@@ -8,9 +8,9 @@ fn orchestrator_completes_and_replays_deterministically() {
         let start = ctx.now_ms();
         let _id = ctx.new_guid();
 
-        let f_a = ctx.call_unified("A", "1");
-        let f_t = ctx.timer_unified(500);
-        let f_e = ctx.wait_unified("Go");
+        let f_a = ctx.schedule_activity("A", "1");
+        let f_t = ctx.schedule_timer(500);
+        let f_e = ctx.schedule_wait("Go");
 
         let (o_a, _o_t, o_e) = join3(f_a, f_t, f_e).await;
 
@@ -67,9 +67,9 @@ fn orchestrator_completes_and_replays_deterministically() {
 #[test]
 fn any_of_three_returns_first_is_activity() {
     let orchestrator = |ctx: OrchestrationContext| async move {
-        let f_a = ctx.call_unified("A", "1");
-        let f_t = ctx.timer_unified(500);
-        let f_e = ctx.wait_unified("Go");
+        let f_a = ctx.schedule_activity("A", "1");
+        let f_t = ctx.schedule_timer(500);
+        let f_e = ctx.schedule_wait("Go");
 
         // Race three futures; winner should be the Activity result given our deterministic scheduling and host
         let left = select(f_a.boxed_local(), f_t.boxed_local());
@@ -120,9 +120,9 @@ fn any_of_three_returns_first_is_activity() {
 fn action_order_is_deterministic_in_first_turn() {
     let orchestrator = |ctx: OrchestrationContext| async move {
         let _ = ctx.new_guid();
-        let f_a = ctx.call_unified("A", "1");
-        let f_t = ctx.timer_unified(500);
-        let f_e = ctx.wait_unified("Go");
+        let f_a = ctx.schedule_activity("A", "1");
+        let f_t = ctx.schedule_timer(500);
+        let f_e = ctx.schedule_wait("Go");
         // Poll all three once; they should each record exactly one action in deterministic order
         let _ = join3(f_a, f_t, f_e).await;
         unreachable!("should not complete in the first turn");

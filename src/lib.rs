@@ -253,15 +253,15 @@ impl Future for DurableFuture {
 }
 
 impl OrchestrationContext {
-    pub fn call_unified(&self, name: impl Into<String>, input: impl Into<String>) -> DurableFuture {
+    pub fn schedule_activity(&self, name: impl Into<String>, input: impl Into<String>) -> DurableFuture {
         DurableFuture(Kind::Activity { name: name.into(), input: input.into(), scheduled: Cell::new(false), ctx: self.clone() })
     }
 
-    pub fn timer_unified(&self, delay_ms: u64) -> DurableFuture {
+    pub fn schedule_timer(&self, delay_ms: u64) -> DurableFuture {
         DurableFuture(Kind::Timer { delay_ms, scheduled: Cell::new(false), ctx: self.clone() })
     }
 
-    pub fn wait_unified(&self, name: impl Into<String>) -> DurableFuture {
+    pub fn schedule_wait(&self, name: impl Into<String>) -> DurableFuture {
         DurableFuture(Kind::External { name: name.into(), scheduled: Cell::new(false), ctx: self.clone() })
     }
 }
