@@ -168,21 +168,21 @@ pub enum UnifiedOutput {
     External(String),
 }
 
-pub struct UnifiedFuture(UnifiedKind);
+pub struct DurableFuture(Kind);
 
-enum UnifiedKind {
+enum Kind {
     Activity { name: String, input: String, scheduled: Cell<bool>, ctx: OrchestrationContext },
     Timer { delay_ms: u64, scheduled: Cell<bool>, ctx: OrchestrationContext },
     External { name: String, scheduled: Cell<bool>, ctx: OrchestrationContext },
 }
 
-impl Future for UnifiedFuture {
+impl Future for DurableFuture {
     type Output = UnifiedOutput;
     fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
         // Safety: We never move fields that are !Unpin; we only take &mut to mutate inner Cells and use ctx by reference.
         let this = unsafe { self.get_unchecked_mut() };
         match &mut this.0 {
-            UnifiedKind::Activity { name, input, scheduled, ctx } => {
+            Kind::Activity { name, input, scheduled, ctx } => {
                 let mut inner = ctx.inner.lock().unwrap();
                 if let Some(next) = inner.next_event().cloned() {
                     match next {
@@ -207,7 +207,7 @@ impl Future for UnifiedFuture {
                 }
                 Poll::Pending
             }
-            UnifiedKind::Timer { delay_ms, scheduled, ctx } => {
+            Kind::Timer { delay_ms, scheduled, ctx } => {
                 let mut inner = ctx.inner.lock().unwrap();
                 if let Some(next) = inner.next_event().cloned() {
                     match next {
@@ -223,7 +223,7 @@ impl Future for UnifiedFuture {
                 }
                 Poll::Pending
             }
-            UnifiedKind::External { name, scheduled, ctx } => {
+            Kind::External { name, scheduled, ctx } => {
                 let mut inner = ctx.inner.lock().unwrap();
                 if let Some(next) = inner.next_event().cloned() {
                     match next {
@@ -253,16 +253,16 @@ impl Future for UnifiedFuture {
 }
 
 impl OrchestrationContext {
-    pub fn call_unified(&self, name: impl Into<String>, input: impl Into<String>) -> UnifiedFuture {
-        UnifiedFuture(UnifiedKind::Activity { name: name.into(), input: input.into(), scheduled: Cell::new(false), ctx: self.clone() })
+    pub fn call_unified(&self, name: impl Into<String>, input: impl Into<String>) -> DurableFuture {
+        DurableFuture(Kind::Activity { name: name.into(), input: input.into(), scheduled: Cell::new(false), ctx: self.clone() })
     }
 
-    pub fn timer_unified(&self, delay_ms: u64) -> UnifiedFuture {
-        UnifiedFuture(UnifiedKind::Timer { delay_ms, scheduled: Cell::new(false), ctx: self.clone() })
+    pub fn timer_unified(&self, delay_ms: u64) -> DurableFuture {
+        DurableFuture(Kind::Timer { delay_ms, scheduled: Cell::new(false), ctx: self.clone() })
     }
 
-    pub fn wait_unified(&self, name: impl Into<String>) -> UnifiedFuture {
-        UnifiedFuture(UnifiedKind::External { name: name.into(), scheduled: Cell::new(false), ctx: self.clone() })
+    pub fn wait_unified(&self, name: impl Into<String>) -> DurableFuture {
+        DurableFuture(Kind::External { name: name.into(), scheduled: Cell::new(false), ctx: self.clone() })
     }
 }
 
