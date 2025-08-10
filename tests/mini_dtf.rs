@@ -1,5 +1,5 @@
 use futures::future::join3;
-use rust_dtf_experiment::{run_turn, Action, Event, Executor, OrchestrationContext, UnifiedOutput};
+use rust_dtf::{run_turn, Action, Event, Executor, OrchestrationContext, UnifiedOutput};
 
 #[test]
 fn orchestrator_completes_and_replays_deterministically() {

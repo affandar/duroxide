@@ -288,7 +288,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "rust_dtf_experiment"
+name = "rust-dtf"
 version = "0.1.0"
 dependencies = [
  "anyhow",

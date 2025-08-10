@@ -1,8 +1,12 @@
 [package]
-name = "rust_dtf_experiment"
+name = "rust-dtf"
 version = "0.1.0"
 edition = "2024"
-default-run = "rust_dtf_experiment"
+description = "Mini deterministic task framework: orchestration core for durable-style workflows"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/your-org/rust-dtf"
+keywords = ["durable", "workflow", "orchestration", "deterministic"]
+categories = ["asynchronous", "concurrency"]
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }
