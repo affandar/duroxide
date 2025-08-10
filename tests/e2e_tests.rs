@@ -1,6 +1,6 @@
 use futures::future::{join3, select, Either};
 use futures::FutureExt;
-use rust_dtf::{run_turn, Action, Event, Executor, OrchestrationContext, UnifiedOutput};
+use rust_dtf::{run_turn, Action, Event, Executor, OrchestrationContext, DurableOutput};
 
 #[test]
 fn orchestrator_completes_and_replays_deterministically() {
@@ -14,8 +14,8 @@ fn orchestrator_completes_and_replays_deterministically() {
 
         let (o_a, _o_t, o_e) = join3(f_a, f_t, f_e).await;
 
-        let a = match o_a { UnifiedOutput::Activity(v) => v, _ => unreachable!("A must be activity result") };
-        let evt = match o_e { UnifiedOutput::External(v) => v, _ => unreachable!("Go must be external event") };
+        let a = match o_a { DurableOutput::Activity(v) => v, _ => unreachable!("A must be activity result") };
+        let evt = match o_e { DurableOutput::External(v) => v, _ => unreachable!("Go must be external event") };
 
         let b = ctx.call_activity("B", a.clone()).await;
         format!("id=_hidden, start={start}, evt={evt}, b={b}")
@@ -76,9 +76,9 @@ fn any_of_three_returns_first_is_activity() {
         let race = select(left, f_e.boxed_local());
 
         match race.await {
-            Either::Left((Either::Left((UnifiedOutput::Activity(a), _other)), _third)) => format!("winner=A:{a}"),
-            Either::Left((Either::Right((UnifiedOutput::Timer, _other)), _third)) => "winner=T".to_string(),
-            Either::Right((UnifiedOutput::External(e), _left)) => format!("winner=E:{e}"),
+            Either::Left((Either::Left((DurableOutput::Activity(a), _other)), _third)) => format!("winner=A:{a}"),
+            Either::Left((Either::Right((DurableOutput::Timer, _other)), _third)) => "winner=T".to_string(),
+            Either::Right((DurableOutput::External(e), _left)) => format!("winner=E:{e}"),
             _ => panic!("unexpected winner variant"),
         }
     };

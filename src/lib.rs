@@ -162,7 +162,7 @@ impl OrchestrationContext {
 // Unified future/output that allows joining different orchestration primitives
 
 #[derive(Debug, Clone)]
-pub enum UnifiedOutput {
+pub enum DurableOutput {
     Activity(String),
     Timer,
     External(String),
@@ -177,7 +177,7 @@ enum Kind {
 }
 
 impl Future for DurableFuture {
-    type Output = UnifiedOutput;
+    type Output = DurableOutput;
     fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
         // Safety: We never move fields that are !Unpin; we only take &mut to mutate inner Cells and use ctx by reference.
         let this = unsafe { self.get_unchecked_mut() };
@@ -189,7 +189,7 @@ impl Future for DurableFuture {
                         Event::ActivityResult { name: n, input: inp, result } => {
                             if &n == name && &inp == input {
                                 inner.consume_event();
-                                return Poll::Ready(UnifiedOutput::Activity(result));
+                                return Poll::Ready(DurableOutput::Activity(result));
                             } else {
                                 panic!(
                                     "Replay corruption: expected ActivityResult({}, {}), found {:?}",
@@ -213,7 +213,7 @@ impl Future for DurableFuture {
                     match next {
                         Event::TimerFired { .. } => {
                             inner.consume_event();
-                            return Poll::Ready(UnifiedOutput::Timer);
+                            return Poll::Ready(DurableOutput::Timer);
                         }
                         other => panic!("Replay corruption: expected TimerFired, found {other:?}"),
                     }
@@ -230,7 +230,7 @@ impl Future for DurableFuture {
                         Event::ExternalEvent { name: n, data } => {
                             if &n == name {
                                 inner.consume_event();
-                                return Poll::Ready(UnifiedOutput::External(data));
+                                return Poll::Ready(DurableOutput::External(data));
                             } else {
                                 panic!(
                                     "Replay corruption: expected ExternalEvent({}), found {:?}",
