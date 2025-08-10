@@ -82,8 +82,8 @@ impl OrchestrationContext {
                             }
                         }
                         other => panic!(
-                            "Replay corruption: expected ActivityResult({}, {}), found {:?}",
-                            this.name, this.input, other
+                            "Replay corruption: expected ActivityResult({}, {}), found {other:?}",
+                            this.name, this.input
                         ),
                     }
                 }
@@ -109,7 +109,7 @@ impl OrchestrationContext {
                             ctx.consume_event();
                             return Poll::Ready(());
                         }
-                        other => panic!("Replay corruption: expected TimerFired, found {:?}", other),
+                        other => panic!("Replay corruption: expected TimerFired, found {other:?}"),
                     }
                 }
                 if !this.scheduled.replace(true) {
@@ -142,8 +142,8 @@ impl OrchestrationContext {
                             }
                         }
                         other => panic!(
-                            "Replay corruption: expected ExternalEvent({}), found {:?}",
-                            this.name, other
+                            "Replay corruption: expected ExternalEvent({}), found {other:?}",
+                            this.name
                         ),
                     }
                 }
@@ -157,6 +157,113 @@ impl OrchestrationContext {
     }
 
     fn take_actions(&self) -> Vec<Action> { std::mem::take(&mut self.inner.lock().unwrap().actions) }
+}
+
+// Unified future/output that allows joining different orchestration primitives
+
+#[derive(Debug, Clone)]
+pub enum UnifiedOutput {
+    Activity(String),
+    Timer,
+    External(String),
+}
+
+pub struct UnifiedFuture(UnifiedKind);
+
+enum UnifiedKind {
+    Activity { name: String, input: String, scheduled: Cell<bool>, ctx: OrchestrationContext },
+    Timer { delay_ms: u64, scheduled: Cell<bool>, ctx: OrchestrationContext },
+    External { name: String, scheduled: Cell<bool>, ctx: OrchestrationContext },
+}
+
+impl Future for UnifiedFuture {
+    type Output = UnifiedOutput;
+    fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
+        // Safety: We never move fields that are !Unpin; we only take &mut to mutate inner Cells and use ctx by reference.
+        let this = unsafe { self.get_unchecked_mut() };
+        match &mut this.0 {
+            UnifiedKind::Activity { name, input, scheduled, ctx } => {
+                let mut inner = ctx.inner.lock().unwrap();
+                if let Some(next) = inner.next_event().cloned() {
+                    match next {
+                        Event::ActivityResult { name: n, input: inp, result } => {
+                            if &n == name && &inp == input {
+                                inner.consume_event();
+                                return Poll::Ready(UnifiedOutput::Activity(result));
+                            } else {
+                                panic!(
+                                    "Replay corruption: expected ActivityResult({}, {}), found {:?}",
+                                    name, input, Event::ActivityResult { name: n, input: inp, result }
+                                );
+                            }
+                        }
+                        other => panic!(
+                            "Replay corruption: expected ActivityResult({name}, {input}), found {other:?}",
+                        ),
+                    }
+                }
+                if !scheduled.replace(true) {
+                    inner.record_action(Action::CallActivity { name: name.clone(), input: input.clone() });
+                }
+                Poll::Pending
+            }
+            UnifiedKind::Timer { delay_ms, scheduled, ctx } => {
+                let mut inner = ctx.inner.lock().unwrap();
+                if let Some(next) = inner.next_event().cloned() {
+                    match next {
+                        Event::TimerFired { .. } => {
+                            inner.consume_event();
+                            return Poll::Ready(UnifiedOutput::Timer);
+                        }
+                        other => panic!("Replay corruption: expected TimerFired, found {other:?}"),
+                    }
+                }
+                if !scheduled.replace(true) {
+                    inner.record_action(Action::CreateTimer { delay_ms: *delay_ms });
+                }
+                Poll::Pending
+            }
+            UnifiedKind::External { name, scheduled, ctx } => {
+                let mut inner = ctx.inner.lock().unwrap();
+                if let Some(next) = inner.next_event().cloned() {
+                    match next {
+                        Event::ExternalEvent { name: n, data } => {
+                            if &n == name {
+                                inner.consume_event();
+                                return Poll::Ready(UnifiedOutput::External(data));
+                            } else {
+                                panic!(
+                                    "Replay corruption: expected ExternalEvent({}), found {:?}",
+                                    name, Event::ExternalEvent { name: n, data }
+                                );
+                            }
+                        }
+                        other => panic!(
+                            "Replay corruption: expected ExternalEvent({name}), found {other:?}",
+                        ),
+                    }
+                }
+                if !scheduled.replace(true) {
+                    inner.record_action(Action::WaitExternal { name: name.clone() });
+                }
+                Poll::Pending
+            }
+        }
+    }
+}
+
+impl OrchestrationContext {
+    pub fn call_unified(&self, name: impl Into<String>, input: impl Into<String>) -> UnifiedFuture {
+        UnifiedFuture(UnifiedKind::Activity { name: name.into(), input: input.into(), scheduled: Cell::new(false), ctx: self.clone() })
+    }
+
+    pub fn timer_unified(&self, delay_ms: u64) -> UnifiedFuture {
+        UnifiedFuture(UnifiedKind::Timer { delay_ms, scheduled: Cell::new(false), ctx: self.clone() })
+    }
+
+    pub fn wait_unified(&self, name: impl Into<String>) -> UnifiedFuture {
+        UnifiedFuture(UnifiedKind::External { name: name.into(), scheduled: Cell::new(false), ctx: self.clone() })
+    }
 }
 
 fn noop_waker() -> Waker {
@@ -181,21 +288,17 @@ where
 {
     let ctx = OrchestrationContext::new(history.clone());
     let mut fut = orchestrator(ctx.clone());
-    loop {
-        match poll_once(&mut fut) {
-            Poll::Ready(out) => {
-                return (history, Vec::new(), Some(out));
-            }
-            Poll::Pending => {
-                let actions = ctx.take_actions();
-                if !actions.is_empty() {
-                    return (history, actions, None);
-                }
-                break;
+    match poll_once(&mut fut) {
+        Poll::Ready(out) => (history, Vec::new(), Some(out)),
+        Poll::Pending => {
+            let actions = ctx.take_actions();
+            if !actions.is_empty() {
+                (history, actions, None)
+            } else {
+                (history, Vec::new(), None)
             }
         }
     }
-    (history, Vec::new(), None)
 }
 
 pub struct Executor;
