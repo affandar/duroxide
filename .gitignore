@@ -1,0 +1,17 @@
+# Build artifacts
+/target
+
+# Rust backup files
+**/*.rs.bk
+
+# macOS
+.DS_Store
+
+# Editors/IDEs
+/.vscode/
+/.idea/
+*.swp
+*.swo
+
+# Cursor / local tools
+.cursor/

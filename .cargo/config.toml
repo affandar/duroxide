@@ -1,0 +1,6 @@
+[alias]
+t = "test"
+tw = "test -- --nocapture"
+r = "run"
+c = "clippy -- -D warnings"
+f = "fmt"

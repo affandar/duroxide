@@ -1,0 +1,12 @@
+[package]
+name = "rust_dtf_experiment"
+version = "0.1.0"
+edition = "2024"
+default-run = "rust_dtf_experiment"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+futures = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
