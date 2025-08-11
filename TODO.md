@@ -19,6 +19,16 @@
 - Keep deterministic replay as the primary invariant; host/provider must only append to history, never mutate existing entries.
 
 ### Proposed next steps (prioritized)
+0. Refactor to correlated event IDs and buffered completions (DTF-style)
+   - Introduce stable correlation IDs for actions/events:
+     - Activity: TaskScheduled(id) ↔ TaskCompleted(id)
+     - Timer: TimerCreated(id) ↔ TimerFired(id)
+     - External: ExternalSubscribed(name, id?) ↔ ExternalRaised(name, seq or id)
+   - Context should buffer completions by correlation rather than consuming strictly from the head of history.
+   - Futures resolve by matching their correlation, allowing multiple results (from races) to exist without replay corruption.
+   - Define deterministic tie-breaking for WhenAny-like races (match history order); leave losing contenders buffered for later awaits.
+   - Update unified futures and `run_turn` to use the buffer; keep single-poll-per-turn semantics deterministic [[race refactor]].
+   - Convert existing tests; keep `complex_control_flow_orchestration` as a guard against the current failure mode.
 1. Extract provider-facing traits
    - Define minimal traits for a host/provider boundary (names suggestive):
      - `HistoryStore` (append-only per instance; read by cursor/index),
@@ -45,7 +55,7 @@
 5. Tests to lock in replay determinism
    - Activity -> Timer -> ExternalEvent scenario (current sample) via the provider API.
    - Multiple activities and timers, parallel fan-out/fan-in, event ordering edge cases.
-   - Negative tests: mismatched event order should panic during replay.
+   - Negative tests: mismatched correlation should panic during replay; verify buffered race losers don’t corrupt subsequent awaits.
 
 6. Azure Storage provider scaffold
    - Research available Rust crates for Azure Storage (Queues/Tables/Blobs) and viability for Durable semantics.
