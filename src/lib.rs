@@ -168,6 +168,14 @@ pub enum DurableOutput {
     External(String),
 }
 
+// NOTE: Current replay model strictly consumes the next history event for each await.
+// This breaks down in races (e.g., select(timer, external)) where the host may append
+// multiple completions in one turn, and the "loser" event can end up ahead of the next
+// awaited operation, causing a replay mismatch. We will refactor to correlate by stable
+// IDs and buffer completions so futures resolve by correlation rather than head-of-queue
+// order, matching Durable Task semantics where multiple results can be present out of
+// arrival order without corrupting replay.
+
 pub struct DurableFuture(Kind);
 
 enum Kind {
