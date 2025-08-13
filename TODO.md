@@ -76,3 +76,15 @@
 
 ### Quick run check (today)
 - `cargo run` should print a completed result and a successful deterministic replay.
+
+### Open question: schedule_* futures vs ergonomic wrappers
+- Summary: We kept both the composable primitives (`schedule_activity`, `schedule_timer`, `schedule_wait`) which return a unified `DurableFuture -> DurableOutput`, and the ergonomic wrappers (`call_activity`, `timer`, `wait_external`) that map directly to concrete outputs (`String`/`()`/`String`).
+- Why both:
+  - Composability: `schedule_*` enables racing/combining with `select`, `join`, `join3`, etc., since they share a single future/output type.
+  - Ergonomics: wrappers avoid repetitive `match` boilerplate when awaiting a single primitive sequentially.
+- What to understand deeper:
+  - Whether we can design combinators (e.g., `when_any`, `when_all`) that preserve arrival-order deterministically without relying on poll-order bias of `select`.
+  - Tradeoffs of typed `DurableOutput` vs forcing a uniform `String` output. Current choice favors type clarity and safety over superficial uniformity.
+  - Clear guidance on when to use `schedule_*` (races/fan-out) vs wrappers (simple awaits) to minimize code duplication while staying explicit.
+  - Impact on replay determinism: ensure combinators pick earliest completion by history order when needed; wrappers should remain simple pass-throughs.
+  - API surface: if we ever drop wrappers, show concise helper patterns to extract `DurableOutput` without noise; otherwise keep both paths documented.
