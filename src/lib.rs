@@ -192,17 +192,6 @@ impl Future for DurableFuture {
     fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
         // Safety: We never move fields that are !Unpin; we only take &mut to mutate inner Cells and use ctx by reference.
         let this = unsafe { self.get_unchecked_mut() };
-        // Debug: dump full history at the start of each poll
-        eprintln!("DurableFuture::poll"); // TODO : WHY NOT PRINTING????ß
-        {
-            let ctx_clone = match &this.0 {
-                Kind::Activity { ctx, .. } => ctx.clone(),
-                Kind::Timer { ctx, .. } => ctx.clone(),
-                Kind::External { ctx, .. } => ctx.clone(),
-            };
-            let history_snapshot = ctx_clone.inner.lock().unwrap().history.clone();
-            eprintln!("[DurableFuture::poll] history = {:#?}", history_snapshot);
-        }
         match &mut this.0 {
             Kind::Activity { id, name, input, scheduled, ctx } => {
                 let mut inner = ctx.inner.lock().unwrap();
