@@ -1,4 +1,5 @@
-use futures::future::{join3, select, Either};
+use futures::future::{join3, select, Either, join};
+//
 use rust_dtf::{run_turn, Action, Event, Executor, OrchestrationContext, DurableOutput};
 
 #[test]
@@ -21,30 +22,29 @@ fn orchestrator_completes_and_replays_deterministically() {
     };
 
     let history: Vec<Event> = Vec::new();
+    // Host processes only actions and appends completion events
     let host_execute_actions = |actions: Vec<Action>, history: &mut Vec<Event>| {
         for a in actions {
             match a {
-                Action::CallActivity { name, input } => {
+                Action::CallActivity { id, name, input } => {
                     let result = match name.as_str() {
-                        "A" => {
-                            let x: i32 = input.parse().unwrap_or(0);
-                            (x + 1).to_string()
-                        }
+                        "A" => input.parse::<i32>().unwrap_or(0).saturating_add(1).to_string(),
                         "B" => format!("{input}!"),
                         _ => format!("echo:{input}"),
                     };
-                    history.push(Event::ActivityResult { name, input, result });
+                    history.push(Event::ActivityCompleted { id, result });
                 }
-                Action::CreateTimer { delay_ms } => {
-                    let last_time = history
+                Action::CreateTimer { id, .. } => {
+                    // Look up created fire_at_ms in history by id
+                    let fire_at_ms = history
                         .iter()
                         .rev()
-                        .find_map(|e| match e { Event::TimerFired { fire_at_ms } => Some(*fire_at_ms), _ => None })
-                        .unwrap_or(0);
-                    history.push(Event::TimerFired { fire_at_ms: last_time + delay_ms });
+                        .find_map(|e| match e { Event::TimerCreated { id: cid, fire_at_ms } if *cid == id => Some(*fire_at_ms), _ => None })
+                        .unwrap_or_else(|| 0);
+                    history.push(Event::TimerFired { id, fire_at_ms });
                 }
-                Action::WaitExternal { name } => {
-                    history.push(Event::ExternalEvent { name, data: "ok".to_string() });
+                Action::WaitExternal { id, name } => {
+                    history.push(Event::ExternalEvent { id, name, data: "ok".to_string() });
                 }
             }
         }
@@ -54,7 +54,7 @@ fn orchestrator_completes_and_replays_deterministically() {
     let (final_history, output) = Executor::drive_to_completion(history.clone(), orchestrator, host_execute_actions);
     assert!(output.contains("evt=ok"));
     assert!(output.contains("b=2!"));
-    assert_eq!(final_history.len(), 4, "expected 4 history events");
+    assert_eq!(final_history.len(), 8, "expected 8 history events (scheduled + completed)");
 
     // Replay to verify determinism
     let (_h2, acts2, out2) = run_turn(final_history.clone(), orchestrator);
@@ -70,14 +70,29 @@ fn any_of_three_returns_first_is_activity() {
         let f_t = ctx.schedule_timer(500);
         let f_e = ctx.schedule_wait("Go");
 
-        // Race three futures; winner should be the Activity result given our deterministic scheduling and host
+        // Race three futures; capture the winner, then explicitly await the other two before exiting
         let left = select(f_a, f_t);
         let race = select(left, f_e);
 
         match race.await {
-            Either::Left((Either::Left((DurableOutput::Activity(a), _other)), _third)) => format!("winner=A:{a}"),
-            Either::Left((Either::Right((DurableOutput::Timer, _other)), _third)) => "winner=T".to_string(),
-            Either::Right((DurableOutput::External(e), _left)) => format!("winner=E:{e}"),
+            // A wins first; now await timer and external
+            Either::Left((Either::Left((DurableOutput::Activity(a), f_t_rest)), f_e_rest)) => {
+                let _ = join(f_t_rest, f_e_rest).await;
+                format!("winner=A:{a}")
+            }
+            // Timer wins first; await activity and external
+            Either::Left((Either::Right((DurableOutput::Timer, f_a_rest)), f_e_rest)) => {
+                let _ = join(f_a_rest, f_e_rest).await;
+                "winner=T".to_string()
+            }
+            // External wins first; await the left pair (A vs T), then await its leftover
+            Either::Right((DurableOutput::External(e), left_rest)) => {
+                match left_rest.await {
+                    Either::Left((_a_done, f_t_remaining)) => { let _ = f_t_remaining.await; }
+                    Either::Right((_t_done, f_a_remaining)) => { let _ = f_a_remaining.await; }
+                }
+                format!("winner=E:{e}")
+            }
             _ => panic!("unexpected winner variant"),
         }
     };
@@ -86,26 +101,23 @@ fn any_of_three_returns_first_is_activity() {
     let host_execute_actions = |actions: Vec<Action>, history: &mut Vec<Event>| {
         for a in actions {
             match a {
-                Action::CallActivity { name, input } => {
+                Action::CallActivity { id, name, input } => {
                     let result = match name.as_str() {
-                        "A" => {
-                            let x: i32 = input.parse().unwrap_or(0);
-                            (x + 1).to_string()
-                        }
+                        "A" => input.parse::<i32>().unwrap_or(0).saturating_add(1).to_string(),
                         _ => format!("echo:{input}"),
                     };
-                    history.push(Event::ActivityResult { name, input, result });
+                    history.push(Event::ActivityCompleted { id, result });
                 }
-                Action::CreateTimer { delay_ms } => {
-                    let last_time = history
+                Action::CreateTimer { id, .. } => {
+                    let fire_at_ms = history
                         .iter()
                         .rev()
-                        .find_map(|e| match e { Event::TimerFired { fire_at_ms } => Some(*fire_at_ms), _ => None })
-                        .unwrap_or(0);
-                    history.push(Event::TimerFired { fire_at_ms: last_time + delay_ms });
+                        .find_map(|e| match e { Event::TimerCreated { id: cid, fire_at_ms } if *cid == id => Some(*fire_at_ms), _ => None })
+                        .unwrap_or_else(|| 0);
+                    history.push(Event::TimerFired { id, fire_at_ms });
                 }
-                Action::WaitExternal { name } => {
-                    history.push(Event::ExternalEvent { name, data: "ok".to_string() });
+                Action::WaitExternal { id, name } => {
+                    history.push(Event::ExternalEvent { id, name, data: "ok".to_string() });
                 }
             }
         }
@@ -113,6 +125,100 @@ fn any_of_three_returns_first_is_activity() {
 
     let (_final_history, output) = Executor::drive_to_completion(history, orchestrator, host_execute_actions);
     assert!(output.starts_with("winner=A:"), "expected activity to win deterministically, got {output}");
+}
+
+#[test]
+fn any_of_three_winner_then_staggered_completions() {
+    let orchestrator = |ctx: OrchestrationContext| async move {
+        let f_a = ctx.schedule_activity("A", "1");
+        let f_t = ctx.schedule_timer(500);
+        let f_e = ctx.schedule_wait("Go");
+
+        let left = select(f_a, f_t);
+        let race = select(left, f_e);
+
+        match race.await {
+            // A wins first; then await timer and external in any order
+            Either::Left((Either::Left((DurableOutput::Activity(a), f_t_rest)), f_e_rest)) => {
+                let _ = join(f_t_rest, f_e_rest).await;
+                format!("winner=A:{a}")
+            }
+            _ => panic!("unexpected winner variant"),
+        }
+    };
+
+    let mut pending_timer: Option<(u64, u64)> = None; // (id, fire_at)
+    let mut pending_external: Option<(u64, String)> = None; // (id, name)
+    let mut step: u32 = 0;
+
+    let history: Vec<Event> = Vec::new();
+    let host_execute_actions = |actions: Vec<Action>, history: &mut Vec<Event>| {
+        match step {
+            0 => {
+                // First iteration: complete activity only; stash timer/external for later
+                for a in actions {
+                    match a {
+                        Action::CallActivity { id, name, input } => {
+                            let result = match name.as_str() {
+                                "A" => input.parse::<i32>().unwrap_or(0).saturating_add(1).to_string(),
+                                _ => format!("echo:{input}"),
+                            };
+                            history.push(Event::ActivityCompleted { id, result });
+                        }
+                        Action::CreateTimer { id, .. } => {
+                            // Lookup TimerCreated to learn fire time; store to complete later
+                            let fire_at_ms = history
+                                .iter()
+                                .rev()
+                                .find_map(|e| match e { Event::TimerCreated { id: cid, fire_at_ms } if *cid == id => Some(*fire_at_ms), _ => None })
+                                .unwrap_or_else(|| 0);
+                            pending_timer = Some((id, fire_at_ms));
+                        }
+                        Action::WaitExternal { id, name } => {
+                            pending_external = Some((id, name));
+                        }
+                    }
+                }
+                step = 1;
+            }
+            1 => {
+                // Second iteration: fire the timer if pending
+                if let Some((id, fire_at_ms)) = pending_timer.take() {
+                    history.push(Event::TimerFired { id, fire_at_ms });
+                }
+                step = 2;
+            }
+            2 => {
+                // Third iteration: raise the external if pending
+                if let Some((id, name)) = pending_external.take() {
+                    history.push(Event::ExternalEvent { id, name, data: "ok".to_string() });
+                }
+                step = 3;
+            }
+            _ => {}
+        }
+    };
+
+    let (final_history, output) = Executor::drive_to_completion(history, orchestrator, host_execute_actions);
+    assert!(output.starts_with("winner=A:"), "expected activity to win deterministically, got {output}");
+
+    // Verify completion ordering across turns: ActivityCompleted before TimerFired before ExternalEvent
+    let mut idx_a = None;
+    let mut idx_t = None;
+    let mut idx_e = None;
+    for (i, e) in final_history.iter().enumerate() {
+        match e {
+            Event::ActivityCompleted { .. } if idx_a.is_none() => idx_a = Some(i),
+            Event::TimerFired { .. } if idx_t.is_none() => idx_t = Some(i),
+            Event::ExternalEvent { .. } if idx_e.is_none() => idx_e = Some(i),
+            _ => {}
+        }
+    }
+    let (ia, it, ie) = (idx_a.unwrap(), idx_t.unwrap(), idx_e.unwrap());
+    assert!(ia < it && it < ie, "unexpected completion order: A at {ia}, T at {it}, E at {ie}\nfinal_history={final_history:#?}");
+
+    // Still 6 events total: 3 scheduled/subscribed + 3 completions
+    assert_eq!(final_history.len(), 6, "unexpected final history length: {:?}", final_history);
 }
 
 #[test]
@@ -154,7 +260,7 @@ fn sequential_activity_chain_completes() {
     let host_execute_actions = |actions: Vec<Action>, history: &mut Vec<Event>| {
         for a in actions {
             match a {
-                Action::CallActivity { name, input } => {
+                Action::CallActivity { id, name, input } => {
                     let result = match name.as_str() {
                         // A: parse int, increment
                         "A" => input.parse::<i32>().map(|x| x + 1).unwrap_or(0).to_string(),
@@ -164,18 +270,18 @@ fn sequential_activity_chain_completes() {
                         "C" => format!("{input}c"),
                         _ => format!("echo:{input}"),
                     };
-                    history.push(Event::ActivityResult { name, input, result });
+                    history.push(Event::ActivityCompleted { id, result });
                 }
-                Action::CreateTimer { delay_ms } => {
-                    let last_time = history
+                Action::CreateTimer { id, .. } => {
+                    let fire_at_ms = history
                         .iter()
                         .rev()
-                        .find_map(|e| match e { Event::TimerFired { fire_at_ms } => Some(*fire_at_ms), _ => None })
-                        .unwrap_or(0);
-                    history.push(Event::TimerFired { fire_at_ms: last_time + delay_ms });
+                        .find_map(|e| match e { Event::TimerCreated { id: cid, fire_at_ms } if *cid == id => Some(*fire_at_ms), _ => None })
+                        .unwrap_or_else(|| 0);
+                    history.push(Event::TimerFired { id, fire_at_ms });
                 }
-                Action::WaitExternal { name } => {
-                    history.push(Event::ExternalEvent { name, data: "ok".to_string() });
+                Action::WaitExternal { id, name } => {
+                    history.push(Event::ExternalEvent { id, name, data: "ok".to_string() });
                 }
             }
         }
@@ -183,7 +289,7 @@ fn sequential_activity_chain_completes() {
 
     let (final_history, output) = Executor::drive_to_completion(history, orchestrator, host_execute_actions);
     assert_eq!(output, "c=2bc");
-    assert_eq!(final_history.len(), 3, "expected exactly three activity results in history");
+    assert_eq!(final_history.len(), 6, "expected exactly three scheduled+completed activity pairs in history");
 }
 
 #[test]
@@ -227,7 +333,7 @@ fn complex_control_flow_orchestration() {
     let host_execute_actions = |actions: Vec<Action>, history: &mut Vec<Event>| {
         for a in actions {
             match a {
-                Action::CallActivity { name, input } => {
+                Action::CallActivity { id, name, input } => {
                     let result = match name.as_str() {
                         // First two Fetch calls fail (return "err"), third succeeds ("ok").
                         "Fetch" => {
@@ -238,18 +344,18 @@ fn complex_control_flow_orchestration() {
                         "Acc" => format!("{input}:x"),
                         _ => format!("echo:{input}"),
                     };
-                    history.push(Event::ActivityResult { name, input, result });
+                    history.push(Event::ActivityCompleted { id, result });
                 }
-                Action::CreateTimer { delay_ms } => {
-                    let last_time = history
+                Action::CreateTimer { id, .. } => {
+                    let fire_at_ms = history
                         .iter()
                         .rev()
-                        .find_map(|e| match e { Event::TimerFired { fire_at_ms } => Some(*fire_at_ms), _ => None })
-                        .unwrap_or(0);
-                    history.push(Event::TimerFired { fire_at_ms: last_time + delay_ms });
+                        .find_map(|e| match e { Event::TimerCreated { id: cid, fire_at_ms } if *cid == id => Some(*fire_at_ms), _ => None })
+                        .unwrap_or_else(|| 0);
+                    history.push(Event::TimerFired { id, fire_at_ms });
                 }
-                Action::WaitExternal { name } => {
-                    history.push(Event::ExternalEvent { name, data: "go".to_string() });
+                Action::WaitExternal { id, name } => {
+                    history.push(Event::ExternalEvent { id, name, data: "go".to_string() });
                 }
             }
         }
@@ -265,13 +371,13 @@ fn complex_control_flow_orchestration() {
     assert!(output.contains("branch=timer"), "unexpected branch winner: {output}");
     assert!(output.contains("acc=seed-0:x-1:x-2:x"), "unexpected accumulator: {output}");
 
-    // History: 3 ActivityResults for Fetch/Acc? Let's count precisely:
-    // - Fetch called 3 times -> 3 ActivityResult
-    // - 2 backoff timers (100ms each) -> 2 TimerFired
-    // - Branch: one 50ms timer and one ExternalEvent -> 1 TimerFired + 1 ExternalEvent
-    // - Acc called 3 times -> 3 ActivityResult
-    // Total = 3 + 2 + 1 + 1 + 3 = 10 events
-    assert_eq!(final_history.len(), 10, "unexpected final history length: {:?}", final_history);
+    // History counts with correlated scheduling:
+    // - Fetch called 3 times -> 3 ActivityScheduled + 3 ActivityCompleted = 6
+    // - 2 backoff timers (100ms each) -> 2 TimerCreated + 2 TimerFired = 4
+    // - Branch: one 50ms timer and one External -> 1 TimerCreated + 1 TimerFired + 1 ExternalSubscribed + 1 ExternalEvent = 4
+    // - Acc called 3 times -> 3 ActivityScheduled + 3 ActivityCompleted = 6
+    // Total = 6 + 4 + 4 + 6 = 20 events
+    assert_eq!(final_history.len(), 20, "unexpected final history length: {:?}", final_history);
 }
 
 
