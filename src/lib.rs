@@ -107,58 +107,6 @@ impl OrchestrationContext {
     pub fn now_ms(&self) -> u64 { self.inner.lock().unwrap().now_ms() }
     pub fn new_guid(&self) -> String { self.inner.lock().unwrap().new_guid() }
 
-    pub fn call_activity(&self, name: impl Into<String>, input: impl Into<String>) -> impl Future<Output = String> + '_ {
-        // Adapter over unified DurableFuture using correlated ids
-        let fut = self.schedule_activity(name, input);
-        struct MapActivity(DurableFuture);
-        impl Future for MapActivity {
-            type Output = String;
-            fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-                let this = unsafe { self.map_unchecked_mut(|s| &mut s.0) };
-                match this.poll(cx) {
-                    Poll::Ready(DurableOutput::Activity(v)) => Poll::Ready(v),
-                    Poll::Ready(other) => panic!("Unexpected durable output variant: {other:?}"),
-                    Poll::Pending => Poll::Pending,
-                }
-            }
-        }
-        MapActivity(fut)
-    }
-
-    pub fn timer(&self, delay_ms: u64) -> impl Future<Output = ()> + '_ {
-        let fut = self.schedule_timer(delay_ms);
-        struct MapTimer(DurableFuture);
-        impl Future for MapTimer {
-            type Output = ();
-            fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-                let this = unsafe { self.map_unchecked_mut(|s| &mut s.0) };
-                match this.poll(cx) {
-                    Poll::Ready(DurableOutput::Timer) => Poll::Ready(()),
-                    Poll::Ready(other) => panic!("Unexpected durable output variant: {other:?}"),
-                    Poll::Pending => Poll::Pending,
-                }
-            }
-        }
-        MapTimer(fut)
-    }
-
-    pub fn wait_external(&self, name: impl Into<String>) -> impl Future<Output = String> + '_ {
-        let fut = self.schedule_wait(name);
-        struct MapExternal(DurableFuture);
-        impl Future for MapExternal {
-            type Output = String;
-            fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-                let this = unsafe { self.map_unchecked_mut(|s| &mut s.0) };
-                match this.poll(cx) {
-                    Poll::Ready(DurableOutput::External(v)) => Poll::Ready(v),
-                    Poll::Ready(other) => panic!("Unexpected durable output variant: {other:?}"),
-                    Poll::Pending => Poll::Pending,
-                }
-            }
-        }
-        MapExternal(fut)
-    }
-
     fn take_actions(&self) -> Vec<Action> { std::mem::take(&mut self.inner.lock().unwrap().actions) }
 }
 
@@ -244,6 +192,56 @@ impl Future for DurableFuture {
                 Poll::Pending
             }
         }
+    }
+}
+
+impl DurableFuture {
+    pub fn into_activity(self) -> impl Future<Output = String> {
+        struct Map(DurableFuture);
+        impl Future for Map {
+            type Output = String;
+            fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+                let this = unsafe { self.map_unchecked_mut(|s| &mut s.0) };
+                match this.poll(cx) {
+                    Poll::Ready(DurableOutput::Activity(v)) => Poll::Ready(v),
+                    Poll::Ready(other) => panic!("into_activity used on non-activity future: {other:?}"),
+                    Poll::Pending => Poll::Pending,
+                }
+            }
+        }
+        Map(self)
+    }
+
+    pub fn into_timer(self) -> impl Future<Output = ()> {
+        struct Map(DurableFuture);
+        impl Future for Map {
+            type Output = ();
+            fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+                let this = unsafe { self.map_unchecked_mut(|s| &mut s.0) };
+                match this.poll(cx) {
+                    Poll::Ready(DurableOutput::Timer) => Poll::Ready(()),
+                    Poll::Ready(other) => panic!("into_timer used on non-timer future: {other:?}"),
+                    Poll::Pending => Poll::Pending,
+                }
+            }
+        }
+        Map(self)
+    }
+
+    pub fn into_event(self) -> impl Future<Output = String> {
+        struct Map(DurableFuture);
+        impl Future for Map {
+            type Output = String;
+            fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+                let this = unsafe { self.map_unchecked_mut(|s| &mut s.0) };
+                match this.poll(cx) {
+                    Poll::Ready(DurableOutput::External(v)) => Poll::Ready(v),
+                    Poll::Ready(other) => panic!("into_event used on non-external future: {other:?}"),
+                    Poll::Pending => Poll::Pending,
+                }
+            }
+        }
+        Map(self)
     }
 }
 

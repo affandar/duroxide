@@ -17,7 +17,7 @@ fn orchestrator_completes_and_replays_deterministically() {
         let a = match o_a { DurableOutput::Activity(v) => v, _ => unreachable!("A must be activity result") };
         let evt = match o_e { DurableOutput::External(v) => v, _ => unreachable!("Go must be external event") };
 
-        let b = ctx.call_activity("B", a.clone()).await;
+        let b = ctx.schedule_activity("B", a.clone()).into_activity().await;
         format!("id=_hidden, start={start}, evt={evt}, b={b}")
     };
 
@@ -250,9 +250,9 @@ fn action_order_is_deterministic_in_first_turn() {
 #[test]
 fn sequential_activity_chain_completes() {
     let orchestrator = |ctx: OrchestrationContext| async move {
-        let a = ctx.call_activity("A", "1").await;
-        let b = ctx.call_activity("B", a).await;
-        let c = ctx.call_activity("C", b).await;
+        let a = ctx.schedule_activity("A", "1").into_activity().await;
+        let b = ctx.schedule_activity("B", a).into_activity().await;
+        let c = ctx.schedule_activity("C", b).into_activity().await;
         format!("c={c}")
     };
 
@@ -305,10 +305,10 @@ fn complex_control_flow_orchestration() {
         // Retry Fetch until it returns "ok"; backoff 100ms between attempts
         let mut attempts = 0u32;
         loop {
-            let res = ctx.call_activity("Fetch", attempts.to_string()).await;
+            let res = ctx.schedule_activity("Fetch", attempts.to_string()).into_activity().await;
             if res == "ok" { break; }
             attempts += 1;
-            ctx.timer(100).await;
+            ctx.schedule_timer(100).into_timer().await;
         }
 
         // Branch: race a short timer vs an external event; with our deterministic host ordering
@@ -322,7 +322,7 @@ fn complex_control_flow_orchestration() {
         // Sequential dependent activities in a loop
         let mut acc = String::from("seed");
         for i in 0..3u32 {
-            acc = ctx.call_activity("Acc", format!("{acc}-{i}")).await;
+            acc = ctx.schedule_activity("Acc", format!("{acc}-{i}")).into_activity().await;
         }
 
         format!("attempts={attempts}, branch={branch}, acc={acc}")
