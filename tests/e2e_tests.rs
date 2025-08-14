@@ -2,6 +2,26 @@ use futures::future::{join3, select, Either, join};
 use std::sync::Arc;
 use rust_dtf::{run_turn, Event, OrchestrationContext, DurableOutput, Action};
 use rust_dtf::runtime::{self, activity::ActivityRegistry};
+use rust_dtf::providers::{HistoryStore};
+use rust_dtf::providers::in_memory::InMemoryHistoryStore;
+use rust_dtf::providers::fs::FsHistoryStore;
+use std::sync::Arc as StdArc;
+
+async fn with_each_store<F, Fut>(mut f: F)
+where
+    F: FnMut(StdArc<dyn HistoryStore>) -> Fut,
+    Fut: std::future::Future<Output = ()>,
+{
+    // In-memory
+    let store = StdArc::new(InMemoryHistoryStore::default()) as StdArc<dyn HistoryStore>;
+    f(store).await;
+
+    // Filesystem (tempdir lifetime spans the call)
+    let td = tempfile::tempdir().unwrap();
+    let store = StdArc::new(FsHistoryStore::new(td.path())) as StdArc<dyn HistoryStore>;
+    f(store).await;
+    drop(td);
+}
 
 #[tokio::test]
 async fn orchestrator_completes_and_replays_deterministically() {
@@ -30,27 +50,24 @@ async fn orchestrator_completes_and_replays_deterministically() {
         .register("B", |input: String| async move { format!("{input}!") })
         .build();
 
-    // Shared runtime
-    let rt = runtime::Runtime::start(Arc::new(registry)).await;
-
-    // Drive to completion via message-driven runtime; raise external "Go" shortly after
-    let rt_clone = rt.clone();
-    tokio::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_millis(6)).await;
-        rt_clone.raise_event("inst-orch-1", "Go", "ok").await;
-    });
-    let handle = rt.clone().spawn_instance_to_completion("inst-orch-1", orchestrator).await;
-    let (final_history, output) = handle.await.unwrap();
+    with_each_store(|store| async {
+        let rt = runtime::Runtime::start_with_store(store, Arc::new(registry.clone())).await;
+        let rt_clone = rt.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(6)).await;
+            rt_clone.raise_event("inst-orch-1", "Go", "ok").await;
+        });
+        let handle = rt.clone().spawn_instance_to_completion("inst-orch-1", orchestrator).await;
+        let (final_history, output) = handle.await.unwrap();
     assert!(output.contains("evt=ok"));
     assert!(output.contains("b=2!"));
     assert_eq!(final_history.len(), 8, "expected 8 history events (scheduled + completed)");
 
-    // Replay to verify determinism
-    let (_h2, acts2, out2) = run_turn(final_history.clone(), orchestrator);
-    assert!(acts2.is_empty(), "replay should not produce new actions");
-    assert_eq!(out2.unwrap(), output);
-
-    rt.shutdown().await;
+        let (_h2, acts2, out2) = run_turn(final_history.clone(), orchestrator);
+        assert!(acts2.is_empty(), "replay should not produce new actions");
+        assert_eq!(out2.unwrap(), output);
+        rt.shutdown().await;
+    }).await;
 }
 
 #[tokio::test]
@@ -93,17 +110,18 @@ async fn any_of_three_returns_first_is_activity() {
         })
         .build();
 
-    let rt = runtime::Runtime::start(Arc::new(registry)).await;
-    // Raise external slightly later to allow activity/timer to contend
-    let rt_clone = rt.clone();
-    tokio::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_millis(6)).await;
-        rt_clone.raise_event("inst-race-1", "Go", "ok").await;
-    });
-    let handle = rt.clone().spawn_instance_to_completion("inst-race-1", orchestrator).await;
-    let (_race_history, output) = handle.await.unwrap();
-    assert!(output.starts_with("winner=A:"), "expected activity to win deterministically, got {output}");
-    rt.shutdown().await;
+    with_each_store(|store| async {
+        let rt = runtime::Runtime::start_with_store(store, Arc::new(registry.clone())).await;
+        let rt_clone = rt.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(6)).await;
+            rt_clone.raise_event("inst-race-1", "Go", "ok").await;
+        });
+        let handle = rt.clone().spawn_instance_to_completion("inst-race-1", orchestrator).await;
+        let (_race_history, output) = handle.await.unwrap();
+        assert!(output.starts_with("winner=A:"), "expected activity to win deterministically, got {output}");
+        rt.shutdown().await;
+    }).await;
 }
 
 #[tokio::test]
@@ -132,15 +150,15 @@ async fn any_of_three_winner_then_staggered_completions() {
         })
         .build();
 
-    let rt = runtime::Runtime::start(Arc::new(registry)).await;
-    // Stagger external arrival to be last
-    let rt_clone = rt.clone();
-    tokio::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_millis(6)).await;
-        rt_clone.raise_event("inst-stagger-1", "Go", "ok").await;
-    });
-    let handle = rt.clone().spawn_instance_to_completion("inst-stagger-1", orchestrator).await;
-    let (final_history, output) = handle.await.unwrap();
+    with_each_store(|store| async {
+        let rt = runtime::Runtime::start_with_store(store, Arc::new(registry.clone())).await;
+        let rt_clone = rt.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(6)).await;
+            rt_clone.raise_event("inst-stagger-1", "Go", "ok").await;
+        });
+        let handle = rt.clone().spawn_instance_to_completion("inst-stagger-1", orchestrator).await;
+        let (final_history, output) = handle.await.unwrap();
     assert!(output.starts_with("winner=A:"), "expected activity to win deterministically, got {output}");
 
     // Verify completion ordering across turns: ActivityCompleted before TimerFired before ExternalEvent
@@ -160,7 +178,8 @@ async fn any_of_three_winner_then_staggered_completions() {
 
     // Still 6 events total: 3 scheduled/subscribed + 3 completions
     assert_eq!(final_history.len(), 6, "unexpected final history length: {:?}", final_history);
-    rt.shutdown().await;
+        rt.shutdown().await;
+    }).await;
 }
 
 #[test]
@@ -203,12 +222,14 @@ async fn sequential_activity_chain_completes() {
         .register("C", |input: String| async move { format!("{input}c") })
         .build();
 
-    let rt = runtime::Runtime::start(Arc::new(registry)).await;
-    let handle = rt.clone().spawn_instance_to_completion("inst-seq-1", orchestrator).await;
-    let (final_history, output) = handle.await.unwrap();
-    assert_eq!(output, "c=2bc");
-    assert_eq!(final_history.len(), 6, "expected exactly three scheduled+completed activity pairs in history");
-    rt.shutdown().await;
+    with_each_store(|store| async {
+        let rt = runtime::Runtime::start_with_store(store, Arc::new(registry.clone())).await;
+        let handle = rt.clone().spawn_instance_to_completion("inst-seq-1", orchestrator).await;
+        let (final_history, output) = handle.await.unwrap();
+        assert_eq!(output, "c=2bc");
+        assert_eq!(final_history.len(), 6, "expected exactly three scheduled+completed activity pairs in history");
+        rt.shutdown().await;
+    }).await;
 }
 
 #[tokio::test]
@@ -255,15 +276,15 @@ async fn complex_control_flow_orchestration() {
         .register("Acc", |input: String| async move { format!("{input}:x") })
         .build();
 
-    let rt = runtime::Runtime::start(Arc::new(registry)).await;
-    // Raise the Proceed external, but timers should win given shorter delay
-    let rt_clone = rt.clone();
-    tokio::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_millis(6)).await;
-        rt_clone.raise_event("inst-complex-1", "Proceed", "go").await;
-    });
-    let handle = rt.clone().spawn_instance_to_completion("inst-complex-1", orchestrator).await;
-    let (final_history, output) = handle.await.unwrap();
+    with_each_store(|store| async {
+        let rt = runtime::Runtime::start_with_store(store, Arc::new(registry.clone())).await;
+        let rt_clone = rt.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(6)).await;
+            rt_clone.raise_event("inst-complex-1", "Proceed", "go").await;
+        });
+        let handle = rt.clone().spawn_instance_to_completion("inst-complex-1", orchestrator).await;
+        let (final_history, output) = handle.await.unwrap();
 
     // Expectations:
     // - Fetch attempts = 2 backoffs (3rd attempt succeeds), so attempts==2 when we break
@@ -284,7 +305,8 @@ async fn complex_control_flow_orchestration() {
     let expected_len = if has_ext_event { 20 } else { 19 };
     assert_eq!(final_history.len(), expected_len, "unexpected final history length: {:?}", final_history);
 
-    rt.shutdown().await;
+        rt.shutdown().await;
+    }).await;
 }
 
 
@@ -297,17 +319,15 @@ async fn wait_external_completes() {
 
     // No activities needed
     let registry = ActivityRegistry::builder().build();
-    let rt = runtime::Runtime::start(Arc::new(registry)).await;
-
-    // Raise external shortly after start
-    let rt_clone = rt.clone();
-    tokio::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_millis(4)).await;
-        rt_clone.raise_event("inst-wait-1", "Only", "payload").await;
-    });
-
-    let handle = rt.clone().spawn_instance_to_completion("inst-wait-1", orchestrator).await;
-    let (final_history, output) = handle.await.unwrap();
+    with_each_store(|store| async {
+        let rt = runtime::Runtime::start_with_store(store, Arc::new(registry.clone())).await;
+        let rt_clone = rt.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(4)).await;
+            rt_clone.raise_event("inst-wait-1", "Only", "payload").await;
+        });
+        let handle = rt.clone().spawn_instance_to_completion("inst-wait-1", orchestrator).await;
+        let (final_history, output) = handle.await.unwrap();
 
     assert_eq!(output, "only=payload");
     // Expect exactly subscription + event
@@ -315,7 +335,8 @@ async fn wait_external_completes() {
     assert!(matches!(final_history[1], Event::ExternalEvent { .. }));
     assert_eq!(final_history.len(), 2);
 
-    rt.shutdown().await;
+        rt.shutdown().await;
+    }).await;
 }
 
 #[tokio::test]
@@ -326,20 +347,16 @@ async fn external_sent_before_instance_is_ignored() {
     };
 
     let registry = ActivityRegistry::builder().build();
-    let rt = runtime::Runtime::start(Arc::new(registry)).await;
-
-    // Send event before instance has registered; should be ignored
-    rt.raise_event("inst-wait-ignore-1", "Only", "early").await;
-
-    // After a short delay, send the real event and then start the instance
-    let rt_clone = rt.clone();
-    tokio::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_millis(4)).await;
-        rt_clone.raise_event("inst-wait-ignore-1", "Only", "late").await;
-    });
-
-    let handle = rt.clone().spawn_instance_to_completion("inst-wait-ignore-1", orchestrator).await;
-    let (final_history, output) = handle.await.unwrap();
+    with_each_store(|store| async {
+        let rt = runtime::Runtime::start_with_store(store, Arc::new(registry.clone())).await;
+        rt.raise_event("inst-wait-ignore-1", "Only", "early").await;
+        let rt_clone = rt.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(4)).await;
+            rt_clone.raise_event("inst-wait-ignore-1", "Only", "late").await;
+        });
+        let handle = rt.clone().spawn_instance_to_completion("inst-wait-ignore-1", orchestrator).await;
+        let (final_history, output) = handle.await.unwrap();
 
     // Should not have delivered the early event; only the later one is observed
     assert_eq!(output, "only=late");
@@ -347,7 +364,8 @@ async fn external_sent_before_instance_is_ignored() {
     assert!(!final_history.iter().any(|e| matches!(e, Event::ExternalEvent { name, data, .. } if name == "Only" && data == "early")));
     assert_eq!(final_history.len(), 2, "expected only subscribe + single event");
 
-    rt.shutdown().await;
+        rt.shutdown().await;
+    }).await;
 }
 
 #[tokio::test]
@@ -363,17 +381,15 @@ async fn race_external_vs_timer_ordering() {
     };
 
     let registry = ActivityRegistry::builder().build();
-    let rt = runtime::Runtime::start(Arc::new(registry)).await;
-
-    // Raise external after timer should have fired, so timer wins
-    let rt_clone = rt.clone();
-    tokio::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_millis(6)).await;
-        rt_clone.raise_event("inst-race-order-1", "Race", "ok").await;
-    });
-
-    let handle = rt.clone().spawn_instance_to_completion("inst-race-order-1", orchestrator).await;
-    let (final_history, output) = handle.await.unwrap();
+    with_each_store(|store| async {
+        let rt = runtime::Runtime::start_with_store(store, Arc::new(registry.clone())).await;
+        let rt_clone = rt.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(6)).await;
+            rt_clone.raise_event("inst-race-order-1", "Race", "ok").await;
+        });
+        let handle = rt.clone().spawn_instance_to_completion("inst-race-order-1", orchestrator).await;
+        let (final_history, output) = handle.await.unwrap();
 
     assert_eq!(output, "timer");
     // Ensure TimerFired occurs and external is either absent or after timer
@@ -382,7 +398,8 @@ async fn race_external_vs_timer_ordering() {
         assert!(idx_t < idx_e, "expected timer to fire before external: {final_history:#?}");
     }
 
-    rt.shutdown().await;
+        rt.shutdown().await;
+    }).await;
 }
 
 #[tokio::test]
@@ -398,17 +415,15 @@ async fn race_event_vs_timer_event_wins() {
     };
 
     let registry = ActivityRegistry::builder().build();
-    let rt = runtime::Runtime::start(Arc::new(registry)).await;
-
-    // Raise external before timer can fire so external wins
-    let rt_clone = rt.clone();
-    tokio::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_millis(2)).await;
-        rt_clone.raise_event("inst-race-order-2", "Race", "ok").await;
-    });
-
-    let handle = rt.clone().spawn_instance_to_completion("inst-race-order-2", orchestrator).await;
-    let (final_history, output) = handle.await.unwrap();
+    with_each_store(|store| async {
+        let rt = runtime::Runtime::start_with_store(store, Arc::new(registry.clone())).await;
+        let rt_clone = rt.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+            rt_clone.raise_event("inst-race-order-2", "Race", "ok").await;
+        });
+        let handle = rt.clone().spawn_instance_to_completion("inst-race-order-2", orchestrator).await;
+        let (final_history, output) = handle.await.unwrap();
 
     assert_eq!(output, "external");
     // If both present, ensure external event is before timer fired (or timer may be absent)
@@ -417,7 +432,8 @@ async fn race_event_vs_timer_event_wins() {
         assert!(idx_e < idx_t, "expected external before timer: {final_history:#?}");
     }
 
-    rt.shutdown().await;
+        rt.shutdown().await;
+    }).await;
 }
 
 
