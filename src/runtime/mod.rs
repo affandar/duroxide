@@ -3,6 +3,7 @@ use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
 use tokio::task::JoinHandle;
 use crate::{Action, Event, OrchestrationContext, run_turn};
+use tracing::{debug, warn};
 
 pub mod activity;
 
@@ -34,12 +35,8 @@ impl CompletionRouter {
             | OrchestratorMsg::ExternalEvent { instance, .. }
             | OrchestratorMsg::ExternalByName { instance, .. } => instance.clone(),
         };
-        if let Some(tx) = self.inboxes.lock().await.get(&key) {
-            let _ = tx.send(msg);
-        } else {
-            // No running orchestration for this instance; ignore with warning
-            eprintln!("[Runtime] Warning: dropping message for unknown instance '{}': {:?}", key, kind_of(&msg));
-        }
+        if let Some(tx) = self.inboxes.lock().await.get(&key) { let _ = tx.send(msg); }
+        else { warn!(instance=%key, kind=%kind_of(&msg), "dropping message for unknown instance"); }
     }
 }
 
@@ -63,6 +60,11 @@ pub struct Runtime {
 
 impl Runtime {
     pub async fn start(registry: Arc<activity::ActivityRegistry>) -> Arc<Self> {
+        // Install a default subscriber if none set (ok to call many times)
+        let _ = tracing_subscriber::fmt()
+            .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
+            .try_init();
+
         let (activity_tx, activity_rx) = mpsc::channel::<ActivityWorkItem>(512);
         let (timer_tx, timer_rx) = mpsc::channel::<TimerWorkItem>(512);
         let (router_tx, mut router_rx) = mpsc::unbounded_channel::<OrchestratorMsg>();
@@ -123,16 +125,18 @@ impl Runtime {
             for a in actions {
                 match a {
                     Action::CallActivity { id, name, input } => {
+                        debug!(instance, id, name=%name, "dispatch activity");
                         let _ = self.activity_tx.send(ActivityWorkItem { instance: instance.to_string(), id, name, input }).await;
                     }
                     Action::CreateTimer { id, delay_ms } => {
                         let fire_at_ms = history.iter().rev().find_map(|e| match e {
                             Event::TimerCreated { id: cid, fire_at_ms } if *cid == id => Some(*fire_at_ms), _ => None
                         }).unwrap_or(0);
+                        debug!(instance, id, fire_at_ms, delay_ms, "dispatch timer");
                         let _ = self.timer_tx.send(TimerWorkItem { instance: instance.to_string(), id, fire_at_ms, delay_ms }).await;
                     }
                     Action::WaitExternal { id, name } => {
-                        // Orchestrator subscribed; external must be raised via Runtime API
+                        debug!(instance, id, name=%name, "subscribe external");
                         let _ = (id, name); // no-op
                     }
                 }

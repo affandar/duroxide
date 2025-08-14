@@ -66,6 +66,9 @@
    - Guidance on schedule_* vs into_* usage (races vs sequential awaits).
    - Error handling and cancellation model (timeouts, activity failures, retries).
 
+9) Error handling and tests
+   - Activities throw errors, control flow works in orchestrations to handle these
+
 ### Explicit TODOs
 - Add proper logging.
 - Add proper metrics.
