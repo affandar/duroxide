@@ -1,90 +1,79 @@
-## TODO: Durable Task Rust Core – Current Context and Next Steps
+## Durable Task Rust Core – Status and Next Steps
 
-### Current context
-- Minimal deterministic orchestration core in `src/lib.rs`:
-  - Public types: `Event`, `Action`, `OrchestrationContext`, `run_turn`, `Executor::drive_to_completion`.
-  - Execution model: single-threaded polling with a no-op `Waker`; logical time advances on `TimerFired` events; GUIDs are deterministic per instance.
-  - Futures for orchestration primitives:
-    - `ctx.call_activity(name, input)` emits `Action::CallActivity` or consumes matching `Event::ActivityResult` during replay.
-    - `ctx.timer(delay_ms)` emits `Action::CreateTimer` or consumes `Event::TimerFired`.
-    - `ctx.wait_external(name)` emits `Action::WaitExternal` or consumes `Event::ExternalEvent`.
-  - Each primitive uses an internal `scheduled: Cell<bool>` to ensure the action is recorded once per future instance, even if polled multiple times before host runs.
-- Sample orchestrator in `src/main.rs`:
-  - Calls A, waits a timer, waits external event "Go", then calls B; result is formatted string.
-  - `host_execute_actions` simulates a host by appending matching `Event`s to history.
-  - Run once to completion, then replay to verify determinism (no new actions, identical output).
+### Current state (green)
+- Deterministic orchestration core (`src/lib.rs`)
+  - Correlated history with stable IDs: `ActivityScheduled/Completed`, `TimerCreated/Fired`, `ExternalSubscribed/Event`.
+  - Unified `DurableFuture` with composable `schedule_*` APIs and typed adapters: `into_activity()`, `into_timer()`, `into_event()`.
+  - Single-poll-per-turn determinism preserved; replay consumes by correlation from history (not head-of-queue).
 
-### Decisions and constraints
-- Focus scope: implement an in-memory provider and an Azure Storage-backed provider; skip tracing/observability for now.
-- Keep deterministic replay as the primary invariant; host/provider must only append to history, never mutate existing entries.
+- Message-driven runtime (`src/runtime/`)
+  - `Runtime` with long-lived Tokio worker pools (activity, timer) and a completion router.
+  - `ActivityRegistry` to register async activity handlers; `ActivityWorker` dispatches by name.
+  - Real-time timers (sleep for requested delay) and `raise_event(instance, name, data)` API.
+  - Per-instance inbox; messages to unknown instances are ignored with a warning.
+  - Instance execution: `spawn_instance_to_completion` (async task), `run_instance_to_completion` (direct), `drain_instances`, `shutdown`.
+
+- Tests (10/10, fast; real-time delays are a few ms)
+  - Deterministic end-to-end orchestration and replay.
+  - Races (activity vs timer vs external), staggered completions across turns.
+  - Sequential fan-in chain, action-order determinism in first turn.
+  - External-only orchestration; event-vs-timer ordering (both ways).
+  - External sent before instance start is dropped (ignored) and later event succeeds.
+
+### What we’ve accomplished
+- Refactored to DTF-style correlated events and buffered resolution; removed head-of-queue assumptions.
+- Simplified API while keeping composability and ergonomics (`schedule_*` + `into_*`).
+- Split host into a message-based runtime; workers run independently of instance turns.
+- Added spawn/drain lifecycle for running multiple instances concurrently.
+- Converted tests to the runtime; added race/order/ignore-before-start cases.
 
 ### Proposed next steps (prioritized)
-0. Refactor to correlated event IDs and buffered completions (DTF-style)
-   - Introduce stable correlation IDs for actions/events:
-     - Activity: TaskScheduled(id) ↔ TaskCompleted(id)
-     - Timer: TimerCreated(id) ↔ TimerFired(id)
-     - External: ExternalSubscribed(name, id?) ↔ ExternalRaised(name, seq or id)
-   - Context should buffer completions by correlation rather than consuming strictly from the head of history.
-   - Futures resolve by matching their correlation, allowing multiple results (from races) to exist without replay corruption.
-   - Define deterministic tie-breaking for WhenAny-like races (match history order); leave losing contenders buffered for later awaits.
-   - Update unified futures and `run_turn` to use the buffer; keep single-poll-per-turn semantics deterministic [[race refactor]].
-   - Convert existing tests; keep `complex_control_flow_orchestration` as a guard against the current failure mode.
-1. Extract provider-facing traits
-   - Define minimal traits for a host/provider boundary (names suggestive):
-     - `HistoryStore` (append-only per instance; read by cursor/index),
-     - `TimerScheduler` (persist timers as events to fire at logical time),
-     - `ExternalEventRouter` (enqueue external events),
-     - Optionally a single `Provider` that exposes these capabilities.
-   - Include an `InstanceId` concept and plumb it through `OrchestrationContext`.
+1) Provider model and persistence
+   - Define a provider trait set to abstract storage and routing:
+     - `HistoryStore` (append/read by instance, durable)
+     - `TimerScheduler` (durable, wakes by wall-clock)
+     - `ExternalEventRouter` (enqueue/signal to instances)
+     - Optional `WorkQueue` abstraction for activities
+   - Plug the runtime against these traits; keep the current in-memory implementation as a baseline.
 
-2. Implement an in-memory provider
-   - Thread-safe append-only history per `InstanceId` (e.g., `Arc<Mutex<HashMap<InstanceId, Vec<Event>>>>`).
-   - Deterministic host loop that:
-     - Calls `run_turn` with the current instance history,
-     - Executes returned `Action`s to append new `Event`s,
-     - Repeats until `run_turn` returns `Some(output)`.
+2) File-system provider
+   - Simple, append-only per-instance history files with fsync; directory-per-instance for events and work.
+   - Basic crash recovery: on restart, read history and resume turns; ensure id adoption remains deterministic.
 
-3. Refactor `src/main.rs` host
-   - Replace `host_execute_actions` with the in-memory provider implementation and a reusable `run_to_completion(instance_id, orchestrator)` helper.
+3) Azure Blob (or Table/Queue) provider
+   - Minimal schema for append-only history and durable timers.
+   - Map activities to a queue; completions flow back as events.
+   - Keep it behind a feature flag initially.
 
-4. Introduce public instance-level API
-   - `start_new(orchestrator, input) -> InstanceId`.
-   - `raise_event(instance_id, name, data)`.
-   - `get_status(instance_id) -> { history_len, last_event_time, output? }`.
+4) Determinism helpers
+   - GUID and logical-time determinism utilities to ensure reproducible values under replay.
+   - Make available in `OrchestrationContext` for user orchestrations (e.g., `ctx.new_guid()`, `ctx.now_ms()`).
 
-5. Tests to lock in replay determinism
-   - Activity -> Timer -> ExternalEvent scenario (current sample) via the provider API.
-   - Multiple activities and timers, parallel fan-out/fan-in, event ordering edge cases.
-   - Negative tests: mismatched correlation should panic during replay; verify buffered race losers don’t corrupt subsequent awaits.
+5) Crash recovery tests
+   - Kill between scheduling and completion; on resume, ensure no duplicate scheduling and deterministic convergence.
+   - Corrupted/out-of-order histories: detect and fail fast or recover by correlation.
 
-6. Azure Storage provider scaffold
-   - Research available Rust crates for Azure Storage (Queues/Tables/Blobs) and viability for Durable semantics.
-   - Define a minimal storage schema compatible with append-only history (Tables for history, Queues for work dispatch, or a simplified single store to start).
-   - Implement a no-op or stubbed provider behind a feature flag; iterate to real I/O afterward.
+6) Observability
+   - Proper logging (structured) across core and runtime.
+   - Metrics for turns, queue depth, action counts, latency, and failure rates.
 
-7. Repository structure and docs
-   - Add a `providers/` module with `in_memory` and `azure_storage` submodules.
-   - Expand `README.md` with usage examples and invariants.
+7) Visualization
+   - Small website to visualize instance history and state transitions (timeline of events, per-turn view).
+   - Live view for in-memory provider; pluggable backends later.
 
-### Nice-to-haves / tech debt
-- Proper executor integration (wake and re-poll strategy) beyond `poll_once` loop.
-- Cancellation and timeouts; activity failure semantics and retries.
-- Serialization via `serde` for activity inputs/outputs and events.
-- Concurrency controls for fan-out/fan-in workflows.
-- Logging (optional; avoid tracing until providers are done).
-- Packaging and CI (fmt, clippy, tests).
+8) API polish and docs
+   - Public `Runtime`/`ActivityRegistry` docs and examples.
+   - Guidance on schedule_* vs into_* usage (races vs sequential awaits).
+   - Error handling and cancellation model (timeouts, activity failures, retries).
 
-### Quick run check (today)
-- `cargo run` should print a completed result and a successful deterministic replay.
+### Explicit TODOs
+- Add proper logging.
+- Add proper metrics.
+- Build a website to visualize execution.
+- Formalize a provider model for the state, queues and timers.
+- Write a file system based provider.
+- Write an Azure Blob based provider.
+- Write GUID and time deterministic helper methods.
+- Crash recovery tests.
 
-### Open question: schedule_* futures vs ergonomic wrappers
-- Summary: We kept both the composable primitives (`schedule_activity`, `schedule_timer`, `schedule_wait`) which return a unified `DurableFuture -> DurableOutput`, and the ergonomic wrappers (`call_activity`, `timer`, `wait_external`) that map directly to concrete outputs (`String`/`()`/`String`).
-- Why both:
-  - Composability: `schedule_*` enables racing/combining with `select`, `join`, `join3`, etc., since they share a single future/output type.
-  - Ergonomics: wrappers avoid repetitive `match` boilerplate when awaiting a single primitive sequentially.
-- What to understand deeper:
-  - Whether we can design combinators (e.g., `when_any`, `when_all`) that preserve arrival-order deterministically without relying on poll-order bias of `select`.
-  - Tradeoffs of typed `DurableOutput` vs forcing a uniform `String` output. Current choice favors type clarity and safety over superficial uniformity.
-  - Clear guidance on when to use `schedule_*` (races/fan-out) vs wrappers (simple awaits) to minimize code duplication while staying explicit.
-  - Impact on replay determinism: ensure combinators pick earliest completion by history order when needed; wrappers should remain simple pass-throughs.
-  - API surface: if we ever drop wrappers, show concise helper patterns to extract `DurableOutput` without noise; otherwise keep both paths documented.
+
