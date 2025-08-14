@@ -17,3 +17,4 @@ anyhow = "1"
 async-trait = "0.1"
 tracing = { version = "0.1", features = ["std"] }
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+tempfile = "3"

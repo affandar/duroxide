@@ -12,5 +12,6 @@ pub trait HistoryStore: Send + Sync {
 // Providers are datastores only; runtime owns queues and workers.
 
 pub mod in_memory;
+pub mod fs;
 
 

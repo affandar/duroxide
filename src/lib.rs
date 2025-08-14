@@ -9,7 +9,9 @@ use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
 pub mod runtime;
 pub mod providers;
 
-#[derive(Debug, Clone)]
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Event {
     // Activity lifecycle
     ActivityScheduled { id: u64, name: String, input: String },

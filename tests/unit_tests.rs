@@ -1,5 +1,7 @@
 use rust_dtf::{run_turn, OrchestrationContext, Event, Action};
 use rust_dtf::runtime::{self, activity::ActivityRegistry};
+use rust_dtf::providers::{HistoryStore};
+use rust_dtf::providers::fs::FsHistoryStore;
 use std::sync::Arc;
 
 // 1) Single-turn emission: ensure exactly one action per scheduled future and matching schedule event recorded.
@@ -70,9 +72,8 @@ async fn deterministic_replay_activity_only() {
 // 4) HistoryStore admin APIs (in-memory)
 #[tokio::test]
 async fn history_store_admin_apis() {
-    use rust_dtf::providers::in_memory::InMemoryHistoryStore;
-    use rust_dtf::providers::HistoryStore;
-    let store = InMemoryHistoryStore::default();
+    let tmp = tempfile::tempdir().unwrap();
+    let store = FsHistoryStore::new(tmp.path());
     store.append("i1", vec![Event::TimerCreated { id: 1, fire_at_ms: 10 }]).await;
     store.append("i2", vec![Event::ExternalSubscribed { id: 1, name: "Go".into() }]).await;
     let instances = store.list_instances().await;
