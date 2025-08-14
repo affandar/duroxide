@@ -7,6 +7,7 @@ use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
 // Public orchestration primitives and executor
 
 pub mod runtime;
+pub mod providers;
 
 #[derive(Debug, Clone)]
 pub enum Event {

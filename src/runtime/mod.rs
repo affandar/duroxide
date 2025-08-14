@@ -3,6 +3,8 @@ use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
 use tokio::task::JoinHandle;
 use crate::{Action, Event, OrchestrationContext, run_turn};
+use crate::providers::HistoryStore;
+use crate::providers::in_memory::InMemoryHistoryStore;
 use tracing::{debug, warn};
 
 pub mod activity;
@@ -56,10 +58,16 @@ pub struct Runtime {
     router: Arc<CompletionRouter>,
     joins: Mutex<Vec<JoinHandle<()>>>,
     instance_joins: Mutex<Vec<JoinHandle<()>>>,
+    history_store: Arc<dyn HistoryStore>,
 }
 
 impl Runtime {
     pub async fn start(registry: Arc<activity::ActivityRegistry>) -> Arc<Self> {
+        let history_store: Arc<dyn HistoryStore> = Arc::new(InMemoryHistoryStore::default());
+        Self::start_with_store(history_store, registry).await
+    }
+
+    pub async fn start_with_store(history_store: Arc<dyn HistoryStore>, registry: Arc<activity::ActivityRegistry>) -> Arc<Self> {
         // Install a default subscriber if none set (ok to call many times)
         let _ = tracing_subscriber::fmt()
             .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
@@ -88,7 +96,7 @@ impl Runtime {
             while let Some(msg) = router_rx.recv().await { router_clone.forward(msg).await; }
         }));
 
-        Arc::new(Self { activity_tx, timer_tx, router_tx, router, joins: Mutex::new(joins), instance_joins: Mutex::new(Vec::new()) })
+        Arc::new(Self { activity_tx, timer_tx, router_tx, router, joins: Mutex::new(joins), instance_joins: Mutex::new(Vec::new()), history_store })
     }
 
     pub async fn shutdown(self: Arc<Self>) {
@@ -114,10 +122,15 @@ impl Runtime {
         OFut: std::future::Future<Output = O> + Send + 'static,
         O: Send + 'static,
     {
-        let mut history: Vec<Event> = Vec::new();
+        // Load existing history from store if any
+        let mut history: Vec<Event> = self.history_store.read(instance).await;
         let mut comp_rx = self.router.register(instance).await;
 
+        // Rehydrate pending activities and timers from history
+        rehydrate_pending(instance, &history, &self.activity_tx, &self.timer_tx).await;
+
         loop {
+            let baseline_len = history.len();
             let (hist_after, actions, out_opt) = run_turn(history, &orchestrator);
             history = hist_after;
             if let Some(out) = out_opt { return (history, out); }
@@ -150,6 +163,12 @@ impl Runtime {
                     Ok(msg) => append_completion(&mut history, msg),
                     Err(_) => break,
                 }
+            }
+
+            // Persist new events appended during this turn
+            if history.len() > baseline_len {
+                let new_events = history[baseline_len..].to_vec();
+                self.history_store.append(instance, new_events).await;
             }
         }
     }
@@ -209,6 +228,55 @@ impl Runtime {
         let _ = self.router_tx.send(OrchestratorMsg::ExternalByName {
             instance: instance.to_string(), name: name.into(), data: data.into(),
         });
+    }
+}
+
+async fn rehydrate_pending(
+    instance: &str,
+    history: &Vec<Event>,
+    activity_tx: &mpsc::Sender<ActivityWorkItem>,
+    timer_tx: &mpsc::Sender<TimerWorkItem>,
+) {
+    use std::collections::HashSet;
+    let mut completed_activities: HashSet<u64> = HashSet::new();
+    let mut fired_timers: HashSet<u64> = HashSet::new();
+
+    for e in history.iter() {
+        match e {
+            Event::ActivityCompleted { id, .. } => { completed_activities.insert(*id); }
+            Event::TimerFired { id, .. } => { fired_timers.insert(*id); }
+            _ => {}
+        }
+    }
+
+    // Re-enqueue activities that were scheduled but not completed
+    for e in history.iter() {
+        if let Event::ActivityScheduled { id, name, input } = e {
+            if !completed_activities.contains(id) {
+                let _ = activity_tx.send(ActivityWorkItem {
+                    instance: instance.to_string(),
+                    id: *id,
+                    name: name.clone(),
+                    input: input.clone(),
+                }).await;
+            }
+        }
+    }
+
+    // Re-arm timers that were created but not fired
+    for e in history.iter() {
+        if let Event::TimerCreated { id, fire_at_ms } = e {
+            if !fired_timers.contains(id) {
+                // Best-effort remaining delay; if already past, fire immediately (0ms)
+                let delay_ms = 0u64.max(*fire_at_ms);
+                let _ = timer_tx.send(TimerWorkItem {
+                    instance: instance.to_string(),
+                    id: *id,
+                    fire_at_ms: *fire_at_ms,
+                    delay_ms,
+                }).await;
+            }
+        }
     }
 }
 
