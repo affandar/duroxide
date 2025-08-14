@@ -1,0 +1,149 @@
+use futures::future::{join3};
+use std::sync::Arc;
+use rust_dtf::{Event, OrchestrationContext};
+use rust_dtf::runtime::{self, activity::ActivityRegistry};
+use rust_dtf::providers::HistoryStore;
+use rust_dtf::providers::in_memory::InMemoryHistoryStore;
+use rust_dtf::providers::fs::FsHistoryStore;
+use std::sync::Arc as StdArc;
+
+async fn concurrent_orchestrations_different_activities_with(store: StdArc<dyn HistoryStore>) {
+    let o1 = |ctx: OrchestrationContext| async move {
+        let f_a = ctx.schedule_activity("Add", "2,3");
+        let f_e = ctx.schedule_wait("Go");
+        let f_t = ctx.schedule_timer(1);
+        let (a, e, _) = join3(f_a.into_activity(), f_e.into_event(), f_t.into_timer()).await;
+        let a = a.unwrap();
+        format!("o1:sum={a};evt={e}")
+    };
+    let o2 = |ctx: OrchestrationContext| async move {
+        let f_a = ctx.schedule_activity("Upper", "hi");
+        let f_e = ctx.schedule_wait("Go");
+        let f_t = ctx.schedule_timer(1);
+        let (a, e, _) = join3(f_a.into_activity(), f_e.into_event(), f_t.into_timer()).await;
+        let a = a.unwrap();
+        format!("o2:up={a};evt={e}")
+    };
+
+    let registry = ActivityRegistry::builder()
+        .register("Add", |input: String| async move {
+            let mut parts = input.split(',');
+            let a = parts.next().unwrap_or("0").parse::<i64>().unwrap_or(0);
+            let b = parts.next().unwrap_or("0").parse::<i64>().unwrap_or(0);
+            (a + b).to_string()
+        })
+        .register("Upper", |input: String| async move { input.to_uppercase() })
+        .build();
+
+    let rt = runtime::Runtime::start_with_store(store, Arc::new(registry)).await;
+    let h1 = rt.clone().spawn_instance_to_completion("inst-multi-1", o1).await;
+    let h2 = rt.clone().spawn_instance_to_completion("inst-multi-2", o2).await;
+
+    let rt_c = rt.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(3)).await;
+        rt_c.raise_event("inst-multi-1", "Go", "E1").await;
+    });
+    let rt_c2 = rt.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(4)).await;
+        rt_c2.raise_event("inst-multi-2", "Go", "E2").await;
+    });
+
+    let (hist1, out1) = h1.await.unwrap();
+    let (hist2, out2) = h2.await.unwrap();
+
+    assert!(out1.contains("o1:sum=5;evt=E1"), "unexpected out1: {out1}");
+    assert!(out2.contains("o2:up=HI;evt=E2"), "unexpected out2: {out2}");
+
+    assert!(hist1.iter().any(|e| matches!(e, Event::ActivityCompleted { id, result } if *id == 1 && result == "5")));
+    assert!(hist2.iter().any(|e| matches!(e, Event::ActivityCompleted { id, result } if *id == 1 && result == "HI")));
+    assert!(hist1.iter().any(|e| matches!(e, Event::ExternalEvent { id, data, .. } if *id == 2 && data == "E1")));
+    assert!(hist2.iter().any(|e| matches!(e, Event::ExternalEvent { id, data, .. } if *id == 2 && data == "E2")));
+    assert!(hist1.iter().any(|e| matches!(e, Event::TimerFired { id, .. } if *id == 3)));
+    assert!(hist2.iter().any(|e| matches!(e, Event::TimerFired { id, .. } if *id == 3)));
+
+    rt.shutdown().await;
+}
+
+#[tokio::test]
+async fn concurrent_orchestrations_different_activities_inmem() {
+    let store = StdArc::new(InMemoryHistoryStore::default()) as StdArc<dyn HistoryStore>;
+    concurrent_orchestrations_different_activities_with(store).await;
+}
+
+#[tokio::test]
+async fn concurrent_orchestrations_different_activities_fs() {
+    let td = tempfile::tempdir().unwrap();
+    let store = StdArc::new(FsHistoryStore::new(td.path())) as StdArc<dyn HistoryStore>;
+    concurrent_orchestrations_different_activities_with(store).await;
+}
+
+async fn concurrent_orchestrations_same_activities_with(store: StdArc<dyn HistoryStore>) {
+    let o1 = |ctx: OrchestrationContext| async move {
+        let f_a = ctx.schedule_activity("Proc", "10");
+        let f_e = ctx.schedule_wait("Go");
+        let f_t = ctx.schedule_timer(1);
+        let (a, e, _) = join3(f_a.into_activity(), f_e.into_event(), f_t.into_timer()).await;
+        let a = a.unwrap();
+        format!("o1:a={a};evt={e}")
+    };
+    let o2 = |ctx: OrchestrationContext| async move {
+        let _guid = ctx.new_guid();
+        let f_a = ctx.schedule_activity("Proc", "20");
+        let f_e = ctx.schedule_wait("Go");
+        let f_t = ctx.schedule_timer(1);
+        let (a, e, _) = join3(f_a.into_activity(), f_e.into_event(), f_t.into_timer()).await;
+        let a = a.unwrap();
+        format!("o2:a={a};evt={e}")
+    };
+
+    let registry = ActivityRegistry::builder()
+        .register("Proc", |input: String| async move { let n = input.parse::<i64>().unwrap_or(0); (n + 1).to_string() })
+        .build();
+
+    let rt = runtime::Runtime::start_with_store(store, Arc::new(registry)).await;
+    let h1 = rt.clone().spawn_instance_to_completion("inst-same-acts-1", o1).await;
+    let h2 = rt.clone().spawn_instance_to_completion("inst-same-acts-2", o2).await;
+
+    let rt_c = rt.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(3)).await;
+        rt_c.raise_event("inst-same-acts-1", "Go", "P1").await;
+    });
+    let rt_c2 = rt.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        rt_c2.raise_event("inst-same-acts-2", "Go", "P2").await;
+    });
+
+    let (hist1, out1) = h1.await.unwrap();
+    let (hist2, out2) = h2.await.unwrap();
+
+    assert_eq!(out1, "o1:a=11;evt=P1");
+    assert_eq!(out2, "o2:a=21;evt=P2");
+
+    assert!(hist1.iter().any(|e| matches!(e, Event::ActivityCompleted { id, result } if *id == 1 && result == "11")));
+    assert!(hist2.iter().any(|e| matches!(e, Event::ActivityCompleted { id, result } if *id == 1 && result == "21")));
+    assert!(hist1.iter().any(|e| matches!(e, Event::ExternalEvent { id, data, .. } if *id == 2 && data == "P1")));
+    assert!(hist2.iter().any(|e| matches!(e, Event::ExternalEvent { id, data, .. } if *id == 2 && data == "P2")));
+    assert!(hist1.iter().any(|e| matches!(e, Event::TimerFired { id, .. } if *id == 3)));
+    assert!(hist2.iter().any(|e| matches!(e, Event::TimerFired { id, .. } if *id == 3)));
+
+    rt.shutdown().await;
+}
+
+#[tokio::test]
+async fn concurrent_orchestrations_same_activities_inmem() {
+    let store = StdArc::new(InMemoryHistoryStore::default()) as StdArc<dyn HistoryStore>;
+    concurrent_orchestrations_same_activities_with(store).await;
+}
+
+#[tokio::test]
+async fn concurrent_orchestrations_same_activities_fs() {
+    let td = tempfile::tempdir().unwrap();
+    let store = StdArc::new(FsHistoryStore::new(td.path())) as StdArc<dyn HistoryStore>;
+    concurrent_orchestrations_same_activities_with(store).await;
+}
+
+
