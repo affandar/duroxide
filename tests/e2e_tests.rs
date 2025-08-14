@@ -7,8 +7,8 @@ use rust_dtf::providers::in_memory::InMemoryHistoryStore;
 use rust_dtf::providers::fs::FsHistoryStore;
 use std::sync::Arc as StdArc;
 
-async fn orchestrator_completes_and_replays_deterministically_with(store: StdArc<dyn HistoryStore>) {
-    let orchestrator = |ctx: OrchestrationContext| async move {
+async fn orchestration_completes_and_replays_deterministically_with(store: StdArc<dyn HistoryStore>) {
+    let orchestration = |ctx: OrchestrationContext| async move {
         let start = ctx.now_ms();
         let _id = ctx.new_guid();
 
@@ -39,28 +39,28 @@ async fn orchestrator_completes_and_replays_deterministically_with(store: StdArc
         tokio::time::sleep(std::time::Duration::from_millis(6)).await;
         rt_clone.raise_event("inst-orch-1", "Go", "ok").await;
     });
-    let handle = rt.clone().spawn_instance_to_completion("inst-orch-1", orchestrator).await;
+    let handle = rt.clone().spawn_instance_to_completion("inst-orch-1", orchestration).await;
     let (final_history, output) = handle.await.unwrap();
     assert!(output.contains("evt=ok"));
     assert!(output.contains("b=2!"));
     assert_eq!(final_history.len(), 8, "expected 8 history events (scheduled + completed)");
-    let (_h2, acts2, out2) = run_turn(final_history.clone(), orchestrator);
+    let (_h2, acts2, out2) = run_turn(final_history.clone(), orchestration);
     assert!(acts2.is_empty(), "replay should not produce new actions");
     assert_eq!(out2.unwrap(), output);
     rt.shutdown().await;
 }
 
 #[tokio::test]
-async fn orchestrator_completes_and_replays_deterministically_inmem() {
+async fn orchestration_completes_and_replays_deterministically_inmem() {
     let store = StdArc::new(InMemoryHistoryStore::default()) as StdArc<dyn HistoryStore>;
-    orchestrator_completes_and_replays_deterministically_with(store).await;
+    orchestration_completes_and_replays_deterministically_with(store).await;
 }
 
 #[tokio::test]
-async fn orchestrator_completes_and_replays_deterministically_fs() {
+async fn orchestration_completes_and_replays_deterministically_fs() {
     let td = tempfile::tempdir().unwrap();
     let store = StdArc::new(FsHistoryStore::new(td.path())) as StdArc<dyn HistoryStore>;
-    orchestrator_completes_and_replays_deterministically_with(store).await;
+    orchestration_completes_and_replays_deterministically_with(store).await;
 }
 
 async fn any_of_three_returns_first_is_activity_with(store: StdArc<dyn HistoryStore>) {
@@ -939,6 +939,141 @@ async fn recovery_counts_inmem_reexecutes_prebarrier_steps() {
     assert_eq!(c4, 1, "step 4 should run once after resume");
 
     rt2.shutdown().await;
+}
+
+fn parse_activity_result(s: &str) -> Result<String, String> {
+    #[derive(serde::Deserialize)]
+    struct R { ok: bool, #[serde(default)] value: String, #[serde(default)] error: String }
+    let r: R = serde_json::from_str(s).unwrap_or(R { ok: true, value: s.to_string(), error: String::new() });
+    if r.ok { Ok(r.value) } else { Err(r.error) }
+}
+
+async fn error_handling_compensation_on_ship_failure_with(store: StdArc<dyn HistoryStore>) {
+    // Activities return JSON { ok, value | error }
+    let registry = ActivityRegistry::builder()
+        .register("Debit", |input: String| async move {
+            if input == "fail" { serde_json::json!({"ok": false, "error": "insufficient"}).to_string() }
+            else { serde_json::json!({"ok": true, "value": format!("debited:{input}")}).to_string() }
+        })
+        .register("Ship", |input: String| async move {
+            if input == "fail_ship" { serde_json::json!({"ok": false, "error": "courier_down"}).to_string() }
+            else { serde_json::json!({"ok": true, "value": "shipped"}).to_string() }
+        })
+        .register("Credit", |input: String| async move {
+            // Compensation for Debit
+            serde_json::json!({"ok": true, "value": format!("credited:{input}")}).to_string()
+        })
+        .build();
+
+    let orchestration = |ctx: OrchestrationContext| async move {
+        // Step 1: debit
+        let deb = ctx.schedule_activity("Debit", "ok").into_activity().await;
+        let deb = parse_activity_result(&deb);
+        match deb {
+            Err(e) => return format!("debit_failed:{e}"),
+            Ok(deb_val) => {
+                // Step 2: ship (fails)
+                let ship = ctx.schedule_activity("Ship", "fail_ship").into_activity().await;
+                match parse_activity_result(&ship) {
+                    Ok(_) => return "ok".to_string(),
+                    Err(_ship_err) => {
+                        // Compensation: credit
+                        let cred = ctx.schedule_activity("Credit", deb_val).into_activity().await;
+                        let cred = parse_activity_result(&cred).unwrap();
+                        return format!("rolled_back:{cred}");
+                    }
+                }
+            }
+        }
+    };
+
+    let rt = runtime::Runtime::start_with_store(store, Arc::new(registry)).await;
+    let handle = rt.clone().spawn_instance_to_completion("inst-err-ship-1", orchestration).await;
+    let (_hist, out) = handle.await.unwrap();
+    assert!(out.starts_with("rolled_back:credited:"));
+    rt.shutdown().await;
+}
+
+#[tokio::test]
+async fn error_handling_compensation_on_ship_failure_inmem() {
+    let store = StdArc::new(InMemoryHistoryStore::default()) as StdArc<dyn HistoryStore>;
+    error_handling_compensation_on_ship_failure_with(store).await;
+}
+
+#[tokio::test]
+async fn error_handling_compensation_on_ship_failure_fs() {
+    let td = tempfile::tempdir().unwrap();
+    let store = StdArc::new(FsHistoryStore::new(td.path())) as StdArc<dyn HistoryStore>;
+    error_handling_compensation_on_ship_failure_with(store).await;
+}
+
+async fn error_handling_success_path_with(store: StdArc<dyn HistoryStore>) {
+    let registry = ActivityRegistry::builder()
+        .register("Debit", |input: String| async move { serde_json::json!({"ok": true, "value": format!("debited:{input}")}).to_string() })
+        .register("Ship", |_input: String| async move { serde_json::json!({"ok": true, "value": "shipped"}).to_string() })
+        .build();
+
+    let orchestration = |ctx: OrchestrationContext| async move {
+        let deb = ctx.schedule_activity("Debit", "ok").into_activity().await;
+        parse_activity_result(&deb).unwrap();
+        let ship = ctx.schedule_activity("Ship", "ok").into_activity().await;
+        parse_activity_result(&ship).unwrap();
+        "ok".to_string()
+    };
+
+    let rt = runtime::Runtime::start_with_store(store, Arc::new(registry)).await;
+    let handle = rt.clone().spawn_instance_to_completion("inst-err-ok-1", orchestration).await;
+    let (_hist, out) = handle.await.unwrap();
+    assert_eq!(out, "ok");
+    rt.shutdown().await;
+}
+
+#[tokio::test]
+async fn error_handling_success_path_inmem() {
+    let store = StdArc::new(InMemoryHistoryStore::default()) as StdArc<dyn HistoryStore>;
+    error_handling_success_path_with(store).await;
+}
+
+#[tokio::test]
+async fn error_handling_success_path_fs() {
+    let td = tempfile::tempdir().unwrap();
+    let store = StdArc::new(FsHistoryStore::new(td.path())) as StdArc<dyn HistoryStore>;
+    error_handling_success_path_with(store).await;
+}
+
+async fn error_handling_early_debit_failure_with(store: StdArc<dyn HistoryStore>) {
+    let registry = ActivityRegistry::builder()
+        .register("Debit", |input: String| async move { serde_json::json!({"ok": false, "error": format!("bad:{input}")}).to_string() })
+        .register("Ship", |_input: String| async move { serde_json::json!({"ok": true, "value": "shipped"}).to_string() })
+        .register("Credit", |_input: String| async move { serde_json::json!({"ok": true, "value": "credited"}).to_string() })
+        .build();
+
+    let orchestration = |ctx: OrchestrationContext| async move {
+        let deb = ctx.schedule_activity("Debit", "fail").into_activity().await;
+        match parse_activity_result(&deb) {
+            Err(e) => format!("debit_failed:{e}"),
+            Ok(_) => unreachable!(),
+        }
+    };
+
+    let rt = runtime::Runtime::start_with_store(store, Arc::new(registry)).await;
+    let handle = rt.clone().spawn_instance_to_completion("inst-err-debit-1", orchestration).await;
+    let (_hist, out) = handle.await.unwrap();
+    assert!(out.starts_with("debit_failed:"));
+    rt.shutdown().await;
+}
+
+#[tokio::test]
+async fn error_handling_early_debit_failure_inmem() {
+    let store = StdArc::new(InMemoryHistoryStore::default()) as StdArc<dyn HistoryStore>;
+    error_handling_early_debit_failure_with(store).await;
+}
+
+#[tokio::test]
+async fn error_handling_early_debit_failure_fs() {
+    let td = tempfile::tempdir().unwrap();
+    let store = StdArc::new(FsHistoryStore::new(td.path())) as StdArc<dyn HistoryStore>;
+    error_handling_early_debit_failure_with(store).await;
 }
 
 
