@@ -41,7 +41,6 @@ async fn orchestrator_completes_and_replays_deterministically() {
     });
     let handle = rt.clone().spawn_instance_to_completion("inst-orch-1", orchestrator).await;
     let (final_history, output) = handle.await.unwrap();
-    eprintln!("FINAL orchestrator_completes_and_replays_deterministically => history={:#?}, output={}", final_history, output);
     assert!(output.contains("evt=ok"));
     assert!(output.contains("b=2!"));
     assert_eq!(final_history.len(), 8, "expected 8 history events (scheduled + completed)");
@@ -102,8 +101,7 @@ async fn any_of_three_returns_first_is_activity() {
         rt_clone.raise_event("inst-race-1", "Go", "ok").await;
     });
     let handle = rt.clone().spawn_instance_to_completion("inst-race-1", orchestrator).await;
-    let (race_history, output) = handle.await.unwrap();
-    eprintln!("FINAL any_of_three_returns_first_is_activity => history={:#?}, output={}", race_history, output);
+    let (_race_history, output) = handle.await.unwrap();
     assert!(output.starts_with("winner=A:"), "expected activity to win deterministically, got {output}");
     rt.shutdown().await;
 }
@@ -143,7 +141,6 @@ async fn any_of_three_winner_then_staggered_completions() {
     });
     let handle = rt.clone().spawn_instance_to_completion("inst-stagger-1", orchestrator).await;
     let (final_history, output) = handle.await.unwrap();
-    eprintln!("FINAL any_of_three_winner_then_staggered_completions => history={:#?}, output={}", final_history, output);
     assert!(output.starts_with("winner=A:"), "expected activity to win deterministically, got {output}");
 
     // Verify completion ordering across turns: ActivityCompleted before TimerFired before ExternalEvent
@@ -179,8 +176,7 @@ fn action_order_is_deterministic_in_first_turn() {
     };
 
     let history: Vec<Event> = Vec::new();
-    let (hist_after, actions, out) = run_turn(history, orchestrator);
-    eprintln!("TURN action_order_is_deterministic_in_first_turn => history={:#?}, actions={:#?}, output={:?}", hist_after, actions, out);
+    let (_hist_after, actions, _out) = run_turn(history, orchestrator);
     let kinds: Vec<&'static str> = actions
         .iter()
         .map(|a| match a {
@@ -210,7 +206,6 @@ async fn sequential_activity_chain_completes() {
     let rt = runtime::Runtime::start(Arc::new(registry)).await;
     let handle = rt.clone().spawn_instance_to_completion("inst-seq-1", orchestrator).await;
     let (final_history, output) = handle.await.unwrap();
-    eprintln!("FINAL sequential_activity_chain_completes => history={:#?}, output={}", final_history, output);
     assert_eq!(output, "c=2bc");
     assert_eq!(final_history.len(), 6, "expected exactly three scheduled+completed activity pairs in history");
     rt.shutdown().await;
@@ -269,7 +264,6 @@ async fn complex_control_flow_orchestration() {
     });
     let handle = rt.clone().spawn_instance_to_completion("inst-complex-1", orchestrator).await;
     let (final_history, output) = handle.await.unwrap();
-    eprintln!("FINAL complex_control_flow_orchestration => history={:#?}, output={}", final_history, output);
 
     // Expectations:
     // - Fetch attempts = 2 backoffs (3rd attempt succeeds), so attempts==2 when we break
@@ -314,7 +308,6 @@ async fn wait_external_completes() {
 
     let handle = rt.clone().spawn_instance_to_completion("inst-wait-1", orchestrator).await;
     let (final_history, output) = handle.await.unwrap();
-    eprintln!("FINAL wait_external_completes => history={:#?}, output={}", final_history, output);
 
     assert_eq!(output, "only=payload");
     // Expect exactly subscription + event
@@ -347,7 +340,6 @@ async fn external_sent_before_instance_is_ignored() {
 
     let handle = rt.clone().spawn_instance_to_completion("inst-wait-ignore-1", orchestrator).await;
     let (final_history, output) = handle.await.unwrap();
-    eprintln!("FINAL external_sent_before_instance_is_ignored => history={:#?}, output={}", final_history, output);
 
     // Should not have delivered the early event; only the later one is observed
     assert_eq!(output, "only=late");
@@ -382,7 +374,6 @@ async fn race_external_vs_timer_ordering() {
 
     let handle = rt.clone().spawn_instance_to_completion("inst-race-order-1", orchestrator).await;
     let (final_history, output) = handle.await.unwrap();
-    eprintln!("FINAL race_external_vs_timer_ordering => history={:#?}, output={}", final_history, output);
 
     assert_eq!(output, "timer");
     // Ensure TimerFired occurs and external is either absent or after timer
@@ -418,7 +409,6 @@ async fn race_event_vs_timer_event_wins() {
 
     let handle = rt.clone().spawn_instance_to_completion("inst-race-order-2", orchestrator).await;
     let (final_history, output) = handle.await.unwrap();
-    eprintln!("FINAL race_event_vs_timer_event_wins => history={:#?}, output={}", final_history, output);
 
     assert_eq!(output, "external");
     // If both present, ensure external event is before timer fired (or timer may be absent)
