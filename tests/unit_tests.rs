@@ -41,14 +41,14 @@ fn correlation_out_of_order_completion() {
 
     let (_hist_after, actions, out) = run_turn(history, orchestrator);
     assert!(actions.is_empty(), "should resolve from existing completion, no new actions");
-    assert_eq!(out.unwrap(), "ok");
+    assert_eq!(out.unwrap(), Ok("ok".to_string()));
 }
 
 // 3) Deterministic replay on a tiny flow (activity only)
 #[tokio::test]
 async fn deterministic_replay_activity_only() {
     let orchestrator = |ctx: OrchestrationContext| async move {
-        let a = ctx.schedule_activity("A", "2").into_activity().await;
+        let a = ctx.schedule_activity("A", "2").into_activity().await.unwrap();
         format!("a={a}")
     };
 

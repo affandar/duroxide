@@ -16,6 +16,7 @@ pub enum Event {
     // Activity lifecycle
     ActivityScheduled { id: u64, name: String, input: String },
     ActivityCompleted { id: u64, result: String },
+    ActivityFailed { id: u64, error: String },
 
     // Timer lifecycle
     TimerCreated { id: u64, fire_at_ms: u64 },
@@ -60,6 +61,7 @@ impl CtxInner {
             let id_opt = match ev {
                 Event::ActivityScheduled { id, .. }
                 | Event::ActivityCompleted { id, .. }
+                | Event::ActivityFailed { id, .. }
                 | Event::TimerCreated { id, .. }
                 | Event::TimerFired { id, .. }
                 | Event::ExternalSubscribed { id, .. }
@@ -119,7 +121,7 @@ impl OrchestrationContext {
 
 #[derive(Debug, Clone)]
 pub enum DurableOutput {
-    Activity(String),
+    Activity(Result<String, String>),
     Timer,
     External(String),
 }
@@ -149,12 +151,11 @@ impl Future for DurableFuture {
             Kind::Activity { id, name, input, scheduled, ctx } => {
                 let mut inner = ctx.inner.lock().unwrap();
                 // Is there a completion for this id in history?
-                if let Some(result) = inner.history.iter().rev().find_map(|e| match e {
-                    Event::ActivityCompleted { id: cid, result } if cid == id => Some(result.clone()),
+                if let Some(outcome) = inner.history.iter().rev().find_map(|e| match e {
+                    Event::ActivityCompleted { id: cid, result } if cid == id => Some(Ok(result.clone())),
+                    Event::ActivityFailed { id: cid, error } if cid == id => Some(Err(error.clone())),
                     _ => None,
-                }) {
-                    return Poll::Ready(DurableOutput::Activity(result));
-                }
+                }) { return Poll::Ready(DurableOutput::Activity(outcome)); }
                 // If not yet scheduled in history, emit a CallActivity action once
                 let already_scheduled = inner.history.iter().any(|e| matches!(e, Event::ActivityScheduled { id: cid, .. } if cid == id));
                 if !already_scheduled && !scheduled.replace(true) {
@@ -201,10 +202,10 @@ impl Future for DurableFuture {
 }
 
 impl DurableFuture {
-    pub fn into_activity(self) -> impl Future<Output = String> {
+    pub fn into_activity(self) -> impl Future<Output = Result<String, String>> {
         struct Map(DurableFuture);
         impl Future for Map {
-            type Output = String;
+            type Output = Result<String, String>;
             fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
                 let this = unsafe { self.map_unchecked_mut(|s| &mut s.0) };
                 match this.poll(cx) {

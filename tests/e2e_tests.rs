@@ -18,10 +18,10 @@ async fn orchestration_completes_and_replays_deterministically_with(store: StdAr
 
         let (o_a, _o_t, o_e) = join3(f_a, f_t, f_e).await;
 
-        let a = match o_a { DurableOutput::Activity(v) => v, _ => unreachable!("A must be activity result") };
+        let a = match o_a { DurableOutput::Activity(v) => v.unwrap(), _ => unreachable!("A must be activity result") };
         let evt = match o_e { DurableOutput::External(v) => v, _ => unreachable!("Go must be external event") };
 
-        let b = ctx.schedule_activity("B", a.clone()).into_activity().await;
+        let b = ctx.schedule_activity("B", a.clone()).into_activity().await.unwrap();
         format!("id=_hidden, start={start}, evt={evt}, b={b}")
     };
 
@@ -77,7 +77,7 @@ async fn any_of_three_returns_first_is_activity_with(store: StdArc<dyn HistorySt
             // A wins first; now await timer and external
             Either::Left((Either::Left((DurableOutput::Activity(a), f_t_rest)), f_e_rest)) => {
                 let _ = join(f_t_rest, f_e_rest).await;
-                format!("winner=A:{a}")
+                format!("winner=A:{:?}", a)
             }
             // Timer wins first; await activity and external
             Either::Left((Either::Right((DurableOutput::Timer, f_a_rest)), f_e_rest)) => {
@@ -97,9 +97,7 @@ async fn any_of_three_returns_first_is_activity_with(store: StdArc<dyn HistorySt
     };
 
     let registry = ActivityRegistry::builder()
-        .register("A", |input: String| async move {
-            input.parse::<i32>().unwrap_or(0).saturating_add(1).to_string()
-        })
+        .register("A", |input: String| async move { input.parse::<i32>().unwrap_or(0).saturating_add(1).to_string() })
         .build();
 
     let rt = runtime::Runtime::start_with_store(store, Arc::new(registry.clone())).await;
@@ -140,16 +138,14 @@ async fn any_of_three_winner_then_staggered_completions_with(store: StdArc<dyn H
             // A wins first; then await timer and external in any order
             Either::Left((Either::Left((DurableOutput::Activity(a), f_t_rest)), f_e_rest)) => {
                 let _ = join(f_t_rest, f_e_rest).await;
-                format!("winner=A:{a}")
+                format!("winner=A:{:?}", a)
             }
             _ => panic!("unexpected winner variant"),
         }
     };
 
     let registry = ActivityRegistry::builder()
-        .register("A", |input: String| async move {
-            input.parse::<i32>().unwrap_or(0).saturating_add(1).to_string()
-        })
+        .register("A", |input: String| async move { input.parse::<i32>().unwrap_or(0).saturating_add(1).to_string() })
         .build();
 
     let rt = runtime::Runtime::start_with_store(store, Arc::new(registry.clone())).await;
@@ -219,9 +215,9 @@ fn action_order_is_deterministic_in_first_turn() {
 
 async fn sequential_activity_chain_completes_with(store: StdArc<dyn HistoryStore>) {
     let orchestrator = |ctx: OrchestrationContext| async move {
-        let a = ctx.schedule_activity("A", "1").into_activity().await;
-        let b = ctx.schedule_activity("B", a).into_activity().await;
-        let c = ctx.schedule_activity("C", b).into_activity().await;
+        let a = ctx.schedule_activity("A", "1").into_activity().await.unwrap();
+        let b = ctx.schedule_activity("B", a).into_activity().await.unwrap();
+        let c = ctx.schedule_activity("C", b).into_activity().await.unwrap();
         format!("c={c}")
     };
 
@@ -264,7 +260,7 @@ async fn complex_control_flow_orchestration_with(store: StdArc<dyn HistoryStore>
         // Retry Fetch until it returns "ok"; backoff 5ms between attempts
         let mut attempts = 0u32;
         loop {
-            let res = ctx.schedule_activity("Fetch", attempts.to_string()).into_activity().await;
+            let res = ctx.schedule_activity("Fetch", attempts.to_string()).into_activity().await.unwrap();
             if res == "ok" { break; }
             attempts += 1;
             ctx.schedule_timer(5).into_timer().await;
@@ -281,7 +277,7 @@ async fn complex_control_flow_orchestration_with(store: StdArc<dyn HistoryStore>
         // Sequential dependent activities in a loop
         let mut acc = String::from("seed");
         for i in 0..3u32 {
-            acc = ctx.schedule_activity("Acc", format!("{acc}-{i}")).into_activity().await;
+            acc = ctx.schedule_activity("Acc", format!("{acc}-{i}")).into_activity().await.unwrap();
         }
 
         format!("attempts={attempts}, branch={branch}, acc={acc}")
@@ -498,6 +494,7 @@ async fn concurrent_orchestrations_different_activities_with(store: StdArc<dyn H
         let f_e = ctx.schedule_wait("Go");
         let f_t = ctx.schedule_timer(1);
         let (a, e, _) = join3(f_a.into_activity(), f_e.into_event(), f_t.into_timer()).await;
+        let a = a.unwrap();
         format!("o1:sum={a};evt={e}")
     };
     let o2 = |ctx: OrchestrationContext| async move {
@@ -505,6 +502,7 @@ async fn concurrent_orchestrations_different_activities_with(store: StdArc<dyn H
         let f_e = ctx.schedule_wait("Go");
         let f_t = ctx.schedule_timer(1);
         let (a, e, _) = join3(f_a.into_activity(), f_e.into_event(), f_t.into_timer()).await;
+        let a = a.unwrap();
         format!("o2:up={a};evt={e}")
     };
 
@@ -570,6 +568,7 @@ async fn concurrent_orchestrations_same_activities_with(store: StdArc<dyn Histor
         let f_e = ctx.schedule_wait("Go");
         let f_t = ctx.schedule_timer(1);
         let (a, e, _) = join3(f_a.into_activity(), f_e.into_event(), f_t.into_timer()).await;
+        let a = a.unwrap();
         format!("o1:a={a};evt={e}")
     };
     let o2 = |ctx: OrchestrationContext| async move {
@@ -578,6 +577,7 @@ async fn concurrent_orchestrations_same_activities_with(store: StdArc<dyn Histor
         let f_e = ctx.schedule_wait("Go");
         let f_t = ctx.schedule_timer(1);
         let (a, e, _) = join3(f_a.into_activity(), f_e.into_event(), f_t.into_timer()).await;
+        let a = a.unwrap();
         format!("o2:a={a};evt={e}")
     };
 
@@ -640,11 +640,11 @@ where
 {
     // Orchestrator performs 4 steps with a barrier between 2 and 3
     let orchestrator = |ctx: OrchestrationContext| async move {
-        let s1 = ctx.schedule_activity("Step", "1").into_activity().await;
-        let s2 = ctx.schedule_activity("Step", "2").into_activity().await;
+        let s1 = ctx.schedule_activity("Step", "1").into_activity().await.unwrap();
+        let s2 = ctx.schedule_activity("Step", "2").into_activity().await.unwrap();
         let _ = ctx.schedule_wait("Resume").into_event().await;
-        let s3 = ctx.schedule_activity("Step", "3").into_activity().await;
-        let s4 = ctx.schedule_activity("Step", "4").into_activity().await;
+        let s3 = ctx.schedule_activity("Step", "3").into_activity().await.unwrap();
+        let s4 = ctx.schedule_activity("Step", "4").into_activity().await.unwrap();
         format!("{s1}{s2}{s3}{s4}")
     };
 
@@ -941,28 +941,21 @@ async fn recovery_counts_inmem_reexecutes_prebarrier_steps() {
     rt2.shutdown().await;
 }
 
-fn parse_activity_result(s: &str) -> Result<String, String> {
-    #[derive(serde::Deserialize)]
-    struct R { ok: bool, #[serde(default)] value: String, #[serde(default)] error: String }
-    let r: R = serde_json::from_str(s).unwrap_or(R { ok: true, value: s.to_string(), error: String::new() });
-    if r.ok { Ok(r.value) } else { Err(r.error) }
+fn parse_activity_result(s: &Result<String, String>) -> Result<String, String> {
+    s.clone()
 }
 
 async fn error_handling_compensation_on_ship_failure_with(store: StdArc<dyn HistoryStore>) {
     // Activities return JSON { ok, value | error }
     let registry = ActivityRegistry::builder()
-        .register("Debit", |input: String| async move {
-            if input == "fail" { serde_json::json!({"ok": false, "error": "insufficient"}).to_string() }
-            else { serde_json::json!({"ok": true, "value": format!("debited:{input}")}).to_string() }
+        .register_result("Debit", |input: String| async move {
+            if input == "fail" { Err("insufficient".to_string()) }
+            else { Ok(format!("debited:{input}")) }
         })
-        .register("Ship", |input: String| async move {
-            if input == "fail_ship" { serde_json::json!({"ok": false, "error": "courier_down"}).to_string() }
-            else { serde_json::json!({"ok": true, "value": "shipped"}).to_string() }
+        .register_result("Ship", |input: String| async move {
+            if input == "fail_ship" { Err("courier_down".to_string()) } else { Ok("shipped".to_string()) }
         })
-        .register("Credit", |input: String| async move {
-            // Compensation for Debit
-            serde_json::json!({"ok": true, "value": format!("credited:{input}")}).to_string()
-        })
+        .register_result("Credit", |input: String| async move { Ok(format!("credited:{input}")) })
         .build();
 
     let orchestration = |ctx: OrchestrationContext| async move {
@@ -978,8 +971,7 @@ async fn error_handling_compensation_on_ship_failure_with(store: StdArc<dyn Hist
                     Ok(_) => return "ok".to_string(),
                     Err(_ship_err) => {
                         // Compensation: credit
-                        let cred = ctx.schedule_activity("Credit", deb_val).into_activity().await;
-                        let cred = parse_activity_result(&cred).unwrap();
+                        let cred = ctx.schedule_activity("Credit", deb_val).into_activity().await.unwrap();
                         return format!("rolled_back:{cred}");
                     }
                 }
@@ -1009,8 +1001,8 @@ async fn error_handling_compensation_on_ship_failure_fs() {
 
 async fn error_handling_success_path_with(store: StdArc<dyn HistoryStore>) {
     let registry = ActivityRegistry::builder()
-        .register("Debit", |input: String| async move { serde_json::json!({"ok": true, "value": format!("debited:{input}")}).to_string() })
-        .register("Ship", |_input: String| async move { serde_json::json!({"ok": true, "value": "shipped"}).to_string() })
+        .register_result("Debit", |input: String| async move { Ok(format!("debited:{input}")) })
+        .register_result("Ship", |_input: String| async move { Ok("shipped".to_string()) })
         .build();
 
     let orchestration = |ctx: OrchestrationContext| async move {
@@ -1043,14 +1035,14 @@ async fn error_handling_success_path_fs() {
 
 async fn error_handling_early_debit_failure_with(store: StdArc<dyn HistoryStore>) {
     let registry = ActivityRegistry::builder()
-        .register("Debit", |input: String| async move { serde_json::json!({"ok": false, "error": format!("bad:{input}")}).to_string() })
-        .register("Ship", |_input: String| async move { serde_json::json!({"ok": true, "value": "shipped"}).to_string() })
-        .register("Credit", |_input: String| async move { serde_json::json!({"ok": true, "value": "credited"}).to_string() })
+        .register_result("Debit", |input: String| async move { Err(format!("bad:{input}")) })
+        .register_result("Ship", |_input: String| async move { Ok("shipped".to_string()) })
+        .register_result("Credit", |_input: String| async move { Ok("credited".to_string()) })
         .build();
 
     let orchestration = |ctx: OrchestrationContext| async move {
         let deb = ctx.schedule_activity("Debit", "fail").into_activity().await;
-        match parse_activity_result(&deb) {
+        match deb {
             Err(e) => format!("debit_failed:{e}"),
             Ok(_) => unreachable!(),
         }

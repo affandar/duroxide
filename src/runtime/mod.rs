@@ -17,6 +17,7 @@ pub struct TimerWorkItem { pub instance: String, pub id: u64, pub fire_at_ms: u6
 
 pub enum OrchestratorMsg {
     ActivityCompleted { instance: String, id: u64, result: String },
+    ActivityFailed { instance: String, id: u64, error: String },
     TimerFired { instance: String, id: u64, fire_at_ms: u64 },
     ExternalEvent { instance: String, id: u64, name: String, data: String },
     ExternalByName { instance: String, name: String, data: String },
@@ -33,6 +34,7 @@ impl CompletionRouter {
     async fn forward(&self, msg: OrchestratorMsg) {
         let key = match &msg {
             OrchestratorMsg::ActivityCompleted { instance, .. }
+            | OrchestratorMsg::ActivityFailed { instance, .. }
             | OrchestratorMsg::TimerFired { instance, .. }
             | OrchestratorMsg::ExternalEvent { instance, .. }
             | OrchestratorMsg::ExternalByName { instance, .. } => instance.clone(),
@@ -45,6 +47,7 @@ impl CompletionRouter {
 fn kind_of(msg: &OrchestratorMsg) -> &'static str {
     match msg {
         OrchestratorMsg::ActivityCompleted { .. } => "ActivityCompleted",
+        OrchestratorMsg::ActivityFailed { .. } => "ActivityFailed",
         OrchestratorMsg::TimerFired { .. } => "TimerFired",
         OrchestratorMsg::ExternalEvent { .. } => "ExternalEvent",
         OrchestratorMsg::ExternalByName { .. } => "ExternalByName",
@@ -210,6 +213,7 @@ async fn run_timer_worker(mut rx: mpsc::Receiver<TimerWorkItem>, comp_tx: mpsc::
 fn append_completion(history: &mut Vec<Event>, msg: OrchestratorMsg) {
     match msg {
         OrchestratorMsg::ActivityCompleted { id, result, .. } => history.push(Event::ActivityCompleted { id, result }),
+        OrchestratorMsg::ActivityFailed { id, error, .. } => history.push(Event::ActivityFailed { id, error }),
         OrchestratorMsg::TimerFired { id, fire_at_ms, .. } => history.push(Event::TimerFired { id, fire_at_ms }),
         OrchestratorMsg::ExternalEvent { id, name, data, .. } => history.push(Event::ExternalEvent { id, name, data }),
         OrchestratorMsg::ExternalByName { instance: _, name, data } => {
