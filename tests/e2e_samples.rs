@@ -13,6 +13,7 @@ async fn sample_hello_world_with(store: StdArc<dyn HistoryStore>) {
 
     let orchestration = |ctx: OrchestrationContext| async move {
         let res = ctx.schedule_activity("Hello", "Rust").into_activity().await.unwrap();
+        rust_dtf::durable_info!(ctx, "hello_world result");
         res
     };
 
@@ -40,6 +41,7 @@ async fn sample_basic_control_flow_with(store: StdArc<dyn HistoryStore>) {
 
     let orchestration = |ctx: OrchestrationContext| async move {
         let flag = ctx.schedule_activity("GetFlag", "").into_activity().await.unwrap();
+        rust_dtf::durable_info!(ctx, "control_flow flag decided");
         if flag == "yes" {
             ctx.schedule_activity("SayYes", "").into_activity().await.unwrap()
         } else {
@@ -71,6 +73,7 @@ async fn sample_loop_with(store: StdArc<dyn HistoryStore>) {
         let mut acc = String::from("start");
         for _ in 0..3 {
             acc = ctx.schedule_activity("Append", acc).into_activity().await.unwrap();
+            rust_dtf::durable_info!(ctx, "loop iteration completed");
         }
         acc
     };
@@ -101,7 +104,10 @@ async fn sample_error_handling_with(store: StdArc<dyn HistoryStore>) {
     let orchestration = |ctx: OrchestrationContext| async move {
         match ctx.schedule_activity("Fragile", "bad").into_activity().await {
             Ok(v) => v,
-            Err(_e) => ctx.schedule_activity("Recover", "").into_activity().await.unwrap(),
+            Err(_e) => {
+                rust_dtf::durable_warn!(ctx, "fragile failed, recovering");
+                ctx.schedule_activity("Recover", "").into_activity().await.unwrap()
+            },
         }
     };
 
