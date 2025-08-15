@@ -3,7 +3,6 @@ use std::sync::Arc;
 use rust_dtf::{Event, OrchestrationContext};
 use rust_dtf::runtime::{self, activity::ActivityRegistry};
 use rust_dtf::providers::HistoryStore;
-use rust_dtf::providers::in_memory::InMemoryHistoryStore;
 use rust_dtf::providers::fs::FsHistoryStore;
 use std::sync::Arc as StdArc;
 
@@ -67,12 +66,6 @@ async fn concurrent_orchestrations_different_activities_with(store: StdArc<dyn H
 }
 
 #[tokio::test]
-async fn concurrent_orchestrations_different_activities_inmem() {
-    let store = StdArc::new(InMemoryHistoryStore::default()) as StdArc<dyn HistoryStore>;
-    concurrent_orchestrations_different_activities_with(store).await;
-}
-
-#[tokio::test]
 async fn concurrent_orchestrations_different_activities_fs() {
     let td = tempfile::tempdir().unwrap();
     let store = StdArc::new(FsHistoryStore::new(td.path())) as StdArc<dyn HistoryStore>;
@@ -131,12 +124,6 @@ async fn concurrent_orchestrations_same_activities_with(store: StdArc<dyn Histor
     assert!(hist2.iter().any(|e| matches!(e, Event::TimerFired { id, .. } if *id == 3)));
 
     rt.shutdown().await;
-}
-
-#[tokio::test]
-async fn concurrent_orchestrations_same_activities_inmem() {
-    let store = StdArc::new(InMemoryHistoryStore::default()) as StdArc<dyn HistoryStore>;
-    concurrent_orchestrations_same_activities_with(store).await;
 }
 
 #[tokio::test]

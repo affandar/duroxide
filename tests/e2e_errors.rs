@@ -123,3 +123,91 @@ async fn error_handling_early_debit_failure_fs() {
 }
 
 
+// 5) Unknown activity handler: returns Ok("echo:<input>") by design
+async fn unknown_activity_returns_echo_with(store: StdArc<dyn HistoryStore>) {
+    // No registration for "Missing" on purpose
+    let registry = ActivityRegistry::builder().build();
+    let orchestration = |ctx: OrchestrationContext| async move {
+        ctx.schedule_activity("Missing", "foo").into_activity().await.unwrap()
+    };
+
+    let rt = runtime::Runtime::start_with_store(store, Arc::new(registry)).await;
+    let handle = rt.clone().spawn_instance_to_completion("inst-unknown-act-1", orchestration).await;
+    let (_hist, out) = handle.await.unwrap();
+    assert_eq!(out, "echo:foo");
+    rt.shutdown().await;
+}
+
+#[tokio::test]
+async fn unknown_activity_returns_echo_fs() {
+    let td = tempfile::tempdir().unwrap();
+    let store = StdArc::new(FsHistoryStore::new(td.path())) as StdArc<dyn HistoryStore>;
+    unknown_activity_returns_echo_with(store).await;
+}
+
+// 6) Event after orchestration completion is ignored (no history change)
+#[tokio::test]
+async fn event_after_completion_is_ignored_fs() {
+    let td = tempfile::tempdir().unwrap();
+    let store = StdArc::new(FsHistoryStore::new(td.path())) as StdArc<dyn HistoryStore>;
+    let registry = ActivityRegistry::builder().build();
+
+    let instance = "inst-post-complete-1";
+    // Orchestration: subscribe and exit on first event
+    let orchestration = |ctx: OrchestrationContext| async move {
+        let _ = ctx.schedule_wait("Once").into_event().await;
+        "done".to_string()
+    };
+
+    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(registry)).await;
+    let rt_c = rt.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        rt_c.raise_event(instance, "Once", "go").await;
+    });
+    let handle = rt.clone().spawn_instance_to_completion(instance, orchestration).await;
+    let (hist, out) = handle.await.unwrap();
+    assert_eq!(out, "done");
+    let before = hist.len();
+
+    // Raise another event after completion
+    rt.raise_event(instance, "Once", "late").await;
+    // Give router a moment
+    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    let hist_after = store.read(instance).await;
+    assert_eq!(hist_after.len(), before, "post-completion event must not append history");
+    rt.shutdown().await;
+}
+
+// 7) Event raised before subscription after instance start is ignored
+#[tokio::test]
+async fn event_before_subscription_after_start_is_ignored() {
+    // Use FS store for consistency
+    let td = tempfile::tempdir().unwrap();
+    let store = StdArc::new(FsHistoryStore::new(td.path())) as StdArc<dyn HistoryStore>;
+    let registry = ActivityRegistry::builder().build();
+    let rt = runtime::Runtime::start_with_store(store, Arc::new(registry)).await;
+    // Orchestration: delay, then subscribe
+    let orchestration = |ctx: OrchestrationContext| async move {
+        ctx.schedule_timer(10).into_timer().await;
+        ctx.schedule_wait("Evt").into_event().await
+    };
+    let instance = "inst-pre-sub-drop-1";
+    let rt_c1 = rt.clone();
+    tokio::spawn(async move {
+        // Raise early before subscription exists (timer delays subscription)
+        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+        rt_c1.raise_event(instance, "Evt", "early").await;
+    });
+    let rt_c2 = rt.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(15)).await;
+        rt_c2.raise_event(instance, "Evt", "late").await;
+    });
+    let handle = rt.clone().spawn_instance_to_completion(instance, orchestration).await;
+    let (_hist, out) = handle.await.unwrap();
+    assert_eq!(out, "late");
+    rt.shutdown().await;
+}
+
+

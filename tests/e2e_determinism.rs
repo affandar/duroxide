@@ -3,7 +3,6 @@ use std::sync::Arc;
 use rust_dtf::{run_turn, Event, OrchestrationContext, DurableOutput, Action};
 use rust_dtf::runtime::{self, activity::ActivityRegistry};
 use rust_dtf::providers::HistoryStore;
-use rust_dtf::providers::in_memory::InMemoryHistoryStore;
 use rust_dtf::providers::fs::FsHistoryStore;
 use std::sync::Arc as StdArc;
 
@@ -45,12 +44,6 @@ async fn orchestration_completes_and_replays_deterministically_with(store: StdAr
     assert!(acts2.is_empty(), "replay should not produce new actions");
     assert_eq!(out2.unwrap(), output);
     rt.shutdown().await;
-}
-
-#[tokio::test]
-async fn orchestration_completes_and_replays_deterministically_inmem() {
-    let store = StdArc::new(InMemoryHistoryStore::default()) as StdArc<dyn HistoryStore>;
-    orchestration_completes_and_replays_deterministically_with(store).await;
 }
 
 #[tokio::test]
@@ -104,12 +97,6 @@ async fn sequential_activity_chain_completes_with(store: StdArc<dyn HistoryStore
     assert_eq!(output, "c=2bc");
     assert_eq!(final_history.len(), 6, "expected exactly three scheduled+completed activity pairs in history");
     rt.shutdown().await;
-}
-
-#[tokio::test]
-async fn sequential_activity_chain_completes_inmem() {
-    let store = StdArc::new(InMemoryHistoryStore::default()) as StdArc<dyn HistoryStore>;
-    sequential_activity_chain_completes_with(store).await;
 }
 
 #[tokio::test]
