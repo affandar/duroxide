@@ -2,7 +2,6 @@ use std::sync::Arc;
 use rust_dtf::OrchestrationContext;
 use rust_dtf::runtime::{self, activity::ActivityRegistry};
 use rust_dtf::providers::HistoryStore;
-use rust_dtf::providers::in_memory::InMemoryHistoryStore;
 use rust_dtf::providers::fs::FsHistoryStore;
 use std::sync::Arc as StdArc;
 
@@ -22,12 +21,6 @@ async fn sample_hello_world_with(store: StdArc<dyn HistoryStore>) {
     let (_hist, out) = handle.await.unwrap();
     assert_eq!(out, "Hello, Rust!");
     rt.shutdown().await;
-}
-
-#[tokio::test]
-async fn sample_hello_world_inmem() {
-    let store = StdArc::new(InMemoryHistoryStore::default()) as StdArc<dyn HistoryStore>;
-    sample_hello_world_with(store).await;
 }
 
 #[tokio::test]
@@ -62,12 +55,6 @@ async fn sample_basic_control_flow_with(store: StdArc<dyn HistoryStore>) {
 }
 
 #[tokio::test]
-async fn sample_basic_control_flow_inmem() {
-    let store = StdArc::new(InMemoryHistoryStore::default()) as StdArc<dyn HistoryStore>;
-    sample_basic_control_flow_with(store).await;
-}
-
-#[tokio::test]
 async fn sample_basic_control_flow_fs() {
     let td = tempfile::tempdir().unwrap();
     let store = StdArc::new(FsHistoryStore::new(td.path())) as StdArc<dyn HistoryStore>;
@@ -93,12 +80,6 @@ async fn sample_loop_with(store: StdArc<dyn HistoryStore>) {
     let (_hist, out) = handle.await.unwrap();
     assert_eq!(out, "startxxx");
     rt.shutdown().await;
-}
-
-#[tokio::test]
-async fn sample_loop_inmem() {
-    let store = StdArc::new(InMemoryHistoryStore::default()) as StdArc<dyn HistoryStore>;
-    sample_loop_with(store).await;
 }
 
 #[tokio::test]
@@ -129,12 +110,6 @@ async fn sample_error_handling_with(store: StdArc<dyn HistoryStore>) {
     let (_hist, out) = handle.await.unwrap();
     assert_eq!(out, "recovered");
     rt.shutdown().await;
-}
-
-#[tokio::test]
-async fn sample_error_handling_inmem() {
-    let store = StdArc::new(InMemoryHistoryStore::default()) as StdArc<dyn HistoryStore>;
-    sample_error_handling_with(store).await;
 }
 
 #[tokio::test]
