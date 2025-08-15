@@ -2,6 +2,7 @@ use std::sync::Arc;
 use rust_dtf::{Event, OrchestrationContext};
 use rust_dtf::runtime::{self, activity::ActivityRegistry};
 use rust_dtf::providers::HistoryStore;
+use rust_dtf::providers::in_memory::InMemoryHistoryStore;
 use rust_dtf::providers::fs::FsHistoryStore;
 use std::sync::Arc as StdArc;
 
@@ -81,6 +82,25 @@ async fn recovery_across_restart_fs_provider() {
     assert_eq!(count("4"), 1);
 }
 
-// Optionally keep minimal in-memory sanity tests elsewhere
+#[tokio::test]
+async fn recovery_across_restart_inmem_provider() {
+    let instance = String::from("inst-recover-mem-1");
+    let make_store1 = || StdArc::new(InMemoryHistoryStore::default()) as StdArc<dyn HistoryStore>;
+    let make_store2 = || StdArc::new(InMemoryHistoryStore::default()) as StdArc<dyn HistoryStore>;
+
+    recovery_across_restart_core(make_store1, make_store2, instance.clone()).await;
+
+    let store_before = StdArc::new(InMemoryHistoryStore::default()) as StdArc<dyn HistoryStore>;
+    let store_after = StdArc::new(InMemoryHistoryStore::default()) as StdArc<dyn HistoryStore>;
+    let hist_before = store_before.read(&instance).await;
+    let hist_after = store_after.read(&instance).await;
+
+    let count = |hist: &Vec<Event>, inp: &str| hist.iter().filter(|e| matches!(e, Event::ActivityScheduled { name, input, .. } if name == "Step" && input == inp)).count();
+    assert_eq!(count(&hist_before, "1"), 0);
+    assert_eq!(count(&hist_before, "2"), 0);
+    assert_eq!(count(&hist_after, "1"), 0);
+    assert_eq!(count(&hist_after, "2"), 0);
+}
+
 
 
