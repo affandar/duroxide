@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
 use tokio::task::JoinHandle;
-use crate::{Action, Event, OrchestrationContext, run_turn};
+use crate::{Action, Event, OrchestrationContext, run_turn_with};
 use crate::providers::HistoryStore;
 use crate::providers::in_memory::InMemoryHistoryStore;
 use tracing::{debug, warn};
@@ -132,9 +132,10 @@ impl Runtime {
         // Rehydrate pending activities and timers from history
         rehydrate_pending(instance, &history, &self.activity_tx, &self.timer_tx).await;
 
+        let mut turn_index: u64 = 0;
         loop {
             let baseline_len = history.len();
-            let (hist_after, actions, out_opt) = run_turn(history, &orchestrator);
+            let (hist_after, actions, out_opt) = run_turn_with(history, turn_index, &orchestrator);
             history = hist_after;
             if let Some(out) = out_opt { return (history, out); }
 
@@ -173,6 +174,7 @@ impl Runtime {
                 let new_events = history[baseline_len..].to_vec();
                 self.history_store.append(instance, new_events).await;
             }
+            turn_index = turn_index.saturating_add(1);
         }
     }
 

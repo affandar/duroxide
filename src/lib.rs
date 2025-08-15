@@ -8,6 +8,7 @@ use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
 
 pub mod runtime;
 pub mod providers;
+pub mod logging;
 
 use serde::{Deserialize, Serialize};
 
@@ -43,6 +44,10 @@ struct CtxInner {
     guid_counter: u64,
     next_correlation_id: u64,
 
+    // Logging and turn metadata
+    turn_index: u64,
+    logging_enabled_this_poll: bool,
+
     // Reserved for future use: per-turn claimed ids to coordinate multiple futures
     // (prevent re-scheduling the same id). Currently unused.
     #[allow(dead_code)]
@@ -74,13 +79,19 @@ impl CtxInner {
             actions: Vec::new(),
             guid_counter: 0,
             next_correlation_id: max_id.saturating_add(1),
+            turn_index: 0,
+            logging_enabled_this_poll: false,
             claimed_activity_ids: Default::default(),
             claimed_timer_ids: Default::default(),
             claimed_external_ids: Default::default(),
         }
     }
 
-    fn record_action(&mut self, a: Action) { self.actions.push(a); }
+    fn record_action(&mut self, a: Action) {
+        // Scheduling a new action means this poll is producing new decisions
+        self.logging_enabled_this_poll = true;
+        self.actions.push(a);
+    }
 
     fn now_ms(&self) -> u64 {
         // Logical time is last TimerFired.fire_at_ms seen in history
@@ -115,6 +126,15 @@ impl OrchestrationContext {
     pub fn new_guid(&self) -> String { self.inner.lock().unwrap().new_guid() }
 
     fn take_actions(&self) -> Vec<Action> { std::mem::take(&mut self.inner.lock().unwrap().actions) }
+
+    // Turn metadata
+    pub fn turn_index(&self) -> u64 { self.inner.lock().unwrap().turn_index }
+    pub(crate) fn set_turn_index(&self, idx: u64) { self.inner.lock().unwrap().turn_index = idx; }
+
+    // Replay-safe logging control
+    pub fn is_logging_enabled(&self) -> bool { self.inner.lock().unwrap().logging_enabled_this_poll }
+    #[allow(dead_code)]
+    pub(crate) fn enable_logging(&self) { self.inner.lock().unwrap().logging_enabled_this_poll = true; }
 }
 
 // Unified future/output that allows joining different orchestration primitives
@@ -155,7 +175,11 @@ impl Future for DurableFuture {
                     Event::ActivityCompleted { id: cid, result } if cid == id => Some(Ok(result.clone())),
                     Event::ActivityFailed { id: cid, error } if cid == id => Some(Err(error.clone())),
                     _ => None,
-                }) { return Poll::Ready(DurableOutput::Activity(outcome)); }
+                }) {
+                    // Completion present -> progress
+                    inner.logging_enabled_this_poll = true;
+                    return Poll::Ready(DurableOutput::Activity(outcome));
+                }
                 // If not yet scheduled in history, emit a CallActivity action once
                 let already_scheduled = inner.history.iter().any(|e| matches!(e, Event::ActivityScheduled { id: cid, .. } if cid == id));
                 if !already_scheduled && !scheduled.replace(true) {
@@ -172,6 +196,7 @@ impl Future for DurableFuture {
                     .iter()
                     .any(|e| matches!(e, Event::TimerFired { id: cid, .. } if cid == id))
                 {
+                    inner.logging_enabled_this_poll = true;
                     return Poll::Ready(DurableOutput::Timer);
                 }
                 let already_created = inner.history.iter().any(|e| matches!(e, Event::TimerCreated { id: cid, .. } if cid == id));
@@ -188,6 +213,7 @@ impl Future for DurableFuture {
                     Event::ExternalEvent { id: cid, data, .. } if cid == id => Some(data.clone()),
                     _ => None,
                 }) {
+                    inner.logging_enabled_this_poll = true;
                     return Poll::Ready(DurableOutput::External(data));
                 }
                 let already_subscribed = inner.history.iter().any(|e| matches!(e, Event::ExternalSubscribed { id: cid, .. } if cid == id));
@@ -325,6 +351,26 @@ where
     F: Future<Output = O>,
 {
     let ctx = OrchestrationContext::new(history);
+    let mut fut = orchestrator(ctx.clone());
+    match poll_once(&mut fut) {
+        Poll::Ready(out) => {
+            let hist_after = ctx.inner.lock().unwrap().history.clone();
+            (hist_after, Vec::new(), Some(out))
+        }
+        Poll::Pending => {
+            let actions = ctx.take_actions();
+            let hist_after = ctx.inner.lock().unwrap().history.clone();
+            (hist_after, actions, None)
+        }
+    }
+}
+
+pub fn run_turn_with<O, F>(history: Vec<Event>, turn_index: u64, orchestrator: impl Fn(OrchestrationContext) -> F) -> (Vec<Event>, Vec<Action>, Option<O>)
+where
+    F: Future<Output = O>,
+{
+    let ctx = OrchestrationContext::new(history);
+    ctx.set_turn_index(turn_index);
     let mut fut = orchestrator(ctx.clone());
     match poll_once(&mut fut) {
         Poll::Ready(out) => {
