@@ -104,14 +104,12 @@ impl ActivityWorker {
                         }
                     }
                 }
-            } else {
-                if let Err(_e) = self.completion_tx.send(OrchestratorMsg::ActivityFailed {
-                    instance: wi.instance,
-                    id: wi.id,
-                    error: format!("unregistered:{}", wi.name),
-                }) {
-                    panic!("activity worker: router dropped while sending unregistered failure (id={})", wi.id);
-                }
+            } else if let Err(_e) = self.completion_tx.send(OrchestratorMsg::ActivityFailed {
+                instance: wi.instance,
+                id: wi.id,
+                error: format!("unregistered:{}", wi.name),
+            }) {
+                panic!("activity worker: router dropped while sending unregistered failure (id={})", wi.id);
             }
         }
     }

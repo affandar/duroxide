@@ -19,14 +19,14 @@ async fn error_handling_compensation_on_ship_failure_with(store: StdArc<dyn Hist
         let deb = ctx.schedule_activity("Debit", "ok").into_activity().await;
         let deb = parse_activity_result(&deb);
         match deb {
-            Err(e) => return format!("debit_failed:{e}"),
+            Err(e) => format!("debit_failed:{e}"),
             Ok(deb_val) => {
                 let ship = ctx.schedule_activity("Ship", "fail_ship").into_activity().await;
                 match parse_activity_result(&ship) {
-                    Ok(_) => return "ok".to_string(),
+                    Ok(_) => "ok".to_string(),
                     Err(_) => {
                         let cred = ctx.schedule_activity("Credit", deb_val).into_activity().await.unwrap();
-                        return format!("rolled_back:{cred}");
+                        format!("rolled_back:{cred}")
                     }
                 }
             }

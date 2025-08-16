@@ -18,9 +18,9 @@ async fn sample_hello_world_fs() {
     let orchestration = |ctx: OrchestrationContext| async move {
         ctx.trace_info("hello_world started");
         let res = ctx.schedule_activity("Hello", "Rust").into_activity().await.unwrap();
-        ctx.trace_info(format!("hello_world result={} ", res));
+        ctx.trace_info(format!("hello_world result={res} "));
         let res1 = ctx.schedule_activity("Hello", "Rust123").into_activity().await.unwrap();
-        ctx.trace_info(format!("hello_world result={} ", res1));
+        ctx.trace_info(format!("hello_world result={res1} "));
         res
     };
 
@@ -44,7 +44,7 @@ async fn sample_basic_control_flow_fs() {
 
     let orchestration = |ctx: OrchestrationContext| async move {
         let flag = ctx.schedule_activity("GetFlag", "").into_activity().await.unwrap();
-        ctx.trace_info(format!("control_flow flag decided = {}", flag));
+        ctx.trace_info(format!("control_flow flag decided = {flag}"));
         if flag == "yes" {
             ctx.schedule_activity("SayYes", "").into_activity().await.unwrap()
         } else {
@@ -73,7 +73,7 @@ async fn sample_loop_fs() {
         let mut acc = String::from("start");
         for i in 0..3 {
             acc = ctx.schedule_activity("Append", acc).into_activity().await.unwrap();
-            ctx.trace_info(format!("loop iteration {} completed acc={}", i, acc));
+            ctx.trace_info(format!("loop iteration {i} completed acc={acc}"));
         }
         acc
     };
@@ -100,14 +100,14 @@ async fn sample_error_handling_fs() {
     let orchestration = |ctx: OrchestrationContext| async move {
         match ctx.schedule_activity("Fragile", "bad").into_activity().await {
             Ok(v) => {
-                ctx.trace_info(format!("fragile succeeded value={}", v));
+                ctx.trace_info(format!("fragile succeeded value={v}"));
                 v
             },
             Err(e) => {
-                ctx.trace_warn(format!("fragile failed error={}", e));
+                ctx.trace_warn(format!("fragile failed error={e}"));
                 let rec = ctx.schedule_activity("Recover", "").into_activity().await.unwrap();
                 if rec != "recovered" {
-                    ctx.trace_error(format!("unexpected recovery value={}", rec));
+                    ctx.trace_error(format!("unexpected recovery value={rec}"));
                 }
                 rec
             },
@@ -121,14 +121,13 @@ async fn sample_error_handling_fs() {
     rt.shutdown().await;
 }
 
-
 #[tokio::test]
 async fn dtf_legacy_gabbar_greetings_fs() {
     let td = tempfile::tempdir().unwrap();
     let store = StdArc::new(FsHistoryStore::new(td.path())) as StdArc<dyn HistoryStore>;
 
     let registry = ActivityRegistry::builder()
-        .register_result("Greetings", |input: String| async move { Ok(format!("Hello, {}!", input)) })
+        .register_result("Greetings", |input: String| async move { Ok(format!("Hello, {input}!")) })
         .build();
 
     let orchestration = |ctx: OrchestrationContext| async move {

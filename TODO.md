@@ -11,7 +11,8 @@
 - Write detailed architecture and user documentation 
 - Document all methods
 - Batch the calls to logging, don't spin up an activity per
-- Orchestration state?
+- Orchestration state? Monitoring?
+- Support for orchestration chaining + eternal orchestrations
 
 ## DONE
 

@@ -35,8 +35,7 @@ fn correlation_out_of_order_completion() {
     ];
 
     let orchestrator = |ctx: OrchestrationContext| async move {
-        let out = ctx.schedule_activity("A", "1").into_activity().await;
-        out
+        ctx.schedule_activity("A", "1").into_activity().await
     };
 
     let (_hist_after, actions, _logs, out) = run_turn(history, orchestrator);

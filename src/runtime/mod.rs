@@ -65,7 +65,7 @@ fn kind_of(msg: &OrchestratorMsg) -> &'static str {
 }
 
 /// In-process runtime that executes activities and timers and persists
-/// history via a `HistoryStore`. Suitable for tests and samples.
+/// history via a `HistoryStore`. 
 pub struct Runtime {
     activity_tx: mpsc::Sender<ActivityWorkItem>,
     timer_tx: mpsc::Sender<TimerWorkItem>,
@@ -98,7 +98,7 @@ impl Runtime {
 
         // spawn activity worker with system trace handler pre-registered
         // copy user registrations
-        let mut builder = activity::ActivityRegistryBuilder::from_registry(&*registry);
+        let mut builder = activity::ActivityRegistryBuilder::from_registry(&registry);
         // add system trace activity
         builder = builder.register_result("__system_trace", |input: String| async move {
             // input format: "LEVEL:message"
@@ -210,7 +210,7 @@ impl Runtime {
                 if let Err(e) = self.history_store.append(instance, new_events).await {
                     error!(instance, turn_index, error=%e, "failed to append history");
                     // Surface as panic for now to preserve determinism
-                    panic!("history append failed: {}", e);
+                    panic!("history append failed: {e}");
                 }
                 turn_index = turn_index.saturating_add(1);
             }
@@ -309,7 +309,7 @@ impl Runtime {
 
 async fn rehydrate_pending(
     instance: &str,
-    history: &Vec<Event>,
+    history: &[Event],
     activity_tx: &mpsc::Sender<ActivityWorkItem>,
     timer_tx: &mpsc::Sender<TimerWorkItem>,
 ) {
@@ -346,7 +346,7 @@ async fn rehydrate_pending(
         if let Event::TimerCreated { id, fire_at_ms } = e {
             if !fired_timers.contains(id) {
                 // Best-effort remaining delay; if already past, fire immediately (0ms)
-                let delay_ms = 0u64.max(*fire_at_ms);
+                let delay_ms = *fire_at_ms;
                 if let Err(e) = timer_tx.send(TimerWorkItem {
                     instance: instance.to_string(),
                     id: *id,

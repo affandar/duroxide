@@ -14,7 +14,7 @@ pub struct FsHistoryStore { root: PathBuf }
 impl FsHistoryStore {
     /// Create a new store rooted at the given directory path.
     pub fn new(root: impl AsRef<Path>) -> Self { Self { root: root.as_ref().to_path_buf() } }
-    fn inst_path(&self, instance: &str) -> PathBuf { self.root.join(format!("{}.jsonl", instance)) }
+    fn inst_path(&self, instance: &str) -> PathBuf { self.root.join(format!("{instance}.jsonl")) }
 }
 
 #[async_trait::async_trait]
@@ -26,7 +26,7 @@ impl HistoryStore for FsHistoryStore {
         let mut out = Vec::new();
         for line in data.lines() {
             if line.trim().is_empty() { continue; }
-            match serde_json::from_str::<Event>(line) { Ok(ev) => out.push(ev), Err(_) => {} }
+            if let Ok(ev) = serde_json::from_str::<Event>(line) { out.push(ev) }
         }
         out
     }
@@ -74,7 +74,7 @@ impl HistoryStore for FsHistoryStore {
     async fn dump_all_pretty(&self) -> String {
         let mut out = String::new();
         for inst in self.list_instances().await {
-            out.push_str(&format!("instance={}\n", inst));
+            out.push_str(&format!("instance={inst}\n"));
             for ev in self.read(&inst).await { out.push_str(&format!("  {ev:#?}\n")); }
         }
         out

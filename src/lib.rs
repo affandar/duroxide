@@ -413,7 +413,11 @@ fn poll_once<F: Future>(fut: &mut F) -> Poll<F::Output> {
 
 /// Poll the orchestrator once with the provided history, producing
 /// updated history, requested `Action`s, buffered logs, and an optional output.
-pub fn run_turn<O, F>(history: Vec<Event>, orchestrator: impl Fn(OrchestrationContext) -> F) -> (Vec<Event>, Vec<Action>, Vec<(LogLevel, String)>, Option<O>)
+/// Tuple returned by `run_turn` and `run_turn_with` containing the updated
+/// history, actions to execute, per-turn logs, and an optional output.
+pub type TurnResult<O> = (Vec<Event>, Vec<Action>, Vec<(LogLevel, String)>, Option<O>);
+
+pub fn run_turn<O, F>(history: Vec<Event>, orchestrator: impl Fn(OrchestrationContext) -> F) -> TurnResult<O>
 where
     F: Future<Output = O>,
 {
@@ -439,7 +443,7 @@ where
 
 /// Same as `run_turn` but annotates the context with a caller-supplied
 /// turn index for diagnostics and logging.
-pub fn run_turn_with<O, F>(history: Vec<Event>, turn_index: u64, orchestrator: impl Fn(OrchestrationContext) -> F) -> (Vec<Event>, Vec<Action>, Vec<(LogLevel, String)>, Option<O>)
+pub fn run_turn_with<O, F>(history: Vec<Event>, turn_index: u64, orchestrator: impl Fn(OrchestrationContext) -> F) -> TurnResult<O>
 where
     F: Future<Output = O>,
 {
