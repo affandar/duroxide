@@ -13,15 +13,6 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Rust
-        uses: actions/setup-rust@v1
-        with:
-          rust-version: stable
-
-      - name: Install Clippy and Rustfmt
-        run: |
-          rustup component add clippy
-          rustup component add rustfmt
 
       - name: Run cargo fmt
         run: cargo fmt -- --check
