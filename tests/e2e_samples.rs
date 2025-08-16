@@ -149,3 +149,36 @@ async fn dtf_legacy_gabbar_greetings_fs() {
 }
 
 
+#[tokio::test]
+async fn sample_system_activities_fs() {
+    let td = tempfile::tempdir().unwrap();
+    let store = StdArc::new(FsHistoryStore::new(td.path())) as StdArc<dyn HistoryStore>;
+
+    let registry = ActivityRegistry::builder().build();
+
+    let orchestration = |ctx: OrchestrationContext| async move {
+        let now = ctx.system_now_ms().await;
+        let guid = ctx.system_new_guid().await;
+        ctx.trace_info(format!("system now={now}, guid={guid}"));
+        format!("n={now},g={guid}")
+    };
+
+    let rt = runtime::Runtime::start_with_store(store, Arc::new(registry)).await;
+    let handle = rt.clone().spawn_instance_to_completion("inst-system-acts", orchestration).await;
+    let (_hist, out) = handle.await.unwrap();
+
+    // Basic assertions
+    assert!(out.contains("n=") && out.contains(",g="));
+    let parts: Vec<&str> = out.split([',', '=']).collect();
+    // parts like ["n", now, "g", guid]
+    assert!(parts.len() >= 4);
+    let now_val: u128 = parts[1].parse().unwrap_or(0);
+    let guid_str = parts[3];
+    assert!(now_val > 0);
+    assert_eq!(guid_str.len(), 32);
+    assert!(guid_str.chars().all(|c| c.is_ascii_hexdigit()));
+
+    rt.shutdown().await;
+}
+
+

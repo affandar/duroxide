@@ -9,13 +9,13 @@
 - Detailed documentation in the docs folder for how the system works
 - Remove dead code, including the one with allow(dead_code)
 - Write detailed architecture and user documentation 
-- Document all methods
 - Batch the calls to logging, don't spin up an activity per
 - Orchestration state? Monitoring?
 - Support for orchestration chaining + eternal orchestrations
 
 ## DONE
 
+- Document all methods
 - Add proper logging
 - Write a file system based provider.
 - Crash recovery tests.

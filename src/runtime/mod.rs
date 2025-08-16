@@ -99,10 +99,25 @@ impl Runtime {
         // spawn activity worker with system trace handler pre-registered
         // copy user registrations
         let mut builder = activity::ActivityRegistryBuilder::from_registry(&registry);
-        // add system trace activity
+        // add system activities
         builder = builder.register_result("__system_trace", |input: String| async move {
             // input format: "LEVEL:message"
             Ok(input)
+        });
+        builder = builder.register_result("__system_now", |_input: String| async move {
+            let now_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis();
+            Ok(now_ms.to_string())
+        });
+        builder = builder.register_result("__system_new_guid", |_input: String| async move {
+            // Pseudo-guid: 32-hex digits from current nanos since epoch
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos();
+            Ok(format!("{nanos:032x}"))
         });
         let reg_clone = builder.build();
         let rt_tx = router_tx.clone();

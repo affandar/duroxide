@@ -198,6 +198,26 @@ impl OrchestrationContext {
     pub fn trace_error(&self, message: impl Into<String>) { self.trace("ERROR", message.into()); }
     /// Convenience wrapper for DEBUG level tracing.
     pub fn trace_debug(&self, message: impl Into<String>) { self.trace("DEBUG", message.into()); }
+
+    /// Return current wall-clock time from a system activity in milliseconds since epoch.
+    pub async fn system_now_ms(&self) -> u128 {
+        let v = self
+            .schedule_activity("__system_now", "".to_string())
+            .into_activity()
+            .await
+            .unwrap_or_else(|e| panic!("system_now failed: {e}"));
+        v.parse::<u128>().unwrap_or(0)
+    }
+
+    /// Return a new pseudo-GUID string from a system activity. Intended for
+    /// integration paths; for deterministic GUIDs prefer `new_guid()`.
+    pub async fn system_new_guid(&self) -> String {
+        self
+            .schedule_activity("__system_new_guid", "".to_string())
+            .into_activity()
+            .await
+            .unwrap_or_else(|e| panic!("system_new_guid failed: {e}"))
+    }
 }
 
 // Unified future/output that allows joining different orchestration primitives
