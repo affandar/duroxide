@@ -2,6 +2,17 @@
 
 Deterministic task orchestration in Rust, inspired by Durable Task.
 
+What you can build with this (inspired by .NET Durable Task/Durable Functions patterns)
+- Function chaining: model a multi-step process as sequential awaits where each step depends on prior results.
+- Fan-out/fan-in: schedule many activities in parallel and deterministically aggregate results.
+- Human interaction (external events): wait for out-of-band approvals, callbacks, or webhooks and then resume.
+- Durable timers and deadlines: sleep for minutes/hours/days without holding threads; resume exactly-once after timeouts.
+- Saga-style compensation: on failure, run compensating actions to roll back prior steps.
+- Async HTTP APIs: kick off a workflow and return immediately; later poll or get a callback when it completes.
+- Monitor/recurring jobs: run a loop that wakes up on a schedule, checks state, and continues.
+
+These scenarios mirror the officially documented Durable Task/Durable Functions application patterns and are enabled here by deterministic replay, correlation IDs, durable timers, and external event handling.
+
 Getting started samples
 - See `tests/e2e_samples.rs` for end-to-end usage patterns (hello world, control flow, loops, error handling, and system activities). It's the best starting point to learn the API by example.
 
