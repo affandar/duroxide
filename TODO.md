@@ -4,7 +4,7 @@
 - Build a website to visualize execution.
 - Write an Azure Blob based provider.
 - Batch the calls to logging, don't spin up an activity per
-- Orchestration state? Monitoring?
+- Orchestration state? Monitoring? Visiblity? 
 - Support for orchestration chaining + eternal orchestrations
 - Real world samples (provisioning resources in Azure e.g.)
 

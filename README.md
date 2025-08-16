@@ -118,6 +118,7 @@ Notes
 - Import as `rust_dtf` in Rust source.
 - Timers are real time (Tokio sleep). External events are via `Runtime::raise_event`.
 - Unknown-instance messages are logged and dropped. Providers persist history only (queues are in-memory runtime components).
+- Logging is replay-safe by treating it as a system activity via `ctx.trace_*` helpers; logs are emitted through tracing at completion time (not persisted as history events).
 
 Provenance
 - This codebase was generated entirely by AI with guidance from a human

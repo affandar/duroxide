@@ -1,0 +1,13 @@
+[package]
+name = "hello-cli"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+futures = "0.3"
+rust-dtf = { path = "../.." }
+anyhow = "1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+
+

@@ -6,6 +6,7 @@ use crate::{Action, Event, OrchestrationContext, run_turn_with};
 use crate::providers::HistoryStore;
 use crate::providers::in_memory::InMemoryHistoryStore;
 use tracing::{debug, warn, info, error};
+use std::collections::HashSet;
 
 /// Runtime components: activity worker and registry utilities.
 pub mod activity;
@@ -46,10 +47,10 @@ impl CompletionRouter {
         let kind = kind_of(&msg);
         if let Some(tx) = self.inboxes.lock().await.get(&key) {
             if let Err(_e) = tx.send(msg) {
-                panic!("router: receiver dropped for instance={key}, kind={kind}");
+                warn!(instance=%key, kind=%kind, "router: receiver dropped, dropping message");
             }
         } else {
-            panic!("router: unknown instance for message kind={kind}, instance={key}");
+            warn!(instance=%key, kind=%kind, "router: unknown instance, dropping message");
         }
     }
 }
@@ -74,6 +75,7 @@ pub struct Runtime {
     joins: Mutex<Vec<JoinHandle<()>>>,
     instance_joins: Mutex<Vec<JoinHandle<()>>>,
     history_store: Arc<dyn HistoryStore>,
+    active_instances: Mutex<HashSet<String>>,
 }
 
 impl Runtime {
@@ -135,7 +137,7 @@ impl Runtime {
             while let Some(msg) = router_rx.recv().await { router_clone.forward(msg).await; }
         }));
 
-        Arc::new(Self { activity_tx, timer_tx, router_tx, router, joins: Mutex::new(joins), instance_joins: Mutex::new(Vec::new()), history_store })
+        Arc::new(Self { activity_tx, timer_tx, router_tx, router, joins: Mutex::new(joins), instance_joins: Mutex::new(Vec::new()), history_store, active_instances: Mutex::new(HashSet::new()) })
     }
 
     /// Abort background tasks. Channels are dropped with the runtime.
@@ -165,7 +167,30 @@ impl Runtime {
         OFut: std::future::Future<Output = O> + Send + 'static,
         O: Send + 'static,
     {
-        // Load existing history from store if any
+        // Ensure instance not already active in this runtime
+        {
+            let mut act = self.active_instances.lock().await;
+            if !act.insert(instance.to_string()) {
+                panic!("instance already active: {instance}");
+            }
+        }
+        // Ensure removal of active flag even if the task panics
+        struct ActiveGuard { rt: Arc<Runtime>, inst: String }
+        impl Drop for ActiveGuard {
+            fn drop(&mut self) {
+                // best-effort removal; ignore poisoning
+                let rt = self.rt.clone();
+                let inst = self.inst.clone();
+                // spawn a blocking remove since Drop can't be async
+                let _ = tokio::spawn(async move { rt.active_instances.lock().await.remove(&inst); });
+            }
+        }
+        let _active_guard = ActiveGuard { rt: self.clone(), inst: instance.to_string() };
+        // Ensure instance exists; create if missing; propagate error
+        if let Err(e) = self.history_store.create_instance(instance).await {
+            panic!("failed to create instance {instance}: {e}");
+        }
+        // Load existing history from store (now exists)
         let mut history: Vec<Event> = self.history_store.read(instance).await;
         let mut comp_rx = self.router.register(instance).await;
 
@@ -177,9 +202,7 @@ impl Runtime {
             let baseline_len = history.len();
             let (hist_after, actions, _logs, out_opt) = run_turn_with(history, turn_index, &orchestrator);
             history = hist_after;
-            if let Some(out) = out_opt {
-                return (history, out);
-            }
+            if let Some(out) = out_opt { return (history, out); }
 
             for a in actions {
                 match a {
@@ -201,10 +224,6 @@ impl Runtime {
                     Action::WaitExternal { id, name } => {
                         debug!(instance, id, name=%name, "subscribe external");
                         let _ = (id, name); // no-op
-                    }
-                    Action::EmitTrace { id, level, message } => {
-                        // Backwards compatibility: still persist TraceEmitted event; no direct emit
-                        history.push(Event::TraceEmitted { id, level, message });
                     }
                 }
             }
@@ -268,7 +287,7 @@ async fn run_timer_worker(mut rx: mpsc::Receiver<TimerWorkItem>, comp_tx: mpsc::
         let id = wi.id;
         let fire_at = wi.fire_at_ms;
         if let Err(_e) = comp_tx.send(OrchestratorMsg::TimerFired { instance: inst.clone(), id, fire_at_ms: fire_at }) {
-            panic!("timer worker: router receiver dropped (instance={inst}, id={id})");
+            warn!(instance=%inst, id=%id, "timer worker: router receiver dropped, dropping TimerFired");
         }
     }
 }
@@ -276,21 +295,17 @@ async fn run_timer_worker(mut rx: mpsc::Receiver<TimerWorkItem>, comp_tx: mpsc::
 fn append_completion(history: &mut Vec<Event>, msg: OrchestratorMsg) {
     match msg {
         OrchestratorMsg::ActivityCompleted { instance, id, result } => {
-            // If this completion corresponds to system trace, emit and persist TraceEmitted in addition to ActivityCompleted
+            // If this completion corresponds to system trace, emit to tracing only
             let is_system_trace = history.iter().rev().any(|e| matches!(e, Event::ActivityScheduled { id: cid, name, .. } if *cid == id && name == "__system_trace"));
             if is_system_trace {
-                // Parse input format "LEVEL:message" coming back as result echo
                 if let Some((lvl, msg_text)) = result.split_once(':') {
                     match lvl {
                         "ERROR" | "error" => error!(instance=%instance, id, "{}", msg_text),
                         "WARN" | "warn" | "WARNING" | "warning" => warn!(instance=%instance, id, "{}", msg_text),
                         _ => info!(instance=%instance, id, "{}", msg_text),
                     }
-                    history.push(Event::TraceEmitted { id, level: lvl.to_string(), message: msg_text.to_string() });
                 } else {
-                    // Fallback: treat entire string as info message
                     info!(instance=%instance, id, "{}", result);
-                    history.push(Event::TraceEmitted { id, level: "INFO".to_string(), message: result.clone() });
                 }
             }
             history.push(Event::ActivityCompleted { id, result })
@@ -317,7 +332,7 @@ impl Runtime {
         if let Err(_e) = self.router_tx.send(OrchestratorMsg::ExternalByName {
             instance: instance.to_string(), name: name_str.clone(), data: data_str,
         }) {
-            panic!("raise_event: router dropped (instance={instance}, name={name_str})");
+            warn!(instance, name=%name_str, "raise_event: router dropped, dropping ExternalByName");
         }
     }
 }
@@ -350,7 +365,7 @@ async fn rehydrate_pending(
                     name: name.clone(),
                     input: input.clone(),
                 }).await {
-                    panic!("rehydrate: failed to enqueue activity id={id}, name={name}: {e}");
+                    warn!(instance, id=%id, name=%name, error=%e, "rehydrate: failed to enqueue activity");
                 }
             }
         }
@@ -368,7 +383,7 @@ async fn rehydrate_pending(
                     fire_at_ms: *fire_at_ms,
                     delay_ms,
                 }).await {
-                    panic!("rehydrate: failed to enqueue timer id={id}: {e}");
+                    warn!(instance, id=%id, error=%e, "rehydrate: failed to enqueue timer");
                 }
             }
         }

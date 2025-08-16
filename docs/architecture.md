@@ -39,14 +39,12 @@ classDiagram
       +TimerFired(id, fire_at_ms)
       +ExternalSubscribed(id, name)
       +ExternalEvent(id, name, data)
-      +TraceEmitted(id, level, message)
     }
 
     class Action {
       +CallActivity(id, name, input)
       +CreateTimer(id, delay_ms)
       +WaitExternal(id, name)
-      +EmitTrace(id, level, message)
     }
 ```
 

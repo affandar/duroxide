@@ -13,7 +13,14 @@ pub struct FsHistoryStore { root: PathBuf }
 
 impl FsHistoryStore {
     /// Create a new store rooted at the given directory path.
-    pub fn new(root: impl AsRef<Path>) -> Self { Self { root: root.as_ref().to_path_buf() } }
+    /// If `reset_on_create` is true, delete any existing data under the root first.
+    pub fn new(root: impl AsRef<Path>, reset_on_create: bool) -> Self {
+        let path = root.as_ref().to_path_buf();
+        if reset_on_create {
+            let _ = std::fs::remove_dir_all(&path);
+        }
+        Self { root: path }
+    }
     fn inst_path(&self, instance: &str) -> PathBuf { self.root.join(format!("{instance}.jsonl")) }
 }
 
@@ -34,16 +41,19 @@ impl HistoryStore for FsHistoryStore {
     /// Append events with a simple capacity guard by rewriting the file.
     async fn append(&self, instance: &str, new_events: Vec<Event>) -> Result<(), String> {
         fs::create_dir_all(&self.root).await.ok();
-        let path = self.inst_path(instance);
         // Read current to enforce CAP
-        let mut existing = self.read(instance).await;
+        let existing = self.read(instance).await;
+        // If the instance file does not exist, treat as error (must call create_instance first)
+        let path = self.inst_path(instance);
+        if !fs::try_exists(&path).await.map_err(|e| e.to_string())? {
+            return Err(format!("instance not found: {instance}"));
+        }
         if existing.len() + new_events.len() > CAP {
             return Err(format!("history cap exceeded (cap={}, have={}, append={})", CAP, existing.len(), new_events.len()));
         }
-        existing.extend(new_events.into_iter());
-        // Rewrite file with bounded history
-        let mut file = fs::OpenOptions::new().create(true).write(true).truncate(true).open(&path).await.unwrap();
-        for ev in existing {
+        // Append only new events without truncation
+        let mut file = fs::OpenOptions::new().create(true).append(true).open(&path).await.unwrap();
+        for ev in new_events {
             let line = serde_json::to_string(&ev).unwrap();
             file.write_all(line.as_bytes()).await.unwrap();
             file.write_all(b"\n").await.unwrap();
@@ -78,6 +88,25 @@ impl HistoryStore for FsHistoryStore {
             for ev in self.read(&inst).await { out.push_str(&format!("  {ev:#?}\n")); }
         }
         out
+    }
+
+    async fn create_instance(&self, instance: &str) -> Result<(), String> {
+        fs::create_dir_all(&self.root).await.map_err(|e| e.to_string())?;
+        let path = self.inst_path(instance);
+        if fs::try_exists(&path).await.map_err(|e| e.to_string())? {
+            return Err(format!("instance already exists: {instance}"));
+        }
+        let _ = fs::OpenOptions::new().create_new(true).write(true).open(&path).await.map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    async fn remove_instance(&self, instance: &str) -> Result<(), String> {
+        let path = self.inst_path(instance);
+        if !fs::try_exists(&path).await.map_err(|e| e.to_string())? {
+            return Err(format!("instance not found: {instance}"));
+        }
+        fs::remove_file(&path).await.map_err(|e| e.to_string())?;
+        Ok(())
     }
 }
 

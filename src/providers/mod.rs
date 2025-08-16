@@ -13,6 +13,19 @@ pub trait HistoryStore: Send + Sync {
     async fn list_instances(&self) -> Vec<String>;
     /// Return a pretty-printed dump of all instances (test utility).
     async fn dump_all_pretty(&self) -> String;
+
+    /// Create a new, empty instance. Implementations should return an error if the
+    /// instance already exists. Default no-op for stores that don't track instances eagerly.
+    async fn create_instance(&self, _instance: &str) -> Result<(), String> { Ok(()) }
+
+    /// Remove an existing instance and its history. Default no-op.
+    async fn remove_instance(&self, _instance: &str) -> Result<(), String> { Ok(()) }
+
+    /// Remove multiple instances. Default implementation calls `remove_instance` for each id.
+    async fn remove_instances(&self, instances: &[String]) -> Result<(), String> {
+        for id in instances { self.remove_instance(id).await?; }
+        Ok(())
+    }
 }
 
 // Providers are datastores only; runtime owns queues and workers.

@@ -49,7 +49,7 @@ async fn error_handling_compensation_on_ship_failure_inmem() {
 #[tokio::test]
 async fn error_handling_compensation_on_ship_failure_fs() {
     let td = tempfile::tempdir().unwrap();
-    let store = StdArc::new(FsHistoryStore::new(td.path())) as StdArc<dyn HistoryStore>;
+    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
     error_handling_compensation_on_ship_failure_with(store).await;
 }
 
@@ -83,7 +83,7 @@ async fn error_handling_success_path_inmem() {
 #[tokio::test]
 async fn error_handling_success_path_fs() {
     let td = tempfile::tempdir().unwrap();
-    let store = StdArc::new(FsHistoryStore::new(td.path())) as StdArc<dyn HistoryStore>;
+    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
     error_handling_success_path_with(store).await;
 }
 
@@ -118,7 +118,7 @@ async fn error_handling_early_debit_failure_inmem() {
 #[tokio::test]
 async fn error_handling_early_debit_failure_fs() {
     let td = tempfile::tempdir().unwrap();
-    let store = StdArc::new(FsHistoryStore::new(td.path())) as StdArc<dyn HistoryStore>;
+    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
     error_handling_early_debit_failure_with(store).await;
 }
 
@@ -142,7 +142,7 @@ async fn unknown_activity_fails_with(store: StdArc<dyn HistoryStore>) {
 #[tokio::test]
 async fn unknown_activity_fails_fs() {
     let td = tempfile::tempdir().unwrap();
-    let store = StdArc::new(FsHistoryStore::new(td.path())) as StdArc<dyn HistoryStore>;
+    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
     unknown_activity_fails_with(store).await;
 }
 
@@ -150,7 +150,7 @@ async fn unknown_activity_fails_fs() {
 #[tokio::test]
 async fn event_after_completion_is_ignored_fs() {
     let td = tempfile::tempdir().unwrap();
-    let store = StdArc::new(FsHistoryStore::new(td.path())) as StdArc<dyn HistoryStore>;
+    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
     let registry = ActivityRegistry::builder().build();
 
     let instance = "inst-post-complete-1";
@@ -185,7 +185,7 @@ async fn event_after_completion_is_ignored_fs() {
 async fn event_before_subscription_after_start_is_ignored() {
     // Use FS store for consistency
     let td = tempfile::tempdir().unwrap();
-    let store = StdArc::new(FsHistoryStore::new(td.path())) as StdArc<dyn HistoryStore>;
+    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
     let registry = ActivityRegistry::builder().build();
     let rt = runtime::Runtime::start_with_store(store, Arc::new(registry)).await;
     // Orchestration: delay, then subscribe
@@ -243,7 +243,7 @@ async fn history_cap_exceeded_inmem() {
 #[tokio::test]
 async fn history_cap_exceeded_fs() {
     let td = tempfile::tempdir().unwrap();
-    let store = StdArc::new(FsHistoryStore::new(td.path())) as StdArc<dyn HistoryStore>;
+    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
     history_cap_exceeded_with(store).await;
 }
 

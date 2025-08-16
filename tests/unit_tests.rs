@@ -3,6 +3,7 @@ use rust_dtf::runtime::{self, activity::ActivityRegistry};
 use rust_dtf::providers::{HistoryStore};
 use rust_dtf::providers::fs::FsHistoryStore;
 use std::sync::Arc;
+use rust_dtf::providers::in_memory::InMemoryHistoryStore;
 
 // 1) Single-turn emission: ensure exactly one action per scheduled future and matching schedule event recorded.
 #[test]
@@ -72,7 +73,9 @@ async fn deterministic_replay_activity_only() {
 #[tokio::test]
 async fn history_store_admin_apis() {
     let tmp = tempfile::tempdir().unwrap();
-    let store = FsHistoryStore::new(tmp.path());
+    let store = FsHistoryStore::new(tmp.path(), true);
+    store.create_instance("i1").await.unwrap();
+    store.create_instance("i2").await.unwrap();
     store.append("i1", vec![Event::TimerCreated { id: 1, fire_at_ms: 10 }]).await.unwrap();
     store.append("i2", vec![Event::ExternalSubscribed { id: 1, name: "Go".into() }]).await.unwrap();
     let instances = store.list_instances().await;
@@ -81,6 +84,54 @@ async fn history_store_admin_apis() {
     assert!(dump.contains("instance=i1") && dump.contains("instance=i2"));
     store.reset().await;
     assert!(store.list_instances().await.is_empty());
+}
+
+#[tokio::test]
+async fn providers_create_remove_and_duplicate_checks() {
+    // In-memory provider create/remove
+    let mem = InMemoryHistoryStore::default();
+    mem.create_instance("dup").await.unwrap();
+    // Duplicate create should error
+    assert!(mem.create_instance("dup").await.is_err());
+    // Append to non-existent should fail
+    assert!(mem.append("missing", vec![]).await.is_err());
+    // Remove existing ok; remove missing should error
+    mem.remove_instance("dup").await.unwrap();
+    assert!(mem.remove_instance("dup").await.is_err());
+
+    // Filesystem provider create/remove
+    let tmp = tempfile::tempdir().unwrap();
+    let fs = rust_dtf::providers::fs::FsHistoryStore::new(tmp.path(), true);
+    fs.create_instance("i1").await.unwrap();
+    assert!(fs.create_instance("i1").await.is_err());
+    assert!(fs.append("missing", vec![]).await.is_err());
+    fs.remove_instance("i1").await.unwrap();
+    assert!(fs.remove_instance("i1").await.is_err());
+}
+
+#[tokio::test]
+async fn runtime_duplicate_orchestration_errors() {
+    // Start runtime and attempt to start the same instance twice concurrently
+    let registry = ActivityRegistry::builder().build();
+    let rt = runtime::Runtime::start(Arc::new(registry)).await;
+    let inst = "dup-orch";
+
+    let h1 = rt.clone().spawn_instance_to_completion(inst, |ctx| async move {
+        ctx.schedule_timer(10).into_timer().await;
+        "ok".to_string()
+    }).await;
+
+    // Second start should fail (panic inside task) due to runtime active-instance guard
+    let h2 = rt.clone().spawn_instance_to_completion(inst, |ctx| async move {
+        ctx.schedule_timer(1).into_timer().await;
+        "nope".to_string()
+    }).await;
+    let res = h2.await;
+    assert!(res.is_err(), "expected duplicate start to panic in task");
+
+    let (_hist, out) = h1.await.unwrap();
+    assert_eq!(out, "ok");
+    rt.shutdown().await;
 }
 
 
