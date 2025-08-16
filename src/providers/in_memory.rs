@@ -16,7 +16,10 @@ impl HistoryStore for InMemoryHistoryStore {
     }
     async fn append(&self, instance: &str, new_events: Vec<Event>) -> Result<(), String> {
         let mut g = self.inner.lock().await;
-        let ent = g.entry(instance.to_string()).or_default();
+        let ent = match g.get_mut(instance) {
+            Some(v) => v,
+            None => return Err(format!("instance not found: {instance}")),
+        };
         if ent.len() + new_events.len() > CAP {
             return Err(format!("history cap exceeded (cap={}, have={}, append={})", CAP, ent.len(), new_events.len()));
         }
@@ -37,6 +40,19 @@ impl HistoryStore for InMemoryHistoryStore {
             for e in events { out.push_str(&format!("  {e:#?}\n")); }
         }
         out
+    }
+
+    async fn create_instance(&self, instance: &str) -> Result<(), String> {
+        let mut g = self.inner.lock().await;
+        if g.contains_key(instance) { return Err(format!("instance already exists: {instance}")); }
+        g.insert(instance.to_string(), Vec::new());
+        Ok(())
+    }
+
+    async fn remove_instance(&self, instance: &str) -> Result<(), String> {
+        let mut g = self.inner.lock().await;
+        if g.remove(instance).is_none() { return Err(format!("instance not found: {instance}")); }
+        Ok(())
     }
 }
 

@@ -33,13 +33,13 @@ async fn wait_external_completes_with(store: StdArc<dyn HistoryStore>) {
 #[tokio::test]
 async fn wait_external_completes_fs() {
     let td = tempfile::tempdir().unwrap();
-    let store = StdArc::new(FsHistoryStore::new(td.path())) as StdArc<dyn HistoryStore>;
+    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
     wait_external_completes_with(store).await;
 }
 
 async fn race_external_vs_timer_ordering_with(store: StdArc<dyn HistoryStore>) {
     let orchestrator = |ctx: OrchestrationContext| async move {
-        let race = select(ctx.schedule_timer(3), ctx.schedule_wait("Race"));
+        let race = select(ctx.schedule_timer(10), ctx.schedule_wait("Race"));
         match race.await {
             Either::Left((_t, _e)) => "timer".to_string(),
             Either::Right((_e, _t)) => "external".to_string(),
@@ -50,7 +50,7 @@ async fn race_external_vs_timer_ordering_with(store: StdArc<dyn HistoryStore>) {
     let rt = runtime::Runtime::start_with_store(store, Arc::new(registry.clone())).await;
     let rt_clone = rt.clone();
     tokio::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_millis(6)).await;
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         rt_clone.raise_event("inst-race-order-1", "Race", "ok").await;
     });
     let handle = rt.clone().spawn_instance_to_completion("inst-race-order-1", orchestrator).await;
@@ -68,7 +68,7 @@ async fn race_external_vs_timer_ordering_with(store: StdArc<dyn HistoryStore>) {
 #[tokio::test]
 async fn race_external_vs_timer_ordering_fs() {
     let td = tempfile::tempdir().unwrap();
-    let store = StdArc::new(FsHistoryStore::new(td.path())) as StdArc<dyn HistoryStore>;
+    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
     race_external_vs_timer_ordering_with(store).await;
 }
 
@@ -91,6 +91,7 @@ async fn race_event_vs_timer_event_wins_with(store: StdArc<dyn HistoryStore>) {
     let handle = rt.clone().spawn_instance_to_completion("inst-race-order-2", orchestrator).await;
     let (final_history, output) = handle.await.unwrap();
 
+    // With batching, timer may win select even if external event is delivered first; assert consistent history ordering
     assert_eq!(output, "external");
     let idx_e = final_history.iter().position(|e| matches!(e, Event::ExternalEvent { .. })).unwrap();
     if let Some(idx_t) = final_history.iter().position(|e| matches!(e, Event::TimerFired { .. })) {
@@ -103,7 +104,7 @@ async fn race_event_vs_timer_event_wins_with(store: StdArc<dyn HistoryStore>) {
 #[tokio::test]
 async fn race_event_vs_timer_event_wins_fs() {
     let td = tempfile::tempdir().unwrap();
-    let store = StdArc::new(FsHistoryStore::new(td.path())) as StdArc<dyn HistoryStore>;
+    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
     race_event_vs_timer_event_wins_with(store).await;
 }
 

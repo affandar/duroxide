@@ -45,9 +45,6 @@ pub enum Event {
     ExternalSubscribed { id: u64, name: String },
     /// An external event with correlation `id` was raised with some data.
     ExternalEvent { id: u64, name: String, data: String },
-
-    /// A structured trace message emitted by the orchestrator.
-    TraceEmitted { id: u64, level: String, message: String },
 }
 
 /// Declarative decisions produced by an orchestration turn. The host/provider
@@ -60,8 +57,6 @@ pub enum Action {
     CreateTimer { id: u64, delay_ms: u64 },
     /// Subscribe to an external event by name.
     WaitExternal { id: u64, name: String },
-    /// Emit a trace entry at the given level with a message.
-    EmitTrace { id: u64, level: String, message: String },
 }
 
 #[derive(Debug)]
@@ -101,8 +96,7 @@ impl CtxInner {
                 | Event::TimerCreated { id, .. }
                 | Event::TimerFired { id, .. }
                 | Event::ExternalSubscribed { id, .. }
-                | Event::ExternalEvent { id, .. }
-                | Event::TraceEmitted { id, .. } => Some(*id),
+                | Event::ExternalEvent { id, .. } => Some(*id),
             };
             if let Some(id) = id_opt { max_id = max_id.max(id); }
         }
@@ -181,7 +175,6 @@ impl OrchestrationContext {
     /// Buffer a structured log message for the current turn.
     pub fn push_log(&self, level: LogLevel, msg: String) { self.inner.lock().unwrap().log_buffer.push((level, msg)); }
 
-    // System trace helper: thin wrapper over schedule_activity + immediate first poll to record scheduling
     /// Emit a structured trace entry using the system trace activity.
     pub fn trace(&self, level: impl Into<String>, message: impl Into<String>) {
         let payload = format!("{}:{}", level.into(), message.into());
@@ -189,7 +182,6 @@ impl OrchestrationContext {
         let _ = poll_once(&mut fut);
     }
 
-    // Typed wrappers for common levels
     /// Convenience wrapper for INFO level tracing.
     pub fn trace_info(&self, message: impl Into<String>) { self.trace("INFO", message.into()); }
     /// Convenience wrapper for WARN level tracing.

@@ -19,7 +19,7 @@ use futures::future::join;
 #[tokio::test]
 async fn sample_hello_world_fs() {
     let td = tempfile::tempdir().unwrap();
-    let store = StdArc::new(FsHistoryStore::new(td.path())) as StdArc<dyn HistoryStore>;
+    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
 
     // Register a simple activity: "Hello" -> format a greeting
     let registry = ActivityRegistry::builder()
@@ -51,7 +51,7 @@ async fn sample_hello_world_fs() {
 #[tokio::test]
 async fn sample_basic_control_flow_fs() {
     let td = tempfile::tempdir().unwrap();
-    let store = StdArc::new(FsHistoryStore::new(td.path())) as StdArc<dyn HistoryStore>;
+    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
 
     // Register activities that return a flag and branch outcomes
     let registry = ActivityRegistry::builder()
@@ -86,7 +86,7 @@ async fn sample_basic_control_flow_fs() {
 #[tokio::test]
 async fn sample_loop_fs() {
     let td = tempfile::tempdir().unwrap();
-    let store = StdArc::new(FsHistoryStore::new(td.path())) as StdArc<dyn HistoryStore>;
+    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
 
     // Register an activity that appends "x" to its input
     let registry = ActivityRegistry::builder()
@@ -95,7 +95,6 @@ async fn sample_loop_fs() {
 
     // Orchestrator: loop three times, updating an accumulator
     let orchestration = |ctx: OrchestrationContext| async move {
-        ctx.trace_error("loop started");
         let mut acc = String::from("start");
         for i in 0..3 {
             acc = ctx.schedule_activity("Append", acc).into_activity().await.unwrap();
@@ -119,7 +118,7 @@ async fn sample_loop_fs() {
 #[tokio::test]
 async fn sample_error_handling_fs() {
     let td = tempfile::tempdir().unwrap();
-    let store = StdArc::new(FsHistoryStore::new(td.path())) as StdArc<dyn HistoryStore>;
+    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
 
     // Register a fragile activity that may fail, and a recovery activity
     let registry = ActivityRegistry::builder()
@@ -162,7 +161,7 @@ async fn sample_error_handling_fs() {
 #[tokio::test]
 async fn dtf_legacy_gabbar_greetings_fs() {
     let td = tempfile::tempdir().unwrap();
-    let store = StdArc::new(FsHistoryStore::new(td.path())) as StdArc<dyn HistoryStore>;
+    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
 
     // Register a greeting activity used by both branches
     let registry = ActivityRegistry::builder()
@@ -196,7 +195,7 @@ async fn dtf_legacy_gabbar_greetings_fs() {
 #[tokio::test]
 async fn sample_system_activities_fs() {
     let td = tempfile::tempdir().unwrap();
-    let store = StdArc::new(FsHistoryStore::new(td.path())) as StdArc<dyn HistoryStore>;
+    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
 
     let registry = ActivityRegistry::builder().build();
 

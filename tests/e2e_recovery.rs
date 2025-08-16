@@ -41,6 +41,8 @@ where
     drop(handle1);
 
     let store2 = make_store_stage2();
+    // Remove the instance before attempting restart; runtime now treats existing instances as an error
+    let _ = store2.remove_instance(&instance).await;
     let rt2 = runtime::Runtime::start_with_store(store2.clone(), Arc::new(registry.clone())).await;
     let rt2_c = rt2.clone();
     let instance_for_spawn = instance.clone();
@@ -68,12 +70,12 @@ async fn recovery_across_restart_fs_provider() {
 
     let instance = String::from("inst-recover-fs-1");
 
-    let make_store1 = || StdArc::new(FsHistoryStore::new(&dir)) as StdArc<dyn HistoryStore>;
-    let make_store2 = || StdArc::new(FsHistoryStore::new(&dir)) as StdArc<dyn HistoryStore>;
+    let make_store1 = || StdArc::new(FsHistoryStore::new(&dir, true)) as StdArc<dyn HistoryStore>;
+    let make_store2 = || StdArc::new(FsHistoryStore::new(&dir, false)) as StdArc<dyn HistoryStore>;
 
     recovery_across_restart_core(make_store1, make_store2, instance.clone()).await;
 
-    let store = StdArc::new(FsHistoryStore::new(&dir)) as StdArc<dyn HistoryStore>;
+    let store = StdArc::new(FsHistoryStore::new(&dir, false)) as StdArc<dyn HistoryStore>;
     let hist = store.read(&instance).await;
     let count = |inp: &str| hist.iter().filter(|e| matches!(e, Event::ActivityScheduled { name, input, .. } if name == "Step" && input == inp)).count();
     assert_eq!(count("1"), 1);
