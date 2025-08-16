@@ -122,27 +122,28 @@ async fn error_handling_early_debit_failure_fs() {
     error_handling_early_debit_failure_with(store).await;
 }
 
-
-// 5) Unknown activity handler: returns Ok("echo:<input>") by design
-async fn unknown_activity_returns_echo_with(store: StdArc<dyn HistoryStore>) {
-    // No registration for "Missing" on purpose
+// 5) Unknown activity handler: should fail with unregistered error
+async fn unknown_activity_fails_with(store: StdArc<dyn HistoryStore>) {
     let registry = ActivityRegistry::builder().build();
     let orchestration = |ctx: OrchestrationContext| async move {
-        ctx.schedule_activity("Missing", "foo").into_activity().await.unwrap()
+        match ctx.schedule_activity("Missing", "foo").into_activity().await {
+            Ok(v) => format!("unexpected_ok:{v}"),
+            Err(e) => format!("err={e}"),
+        }
     };
 
     let rt = runtime::Runtime::start_with_store(store, Arc::new(registry)).await;
     let handle = rt.clone().spawn_instance_to_completion("inst-unknown-act-1", orchestration).await;
     let (_hist, out) = handle.await.unwrap();
-    assert_eq!(out, "echo:foo");
+    assert!(out.starts_with("err=unregistered:Missing"));
     rt.shutdown().await;
 }
 
 #[tokio::test]
-async fn unknown_activity_returns_echo_fs() {
+async fn unknown_activity_fails_fs() {
     let td = tempfile::tempdir().unwrap();
     let store = StdArc::new(FsHistoryStore::new(td.path())) as StdArc<dyn HistoryStore>;
-    unknown_activity_returns_echo_with(store).await;
+    unknown_activity_fails_with(store).await;
 }
 
 // 6) Event after orchestration completion is ignored (no history change)
@@ -208,6 +209,42 @@ async fn event_before_subscription_after_start_is_ignored() {
     let (_hist, out) = handle.await.unwrap();
     assert_eq!(out, "late");
     rt.shutdown().await;
+}
+
+// 8) History cap exceeded triggers a hard error (no truncation) for both providers
+async fn history_cap_exceeded_with(store: StdArc<dyn HistoryStore>) {
+    let registry = ActivityRegistry::builder()
+        .register_result("Noop", |_in: String| async move { Ok(String::new()) })
+        .build();
+
+    // Orchestration that schedules more than CAP events.
+    // Each activity emits two events (Scheduled + Completed). With CAP=1024, 600 activities exceed.
+    let orchestration = |ctx: OrchestrationContext| async move {
+        for i in 0..600u32 {
+            let _ = ctx.schedule_activity("Noop", format!("{i}")).into_activity().await;
+        }
+        "done".to_string()
+    };
+
+    let rt = runtime::Runtime::start_with_store(store, Arc::new(registry)).await;
+    let handle = rt.clone().spawn_instance_to_completion("inst-cap-exceed", orchestration).await;
+    // Expect the background task to panic due to append error; awaiting should return JoinError
+    let res = handle.await;
+    assert!(res.is_err(), "expected append failure to propagate as task error");
+    rt.shutdown().await;
+}
+
+#[tokio::test]
+async fn history_cap_exceeded_inmem() {
+    let store = StdArc::new(InMemoryHistoryStore::default()) as StdArc<dyn HistoryStore>;
+    history_cap_exceeded_with(store).await;
+}
+
+#[tokio::test]
+async fn history_cap_exceeded_fs() {
+    let td = tempfile::tempdir().unwrap();
+    let store = StdArc::new(FsHistoryStore::new(td.path())) as StdArc<dyn HistoryStore>;
+    history_cap_exceeded_with(store).await;
 }
 
 

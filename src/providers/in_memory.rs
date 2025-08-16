@@ -4,6 +4,8 @@ use tokio::sync::Mutex;
 use crate::Event;
 use super::HistoryStore;
 
+const CAP: usize = 1024;
+
 #[derive(Default)]
 pub struct InMemoryHistoryStore { inner: Mutex<HashMap<String, Vec<Event>>> }
 
@@ -12,10 +14,14 @@ impl HistoryStore for InMemoryHistoryStore {
     async fn read(&self, instance: &str) -> Vec<Event> {
         self.inner.lock().await.get(instance).cloned().unwrap_or_default()
     }
-    async fn append(&self, instance: &str, new_events: Vec<Event>) {
+    async fn append(&self, instance: &str, new_events: Vec<Event>) -> Result<(), String> {
         let mut g = self.inner.lock().await;
         let ent = g.entry(instance.to_string()).or_default();
+        if ent.len() + new_events.len() > CAP {
+            return Err(format!("history cap exceeded (cap={}, have={}, append={})", CAP, ent.len(), new_events.len()));
+        }
         ent.extend(new_events);
+        Ok(())
     }
     async fn reset(&self) {
         self.inner.lock().await.clear();

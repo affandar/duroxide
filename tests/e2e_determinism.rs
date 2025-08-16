@@ -40,7 +40,7 @@ async fn orchestration_completes_and_replays_deterministically_with(store: StdAr
     assert!(output.contains("evt=ok"));
     assert!(output.contains("b=2!"));
     assert_eq!(final_history.len(), 8, "expected 8 history events (scheduled + completed)");
-    let (_h2, acts2, out2) = run_turn(final_history.clone(), orchestration);
+    let (_h2, acts2, _logs2, out2) = run_turn(final_history.clone(), orchestration);
     assert!(acts2.is_empty(), "replay should not produce new actions");
     assert_eq!(out2.unwrap(), output);
     rt.shutdown().await;
@@ -65,13 +65,14 @@ fn action_order_is_deterministic_in_first_turn() {
     };
 
     let history: Vec<Event> = Vec::new();
-    let (_hist_after, actions, _out) = run_turn(history, orchestrator);
+    let (_hist_after, actions, _logs, _out) = run_turn(history, orchestrator);
     let kinds: Vec<&'static str> = actions
         .iter()
         .map(|a| match a {
             Action::CallActivity { .. } => "CallActivity",
             Action::CreateTimer { .. } => "CreateTimer",
             Action::WaitExternal { .. } => "WaitExternal",
+            Action::EmitTrace { .. } => "EmitTrace",
         })
         .collect();
     assert_eq!(kinds, vec!["CallActivity", "CreateTimer", "WaitExternal"], "actions must be recorded in declaration/poll order");

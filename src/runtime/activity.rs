@@ -34,6 +34,11 @@ impl ActivityRegistry {
 pub struct ActivityRegistryBuilder { map: HashMap<String, Arc<dyn ActivityHandler>> }
 
 impl ActivityRegistryBuilder {
+    pub fn from_registry(reg: &ActivityRegistry) -> Self {
+        let mut map: HashMap<String, Arc<dyn ActivityHandler>> = HashMap::new();
+        for (k, v) in reg.inner.iter() { map.insert(k.clone(), v.clone()); }
+        ActivityRegistryBuilder { map }
+    }
     // Convenience: register an activity whose future yields String (treated as Ok)
     pub fn register<F, Fut>(mut self, name: impl Into<String>, f: F) -> Self
     where
@@ -83,7 +88,11 @@ impl ActivityWorker {
                     }
                 }
             } else {
-                let _ = self.completion_tx.send(OrchestratorMsg::ActivityCompleted { instance: wi.instance, id: wi.id, result: format!("echo:{}", wi.input) });
+                let _ = self.completion_tx.send(OrchestratorMsg::ActivityFailed {
+                    instance: wi.instance,
+                    id: wi.id,
+                    error: format!("unregistered:{}", wi.name),
+                });
             }
         }
     }

@@ -5,7 +5,7 @@ use tokio::task::JoinHandle;
 use crate::{Action, Event, OrchestrationContext, run_turn_with};
 use crate::providers::HistoryStore;
 use crate::providers::in_memory::InMemoryHistoryStore;
-use tracing::{debug, warn};
+use tracing::{debug, warn, info, error};
 
 pub mod activity;
 
@@ -82,8 +82,15 @@ impl Runtime {
         let router = Arc::new(CompletionRouter { inboxes: Mutex::new(HashMap::new()) });
         let mut joins: Vec<JoinHandle<()>> = Vec::new();
 
-        // spawn activity worker
-        let reg_clone = (*registry).clone();
+        // spawn activity worker with system trace handler pre-registered
+        // copy user registrations
+        let mut builder = activity::ActivityRegistryBuilder::from_registry(&*registry);
+        // add system trace activity
+        builder = builder.register_result("__system_trace", |input: String| async move {
+            // input format: "LEVEL:message"
+            Ok(input)
+        });
+        let reg_clone = builder.build();
         let rt_tx = router_tx.clone();
         joins.push(tokio::spawn(async move {
             activity::ActivityWorker::new(reg_clone, rt_tx).run(activity_rx).await
@@ -135,9 +142,11 @@ impl Runtime {
         let mut turn_index: u64 = 0;
         loop {
             let baseline_len = history.len();
-            let (hist_after, actions, out_opt) = run_turn_with(history, turn_index, &orchestrator);
+            let (hist_after, actions, _logs, out_opt) = run_turn_with(history, turn_index, &orchestrator);
             history = hist_after;
-            if let Some(out) = out_opt { return (history, out); }
+            if let Some(out) = out_opt {
+                return (history, out);
+            }
 
             for a in actions {
                 match a {
@@ -156,6 +165,10 @@ impl Runtime {
                         debug!(instance, id, name=%name, "subscribe external");
                         let _ = (id, name); // no-op
                     }
+                    Action::EmitTrace { id, level, message } => {
+                        // Backwards compatibility: still persist TraceEmitted event; no direct emit
+                        history.push(Event::TraceEmitted { id, level, message });
+                    }
                 }
             }
 
@@ -172,9 +185,13 @@ impl Runtime {
             // Persist new events appended during this turn
             if history.len() > baseline_len {
                 let new_events = history[baseline_len..].to_vec();
-                self.history_store.append(instance, new_events).await;
+                if let Err(e) = self.history_store.append(instance, new_events).await {
+                    error!(instance, turn_index, error=%e, "failed to append history");
+                    // Surface as panic for now to preserve determinism
+                    panic!("history append failed: {}", e);
+                }
+                turn_index = turn_index.saturating_add(1);
             }
-            turn_index = turn_index.saturating_add(1);
         }
     }
 
@@ -214,7 +231,26 @@ async fn run_timer_worker(mut rx: mpsc::Receiver<TimerWorkItem>, comp_tx: mpsc::
 
 fn append_completion(history: &mut Vec<Event>, msg: OrchestratorMsg) {
     match msg {
-        OrchestratorMsg::ActivityCompleted { id, result, .. } => history.push(Event::ActivityCompleted { id, result }),
+        OrchestratorMsg::ActivityCompleted { instance, id, result } => {
+            // If this completion corresponds to system trace, emit and persist TraceEmitted in addition to ActivityCompleted
+            let is_system_trace = history.iter().rev().any(|e| matches!(e, Event::ActivityScheduled { id: cid, name, .. } if *cid == id && name == "__system_trace"));
+            if is_system_trace {
+                // Parse input format "LEVEL:message" coming back as result echo
+                if let Some((lvl, msg_text)) = result.split_once(':') {
+                    match lvl {
+                        "ERROR" | "error" => error!(instance=%instance, id, "{}", msg_text),
+                        "WARN" | "warn" | "WARNING" | "warning" => warn!(instance=%instance, id, "{}", msg_text),
+                        _ => info!(instance=%instance, id, "{}", msg_text),
+                    }
+                    history.push(Event::TraceEmitted { id, level: lvl.to_string(), message: msg_text.to_string() });
+                } else {
+                    // Fallback: treat entire string as info message
+                    info!(instance=%instance, id, "{}", result);
+                    history.push(Event::TraceEmitted { id, level: "INFO".to_string(), message: result.clone() });
+                }
+            }
+            history.push(Event::ActivityCompleted { id, result })
+        }
         OrchestratorMsg::ActivityFailed { id, error, .. } => history.push(Event::ActivityFailed { id, error }),
         OrchestratorMsg::TimerFired { id, fire_at_ms, .. } => history.push(Event::TimerFired { id, fire_at_ms }),
         OrchestratorMsg::ExternalEvent { id, name, data, .. } => history.push(Event::ExternalEvent { id, name, data }),
