@@ -1,9 +1,9 @@
-use futures::future::{select, Either};
-use std::sync::Arc;
-use rust_dtf::{Event, OrchestrationContext};
-use rust_dtf::runtime::{self, activity::ActivityRegistry};
+use futures::future::{Either, select};
 use rust_dtf::providers::HistoryStore;
 use rust_dtf::providers::fs::FsHistoryStore;
+use rust_dtf::runtime::{self, activity::ActivityRegistry};
+use rust_dtf::{Event, OrchestrationContext};
+use std::sync::Arc;
 use std::sync::Arc as StdArc;
 
 async fn wait_external_completes_with(store: StdArc<dyn HistoryStore>) {
@@ -19,7 +19,10 @@ async fn wait_external_completes_with(store: StdArc<dyn HistoryStore>) {
         tokio::time::sleep(std::time::Duration::from_millis(4)).await;
         rt_clone.raise_event("inst-wait-1", "Only", "payload").await;
     });
-    let handle = rt.clone().spawn_instance_to_completion("inst-wait-1", orchestrator).await;
+    let handle = rt
+        .clone()
+        .spawn_instance_to_completion("inst-wait-1", orchestrator)
+        .await;
     let (final_history, output) = handle.await.unwrap();
 
     assert_eq!(output, "only=payload");
@@ -51,15 +54,29 @@ async fn race_external_vs_timer_ordering_with(store: StdArc<dyn HistoryStore>) {
     let rt_clone = rt.clone();
     tokio::spawn(async move {
         tokio::time::sleep(std::time::Duration::from_millis(6)).await;
-        rt_clone.raise_event("inst-race-order-1", "Race", "ok").await;
+        rt_clone
+            .raise_event("inst-race-order-1", "Race", "ok")
+            .await;
     });
-    let handle = rt.clone().spawn_instance_to_completion("inst-race-order-1", orchestrator).await;
+    let handle = rt
+        .clone()
+        .spawn_instance_to_completion("inst-race-order-1", orchestrator)
+        .await;
     let (final_history, output) = handle.await.unwrap();
 
     assert_eq!(output, "timer");
-    let idx_t = final_history.iter().position(|e| matches!(e, Event::TimerFired { .. })).unwrap();
-    if let Some(idx_e) = final_history.iter().position(|e| matches!(e, Event::ExternalEvent { .. })) {
-        assert!(idx_t < idx_e, "expected timer to fire before external: {final_history:#?}");
+    let idx_t = final_history
+        .iter()
+        .position(|e| matches!(e, Event::TimerFired { .. }))
+        .unwrap();
+    if let Some(idx_e) = final_history
+        .iter()
+        .position(|e| matches!(e, Event::ExternalEvent { .. }))
+    {
+        assert!(
+            idx_t < idx_e,
+            "expected timer to fire before external: {final_history:#?}"
+        );
     }
 
     rt.shutdown().await;
@@ -86,15 +103,29 @@ async fn race_event_vs_timer_event_wins_with(store: StdArc<dyn HistoryStore>) {
     let rt_clone = rt.clone();
     tokio::spawn(async move {
         tokio::time::sleep(std::time::Duration::from_millis(2)).await;
-        rt_clone.raise_event("inst-race-order-2", "Race", "ok").await;
+        rt_clone
+            .raise_event("inst-race-order-2", "Race", "ok")
+            .await;
     });
-    let handle = rt.clone().spawn_instance_to_completion("inst-race-order-2", orchestrator).await;
+    let handle = rt
+        .clone()
+        .spawn_instance_to_completion("inst-race-order-2", orchestrator)
+        .await;
     let (final_history, output) = handle.await.unwrap();
 
     assert_eq!(output, "external");
-    let idx_e = final_history.iter().position(|e| matches!(e, Event::ExternalEvent { .. })).unwrap();
-    if let Some(idx_t) = final_history.iter().position(|e| matches!(e, Event::TimerFired { .. })) {
-        assert!(idx_e < idx_t, "expected external before timer: {final_history:#?}");
+    let idx_e = final_history
+        .iter()
+        .position(|e| matches!(e, Event::ExternalEvent { .. }))
+        .unwrap();
+    if let Some(idx_t) = final_history
+        .iter()
+        .position(|e| matches!(e, Event::TimerFired { .. }))
+    {
+        assert!(
+            idx_e < idx_t,
+            "expected external before timer: {final_history:#?}"
+        );
     }
 
     rt.shutdown().await;
@@ -106,5 +137,3 @@ async fn race_event_vs_timer_event_wins_fs() {
     let store = StdArc::new(FsHistoryStore::new(td.path())) as StdArc<dyn HistoryStore>;
     race_event_vs_timer_event_wins_with(store).await;
 }
-
-

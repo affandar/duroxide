@@ -17,12 +17,12 @@ use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
 
 // Public orchestration primitives and executor
 
-pub mod runtime;
-pub mod providers;
 pub mod logging;
+pub mod providers;
+pub mod runtime;
 
-use serde::{Deserialize, Serialize};
 use crate::logging::LogLevel;
+use serde::{Deserialize, Serialize};
 
 /// Append-only orchestration history entries persisted by a provider and
 /// consumed during replay. Variants use stable correlation IDs to pair
@@ -30,7 +30,11 @@ use crate::logging::LogLevel;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Event {
     /// Activity was scheduled with a unique ID and input.
-    ActivityScheduled { id: u64, name: String, input: String },
+    ActivityScheduled {
+        id: u64,
+        name: String,
+        input: String,
+    },
     /// Activity completed successfully with a result.
     ActivityCompleted { id: u64, result: String },
     /// Activity failed with an error string.
@@ -47,7 +51,11 @@ pub enum Event {
     ExternalEvent { id: u64, name: String, data: String },
 
     /// A structured trace message emitted by the orchestrator.
-    TraceEmitted { id: u64, level: String, message: String },
+    TraceEmitted {
+        id: u64,
+        level: String,
+        message: String,
+    },
 }
 
 /// Declarative decisions produced by an orchestration turn. The host/provider
@@ -55,13 +63,21 @@ pub enum Event {
 #[derive(Debug, Clone)]
 pub enum Action {
     /// Schedule an activity invocation.
-    CallActivity { id: u64, name: String, input: String },
+    CallActivity {
+        id: u64,
+        name: String,
+        input: String,
+    },
     /// Create a timer that will fire after the requested delay.
     CreateTimer { id: u64, delay_ms: u64 },
     /// Subscribe to an external event by name.
     WaitExternal { id: u64, name: String },
     /// Emit a trace entry at the given level with a message.
-    EmitTrace { id: u64, level: String, message: String },
+    EmitTrace {
+        id: u64,
+        level: String,
+        message: String,
+    },
 }
 
 #[derive(Debug)]
@@ -104,7 +120,9 @@ impl CtxInner {
                 | Event::ExternalEvent { id, .. }
                 | Event::TraceEmitted { id, .. } => Some(*id),
             };
-            if let Some(id) = id_opt { max_id = max_id.max(id); }
+            if let Some(id) = id_opt {
+                max_id = max_id.max(id);
+            }
         }
         Self {
             history,
@@ -131,7 +149,9 @@ impl CtxInner {
         let mut last = 0u64;
         for ev in &self.history {
             if let Event::TimerFired { fire_at_ms, .. } = ev {
-                if *fire_at_ms > last { last = *fire_at_ms; }
+                if *fire_at_ms > last {
+                    last = *fire_at_ms;
+                }
             }
         }
         last
@@ -151,35 +171,59 @@ impl CtxInner {
 
 /// User-facing orchestration context for scheduling and replay-safe helpers.
 #[derive(Clone)]
-pub struct OrchestrationContext { inner: Arc<Mutex<CtxInner>> }
+pub struct OrchestrationContext {
+    inner: Arc<Mutex<CtxInner>>,
+}
 
 impl OrchestrationContext {
     /// Construct a new context from an existing history vector.
-    pub fn new(history: Vec<Event>) -> Self { Self { inner: Arc::new(Mutex::new(CtxInner::new(history))) } }
+    pub fn new(history: Vec<Event>) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(CtxInner::new(history))),
+        }
+    }
 
     /// Returns the current logical time in milliseconds based on the last
     /// `TimerFired` event in history.
-    pub fn now_ms(&self) -> u64 { self.inner.lock().unwrap().now_ms() }
+    pub fn now_ms(&self) -> u64 {
+        self.inner.lock().unwrap().now_ms()
+    }
     /// Returns a deterministic GUID string, incremented per instance.
-    pub fn new_guid(&self) -> String { self.inner.lock().unwrap().new_guid() }
+    pub fn new_guid(&self) -> String {
+        self.inner.lock().unwrap().new_guid()
+    }
 
-    fn take_actions(&self) -> Vec<Action> { std::mem::take(&mut self.inner.lock().unwrap().actions) }
+    fn take_actions(&self) -> Vec<Action> {
+        std::mem::take(&mut self.inner.lock().unwrap().actions)
+    }
 
     // Turn metadata
     /// The zero-based turn counter assigned by the host for diagnostics.
-    pub fn turn_index(&self) -> u64 { self.inner.lock().unwrap().turn_index }
-    pub(crate) fn set_turn_index(&self, idx: u64) { self.inner.lock().unwrap().turn_index = idx; }
+    pub fn turn_index(&self) -> u64 {
+        self.inner.lock().unwrap().turn_index
+    }
+    pub(crate) fn set_turn_index(&self, idx: u64) {
+        self.inner.lock().unwrap().turn_index = idx;
+    }
 
     // Replay-safe logging control
     /// Indicates whether logging is enabled for the current poll. This is
     /// flipped on when a decision is recorded to minimize log noise.
-    pub fn is_logging_enabled(&self) -> bool { self.inner.lock().unwrap().logging_enabled_this_poll }
+    pub fn is_logging_enabled(&self) -> bool {
+        self.inner.lock().unwrap().logging_enabled_this_poll
+    }
     #[allow(dead_code)]
-    pub(crate) fn set_logging_enabled(&self, enabled: bool) { self.inner.lock().unwrap().logging_enabled_this_poll = enabled; }
+    pub(crate) fn set_logging_enabled(&self, enabled: bool) {
+        self.inner.lock().unwrap().logging_enabled_this_poll = enabled;
+    }
     /// Drain the buffered log messages accumulated during the last turn.
-    pub fn take_log_buffer(&self) -> Vec<(LogLevel, String)> { std::mem::take(&mut self.inner.lock().unwrap().log_buffer) }
+    pub fn take_log_buffer(&self) -> Vec<(LogLevel, String)> {
+        std::mem::take(&mut self.inner.lock().unwrap().log_buffer)
+    }
     /// Buffer a structured log message for the current turn.
-    pub fn push_log(&self, level: LogLevel, msg: String) { self.inner.lock().unwrap().log_buffer.push((level, msg)); }
+    pub fn push_log(&self, level: LogLevel, msg: String) {
+        self.inner.lock().unwrap().log_buffer.push((level, msg));
+    }
 
     // System trace helper: thin wrapper over schedule_activity + immediate first poll to record scheduling
     /// Emit a structured trace entry using the system trace activity.
@@ -191,13 +235,21 @@ impl OrchestrationContext {
 
     // Typed wrappers for common levels
     /// Convenience wrapper for INFO level tracing.
-    pub fn trace_info(&self, message: impl Into<String>) { self.trace("INFO", message.into()); }
+    pub fn trace_info(&self, message: impl Into<String>) {
+        self.trace("INFO", message.into());
+    }
     /// Convenience wrapper for WARN level tracing.
-    pub fn trace_warn(&self, message: impl Into<String>) { self.trace("WARN", message.into()); }
+    pub fn trace_warn(&self, message: impl Into<String>) {
+        self.trace("WARN", message.into());
+    }
     /// Convenience wrapper for ERROR level tracing.
-    pub fn trace_error(&self, message: impl Into<String>) { self.trace("ERROR", message.into()); }
+    pub fn trace_error(&self, message: impl Into<String>) {
+        self.trace("ERROR", message.into());
+    }
     /// Convenience wrapper for DEBUG level tracing.
-    pub fn trace_debug(&self, message: impl Into<String>) { self.trace("DEBUG", message.into()); }
+    pub fn trace_debug(&self, message: impl Into<String>) {
+        self.trace("DEBUG", message.into());
+    }
 
     /// Return current wall-clock time from a system activity in milliseconds since epoch.
     pub async fn system_now_ms(&self) -> u128 {
@@ -212,8 +264,7 @@ impl OrchestrationContext {
     /// Return a new pseudo-GUID string from a system activity. Intended for
     /// integration paths; for deterministic GUIDs prefer `new_guid()`.
     pub async fn system_new_guid(&self) -> String {
-        self
-            .schedule_activity("__system_new_guid", "".to_string())
+        self.schedule_activity("__system_new_guid", "".to_string())
             .into_activity()
             .await
             .unwrap_or_else(|e| panic!("system_new_guid failed: {e}"))
@@ -243,9 +294,25 @@ pub enum DurableOutput {
 pub struct DurableFuture(Kind);
 
 enum Kind {
-    Activity { id: u64, name: String, input: String, scheduled: Cell<bool>, ctx: OrchestrationContext },
-    Timer { id: u64, delay_ms: u64, scheduled: Cell<bool>, ctx: OrchestrationContext },
-    External { id: u64, name: String, scheduled: Cell<bool>, ctx: OrchestrationContext },
+    Activity {
+        id: u64,
+        name: String,
+        input: String,
+        scheduled: Cell<bool>,
+        ctx: OrchestrationContext,
+    },
+    Timer {
+        id: u64,
+        delay_ms: u64,
+        scheduled: Cell<bool>,
+        ctx: OrchestrationContext,
+    },
+    External {
+        id: u64,
+        name: String,
+        scheduled: Cell<bool>,
+        ctx: OrchestrationContext,
+    },
 }
 
 impl Future for DurableFuture {
@@ -254,48 +321,103 @@ impl Future for DurableFuture {
         // Safety: We never move fields that are !Unpin; we only take &mut to mutate inner Cells and use ctx by reference.
         let this = unsafe { self.get_unchecked_mut() };
         match &mut this.0 {
-            Kind::Activity { id, name, input, scheduled, ctx } => {
+            Kind::Activity {
+                id,
+                name,
+                input,
+                scheduled,
+                ctx,
+            } => {
                 let mut inner = ctx.inner.lock().unwrap();
                 // Is there a completion for this id in history?
                 if let Some(outcome) = inner.history.iter().rev().find_map(|e| match e {
-                    Event::ActivityCompleted { id: cid, result } if cid == id => Some(Ok(result.clone())),
-                    Event::ActivityFailed { id: cid, error } if cid == id => Some(Err(error.clone())),
+                    Event::ActivityCompleted { id: cid, result } if cid == id => {
+                        Some(Ok(result.clone()))
+                    }
+                    Event::ActivityFailed { id: cid, error } if cid == id => {
+                        Some(Err(error.clone()))
+                    }
                     _ => None,
-                }) { return Poll::Ready(DurableOutput::Activity(outcome)); }
+                }) {
+                    return Poll::Ready(DurableOutput::Activity(outcome));
+                }
                 // If not yet scheduled in history, emit a CallActivity action once
-                let already_scheduled = inner.history.iter().any(|e| matches!(e, Event::ActivityScheduled { id: cid, .. } if cid == id));
+                let already_scheduled = inner
+                    .history
+                    .iter()
+                    .any(|e| matches!(e, Event::ActivityScheduled { id: cid, .. } if cid == id));
                 if !already_scheduled && !scheduled.replace(true) {
                     // Record schedule locally for this turn so subsequent polls observe it
-                    inner.history.push(Event::ActivityScheduled { id: *id, name: name.clone(), input: input.clone() });
-                    inner.record_action(Action::CallActivity { id: *id, name: name.clone(), input: input.clone() });
+                    inner.history.push(Event::ActivityScheduled {
+                        id: *id,
+                        name: name.clone(),
+                        input: input.clone(),
+                    });
+                    inner.record_action(Action::CallActivity {
+                        id: *id,
+                        name: name.clone(),
+                        input: input.clone(),
+                    });
                 }
                 Poll::Pending
             }
-            Kind::Timer { id, delay_ms, scheduled, ctx } => {
+            Kind::Timer {
+                id,
+                delay_ms,
+                scheduled,
+                ctx,
+            } => {
                 let mut inner = ctx.inner.lock().unwrap();
                 if inner
                     .history
                     .iter()
                     .any(|e| matches!(e, Event::TimerFired { id: cid, .. } if cid == id))
-                { return Poll::Ready(DurableOutput::Timer); }
-                let already_created = inner.history.iter().any(|e| matches!(e, Event::TimerCreated { id: cid, .. } if cid == id));
+                {
+                    return Poll::Ready(DurableOutput::Timer);
+                }
+                let already_created = inner
+                    .history
+                    .iter()
+                    .any(|e| matches!(e, Event::TimerCreated { id: cid, .. } if cid == id));
                 if !already_created && !scheduled.replace(true) {
                     let fire_at_ms = inner.now_ms().saturating_add(*delay_ms);
-                    inner.history.push(Event::TimerCreated { id: *id, fire_at_ms });
-                    inner.record_action(Action::CreateTimer { id: *id, delay_ms: *delay_ms });
+                    inner.history.push(Event::TimerCreated {
+                        id: *id,
+                        fire_at_ms,
+                    });
+                    inner.record_action(Action::CreateTimer {
+                        id: *id,
+                        delay_ms: *delay_ms,
+                    });
                 }
                 Poll::Pending
             }
-            Kind::External { id, name, scheduled, ctx } => {
+            Kind::External {
+                id,
+                name,
+                scheduled,
+                ctx,
+            } => {
                 let mut inner = ctx.inner.lock().unwrap();
                 if let Some(data) = inner.history.iter().rev().find_map(|e| match e {
                     Event::ExternalEvent { id: cid, data, .. } if cid == id => Some(data.clone()),
                     _ => None,
-                }) { return Poll::Ready(DurableOutput::External(data)); }
-                let already_subscribed = inner.history.iter().any(|e| matches!(e, Event::ExternalSubscribed { id: cid, .. } if cid == id));
+                }) {
+                    return Poll::Ready(DurableOutput::External(data));
+                }
+                let already_subscribed = inner
+                    .history
+                    .iter()
+                    .any(|e| matches!(e, Event::ExternalSubscribed { id: cid, .. } if cid == id));
                 if !already_subscribed && !scheduled.replace(true) {
-                    inner.history.push(Event::ExternalSubscribed { id: *id, name: name.clone() });
-                    inner.record_action(Action::WaitExternal { id: *id, name: name.clone() });
+                    inner.history.push(Event::ExternalSubscribed {
+                        id: *id,
+                        name: name.clone(),
+                    });
+                    inner.record_action(Action::WaitExternal {
+                        id: *id,
+                        name: name.clone(),
+                    });
                 }
                 Poll::Pending
             }
@@ -314,7 +436,9 @@ impl DurableFuture {
                 let this = unsafe { self.map_unchecked_mut(|s| &mut s.0) };
                 match this.poll(cx) {
                     Poll::Ready(DurableOutput::Activity(v)) => Poll::Ready(v),
-                    Poll::Ready(other) => panic!("into_activity used on non-activity future: {other:?}"),
+                    Poll::Ready(other) => {
+                        panic!("into_activity used on non-activity future: {other:?}")
+                    }
                     Poll::Pending => Poll::Pending,
                 }
             }
@@ -350,7 +474,9 @@ impl DurableFuture {
                 let this = unsafe { self.map_unchecked_mut(|s| &mut s.0) };
                 match this.poll(cx) {
                     Poll::Ready(DurableOutput::External(v)) => Poll::Ready(v),
-                    Poll::Ready(other) => panic!("into_event used on non-external future: {other:?}"),
+                    Poll::Ready(other) => {
+                        panic!("into_event used on non-external future: {other:?}")
+                    }
                     Poll::Pending => Poll::Pending,
                 }
             }
@@ -361,7 +487,11 @@ impl DurableFuture {
 
 impl OrchestrationContext {
     /// Schedule an activity and return a `DurableFuture` correlated to it.
-    pub fn schedule_activity(&self, name: impl Into<String>, input: impl Into<String>) -> DurableFuture {
+    pub fn schedule_activity(
+        &self,
+        name: impl Into<String>,
+        input: impl Into<String>,
+    ) -> DurableFuture {
         let name: String = name.into();
         let input: String = input.into();
         let mut inner = self.inner.lock().unwrap();
@@ -370,13 +500,25 @@ impl OrchestrationContext {
             .history
             .iter()
             .find_map(|e| match e {
-                Event::ActivityScheduled { id, name: n, input: inp } if n == &name && inp == &input && !inner.claimed_activity_ids.contains(id) => Some(*id),
+                Event::ActivityScheduled {
+                    id,
+                    name: n,
+                    input: inp,
+                } if n == &name && inp == &input && !inner.claimed_activity_ids.contains(id) => {
+                    Some(*id)
+                }
                 _ => None,
             })
             .unwrap_or_else(|| inner.next_id());
         inner.claimed_activity_ids.insert(adopted_id);
         drop(inner);
-        DurableFuture(Kind::Activity { id: adopted_id, name, input, scheduled: Cell::new(false), ctx: self.clone() })
+        DurableFuture(Kind::Activity {
+            id: adopted_id,
+            name,
+            input,
+            scheduled: Cell::new(false),
+            ctx: self.clone(),
+        })
     }
 
     /// Schedule a timer and return a `DurableFuture` correlated to it.
@@ -387,13 +529,20 @@ impl OrchestrationContext {
             .history
             .iter()
             .find_map(|e| match e {
-                Event::TimerCreated { id, .. } if !inner.claimed_timer_ids.contains(id) => Some(*id),
+                Event::TimerCreated { id, .. } if !inner.claimed_timer_ids.contains(id) => {
+                    Some(*id)
+                }
                 _ => None,
             })
             .unwrap_or_else(|| inner.next_id());
         inner.claimed_timer_ids.insert(adopted_id);
         drop(inner);
-        DurableFuture(Kind::Timer { id: adopted_id, delay_ms, scheduled: Cell::new(false), ctx: self.clone() })
+        DurableFuture(Kind::Timer {
+            id: adopted_id,
+            delay_ms,
+            scheduled: Cell::new(false),
+            ctx: self.clone(),
+        })
     }
 
     /// Subscribe to an external event by name and return its `DurableFuture`.
@@ -405,18 +554,29 @@ impl OrchestrationContext {
             .history
             .iter()
             .find_map(|e| match e {
-                Event::ExternalSubscribed { id, name: n } if n == &name && !inner.claimed_external_ids.contains(id) => Some(*id),
+                Event::ExternalSubscribed { id, name: n }
+                    if n == &name && !inner.claimed_external_ids.contains(id) =>
+                {
+                    Some(*id)
+                }
                 _ => None,
             })
             .unwrap_or_else(|| inner.next_id());
         inner.claimed_external_ids.insert(adopted_id);
         drop(inner);
-        DurableFuture(Kind::External { id: adopted_id, name, scheduled: Cell::new(false), ctx: self.clone() })
+        DurableFuture(Kind::External {
+            id: adopted_id,
+            name,
+            scheduled: Cell::new(false),
+            ctx: self.clone(),
+        })
     }
 }
 
 fn noop_waker() -> Waker {
-    unsafe fn clone(_: *const ()) -> RawWaker { RawWaker::new(std::ptr::null(), &VTABLE) }
+    unsafe fn clone(_: *const ()) -> RawWaker {
+        RawWaker::new(std::ptr::null(), &VTABLE)
+    }
     unsafe fn wake(_: *const ()) {}
     unsafe fn wake_by_ref(_: *const ()) {}
     unsafe fn drop(_: *const ()) {}
@@ -437,7 +597,10 @@ fn poll_once<F: Future>(fut: &mut F) -> Poll<F::Output> {
 /// history, actions to execute, per-turn logs, and an optional output.
 pub type TurnResult<O> = (Vec<Event>, Vec<Action>, Vec<(LogLevel, String)>, Option<O>);
 
-pub fn run_turn<O, F>(history: Vec<Event>, orchestrator: impl Fn(OrchestrationContext) -> F) -> TurnResult<O>
+pub fn run_turn<O, F>(
+    history: Vec<Event>,
+    orchestrator: impl Fn(OrchestrationContext) -> F,
+) -> TurnResult<O>
 where
     F: Future<Output = O>,
 {
@@ -463,7 +626,11 @@ where
 
 /// Same as `run_turn` but annotates the context with a caller-supplied
 /// turn index for diagnostics and logging.
-pub fn run_turn_with<O, F>(history: Vec<Event>, turn_index: u64, orchestrator: impl Fn(OrchestrationContext) -> F) -> TurnResult<O>
+pub fn run_turn_with<O, F>(
+    history: Vec<Event>,
+    turn_index: u64,
+    orchestrator: impl Fn(OrchestrationContext) -> F,
+) -> TurnResult<O>
 where
     F: Future<Output = O>,
 {
@@ -494,7 +661,11 @@ impl Executor {
     /// Drives an orchestrator by alternately replaying one turn and invoking
     /// the provided `execute_actions` to materialize requested actions into
     /// history, until the orchestrator completes.
-    pub fn drive_to_completion<O, F, X>(mut history: Vec<Event>, orchestrator: impl Fn(OrchestrationContext) -> F, mut execute_actions: X) -> (Vec<Event>, O)
+    pub fn drive_to_completion<O, F, X>(
+        mut history: Vec<Event>,
+        orchestrator: impl Fn(OrchestrationContext) -> F,
+        mut execute_actions: X,
+    ) -> (Vec<Event>, O)
     where
         F: Future<Output = O>,
         X: FnMut(Vec<Action>, &mut Vec<Event>),
@@ -509,7 +680,3 @@ impl Executor {
         }
     }
 }
-
-
-
-
