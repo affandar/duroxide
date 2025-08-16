@@ -7,9 +7,73 @@ use crate::providers::HistoryStore;
 use crate::providers::in_memory::InMemoryHistoryStore;
 use tracing::{debug, warn, info, error};
 use std::collections::HashSet;
+use async_trait::async_trait;
 
 /// Runtime components: activity worker and registry utilities.
 pub mod activity;
+
+/// Trait implemented by orchestration handlers that can be invoked by the runtime.
+#[async_trait]
+pub trait OrchestrationHandler: Send + Sync {
+    async fn invoke(&self, ctx: OrchestrationContext) -> String;
+}
+
+/// Function wrapper that implements `OrchestrationHandler`.
+pub struct FnOrchestration<F, Fut>(pub F)
+where
+    F: Fn(OrchestrationContext) -> Fut + Send + Sync + 'static,
+    Fut: std::future::Future<Output = String> + Send + 'static;
+
+#[async_trait]
+impl<F, Fut> OrchestrationHandler for FnOrchestration<F, Fut>
+where
+    F: Fn(OrchestrationContext) -> Fut + Send + Sync + 'static,
+    Fut: std::future::Future<Output = String> + Send + 'static,
+{
+    async fn invoke(&self, ctx: OrchestrationContext) -> String {
+        (self.0)(ctx).await
+    }
+}
+
+/// Immutable registry mapping orchestration names to handlers.
+#[derive(Clone, Default)]
+pub struct OrchestrationRegistry {
+    inner: Arc<HashMap<String, Arc<dyn OrchestrationHandler>>>,
+}
+
+impl OrchestrationRegistry {
+    /// Create a new builder for registering orchestrations.
+    pub fn builder() -> OrchestrationRegistryBuilder {
+        OrchestrationRegistryBuilder { map: HashMap::new() }
+    }
+
+    /// Look up a handler by name.
+    pub fn get(&self, name: &str) -> Option<Arc<dyn OrchestrationHandler>> {
+        self.inner.get(name).cloned()
+    }
+}
+
+/// Builder for `OrchestrationRegistry`.
+pub struct OrchestrationRegistryBuilder {
+    map: HashMap<String, Arc<dyn OrchestrationHandler>>,
+}
+
+impl OrchestrationRegistryBuilder {
+    /// Register an orchestration function that returns a `String`.
+    pub fn register<F, Fut>(mut self, name: impl Into<String>, f: F) -> Self
+    where
+        F: Fn(OrchestrationContext) -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = String> + Send + 'static,
+    {
+        self.map.insert(name.into(), Arc::new(FnOrchestration(f)));
+        self
+    }
+
+    /// Finalize and produce an `OrchestrationRegistry`.
+    pub fn build(self) -> OrchestrationRegistry {
+        OrchestrationRegistry { inner: Arc::new(self.map) }
+    }
+}
 
 /// Work item enqueued to the activity worker.
 #[derive(Clone)]
@@ -76,17 +140,18 @@ pub struct Runtime {
     instance_joins: Mutex<Vec<JoinHandle<()>>>,
     history_store: Arc<dyn HistoryStore>,
     active_instances: Mutex<HashSet<String>>,
+    orchestration_registry: OrchestrationRegistry,
 }
 
 impl Runtime {
     /// Start a new runtime using the in-memory history store.
-    pub async fn start(registry: Arc<activity::ActivityRegistry>) -> Arc<Self> {
+    pub async fn start(activity_registry: Arc<activity::ActivityRegistry>, orchestration_registry: OrchestrationRegistry) -> Arc<Self> {
         let history_store: Arc<dyn HistoryStore> = Arc::new(InMemoryHistoryStore::default());
-        Self::start_with_store(history_store, registry).await
+        Self::start_with_store(history_store, activity_registry, orchestration_registry).await
     }
 
     /// Start a new runtime with a custom `HistoryStore` implementation.
-    pub async fn start_with_store(history_store: Arc<dyn HistoryStore>, registry: Arc<activity::ActivityRegistry>) -> Arc<Self> {
+    pub async fn start_with_store(history_store: Arc<dyn HistoryStore>, activity_registry: Arc<activity::ActivityRegistry>, orchestration_registry: OrchestrationRegistry) -> Arc<Self> {
         // Install a default subscriber if none set (ok to call many times)
         let _ = tracing_subscriber::fmt()
             .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
@@ -100,7 +165,7 @@ impl Runtime {
 
         // spawn activity worker with system trace handler pre-registered
         // copy user registrations
-        let mut builder = activity::ActivityRegistryBuilder::from_registry(&registry);
+        let mut builder = activity::ActivityRegistryBuilder::from_registry(&activity_registry);
         // add system activities
         builder = builder.register_result("__system_trace", |input: String| async move {
             // input format: "LEVEL:message"
@@ -137,7 +202,7 @@ impl Runtime {
             while let Some(msg) = router_rx.recv().await { router_clone.forward(msg).await; }
         }));
 
-        Arc::new(Self { activity_tx, timer_tx, router_tx, router, joins: Mutex::new(joins), instance_joins: Mutex::new(Vec::new()), history_store, active_instances: Mutex::new(HashSet::new()) })
+        Arc::new(Self { activity_tx, timer_tx, router_tx, router, joins: Mutex::new(joins), instance_joins: Mutex::new(Vec::new()), history_store, active_instances: Mutex::new(HashSet::new()), orchestration_registry })
     }
 
     /// Abort background tasks. Channels are dropped with the runtime.
@@ -155,18 +220,13 @@ impl Runtime {
         }
     }
 
-    /// Run a single instance to completion in the current task, returning
+    /// Run a single instance to completion by orchestration name, returning
     /// its final history and output.
-    pub async fn run_instance_to_completion<O, F, OFut>(
+    pub async fn run_instance_to_completion(
         self: Arc<Self>,
         instance: &str,
-        orchestrator: F,
-    ) -> (Vec<Event>, O)
-    where
-        F: Fn(OrchestrationContext) -> OFut + Send + Sync + 'static,
-        OFut: std::future::Future<Output = O> + Send + 'static,
-        O: Send + 'static,
-    {
+        orchestration_name: &str,
+    ) -> (Vec<Event>, String) {
         // Ensure instance not already active in this runtime
         {
             let mut act = self.active_instances.lock().await;
@@ -174,6 +234,10 @@ impl Runtime {
                 panic!("instance already active: {instance}");
             }
         }
+        // Look up the orchestration handler
+        let orchestration_handler = self.orchestration_registry.get(orchestration_name)
+            .unwrap_or_else(|| panic!("orchestration not found: {orchestration_name}"));
+
         // Ensure removal of active flag even if the task panics
         struct ActiveGuard { rt: Arc<Runtime>, inst: String }
         impl Drop for ActiveGuard {
@@ -197,10 +261,15 @@ impl Runtime {
         // Rehydrate pending activities and timers from history
         rehydrate_pending(instance, &history, &self.activity_tx, &self.timer_tx).await;
 
+        let orchestrator_fn = |ctx: OrchestrationContext| {
+            let handler = orchestration_handler.clone();
+            async move { handler.invoke(ctx).await }
+        };
+
         let mut turn_index: u64 = 0;
         loop {
             let baseline_len = history.len();
-            let (hist_after, actions, _logs, out_opt) = run_turn_with(history, turn_index, &orchestrator);
+            let (hist_after, actions, _logs, out_opt) = run_turn_with(history, turn_index, &orchestrator_fn);
             history = hist_after;
             if let Some(out) = out_opt { return (history, out); }
 
@@ -253,22 +322,18 @@ impl Runtime {
 
     /// Spawn an instance and return a handle that resolves to its history
     /// and output when complete.
-    pub async fn spawn_instance_to_completion<O, F, OFut>(
+    pub async fn spawn_instance_to_completion(
         self: Arc<Self>,
         instance: &str,
-        orchestrator: F,
-    ) -> JoinHandle<(Vec<Event>, O)>
-    where
-        F: Fn(OrchestrationContext) -> OFut + Send + Sync + 'static,
-        OFut: std::future::Future<Output = O> + Send + 'static,
-        O: Send + 'static,
-    {
+        orchestration_name: &str,
+    ) -> JoinHandle<(Vec<Event>, String)> {
         let notify = Arc::new(tokio::sync::Notify::new());
         let notify_for_watcher = notify.clone();
         let this_for_task = self.clone();
         let inst = instance.to_string();
+        let orch_name = orchestration_name.to_string();
         let handle = tokio::spawn(async move {
-            let res = this_for_task.run_instance_to_completion::<O, F, OFut>(&inst, orchestrator).await;
+            let res = this_for_task.run_instance_to_completion(&inst, &orch_name).await;
             notify.notify_waiters();
             res
         });

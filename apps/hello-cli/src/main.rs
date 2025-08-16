@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use rust_dtf::OrchestrationContext;
+use rust_dtf::{OrchestrationContext, OrchestrationRegistry};
 use rust_dtf::runtime::{Runtime, activity::ActivityRegistry};
 use rust_dtf::providers::{HistoryStore};
 use rust_dtf::providers::fs::FsHistoryStore;
@@ -17,13 +17,18 @@ async fn main() -> anyhow::Result<()> {
         .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
         .try_init();
 
-    let registry = ActivityRegistry::builder()
+    let activity_registry = ActivityRegistry::builder()
         .register_result("Hello", |name: String| async move { Ok(format!("Hello, {name}!")) })
         .build();
+
+    let orchestration_registry = OrchestrationRegistry::builder()
+        .register("HelloOrchestration", orchestrator)
+        .build();
+
     // Use filesystem-backed provider so history persists across runs
     let store = Arc::new(FsHistoryStore::new("./dtf-data", true)) as Arc<dyn HistoryStore>;
-    let rt = Runtime::start_with_store(store, Arc::new(registry)).await;
-    let handle = rt.clone().spawn_instance_to_completion("inst-hello-cli-1", orchestrator).await;
+    let rt = Runtime::start_with_store(store, Arc::new(activity_registry), orchestration_registry).await;
+    let handle = rt.clone().spawn_instance_to_completion("inst-hello-cli-1", "HelloOrchestration").await;
     let (_hist, output) = handle.await.unwrap();
     println!("{output}");
     rt.shutdown().await;

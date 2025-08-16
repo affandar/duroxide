@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use rust_dtf::{Event, OrchestrationContext};
+use rust_dtf::{Event, OrchestrationContext, OrchestrationRegistry};
 use rust_dtf::runtime::{self, activity::ActivityRegistry};
 use rust_dtf::providers::HistoryStore;
 use rust_dtf::providers::in_memory::InMemoryHistoryStore;
@@ -25,10 +25,13 @@ where
     };
 
     let store1 = make_store_stage1();
-    let registry = ActivityRegistry::builder().register("Step", |input: String| async move { input }).build();
+    let activity_registry = ActivityRegistry::builder().register("Step", |input: String| async move { input }).build();
+    let orchestration_registry = OrchestrationRegistry::builder()
+        .register("RecoveryTest", orchestrator)
+        .build();
 
-    let rt1 = runtime::Runtime::start_with_store(store1.clone(), Arc::new(registry.clone())).await;
-    let handle1 = rt1.clone().spawn_instance_to_completion(&instance, orchestrator).await;
+    let rt1 = runtime::Runtime::start_with_store(store1.clone(), Arc::new(activity_registry.clone()), orchestration_registry.clone()).await;
+    let handle1 = rt1.clone().spawn_instance_to_completion(&instance, "RecoveryTest").await;
 
     tokio::time::sleep(std::time::Duration::from_millis(15)).await;
 
@@ -43,14 +46,14 @@ where
     let store2 = make_store_stage2();
     // Remove the instance before attempting restart; runtime now treats existing instances as an error
     let _ = store2.remove_instance(&instance).await;
-    let rt2 = runtime::Runtime::start_with_store(store2.clone(), Arc::new(registry.clone())).await;
+    let rt2 = runtime::Runtime::start_with_store(store2.clone(), Arc::new(activity_registry.clone()), orchestration_registry.clone()).await;
     let rt2_c = rt2.clone();
     let instance_for_spawn = instance.clone();
     tokio::spawn(async move {
         tokio::time::sleep(std::time::Duration::from_millis(5)).await;
         rt2_c.raise_event(&instance_for_spawn, "Resume", "go").await;
     });
-    let handle2 = rt2.clone().spawn_instance_to_completion(&instance, orchestrator).await;
+    let handle2 = rt2.clone().spawn_instance_to_completion(&instance, "RecoveryTest").await;
     let (_final_hist_runtime, output) = handle2.await.unwrap();
     assert_eq!(output, "1234");
 

@@ -1,6 +1,6 @@
 use futures::future::{join3};
 use std::sync::Arc;
-use rust_dtf::{Event, OrchestrationContext};
+use rust_dtf::{Event, OrchestrationContext, OrchestrationRegistry};
 use rust_dtf::runtime::{self, activity::ActivityRegistry};
 use rust_dtf::providers::HistoryStore;
 use rust_dtf::providers::fs::FsHistoryStore;
@@ -24,7 +24,7 @@ async fn concurrent_orchestrations_different_activities_with(store: StdArc<dyn H
         format!("o2:up={a};evt={e}")
     };
 
-    let registry = ActivityRegistry::builder()
+    let activity_registry = ActivityRegistry::builder()
         .register("Add", |input: String| async move {
             let mut parts = input.split(',');
             let a = parts.next().unwrap_or("0").parse::<i64>().unwrap_or(0);
@@ -34,9 +34,14 @@ async fn concurrent_orchestrations_different_activities_with(store: StdArc<dyn H
         .register("Upper", |input: String| async move { input.to_uppercase() })
         .build();
 
-    let rt = runtime::Runtime::start_with_store(store, Arc::new(registry)).await;
-    let h1 = rt.clone().spawn_instance_to_completion("inst-multi-1", o1).await;
-    let h2 = rt.clone().spawn_instance_to_completion("inst-multi-2", o2).await;
+    let orchestration_registry = OrchestrationRegistry::builder()
+        .register("AddOrchestration", o1)
+        .register("UpperOrchestration", o2)
+        .build();
+
+    let rt = runtime::Runtime::start_with_store(store, Arc::new(activity_registry), orchestration_registry).await;
+    let h1 = rt.clone().spawn_instance_to_completion("inst-multi-1", "AddOrchestration").await;
+    let h2 = rt.clone().spawn_instance_to_completion("inst-multi-2", "UpperOrchestration").await;
 
     let rt_c = rt.clone();
     tokio::spawn(async move {
@@ -91,13 +96,18 @@ async fn concurrent_orchestrations_same_activities_with(store: StdArc<dyn Histor
         format!("o2:a={a};evt={e}")
     };
 
-    let registry = ActivityRegistry::builder()
+    let activity_registry = ActivityRegistry::builder()
         .register("Proc", |input: String| async move { let n = input.parse::<i64>().unwrap_or(0); (n + 1).to_string() })
         .build();
 
-    let rt = runtime::Runtime::start_with_store(store, Arc::new(registry)).await;
-    let h1 = rt.clone().spawn_instance_to_completion("inst-same-acts-1", o1).await;
-    let h2 = rt.clone().spawn_instance_to_completion("inst-same-acts-2", o2).await;
+    let orchestration_registry = OrchestrationRegistry::builder()
+        .register("ProcOrchestration1", o1)
+        .register("ProcOrchestration2", o2)
+        .build();
+
+    let rt = runtime::Runtime::start_with_store(store, Arc::new(activity_registry), orchestration_registry).await;
+    let h1 = rt.clone().spawn_instance_to_completion("inst-same-acts-1", "ProcOrchestration1").await;
+    let h2 = rt.clone().spawn_instance_to_completion("inst-same-acts-2", "ProcOrchestration2").await;
 
     let rt_c = rt.clone();
     tokio::spawn(async move {

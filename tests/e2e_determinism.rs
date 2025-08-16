@@ -1,6 +1,6 @@
 use futures::future::{join3};
 use std::sync::Arc;
-use rust_dtf::{run_turn, Event, OrchestrationContext, DurableOutput, Action};
+use rust_dtf::{run_turn, Event, OrchestrationContext, DurableOutput, Action, OrchestrationRegistry};
 use rust_dtf::runtime::{self, activity::ActivityRegistry};
 use rust_dtf::providers::HistoryStore;
 use rust_dtf::providers::fs::FsHistoryStore;
@@ -24,18 +24,22 @@ async fn orchestration_completes_and_replays_deterministically_with(store: StdAr
         format!("id=_hidden, start={start}, evt={evt}, b={b}")
     };
 
-    let registry = ActivityRegistry::builder()
+    let activity_registry = ActivityRegistry::builder()
         .register("A", |input: String| async move { input.parse::<i32>().unwrap_or(0).saturating_add(1).to_string() })
         .register("B", |input: String| async move { format!("{input}!") })
         .build();
 
-    let rt = runtime::Runtime::start_with_store(store, Arc::new(registry.clone())).await;
+    let orchestration_registry = OrchestrationRegistry::builder()
+        .register("DeterministicOrchestration", orchestration)
+        .build();
+
+    let rt = runtime::Runtime::start_with_store(store, Arc::new(activity_registry), orchestration_registry).await;
     let rt_clone = rt.clone();
     tokio::spawn(async move {
         tokio::time::sleep(std::time::Duration::from_millis(6)).await;
         rt_clone.raise_event("inst-orch-1", "Go", "ok").await;
     });
-    let handle = rt.clone().spawn_instance_to_completion("inst-orch-1", orchestration).await;
+    let handle = rt.clone().spawn_instance_to_completion("inst-orch-1", "DeterministicOrchestration").await;
     let (final_history, output) = handle.await.unwrap();
     assert!(output.contains("evt=ok"));
     assert!(output.contains("b=2!"));
@@ -85,14 +89,18 @@ async fn sequential_activity_chain_completes_with(store: StdArc<dyn HistoryStore
         format!("c={c}")
     };
 
-    let registry = ActivityRegistry::builder()
+    let activity_registry = ActivityRegistry::builder()
         .register("A", |input: String| async move { input.parse::<i32>().map(|x| x + 1).unwrap_or(0).to_string() })
         .register("B", |input: String| async move { format!("{input}b") })
         .register("C", |input: String| async move { format!("{input}c") })
         .build();
 
-    let rt = runtime::Runtime::start_with_store(store, Arc::new(registry.clone())).await;
-    let handle = rt.clone().spawn_instance_to_completion("inst-seq-1", orchestrator).await;
+    let orchestration_registry = OrchestrationRegistry::builder()
+        .register("SequentialOrchestration", orchestrator)
+        .build();
+
+    let rt = runtime::Runtime::start_with_store(store, Arc::new(activity_registry), orchestration_registry).await;
+    let handle = rt.clone().spawn_instance_to_completion("inst-seq-1", "SequentialOrchestration").await;
     let (final_history, output) = handle.await.unwrap();
     assert_eq!(output, "c=2bc");
     assert_eq!(final_history.len(), 6, "expected exactly three scheduled+completed activity pairs in history");

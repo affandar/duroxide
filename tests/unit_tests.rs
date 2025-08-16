@@ -1,9 +1,16 @@
-use rust_dtf::{run_turn, OrchestrationContext, Event, Action};
+use rust_dtf::{run_turn, OrchestrationContext, Event, Action, OrchestrationRegistry};
 use rust_dtf::runtime::{self, activity::ActivityRegistry};
 use rust_dtf::providers::{HistoryStore};
 use rust_dtf::providers::fs::FsHistoryStore;
 use std::sync::Arc;
 use rust_dtf::providers::in_memory::InMemoryHistoryStore;
+
+// Helper to create runtime with registries for tests
+async fn create_test_runtime(activity_registry: ActivityRegistry) -> Arc<runtime::Runtime> {
+    // Create a minimal orchestration registry for basic tests
+    let orchestration_registry = OrchestrationRegistry::builder().build();
+    runtime::Runtime::start(Arc::new(activity_registry), orchestration_registry).await
+}
 
 // 1) Single-turn emission: ensure exactly one action per scheduled future and matching schedule event recorded.
 #[test]
@@ -52,13 +59,18 @@ async fn deterministic_replay_activity_only() {
         format!("a={a}")
     };
 
-    let registry = ActivityRegistry::builder()
+    let activity_registry = ActivityRegistry::builder()
         .register("A", |input: String| async move {
             input.parse::<i32>().unwrap_or(0).saturating_add(1).to_string()
         })
         .build();
-    let rt = runtime::Runtime::start(Arc::new(registry)).await;
-    let h = rt.clone().spawn_instance_to_completion("inst-unit-1", orchestrator).await;
+    
+    let orchestration_registry = OrchestrationRegistry::builder()
+        .register("TestOrchestration", orchestrator)
+        .build();
+    
+    let rt = runtime::Runtime::start(Arc::new(activity_registry), orchestration_registry).await;
+    let h = rt.clone().spawn_instance_to_completion("inst-unit-1", "TestOrchestration").await;
     let (final_history, output) = h.await.unwrap();
     assert_eq!(output, "a=3");
 
@@ -112,20 +124,26 @@ async fn providers_create_remove_and_duplicate_checks() {
 #[tokio::test]
 async fn runtime_duplicate_orchestration_errors() {
     // Start runtime and attempt to start the same instance twice concurrently
-    let registry = ActivityRegistry::builder().build();
-    let rt = runtime::Runtime::start(Arc::new(registry)).await;
+    let activity_registry = ActivityRegistry::builder().build();
+    
+    let orchestration_registry = OrchestrationRegistry::builder()
+        .register("TestOrch1", |ctx| async move {
+            ctx.schedule_timer(10).into_timer().await;
+            "ok".to_string()
+        })
+        .register("TestOrch2", |ctx| async move {
+            ctx.schedule_timer(1).into_timer().await;
+            "nope".to_string()
+        })
+        .build();
+    
+    let rt = runtime::Runtime::start(Arc::new(activity_registry), orchestration_registry).await;
     let inst = "dup-orch";
 
-    let h1 = rt.clone().spawn_instance_to_completion(inst, |ctx| async move {
-        ctx.schedule_timer(10).into_timer().await;
-        "ok".to_string()
-    }).await;
+    let h1 = rt.clone().spawn_instance_to_completion(inst, "TestOrch1").await;
 
     // Second start should fail (panic inside task) due to runtime active-instance guard
-    let h2 = rt.clone().spawn_instance_to_completion(inst, |ctx| async move {
-        ctx.schedule_timer(1).into_timer().await;
-        "nope".to_string()
-    }).await;
+    let h2 = rt.clone().spawn_instance_to_completion(inst, "TestOrch2").await;
     let res = h2.await;
     assert!(res.is_err(), "expected duplicate start to panic in task");
 
