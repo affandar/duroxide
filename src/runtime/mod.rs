@@ -42,10 +42,10 @@ impl CompletionRouter {
         let kind = kind_of(&msg);
         if let Some(tx) = self.inboxes.lock().await.get(&key) {
             if let Err(_e) = tx.send(msg) {
-                warn!(instance=%key, kind=%kind, "dropping message: receiver dropped");
+                panic!("router: receiver dropped for instance={key}, kind={kind}");
             }
         } else {
-            warn!(instance=%key, kind=%kind, "dropping message for unknown instance");
+            panic!("router: unknown instance for message kind={kind}, instance={key}");
         }
     }
 }
@@ -159,7 +159,6 @@ impl Runtime {
                     Action::CallActivity { id, name, input } => {
                         debug!(instance, id, name=%name, "dispatch activity");
                         if let Err(e) = self.activity_tx.send(ActivityWorkItem { instance: instance.to_string(), id, name, input }).await {
-                            error!(instance, id, error=%e, "failed to dispatch activity");
                             panic!("activity dispatch failed: {e}");
                         }
                     }
@@ -169,7 +168,6 @@ impl Runtime {
                         }).unwrap_or(0);
                         debug!(instance, id, fire_at_ms, delay_ms, "dispatch timer");
                         if let Err(e) = self.timer_tx.send(TimerWorkItem { instance: instance.to_string(), id, fire_at_ms, delay_ms }).await {
-                            error!(instance, id, error=%e, "failed to dispatch timer");
                             panic!("timer dispatch failed: {e}");
                         }
                     }
@@ -241,7 +239,7 @@ async fn run_timer_worker(mut rx: mpsc::Receiver<TimerWorkItem>, comp_tx: mpsc::
         let id = wi.id;
         let fire_at = wi.fire_at_ms;
         if let Err(_e) = comp_tx.send(OrchestratorMsg::TimerFired { instance: inst.clone(), id, fire_at_ms: fire_at }) {
-            warn!(instance=%inst, id=%id, "dropping timer fired: router receiver dropped");
+            panic!("timer worker: router receiver dropped (instance={inst}, id={id})");
         }
     }
 }
@@ -289,7 +287,7 @@ impl Runtime {
         if let Err(_e) = self.router_tx.send(OrchestratorMsg::ExternalByName {
             instance: instance.to_string(), name: name_str.clone(), data: data_str,
         }) {
-            warn!(instance, name=%name_str, "failed to route external event: router dropped");
+            panic!("raise_event: router dropped (instance={instance}, name={name_str})");
         }
     }
 }
@@ -322,7 +320,7 @@ async fn rehydrate_pending(
                     name: name.clone(),
                     input: input.clone(),
                 }).await {
-                    warn!(instance, id=%id, name=%name, error=%e, "rehydrate: failed to enqueue activity");
+                    panic!("rehydrate: failed to enqueue activity id={id}, name={name}: {e}");
                 }
             }
         }
@@ -340,7 +338,7 @@ async fn rehydrate_pending(
                     fire_at_ms: *fire_at_ms,
                     delay_ms,
                 }).await {
-                    warn!(instance, id=%id, error=%e, "rehydrate: failed to enqueue timer");
+                    panic!("rehydrate: failed to enqueue timer id={id}: {e}");
                 }
             }
         }
