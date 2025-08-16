@@ -7,6 +7,7 @@
 - Orchestration state? Monitoring? Visiblity? 
 - Support for orchestration chaining + eternal orchestrations
 - Real world samples (provisioning resources in Azure e.g.)
+- Build orchestration registry and runtime ability to load and resume in-progress orchestrations from the provider.
 
 ## DONE
 
