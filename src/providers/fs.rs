@@ -5,6 +5,8 @@ use serde_json;
 use crate::Event;
 use super::HistoryStore;
 
+const CAP: usize = 1024;
+
 #[derive(Clone)]
 pub struct FsHistoryStore { root: PathBuf }
 
@@ -26,16 +28,24 @@ impl HistoryStore for FsHistoryStore {
         out
     }
 
-    async fn append(&self, instance: &str, new_events: Vec<Event>) {
+    async fn append(&self, instance: &str, new_events: Vec<Event>) -> Result<(), String> {
         fs::create_dir_all(&self.root).await.ok();
         let path = self.inst_path(instance);
-        let mut file = fs::OpenOptions::new().create(true).append(true).open(&path).await.unwrap();
-        for ev in new_events {
+        // Read current to enforce CAP
+        let mut existing = self.read(instance).await;
+        if existing.len() + new_events.len() > CAP {
+            return Err(format!("history cap exceeded (cap={}, have={}, append={})", CAP, existing.len(), new_events.len()));
+        }
+        existing.extend(new_events.into_iter());
+        // Rewrite file with bounded history
+        let mut file = fs::OpenOptions::new().create(true).write(true).truncate(true).open(&path).await.unwrap();
+        for ev in existing {
             let line = serde_json::to_string(&ev).unwrap();
             file.write_all(line.as_bytes()).await.unwrap();
             file.write_all(b"\n").await.unwrap();
         }
         file.flush().await.ok();
+        Ok(())
     }
 
     async fn reset(&self) {

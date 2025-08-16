@@ -14,7 +14,7 @@ fn action_emission_single_turn() {
     };
 
     let history: Vec<Event> = Vec::new();
-    let (hist_after, actions, out) = run_turn(history, orchestrator);
+    let (hist_after, actions, _logs, out) = run_turn(history, orchestrator);
     assert!(out.is_none(), "must not complete in first turn");
     assert_eq!(actions.len(), 1, "exactly one action expected");
     match &actions[0] { Action::CallActivity { name, input, .. } => {
@@ -39,16 +39,16 @@ fn correlation_out_of_order_completion() {
         out
     };
 
-    let (_hist_after, actions, out) = run_turn(history, orchestrator);
+    let (_hist_after, actions, _logs, out) = run_turn(history, orchestrator);
     assert!(actions.is_empty(), "should resolve from existing completion, no new actions");
-    assert_eq!(out.unwrap(), "ok");
+    assert_eq!(out.unwrap(), Ok("ok".to_string()));
 }
 
 // 3) Deterministic replay on a tiny flow (activity only)
 #[tokio::test]
 async fn deterministic_replay_activity_only() {
     let orchestrator = |ctx: OrchestrationContext| async move {
-        let a = ctx.schedule_activity("A", "2").into_activity().await;
+        let a = ctx.schedule_activity("A", "2").into_activity().await.unwrap();
         format!("a={a}")
     };
 
@@ -63,7 +63,7 @@ async fn deterministic_replay_activity_only() {
     assert_eq!(output, "a=3");
 
     // Replay must produce same output and no new actions
-    let (_h2, acts2, out2) = run_turn(final_history.clone(), orchestrator);
+    let (_h2, acts2, _logs2, out2) = run_turn(final_history.clone(), orchestrator);
     assert!(acts2.is_empty());
     assert_eq!(out2.unwrap(), output);
     rt.shutdown().await;
@@ -74,8 +74,8 @@ async fn deterministic_replay_activity_only() {
 async fn history_store_admin_apis() {
     let tmp = tempfile::tempdir().unwrap();
     let store = FsHistoryStore::new(tmp.path());
-    store.append("i1", vec![Event::TimerCreated { id: 1, fire_at_ms: 10 }]).await;
-    store.append("i2", vec![Event::ExternalSubscribed { id: 1, name: "Go".into() }]).await;
+    store.append("i1", vec![Event::TimerCreated { id: 1, fire_at_ms: 10 }]).await.unwrap();
+    store.append("i2", vec![Event::ExternalSubscribed { id: 1, name: "Go".into() }]).await.unwrap();
     let instances = store.list_instances().await;
     assert!(instances.contains(&"i1".into()) && instances.contains(&"i2".into()));
     let dump = store.dump_all_pretty().await;

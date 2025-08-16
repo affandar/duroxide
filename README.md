@@ -1,11 +1,30 @@
 ## rust-dtf
 
-Mini deterministic task framework core for durable-style orchestrations.
+Deterministic task orchestration in Rust, inspired by Durable Task.
 
 What it is
-- Deterministic orchestration core inspired by Durable Task.
-- Composable orchestrator futures with stable, correlated history and deterministic replay.
-- Message-driven runtime with Tokio worker pools for activities and timers, plus an external event API.
+- Deterministic orchestration core with correlated event IDs and replay safety
+- Message-driven runtime built on Tokio (activity worker pool, timer worker, external event router)
+- Storage-agnostic via `HistoryStore` (in-memory, filesystem today)
+
+How it works (brief)
+- The orchestrator runs turn-by-turn. Each turn it is polled once, may schedule actions, then the host blocks waiting for completions.
+- Every operation has a correlation id. Scheduling is recorded as history events (e.g., `ActivityScheduled`), and completions are matched by id (e.g., `ActivityCompleted`).
+- The runtime dispatches actions to workers over channels. Workers send completions back; the runtime appends them to history and starts the next turn.
+- Logging is replay-safe by treating it as a system activity via `ctx.trace_*` helpers. Logs are emitted on completion and also persisted as `TraceEmitted` events.
+- Providers enforce a history cap (1024 here). If an append would exceed the cap, they return an error; the runtime fails the run to preserve determinism (no truncation).
+
+Key types
+- `OrchestrationContext`: schedules work (`schedule_activity`, `schedule_timer`, `schedule_wait`) and exposes `trace_info/warn/error/debug`.
+- `DurableFuture`: returned by `schedule_*`; use `into_activity()`, `into_timer()`, `into_event()` for typed awaits.
+- `Event`/`Action`: immutable history entries and host-side actions.
+- `HistoryStore`: persistence abstraction (`InMemoryHistoryStore`, `FsHistoryStore`).
+
+Project layout
+- `src/lib.rs` — orchestration primitives and single-turn executor
+- `src/runtime/` — runtime, activity registry/worker, timer worker
+- `src/providers/` — in-memory and filesystem history stores
+- `tests/` — unit and e2e tests
 
 Install (when published)
 ```toml
@@ -13,86 +32,80 @@ Install (when published)
 rust-dtf = "0.1"
 ```
 
-Key concepts
-- History is append-only: `ActivityScheduled/Completed`, `TimerCreated/Fired`, `ExternalSubscribed/Event` (each has an id).
-- Orchestrator code uses `schedule_*` to compose and `into_*` to await typed results.
-- Runtime decouples orchestration from execution via channels (activities, timers, externals).
-
-Local development
-- Build: `cargo build`
-- Test: `cargo test`
-- Lint: `cargo clippy --all-targets --all-features -- -D warnings`
-
-Project layout
-- `src/lib.rs` — orchestration primitives (`OrchestrationContext`, `DurableFuture`, events/actions)
-- `src/runtime/` — message-driven runtime, activity registry/worker, timer worker
-- `tests/e2e_tests.rs` — end-to-end tests (races, ordering, sequential, ignore-before-start)
-
-Quick start: define an orchestrator
-```rust
-use futures::future::{select, Either};
-use rust_dtf::{OrchestrationContext, DurableOutput};
-
-async fn orchestrator(ctx: OrchestrationContext) -> String {
-    let left = select(ctx.schedule_activity("A", "1"), ctx.schedule_timer(5));
-    let race = select(left, ctx.schedule_wait("Go"));
-
-    let a = match race.await {
-        Either::Left((Either::Left((DurableOutput::Activity(a), t_rest)), e_rest)) => {
-            let _ = futures::future::join(t_rest, e_rest).await; a
-        }
-        Either::Left((Either::Right((DurableOutput::Timer, a_rest)), e_rest)) => {
-            let (a_out, _e_out) = futures::future::join(a_rest, e_rest).await;
-            match a_out { DurableOutput::Activity(v) => v, _ => unreachable!() }
-        }
-        Either::Right((DurableOutput::External(_), left_rest)) => {
-            match left_rest.await {
-                Either::Left((a_out, t_rest)) => { let _ = t_rest.await; match a_out { DurableOutput::Activity(v) => v, _ => unreachable!() } }
-                Either::Right((t_out, a_rest)) => { match t_out { DurableOutput::Timer => (), _ => unreachable!() }; match a_rest.await { DurableOutput::Activity(v) => v, _ => unreachable!() } }
-            }
-        }
-        _ => unreachable!(),
-    };
-
-    let b = ctx.schedule_activity("B", a.clone()).into_activity().await;
-    format!("a={a}, b={b}")
-}
-```
-
-Run with the runtime and register activities
+Hello world (activities + runtime)
 ```rust
 use std::sync::Arc;
+use rust_dtf::OrchestrationContext;
 use rust_dtf::runtime::{Runtime, activity::ActivityRegistry};
 
-# async fn example() {
+async fn hello_orch(ctx: OrchestrationContext) -> String {
+    ctx.trace_info("hello started");
+    let res = ctx.schedule_activity("Hello", "Rust").into_activity().await.unwrap();
+    ctx.trace_info(format!("hello result={res}"));
+    res
+}
+
+# async fn run() {
 let registry = ActivityRegistry::builder()
-    .register("A", |input: String| async move { input.parse::<i32>().unwrap_or(0).saturating_add(1).to_string() })
-    .register("B", |input: String| async move { format!("{input}!") })
+    .register_result("Hello", |name: String| async move { Ok(format!("Hello, {name}!")) })
     .build();
 
 let rt = Runtime::start(Arc::new(registry)).await;
-
-// Option 1: spawn
-let h = rt.clone().spawn_instance_to_completion("inst-1", orchestrator).await;
-rt.raise_event("inst-1", "Go", "ok").await;
-let (history, output) = h.await.unwrap();
-
-// Option 2: run inline
-// let (history, output) = rt.clone().run_instance_to_completion("inst-1", orchestrator).await;
-
-println!("history={:#?}, output={}", history, output);
+let h = rt.clone().spawn_instance_to_completion("inst-hello-1", hello_orch).await;
+let (_history, output) = h.await.unwrap();
+assert_eq!(output, "Hello, Rust!");
 rt.shutdown().await;
 # }
 ```
 
-Deterministic replay
+Parallel fan-out (DTF-style greetings)
 ```rust
-use rust_dtf::run_turn;
-let (hist_after, _actions, out) = run_turn(history.clone(), orchestrator);
-assert!(out.is_some());
+use futures::future::join;
+async fn fanout(ctx: OrchestrationContext) -> Vec<String> {
+    let g1 = ctx.schedule_activity("Greetings", "Gabbar").into_activity();
+    let g2 = ctx.schedule_activity("Greetings", "Samba").into_activity();
+    let (r1, r2) = join(g1, g2).await;
+    vec![r1.unwrap(), r2.unwrap()]
+}
 ```
 
+Control flow + timers + externals
+```rust
+use futures::future::select;
+use rust_dtf::DurableOutput;
+async fn control(ctx: OrchestrationContext) -> String {
+    let race = select(ctx.schedule_timer(10).into_timer(), ctx.schedule_wait("Evt").into_event());
+    match race.await {
+        // event wins
+        Either::Right((data, _left_rest)) => data,
+        // timer wins then wait for event
+        Either::Left((_timer, right_rest)) => right_rest.await,
+    }
+}
+```
+
+Error handling (Result<String, String>)
+```rust
+async fn comp_sample(ctx: OrchestrationContext) -> String {
+    match ctx.schedule_activity("Fragile", "bad").into_activity().await {
+        Ok(v) => v,
+        Err(e) => {
+            ctx.trace_warn(format!("fragile failed error={e}"));
+            ctx.schedule_activity("Recover", "").into_activity().await.unwrap()
+        }
+    }
+}
+```
+
+Local development
+- Build: `cargo build`
+- Test everything: `cargo test --all -- --nocapture`
+- Run a specific test: `cargo test --test e2e_samples dtf_legacy_gabbar_greetings_fs -- --nocapture`
+
 Notes
-- Crate name is hyphenated: `rust-dtf`. In Rust code, import it as `rust_dtf`.
-- Real-time timers use Tokio sleeps. Externals are delivered via `raise_event`.
-- Messages for unknown instances are ignored with a warning; buffering-before-start can be added via provider.
+- Import as `rust_dtf` in Rust source.
+- Timers are real time (Tokio sleep). External events are via `Runtime::raise_event`.
+- Unknown-instance messages are logged and dropped. Providers persist history only (queues are in-memory runtime components).
+
+Provenance
+- This codebase was generated entirely by AI with guidance from a human. Not a single line of code was hand-written by a human.
