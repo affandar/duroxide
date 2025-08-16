@@ -1,5 +1,8 @@
 ## Durable Task Rust Core – TODOs
 
+- Add orchestration registry
+- Add capability to the runtime to resume persisted orchestrations from the history provider
+- Add signalling mechanism in the provider which runtime can poll to trigger replay
 - Add proper metrics.
 - Build a website to visualize execution.
 - Write an Azure Blob based provider.
