@@ -473,9 +473,9 @@ async fn rehydrate_pending(
 
     // Re-enqueue activities that were scheduled but not completed
     for e in history.iter() {
-        if let Event::ActivityScheduled { id, name, input } = e {
-            if !completed_activities.contains(id) {
-                if let Err(e) = activity_tx
+        if let Event::ActivityScheduled { id, name, input } = e
+            && !completed_activities.contains(id)
+                && let Err(e) = activity_tx
                     .send(ActivityWorkItem {
                         instance: instance.to_string(),
                         id: *id,
@@ -486,14 +486,12 @@ async fn rehydrate_pending(
                 {
                     panic!("rehydrate: failed to enqueue activity id={id}, name={name}: {e}");
                 }
-            }
-        }
     }
 
     // Re-arm timers that were created but not fired
     for e in history.iter() {
-        if let Event::TimerCreated { id, fire_at_ms } = e {
-            if !fired_timers.contains(id) {
+        if let Event::TimerCreated { id, fire_at_ms } = e
+            && !fired_timers.contains(id) {
                 // Best-effort remaining delay; if already past, fire immediately (0ms)
                 let delay_ms = *fire_at_ms;
                 if let Err(e) = timer_tx
@@ -508,6 +506,5 @@ async fn rehydrate_pending(
                     panic!("rehydrate: failed to enqueue timer id={id}: {e}");
                 }
             }
-        }
     }
 }

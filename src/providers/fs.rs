@@ -85,11 +85,10 @@ impl HistoryStore for FsHistoryStore {
         let mut out = Vec::new();
         if let Ok(mut rd) = fs::read_dir(&self.root).await {
             while let Ok(Some(ent)) = rd.next_entry().await {
-                if let Some(name) = ent.file_name().to_str() {
-                    if let Some(stem) = name.strip_suffix(".jsonl") {
+                if let Some(name) = ent.file_name().to_str()
+                    && let Some(stem) = name.strip_suffix(".jsonl") {
                         out.push(stem.to_string());
                     }
-                }
             }
         }
         out

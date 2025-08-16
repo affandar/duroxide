@@ -148,11 +148,10 @@ impl CtxInner {
         // Logical time is last TimerFired.fire_at_ms seen in history
         let mut last = 0u64;
         for ev in &self.history {
-            if let Event::TimerFired { fire_at_ms, .. } = ev {
-                if *fire_at_ms > last {
+            if let Event::TimerFired { fire_at_ms, .. } = ev
+                && *fire_at_ms > last {
                     last = *fire_at_ms;
                 }
-            }
         }
         last
     }
