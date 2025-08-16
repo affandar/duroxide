@@ -7,14 +7,18 @@ use crate::providers::HistoryStore;
 use crate::providers::in_memory::InMemoryHistoryStore;
 use tracing::{debug, warn, info, error};
 
+/// Runtime components: activity worker and registry utilities.
 pub mod activity;
 
+/// Work item enqueued to the activity worker.
 #[derive(Clone)]
 pub struct ActivityWorkItem { pub instance: String, pub id: u64, pub name: String, pub input: String }
 
+/// Work item enqueued to the timer worker.
 #[derive(Clone)]
 pub struct TimerWorkItem { pub instance: String, pub id: u64, pub fire_at_ms: u64, pub delay_ms: u64 }
 
+/// Messages delivered back to the orchestrator loop by workers and routers.
 pub enum OrchestratorMsg {
     ActivityCompleted { instance: String, id: u64, result: String },
     ActivityFailed { instance: String, id: u64, error: String },
@@ -60,6 +64,8 @@ fn kind_of(msg: &OrchestratorMsg) -> &'static str {
     }
 }
 
+/// In-process runtime that executes activities and timers and persists
+/// history via a `HistoryStore`. Suitable for tests and samples.
 pub struct Runtime {
     activity_tx: mpsc::Sender<ActivityWorkItem>,
     timer_tx: mpsc::Sender<TimerWorkItem>,
@@ -71,11 +77,13 @@ pub struct Runtime {
 }
 
 impl Runtime {
+    /// Start a new runtime using the in-memory history store.
     pub async fn start(registry: Arc<activity::ActivityRegistry>) -> Arc<Self> {
         let history_store: Arc<dyn HistoryStore> = Arc::new(InMemoryHistoryStore::default());
         Self::start_with_store(history_store, registry).await
     }
 
+    /// Start a new runtime with a custom `HistoryStore` implementation.
     pub async fn start_with_store(history_store: Arc<dyn HistoryStore>, registry: Arc<activity::ActivityRegistry>) -> Arc<Self> {
         // Install a default subscriber if none set (ok to call many times)
         let _ = tracing_subscriber::fmt()
@@ -115,12 +123,14 @@ impl Runtime {
         Arc::new(Self { activity_tx, timer_tx, router_tx, router, joins: Mutex::new(joins), instance_joins: Mutex::new(Vec::new()), history_store })
     }
 
+    /// Abort background tasks. Channels are dropped with the runtime.
     pub async fn shutdown(self: Arc<Self>) {
         // Abort background tasks; channels will be dropped with Runtime
         let mut joins = self.joins.lock().await;
         for j in joins.drain(..) { j.abort(); }
     }
 
+    /// Await completion of all outstanding spawned orchestration instances.
     pub async fn drain_instances(self: Arc<Self>) {
         let mut joins = self.instance_joins.lock().await;
         while let Some(j) = joins.pop() {
@@ -128,6 +138,8 @@ impl Runtime {
         }
     }
 
+    /// Run a single instance to completion in the current task, returning
+    /// its final history and output.
     pub async fn run_instance_to_completion<O, F, OFut>(
         self: Arc<Self>,
         instance: &str,
@@ -205,6 +217,8 @@ impl Runtime {
         }
     }
 
+    /// Spawn an instance and return a handle that resolves to its history
+    /// and output when complete.
     pub async fn spawn_instance_to_completion<O, F, OFut>(
         self: Arc<Self>,
         instance: &str,
@@ -281,6 +295,7 @@ fn append_completion(history: &mut Vec<Event>, msg: OrchestratorMsg) {
 }
 
 impl Runtime {
+    /// Raise an external event by name into a running instance.
     pub async fn raise_event(&self, instance: &str, name: impl Into<String>, data: impl Into<String>) {
         let name_str = name.into();
         let data_str = data.into();

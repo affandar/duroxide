@@ -7,16 +7,19 @@ use super::HistoryStore;
 
 const CAP: usize = 1024;
 
+/// Simple filesystem-backed history store writing JSONL per instance.
 #[derive(Clone)]
 pub struct FsHistoryStore { root: PathBuf }
 
 impl FsHistoryStore {
+    /// Create a new store rooted at the given directory path.
     pub fn new(root: impl AsRef<Path>) -> Self { Self { root: root.as_ref().to_path_buf() } }
     fn inst_path(&self, instance: &str) -> PathBuf { self.root.join(format!("{}.jsonl", instance)) }
 }
 
 #[async_trait::async_trait]
 impl HistoryStore for FsHistoryStore {
+    /// Read the entire JSONL file for the instance and deserialize each line.
     async fn read(&self, instance: &str) -> Vec<Event> {
         let path = self.inst_path(instance);
         let data = fs::read_to_string(&path).await.unwrap_or_default();
@@ -28,6 +31,7 @@ impl HistoryStore for FsHistoryStore {
         out
     }
 
+    /// Append events with a simple capacity guard by rewriting the file.
     async fn append(&self, instance: &str, new_events: Vec<Event>) -> Result<(), String> {
         fs::create_dir_all(&self.root).await.ok();
         let path = self.inst_path(instance);
@@ -48,10 +52,12 @@ impl HistoryStore for FsHistoryStore {
         Ok(())
     }
 
+    /// Remove the root directory and all contents.
     async fn reset(&self) {
         let _ = fs::remove_dir_all(&self.root).await;
     }
 
+    /// List instances by scanning filenames with `.jsonl` suffix.
     async fn list_instances(&self) -> Vec<String> {
         let mut out = Vec::new();
         if let Ok(mut rd) = fs::read_dir(&self.root).await {
@@ -64,6 +70,7 @@ impl HistoryStore for FsHistoryStore {
         out
     }
 
+    /// Produce a human-readable dump of all stored histories.
     async fn dump_all_pretty(&self) -> String {
         let mut out = String::new();
         for inst in self.list_instances().await {

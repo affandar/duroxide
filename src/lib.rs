@@ -1,3 +1,14 @@
+//! Minimal deterministic orchestration core inspired by Durable Task.
+//!
+//! This crate exposes a replay-driven programming model that records
+//! append-only `Event`s and replays them to make orchestration logic
+//! deterministic. It provides:
+//!
+//! - Public data model: `Event`, `Action`
+//! - Orchestration driver: `run_turn`, `run_turn_with`, and `Executor`
+//! - An `OrchestrationContext` with futures to schedule activities,
+//!   timers, and external events using correlation IDs
+//! - A unified `DurableFuture` that can be composed with `join`/`select`
 use std::cell::Cell;
 use std::future::Future;
 use std::pin::Pin;
@@ -13,30 +24,43 @@ pub mod logging;
 use serde::{Deserialize, Serialize};
 use crate::logging::LogLevel;
 
+/// Append-only orchestration history entries persisted by a provider and
+/// consumed during replay. Variants use stable correlation IDs to pair
+/// scheduling operations with their completions.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Event {
-    // Activity lifecycle
+    /// Activity was scheduled with a unique ID and input.
     ActivityScheduled { id: u64, name: String, input: String },
+    /// Activity completed successfully with a result.
     ActivityCompleted { id: u64, result: String },
+    /// Activity failed with an error string.
     ActivityFailed { id: u64, error: String },
 
-    // Timer lifecycle
+    /// Timer was created and will logically fire at `fire_at_ms`.
     TimerCreated { id: u64, fire_at_ms: u64 },
+    /// Timer fired at logical time `fire_at_ms`.
     TimerFired { id: u64, fire_at_ms: u64 },
 
-    // External event subscription and raise
+    /// Subscription to an external event by name was recorded with a unique ID.
     ExternalSubscribed { id: u64, name: String },
+    /// An external event with correlation `id` was raised with some data.
     ExternalEvent { id: u64, name: String, data: String },
 
-    // System trace/log events
+    /// A structured trace message emitted by the orchestrator.
     TraceEmitted { id: u64, level: String, message: String },
 }
 
+/// Declarative decisions produced by an orchestration turn. The host/provider
+/// is responsible for materializing these into corresponding `Event`s.
 #[derive(Debug, Clone)]
 pub enum Action {
+    /// Schedule an activity invocation.
     CallActivity { id: u64, name: String, input: String },
+    /// Create a timer that will fire after the requested delay.
     CreateTimer { id: u64, delay_ms: u64 },
+    /// Subscribe to an external event by name.
     WaitExternal { id: u64, name: String },
+    /// Emit a trace entry at the given level with a message.
     EmitTrace { id: u64, level: String, message: String },
 }
 
@@ -125,29 +149,40 @@ impl CtxInner {
     }
 }
 
+/// User-facing orchestration context for scheduling and replay-safe helpers.
 #[derive(Clone)]
 pub struct OrchestrationContext { inner: Arc<Mutex<CtxInner>> }
 
 impl OrchestrationContext {
+    /// Construct a new context from an existing history vector.
     pub fn new(history: Vec<Event>) -> Self { Self { inner: Arc::new(Mutex::new(CtxInner::new(history))) } }
 
+    /// Returns the current logical time in milliseconds based on the last
+    /// `TimerFired` event in history.
     pub fn now_ms(&self) -> u64 { self.inner.lock().unwrap().now_ms() }
+    /// Returns a deterministic GUID string, incremented per instance.
     pub fn new_guid(&self) -> String { self.inner.lock().unwrap().new_guid() }
 
     fn take_actions(&self) -> Vec<Action> { std::mem::take(&mut self.inner.lock().unwrap().actions) }
 
     // Turn metadata
+    /// The zero-based turn counter assigned by the host for diagnostics.
     pub fn turn_index(&self) -> u64 { self.inner.lock().unwrap().turn_index }
     pub(crate) fn set_turn_index(&self, idx: u64) { self.inner.lock().unwrap().turn_index = idx; }
 
     // Replay-safe logging control
+    /// Indicates whether logging is enabled for the current poll. This is
+    /// flipped on when a decision is recorded to minimize log noise.
     pub fn is_logging_enabled(&self) -> bool { self.inner.lock().unwrap().logging_enabled_this_poll }
     #[allow(dead_code)]
     pub(crate) fn set_logging_enabled(&self, enabled: bool) { self.inner.lock().unwrap().logging_enabled_this_poll = enabled; }
+    /// Drain the buffered log messages accumulated during the last turn.
     pub fn take_log_buffer(&self) -> Vec<(LogLevel, String)> { std::mem::take(&mut self.inner.lock().unwrap().log_buffer) }
+    /// Buffer a structured log message for the current turn.
     pub fn push_log(&self, level: LogLevel, msg: String) { self.inner.lock().unwrap().log_buffer.push((level, msg)); }
 
     // System trace helper: thin wrapper over schedule_activity + immediate first poll to record scheduling
+    /// Emit a structured trace entry using the system trace activity.
     pub fn trace(&self, level: impl Into<String>, message: impl Into<String>) {
         let payload = format!("{}:{}", level.into(), message.into());
         let mut fut = self.schedule_activity("__system_trace", payload);
@@ -155,14 +190,19 @@ impl OrchestrationContext {
     }
 
     // Typed wrappers for common levels
+    /// Convenience wrapper for INFO level tracing.
     pub fn trace_info(&self, message: impl Into<String>) { self.trace("INFO", message.into()); }
+    /// Convenience wrapper for WARN level tracing.
     pub fn trace_warn(&self, message: impl Into<String>) { self.trace("WARN", message.into()); }
+    /// Convenience wrapper for ERROR level tracing.
     pub fn trace_error(&self, message: impl Into<String>) { self.trace("ERROR", message.into()); }
+    /// Convenience wrapper for DEBUG level tracing.
     pub fn trace_debug(&self, message: impl Into<String>) { self.trace("DEBUG", message.into()); }
 }
 
 // Unified future/output that allows joining different orchestration primitives
 
+/// Output of a `DurableFuture` when awaited via unified composition.
 #[derive(Debug, Clone)]
 pub enum DurableOutput {
     Activity(Result<String, String>),
@@ -178,6 +218,8 @@ pub enum DurableOutput {
 // order, matching Durable Task semantics where multiple results can be present out of
 // arrival order without corrupting replay.
 
+/// A unified future for activities, timers, and external events that carries a
+/// correlation ID. Useful for composing with `futures::select`/`join`.
 pub struct DurableFuture(Kind);
 
 enum Kind {
@@ -242,6 +284,8 @@ impl Future for DurableFuture {
 }
 
 impl DurableFuture {
+    /// Converts this unified future into a future that resolves only for
+    /// an activity completion or failure.
     pub fn into_activity(self) -> impl Future<Output = Result<String, String>> {
         struct Map(DurableFuture);
         impl Future for Map {
@@ -258,6 +302,8 @@ impl DurableFuture {
         Map(self)
     }
 
+    /// Converts this unified future into a future that resolves when the
+    /// corresponding timer fires.
     pub fn into_timer(self) -> impl Future<Output = ()> {
         struct Map(DurableFuture);
         impl Future for Map {
@@ -274,6 +320,8 @@ impl DurableFuture {
         Map(self)
     }
 
+    /// Converts this unified future into a future that resolves with the
+    /// payload of the correlated external event.
     pub fn into_event(self) -> impl Future<Output = String> {
         struct Map(DurableFuture);
         impl Future for Map {
@@ -292,6 +340,7 @@ impl DurableFuture {
 }
 
 impl OrchestrationContext {
+    /// Schedule an activity and return a `DurableFuture` correlated to it.
     pub fn schedule_activity(&self, name: impl Into<String>, input: impl Into<String>) -> DurableFuture {
         let name: String = name.into();
         let input: String = input.into();
@@ -310,6 +359,7 @@ impl OrchestrationContext {
         DurableFuture(Kind::Activity { id: adopted_id, name, input, scheduled: Cell::new(false), ctx: self.clone() })
     }
 
+    /// Schedule a timer and return a `DurableFuture` correlated to it.
     pub fn schedule_timer(&self, delay_ms: u64) -> DurableFuture {
         let mut inner = self.inner.lock().unwrap();
         // Adopt first unclaimed TimerCreated id if any, else allocate
@@ -326,6 +376,7 @@ impl OrchestrationContext {
         DurableFuture(Kind::Timer { id: adopted_id, delay_ms, scheduled: Cell::new(false), ctx: self.clone() })
     }
 
+    /// Subscribe to an external event by name and return its `DurableFuture`.
     pub fn schedule_wait(&self, name: impl Into<String>) -> DurableFuture {
         let name: String = name.into();
         let mut inner = self.inner.lock().unwrap();
@@ -360,6 +411,8 @@ fn poll_once<F: Future>(fut: &mut F) -> Poll<F::Output> {
     pinned.as_mut().poll(&mut cx)
 }
 
+/// Poll the orchestrator once with the provided history, producing
+/// updated history, requested `Action`s, buffered logs, and an optional output.
 pub fn run_turn<O, F>(history: Vec<Event>, orchestrator: impl Fn(OrchestrationContext) -> F) -> (Vec<Event>, Vec<Action>, Vec<(LogLevel, String)>, Option<O>)
 where
     F: Future<Output = O>,
@@ -384,6 +437,8 @@ where
     }
 }
 
+/// Same as `run_turn` but annotates the context with a caller-supplied
+/// turn index for diagnostics and logging.
 pub fn run_turn_with<O, F>(history: Vec<Event>, turn_index: u64, orchestrator: impl Fn(OrchestrationContext) -> F) -> (Vec<Event>, Vec<Action>, Vec<(LogLevel, String)>, Option<O>)
 where
     F: Future<Output = O>,
@@ -408,9 +463,13 @@ where
     }
 }
 
+/// Helper for single-threaded, host-driven execution in tests and samples.
 pub struct Executor;
 
 impl Executor {
+    /// Drives an orchestrator by alternately replaying one turn and invoking
+    /// the provided `execute_actions` to materialize requested actions into
+    /// history, until the orchestrator completes.
     pub fn drive_to_completion<O, F, X>(mut history: Vec<Event>, orchestrator: impl Fn(OrchestrationContext) -> F, mut execute_actions: X) -> (Vec<Event>, O)
     where
         F: Future<Output = O>,

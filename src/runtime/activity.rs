@@ -4,6 +4,7 @@ use async_trait::async_trait;
 
 use super::{ActivityWorkItem, OrchestratorMsg};
 
+/// Trait implemented by activity handlers that can be invoked by the runtime.
 #[async_trait]
 pub trait ActivityHandler: Send + Sync {
     async fn invoke(&self, input: String) -> Result<String, String>;
@@ -23,23 +24,29 @@ where
     async fn invoke(&self, input: String) -> Result<String, String> { (self.0)(input).await }
 }
 
+/// Immutable registry mapping activity names to handlers.
 #[derive(Clone, Default)]
 pub struct ActivityRegistry { inner: Arc<HashMap<String, Arc<dyn ActivityHandler>>> }
 
 impl ActivityRegistry {
+    /// Create a new builder for registering activities.
     pub fn builder() -> ActivityRegistryBuilder { ActivityRegistryBuilder { map: HashMap::new() } }
+    /// Look up a handler by name.
     pub fn get(&self, name: &str) -> Option<Arc<dyn ActivityHandler>> { self.inner.get(name).cloned() }
 }
 
+/// Builder for `ActivityRegistry`.
 pub struct ActivityRegistryBuilder { map: HashMap<String, Arc<dyn ActivityHandler>> }
 
 impl ActivityRegistryBuilder {
+    /// Initialize a new builder from an existing registry.
     pub fn from_registry(reg: &ActivityRegistry) -> Self {
         let mut map: HashMap<String, Arc<dyn ActivityHandler>> = HashMap::new();
         for (k, v) in reg.inner.iter() { map.insert(k.clone(), v.clone()); }
         ActivityRegistryBuilder { map }
     }
     // Convenience: register an activity whose future yields String (treated as Ok)
+    /// Register a function as an activity that returns a `String`.
     pub fn register<F, Fut>(mut self, name: impl Into<String>, f: F) -> Self
     where
         F: Fn(String) -> Fut + Send + Sync + 'static,
@@ -56,6 +63,7 @@ impl ActivityRegistryBuilder {
     }
 
     // Typed: register an activity that returns Result<String, String>
+    /// Register a function as an activity that returns `Result<String, String>`.
     pub fn register_result<F, Fut>(mut self, name: impl Into<String>, f: F) -> Self
     where
         F: Fn(String) -> Fut + Send + Sync + 'static,
@@ -64,18 +72,23 @@ impl ActivityRegistryBuilder {
         self.map.insert(name.into(), Arc::new(FnActivity(f)));
         self
     }
+    /// Finalize and produce an `ActivityRegistry`.
     pub fn build(self) -> ActivityRegistry { ActivityRegistry { inner: Arc::new(self.map) } }
 }
 
+/// Worker that receives `ActivityWorkItem`s and executes registered handlers,
+/// reporting results via the orchestrator message channel.
 pub struct ActivityWorker {
     registry: ActivityRegistry,
     completion_tx: mpsc::UnboundedSender<OrchestratorMsg>,
 }
 
 impl ActivityWorker {
+    /// Create a new `ActivityWorker` with the given registry and completion channel.
     pub fn new(registry: ActivityRegistry, completion_tx: mpsc::UnboundedSender<OrchestratorMsg>) -> Self {
         Self { registry, completion_tx }
     }
+    /// Run the worker loop until the input channel is closed.
     pub async fn run(self, mut rx: mpsc::Receiver<ActivityWorkItem>) {
         while let Some(wi) = rx.recv().await {
             if let Some(handler) = self.registry.get(&wi.name) {
