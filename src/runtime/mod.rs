@@ -39,8 +39,14 @@ impl CompletionRouter {
             | OrchestratorMsg::ExternalEvent { instance, .. }
             | OrchestratorMsg::ExternalByName { instance, .. } => instance.clone(),
         };
-        if let Some(tx) = self.inboxes.lock().await.get(&key) { let _ = tx.send(msg); }
-        else { warn!(instance=%key, kind=%kind_of(&msg), "dropping message for unknown instance"); }
+        let kind = kind_of(&msg);
+        if let Some(tx) = self.inboxes.lock().await.get(&key) {
+            if let Err(_e) = tx.send(msg) {
+                warn!(instance=%key, kind=%kind, "dropping message: receiver dropped");
+            }
+        } else {
+            warn!(instance=%key, kind=%kind, "dropping message for unknown instance");
+        }
     }
 }
 
@@ -152,14 +158,20 @@ impl Runtime {
                 match a {
                     Action::CallActivity { id, name, input } => {
                         debug!(instance, id, name=%name, "dispatch activity");
-                        let _ = self.activity_tx.send(ActivityWorkItem { instance: instance.to_string(), id, name, input }).await;
+                        if let Err(e) = self.activity_tx.send(ActivityWorkItem { instance: instance.to_string(), id, name, input }).await {
+                            error!(instance, id, error=%e, "failed to dispatch activity");
+                            panic!("activity dispatch failed: {e}");
+                        }
                     }
                     Action::CreateTimer { id, delay_ms } => {
                         let fire_at_ms = history.iter().rev().find_map(|e| match e {
                             Event::TimerCreated { id: cid, fire_at_ms } if *cid == id => Some(*fire_at_ms), _ => None
                         }).unwrap_or(0);
                         debug!(instance, id, fire_at_ms, delay_ms, "dispatch timer");
-                        let _ = self.timer_tx.send(TimerWorkItem { instance: instance.to_string(), id, fire_at_ms, delay_ms }).await;
+                        if let Err(e) = self.timer_tx.send(TimerWorkItem { instance: instance.to_string(), id, fire_at_ms, delay_ms }).await {
+                            error!(instance, id, error=%e, "failed to dispatch timer");
+                            panic!("timer dispatch failed: {e}");
+                        }
                     }
                     Action::WaitExternal { id, name } => {
                         debug!(instance, id, name=%name, "subscribe external");
@@ -225,7 +237,12 @@ async fn run_timer_worker(mut rx: mpsc::Receiver<TimerWorkItem>, comp_tx: mpsc::
     while let Some(wi) = rx.recv().await {
         // Real-time sleep based on requested delay
         tokio::time::sleep(std::time::Duration::from_millis(wi.delay_ms)).await;
-        let _ = comp_tx.send(OrchestratorMsg::TimerFired { instance: wi.instance, id: wi.id, fire_at_ms: wi.fire_at_ms });
+        let inst = wi.instance.clone();
+        let id = wi.id;
+        let fire_at = wi.fire_at_ms;
+        if let Err(_e) = comp_tx.send(OrchestratorMsg::TimerFired { instance: inst.clone(), id, fire_at_ms: fire_at }) {
+            warn!(instance=%inst, id=%id, "dropping timer fired: router receiver dropped");
+        }
     }
 }
 
@@ -267,9 +284,13 @@ fn append_completion(history: &mut Vec<Event>, msg: OrchestratorMsg) {
 
 impl Runtime {
     pub async fn raise_event(&self, instance: &str, name: impl Into<String>, data: impl Into<String>) {
-        let _ = self.router_tx.send(OrchestratorMsg::ExternalByName {
-            instance: instance.to_string(), name: name.into(), data: data.into(),
-        });
+        let name_str = name.into();
+        let data_str = data.into();
+        if let Err(_e) = self.router_tx.send(OrchestratorMsg::ExternalByName {
+            instance: instance.to_string(), name: name_str.clone(), data: data_str,
+        }) {
+            warn!(instance, name=%name_str, "failed to route external event: router dropped");
+        }
     }
 }
 
@@ -295,12 +316,14 @@ async fn rehydrate_pending(
     for e in history.iter() {
         if let Event::ActivityScheduled { id, name, input } = e {
             if !completed_activities.contains(id) {
-                let _ = activity_tx.send(ActivityWorkItem {
+                if let Err(e) = activity_tx.send(ActivityWorkItem {
                     instance: instance.to_string(),
                     id: *id,
                     name: name.clone(),
                     input: input.clone(),
-                }).await;
+                }).await {
+                    warn!(instance, id=%id, name=%name, error=%e, "rehydrate: failed to enqueue activity");
+                }
             }
         }
     }
@@ -311,12 +334,14 @@ async fn rehydrate_pending(
             if !fired_timers.contains(id) {
                 // Best-effort remaining delay; if already past, fire immediately (0ms)
                 let delay_ms = 0u64.max(*fire_at_ms);
-                let _ = timer_tx.send(TimerWorkItem {
+                if let Err(e) = timer_tx.send(TimerWorkItem {
                     instance: instance.to_string(),
                     id: *id,
                     fire_at_ms: *fire_at_ms,
                     delay_ms,
-                }).await;
+                }).await {
+                    warn!(instance, id=%id, error=%e, "rehydrate: failed to enqueue timer");
+                }
             }
         }
     }

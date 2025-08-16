@@ -81,18 +81,25 @@ impl ActivityWorker {
             if let Some(handler) = self.registry.get(&wi.name) {
                 match handler.invoke(wi.input).await {
                     Ok(result) => {
-                        let _ = self.completion_tx.send(OrchestratorMsg::ActivityCompleted { instance: wi.instance, id: wi.id, result });
+                        if let Err(_e) = self.completion_tx.send(OrchestratorMsg::ActivityCompleted { instance: wi.instance, id: wi.id, result }) {
+                            // Router dropped; log and drop work item
+                            // Using tracing here would require bringing it into this module; keep it silent or add tracing if available.
+                        }
                     }
                     Err(error) => {
-                        let _ = self.completion_tx.send(OrchestratorMsg::ActivityFailed { instance: wi.instance, id: wi.id, error });
+                        if let Err(_e) = self.completion_tx.send(OrchestratorMsg::ActivityFailed { instance: wi.instance, id: wi.id, error }) {
+                            // Router dropped; drop error
+                        }
                     }
                 }
             } else {
-                let _ = self.completion_tx.send(OrchestratorMsg::ActivityFailed {
+                if let Err(_e) = self.completion_tx.send(OrchestratorMsg::ActivityFailed {
                     instance: wi.instance,
                     id: wi.id,
                     error: format!("unregistered:{}", wi.name),
-                });
+                }) {
+                    // Router dropped; drop error
+                }
             }
         }
     }
