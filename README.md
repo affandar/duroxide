@@ -2,6 +2,9 @@
 
 Deterministic task orchestration in Rust, inspired by Durable Task.
 
+Getting started samples
+- See `tests/e2e_samples.rs` for end-to-end usage patterns (hello world, control flow, loops, error handling, and system activities). It's the best starting point to learn the API by example.
+
 What it is
 - Deterministic orchestration core with correlated event IDs and replay safety
 - Message-driven runtime built on Tokio (activity worker pool, timer worker, external event router)
