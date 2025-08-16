@@ -8,8 +8,6 @@ What you can build with this (inspired by .NET Durable Task/Durable Functions pa
 - Human interaction (external events): wait for out-of-band approvals, callbacks, or webhooks and then resume.
 - Durable timers and deadlines: sleep for minutes/hours/days without holding threads; resume exactly-once after timeouts.
 - Saga-style compensation: on failure, run compensating actions to roll back prior steps.
-- Async HTTP APIs: kick off a workflow and return immediately; later poll or get a callback when it completes.
-- Monitor/recurring jobs: run a loop that wakes up on a schedule, checks state, and continues.
 
 These scenarios mirror the officially documented Durable Task/Durable Functions application patterns and are enabled here by deterministic replay, correlation IDs, durable timers, and external event handling.
 
