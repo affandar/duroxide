@@ -41,7 +41,7 @@ pub struct ActivityRegistryBuilder { map: HashMap<String, Arc<dyn ActivityHandle
 impl ActivityRegistryBuilder {
     /// Initialize a new builder from an existing registry.
     pub fn from_registry(reg: &ActivityRegistry) -> Self {
-        let mut map: HashMap<String, Arc<dyn ActivityHandler>> = HashMap::new();
+        let mut map = HashMap::new();
         for (k, v) in reg.inner.iter() { map.insert(k.clone(), v.clone()); }
         ActivityRegistryBuilder { map }
     }

@@ -79,7 +79,7 @@ pub struct Runtime {
 impl Runtime {
     /// Start a new runtime using the in-memory history store.
     pub async fn start(registry: Arc<activity::ActivityRegistry>) -> Arc<Self> {
-        let history_store: Arc<dyn HistoryStore> = Arc::new(InMemoryHistoryStore::default());
+        let history_store = Arc::new(InMemoryHistoryStore::default());
         Self::start_with_store(history_store, registry).await
     }
 
@@ -94,7 +94,7 @@ impl Runtime {
         let (timer_tx, timer_rx) = mpsc::channel::<TimerWorkItem>(512);
         let (router_tx, mut router_rx) = mpsc::unbounded_channel::<OrchestratorMsg>();
         let router = Arc::new(CompletionRouter { inboxes: Mutex::new(HashMap::new()) });
-        let mut joins: Vec<JoinHandle<()>> = Vec::new();
+        let mut joins = Vec::new();
 
         // spawn activity worker with system trace handler pre-registered
         // copy user registrations
@@ -329,8 +329,8 @@ async fn rehydrate_pending(
     timer_tx: &mpsc::Sender<TimerWorkItem>,
 ) {
     use std::collections::HashSet;
-    let mut completed_activities: HashSet<u64> = HashSet::new();
-    let mut fired_timers: HashSet<u64> = HashSet::new();
+    let mut completed_activities = HashSet::new();
+    let mut fired_timers = HashSet::new();
 
     for e in history.iter() {
         match e {
