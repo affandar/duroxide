@@ -108,4 +108,4 @@ Notes
 - Unknown-instance messages are logged and dropped. Providers persist history only (queues are in-memory runtime components).
 
 Provenance
-- This codebase was generated entirely by AI with guidance from a human. Not a single line of code was hand-written by a human.
+- This codebase was generated entirely by AI with guidance from a human
