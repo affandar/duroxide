@@ -141,6 +141,16 @@ impl HistoryStore for FsHistoryStore {
         }
         Some(first)
     }
+
+    async fn set_instance_orchestration(&self, instance: &str, orchestration: &str) -> Result<(), String> {
+        let meta_path = self.root.join(format!("{instance}.meta"));
+        std::fs::write(meta_path, orchestration).map_err(|e| e.to_string())
+    }
+
+    async fn get_instance_orchestration(&self, instance: &str) -> Option<String> {
+        let meta_path = self.root.join(format!("{instance}.meta"));
+        std::fs::read_to_string(meta_path).ok()
+    }
 }
 
 

@@ -10,6 +10,7 @@ const CAP: usize = 1024;
 pub struct InMemoryHistoryStore {
     inner: Mutex<HashMap<String, Vec<Event>>>,
     work_q: Mutex<Vec<WorkItem>>, // simple FIFO
+    meta: Mutex<HashMap<String, String>>, // instance -> orchestration name
 }
 
 #[async_trait::async_trait]
@@ -67,6 +68,15 @@ impl HistoryStore for InMemoryHistoryStore {
         let mut q = self.work_q.lock().await;
         if q.is_empty() { return None; }
         Some(q.remove(0))
+    }
+
+    async fn set_instance_orchestration(&self, instance: &str, orchestration: &str) -> Result<(), String> {
+        self.meta.lock().await.insert(instance.to_string(), orchestration.to_string());
+        Ok(())
+    }
+
+    async fn get_instance_orchestration(&self, instance: &str) -> Option<String> {
+        self.meta.lock().await.get(instance).cloned()
     }
 }
 

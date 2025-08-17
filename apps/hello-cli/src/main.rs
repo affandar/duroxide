@@ -4,7 +4,7 @@ use rust_dtf::runtime::{Runtime, activity::ActivityRegistry};
 use rust_dtf::providers::{HistoryStore};
 use rust_dtf::providers::fs::FsHistoryStore;
 
-async fn orchestrator(ctx: OrchestrationContext) -> String {
+async fn orchestrator(ctx: OrchestrationContext, _input: String) -> String {
     ctx.trace_info("hello-cli started1");
     let res = ctx.schedule_activity("Hello", "Rust").into_activity().await.unwrap();
     res

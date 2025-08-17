@@ -7,7 +7,7 @@ use rust_dtf::providers::fs::FsHistoryStore;
 use std::sync::Arc as StdArc;
 
 async fn orchestration_completes_and_replays_deterministically_with(store: StdArc<dyn HistoryStore>) {
-    let orchestration = |ctx: OrchestrationContext| async move {
+    let orchestration = |ctx: OrchestrationContext, _input: String| async move {
         let start = ctx.now_ms();
         let _id = ctx.new_guid();
 
@@ -39,12 +39,26 @@ async fn orchestration_completes_and_replays_deterministically_with(store: StdAr
         tokio::time::sleep(std::time::Duration::from_millis(6)).await;
         rt_clone.raise_event("inst-orch-1", "Go", "ok").await;
     });
-    let handle = rt.clone().spawn_instance_to_completion("inst-orch-1", "DeterministicOrchestration").await;
+    let handle = rt.clone().start_orchestration("inst-orch-1", "DeterministicOrchestration", "").await;
     let (final_history, output) = handle.await.unwrap();
     assert!(output.contains("evt=ok"));
     assert!(output.contains("b=2!"));
-    assert_eq!(final_history.len(), 8, "expected 8 history events (scheduled + completed)");
-    let (_h2, acts2, _logs2, out2) = run_turn(final_history.clone(), orchestration);
+    // Includes OrchestrationStarted + 4 schedule/complete pairs
+    assert_eq!(final_history.len(), 9, "expected 9 history events including OrchestrationStarted");
+    // For replay, provide a 1-arg closure equivalent to the registered orchestrator
+    let replay = |ctx: OrchestrationContext| async move {
+        let start = ctx.now_ms();
+        let _id = ctx.new_guid();
+        let f_a = ctx.schedule_activity("A", "1");
+        let f_t = ctx.schedule_timer(5);
+        let f_e = ctx.schedule_wait("Go");
+        let (o_a, _o_t, o_e) = join3(f_a, f_t, f_e).await;
+        let a = match o_a { DurableOutput::Activity(v) => v.unwrap(), _ => unreachable!("A must be activity result") };
+        let evt = match o_e { DurableOutput::External(v) => v, _ => unreachable!("Go must be external event") };
+        let b = ctx.schedule_activity("B", a.clone()).into_activity().await.unwrap();
+        format!("id=_hidden, start={start}, evt={evt}, b={b}")
+    };
+    let (_h2, acts2, _logs2, out2) = run_turn(final_history.clone(), replay);
     assert!(acts2.is_empty(), "replay should not produce new actions");
     assert_eq!(out2.unwrap(), output);
     rt.shutdown().await;
@@ -84,7 +98,7 @@ fn action_order_is_deterministic_in_first_turn() {
 }
 
 async fn sequential_activity_chain_completes_with(store: StdArc<dyn HistoryStore>) {
-    let orchestrator = |ctx: OrchestrationContext| async move {
+    let orchestrator = |ctx: OrchestrationContext, _input: String| async move {
         let a = ctx.schedule_activity("A", "1").into_activity().await.unwrap();
         let b = ctx.schedule_activity("B", a).into_activity().await.unwrap();
         let c = ctx.schedule_activity("C", b).into_activity().await.unwrap();
@@ -102,10 +116,11 @@ async fn sequential_activity_chain_completes_with(store: StdArc<dyn HistoryStore
         .build();
 
     let rt = runtime::Runtime::start_with_store(store, Arc::new(activity_registry), orchestration_registry).await;
-    let handle = rt.clone().spawn_instance_to_completion("inst-seq-1", "SequentialOrchestration").await;
+    let handle = rt.clone().start_orchestration("inst-seq-1", "SequentialOrchestration", "").await;
     let (final_history, output) = handle.await.unwrap();
     assert_eq!(output, "c=2bc");
-    assert_eq!(final_history.len(), 6, "expected exactly three scheduled+completed activity pairs in history");
+    // Includes OrchestrationStarted + 3 schedule/complete pairs
+    assert_eq!(final_history.len(), 7, "expected OrchestrationStarted + three scheduled+completed activity pairs in history");
     rt.shutdown().await;
 }
 

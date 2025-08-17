@@ -66,11 +66,11 @@ async fn deterministic_replay_activity_only() {
         .build();
     
     let orchestration_registry = OrchestrationRegistry::builder()
-        .register("TestOrchestration", orchestrator)
+        .register("TestOrchestration", move |ctx, _input| orchestrator(ctx))
         .build();
     
     let rt = runtime::Runtime::start(Arc::new(activity_registry), orchestration_registry).await;
-    let h = rt.clone().spawn_instance_to_completion("inst-unit-1", "TestOrchestration").await;
+    let h = rt.clone().start_orchestration("inst-unit-1", "TestOrchestration", "").await;
     let (final_history, output) = h.await.unwrap();
     assert_eq!(output, "a=3");
 
@@ -127,11 +127,11 @@ async fn runtime_duplicate_orchestration_errors() {
     let activity_registry = ActivityRegistry::builder().build();
     
     let orchestration_registry = OrchestrationRegistry::builder()
-        .register("TestOrch1", |ctx| async move {
+        .register("TestOrch1", |ctx, _| async move {
             ctx.schedule_timer(10).into_timer().await;
             "ok".to_string()
         })
-        .register("TestOrch2", |ctx| async move {
+        .register("TestOrch2", |ctx, _| async move {
             ctx.schedule_timer(1).into_timer().await;
             "nope".to_string()
         })
@@ -140,10 +140,10 @@ async fn runtime_duplicate_orchestration_errors() {
     let rt = runtime::Runtime::start(Arc::new(activity_registry), orchestration_registry).await;
     let inst = "dup-orch";
 
-    let h1 = rt.clone().spawn_instance_to_completion(inst, "TestOrch1").await;
+    let h1 = rt.clone().start_orchestration(inst, "TestOrch1", "").await;
 
     // Second start should fail (panic inside task) due to runtime active-instance guard
-    let h2 = rt.clone().spawn_instance_to_completion(inst, "TestOrch2").await;
+    let h2 = rt.clone().start_orchestration(inst, "TestOrch2", "").await;
     let res = h2.await;
     assert!(res.is_err(), "expected duplicate start to panic in task");
 

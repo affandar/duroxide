@@ -32,6 +32,8 @@ use crate::logging::LogLevel;
 /// scheduling operations with their completions.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Event {
+    /// Orchestration instance was created and started by name with input.
+    OrchestrationStarted { name: String, input: String },
     /// Activity was scheduled with a unique ID and input.
     ActivityScheduled { id: u64, name: String, input: String },
     /// Activity completed successfully with a result.
@@ -100,6 +102,7 @@ impl CtxInner {
                 | Event::TimerFired { id, .. }
                 | Event::ExternalSubscribed { id, .. }
                 | Event::ExternalEvent { id, .. } => Some(*id),
+                Event::OrchestrationStarted { .. } => None,
             };
             if let Some(id) = id_opt { max_id = max_id.max(id); }
         }

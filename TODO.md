@@ -1,5 +1,7 @@
 ## Durable Task Rust Core – TODOs
 
+- do a pass through the code. 
+- redo the orchestration registry change with gpt5 and compare
 - test hung because the initial orchestration takes longer to start!
 - Add orchestration registry
 - Add capability to the runtime to resume persisted orchestrations from the history provider

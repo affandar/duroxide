@@ -42,6 +42,11 @@ pub trait HistoryStore: Send + Sync {
 
     /// Dequeue the next available work item (if any).
     async fn dequeue_work(&self) -> Option<WorkItem> { None }
+
+    /// Persist orchestration name metadata for an instance.
+    async fn set_instance_orchestration(&self, _instance: &str, _orchestration: &str) -> Result<(), String> { Ok(()) }
+    /// Retrieve orchestration name metadata for an instance, if present.
+    async fn get_instance_orchestration(&self, _instance: &str) -> Option<String> { None }
 }
 
 // Providers are datastores only; runtime owns queues and workers.

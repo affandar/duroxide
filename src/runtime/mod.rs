@@ -15,23 +15,23 @@ pub mod activity;
 /// Trait implemented by orchestration handlers that can be invoked by the runtime.
 #[async_trait]
 pub trait OrchestrationHandler: Send + Sync {
-    async fn invoke(&self, ctx: OrchestrationContext) -> String;
+    async fn invoke(&self, ctx: OrchestrationContext, input: String) -> String;
 }
 
 /// Function wrapper that implements `OrchestrationHandler`.
 pub struct FnOrchestration<F, Fut>(pub F)
 where
-    F: Fn(OrchestrationContext) -> Fut + Send + Sync + 'static,
+    F: Fn(OrchestrationContext, String) -> Fut + Send + Sync + 'static,
     Fut: std::future::Future<Output = String> + Send + 'static;
 
 #[async_trait]
 impl<F, Fut> OrchestrationHandler for FnOrchestration<F, Fut>
 where
-    F: Fn(OrchestrationContext) -> Fut + Send + Sync + 'static,
+    F: Fn(OrchestrationContext, String) -> Fut + Send + Sync + 'static,
     Fut: std::future::Future<Output = String> + Send + 'static,
 {
-    async fn invoke(&self, ctx: OrchestrationContext) -> String {
-        (self.0)(ctx).await
+    async fn invoke(&self, ctx: OrchestrationContext, input: String) -> String {
+        (self.0)(ctx, input).await
     }
 }
 
@@ -62,7 +62,7 @@ impl OrchestrationRegistryBuilder {
     /// Register an orchestration function that returns a `String`.
     pub fn register<F, Fut>(mut self, name: impl Into<String>, f: F) -> Self
     where
-        F: Fn(OrchestrationContext) -> Fut + Send + Sync + 'static,
+        F: Fn(OrchestrationContext, String) -> Fut + Send + Sync + 'static,
         Fut: std::future::Future<Output = String> + Send + 'static,
     {
         self.map.insert(name.into(), Arc::new(FnOrchestration(f)));
@@ -152,13 +152,20 @@ pub struct Runtime {
 impl Runtime {
     /// Enqueue a new orchestration instance start. The runtime will pick this up
     /// in the background and drive it to completion.
-    pub async fn start_orchestration(self: Arc<Self>, instance: &str, orchestration_name: &str) {
-        // Provider-backed: enqueue to store so other runtimes can also pick it up if needed
-        if let Err(e) = self.history_store.enqueue_work(WorkItem::StartOrchestration { instance: instance.to_string(), orchestration: orchestration_name.to_string() }).await {
-            panic!("failed to enqueue start request: {e}");
+    pub async fn start_orchestration(self: Arc<Self>, instance: &str, orchestration_name: &str, input: impl Into<String>) -> JoinHandle<(Vec<Event>, String)> {
+        // Ensure instance exists
+        if let Err(_e) = self.history_store.create_instance(instance).await {
+            // ignore if already exists; tests may reuse
         }
-        // Also push to local start queue for immediate reaction
-        let _ = self.start_tx.send(StartRequest { instance: instance.to_string(), orchestration_name: orchestration_name.to_string() });
+        // Append start marker if empty
+        if self.history_store.read(instance).await.is_empty() {
+            let started = vec![Event::OrchestrationStarted { name: orchestration_name.to_string(), input: input.into() }];
+            if let Err(e) = self.history_store.append(instance, started).await {
+                panic!("failed to append OrchestrationStarted: {e}");
+            }
+        }
+        // Spawn to completion and return handle
+        self.clone().spawn_instance_to_completion(instance, orchestration_name).await
     }
     /// Start a new runtime using the in-memory history store.
     pub async fn start(activity_registry: Arc<activity::ActivityRegistry>, orchestration_registry: OrchestrationRegistry) -> Arc<Self> {
@@ -195,6 +202,7 @@ impl Runtime {
             Ok(now_ms.to_string())
         });
         builder = builder.register_result("__system_new_guid", |_input: String| async move {
+            // TODO : find the right way to build a guid
             // Pseudo-guid: 32-hex digits from current nanos since epoch
             let nanos = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -238,6 +246,17 @@ impl Runtime {
         // background poller for provider-backed work queue
         let rt_for_poll = runtime.clone();
         let poller = tokio::spawn(async move {
+            // bootstrap: scan existing instances and enqueue starts for incomplete ones
+            // naive: treat any instance with any history as incomplete
+            let instances = rt_for_poll.history_store.list_instances().await;
+            for inst in instances {
+                if let Some(orchestration) = rt_for_poll.history_store.get_instance_orchestration(&inst).await {
+                    let _hist = rt_for_poll.history_store.read(&inst).await;
+                    // If there's no ExternalEvent/ActivityCompleted/TimerFired after a final output (we don't track), just enqueue
+                    let _ = rt_for_poll.start_tx.send(StartRequest { instance: inst.clone(), orchestration_name: orchestration });
+                }
+            }
+
             loop {
                 if let Some(item) = rt_for_poll.history_store.dequeue_work().await {
                     match item {
@@ -313,10 +332,7 @@ impl Runtime {
             }
         }
         let _active_guard = ActiveGuard { rt: self.clone(), inst: instance.to_string() };
-        // Ensure instance exists; create if missing; propagate error
-        if let Err(e) = self.history_store.create_instance(instance).await {
-            panic!("failed to create instance {instance}: {e}");
-        }
+        // Instance is expected to be created by start_orchestration; do not create here
         // Load existing history from store (now exists)
         let mut history: Vec<Event> = self.history_store.read(instance).await;
         let mut comp_rx = self.router.register(instance).await;
@@ -324,9 +340,16 @@ impl Runtime {
         // Rehydrate pending activities and timers from history
         rehydrate_pending(instance, &history, &self.activity_tx, &self.timer_tx).await;
 
+        // capture input from OrchestrationStarted if present
+        let input = history.iter().find_map(|e| match e {
+            Event::OrchestrationStarted { name: n, input } if n == orchestration_name => Some(input.clone()),
+            _ => None,
+        }).unwrap_or_default();
+
         let orchestrator_fn = |ctx: OrchestrationContext| {
             let handler = orchestration_handler.clone();
-            async move { handler.invoke(ctx).await }
+            let input_clone = input.clone();
+            async move { handler.invoke(ctx, input_clone).await }
         };
 
         let mut turn_index: u64 = 0;

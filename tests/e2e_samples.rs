@@ -28,7 +28,7 @@ async fn sample_hello_world_fs() {
         .build();
 
     // Orchestrator: emit a trace, call Hello twice, return first result
-    let orchestration = |ctx: OrchestrationContext| async move {
+    let orchestration = |ctx: OrchestrationContext, _input: String| async move {
         ctx.trace_info("hello_world started");
         let res = ctx.schedule_activity("Hello", "Rust").into_activity().await.unwrap();
         ctx.trace_info(format!("hello_world result={res} "));
@@ -42,7 +42,7 @@ async fn sample_hello_world_fs() {
         .build();
 
     let rt = runtime::Runtime::start_with_store(store, Arc::new(activity_registry), orchestration_registry).await;
-    let handle = rt.clone().spawn_instance_to_completion("inst-sample-hello-1", "HelloWorld").await;
+    let handle = rt.clone().start_orchestration("inst-sample-hello-1", "HelloWorld", "").await;
     let (_hist, out) = handle.await.unwrap();
     assert_eq!(out, "Hello, Rust!");
     rt.shutdown().await;
@@ -67,7 +67,7 @@ async fn sample_basic_control_flow_fs() {
         .build();
 
     // Orchestrator: get a flag and branch
-    let orchestration = |ctx: OrchestrationContext| async move {
+    let orchestration = |ctx: OrchestrationContext, _input: String| async move {
         let flag = ctx.schedule_activity("GetFlag", "").into_activity().await.unwrap();
         ctx.trace_info(format!("control_flow flag decided = {flag}"));
         if flag == "yes" {
@@ -82,7 +82,7 @@ async fn sample_basic_control_flow_fs() {
         .build();
 
     let rt = runtime::Runtime::start_with_store(store, Arc::new(activity_registry), orchestration_registry).await;
-    let handle = rt.clone().spawn_instance_to_completion("inst-sample-cflow-1", "ControlFlow").await;
+    let handle = rt.clone().start_orchestration("inst-sample-cflow-1", "ControlFlow", "").await;
     let (_hist, out) = handle.await.unwrap();
     assert_eq!(out, "picked_yes");
     rt.shutdown().await;
@@ -105,7 +105,7 @@ async fn sample_loop_fs() {
         .build();
 
     // Orchestrator: loop three times, updating an accumulator
-    let orchestration = |ctx: OrchestrationContext| async move {
+    let orchestration = |ctx: OrchestrationContext, _input: String| async move {
         let mut acc = String::from("start");
         for i in 0..3 {
             acc = ctx.schedule_activity("Append", acc).into_activity().await.unwrap();
@@ -119,7 +119,7 @@ async fn sample_loop_fs() {
         .build();
 
     let rt = runtime::Runtime::start_with_store(store, Arc::new(activity_registry), orchestration_registry).await;
-    let handle = rt.clone().spawn_instance_to_completion("inst-sample-loop-1", "LoopOrchestration").await;
+    let handle = rt.clone().start_orchestration("inst-sample-loop-1", "LoopOrchestration", "").await;
     let (_hist, out) = handle.await.unwrap();
     assert_eq!(out, "startxxx");
     rt.shutdown().await;
@@ -145,7 +145,7 @@ async fn sample_error_handling_fs() {
         .build();
 
     // Orchestrator: try fragile, on error call Recover
-    let orchestration = |ctx: OrchestrationContext| async move {
+    let orchestration = |ctx: OrchestrationContext, _input: String| async move {
         match ctx.schedule_activity("Fragile", "bad").into_activity().await {
             Ok(v) => {
                 ctx.trace_info(format!("fragile succeeded value={v}"));
@@ -167,7 +167,7 @@ async fn sample_error_handling_fs() {
         .build();
 
     let rt = runtime::Runtime::start_with_store(store, Arc::new(activity_registry), orchestration_registry).await;
-    let handle = rt.clone().spawn_instance_to_completion("inst-sample-err-1", "ErrorHandling").await;
+    let handle = rt.clone().start_orchestration("inst-sample-err-1", "ErrorHandling", "").await;
     let (_hist, out) = handle.await.unwrap();
     assert_eq!(out, "recovered");
     rt.shutdown().await;
@@ -189,7 +189,7 @@ async fn dtf_legacy_gabbar_greetings_fs() {
         .register_result("Greetings", |input: String| async move { Ok(format!("Hello, {input}!")) })
         .build();
 
-    let orchestration = |ctx: OrchestrationContext| async move {
+    let orchestration = |ctx: OrchestrationContext, _input: String| async move {
         // Schedule two greetings in parallel (DTF AsyncDynamicProxyGreetingsTest equivalent)
         let f1 = ctx.schedule_activity("Greetings", "Gabbar").into_activity();
         let f2 = ctx.schedule_activity("Greetings", "Samba").into_activity();
@@ -202,7 +202,7 @@ async fn dtf_legacy_gabbar_greetings_fs() {
         .build();
 
     let rt = runtime::Runtime::start_with_store(store, Arc::new(activity_registry), orchestration_registry).await;
-    let handle = rt.clone().spawn_instance_to_completion("inst-dtf-greetings", "Greetings").await;
+    let handle = rt.clone().start_orchestration("inst-dtf-greetings", "Greetings", "").await;
     let (_hist, out) = handle.await.unwrap();
     assert_eq!(out, "Hello, Gabbar!, Hello, Samba!");
     rt.shutdown().await;
@@ -222,7 +222,7 @@ async fn sample_system_activities_fs() {
 
     let activity_registry = ActivityRegistry::builder().build();
 
-    let orchestration = |ctx: OrchestrationContext| async move {
+    let orchestration = |ctx: OrchestrationContext, _input: String| async move {
         let now = ctx.system_now_ms().await;
         let guid = ctx.system_new_guid().await;
         ctx.trace_info(format!("system now={now}, guid={guid}"));
@@ -234,7 +234,7 @@ async fn sample_system_activities_fs() {
         .build();
 
     let rt = runtime::Runtime::start_with_store(store, Arc::new(activity_registry), orchestration_registry).await;
-    let handle = rt.clone().spawn_instance_to_completion("inst-system-acts", "SystemActivities").await;
+    let handle = rt.clone().start_orchestration("inst-system-acts", "SystemActivities", "").await;
     let (_hist, out) = handle.await.unwrap();
 
     // Basic assertions

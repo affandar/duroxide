@@ -16,7 +16,7 @@ async fn error_handling_compensation_on_ship_failure_with(store: StdArc<dyn Hist
         .register_result("Credit", |input: String| async move { Ok(format!("credited:{input}")) })
         .build();
 
-    let orchestration = |ctx: OrchestrationContext| async move {
+    let orchestration = |ctx: OrchestrationContext, _input: String| async move {
         let deb = ctx.schedule_activity("Debit", "ok").into_activity().await;
         let deb = parse_activity_result(&deb);
         match deb {
@@ -39,7 +39,7 @@ async fn error_handling_compensation_on_ship_failure_with(store: StdArc<dyn Hist
         .build();
 
     let rt = runtime::Runtime::start_with_store(store, Arc::new(activity_registry), orchestration_registry).await;
-    let handle = rt.clone().spawn_instance_to_completion("inst-err-ship-1", "ErrorHandlingCompensation").await;
+    let handle = rt.clone().start_orchestration("inst-err-ship-1", "ErrorHandlingCompensation", "").await;
     let (_hist, out) = handle.await.unwrap();
     assert!(out.starts_with("rolled_back:credited:"));
     rt.shutdown().await;
@@ -68,7 +68,7 @@ async fn error_handling_success_path_with(store: StdArc<dyn HistoryStore>) {
         .register_result("Ship", |_input: String| async move { Ok("shipped".to_string()) })
         .build();
 
-    let orchestration = |ctx: OrchestrationContext| async move {
+    let orchestration = |ctx: OrchestrationContext, _input: String| async move {
         let deb = ctx.schedule_activity("Debit", "ok").into_activity().await;
         parse_activity_result(&deb).unwrap();
         let ship = ctx.schedule_activity("Ship", "ok").into_activity().await;
@@ -81,7 +81,7 @@ async fn error_handling_success_path_with(store: StdArc<dyn HistoryStore>) {
         .build();
 
     let rt = runtime::Runtime::start_with_store(store, Arc::new(activity_registry), orchestration_registry).await;
-    let handle = rt.clone().spawn_instance_to_completion("inst-err-ok-1", "ErrorHandlingSuccess").await;
+    let handle = rt.clone().start_orchestration("inst-err-ok-1", "ErrorHandlingSuccess", "").await;
     let (_hist, out) = handle.await.unwrap();
     assert_eq!(out, "ok");
     rt.shutdown().await;
@@ -111,7 +111,7 @@ async fn error_handling_early_debit_failure_with(store: StdArc<dyn HistoryStore>
         .register_result("Credit", |_input: String| async move { Ok("credited".to_string()) })
         .build();
 
-    let orchestration = |ctx: OrchestrationContext| async move {
+    let orchestration = |ctx: OrchestrationContext, _input: String| async move {
         let deb = ctx.schedule_activity("Debit", "fail").into_activity().await;
         match deb {
             Err(e) => format!("debit_failed:{e}"),
@@ -124,7 +124,7 @@ async fn error_handling_early_debit_failure_with(store: StdArc<dyn HistoryStore>
         .build();
 
     let rt = runtime::Runtime::start_with_store(store, Arc::new(activity_registry), orchestration_registry).await;
-    let handle = rt.clone().spawn_instance_to_completion("inst-err-debit-1", "DebitFailureTest").await;
+    let handle = rt.clone().start_orchestration("inst-err-debit-1", "DebitFailureTest", "").await;
     let (_hist, out) = handle.await.unwrap();
     assert!(out.starts_with("debit_failed:"));
     rt.shutdown().await;
@@ -150,7 +150,7 @@ async fn error_handling_early_debit_failure_fs() {
 // 5) Unknown activity handler: should fail with unregistered error
 async fn unknown_activity_fails_with(store: StdArc<dyn HistoryStore>) {
     let activity_registry = ActivityRegistry::builder().build();
-    let orchestration = |ctx: OrchestrationContext| async move {
+    let orchestration = |ctx: OrchestrationContext, _input: String| async move {
         match ctx.schedule_activity("Missing", "foo").into_activity().await {
             Ok(v) => format!("unexpected_ok:{v}"),
             Err(e) => format!("err={e}"),
@@ -162,7 +162,7 @@ async fn unknown_activity_fails_with(store: StdArc<dyn HistoryStore>) {
         .build();
 
     let rt = runtime::Runtime::start_with_store(store, Arc::new(activity_registry), orchestration_registry).await;
-    let handle = rt.clone().spawn_instance_to_completion("inst-unknown-act-1", "MissingActivityTest").await;
+    let handle = rt.clone().start_orchestration("inst-unknown-act-1", "MissingActivityTest", "").await;
     let (_hist, out) = handle.await.unwrap();
     assert!(out.starts_with("err=unregistered:Missing"));
     rt.shutdown().await;
@@ -187,7 +187,7 @@ async fn event_after_completion_is_ignored_fs() {
 
     let instance = "inst-post-complete-1";
     // Orchestration: subscribe and exit on first event
-    let orchestration = |ctx: OrchestrationContext| async move {
+    let orchestration = |ctx: OrchestrationContext, _input: String| async move {
         let _ = ctx.schedule_wait("Once").into_event().await;
         "done".to_string()
     };
@@ -202,7 +202,7 @@ async fn event_after_completion_is_ignored_fs() {
         tokio::time::sleep(std::time::Duration::from_millis(5)).await;
         rt_c.raise_event(instance, "Once", "go").await;
     });
-    let handle = rt.clone().spawn_instance_to_completion(instance, "PostCompleteTest").await;
+    let handle = rt.clone().start_orchestration(instance, "PostCompleteTest", "").await;
     let (hist, out) = handle.await.unwrap();
     assert_eq!(out, "done");
     let before = hist.len();
@@ -225,7 +225,7 @@ async fn event_before_subscription_after_start_is_ignored() {
     let td = tempfile::tempdir().unwrap();
     let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
     let activity_registry = ActivityRegistry::builder().build();
-    let orchestration = |ctx: OrchestrationContext| async move {
+    let orchestration = |ctx: OrchestrationContext, _input: String| async move {
         // Delay before subscribing to simulate missing subscription window
         ctx.schedule_timer(10).into_timer().await;
         // Subscribe, then wait for event with timeout
@@ -255,7 +255,7 @@ async fn event_before_subscription_after_start_is_ignored() {
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
         rt_c2.raise_event(instance, "Evt", "late").await;
     });
-    let handle = rt.clone().spawn_instance_to_completion(instance, "PreSubscriptionTest").await;
+    let handle = rt.clone().start_orchestration(instance, "PreSubscriptionTest", "").await;
     let (_hist, out) = handle.await.unwrap();
     assert_eq!(out, "late");
     eprintln!("END: event_before_subscription_after_start_is_ignored");
@@ -271,7 +271,7 @@ async fn history_cap_exceeded_with(store: StdArc<dyn HistoryStore>) {
 
     // Orchestration that schedules more than CAP events.
     // Each activity emits two events (Scheduled + Completed). With CAP=1024, 600 activities exceed.
-    let orchestration = |ctx: OrchestrationContext| async move {
+    let orchestration = |ctx: OrchestrationContext, _input: String| async move {
         for i in 0..600u32 {
             let _ = ctx.schedule_activity("Noop", format!("{i}")).into_activity().await;
         }
@@ -283,7 +283,7 @@ async fn history_cap_exceeded_with(store: StdArc<dyn HistoryStore>) {
         .build();
 
     let rt = runtime::Runtime::start_with_store(store, Arc::new(activity_registry), orchestration_registry).await;
-    let handle = rt.clone().spawn_instance_to_completion("inst-cap-exceed", "HistoryCapTest").await;
+    let handle = rt.clone().start_orchestration("inst-cap-exceed", "HistoryCapTest", "").await;
     // Expect the background task to panic due to append error; awaiting should return JoinError
     let res = handle.await;
     assert!(res.is_err(), "expected append failure to propagate as task error");

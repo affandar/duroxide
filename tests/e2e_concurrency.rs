@@ -7,7 +7,7 @@ use rust_dtf::providers::fs::FsHistoryStore;
 use std::sync::Arc as StdArc;
 
 async fn concurrent_orchestrations_different_activities_with(store: StdArc<dyn HistoryStore>) {
-    let o1 = |ctx: OrchestrationContext| async move {
+    let o1 = |ctx: OrchestrationContext, _input: String| async move {
         let f_a = ctx.schedule_activity("Add", "2,3");
         let f_e = ctx.schedule_wait("Go");
         let f_t = ctx.schedule_timer(1);
@@ -15,7 +15,7 @@ async fn concurrent_orchestrations_different_activities_with(store: StdArc<dyn H
         let a = a.unwrap();
         format!("o1:sum={a};evt={e}")
     };
-    let o2 = |ctx: OrchestrationContext| async move {
+    let o2 = |ctx: OrchestrationContext, _input: String| async move {
         let f_a = ctx.schedule_activity("Upper", "hi");
         let f_e = ctx.schedule_wait("Go");
         let f_t = ctx.schedule_timer(1);
@@ -40,8 +40,8 @@ async fn concurrent_orchestrations_different_activities_with(store: StdArc<dyn H
         .build();
 
     let rt = runtime::Runtime::start_with_store(store, Arc::new(activity_registry), orchestration_registry).await;
-    let h1 = rt.clone().spawn_instance_to_completion("inst-multi-1", "AddOrchestration").await;
-    let h2 = rt.clone().spawn_instance_to_completion("inst-multi-2", "UpperOrchestration").await;
+    let h1 = rt.clone().start_orchestration("inst-multi-1", "AddOrchestration", "").await;
+    let h2 = rt.clone().start_orchestration("inst-multi-2", "UpperOrchestration", "").await;
 
     let rt_c = rt.clone();
     tokio::spawn(async move {
@@ -79,7 +79,7 @@ async fn concurrent_orchestrations_different_activities_fs() {
 }
 
 async fn concurrent_orchestrations_same_activities_with(store: StdArc<dyn HistoryStore>) {
-    let o1 = |ctx: OrchestrationContext| async move {
+    let o1 = |ctx: OrchestrationContext, _input: String| async move {
         let f_a = ctx.schedule_activity("Proc", "10");
         let f_e = ctx.schedule_wait("Go");
         let f_t = ctx.schedule_timer(1);
@@ -87,7 +87,7 @@ async fn concurrent_orchestrations_same_activities_with(store: StdArc<dyn Histor
         let a = a.unwrap();
         format!("o1:a={a};evt={e}")
     };
-    let o2 = |ctx: OrchestrationContext| async move {
+    let o2 = |ctx: OrchestrationContext, _input: String| async move {
         let _guid = ctx.new_guid();
         let f_a = ctx.schedule_activity("Proc", "20");
         let f_e = ctx.schedule_wait("Go");
@@ -107,8 +107,8 @@ async fn concurrent_orchestrations_same_activities_with(store: StdArc<dyn Histor
         .build();
 
     let rt = runtime::Runtime::start_with_store(store, Arc::new(activity_registry), orchestration_registry).await;
-    let h1 = rt.clone().spawn_instance_to_completion("inst-same-acts-1", "ProcOrchestration1").await;
-    let h2 = rt.clone().spawn_instance_to_completion("inst-same-acts-2", "ProcOrchestration2").await;
+    let h1 = rt.clone().start_orchestration("inst-same-acts-1", "ProcOrchestration1", "").await;
+    let h2 = rt.clone().start_orchestration("inst-same-acts-2", "ProcOrchestration2", "").await;
 
     let rt_c = rt.clone();
     tokio::spawn(async move {

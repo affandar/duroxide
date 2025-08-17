@@ -11,7 +11,7 @@ where
     F1: Fn() -> StdArc<dyn HistoryStore>,
     F2: Fn() -> StdArc<dyn HistoryStore>,
 {
-    let orchestrator = |ctx: OrchestrationContext| async move {
+    let orchestrator = |ctx: OrchestrationContext, _input: String| async move {
         let s1 = ctx.schedule_activity("Step", "1").into_activity().await.unwrap();
         let s2 = ctx.schedule_activity("Step", "2").into_activity().await.unwrap();
         let _ = ctx.schedule_wait("Resume").into_event().await;
@@ -31,7 +31,7 @@ where
         .build();
 
     let rt1 = runtime::Runtime::start_with_store(store1.clone(), Arc::new(activity_registry.clone()), orchestration_registry.clone()).await;
-    let handle1 = rt1.clone().spawn_instance_to_completion(&instance, "RecoveryTest").await;
+    let handle1 = rt1.clone().start_orchestration(&instance, "RecoveryTest", "").await;
 
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
@@ -53,7 +53,7 @@ where
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
         rt2_c.raise_event(&instance_for_spawn, "Resume", "go").await;
     });
-    let handle2 = rt2.clone().spawn_instance_to_completion(&instance, "RecoveryTest").await;
+    let handle2 = rt2.clone().start_orchestration(&instance, "RecoveryTest", "").await;
     let (_final_hist_runtime, output) = handle2.await.unwrap();
     assert_eq!(output, "1234");
 
