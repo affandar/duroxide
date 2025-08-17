@@ -1,11 +1,11 @@
 ## Durable Task Rust Core – TODOs
 
 - do a pass through the code. 
+- tests for provider <-> runtime resumption of multiple orchestrations. 
+- tests for orchestration state, 
+- tests for e
 - redo the orchestration registry change with gpt5 and compare
 - test hung because the initial orchestration takes longer to start!
-- Add orchestration registry
-- Add capability to the runtime to resume persisted orchestrations from the history provider
-- Add signalling mechanism in the provider which runtime can poll to trigger replay
 - Add proper metrics.
 - Build a website to visualize execution.
 - Write an Azure Blob based provider.
@@ -16,6 +16,9 @@
 
 ## DONE
 
+- Add orchestration registry
+- Add capability to the runtime to resume persisted orchestrations from the history provider
+- Add signalling mechanism in the provider which runtime can poll to trigger replay
 - resolve the test hang!!
 - Document all methods
 - Add proper logging

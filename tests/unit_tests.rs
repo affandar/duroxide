@@ -61,23 +61,23 @@ async fn deterministic_replay_activity_only() {
 
     let activity_registry = ActivityRegistry::builder()
         .register("A", |input: String| async move {
-            input.parse::<i32>().unwrap_or(0).saturating_add(1).to_string()
+            Ok(input.parse::<i32>().unwrap_or(0).saturating_add(1).to_string())
         })
         .build();
     
     let orchestration_registry = OrchestrationRegistry::builder()
-        .register("TestOrchestration", move |ctx, _input| orchestrator(ctx))
+        .register("TestOrchestration", move |ctx, _input| async move { Ok(orchestrator(ctx).await) })
         .build();
     
     let rt = runtime::Runtime::start(Arc::new(activity_registry), orchestration_registry).await;
     let h = rt.clone().start_orchestration("inst-unit-1", "TestOrchestration", "").await;
-    let (final_history, output) = h.await.unwrap();
-    assert_eq!(output, "a=3");
+    let (final_history, output) = h.unwrap().await.unwrap();
+    assert_eq!(output.as_ref().unwrap(), "a=3");
 
     // Replay must produce same output and no new actions
     let (_h2, acts2, _logs2, out2) = run_turn(final_history.clone(), orchestrator);
     assert!(acts2.is_empty());
-    assert_eq!(out2.unwrap(), output);
+    assert_eq!(out2.unwrap(), output.clone().unwrap());
     rt.shutdown().await;
 }
 
@@ -129,11 +129,11 @@ async fn runtime_duplicate_orchestration_errors() {
     let orchestration_registry = OrchestrationRegistry::builder()
         .register("TestOrch1", |ctx, _| async move {
             ctx.schedule_timer(10).into_timer().await;
-            "ok".to_string()
+            Ok("ok".to_string())
         })
         .register("TestOrch2", |ctx, _| async move {
             ctx.schedule_timer(1).into_timer().await;
-            "nope".to_string()
+            Ok("nope".to_string())
         })
         .build();
     
@@ -142,13 +142,12 @@ async fn runtime_duplicate_orchestration_errors() {
 
     let h1 = rt.clone().start_orchestration(inst, "TestOrch1", "").await;
 
-    // Second start should fail (panic inside task) due to runtime active-instance guard
+    // Second start should fail immediately due to already-started instance
     let h2 = rt.clone().start_orchestration(inst, "TestOrch2", "").await;
-    let res = h2.await;
-    assert!(res.is_err(), "expected duplicate start to panic in task");
+    assert!(h2.is_err(), "expected duplicate start to return Err");
 
-    let (_hist, out) = h1.await.unwrap();
-    assert_eq!(out, "ok");
+    let (_hist, out) = h1.unwrap().await.unwrap();
+    assert_eq!(out.unwrap(), "ok");
     rt.shutdown().await;
 }
 

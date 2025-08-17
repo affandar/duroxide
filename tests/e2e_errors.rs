@@ -11,23 +11,23 @@ fn parse_activity_result(s: &Result<String, String>) -> Result<String, String> {
 
 async fn error_handling_compensation_on_ship_failure_with(store: StdArc<dyn HistoryStore>) {
     let activity_registry = ActivityRegistry::builder()
-        .register_result("Debit", |input: String| async move { if input == "fail" { Err("insufficient".to_string()) } else { Ok(format!("debited:{input}")) } })
-        .register_result("Ship", |input: String| async move { if input == "fail_ship" { Err("courier_down".to_string()) } else { Ok("shipped".to_string()) } })
-        .register_result("Credit", |input: String| async move { Ok(format!("credited:{input}")) })
+        .register("Debit", |input: String| async move { if input == "fail" { Err("insufficient".to_string()) } else { Ok(format!("debited:{input}")) } })
+        .register("Ship", |input: String| async move { if input == "fail_ship" { Err("courier_down".to_string()) } else { Ok("shipped".to_string()) } })
+        .register("Credit", |input: String| async move { Ok(format!("credited:{input}")) })
         .build();
 
     let orchestration = |ctx: OrchestrationContext, _input: String| async move {
         let deb = ctx.schedule_activity("Debit", "ok").into_activity().await;
         let deb = parse_activity_result(&deb);
         match deb {
-            Err(e) => format!("debit_failed:{e}"),
+            Err(e) => Ok(format!("debit_failed:{e}")),
             Ok(deb_val) => {
                 let ship = ctx.schedule_activity("Ship", "fail_ship").into_activity().await;
                 match parse_activity_result(&ship) {
-                    Ok(_) => "ok".to_string(),
+                    Ok(_) => Ok("ok".to_string()),
                     Err(_) => {
                         let cred = ctx.schedule_activity("Credit", deb_val).into_activity().await.unwrap();
-                        format!("rolled_back:{cred}")
+                        Ok(format!("rolled_back:{cred}"))
                     }
                 }
             }
@@ -40,8 +40,8 @@ async fn error_handling_compensation_on_ship_failure_with(store: StdArc<dyn Hist
 
     let rt = runtime::Runtime::start_with_store(store, Arc::new(activity_registry), orchestration_registry).await;
     let handle = rt.clone().start_orchestration("inst-err-ship-1", "ErrorHandlingCompensation", "").await;
-    let (_hist, out) = handle.await.unwrap();
-    assert!(out.starts_with("rolled_back:credited:"));
+    let (_hist, out) = handle.unwrap().await.unwrap();
+    assert!(out.unwrap().starts_with("rolled_back:credited:"));
     rt.shutdown().await;
 }
 
@@ -64,8 +64,8 @@ async fn error_handling_compensation_on_ship_failure_fs() {
 
 async fn error_handling_success_path_with(store: StdArc<dyn HistoryStore>) {
     let activity_registry = ActivityRegistry::builder()
-        .register_result("Debit", |input: String| async move { Ok(format!("debited:{input}")) })
-        .register_result("Ship", |_input: String| async move { Ok("shipped".to_string()) })
+        .register("Debit", |input: String| async move { Ok(format!("debited:{input}")) })
+        .register("Ship", |_input: String| async move { Ok("shipped".to_string()) })
         .build();
 
     let orchestration = |ctx: OrchestrationContext, _input: String| async move {
@@ -73,7 +73,7 @@ async fn error_handling_success_path_with(store: StdArc<dyn HistoryStore>) {
         parse_activity_result(&deb).unwrap();
         let ship = ctx.schedule_activity("Ship", "ok").into_activity().await;
         parse_activity_result(&ship).unwrap();
-        "ok".to_string()
+        Ok("ok".to_string())
     };
 
     let orchestration_registry = OrchestrationRegistry::builder()
@@ -82,8 +82,8 @@ async fn error_handling_success_path_with(store: StdArc<dyn HistoryStore>) {
 
     let rt = runtime::Runtime::start_with_store(store, Arc::new(activity_registry), orchestration_registry).await;
     let handle = rt.clone().start_orchestration("inst-err-ok-1", "ErrorHandlingSuccess", "").await;
-    let (_hist, out) = handle.await.unwrap();
-    assert_eq!(out, "ok");
+    let (_hist, out) = handle.unwrap().await.unwrap();
+    assert_eq!(out.unwrap(), "ok");
     rt.shutdown().await;
 }
 
@@ -106,15 +106,15 @@ async fn error_handling_success_path_fs() {
 
 async fn error_handling_early_debit_failure_with(store: StdArc<dyn HistoryStore>) {
     let activity_registry = ActivityRegistry::builder()
-        .register_result("Debit", |input: String| async move { Err(format!("bad:{input}")) })
-        .register_result("Ship", |_input: String| async move { Ok("shipped".to_string()) })
-        .register_result("Credit", |_input: String| async move { Ok("credited".to_string()) })
+        .register("Debit", |input: String| async move { Err(format!("bad:{input}")) })
+        .register("Ship", |_input: String| async move { Ok("shipped".to_string()) })
+        .register("Credit", |_input: String| async move { Ok("credited".to_string()) })
         .build();
 
     let orchestration = |ctx: OrchestrationContext, _input: String| async move {
         let deb = ctx.schedule_activity("Debit", "fail").into_activity().await;
         match deb {
-            Err(e) => format!("debit_failed:{e}"),
+            Err(e) => Ok(format!("debit_failed:{e}")),
             Ok(_) => unreachable!(),
         }
     };
@@ -125,8 +125,8 @@ async fn error_handling_early_debit_failure_with(store: StdArc<dyn HistoryStore>
 
     let rt = runtime::Runtime::start_with_store(store, Arc::new(activity_registry), orchestration_registry).await;
     let handle = rt.clone().start_orchestration("inst-err-debit-1", "DebitFailureTest", "").await;
-    let (_hist, out) = handle.await.unwrap();
-    assert!(out.starts_with("debit_failed:"));
+    let (_hist, out) = handle.unwrap().await.unwrap();
+    assert!(out.unwrap().starts_with("debit_failed:"));
     rt.shutdown().await;
 }
 
@@ -152,8 +152,8 @@ async fn unknown_activity_fails_with(store: StdArc<dyn HistoryStore>) {
     let activity_registry = ActivityRegistry::builder().build();
     let orchestration = |ctx: OrchestrationContext, _input: String| async move {
         match ctx.schedule_activity("Missing", "foo").into_activity().await {
-            Ok(v) => format!("unexpected_ok:{v}"),
-            Err(e) => format!("err={e}"),
+            Ok(v) => Ok(format!("unexpected_ok:{v}")),
+            Err(e) => Ok(format!("err={e}")),
         }
     };
 
@@ -163,8 +163,8 @@ async fn unknown_activity_fails_with(store: StdArc<dyn HistoryStore>) {
 
     let rt = runtime::Runtime::start_with_store(store, Arc::new(activity_registry), orchestration_registry).await;
     let handle = rt.clone().start_orchestration("inst-unknown-act-1", "MissingActivityTest", "").await;
-    let (_hist, out) = handle.await.unwrap();
-    assert!(out.starts_with("err=unregistered:Missing"));
+    let (_hist, out) = handle.unwrap().await.unwrap();
+    assert!(out.unwrap().starts_with("err=unregistered:Missing"));
     rt.shutdown().await;
 }
 
@@ -189,7 +189,7 @@ async fn event_after_completion_is_ignored_fs() {
     // Orchestration: subscribe and exit on first event
     let orchestration = |ctx: OrchestrationContext, _input: String| async move {
         let _ = ctx.schedule_wait("Once").into_event().await;
-        "done".to_string()
+        Ok("done".to_string())
     };
 
     let orchestration_registry = OrchestrationRegistry::builder()
@@ -203,9 +203,11 @@ async fn event_after_completion_is_ignored_fs() {
         rt_c.raise_event(instance, "Once", "go").await;
     });
     let handle = rt.clone().start_orchestration(instance, "PostCompleteTest", "").await;
-    let (hist, out) = handle.await.unwrap();
-    assert_eq!(out, "done");
-    let before = hist.len();
+    let (_hist, out) = handle.unwrap().await.unwrap();
+    assert_eq!(out.unwrap(), "done");
+    // Allow runtime to append OrchestrationCompleted terminal event
+    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    let before = store.read(instance).await.len();
 
     // Raise another event after completion
     rt.raise_event(instance, "Once", "late").await;
@@ -232,7 +234,7 @@ async fn event_before_subscription_after_start_is_ignored() {
         let ev = ctx.schedule_wait("Evt").into_event();
         let to = ctx.schedule_timer(1000).into_timer();
         match select(ev, to).await {
-            Either::Left((data, _)) => data,
+            Either::Left((data, _)) => Ok(data),
             Either::Right((_, _)) => panic!("timeout waiting for Evt after subscription"),
         }
     };
@@ -256,8 +258,8 @@ async fn event_before_subscription_after_start_is_ignored() {
         rt_c2.raise_event(instance, "Evt", "late").await;
     });
     let handle = rt.clone().start_orchestration(instance, "PreSubscriptionTest", "").await;
-    let (_hist, out) = handle.await.unwrap();
-    assert_eq!(out, "late");
+    let (_hist, out) = handle.unwrap().await.unwrap();
+    assert_eq!(out.unwrap(), "late");
     eprintln!("END: event_before_subscription_after_start_is_ignored");
     rt.shutdown().await;
 }
@@ -266,7 +268,7 @@ async fn event_before_subscription_after_start_is_ignored() {
 async fn history_cap_exceeded_with(store: StdArc<dyn HistoryStore>) {
     eprintln!("START: history_cap_exceeded_with");
     let activity_registry = ActivityRegistry::builder()
-        .register_result("Noop", |_in: String| async move { Ok(String::new()) })
+        .register("Noop", |_in: String| async move { Ok(String::new()) })
         .build();
 
     // Orchestration that schedules more than CAP events.
@@ -275,7 +277,7 @@ async fn history_cap_exceeded_with(store: StdArc<dyn HistoryStore>) {
         for i in 0..600u32 {
             let _ = ctx.schedule_activity("Noop", format!("{i}")).into_activity().await;
         }
-        "done".to_string()
+        Ok("done".to_string())
     };
 
     let orchestration_registry = OrchestrationRegistry::builder()
@@ -285,7 +287,7 @@ async fn history_cap_exceeded_with(store: StdArc<dyn HistoryStore>) {
     let rt = runtime::Runtime::start_with_store(store, Arc::new(activity_registry), orchestration_registry).await;
     let handle = rt.clone().start_orchestration("inst-cap-exceed", "HistoryCapTest", "").await;
     // Expect the background task to panic due to append error; awaiting should return JoinError
-    let res = handle.await;
+    let res = handle.unwrap().await;
     assert!(res.is_err(), "expected append failure to propagate as task error");
     rt.shutdown().await;
 }

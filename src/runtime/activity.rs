@@ -46,26 +46,8 @@ impl ActivityRegistryBuilder {
         for (k, v) in reg.inner.iter() { map.insert(k.clone(), v.clone()); }
         ActivityRegistryBuilder { map }
     }
-    // Convenience: register an activity whose future yields String (treated as Ok)
-    /// Register a function as an activity that returns a `String`.
-    pub fn register<F, Fut>(mut self, name: impl Into<String>, f: F) -> Self
-    where
-        F: Fn(String) -> Fut + Send + Sync + 'static,
-        Fut: std::future::Future<Output = String> + Send + 'static,
-    {
-        self.map.insert(name.into(), Arc::new(FnActivity(move |input: String| {
-            let fut = f(input);
-            async move {
-                let s = fut.await;
-                Ok::<String, String>(s)
-            }
-        })));
-        self
-    }
-
-    // Typed: register an activity that returns Result<String, String>
     /// Register a function as an activity that returns `Result<String, String>`.
-    pub fn register_result<F, Fut>(mut self, name: impl Into<String>, f: F) -> Self
+    pub fn register<F, Fut>(mut self, name: impl Into<String>, f: F) -> Self
     where
         F: Fn(String) -> Fut + Send + Sync + 'static,
         Fut: std::future::Future<Output = Result<String, String>> + Send + 'static,

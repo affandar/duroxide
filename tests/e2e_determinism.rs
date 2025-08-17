@@ -21,12 +21,12 @@ async fn orchestration_completes_and_replays_deterministically_with(store: StdAr
         let evt = match o_e { DurableOutput::External(v) => v, _ => unreachable!("Go must be external event") };
 
         let b = ctx.schedule_activity("B", a.clone()).into_activity().await.unwrap();
-        format!("id=_hidden, start={start}, evt={evt}, b={b}")
+        Ok(format!("id=_hidden, start={start}, evt={evt}, b={b}"))
     };
 
     let activity_registry = ActivityRegistry::builder()
-        .register("A", |input: String| async move { input.parse::<i32>().unwrap_or(0).saturating_add(1).to_string() })
-        .register("B", |input: String| async move { format!("{input}!") })
+        .register("A", |input: String| async move { Ok(input.parse::<i32>().unwrap_or(0).saturating_add(1).to_string()) })
+        .register("B", |input: String| async move { Ok(format!("{input}!")) })
         .build();
 
     let orchestration_registry = OrchestrationRegistry::builder()
@@ -40,7 +40,8 @@ async fn orchestration_completes_and_replays_deterministically_with(store: StdAr
         rt_clone.raise_event("inst-orch-1", "Go", "ok").await;
     });
     let handle = rt.clone().start_orchestration("inst-orch-1", "DeterministicOrchestration", "").await;
-    let (final_history, output) = handle.await.unwrap();
+    let (final_history, output) = handle.unwrap().await.unwrap();
+    let output = output.unwrap();
     assert!(output.contains("evt=ok"));
     assert!(output.contains("b=2!"));
     // Includes OrchestrationStarted + 4 schedule/complete pairs
@@ -102,13 +103,13 @@ async fn sequential_activity_chain_completes_with(store: StdArc<dyn HistoryStore
         let a = ctx.schedule_activity("A", "1").into_activity().await.unwrap();
         let b = ctx.schedule_activity("B", a).into_activity().await.unwrap();
         let c = ctx.schedule_activity("C", b).into_activity().await.unwrap();
-        format!("c={c}")
+        Ok(format!("c={c}"))
     };
 
     let activity_registry = ActivityRegistry::builder()
-        .register("A", |input: String| async move { input.parse::<i32>().map(|x| x + 1).unwrap_or(0).to_string() })
-        .register("B", |input: String| async move { format!("{input}b") })
-        .register("C", |input: String| async move { format!("{input}c") })
+        .register("A", |input: String| async move { Ok(input.parse::<i32>().map(|x| x + 1).unwrap_or(0).to_string()) })
+        .register("B", |input: String| async move { Ok(format!("{input}b")) })
+        .register("C", |input: String| async move { Ok(format!("{input}c")) })
         .build();
 
     let orchestration_registry = OrchestrationRegistry::builder()
@@ -117,8 +118,8 @@ async fn sequential_activity_chain_completes_with(store: StdArc<dyn HistoryStore
 
     let rt = runtime::Runtime::start_with_store(store, Arc::new(activity_registry), orchestration_registry).await;
     let handle = rt.clone().start_orchestration("inst-seq-1", "SequentialOrchestration", "").await;
-    let (final_history, output) = handle.await.unwrap();
-    assert_eq!(output, "c=2bc");
+    let (final_history, output) = handle.unwrap().await.unwrap();
+    assert_eq!(output.unwrap(), "c=2bc");
     // Includes OrchestrationStarted + 3 schedule/complete pairs
     assert_eq!(final_history.len(), 7, "expected OrchestrationStarted + three scheduled+completed activity pairs in history");
     rt.shutdown().await;

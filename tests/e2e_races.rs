@@ -9,7 +9,7 @@ use std::sync::Arc as StdArc;
 async fn wait_external_completes_with(store: StdArc<dyn HistoryStore>) {
     let orchestrator = |ctx: OrchestrationContext, _input: String| async move {
         let data = ctx.schedule_wait("Only").into_event().await;
-        format!("only={data}")
+        Ok(format!("only={data}"))
     };
 
     let activity_registry = ActivityRegistry::builder().build();
@@ -24,9 +24,9 @@ async fn wait_external_completes_with(store: StdArc<dyn HistoryStore>) {
         rt_clone.raise_event("inst-wait-1", "Only", "payload").await;
     });
     let handle = rt.clone().start_orchestration("inst-wait-1", "WaitExternal", "").await;
-    let (final_history, output) = handle.await.unwrap();
+    let (final_history, output) = handle.unwrap().await.unwrap();
 
-    assert_eq!(output, "only=payload");
+    assert_eq!(output.unwrap(), "only=payload");
     // First event is OrchestrationStarted; then subscription and event
     assert!(matches!(final_history[0], Event::OrchestrationStarted { .. }));
     assert!(matches!(final_history[1], Event::ExternalSubscribed { .. }));
@@ -48,8 +48,8 @@ async fn race_external_vs_timer_ordering_with(store: StdArc<dyn HistoryStore>) {
     let orchestrator = |ctx: OrchestrationContext, _input: String| async move {
         let race = select(ctx.schedule_timer(10), ctx.schedule_wait("Race"));
         match race.await {
-            Either::Left((_t, _e)) => "timer".to_string(),
-            Either::Right((_e, _t)) => "external".to_string(),
+            Either::Left((_t, _e)) => Ok("timer".to_string()),
+            Either::Right((_e, _t)) => Ok("external".to_string()),
         }
     };
 
@@ -65,9 +65,9 @@ async fn race_external_vs_timer_ordering_with(store: StdArc<dyn HistoryStore>) {
         rt_clone.raise_event("inst-race-order-1", "Race", "ok").await;
     });
     let handle = rt.clone().start_orchestration("inst-race-order-1", "RaceOrchestration", "").await;
-    let (final_history, output) = handle.await.unwrap();
+    let (final_history, output) = handle.unwrap().await.unwrap();
 
-    assert_eq!(output, "timer");
+    assert_eq!(output.unwrap(), "timer");
     let idx_t = final_history.iter().position(|e| matches!(e, Event::TimerFired { .. })).unwrap();
     if let Some(idx_e) = final_history.iter().position(|e| matches!(e, Event::ExternalEvent { .. })) {
         assert!(idx_t < idx_e, "expected timer to fire before external: {final_history:#?}");
@@ -88,8 +88,8 @@ async fn race_event_vs_timer_event_wins_with(store: StdArc<dyn HistoryStore>) {
     let orchestrator = |ctx: OrchestrationContext, _input: String| async move {
         let race = select(ctx.schedule_timer(50), ctx.schedule_wait("Race"));
         match race.await {
-            Either::Left((_t, _e)) => "timer".to_string(),
-            Either::Right((_e, _t)) => "external".to_string(),
+            Either::Left((_t, _e)) => Ok("timer".to_string()),
+            Either::Right((_e, _t)) => Ok("external".to_string()),
         }
     };
 
@@ -105,10 +105,10 @@ async fn race_event_vs_timer_event_wins_with(store: StdArc<dyn HistoryStore>) {
         rt_clone.raise_event("inst-race-order-2", "Race", "ok").await;
     });
     let handle = rt.clone().start_orchestration("inst-race-order-2", "RaceEventVsTimer", "").await;
-    let (final_history, output) = handle.await.unwrap();
+    let (final_history, output) = handle.unwrap().await.unwrap();
 
     // With batching, timer may win select even if external event is delivered first; assert consistent history ordering
-    assert_eq!(output, "external");
+    assert_eq!(output.unwrap(), "external");
     let idx_e = final_history.iter().position(|e| matches!(e, Event::ExternalEvent { .. })).unwrap();
     if let Some(idx_t) = final_history.iter().position(|e| matches!(e, Event::TimerFired { .. })) {
         assert!(idx_e < idx_t, "expected external before timer: {final_history:#?}");

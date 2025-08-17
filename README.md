@@ -65,7 +65,7 @@ let registry = ActivityRegistry::builder()
 let rt = Runtime::start(Arc::new(registry)).await;
 let h = rt.clone().spawn_instance_to_completion("inst-hello-1", hello_orch).await;
 let (_history, output) = h.await.unwrap();
-assert_eq!(output, "Hello, Rust!");
+assert_eq!(output.unwrap(), "Hello, Rust!");
 rt.shutdown().await;
 # }
 ```

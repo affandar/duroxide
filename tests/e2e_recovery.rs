@@ -17,7 +17,7 @@ where
         let _ = ctx.schedule_wait("Resume").into_event().await;
         let s3 = ctx.schedule_activity("Step", "3").into_activity().await.unwrap();
         let s4 = ctx.schedule_activity("Step", "4").into_activity().await.unwrap();
-        format!("{s1}{s2}{s3}{s4}")
+        Ok(format!("{s1}{s2}{s3}{s4}"))
     };
 
     let count_scheduled = |hist: &Vec<Event>, input: &str| -> usize {
@@ -25,7 +25,7 @@ where
     };
 
     let store1 = make_store_stage1();
-    let activity_registry = ActivityRegistry::builder().register("Step", |input: String| async move { input }).build();
+    let activity_registry = ActivityRegistry::builder().register("Step", |input: String| async move { Ok(input) }).build();
     let orchestration_registry = OrchestrationRegistry::builder()
         .register("RecoveryTest", orchestrator)
         .build();
@@ -54,8 +54,8 @@ where
         rt2_c.raise_event(&instance_for_spawn, "Resume", "go").await;
     });
     let handle2 = rt2.clone().start_orchestration(&instance, "RecoveryTest", "").await;
-    let (_final_hist_runtime, output) = handle2.await.unwrap();
-    assert_eq!(output, "1234");
+    let (_final_hist_runtime, output) = handle2.unwrap().await.unwrap();
+    assert_eq!(output.unwrap(), "1234");
 
     let final_hist2 = store2.read(&instance).await;
     assert_eq!(count_scheduled(&final_hist2, "3"), 1);

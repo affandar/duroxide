@@ -15,22 +15,22 @@ pub mod activity;
 /// Trait implemented by orchestration handlers that can be invoked by the runtime.
 #[async_trait]
 pub trait OrchestrationHandler: Send + Sync {
-    async fn invoke(&self, ctx: OrchestrationContext, input: String) -> String;
+    async fn invoke(&self, ctx: OrchestrationContext, input: String) -> Result<String, String>;
 }
 
 /// Function wrapper that implements `OrchestrationHandler`.
 pub struct FnOrchestration<F, Fut>(pub F)
 where
     F: Fn(OrchestrationContext, String) -> Fut + Send + Sync + 'static,
-    Fut: std::future::Future<Output = String> + Send + 'static;
+    Fut: std::future::Future<Output = Result<String, String>> + Send + 'static;
 
 #[async_trait]
 impl<F, Fut> OrchestrationHandler for FnOrchestration<F, Fut>
 where
     F: Fn(OrchestrationContext, String) -> Fut + Send + Sync + 'static,
-    Fut: std::future::Future<Output = String> + Send + 'static,
+    Fut: std::future::Future<Output = Result<String, String>> + Send + 'static,
 {
-    async fn invoke(&self, ctx: OrchestrationContext, input: String) -> String {
+    async fn invoke(&self, ctx: OrchestrationContext, input: String) -> Result<String, String> {
         (self.0)(ctx, input).await
     }
 }
@@ -59,11 +59,11 @@ pub struct OrchestrationRegistryBuilder {
 }
 
 impl OrchestrationRegistryBuilder {
-    /// Register an orchestration function that returns a `String`.
+    /// Register an orchestration function that returns `Result<String, String>`.
     pub fn register<F, Fut>(mut self, name: impl Into<String>, f: F) -> Self
     where
         F: Fn(OrchestrationContext, String) -> Fut + Send + Sync + 'static,
-        Fut: std::future::Future<Output = String> + Send + 'static,
+        Fut: std::future::Future<Output = Result<String, String>> + Send + 'static,
     {
         self.map.insert(name.into(), Arc::new(FnOrchestration(f)));
         self
@@ -152,20 +152,20 @@ pub struct Runtime {
 impl Runtime {
     /// Enqueue a new orchestration instance start. The runtime will pick this up
     /// in the background and drive it to completion.
-    pub async fn start_orchestration(self: Arc<Self>, instance: &str, orchestration_name: &str, input: impl Into<String>) -> JoinHandle<(Vec<Event>, String)> {
+    pub async fn start_orchestration(self: Arc<Self>, instance: &str, orchestration_name: &str, input: impl Into<String>) -> Result<JoinHandle<(Vec<Event>, Result<String, String>)>, String> {
         // Ensure instance exists
-        if let Err(_e) = self.history_store.create_instance(instance).await {
-            // ignore if already exists; tests may reuse
-        }
+        let _ = self.history_store.create_instance(instance).await; // best-effort
         // Append start marker if empty
-        if self.history_store.read(instance).await.is_empty() {
+        let hist = self.history_store.read(instance).await;
+        if hist.is_empty() {
             let started = vec![Event::OrchestrationStarted { name: orchestration_name.to_string(), input: input.into() }];
-            if let Err(e) = self.history_store.append(instance, started).await {
-                panic!("failed to append OrchestrationStarted: {e}");
-            }
+            self.history_store.append(instance, started).await.map_err(|e| format!("failed to append OrchestrationStarted: {e}"))?;
+        } else {
+            // already has history → consider already started
+            return Err(format!("instance already started: {instance}"));
         }
         // Spawn to completion and return handle
-        self.clone().spawn_instance_to_completion(instance, orchestration_name).await
+        Ok(self.clone().spawn_instance_to_completion(instance, orchestration_name).await)
     }
     /// Start a new runtime using the in-memory history store.
     pub async fn start(activity_registry: Arc<activity::ActivityRegistry>, orchestration_registry: OrchestrationRegistry) -> Arc<Self> {
@@ -190,18 +190,18 @@ impl Runtime {
         // copy user registrations
         let mut builder = activity::ActivityRegistryBuilder::from_registry(&activity_registry);
         // add system activities
-        builder = builder.register_result("__system_trace", |input: String| async move {
+        builder = builder.register("__system_trace", |input: String| async move {
             // input format: "LEVEL:message"
             Ok(input)
         });
-        builder = builder.register_result("__system_now", |_input: String| async move {
+        builder = builder.register("__system_now", |_input: String| async move {
             let now_ms = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_millis();
             Ok(now_ms.to_string())
         });
-        builder = builder.register_result("__system_new_guid", |_input: String| async move {
+        builder = builder.register("__system_new_guid", |_input: String| async move {
             // TODO : find the right way to build a guid
             // Pseudo-guid: 32-hex digits from current nanos since epoch
             let nanos = std::time::SystemTime::now()
@@ -308,7 +308,7 @@ impl Runtime {
         self: Arc<Self>,
         instance: &str,
         orchestration_name: &str,
-    ) -> (Vec<Event>, String) {
+    ) -> (Vec<Event>, Result<String, String>) {
         // Ensure instance not already active in this runtime
         {
             let mut act = self.active_instances.lock().await;
@@ -357,7 +357,18 @@ impl Runtime {
             let baseline_len = history.len();
             let (hist_after, actions, _logs, out_opt) = run_turn_with(history, turn_index, &orchestrator_fn);
             history = hist_after;
-            if let Some(out) = out_opt { return (history, out); }
+            if let Some(out) = out_opt {
+                // Persist terminal event based on result
+                let term = match &out {
+                    Ok(s) => Event::OrchestrationCompleted { output: s.clone() },
+                    Err(e) => Event::OrchestrationFailed { error: e.clone() },
+                };
+                if let Err(e) = self.history_store.append(instance, vec![term]).await {
+                    error!(instance, turn_index, error=%e, "failed to append terminal event");
+                    panic!("history append failed: {e}");
+                }
+                return (history, out);
+            }
 
             // Persist deltas incrementally to avoid duplicates
             let mut persisted_len = baseline_len;
@@ -428,7 +439,7 @@ impl Runtime {
         self: Arc<Self>,
         instance: &str,
         orchestration_name: &str,
-    ) -> JoinHandle<(Vec<Event>, String)> {
+    ) -> JoinHandle<(Vec<Event>, Result<String, String>)> {
         let notify = Arc::new(tokio::sync::Notify::new());
         let notify_for_watcher = notify.clone();
         let this_for_task = self.clone();

@@ -18,23 +18,22 @@ use futures::future::join;
 /// - Schedule an activity and await its typed completion
 #[tokio::test]
 async fn sample_hello_world_fs() {
-    eprintln!("START: sample_hello_world_fs");
     let td = tempfile::tempdir().unwrap();
     let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
 
     // Register a simple activity: "Hello" -> format a greeting
     let activity_registry = ActivityRegistry::builder()
-        .register_result("Hello", |input: String| async move { Ok(format!("Hello, {input}!")) })
+        .register("Hello", |input: String| async move { Ok(format!("Hello, {input}!")) })
         .build();
 
-    // Orchestrator: emit a trace, call Hello twice, return first result
-    let orchestration = |ctx: OrchestrationContext, _input: String| async move {
+    // Orchestrator: emit a trace, call Hello twice, return result using input
+    let orchestration = |ctx: OrchestrationContext, input: String| async move {
         ctx.trace_info("hello_world started");
         let res = ctx.schedule_activity("Hello", "Rust").into_activity().await.unwrap();
         ctx.trace_info(format!("hello_world result={res} "));
-        let res1 = ctx.schedule_activity("Hello", "Rust123").into_activity().await.unwrap();
+        let res1 = ctx.schedule_activity("Hello", input).into_activity().await.unwrap();
         ctx.trace_info(format!("hello_world result={res1} "));
-        res
+        Ok(res1)
     };
 
     let orchestration_registry = OrchestrationRegistry::builder()
@@ -42,9 +41,9 @@ async fn sample_hello_world_fs() {
         .build();
 
     let rt = runtime::Runtime::start_with_store(store, Arc::new(activity_registry), orchestration_registry).await;
-    let handle = rt.clone().start_orchestration("inst-sample-hello-1", "HelloWorld", "").await;
-    let (_hist, out) = handle.await.unwrap();
-    assert_eq!(out, "Hello, Rust!");
+    let handle = rt.clone().start_orchestration("inst-sample-hello-1", "HelloWorld", "World").await;
+    let (_hist, out) = handle.unwrap().await.unwrap();
+    assert_eq!(out.unwrap(), "Hello, World!");
     rt.shutdown().await;
 }
 
@@ -61,9 +60,9 @@ async fn sample_basic_control_flow_fs() {
 
     // Register activities that return a flag and branch outcomes
     let activity_registry = ActivityRegistry::builder()
-        .register_result("GetFlag", |_input: String| async move { Ok("yes".to_string()) })
-        .register_result("SayYes", |_in: String| async move { Ok("picked_yes".to_string()) })
-        .register_result("SayNo", |_in: String| async move { Ok("picked_no".to_string()) })
+        .register("GetFlag", |_input: String| async move { Ok("yes".to_string()) })
+        .register("SayYes", |_in: String| async move { Ok("picked_yes".to_string()) })
+        .register("SayNo", |_in: String| async move { Ok("picked_no".to_string()) })
         .build();
 
     // Orchestrator: get a flag and branch
@@ -71,9 +70,9 @@ async fn sample_basic_control_flow_fs() {
         let flag = ctx.schedule_activity("GetFlag", "").into_activity().await.unwrap();
         ctx.trace_info(format!("control_flow flag decided = {flag}"));
         if flag == "yes" {
-            ctx.schedule_activity("SayYes", "").into_activity().await.unwrap()
+            Ok(ctx.schedule_activity("SayYes", "").into_activity().await.unwrap())
         } else {
-            ctx.schedule_activity("SayNo", "").into_activity().await.unwrap()
+            Ok(ctx.schedule_activity("SayNo", "").into_activity().await.unwrap())
         }
     };
 
@@ -83,8 +82,8 @@ async fn sample_basic_control_flow_fs() {
 
     let rt = runtime::Runtime::start_with_store(store, Arc::new(activity_registry), orchestration_registry).await;
     let handle = rt.clone().start_orchestration("inst-sample-cflow-1", "ControlFlow", "").await;
-    let (_hist, out) = handle.await.unwrap();
-    assert_eq!(out, "picked_yes");
+    let (_hist, out) = handle.unwrap().await.unwrap();
+    assert_eq!(out.unwrap(), "picked_yes");
     rt.shutdown().await;
 }
 
@@ -101,7 +100,7 @@ async fn sample_loop_fs() {
 
     // Register an activity that appends "x" to its input
     let activity_registry = ActivityRegistry::builder()
-        .register("Append", |input: String| async move { format!("{input}x") })
+        .register("Append", |input: String| async move { Ok(format!("{input}x")) })
         .build();
 
     // Orchestrator: loop three times, updating an accumulator
@@ -111,7 +110,7 @@ async fn sample_loop_fs() {
             acc = ctx.schedule_activity("Append", acc).into_activity().await.unwrap();
             ctx.trace_info(format!("loop iteration {i} completed acc={acc}"));
         }
-        acc
+        Ok(acc)
     };
 
     let orchestration_registry = OrchestrationRegistry::builder()
@@ -120,8 +119,8 @@ async fn sample_loop_fs() {
 
     let rt = runtime::Runtime::start_with_store(store, Arc::new(activity_registry), orchestration_registry).await;
     let handle = rt.clone().start_orchestration("inst-sample-loop-1", "LoopOrchestration", "").await;
-    let (_hist, out) = handle.await.unwrap();
-    assert_eq!(out, "startxxx");
+    let (_hist, out) = handle.unwrap().await.unwrap();
+    assert_eq!(out.unwrap(), "startxxx");
     rt.shutdown().await;
 }
 
@@ -138,10 +137,10 @@ async fn sample_error_handling_fs() {
 
     // Register a fragile activity that may fail, and a recovery activity
     let activity_registry = ActivityRegistry::builder()
-        .register_result("Fragile", |input: String| async move {
+        .register("Fragile", |input: String| async move {
             if input == "bad" { Err("boom".to_string()) } else { Ok("ok".to_string()) }
         })
-        .register_result("Recover", |_input: String| async move { Ok("recovered".to_string()) })
+        .register("Recover", |_input: String| async move { Ok("recovered".to_string()) })
         .build();
 
     // Orchestrator: try fragile, on error call Recover
@@ -149,7 +148,7 @@ async fn sample_error_handling_fs() {
         match ctx.schedule_activity("Fragile", "bad").into_activity().await {
             Ok(v) => {
                 ctx.trace_info(format!("fragile succeeded value={v}"));
-                v
+                Ok(v)
             },
             Err(e) => {
                 ctx.trace_warn(format!("fragile failed error={e}"));
@@ -157,7 +156,7 @@ async fn sample_error_handling_fs() {
                 if rec != "recovered" {
                     ctx.trace_error(format!("unexpected recovery value={rec}"));
                 }
-                rec
+                Ok(rec)
             },
         }
     };
@@ -168,8 +167,8 @@ async fn sample_error_handling_fs() {
 
     let rt = runtime::Runtime::start_with_store(store, Arc::new(activity_registry), orchestration_registry).await;
     let handle = rt.clone().start_orchestration("inst-sample-err-1", "ErrorHandling", "").await;
-    let (_hist, out) = handle.await.unwrap();
-    assert_eq!(out, "recovered");
+    let (_hist, out) = handle.unwrap().await.unwrap();
+    assert_eq!(out.unwrap(), "recovered");
     rt.shutdown().await;
 }
 
@@ -186,7 +185,7 @@ async fn dtf_legacy_gabbar_greetings_fs() {
 
     // Register a greeting activity used by both branches
     let activity_registry = ActivityRegistry::builder()
-        .register_result("Greetings", |input: String| async move { Ok(format!("Hello, {input}!")) })
+        .register("Greetings", |input: String| async move { Ok(format!("Hello, {input}!")) })
         .build();
 
     let orchestration = |ctx: OrchestrationContext, _input: String| async move {
@@ -194,7 +193,7 @@ async fn dtf_legacy_gabbar_greetings_fs() {
         let f1 = ctx.schedule_activity("Greetings", "Gabbar").into_activity();
         let f2 = ctx.schedule_activity("Greetings", "Samba").into_activity();
         let (r1, r2) = join(f1, f2).await;
-        format!("{}, {}", r1.unwrap(), r2.unwrap())
+        Ok(format!("{}, {}", r1.unwrap(), r2.unwrap()))
     };
 
     let orchestration_registry = OrchestrationRegistry::builder()
@@ -203,8 +202,8 @@ async fn dtf_legacy_gabbar_greetings_fs() {
 
     let rt = runtime::Runtime::start_with_store(store, Arc::new(activity_registry), orchestration_registry).await;
     let handle = rt.clone().start_orchestration("inst-dtf-greetings", "Greetings", "").await;
-    let (_hist, out) = handle.await.unwrap();
-    assert_eq!(out, "Hello, Gabbar!, Hello, Samba!");
+    let (_hist, out) = handle.unwrap().await.unwrap();
+    assert_eq!(out.unwrap(), "Hello, Gabbar!, Hello, Samba!");
     rt.shutdown().await;
 }
 
@@ -226,7 +225,7 @@ async fn sample_system_activities_fs() {
         let now = ctx.system_now_ms().await;
         let guid = ctx.system_new_guid().await;
         ctx.trace_info(format!("system now={now}, guid={guid}"));
-        format!("n={now},g={guid}")
+        Ok(format!("n={now},g={guid}"))
     };
 
     let orchestration_registry = OrchestrationRegistry::builder()
@@ -235,8 +234,8 @@ async fn sample_system_activities_fs() {
 
     let rt = runtime::Runtime::start_with_store(store, Arc::new(activity_registry), orchestration_registry).await;
     let handle = rt.clone().start_orchestration("inst-system-acts", "SystemActivities", "").await;
-    let (_hist, out) = handle.await.unwrap();
-
+    let (_hist, out) = handle.unwrap().await.unwrap();
+    let out = out.unwrap();
     // Basic assertions
     assert!(out.contains("n=") && out.contains(",g="));
     let parts: Vec<&str> = out.split([',', '=']).collect();
