@@ -289,4 +289,59 @@ async fn history_cap_exceeded_fs() {
     history_cap_exceeded_with(store).await;
 }
 
+#[tokio::test]
+async fn orchestration_immediate_fail_fs() {
+    let td = tempfile::tempdir().unwrap();
+    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
+    let activity_registry = ActivityRegistry::builder().build();
+
+    let orchestration_registry = OrchestrationRegistry::builder()
+        .register("AlwaysErr", |_ctx, _| async move { Err("oops".to_string()) })
+        .build();
+
+    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+    let handle = rt.clone().start_orchestration("inst-fail-imm", "AlwaysErr", "").await.unwrap();
+    let (hist, out) = handle.await.unwrap();
+    assert!(out.is_err());
+    assert_eq!(out.err().unwrap(), "oops");
+    // Expect OrchestrationStarted + OrchestrationFailed
+    assert_eq!(hist.len(), 2);
+    assert!(matches!(hist.first().unwrap(), rust_dtf::Event::OrchestrationStarted { .. }));
+    assert!(matches!(hist.last().unwrap(), rust_dtf::Event::OrchestrationFailed { .. }));
+    // Status API should report Failed with same error
+    match rt.get_orchestration_status("inst-fail-imm").await {
+        rust_dtf::OrchestrationStatus::Failed { error } => assert_eq!(error, "oops"),
+        other => panic!("unexpected status: {other:?}"),
+    }
+    rt.shutdown().await;
+}
+
+#[tokio::test]
+async fn orchestration_propagates_activity_failure_fs() {
+    let td = tempfile::tempdir().unwrap();
+    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
+    let activity_registry = ActivityRegistry::builder()
+        .register("Fail", |_in: String| async move { Err("bad".to_string()) })
+        .build();
+
+    let orchestration_registry = OrchestrationRegistry::builder()
+        .register("PropagateFail", |ctx, _| async move {
+            let r = ctx.schedule_activity("Fail", "x").into_activity().await;
+            r.map(|_v| "ok".to_string())
+        })
+        .build();
+
+    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+    let handle = rt.clone().start_orchestration("inst-fail-prop", "PropagateFail", "").await.unwrap();
+    let (hist, out) = handle.await.unwrap();
+    assert!(out.is_err());
+    assert_eq!(out.err().unwrap(), "bad");
+    assert!(matches!(hist.last().unwrap(), rust_dtf::Event::OrchestrationFailed { .. }));
+    match rt.get_orchestration_status("inst-fail-prop").await {
+        rust_dtf::OrchestrationStatus::Failed { error } => assert_eq!(error, "bad"),
+        other => panic!("unexpected status: {other:?}"),
+    }
+    rt.shutdown().await;
+}
+
 

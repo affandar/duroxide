@@ -1,5 +1,6 @@
 ## Durable Task Rust Core – TODOs
 
+- Need to understand this oneshot channel to await on
 - sharding and scale out to multiple runtimes
 - versioning strategy
 - mermaid diagrams for orchestrations???
@@ -7,8 +8,6 @@
 - strongly typed activity and orchestration calls?
 - typed parameters for activities and orchestrations
 - cancellations via JoinHandles?
-- tests for provider <-> runtime resumption of multiple orchestrations. 
-- tests for orchestration state, 
 - test hung because the initial orchestration takes longer to start!
 - Add proper metrics.
 - Build a website to visualize execution.
@@ -20,6 +19,8 @@
 
 ## DONE
 
+- tests for orchestration state, 
+- tests for provider <-> runtime resumption of multiple orchestrations. 
 - dequeue multiple item batch
 - do a pass through the code. 
 - Add orchestration registry
