@@ -411,12 +411,28 @@ impl Runtime {
             for a in actions {
                 match a {
                     Action::CallActivity { id, name, input } => {
-                        debug!(instance, id, name=%name, "dispatch activity");
-                        if let Err(e) = self.activity_tx.send(ActivityWorkItem { instance: instance.to_string(), id, name, input }).await {
-                            panic!("activity dispatch failed: {e}");
+                        // If this activity already has a completion in history, skip dispatch (idempotent)
+                        let already_done = history.iter().rev().any(|e| match e {
+                            Event::ActivityCompleted { id: cid, .. } if *cid == id => true,
+                            Event::ActivityFailed { id: cid, .. } if *cid == id => true,
+                            _ => false,
+                        });
+                        if already_done {
+                            debug!(instance, id, name=%name, "skip dispatch: activity already completed/failed");
+                        } else {
+                            debug!(instance, id, name=%name, "dispatch activity");
+                            if let Err(e) = self.activity_tx.send(ActivityWorkItem { instance: instance.to_string(), id, name, input }).await {
+                                panic!("activity dispatch failed: {e}");
+                            }
                         }
                     }
                     Action::CreateTimer { id, delay_ms } => {
+                        // If this timer already fired, skip dispatch
+                        let already_fired = history.iter().rev().any(|e| matches!(e, Event::TimerFired { id: cid, .. } if *cid == id));
+                        if already_fired {
+                            debug!(instance, id, "skip dispatch: timer already fired");
+                            continue;
+                        }
                         let fire_at_ms = history.iter().rev().find_map(|e| match e {
                             Event::TimerCreated { id: cid, fire_at_ms } if *cid == id => Some(*fire_at_ms), _ => None
                         }).unwrap_or(0);

@@ -1,12 +1,11 @@
 ## Durable Task Rust Core – TODOs
 
-- do a pass through the code. 
+- harden queue read semantics (see docs/reliability-queue-and-history.md)
 - strongly typed activity and orchestration calls?
 - typed parameters for activities and orchestrations
 - cancellations via JoinHandles?
 - tests for provider <-> runtime resumption of multiple orchestrations. 
 - tests for orchestration state, 
-- redo the orchestration registry change with gpt5 and compare
 - test hung because the initial orchestration takes longer to start!
 - Add proper metrics.
 - Build a website to visualize execution.
@@ -18,6 +17,8 @@
 
 ## DONE
 
+- dequeue multiple item batch
+- do a pass through the code. 
 - Add orchestration registry
 - Add capability to the runtime to resume persisted orchestrations from the history provider
 - Add signalling mechanism in the provider which runtime can poll to trigger replay
@@ -36,3 +37,6 @@
 - Formalize a provider model for the state, queues and timers.
 - Write GUID and time deterministic helper methods.
 
+## POSTPONED
+
+- redo the orchestration registry change with gpt5 and compare
