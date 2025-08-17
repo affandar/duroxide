@@ -169,6 +169,8 @@ impl Runtime {
         if hist.is_empty() {
             let started = vec![Event::OrchestrationStarted { name: orchestration_name.to_string(), input: input.into() }];
             self.history_store.append(instance, started).await.map_err(|e| format!("failed to append OrchestrationStarted: {e}"))?;
+            // best-effort: record orchestration name metadata for provider bootstrap
+            let _ = self.history_store.set_instance_orchestration(instance, orchestration_name).await;
         } else {
             // already has history → consider already started
             return Err(format!("instance already started: {instance}"));
@@ -272,13 +274,23 @@ impl Runtime {
         let rt_for_poll = runtime.clone();
         let poller = tokio::spawn(async move {
             // bootstrap: scan existing instances and enqueue starts for incomplete ones
-            // naive: treat any instance with any history as incomplete
             let instances = rt_for_poll.history_store.list_instances().await;
             for inst in instances {
-                if let Some(orchestration) = rt_for_poll.history_store.get_instance_orchestration(&inst).await {
-                    let _hist = rt_for_poll.history_store.read(&inst).await;
-                    // If there's no ExternalEvent/ActivityCompleted/TimerFired after a final output (we don't track), just enqueue
-                    let _ = rt_for_poll.start_tx.send(StartRequest { instance: inst.clone(), orchestration_name: orchestration });
+                let hist = rt_for_poll.history_store.read(&inst).await;
+                // Determine orchestration name either from provider meta or from OrchestrationStarted
+                let mut orchestration_name = rt_for_poll.history_store.get_instance_orchestration(&inst).await;
+                if orchestration_name.is_none() {
+                    orchestration_name = hist.iter().find_map(|e| match e {
+                        Event::OrchestrationStarted { name, .. } => Some(name.clone()),
+                        _ => None,
+                    });
+                }
+                if let Some(name) = orchestration_name {
+                    // Skip if terminal event present
+                    let is_terminal = hist.iter().rev().any(|e| matches!(e, Event::OrchestrationCompleted { .. } | Event::OrchestrationFailed { .. }));
+                    if !is_terminal {
+                        let _ = rt_for_poll.start_tx.send(StartRequest { instance: inst.clone(), orchestration_name: name });
+                    }
                 }
             }
 

@@ -5,6 +5,7 @@ use rust_dtf::providers::HistoryStore;
 use rust_dtf::providers::in_memory::InMemoryHistoryStore;
 use rust_dtf::providers::fs::FsHistoryStore;
 use std::sync::Arc as StdArc;
+use rust_dtf::OrchestrationStatus;
 
 async fn recovery_across_restart_core<F1, F2>(make_store_stage1: F1, make_store_stage2: F2, instance: String)
 where
@@ -107,6 +108,123 @@ async fn recovery_across_restart_inmem_provider() {
     assert_eq!(count(&hist_before, "2"), 0);
     assert_eq!(count(&hist_after, "1"), 0);
     assert_eq!(count(&hist_after, "2"), 0);
+}
+
+
+#[tokio::test]
+async fn recovery_multiple_orchestrations_fs_provider() {
+    // Prepare a dedicated directory
+    let base = std::env::current_dir().unwrap().join(".testdata");
+    std::fs::create_dir_all(&base).unwrap();
+    let dir = base.join(format!("fs_recovery_multi_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis()));
+    std::fs::create_dir_all(&dir).unwrap();
+
+    // Orchestrations of different shapes
+    let orch_echo_wait = |ctx: OrchestrationContext, input: String| async move {
+        let _a1 = ctx.schedule_activity("Echo", input.clone()).into_activity().await.unwrap();
+        ctx.schedule_timer(200).into_timer().await;
+        let _a2 = ctx.schedule_activity("Echo", input.clone()).into_activity().await.unwrap();
+        Ok(format!("done:{input}"))
+    };
+    let orch_upper_only = |ctx: OrchestrationContext, input: String| async move {
+        let up = ctx.schedule_activity("Upper", input).into_activity().await.unwrap();
+        Ok(format!("upper:{up}"))
+    };
+    let orch_wait_event_then_echo = |ctx: OrchestrationContext, input: String| async move {
+        let _ = ctx.schedule_wait("Go").into_event().await;
+        let echoed = ctx.schedule_activity("Echo", input).into_activity().await.unwrap();
+        Ok(format!("acked:{echoed}"))
+    };
+    let orch_compute_sum = |ctx: OrchestrationContext, input: String| async move {
+        // input format: "a,b"
+        let sum = ctx.schedule_activity("Add", input).into_activity().await.unwrap();
+        Ok(format!("sum={sum}"))
+    };
+    let orch_two_timers = |ctx: OrchestrationContext, input: String| async move {
+        ctx.schedule_timer(150).into_timer().await;
+        ctx.schedule_timer(150).into_timer().await;
+        let _ = ctx.schedule_activity("Echo", input.clone()).into_activity().await.unwrap();
+        Ok(format!("twodone:{input}"))
+    };
+
+    let activity_registry = ActivityRegistry::builder()
+        .register("Echo", |input: String| async move { Ok(input) })
+        .register("Upper", |input: String| async move { Ok(input.to_uppercase()) })
+        .register("Add", |input: String| async move {
+            let mut it = input.split(',');
+            let a = it.next().unwrap_or("0").parse::<i64>().unwrap_or(0);
+            let b = it.next().unwrap_or("0").parse::<i64>().unwrap_or(0);
+            Ok((a + b).to_string())
+        })
+        .build();
+
+    let orchestration_registry = OrchestrationRegistry::builder()
+        .register("EchoWait", orch_echo_wait)
+        .register("UpperOnly", orch_upper_only)
+        .register("WaitEvent", orch_wait_event_then_echo)
+        .register("ComputeSum", orch_compute_sum)
+        .register("TwoTimers", orch_two_timers)
+        .build();
+
+    // Stage 1: start instances and shut down before all complete
+    let store1 = StdArc::new(FsHistoryStore::new(&dir, true)) as StdArc<dyn HistoryStore>;
+    let rt1 = runtime::Runtime::start_with_store(store1.clone(), Arc::new(activity_registry.clone()), orchestration_registry.clone()).await;
+
+    let cases = vec![
+        ("inst-echo-wait", "EchoWait", "i1"),
+        ("inst-upper", "UpperOnly", "hi"),
+        ("inst-wait", "WaitEvent", "evt"),
+        ("inst-sum", "ComputeSum", "2,3"),
+        ("inst-2timers", "TwoTimers", "z"),
+    ];
+
+    for (inst, name, input) in &cases {
+        let _ = rt1.clone().start_orchestration(inst, name, *input).await.unwrap();
+    }
+    // Allow scheduling to persist, but not enough to complete timers
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    rt1.shutdown().await;
+
+    // Stage 2: restart with same store; runtime should auto-resume non-terminal instances
+    let store2 = StdArc::new(FsHistoryStore::new(&dir, false)) as StdArc<dyn HistoryStore>;
+    let rt2 = runtime::Runtime::start_with_store(store2, Arc::new(activity_registry), orchestration_registry).await;
+
+    // Raise external event for the WaitEvent orchestration after restart
+    let rt2_c = rt2.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        rt2_c.raise_event("inst-wait", "Go", "ok").await;
+    });
+
+    // Poll status for each instance until completion, with a reasonable timeout
+    for (inst, name, input) in &cases {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(6);
+        loop {
+            let st = rt2.get_orchestration_status(inst).await;
+            match st {
+                OrchestrationStatus::Completed { output } => {
+                    // Minimal sanity check per orchestration
+                    match *name {
+                        "EchoWait" => assert_eq!(output, format!("done:{input}")),
+                        "UpperOnly" => assert_eq!(output, format!("upper:{}", input.to_uppercase())),
+                        "WaitEvent" => assert_eq!(output, format!("acked:{input}")),
+                        "ComputeSum" => assert_eq!(output, "sum=5"),
+                        "TwoTimers" => assert_eq!(output, format!("twodone:{input}")),
+                        _ => unreachable!(),
+                    }
+                    break;
+                }
+                OrchestrationStatus::Failed { error } => panic!("{inst} failed: {error}"),
+                OrchestrationStatus::Running => {
+                    if std::time::Instant::now() > deadline { panic!("timeout waiting for {inst}"); }
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                }
+                OrchestrationStatus::NotFound => panic!("{inst} not found after restart"),
+            }
+        }
+    }
+
+    rt2.shutdown().await;
 }
 
 
