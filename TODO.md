@@ -1,5 +1,6 @@
 ## Durable Task Rust Core – TODOs
 
+- test hung because the initial orchestration takes longer to start!
 - Add orchestration registry
 - Add capability to the runtime to resume persisted orchestrations from the history provider
 - Add signalling mechanism in the provider which runtime can poll to trigger replay
@@ -13,6 +14,7 @@
 
 ## DONE
 
+- resolve the test hang!!
 - Document all methods
 - Add proper logging
 - Write a file system based provider.

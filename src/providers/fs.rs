@@ -3,13 +3,13 @@ use tokio::{fs, io::AsyncWriteExt};
 use serde_json;
 
 use crate::Event;
-use super::HistoryStore;
+use super::{HistoryStore, WorkItem};
 
 const CAP: usize = 1024;
 
 /// Simple filesystem-backed history store writing JSONL per instance.
 #[derive(Clone)]
-pub struct FsHistoryStore { root: PathBuf }
+pub struct FsHistoryStore { root: PathBuf, queue_file: PathBuf }
 
 impl FsHistoryStore {
     /// Create a new store rooted at the given directory path.
@@ -19,7 +19,11 @@ impl FsHistoryStore {
         if reset_on_create {
             let _ = std::fs::remove_dir_all(&path);
         }
-        Self { root: path }
+        let queue_file = path.join("work-queue.jsonl");
+        // best-effort create
+        let _ = std::fs::create_dir_all(&path);
+        let _ = std::fs::OpenOptions::new().create(true).append(true).open(&queue_file);
+        Self { root: path, queue_file }
     }
     fn inst_path(&self, instance: &str) -> PathBuf { self.root.join(format!("{instance}.jsonl")) }
 }
@@ -107,6 +111,35 @@ impl HistoryStore for FsHistoryStore {
         }
         fs::remove_file(&path).await.map_err(|e| e.to_string())?;
         Ok(())
+    }
+
+    async fn enqueue_work(&self, item: WorkItem) -> Result<(), String> {
+        // sync file writes are fine here
+        let mut f = std::fs::OpenOptions::new().create(true).append(true).open(&self.queue_file).map_err(|e| e.to_string())?;
+        let line = serde_json::to_string(&item).map_err(|e| e.to_string())?;
+        use std::io::Write as _;
+        f.write_all(line.as_bytes()).map_err(|e| e.to_string())?;
+        f.write_all(b"\n").map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    async fn dequeue_work(&self) -> Option<WorkItem> {
+        // naive: read all, pop first, rewrite rest
+        let content = std::fs::read_to_string(&self.queue_file).ok()?;
+        let mut items: Vec<WorkItem> = content
+            .lines()
+            .filter_map(|l| serde_json::from_str::<WorkItem>(l).ok())
+            .collect();
+        if items.is_empty() { return None; }
+        let first = items.remove(0);
+        let mut f = std::fs::OpenOptions::new().write(true).truncate(true).open(&self.queue_file).ok()?;
+        for it in items {
+            let line = serde_json::to_string(&it).ok()?;
+            use std::io::Write as _;
+            let _ = f.write_all(line.as_bytes());
+            let _ = f.write_all(b"\n");
+        }
+        Some(first)
     }
 }
 

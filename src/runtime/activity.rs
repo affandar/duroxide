@@ -2,7 +2,8 @@ use std::{collections::HashMap, sync::Arc};
 use tokio::sync::mpsc;
 use async_trait::async_trait;
 
-use super::{ActivityWorkItem, OrchestratorMsg};
+use super::ActivityWorkItem;
+use crate::providers::{HistoryStore, WorkItem};
 
 /// Trait implemented by activity handlers that can be invoked by the runtime.
 #[async_trait]
@@ -80,13 +81,13 @@ impl ActivityRegistryBuilder {
 /// reporting results via the orchestrator message channel.
 pub struct ActivityWorker {
     registry: ActivityRegistry,
-    completion_tx: mpsc::UnboundedSender<OrchestratorMsg>,
+    history_store: std::sync::Arc<dyn HistoryStore>,
 }
 
 impl ActivityWorker {
     /// Create a new `ActivityWorker` with the given registry and completion channel.
-    pub fn new(registry: ActivityRegistry, completion_tx: mpsc::UnboundedSender<OrchestratorMsg>) -> Self {
-        Self { registry, completion_tx }
+    pub fn new(registry: ActivityRegistry, history_store: std::sync::Arc<dyn HistoryStore>) -> Self {
+        Self { registry, history_store }
     }
     /// Run the worker loop until the input channel is closed.
     pub async fn run(self, mut rx: mpsc::Receiver<ActivityWorkItem>) {
@@ -94,22 +95,22 @@ impl ActivityWorker {
             if let Some(handler) = self.registry.get(&wi.name) {
                 match handler.invoke(wi.input).await {
                     Ok(result) => {
-                        if let Err(_e) = self.completion_tx.send(OrchestratorMsg::ActivityCompleted { instance: wi.instance, id: wi.id, result }) {
-                            panic!("activity worker: router dropped while sending completion (id={})", wi.id);
+                        if let Err(e) = self.history_store.enqueue_work(WorkItem::ActivityCompleted { instance: wi.instance, id: wi.id, result }).await {
+                            panic!("activity worker: enqueue completion failed (id={}): {}", wi.id, e);
                         }
                     }
                     Err(error) => {
-                        if let Err(_e) = self.completion_tx.send(OrchestratorMsg::ActivityFailed { instance: wi.instance, id: wi.id, error }) {
-                            panic!("activity worker: router dropped while sending failure (id={})", wi.id);
+                        if let Err(e) = self.history_store.enqueue_work(WorkItem::ActivityFailed { instance: wi.instance, id: wi.id, error }).await {
+                            panic!("activity worker: enqueue failure failed (id={}): {}", wi.id, e);
                         }
                     }
                 }
-            } else if let Err(_e) = self.completion_tx.send(OrchestratorMsg::ActivityFailed {
+            } else if let Err(e) = self.history_store.enqueue_work(WorkItem::ActivityFailed {
                 instance: wi.instance,
                 id: wi.id,
                 error: format!("unregistered:{}", wi.name),
-            }) {
-                panic!("activity worker: router dropped while sending unregistered failure (id={})", wi.id);
+            }).await {
+                panic!("activity worker: enqueue unregistered failure failed (id={}): {}", wi.id, e);
             }
         }
     }

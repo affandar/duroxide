@@ -2,12 +2,15 @@ use std::collections::HashMap;
 use tokio::sync::Mutex;
 
 use crate::Event;
-use super::HistoryStore;
+use super::{HistoryStore, WorkItem};
 
 const CAP: usize = 1024;
 
 #[derive(Default)]
-pub struct InMemoryHistoryStore { inner: Mutex<HashMap<String, Vec<Event>>> }
+pub struct InMemoryHistoryStore {
+    inner: Mutex<HashMap<String, Vec<Event>>>,
+    work_q: Mutex<Vec<WorkItem>>, // simple FIFO
+}
 
 #[async_trait::async_trait]
 impl HistoryStore for InMemoryHistoryStore {
@@ -53,6 +56,17 @@ impl HistoryStore for InMemoryHistoryStore {
         let mut g = self.inner.lock().await;
         if g.remove(instance).is_none() { return Err(format!("instance not found: {instance}")); }
         Ok(())
+    }
+
+    async fn enqueue_work(&self, item: WorkItem) -> Result<(), String> {
+        self.work_q.lock().await.push(item);
+        Ok(())
+    }
+
+    async fn dequeue_work(&self) -> Option<WorkItem> {
+        let mut q = self.work_q.lock().await;
+        if q.is_empty() { return None; }
+        Some(q.remove(0))
     }
 }
 

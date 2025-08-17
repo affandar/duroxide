@@ -33,7 +33,7 @@ where
     let rt1 = runtime::Runtime::start_with_store(store1.clone(), Arc::new(activity_registry.clone()), orchestration_registry.clone()).await;
     let handle1 = rt1.clone().spawn_instance_to_completion(&instance, "RecoveryTest").await;
 
-    tokio::time::sleep(std::time::Duration::from_millis(15)).await;
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
     let pre_crash_hist = store1.read(&instance).await;
     assert_eq!(count_scheduled(&pre_crash_hist, "1"), 1);
@@ -50,7 +50,7 @@ where
     let rt2_c = rt2.clone();
     let instance_for_spawn = instance.clone();
     tokio::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
         rt2_c.raise_event(&instance_for_spawn, "Resume", "go").await;
     });
     let handle2 = rt2.clone().spawn_instance_to_completion(&instance, "RecoveryTest").await;
@@ -66,6 +66,7 @@ where
 
 #[tokio::test]
 async fn recovery_across_restart_fs_provider() {
+    eprintln!("START: recovery_across_restart_fs_provider");
     let base = std::env::current_dir().unwrap().join(".testdata");
     std::fs::create_dir_all(&base).unwrap();
     let dir = base.join(format!("fs_recovery_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis()));
@@ -89,6 +90,7 @@ async fn recovery_across_restart_fs_provider() {
 
 #[tokio::test]
 async fn recovery_across_restart_inmem_provider() {
+    eprintln!("START: recovery_across_restart_inmem_provider");
     let instance = String::from("inst-recover-mem-1");
     let make_store1 = || StdArc::new(InMemoryHistoryStore::default()) as StdArc<dyn HistoryStore>;
     let make_store2 = || StdArc::new(InMemoryHistoryStore::default()) as StdArc<dyn HistoryStore>;

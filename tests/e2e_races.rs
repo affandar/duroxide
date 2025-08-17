@@ -36,6 +36,7 @@ async fn wait_external_completes_with(store: StdArc<dyn HistoryStore>) {
 
 #[tokio::test]
 async fn wait_external_completes_fs() {
+    eprintln!("START: wait_external_completes_fs");
     let td = tempfile::tempdir().unwrap();
     let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
     wait_external_completes_with(store).await;
@@ -75,6 +76,7 @@ async fn race_external_vs_timer_ordering_with(store: StdArc<dyn HistoryStore>) {
 
 #[tokio::test]
 async fn race_external_vs_timer_ordering_fs() {
+    eprintln!("START: race_external_vs_timer_ordering_fs");
     let td = tempfile::tempdir().unwrap();
     let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
     race_external_vs_timer_ordering_with(store).await;
@@ -82,7 +84,7 @@ async fn race_external_vs_timer_ordering_fs() {
 
 async fn race_event_vs_timer_event_wins_with(store: StdArc<dyn HistoryStore>) {
     let orchestrator = |ctx: OrchestrationContext| async move {
-        let race = select(ctx.schedule_timer(6), ctx.schedule_wait("Race"));
+        let race = select(ctx.schedule_timer(50), ctx.schedule_wait("Race"));
         match race.await {
             Either::Left((_t, _e)) => "timer".to_string(),
             Either::Right((_e, _t)) => "external".to_string(),
@@ -97,7 +99,7 @@ async fn race_event_vs_timer_event_wins_with(store: StdArc<dyn HistoryStore>) {
     let rt = runtime::Runtime::start_with_store(store, Arc::new(activity_registry), orchestration_registry).await;
     let rt_clone = rt.clone();
     tokio::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
         rt_clone.raise_event("inst-race-order-2", "Race", "ok").await;
     });
     let handle = rt.clone().spawn_instance_to_completion("inst-race-order-2", "RaceEventVsTimer").await;
@@ -115,6 +117,7 @@ async fn race_event_vs_timer_event_wins_with(store: StdArc<dyn HistoryStore>) {
 
 #[tokio::test]
 async fn race_event_vs_timer_event_wins_fs() {
+    eprintln!("START: race_event_vs_timer_event_wins_fs");
     let td = tempfile::tempdir().unwrap();
     let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
     race_event_vs_timer_event_wins_with(store).await;

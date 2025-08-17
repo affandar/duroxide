@@ -3,7 +3,7 @@ use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
 use tokio::task::JoinHandle;
 use crate::{Action, Event, OrchestrationContext, run_turn_with};
-use crate::providers::HistoryStore;
+use crate::providers::{HistoryStore, WorkItem};
 use crate::providers::in_memory::InMemoryHistoryStore;
 use tracing::{debug, warn, info, error};
 use std::collections::HashSet;
@@ -92,6 +92,10 @@ pub enum OrchestratorMsg {
     ExternalByName { instance: String, name: String, data: String },
 }
 
+/// Request to start a new orchestration instance.
+#[derive(Clone, Debug)]
+struct StartRequest { instance: String, orchestration_name: String }
+
 struct CompletionRouter { inboxes: Mutex<HashMap<String, mpsc::UnboundedSender<OrchestratorMsg>>> }
 
 impl CompletionRouter {
@@ -141,9 +145,21 @@ pub struct Runtime {
     history_store: Arc<dyn HistoryStore>,
     active_instances: Mutex<HashSet<String>>,
     orchestration_registry: OrchestrationRegistry,
+    // queue for start requests so callers only enqueue and runtime manages execution
+    start_tx: mpsc::UnboundedSender<StartRequest>,
 }
 
 impl Runtime {
+    /// Enqueue a new orchestration instance start. The runtime will pick this up
+    /// in the background and drive it to completion.
+    pub async fn start_orchestration(self: Arc<Self>, instance: &str, orchestration_name: &str) {
+        // Provider-backed: enqueue to store so other runtimes can also pick it up if needed
+        if let Err(e) = self.history_store.enqueue_work(WorkItem::StartOrchestration { instance: instance.to_string(), orchestration: orchestration_name.to_string() }).await {
+            panic!("failed to enqueue start request: {e}");
+        }
+        // Also push to local start queue for immediate reaction
+        let _ = self.start_tx.send(StartRequest { instance: instance.to_string(), orchestration_name: orchestration_name.to_string() });
+    }
     /// Start a new runtime using the in-memory history store.
     pub async fn start(activity_registry: Arc<activity::ActivityRegistry>, orchestration_registry: OrchestrationRegistry) -> Arc<Self> {
         let history_store: Arc<dyn HistoryStore> = Arc::new(InMemoryHistoryStore::default());
@@ -187,14 +203,14 @@ impl Runtime {
             Ok(format!("{nanos:032x}"))
         });
         let reg_clone = builder.build();
-        let rt_tx = router_tx.clone();
+        let store_for_worker = history_store.clone();
         joins.push(tokio::spawn(async move {
-            activity::ActivityWorker::new(reg_clone, rt_tx).run(activity_rx).await
+            activity::ActivityWorker::new(reg_clone, store_for_worker).run(activity_rx).await
         }));
 
         // spawn timer worker
-        let rt_tx2 = router_tx.clone();
-        joins.push(tokio::spawn(async move { run_timer_worker(timer_rx, rt_tx2).await }));
+        let store_for_timer = history_store.clone();
+        joins.push(tokio::spawn(async move { run_timer_worker(timer_rx, store_for_timer).await }));
 
         // spawn router forwarding task
         let router_clone = router.clone();
@@ -202,7 +218,54 @@ impl Runtime {
             while let Some(msg) = router_rx.recv().await { router_clone.forward(msg).await; }
         }));
 
-        Arc::new(Self { activity_tx, timer_tx, router_tx, router, joins: Mutex::new(joins), instance_joins: Mutex::new(Vec::new()), history_store, active_instances: Mutex::new(HashSet::new()), orchestration_registry })
+        // start request queue + worker
+        let (start_tx, mut start_rx) = mpsc::unbounded_channel::<StartRequest>();
+
+        let runtime = Arc::new(Self { activity_tx, timer_tx, router_tx, router, joins: Mutex::new(joins), instance_joins: Mutex::new(Vec::new()), history_store, active_instances: Mutex::new(HashSet::new()), orchestration_registry, start_tx });
+
+        // background worker to process start requests
+        let rt_for_worker = runtime.clone();
+        let worker = tokio::spawn(async move {
+            while let Some(req) = start_rx.recv().await {
+                let inst = req.instance.clone();
+                let orch = req.orchestration_name.clone();
+                // Spawn to completion using existing execution loop
+                let _ = rt_for_worker.clone().spawn_instance_to_completion(&inst, &orch).await;
+            }
+        });
+        runtime.joins.lock().await.push(worker);
+
+        // background poller for provider-backed work queue
+        let rt_for_poll = runtime.clone();
+        let poller = tokio::spawn(async move {
+            loop {
+                if let Some(item) = rt_for_poll.history_store.dequeue_work().await {
+                    match item {
+                        WorkItem::StartOrchestration { instance, orchestration } => {
+                            // Push to local start queue only; do not re-enqueue to provider to avoid loops
+                            let _ = rt_for_poll.start_tx.send(StartRequest { instance, orchestration_name: orchestration });
+                        }
+                        WorkItem::ActivityCompleted { instance, id, result } => {
+                            let _ = rt_for_poll.router_tx.send(OrchestratorMsg::ActivityCompleted { instance, id, result });
+                        }
+                        WorkItem::ActivityFailed { instance, id, error } => {
+                            let _ = rt_for_poll.router_tx.send(OrchestratorMsg::ActivityFailed { instance, id, error });
+                        }
+                        WorkItem::TimerFired { instance, id, fire_at_ms } => {
+                            let _ = rt_for_poll.router_tx.send(OrchestratorMsg::TimerFired { instance, id, fire_at_ms });
+                        }
+                        WorkItem::ExternalRaised { instance, name, data } => {
+                            let _ = rt_for_poll.router_tx.send(OrchestratorMsg::ExternalByName { instance, name, data });
+                        }
+                    }
+                } else {
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                }
+            }
+        });
+        runtime.joins.lock().await.push(poller);
+
+        runtime
     }
 
     /// Abort background tasks. Channels are dropped with the runtime.
@@ -273,6 +336,19 @@ impl Runtime {
             history = hist_after;
             if let Some(out) = out_opt { return (history, out); }
 
+            // Persist deltas incrementally to avoid duplicates
+            let mut persisted_len = baseline_len;
+            let mut appended_any = false;
+            if history.len() > persisted_len {
+                let new_events = history[persisted_len..].to_vec();
+                if let Err(e) = self.history_store.append(instance, new_events).await {
+                    error!(instance, turn_index, error=%e, "failed to append scheduled events");
+                    panic!("history append failed: {e}");
+                }
+                appended_any = true;
+                persisted_len = history.len();
+            }
+
             for a in actions {
                 match a {
                     Action::CallActivity { id, name, input } => {
@@ -307,14 +383,17 @@ impl Runtime {
                 }
             }
 
-            // Persist new events appended during this turn
-            if history.len() > baseline_len {
-                let new_events = history[baseline_len..].to_vec();
+            // Persist any further events appended during completion handling
+            if history.len() > persisted_len {
+                let new_events = history[persisted_len..].to_vec();
                 if let Err(e) = self.history_store.append(instance, new_events).await {
                     error!(instance, turn_index, error=%e, "failed to append history");
-                    // Surface as panic for now to preserve determinism
                     panic!("history append failed: {e}");
                 }
+                appended_any = true;
+            }
+
+            if appended_any {
                 turn_index = turn_index.saturating_add(1);
             }
         }
@@ -344,15 +423,15 @@ impl Runtime {
     }
 }
 
-async fn run_timer_worker(mut rx: mpsc::Receiver<TimerWorkItem>, comp_tx: mpsc::UnboundedSender<OrchestratorMsg>) {
+async fn run_timer_worker(mut rx: mpsc::Receiver<TimerWorkItem>, store: Arc<dyn HistoryStore>) {
     while let Some(wi) = rx.recv().await {
         // Real-time sleep based on requested delay
         tokio::time::sleep(std::time::Duration::from_millis(wi.delay_ms)).await;
         let inst = wi.instance.clone();
         let id = wi.id;
         let fire_at = wi.fire_at_ms;
-        if let Err(_e) = comp_tx.send(OrchestratorMsg::TimerFired { instance: inst.clone(), id, fire_at_ms: fire_at }) {
-            warn!(instance=%inst, id=%id, "timer worker: router receiver dropped, dropping TimerFired");
+        if let Err(e) = store.enqueue_work(WorkItem::TimerFired { instance: inst.clone(), id, fire_at_ms: fire_at }).await {
+            warn!(instance=%inst, id=%id, error=%e, "timer worker: failed to enqueue TimerFired");
         }
     }
 }
@@ -394,10 +473,8 @@ impl Runtime {
     pub async fn raise_event(&self, instance: &str, name: impl Into<String>, data: impl Into<String>) {
         let name_str = name.into();
         let data_str = data.into();
-        if let Err(_e) = self.router_tx.send(OrchestratorMsg::ExternalByName {
-            instance: instance.to_string(), name: name_str.clone(), data: data_str,
-        }) {
-            warn!(instance, name=%name_str, "raise_event: router dropped, dropping ExternalByName");
+        if let Err(e) = self.history_store.enqueue_work(WorkItem::ExternalRaised { instance: instance.to_string(), name: name_str.clone(), data: data_str }).await {
+            warn!(instance, name=%name_str, error=%e, "raise_event: failed to enqueue ExternalRaised");
         }
     }
 }

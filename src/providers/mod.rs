@@ -1,5 +1,15 @@
 use crate::Event;
 
+/// Provider-backed work queue items the runtime consumes continually.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub enum WorkItem {
+    StartOrchestration { instance: String, orchestration: String },
+    ActivityCompleted { instance: String, id: u64, result: String },
+    ActivityFailed { instance: String, id: u64, error: String },
+    TimerFired { instance: String, id: u64, fire_at_ms: u64 },
+    ExternalRaised { instance: String, name: String, data: String },
+}
+
 /// Storage abstraction for append-only orchestration history per instance.
 #[async_trait::async_trait]
 pub trait HistoryStore: Send + Sync {
@@ -26,6 +36,12 @@ pub trait HistoryStore: Send + Sync {
         for id in instances { self.remove_instance(id).await?; }
         Ok(())
     }
+
+    /// Enqueue a work item for the runtime to act on.
+    async fn enqueue_work(&self, _item: WorkItem) -> Result<(), String> { Err("work queue not supported".into()) }
+
+    /// Dequeue the next available work item (if any).
+    async fn dequeue_work(&self) -> Option<WorkItem> { None }
 }
 
 // Providers are datastores only; runtime owns queues and workers.

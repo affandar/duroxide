@@ -18,6 +18,7 @@ use futures::future::join;
 /// - Schedule an activity and await its typed completion
 #[tokio::test]
 async fn sample_hello_world_fs() {
+    eprintln!("START: sample_hello_world_fs");
     let td = tempfile::tempdir().unwrap();
     let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
 
@@ -54,6 +55,7 @@ async fn sample_hello_world_fs() {
 /// - Use standard Rust control flow to drive subsequent activities
 #[tokio::test]
 async fn sample_basic_control_flow_fs() {
+    eprintln!("START: sample_basic_control_flow_fs");
     let td = tempfile::tempdir().unwrap();
     let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
 
@@ -93,6 +95,7 @@ async fn sample_basic_control_flow_fs() {
 /// - Emit replay-safe traces per iteration
 #[tokio::test]
 async fn sample_loop_fs() {
+    eprintln!("START: sample_loop_fs");
     let td = tempfile::tempdir().unwrap();
     let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
 
@@ -129,6 +132,7 @@ async fn sample_loop_fs() {
 /// - On failure, run a compensating activity and log what happened
 #[tokio::test]
 async fn sample_error_handling_fs() {
+    eprintln!("START: sample_error_handling_fs");
     let td = tempfile::tempdir().unwrap();
     let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
 
@@ -176,6 +180,7 @@ async fn sample_error_handling_fs() {
 /// - Deterministic replay ensures join order is stable
 #[tokio::test]
 async fn dtf_legacy_gabbar_greetings_fs() {
+    eprintln!("START: dtf_legacy_gabbar_greetings_fs");
     let td = tempfile::tempdir().unwrap();
     let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
 
@@ -211,6 +216,7 @@ async fn dtf_legacy_gabbar_greetings_fs() {
 /// - Log and validate basic formatting of results
 #[tokio::test]
 async fn sample_system_activities_fs() {
+    eprintln!("START: sample_system_activities_fs");
     let td = tempfile::tempdir().unwrap();
     let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
 
