@@ -9,6 +9,110 @@ use rust_dtf::providers::HistoryStore;
 use rust_dtf::providers::fs::FsHistoryStore;
 use std::sync::Arc as StdArc;
 use futures::future::join;
+/// Sub-orchestrations: simple child and parent.
+#[tokio::test]
+async fn sample_sub_orchestration_basic_fs() {
+    let td = tempfile::tempdir().unwrap();
+    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
+
+    let activity_registry = ActivityRegistry::builder()
+        .register("Upper", |input: String| async move { Ok(input.to_uppercase()) })
+        .build();
+
+    let child_upper = |ctx: OrchestrationContext, input: String| async move {
+        let up = ctx.schedule_activity("Upper", input).into_activity().await.unwrap();
+        Ok(up)
+    };
+    let parent = |ctx: OrchestrationContext, input: String| async move {
+        let r = ctx.schedule_sub_orchestration("ChildUpper", input).into_sub_orchestration().await.unwrap();
+        Ok(format!("parent:{r}"))
+    };
+
+    let orchestration_registry = OrchestrationRegistry::builder()
+        .register("ChildUpper", child_upper)
+        .register("Parent", parent)
+        .build();
+
+    let rt = runtime::Runtime::start_with_store(store, Arc::new(activity_registry), orchestration_registry).await;
+    let h = rt.clone().start_orchestration("inst-sub-basic", "Parent", "hi").await.unwrap();
+    let (_hist, out) = h.await.unwrap();
+    assert_eq!(out.unwrap(), "parent:HI");
+    rt.shutdown().await;
+}
+
+/// Sub-orchestrations: fan-out and join multiple children.
+#[tokio::test]
+async fn sample_sub_orchestration_fanout_fs() {
+    let td = tempfile::tempdir().unwrap();
+    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
+
+    let activity_registry = ActivityRegistry::builder()
+        .register("Add", |input: String| async move {
+            let mut it = input.split(',');
+            let a = it.next().unwrap_or("0").parse::<i64>().unwrap_or(0);
+            let b = it.next().unwrap_or("0").parse::<i64>().unwrap_or(0);
+            Ok((a + b).to_string())
+        })
+        .build();
+
+    let child_sum = |ctx: OrchestrationContext, input: String| async move {
+        let s = ctx.schedule_activity("Add", input).into_activity().await.unwrap();
+        Ok(s)
+    };
+    let parent = |ctx: OrchestrationContext, _input: String| async move {
+        let a = ctx.schedule_sub_orchestration("ChildSum", "1,2").into_sub_orchestration();
+        let b = ctx.schedule_sub_orchestration("ChildSum", "3,4").into_sub_orchestration();
+        let (ra, rb) = join(a, b).await;
+        let total = ra.unwrap().parse::<i64>().unwrap() + rb.unwrap().parse::<i64>().unwrap();
+        Ok(format!("total={total}"))
+    };
+
+    let orchestration_registry = OrchestrationRegistry::builder()
+        .register("ChildSum", child_sum)
+        .register("ParentFan", parent)
+        .build();
+
+    let rt = runtime::Runtime::start_with_store(store, Arc::new(activity_registry), orchestration_registry).await;
+    let h = rt.clone().start_orchestration("inst-sub-fan", "ParentFan", "").await.unwrap();
+    let (_hist, out) = h.await.unwrap();
+    assert_eq!(out.unwrap(), "total=10");
+    rt.shutdown().await;
+}
+
+/// Sub-orchestrations: chained sub-orchestrations (child calls another child).
+#[tokio::test]
+async fn sample_sub_orchestration_chained_fs() {
+    let td = tempfile::tempdir().unwrap();
+    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
+
+    let activity_registry = ActivityRegistry::builder()
+        .register("AppendX", |input: String| async move { Ok(format!("{input}x")) })
+        .build();
+
+    let leaf = |ctx: OrchestrationContext, input: String| async move {
+        Ok(ctx.schedule_activity("AppendX", input).into_activity().await.unwrap())
+    };
+    let mid = |ctx: OrchestrationContext, input: String| async move {
+        let r = ctx.schedule_sub_orchestration("Leaf", input).into_sub_orchestration().await.unwrap();
+        Ok(format!("{r}-mid"))
+    };
+    let root = |ctx: OrchestrationContext, input: String| async move {
+        let r = ctx.schedule_sub_orchestration("Mid", input).into_sub_orchestration().await.unwrap();
+        Ok(format!("root:{r}"))
+    };
+
+    let orchestration_registry = OrchestrationRegistry::builder()
+        .register("Leaf", leaf)
+        .register("Mid", mid)
+        .register("Root", root)
+        .build();
+
+    let rt = runtime::Runtime::start_with_store(store, Arc::new(activity_registry), orchestration_registry).await;
+    let h = rt.clone().start_orchestration("inst-sub-chain", "Root", "a").await.unwrap();
+    let (_hist, out) = h.await.unwrap();
+    assert_eq!(out.unwrap(), "root:ax-mid");
+    rt.shutdown().await;
+}
 
 /// Hello World: define one activity and call it from an orchestrator.
 ///

@@ -99,6 +99,8 @@ pub enum OrchestratorMsg {
     TimerFired { instance: String, id: u64, fire_at_ms: u64 },
     ExternalEvent { instance: String, id: u64, name: String, data: String },
     ExternalByName { instance: String, name: String, data: String },
+    SubOrchCompleted { instance: String, id: u64, result: String },
+    SubOrchFailed { instance: String, id: u64, error: String },
 }
 
 /// Request to start a new orchestration instance.
@@ -119,7 +121,9 @@ impl CompletionRouter {
             | OrchestratorMsg::ActivityFailed { instance, .. }
             | OrchestratorMsg::TimerFired { instance, .. }
             | OrchestratorMsg::ExternalEvent { instance, .. }
-            | OrchestratorMsg::ExternalByName { instance, .. } => instance.clone(),
+            | OrchestratorMsg::ExternalByName { instance, .. }
+            | OrchestratorMsg::SubOrchCompleted { instance, .. }
+            | OrchestratorMsg::SubOrchFailed { instance, .. } => instance.clone(),
         };
         let kind = kind_of(&msg);
         if let Some(tx) = self.inboxes.lock().await.get(&key) {
@@ -139,6 +143,8 @@ fn kind_of(msg: &OrchestratorMsg) -> &'static str {
         OrchestratorMsg::TimerFired { .. } => "TimerFired",
         OrchestratorMsg::ExternalEvent { .. } => "ExternalEvent",
         OrchestratorMsg::ExternalByName { .. } => "ExternalByName",
+        OrchestratorMsg::SubOrchCompleted { .. } => "SubOrchCompleted",
+        OrchestratorMsg::SubOrchFailed { .. } => "SubOrchFailed",
     }
 }
 
@@ -176,7 +182,7 @@ impl Runtime {
             return Err(format!("instance already started: {instance}"));
         }
         // Spawn to completion and return handle
-        Ok(self.clone().spawn_instance_to_completion(instance, orchestration_name).await)
+        Ok(self.clone().spawn_instance_to_completion(instance, orchestration_name))
     }
 
     /// Returns the current status of an orchestration instance by inspecting its history.
@@ -313,6 +319,12 @@ impl Runtime {
                         WorkItem::ExternalRaised { instance, name, data } => {
                             let _ = rt_for_poll.router_tx.send(OrchestratorMsg::ExternalByName { instance, name, data });
                         }
+                        WorkItem::SubOrchCompleted { parent_instance, parent_id, result } => {
+                            let _ = rt_for_poll.router_tx.send(OrchestratorMsg::SubOrchCompleted { instance: parent_instance, id: parent_id, result });
+                        }
+                        WorkItem::SubOrchFailed { parent_instance, parent_id, error } => {
+                            let _ = rt_for_poll.router_tx.send(OrchestratorMsg::SubOrchFailed { instance: parent_instance, id: parent_id, error });
+                        }
                     }
                 } else {
                     tokio::time::sleep(std::time::Duration::from_millis(10)).await;
@@ -382,6 +394,11 @@ impl Runtime {
             Event::OrchestrationStarted { name: n, input } if n == orchestration_name => Some(input.clone()),
             _ => None,
         }).unwrap_or_default();
+        // If this is a child (ParentLinked exists), remember linkage for notifying parent at terminal
+        let parent_link = history.iter().find_map(|e| match e {
+            Event::ParentLinked { parent_instance, parent_id } => Some((parent_instance.clone(), *parent_id)),
+            _ => None,
+        });
 
         let orchestrator_fn = |ctx: OrchestrationContext| {
             let handler = orchestration_handler.clone();
@@ -403,6 +420,17 @@ impl Runtime {
                 if let Err(e) = self.history_store.append(instance, vec![term]).await {
                     error!(instance, turn_index, error=%e, "failed to append terminal event");
                     panic!("history append failed: {e}");
+                }
+                // If child, enqueue completion to parent
+                if let Some((pinst, pid)) = parent_link.clone() {
+                    match &out {
+                        Ok(s) => {
+                            let _ = self.history_store.enqueue_work(WorkItem::SubOrchCompleted { parent_instance: pinst, parent_id: pid, result: s.clone() }).await;
+                        }
+                        Err(e) => {
+                            let _ = self.history_store.enqueue_work(WorkItem::SubOrchFailed { parent_instance: pinst, parent_id: pid, error: e.clone() }).await;
+                        }
+                    }
                 }
                 return (history, out);
             }
@@ -457,6 +485,36 @@ impl Runtime {
                         debug!(instance, id, name=%name, "subscribe external");
                         let _ = (id, name); // no-op
                     }
+                    Action::StartSubOrchestration { id, name, instance: child_inst, input } => {
+                        let already_done = history.iter().rev().any(|e|
+                            matches!(e, Event::SubOrchestrationCompleted { id: cid, .. } if *cid == id)
+                            || matches!(e, Event::SubOrchestrationFailed { id: cid, .. } if *cid == id)
+                        );
+                        if already_done {
+                            debug!(instance, id, name=%name, "skip dispatch: sub-orch already completed/failed");
+                        } else {
+                            // Make globally unique child instance name based on parent instance and deterministic child suffix
+                            let child_full = format!("{}::{}", instance, child_inst);
+                            let parent_inst = instance.to_string();
+                            let name_clone = name.clone();
+                            let input_clone = input.clone();
+                            let router_tx = self.router_tx.clone();
+                            let rt_for_child = self.clone();
+                            debug!(instance, id, name=%name, child_instance=%child_full, "start child orchestration");
+                            tokio::spawn(async move {
+                                match rt_for_child.start_orchestration(&child_full, &name_clone, input_clone).await {
+                                    Ok(h) => match h.await {
+                                        Ok((_hist, out)) => match out {
+                                            Ok(res) => { let _ = router_tx.send(OrchestratorMsg::SubOrchCompleted { instance: parent_inst, id, result: res }); }
+                                            Err(err) => { let _ = router_tx.send(OrchestratorMsg::SubOrchFailed { instance: parent_inst, id, error: err }); }
+                                        },
+                                        Err(e) => { let _ = router_tx.send(OrchestratorMsg::SubOrchFailed { instance: parent_inst, id, error: format!("child join error: {e}") }); }
+                                    },
+                                    Err(e) => { let _ = router_tx.send(OrchestratorMsg::SubOrchFailed { instance: parent_inst, id, error: e }); }
+                                }
+                            });
+                        }
+                    }
                 }
             }
 
@@ -488,25 +546,15 @@ impl Runtime {
 
     /// Spawn an instance and return a handle that resolves to its history
     /// and output when complete.
-    pub async fn spawn_instance_to_completion(
+    pub fn spawn_instance_to_completion(
         self: Arc<Self>,
         instance: &str,
         orchestration_name: &str,
     ) -> JoinHandle<(Vec<Event>, Result<String, String>)> {
-        let notify = Arc::new(tokio::sync::Notify::new());
-        let notify_for_watcher = notify.clone();
         let this_for_task = self.clone();
         let inst = instance.to_string();
         let orch_name = orchestration_name.to_string();
-        let handle = tokio::spawn(async move {
-            let res = this_for_task.run_instance_to_completion(&inst, &orch_name).await;
-            notify.notify_waiters();
-            res
-        });
-        // watcher task to allow draining all instances generically
-        let watcher = tokio::spawn(async move { notify_for_watcher.notified().await; });
-        self.instance_joins.lock().await.push(watcher);
-        handle
+        tokio::spawn(async move { this_for_task.run_instance_to_completion(&inst, &orch_name).await })
     }
 }
 
@@ -552,6 +600,8 @@ fn append_completion(history: &mut Vec<Event>, msg: OrchestratorMsg) {
                 history.push(Event::ExternalEvent { id, name, data });
             }
         }
+        OrchestratorMsg::SubOrchCompleted { id, result, .. } => history.push(Event::SubOrchestrationCompleted { id, result }),
+        OrchestratorMsg::SubOrchFailed { id, error, .. } => history.push(Event::SubOrchestrationFailed { id, error }),
     }
 }
 

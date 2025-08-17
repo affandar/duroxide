@@ -8,6 +8,8 @@ pub enum WorkItem {
     ActivityFailed { instance: String, id: u64, error: String },
     TimerFired { instance: String, id: u64, fire_at_ms: u64 },
     ExternalRaised { instance: String, name: String, data: String },
+    SubOrchCompleted { parent_instance: String, parent_id: u64, result: String },
+    SubOrchFailed { parent_instance: String, parent_id: u64, error: String },
 }
 
 /// Storage abstraction for append-only orchestration history per instance.

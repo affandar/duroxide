@@ -54,6 +54,16 @@ pub enum Event {
     ExternalSubscribed { id: u64, name: String },
     /// An external event with correlation `id` was raised with some data.
     ExternalEvent { id: u64, name: String, data: String },
+
+    /// Sub-orchestration was scheduled with deterministic child instance id.
+    SubOrchestrationScheduled { id: u64, name: String, instance: String, input: String },
+    /// Sub-orchestration completed and returned a result to the parent.
+    SubOrchestrationCompleted { id: u64, result: String },
+    /// Sub-orchestration failed and returned an error to the parent.
+    SubOrchestrationFailed { id: u64, error: String },
+
+    /// Parent linkage recorded in a child orchestration history.
+    ParentLinked { parent_instance: String, parent_id: u64 },
 }
 
 /// Declarative decisions produced by an orchestration turn. The host/provider
@@ -66,6 +76,8 @@ pub enum Action {
     CreateTimer { id: u64, delay_ms: u64 },
     /// Subscribe to an external event by name.
     WaitExternal { id: u64, name: String },
+    /// Start a sub-orchestration by name and child instance id.
+    StartSubOrchestration { id: u64, name: String, instance: String, input: String },
 }
 
 #[derive(Debug)]
@@ -105,10 +117,14 @@ impl CtxInner {
                 | Event::TimerCreated { id, .. }
                 | Event::TimerFired { id, .. }
                 | Event::ExternalSubscribed { id, .. }
-                | Event::ExternalEvent { id, .. } => Some(*id),
+                | Event::ExternalEvent { id, .. }
+                | Event::SubOrchestrationScheduled { id, .. }
+                | Event::SubOrchestrationCompleted { id, .. }
+                | Event::SubOrchestrationFailed { id, .. } => Some(*id),
                 Event::OrchestrationStarted { .. }
                 | Event::OrchestrationCompleted { .. }
-                | Event::OrchestrationFailed { .. } => None,
+                | Event::OrchestrationFailed { .. }
+                | Event::ParentLinked { .. } => None,
             };
             if let Some(id) = id_opt { max_id = max_id.max(id); }
         }
@@ -232,6 +248,7 @@ pub enum DurableOutput {
     Activity(Result<String, String>),
     Timer,
     External(String),
+    SubOrchestration(Result<String, String>),
 }
 
 // NOTE: Current replay model strictly consumes the next history event for each await.
@@ -250,6 +267,7 @@ enum Kind {
     Activity { id: u64, name: String, input: String, scheduled: Cell<bool>, ctx: OrchestrationContext },
     Timer { id: u64, delay_ms: u64, scheduled: Cell<bool>, ctx: OrchestrationContext },
     External { id: u64, name: String, scheduled: Cell<bool>, ctx: OrchestrationContext },
+    SubOrch { id: u64, name: String, instance: String, input: String, scheduled: Cell<bool>, ctx: OrchestrationContext },
 }
 
 impl Future for DurableFuture {
@@ -300,6 +318,22 @@ impl Future for DurableFuture {
                 if !already_subscribed && !scheduled.replace(true) {
                     inner.history.push(Event::ExternalSubscribed { id: *id, name: name.clone() });
                     inner.record_action(Action::WaitExternal { id: *id, name: name.clone() });
+                }
+                Poll::Pending
+            }
+            Kind::SubOrch { id, name, instance, input, scheduled, ctx } => {
+                let mut inner = ctx.inner.lock().unwrap();
+                // Completion present?
+                if let Some(outcome) = inner.history.iter().rev().find_map(|e| match e {
+                    Event::SubOrchestrationCompleted { id: cid, result } if cid == id => Some(Ok(result.clone())),
+                    Event::SubOrchestrationFailed { id: cid, error } if cid == id => Some(Err(error.clone())),
+                    _ => None,
+                }) { return Poll::Ready(DurableOutput::SubOrchestration(outcome)); }
+                // Schedule once
+                let already_scheduled = inner.history.iter().any(|e| matches!(e, Event::SubOrchestrationScheduled { id: cid, .. } if cid == id));
+                if !already_scheduled && !scheduled.replace(true) {
+                    inner.history.push(Event::SubOrchestrationScheduled { id: *id, name: name.clone(), instance: instance.clone(), input: input.clone() });
+                    inner.record_action(Action::StartSubOrchestration { id: *id, name: name.clone(), instance: instance.clone(), input: input.clone() });
                 }
                 Poll::Pending
             }
@@ -361,6 +395,24 @@ impl DurableFuture {
         }
         Map(self)
     }
+
+    /// Converts this unified future into a future that resolves only for
+    /// a sub-orchestration completion or failure.
+    pub fn into_sub_orchestration(self) -> impl Future<Output = Result<String, String>> {
+        struct Map(DurableFuture);
+        impl Future for Map {
+            type Output = Result<String, String>;
+            fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+                let this = unsafe { self.map_unchecked_mut(|s| &mut s.0) };
+                match this.poll(cx) {
+                    Poll::Ready(DurableOutput::SubOrchestration(v)) => Poll::Ready(v),
+                    Poll::Ready(other) => panic!("into_sub_orchestration used on non-sub-orch future: {other:?}"),
+                    Poll::Pending => Poll::Pending,
+                }
+            }
+        }
+        Map(self)
+    }
 }
 
 impl OrchestrationContext {
@@ -416,6 +468,24 @@ impl OrchestrationContext {
         inner.claimed_external_ids.insert(adopted_id);
         drop(inner);
         DurableFuture(Kind::External { id: adopted_id, name, scheduled: Cell::new(false), ctx: self.clone() })
+    }
+
+    /// Schedule a sub-orchestration by name with deterministic child instance id derived
+    /// from parent context and correlation id.
+    pub fn schedule_sub_orchestration(&self, name: impl Into<String>, input: impl Into<String>) -> DurableFuture {
+        let name: String = name.into();
+        let input: String = input.into();
+        let mut inner = self.inner.lock().unwrap();
+        // Adopt existing record or allocate new id
+        let adopted = inner.history.iter().find_map(|e| match e {
+            Event::SubOrchestrationScheduled { id, name: n, input: inp, instance: inst } if n == &name && inp == &input => Some((*id, inst.clone())),
+            _ => None,
+        });
+        let (id, instance) = if let Some((id, inst)) = adopted { (id, inst) } else { (inner.next_id(), String::new()) };
+        // Use a portable placeholder that the runtime can disambiguate by prefixing parent instance
+        let child_instance = if instance.is_empty() { format!("sub::{id}") } else { instance };
+        drop(inner);
+        DurableFuture(Kind::SubOrch { id, name, instance: child_instance, input, scheduled: Cell::new(false), ctx: self.clone() })
     }
 }
 
