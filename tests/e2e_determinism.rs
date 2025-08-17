@@ -1,6 +1,7 @@
 use futures::future::{join3};
 use std::sync::Arc;
 use rust_dtf::{run_turn, Event, OrchestrationContext, DurableOutput, Action, OrchestrationRegistry};
+mod common;
 use rust_dtf::runtime::{self, activity::ActivityRegistry};
 use rust_dtf::providers::HistoryStore;
 use rust_dtf::providers::fs::FsHistoryStore;
@@ -33,10 +34,11 @@ async fn orchestration_completes_and_replays_deterministically_with(store: StdAr
         .register("DeterministicOrchestration", orchestration)
         .build();
 
-    let rt = runtime::Runtime::start_with_store(store, Arc::new(activity_registry), orchestration_registry).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+    let store_for_wait = store.clone();
     let rt_clone = rt.clone();
     tokio::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_millis(6)).await;
+        let _ = crate::common::wait_for_subscription(store_for_wait, "inst-orch-1", "Go", 1000).await;
         rt_clone.raise_event("inst-orch-1", "Go", "ok").await;
     });
     let handle = rt.clone().start_orchestration("inst-orch-1", "DeterministicOrchestration", "").await;
@@ -44,8 +46,8 @@ async fn orchestration_completes_and_replays_deterministically_with(store: StdAr
     let output = output.unwrap();
     assert!(output.contains("evt=ok"));
     assert!(output.contains("b=2!"));
-    // Includes OrchestrationStarted + 4 schedule/complete pairs
-    assert_eq!(final_history.len(), 9, "expected 9 history events including OrchestrationStarted");
+    // Includes OrchestrationStarted + 4 schedule/complete pairs + terminal OrchestrationCompleted
+    assert_eq!(final_history.len(), 10, "expected 10 history events including OrchestrationStarted and terminal event");
     // For replay, provide a 1-arg closure equivalent to the registered orchestrator
     let replay = |ctx: OrchestrationContext| async move {
         let start = ctx.now_ms();
@@ -91,6 +93,8 @@ fn action_order_is_deterministic_in_first_turn() {
             Action::CallActivity { .. } => "CallActivity",
             Action::CreateTimer { .. } => "CreateTimer",
             Action::WaitExternal { .. } => "WaitExternal",
+            Action::StartOrchestrationDetached { .. } => "StartOrchestrationDetached",
+            Action::StartSubOrchestration { .. } => "StartSubOrchestration",
         })
         .collect();
     assert_eq!(kinds, vec!["CallActivity", "CreateTimer", "WaitExternal"], "actions must be recorded in declaration/poll order");
@@ -118,8 +122,8 @@ async fn sequential_activity_chain_completes_with(store: StdArc<dyn HistoryStore
     let handle = rt.clone().start_orchestration("inst-seq-1", "SequentialOrchestration", "").await;
     let (final_history, output) = handle.unwrap().await.unwrap();
     assert_eq!(output.unwrap(), "c=2bc");
-    // Includes OrchestrationStarted + 3 schedule/complete pairs
-    assert_eq!(final_history.len(), 7, "expected OrchestrationStarted + three scheduled+completed activity pairs in history");
+    // Includes OrchestrationStarted + 3 schedule/complete pairs + terminal OrchestrationCompleted
+    assert_eq!(final_history.len(), 8, "expected OrchestrationStarted + three scheduled+completed activity pairs + terminal event in history");
     rt.shutdown().await;
 }
 

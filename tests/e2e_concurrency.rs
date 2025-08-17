@@ -1,5 +1,6 @@
 use futures::future::{join3};
 use std::sync::Arc;
+mod common;
 use rust_dtf::{Event, OrchestrationContext, OrchestrationRegistry};
 use rust_dtf::runtime::{self, activity::ActivityRegistry};
 use rust_dtf::providers::HistoryStore;
@@ -39,18 +40,20 @@ async fn concurrent_orchestrations_different_activities_with(store: StdArc<dyn H
         .register("UpperOrchestration", o2)
         .build();
 
-    let rt = runtime::Runtime::start_with_store(store, Arc::new(activity_registry), orchestration_registry).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
     let h1 = rt.clone().start_orchestration("inst-multi-1", "AddOrchestration", "").await;
     let h2 = rt.clone().start_orchestration("inst-multi-2", "UpperOrchestration", "").await;
 
+    let store_for_wait1 = store.clone();
     let rt_c = rt.clone();
     tokio::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_millis(3)).await;
+        let _ = common::wait_for_subscription(store_for_wait1, "inst-multi-1", "Go", 1000).await;
         rt_c.raise_event("inst-multi-1", "Go", "E1").await;
     });
+    let store_for_wait2 = store.clone();
     let rt_c2 = rt.clone();
     tokio::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_millis(4)).await;
+        let _ = common::wait_for_subscription(store_for_wait2, "inst-multi-2", "Go", 1000).await;
         rt_c2.raise_event("inst-multi-2", "Go", "E2").await;
     });
 
@@ -105,18 +108,20 @@ async fn concurrent_orchestrations_same_activities_with(store: StdArc<dyn Histor
         .register("ProcOrchestration2", o2)
         .build();
 
-    let rt = runtime::Runtime::start_with_store(store, Arc::new(activity_registry), orchestration_registry).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
     let h1 = rt.clone().start_orchestration("inst-same-acts-1", "ProcOrchestration1", "").await;
     let h2 = rt.clone().start_orchestration("inst-same-acts-2", "ProcOrchestration2", "").await;
 
+    let store_for_wait3 = store.clone();
     let rt_c = rt.clone();
     tokio::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_millis(3)).await;
+        let _ = common::wait_for_subscription(store_for_wait3, "inst-same-acts-1", "Go", 1000).await;
         rt_c.raise_event("inst-same-acts-1", "Go", "P1").await;
     });
+    let store_for_wait4 = store.clone();
     let rt_c2 = rt.clone();
     tokio::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        let _ = common::wait_for_subscription(store_for_wait4, "inst-same-acts-2", "Go", 1000).await;
         rt_c2.raise_event("inst-same-acts-2", "Go", "P2").await;
     });
 

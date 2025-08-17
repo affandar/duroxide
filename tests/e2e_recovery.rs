@@ -6,6 +6,8 @@ use rust_dtf::providers::in_memory::InMemoryHistoryStore;
 use rust_dtf::providers::fs::FsHistoryStore;
 use std::sync::Arc as StdArc;
 use rust_dtf::OrchestrationStatus;
+mod common;
+use common::*;
 
 async fn recovery_across_restart_core<F1, F2>(make_store_stage1: F1, make_store_stage2: F2, instance: String)
 where
@@ -34,7 +36,9 @@ where
     let rt1 = runtime::Runtime::start_with_store(store1.clone(), Arc::new(activity_registry.clone()), orchestration_registry.clone()).await;
     let handle1 = rt1.clone().start_orchestration(&instance, "RecoveryTest", "").await;
 
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    // Wait until the subscription for the Resume event has been written to history.
+    // This guarantees that steps 1 and 2 have executed and were persisted.
+    assert!(wait_for_subscription(store1.clone(), &instance, "Resume", 1000).await);
 
     let pre_crash_hist = store1.read(&instance).await;
     assert_eq!(count_scheduled(&pre_crash_hist, "1"), 1);
@@ -181,18 +185,44 @@ async fn recovery_multiple_orchestrations_fs_provider() {
     for (inst, name, input) in &cases {
         let _ = rt1.clone().start_orchestration(inst, name, *input).await.unwrap();
     }
-    // Allow scheduling to persist, but not enough to complete timers
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    // Wait for each orchestration to reach its expected pre-shutdown checkpoint
+    // EchoWait: timer created but not yet fired
+    assert!(wait_for_history(store1.clone(), "inst-echo-wait", |h| {
+        let has_timer_created = h.iter().any(|e| matches!(e, Event::TimerCreated { .. }));
+        let has_timer_fired = h.iter().any(|e| matches!(e, Event::TimerFired { .. }));
+        has_timer_created && !has_timer_fired
+    }, 2000).await);
+
+    // UpperOnly: just needs its single activity scheduled/completed
+    assert!(wait_for_history(store1.clone(), "inst-upper", |h| {
+        h.iter().any(|e| matches!(e, Event::ActivityCompleted { .. }))
+    }, 1000).await);
+
+    // WaitEvent: subscription written
+    assert!(wait_for_subscription(store1.clone(), "inst-wait", "Go", 1000).await);
+
+    // ComputeSum: either scheduled or completed quickly
+    assert!(wait_for_history(store1.clone(), "inst-sum", |h| {
+        h.iter().any(|e| matches!(e, Event::ActivityScheduled { name, .. } if name == "Add"))
+        || h.iter().any(|e| matches!(e, Event::ActivityCompleted { .. }))
+    }, 2000).await);
+
+    // TwoTimers: both timers created
+    assert!(wait_for_history(store1.clone(), "inst-2timers", |h| {
+        h.iter().filter(|e| matches!(e, Event::TimerCreated { .. })).count() >= 2
+    }, 1000).await);
     rt1.shutdown().await;
 
     // Stage 2: restart with same store; runtime should auto-resume non-terminal instances
     let store2 = StdArc::new(FsHistoryStore::new(&dir, false)) as StdArc<dyn HistoryStore>;
+    let store2_for_wait = store2.clone();
     let rt2 = runtime::Runtime::start_with_store(store2, Arc::new(activity_registry), orchestration_registry).await;
 
     // Raise external event for the WaitEvent orchestration after restart
     let rt2_c = rt2.clone();
     tokio::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        // Gate raising the event on the subscription being persisted
+        let _ = wait_for_subscription(store2_for_wait, "inst-wait", "Go", 2_000).await;
         rt2_c.raise_event("inst-wait", "Go", "ok").await;
     });
 

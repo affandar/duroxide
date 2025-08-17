@@ -55,6 +55,9 @@ pub enum Event {
     /// An external event with correlation `id` was raised with some data.
     ExternalEvent { id: u64, name: String, data: String },
 
+    /// Fire-and-forget orchestration scheduling (detached).
+    OrchestrationChained { id: u64, name: String, instance: String, input: String },
+
     /// Sub-orchestration was scheduled with deterministic child instance id.
     SubOrchestrationScheduled { id: u64, name: String, instance: String, input: String },
     /// Sub-orchestration completed and returned a result to the parent.
@@ -76,6 +79,8 @@ pub enum Action {
     CreateTimer { id: u64, delay_ms: u64 },
     /// Subscribe to an external event by name.
     WaitExternal { id: u64, name: String },
+    /// Start a detached orchestration (no result routing back to parent).
+    StartOrchestrationDetached { id: u64, name: String, instance: String, input: String },
     /// Start a sub-orchestration by name and child instance id.
     StartSubOrchestration { id: u64, name: String, instance: String, input: String },
 }
@@ -118,6 +123,7 @@ impl CtxInner {
                 | Event::TimerFired { id, .. }
                 | Event::ExternalSubscribed { id, .. }
                 | Event::ExternalEvent { id, .. }
+                | Event::OrchestrationChained { id, .. }
                 | Event::SubOrchestrationScheduled { id, .. }
                 | Event::SubOrchestrationCompleted { id, .. }
                 | Event::SubOrchestrationFailed { id, .. } => Some(*id),
@@ -487,6 +493,29 @@ impl OrchestrationContext {
         drop(inner);
         DurableFuture(Kind::SubOrch { id, name, instance: child_instance, input, scheduled: Cell::new(false), ctx: self.clone() })
     }
+
+    /// Schedule a detached orchestration with an explicit instance id.
+    /// The runtime will prefix this with the parent instance to ensure global uniqueness.
+    pub fn schedule_orchestration(
+        &self,
+        name: impl Into<String>,
+        instance: impl Into<String>,
+        input: impl Into<String>,
+    ) {
+        let name: String = name.into();
+        let instance: String = instance.into();
+        let input: String = input.into();
+        let mut inner = self.inner.lock().unwrap();
+        let adopted = inner.history.iter().find_map(|e| match e {
+            Event::OrchestrationChained { id, name: n, instance: inst, input: inp } if n == &name && inp == &input && inst == &instance => Some(*id),
+            _ => None,
+        });
+        let id = adopted.unwrap_or_else(|| inner.next_id());
+        inner.history.push(Event::OrchestrationChained { id, name: name.clone(), instance: instance.clone(), input: input.clone() });
+        inner.record_action(Action::StartOrchestrationDetached { id, name, instance, input });
+    }
+
+    // removed: schedule_orchestration(name, input) without instance id (must pass instance id)
 }
 
 fn noop_waker() -> Waker {

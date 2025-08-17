@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{mpsc, Mutex, oneshot};
 use tokio::task::JoinHandle;
 use crate::{Action, Event, OrchestrationContext, run_turn_with};
 use crate::providers::{HistoryStore, WorkItem};
@@ -159,6 +159,8 @@ pub struct Runtime {
     instance_joins: Mutex<Vec<JoinHandle<()>>>,
     history_store: Arc<dyn HistoryStore>,
     active_instances: Mutex<HashSet<String>>,
+    pending_starts: Mutex<HashSet<String>>,
+    result_waiters: Mutex<HashMap<String, Vec<oneshot::Sender<(Vec<Event>, Result<String, String>)>>>>,
     orchestration_registry: OrchestrationRegistry,
     // queue for start requests so callers only enqueue and runtime manages execution
     start_tx: mpsc::UnboundedSender<StartRequest>,
@@ -178,11 +180,15 @@ impl Runtime {
             // best-effort: record orchestration name metadata for provider bootstrap
             let _ = self.history_store.set_instance_orchestration(instance, orchestration_name).await;
         } else {
-            // already has history → consider already started
-            return Err(format!("instance already started: {instance}"));
+            // Allow duplicate starts as a warning for detached or at-least-once semantics
+            warn!(instance, "instance already has history; duplicate start accepted (deduped)");
         }
-        // Spawn to completion and return handle
-        Ok(self.clone().spawn_instance_to_completion(instance, orchestration_name))
+        // Enqueue a start request; background worker will dedupe and run exactly one execution
+        let _ = self.start_tx.send(StartRequest { instance: instance.to_string(), orchestration_name: orchestration_name.to_string() });
+        // Register a oneshot waiter for the result and return a handle awaiting it
+        let (tx, rx) = oneshot::channel::<(Vec<Event>, Result<String, String>)>();
+        self.result_waiters.lock().await.entry(instance.to_string()).or_default().push(tx);
+        Ok(tokio::spawn(async move { rx.await.expect("result")}))
     }
 
     /// Returns the current status of an orchestration instance by inspecting its history.
@@ -262,7 +268,7 @@ impl Runtime {
         // start request queue + worker
         let (start_tx, mut start_rx) = mpsc::unbounded_channel::<StartRequest>();
 
-        let runtime = Arc::new(Self { activity_tx, timer_tx, router_tx, router, joins: Mutex::new(joins), instance_joins: Mutex::new(Vec::new()), history_store, active_instances: Mutex::new(HashSet::new()), orchestration_registry, start_tx });
+        let runtime = Arc::new(Self { activity_tx, timer_tx, router_tx, router, joins: Mutex::new(joins), instance_joins: Mutex::new(Vec::new()), history_store, active_instances: Mutex::new(HashSet::new()), pending_starts: Mutex::new(HashSet::new()), result_waiters: Mutex::new(HashMap::new()), orchestration_registry, start_tx });
 
         // background worker to process start requests
         let rt_for_worker = runtime.clone();
@@ -270,8 +276,19 @@ impl Runtime {
             while let Some(req) = start_rx.recv().await {
                 let inst = req.instance.clone();
                 let orch = req.orchestration_name.clone();
-                // Spawn to completion using existing execution loop
-                let _ = rt_for_worker.clone().spawn_instance_to_completion(&inst, &orch).await;
+                // Deduplicate: skip if already pending or active
+                {
+                    let mut pend = rt_for_worker.pending_starts.lock().await;
+                    if pend.contains(&inst) || rt_for_worker.active_instances.lock().await.contains(&inst) {
+                        warn!(instance=%inst, orchestration=%orch, "start worker: duplicate start suppressed");
+                        continue;
+                    }
+                    pend.insert(inst.clone());
+                }
+                // Spawn to completion without awaiting so we can process more starts
+                let _handle = rt_for_worker.clone().spawn_instance_to_completion(&inst, &orch);
+                // Clear pending flag immediately; active guard prevents double-run
+                rt_for_worker.pending_starts.lock().await.remove(&inst);
             }
         });
         runtime.joins.lock().await.push(worker);
@@ -302,6 +319,43 @@ impl Runtime {
 
             loop {
                 if let Some(item) = rt_for_poll.history_store.dequeue_work().await {
+                    // Helper to check if instance is active; if not, re-enqueue the item to avoid drops
+                    let mut maybe_forward = true;
+                    let (target_instance, reenqueue): (Option<String>, Option<WorkItem>) = match &item {
+                        WorkItem::StartOrchestration { instance, orchestration } => {
+                            let _ = orchestration; // unused here
+                            (None, None)
+                        }
+                        WorkItem::ActivityCompleted { instance, id, result } => {
+                            (Some(instance.clone()), Some(WorkItem::ActivityCompleted { instance: instance.clone(), id: *id, result: result.clone() }))
+                        }
+                        WorkItem::ActivityFailed { instance, id, error } => {
+                            (Some(instance.clone()), Some(WorkItem::ActivityFailed { instance: instance.clone(), id: *id, error: error.clone() }))
+                        }
+                        WorkItem::TimerFired { instance, id, fire_at_ms } => {
+                            (Some(instance.clone()), Some(WorkItem::TimerFired { instance: instance.clone(), id: *id, fire_at_ms: *fire_at_ms }))
+                        }
+                        WorkItem::ExternalRaised { instance, name, data } => {
+                            (Some(instance.clone()), Some(WorkItem::ExternalRaised { instance: instance.clone(), name: name.clone(), data: data.clone() }))
+                        }
+                        WorkItem::SubOrchCompleted { parent_instance, parent_id, result } => {
+                            (Some(parent_instance.clone()), Some(WorkItem::SubOrchCompleted { parent_instance: parent_instance.clone(), parent_id: *parent_id, result: result.clone() }))
+                        }
+                        WorkItem::SubOrchFailed { parent_instance, parent_id, error } => {
+                            (Some(parent_instance.clone()), Some(WorkItem::SubOrchFailed { parent_instance: parent_instance.clone(), parent_id: *parent_id, error: error.clone() }))
+                        }
+                    };
+                    if let Some(inst) = target_instance {
+                        let is_active = rt_for_poll.active_instances.lock().await.contains(&inst);
+                        if !is_active {
+                            if let Some(it) = reenqueue {
+                                let _ = rt_for_poll.history_store.enqueue_work(it).await;
+                            }
+                            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                            maybe_forward = false;
+                        }
+                    }
+                    if !maybe_forward { continue; }
                     match item {
                         WorkItem::StartOrchestration { instance, orchestration } => {
                             // Push to local start queue only; do not re-enqueue to provider to avoid loops
@@ -412,6 +466,27 @@ impl Runtime {
             let (hist_after, actions, _logs, out_opt) = run_turn_with(history, turn_index, &orchestrator_fn);
             history = hist_after;
             if let Some(out) = out_opt {
+                // Persist any deltas produced during this final turn
+                let deltas = if history.len() > baseline_len { history[baseline_len..].to_vec() } else { Vec::new() };
+                if !deltas.is_empty() {
+                    if let Err(e) = self.history_store.append(instance, deltas.clone()).await {
+                        error!(instance, turn_index, error=%e, "failed to append final turn events");
+                        // Wake any waiters with error to avoid hangs
+                        if let Some(waiters) = self.result_waiters.lock().await.remove(instance) {
+                            for w in waiters { let _ = w.send((history.clone(), Err(format!("history append failed: {e}")))); }
+                        }
+                        panic!("history append failed: {e}");
+                    }
+                }
+                // Best-effort dispatch for detached orchestration starts that were emitted in this final turn
+                for e in deltas {
+                    if let Event::OrchestrationChained { id, name, instance: child_inst, input } = e {
+                        match self.clone().start_orchestration(&child_inst, &name, input).await {
+                            Ok(_h) => { debug!(instance, id, name=%name, child_instance=%child_inst, "started detached orchestration (final turn)"); }
+                            Err(err) => { warn!(instance, id, name=%name, child_instance=%child_inst, error=%err, "detached start failed (final turn)"); }
+                        }
+                    }
+                }
                 // Persist terminal event based on result
                 let term = match &out {
                     Ok(s) => Event::OrchestrationCompleted { output: s.clone() },
@@ -419,7 +494,22 @@ impl Runtime {
                 };
                 if let Err(e) = self.history_store.append(instance, vec![term]).await {
                     error!(instance, turn_index, error=%e, "failed to append terminal event");
+                    if let Some(waiters) = self.result_waiters.lock().await.remove(instance) {
+                        for w in waiters { let _ = w.send((history.clone(), Err(format!("history append failed: {e}")))); }
+                    }
                     panic!("history append failed: {e}");
+                }
+                // Reflect terminal in local history
+                let term_local = match &out {
+                    Ok(s) => Event::OrchestrationCompleted { output: s.clone() },
+                    Err(e) => Event::OrchestrationFailed { error: e.clone() },
+                };
+                history.push(term_local);
+                // Notify any waiters
+                if let Some(waiters) = self.result_waiters.lock().await.remove(instance) {
+                    for w in waiters {
+                        let _ = w.send((history.clone(), out.clone()));
+                    }
                 }
                 // If child, enqueue completion to parent
                 if let Some((pinst, pid)) = parent_link.clone() {
@@ -442,6 +532,9 @@ impl Runtime {
                 let new_events = history[persisted_len..].to_vec();
                 if let Err(e) = self.history_store.append(instance, new_events).await {
                     error!(instance, turn_index, error=%e, "failed to append scheduled events");
+                    if let Some(waiters) = self.result_waiters.lock().await.remove(instance) {
+                        for w in waiters { let _ = w.send((history.clone(), Err(format!("history append failed: {e}")))); }
+                    }
                     panic!("history append failed: {e}");
                 }
                 appended_any = true;
@@ -478,12 +571,22 @@ impl Runtime {
                         }).unwrap_or(0);
                         debug!(instance, id, fire_at_ms, delay_ms, "dispatch timer");
                         if let Err(e) = self.timer_tx.send(TimerWorkItem { instance: instance.to_string(), id, fire_at_ms, delay_ms }).await {
+                            if let Some(waiters) = self.result_waiters.lock().await.remove(instance) {
+                                for w in waiters { let _ = w.send((history.clone(), Err(format!("timer dispatch failed: {e}")))); }
+                            }
                             panic!("timer dispatch failed: {e}");
                         }
                     }
                     Action::WaitExternal { id, name } => {
                         debug!(instance, id, name=%name, "subscribe external");
                         let _ = (id, name); // no-op
+                    }
+                    Action::StartOrchestrationDetached { id, name, instance: child_inst, input } => {
+                        // Fire-and-forget: try to start a new orchestration instance using the provided instance id (no parent prefix).
+                        match self.clone().start_orchestration(&child_inst, &name, input).await {
+                            Ok(_h) => { debug!(instance, id, name=%name, child_instance=%child_inst, "started detached orchestration"); }
+                            Err(e) => { warn!(instance, id, name=%name, child_instance=%child_inst, error=%e, "detached start failed (likely duplicate instance)"); }
+                        }
                     }
                     Action::StartSubOrchestration { id, name, instance: child_inst, input } => {
                         let already_done = history.iter().rev().any(|e|
@@ -533,6 +636,9 @@ impl Runtime {
                 let new_events = history[persisted_len..].to_vec();
                 if let Err(e) = self.history_store.append(instance, new_events).await {
                     error!(instance, turn_index, error=%e, "failed to append history");
+                    if let Some(waiters) = self.result_waiters.lock().await.remove(instance) {
+                        for w in waiters { let _ = w.send((history.clone(), Err(format!("history append failed: {e}")))); }
+                    }
                     panic!("history append failed: {e}");
                 }
                 appended_any = true;
@@ -654,8 +760,12 @@ async fn rehydrate_pending(
     for e in history.iter() {
         if let Event::TimerCreated { id, fire_at_ms } = e {
             if !fired_timers.contains(id) {
-                // Best-effort remaining delay; if already past, fire immediately (0ms)
-                let delay_ms = *fire_at_ms;
+                // Compute remaining delay relative to current time; if past due, fire immediately (0ms)
+                let now_ms: u64 = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as u64;
+                let delay_ms = fire_at_ms.saturating_sub(now_ms);
                 if let Err(e) = timer_tx.send(TimerWorkItem {
                     instance: instance.to_string(),
                     id: *id,

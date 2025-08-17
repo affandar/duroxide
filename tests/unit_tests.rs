@@ -122,32 +122,40 @@ async fn providers_create_remove_and_duplicate_checks() {
 }
 
 #[tokio::test]
-async fn runtime_duplicate_orchestration_errors() {
+async fn runtime_duplicate_orchestration_deduped_single_execution() {
     // Start runtime and attempt to start the same instance twice concurrently
     let activity_registry = ActivityRegistry::builder().build();
-    
+
     let orchestration_registry = OrchestrationRegistry::builder()
-        .register("TestOrch1", |ctx, _| async move {
-            ctx.schedule_timer(10).into_timer().await;
+        .register("TestOrch", |ctx, _| async move {
+            // Slow a bit to allow duplicate enqueue to happen
+            ctx.schedule_timer(20).into_timer().await;
             Ok("ok".to_string())
         })
-        .register("TestOrch2", |ctx, _| async move {
-            ctx.schedule_timer(1).into_timer().await;
-            Ok("nope".to_string())
-        })
         .build();
-    
+
     let rt = runtime::Runtime::start(Arc::new(activity_registry), orchestration_registry).await;
     let inst = "dup-orch";
 
-    let h1 = rt.clone().start_orchestration(inst, "TestOrch1", "").await;
+    // Fire two start requests for the same instance
+    let h1 = rt.clone().start_orchestration(inst, "TestOrch", "").await.unwrap();
+    let h2 = rt.clone().start_orchestration(inst, "TestOrch", "").await.unwrap();
 
-    // Second start should fail immediately due to already-started instance
-    let h2 = rt.clone().start_orchestration(inst, "TestOrch2", "").await;
-    assert!(h2.is_err(), "expected duplicate start to return Err");
+    // Both handles should resolve to the same single execution/result
+    let (hist1, out1) = h1.await.unwrap();
+    let (hist2, out2) = h2.await.unwrap();
+    assert_eq!(out1.as_ref().unwrap(), "ok");
+    assert_eq!(out2.as_ref().unwrap(), "ok");
 
-    let (_hist, out) = h1.unwrap().await.unwrap();
-    assert_eq!(out.unwrap(), "ok");
+    // Ensure there is only one terminal event in history
+    let term_count = hist1.iter().filter(|e| matches!(e, Event::OrchestrationCompleted { .. } | Event::OrchestrationFailed { .. })).count();
+    assert_eq!(term_count, 1, "should have exactly one terminal event");
+
+    // Second handle observed the same execution: same length and only one start/terminal
+    assert_eq!(hist1.len(), hist2.len());
+    let started_count = hist1.iter().filter(|e| matches!(e, Event::OrchestrationStarted { .. })).count();
+    assert_eq!(started_count, 1);
+
     rt.shutdown().await;
 }
 

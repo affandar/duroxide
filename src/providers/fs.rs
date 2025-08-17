@@ -5,11 +5,14 @@ use serde_json;
 use crate::Event;
 use super::{HistoryStore, WorkItem};
 
+#[cfg(test)]
+const CAP: usize = 64;
+#[cfg(not(test))]
 const CAP: usize = 1024;
 
 /// Simple filesystem-backed history store writing JSONL per instance.
 #[derive(Clone)]
-pub struct FsHistoryStore { root: PathBuf, queue_file: PathBuf }
+pub struct FsHistoryStore { root: PathBuf, queue_file: PathBuf, cap: usize }
 
 impl FsHistoryStore {
     /// Create a new store rooted at the given directory path.
@@ -23,7 +26,13 @@ impl FsHistoryStore {
         // best-effort create
         let _ = std::fs::create_dir_all(&path);
         let _ = std::fs::OpenOptions::new().create(true).append(true).open(&queue_file);
-        Self { root: path, queue_file }
+        Self { root: path, queue_file, cap: 1024 }
+    }
+    /// Create a new store with a custom history cap (useful for tests).
+    pub fn new_with_cap(root: impl AsRef<Path>, reset_on_create: bool, cap: usize) -> Self {
+        let mut s = Self::new(root, reset_on_create);
+        s.cap = cap;
+        s
     }
     fn inst_path(&self, instance: &str) -> PathBuf { self.root.join(format!("{instance}.jsonl")) }
 }
@@ -52,8 +61,8 @@ impl HistoryStore for FsHistoryStore {
         if !fs::try_exists(&path).await.map_err(|e| e.to_string())? {
             return Err(format!("instance not found: {instance}"));
         }
-        if existing.len() + new_events.len() > CAP {
-            return Err(format!("history cap exceeded (cap={}, have={}, append={})", CAP, existing.len(), new_events.len()));
+        if existing.len() + new_events.len() > self.cap {
+            return Err(format!("history cap exceeded (cap={}, have={}, append={})", self.cap, existing.len(), new_events.len()));
         }
         // Append only new events without truncation
         let mut file = fs::OpenOptions::new().create(true).append(true).open(&path).await.unwrap();
