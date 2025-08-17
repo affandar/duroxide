@@ -66,7 +66,7 @@ where
 
 #[tokio::test]
 async fn recovery_across_restart_fs_provider() {
-    eprintln!("START: recovery_across_restart_fs_provider");
+    
     let base = std::env::current_dir().unwrap().join(".testdata");
     std::fs::create_dir_all(&base).unwrap();
     let dir = base.join(format!("fs_recovery_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis()));
@@ -90,7 +90,7 @@ async fn recovery_across_restart_fs_provider() {
 
 #[tokio::test]
 async fn recovery_across_restart_inmem_provider() {
-    eprintln!("START: recovery_across_restart_inmem_provider");
+    
     let instance = String::from("inst-recover-mem-1");
     let make_store1 = || StdArc::new(InMemoryHistoryStore::default()) as StdArc<dyn HistoryStore>;
     let make_store2 = || StdArc::new(InMemoryHistoryStore::default()) as StdArc<dyn HistoryStore>;

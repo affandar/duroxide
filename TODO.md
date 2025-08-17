@@ -1,9 +1,11 @@
 ## Durable Task Rust Core – TODOs
 
 - do a pass through the code. 
+- strongly typed activity and orchestration calls?
+- typed parameters for activities and orchestrations
+- cancellations via JoinHandles?
 - tests for provider <-> runtime resumption of multiple orchestrations. 
 - tests for orchestration state, 
-- tests for e
 - redo the orchestration registry change with gpt5 and compare
 - test hung because the initial orchestration takes longer to start!
 - Add proper metrics.

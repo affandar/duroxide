@@ -72,7 +72,6 @@ async fn concurrent_orchestrations_different_activities_with(store: StdArc<dyn H
 
 #[tokio::test]
 async fn concurrent_orchestrations_different_activities_fs() {
-    eprintln!("START: concurrent_orchestrations_different_activities_fs");
     let td = tempfile::tempdir().unwrap();
     let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
     concurrent_orchestrations_different_activities_with(store).await;
@@ -139,7 +138,6 @@ async fn concurrent_orchestrations_same_activities_with(store: StdArc<dyn Histor
 
 #[tokio::test]
 async fn concurrent_orchestrations_same_activities_fs() {
-    eprintln!("START: concurrent_orchestrations_same_activities_fs");
     let td = tempfile::tempdir().unwrap();
     let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
     concurrent_orchestrations_same_activities_with(store).await;

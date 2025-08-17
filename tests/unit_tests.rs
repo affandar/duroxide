@@ -151,4 +151,51 @@ async fn runtime_duplicate_orchestration_errors() {
     rt.shutdown().await;
 }
 
+#[tokio::test]
+async fn orchestration_status_apis() {
+    use rust_dtf::OrchestrationStatus;
+
+    // Registry with two orchestrations: one completes after a short timer, one fails immediately
+    let activity_registry = ActivityRegistry::builder().build();
+    let orchestration_registry = OrchestrationRegistry::builder()
+        .register("ShortTimer", |ctx, _| async move {
+            ctx.schedule_timer(10).into_timer().await;
+            Ok("ok".to_string())
+        })
+        .register("AlwaysFails", |_ctx, _| async move {
+            Err("boom".to_string())
+        })
+        .build();
+
+    let rt = runtime::Runtime::start(Arc::new(activity_registry), orchestration_registry).await;
+
+    // NotFound for unknown instance
+    let s = rt.get_orchestration_status("no-such").await;
+    assert!(matches!(s, OrchestrationStatus::NotFound));
+
+    // Start a running orchestration; should be Running immediately
+    let inst_running = "inst-status-running";
+    let handle_running = rt.clone().start_orchestration(inst_running, "ShortTimer", "").await.unwrap();
+    let s1 = rt.get_orchestration_status(inst_running).await;
+    assert!(matches!(s1, OrchestrationStatus::Running));
+
+    // After completion, should be Completed with output
+    let (_h, out) = handle_running.await.unwrap();
+    assert_eq!(out.as_ref().unwrap(), "ok");
+    let s2 = rt.get_orchestration_status(inst_running).await;
+    assert!(matches!(s2, OrchestrationStatus::Completed { .. }));
+    if let OrchestrationStatus::Completed { output } = s2 { assert_eq!(output, "ok"); }
+
+    // Failed orchestration
+    let inst_fail = "inst-status-fail";
+    let handle_fail = rt.clone().start_orchestration(inst_fail, "AlwaysFails", "").await.unwrap();
+    let (_h2, out2) = handle_fail.await.unwrap();
+    assert!(out2.is_err());
+    let s3 = rt.get_orchestration_status(inst_fail).await;
+    assert!(matches!(s3, OrchestrationStatus::Failed { .. }));
+    if let OrchestrationStatus::Failed { error } = s3 { assert_eq!(error, "boom"); }
+
+    rt.shutdown().await;
+}
+
 

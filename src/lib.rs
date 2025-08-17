@@ -22,7 +22,7 @@ pub mod providers;
 pub mod logging;
 
 // Re-export key runtime types for convenience
-pub use runtime::{OrchestrationRegistry, OrchestrationRegistryBuilder, OrchestrationHandler};
+pub use runtime::{OrchestrationRegistry, OrchestrationRegistryBuilder, OrchestrationHandler, OrchestrationStatus};
 
 use serde::{Deserialize, Serialize};
 use crate::logging::LogLevel;

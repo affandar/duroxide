@@ -38,7 +38,6 @@ async fn wait_external_completes_with(store: StdArc<dyn HistoryStore>) {
 
 #[tokio::test]
 async fn wait_external_completes_fs() {
-    eprintln!("START: wait_external_completes_fs");
     let td = tempfile::tempdir().unwrap();
     let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
     wait_external_completes_with(store).await;
@@ -78,7 +77,6 @@ async fn race_external_vs_timer_ordering_with(store: StdArc<dyn HistoryStore>) {
 
 #[tokio::test]
 async fn race_external_vs_timer_ordering_fs() {
-    eprintln!("START: race_external_vs_timer_ordering_fs");
     let td = tempfile::tempdir().unwrap();
     let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
     race_external_vs_timer_ordering_with(store).await;
@@ -119,7 +117,6 @@ async fn race_event_vs_timer_event_wins_with(store: StdArc<dyn HistoryStore>) {
 
 #[tokio::test]
 async fn race_event_vs_timer_event_wins_fs() {
-    eprintln!("START: race_event_vs_timer_event_wins_fs");
     let td = tempfile::tempdir().unwrap();
     let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
     race_event_vs_timer_event_wins_with(store).await;

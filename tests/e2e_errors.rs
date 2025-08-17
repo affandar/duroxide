@@ -47,19 +47,15 @@ async fn error_handling_compensation_on_ship_failure_with(store: StdArc<dyn Hist
 
 #[tokio::test]
 async fn error_handling_compensation_on_ship_failure_inmem() {
-    eprintln!("START: error_handling_compensation_on_ship_failure_inmem");
     let store = StdArc::new(InMemoryHistoryStore::default()) as StdArc<dyn HistoryStore>;
     error_handling_compensation_on_ship_failure_with(store).await;
-    eprintln!("END: error_handling_compensation_on_ship_failure_inmem");
 }
 
 #[tokio::test]
 async fn error_handling_compensation_on_ship_failure_fs() {
-    eprintln!("START: error_handling_compensation_on_ship_failure_fs");
     let td = tempfile::tempdir().unwrap();
     let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
     error_handling_compensation_on_ship_failure_with(store).await;
-    eprintln!("END: error_handling_compensation_on_ship_failure_fs");
 }
 
 async fn error_handling_success_path_with(store: StdArc<dyn HistoryStore>) {
@@ -89,19 +85,15 @@ async fn error_handling_success_path_with(store: StdArc<dyn HistoryStore>) {
 
 #[tokio::test]
 async fn error_handling_success_path_inmem() {
-    eprintln!("START: error_handling_success_path_inmem");
     let store = StdArc::new(InMemoryHistoryStore::default()) as StdArc<dyn HistoryStore>;
     error_handling_success_path_with(store).await;
-    eprintln!("END: error_handling_success_path_inmem");
 }
 
 #[tokio::test]
 async fn error_handling_success_path_fs() {
-    eprintln!("START: error_handling_success_path_fs");
     let td = tempfile::tempdir().unwrap();
     let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
     error_handling_success_path_with(store).await;
-    eprintln!("END: error_handling_success_path_fs");
 }
 
 async fn error_handling_early_debit_failure_with(store: StdArc<dyn HistoryStore>) {
@@ -132,19 +124,15 @@ async fn error_handling_early_debit_failure_with(store: StdArc<dyn HistoryStore>
 
 #[tokio::test]
 async fn error_handling_early_debit_failure_inmem() {
-    eprintln!("START: error_handling_early_debit_failure_inmem");
     let store = StdArc::new(InMemoryHistoryStore::default()) as StdArc<dyn HistoryStore>;
     error_handling_early_debit_failure_with(store).await;
-    eprintln!("END: error_handling_early_debit_failure_inmem");
 }
 
 #[tokio::test]
 async fn error_handling_early_debit_failure_fs() {
-    eprintln!("START: error_handling_early_debit_failure_fs");
     let td = tempfile::tempdir().unwrap();
     let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
     error_handling_early_debit_failure_with(store).await;
-    eprintln!("END: error_handling_early_debit_failure_fs");
 }
 
 // 5) Unknown activity handler: should fail with unregistered error
@@ -170,17 +158,14 @@ async fn unknown_activity_fails_with(store: StdArc<dyn HistoryStore>) {
 
 #[tokio::test]
 async fn unknown_activity_fails_fs() {
-    eprintln!("START: unknown_activity_fails_fs");
     let td = tempfile::tempdir().unwrap();
     let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
     unknown_activity_fails_with(store).await;
-    eprintln!("END: unknown_activity_fails_fs");
 }
 
 // 6) Event after orchestration completion is ignored (no history change)
 #[tokio::test]
 async fn event_after_completion_is_ignored_fs() {
-    eprintln!("START: event_after_completion_is_ignored_fs");
     let td = tempfile::tempdir().unwrap();
     let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
     let activity_registry = ActivityRegistry::builder().build();
@@ -215,14 +200,12 @@ async fn event_after_completion_is_ignored_fs() {
     tokio::time::sleep(std::time::Duration::from_millis(5)).await;
     let hist_after = store.read(instance).await;
     assert_eq!(hist_after.len(), before, "post-completion event must not append history");
-    eprintln!("END: event_after_completion_is_ignored_fs");
     rt.shutdown().await;
 }
 
 // 7) Event raised before subscription after instance start is ignored
 #[tokio::test]
 async fn event_before_subscription_after_start_is_ignored() {
-    eprintln!("START: event_before_subscription_after_start_is_ignored");
     // Use FS store for consistency
     let td = tempfile::tempdir().unwrap();
     let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
@@ -260,13 +243,11 @@ async fn event_before_subscription_after_start_is_ignored() {
     let handle = rt.clone().start_orchestration(instance, "PreSubscriptionTest", "").await;
     let (_hist, out) = handle.unwrap().await.unwrap();
     assert_eq!(out.unwrap(), "late");
-    eprintln!("END: event_before_subscription_after_start_is_ignored");
     rt.shutdown().await;
 }
 
 // 8) History cap exceeded triggers a hard error (no truncation) for both providers
 async fn history_cap_exceeded_with(store: StdArc<dyn HistoryStore>) {
-    eprintln!("START: history_cap_exceeded_with");
     let activity_registry = ActivityRegistry::builder()
         .register("Noop", |_in: String| async move { Ok(String::new()) })
         .build();
@@ -294,19 +275,15 @@ async fn history_cap_exceeded_with(store: StdArc<dyn HistoryStore>) {
 
 #[tokio::test]
 async fn history_cap_exceeded_inmem() {
-    eprintln!("START: history_cap_exceeded_inmem");
     let store = StdArc::new(InMemoryHistoryStore::default()) as StdArc<dyn HistoryStore>;
     history_cap_exceeded_with(store).await;
-    eprintln!("END: history_cap_exceeded_inmem");
 }
 
 #[tokio::test]
 async fn history_cap_exceeded_fs() {
-    eprintln!("START: history_cap_exceeded_fs");
     let td = tempfile::tempdir().unwrap();
     let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
     history_cap_exceeded_with(store).await;
-    eprintln!("END: history_cap_exceeded_fs");
 }
 
 

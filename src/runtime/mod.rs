@@ -12,6 +12,15 @@ use async_trait::async_trait;
 /// Runtime components: activity worker and registry utilities.
 pub mod activity;
 
+/// High-level orchestration status derived from history.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OrchestrationStatus {
+    NotFound,
+    Running,
+    Completed { output: String },
+    Failed { error: String },
+}
+
 /// Trait implemented by orchestration handlers that can be invoked by the runtime.
 #[async_trait]
 pub trait OrchestrationHandler: Send + Sync {
@@ -166,6 +175,22 @@ impl Runtime {
         }
         // Spawn to completion and return handle
         Ok(self.clone().spawn_instance_to_completion(instance, orchestration_name).await)
+    }
+
+    /// Returns the current status of an orchestration instance by inspecting its history.
+    pub async fn get_orchestration_status(&self, instance: &str) -> OrchestrationStatus {
+        let hist = self.history_store.read(instance).await;
+        if hist.is_empty() {
+            return OrchestrationStatus::NotFound;
+        }
+        for e in hist.iter().rev() {
+            match e {
+                Event::OrchestrationFailed { error } => return OrchestrationStatus::Failed { error: error.clone() },
+                Event::OrchestrationCompleted { output } => return OrchestrationStatus::Completed { output: output.clone() },
+                _ => {}
+            }
+        }
+        OrchestrationStatus::Running
     }
     /// Start a new runtime using the in-memory history store.
     pub async fn start(activity_registry: Arc<activity::ActivityRegistry>, orchestration_registry: OrchestrationRegistry) -> Arc<Self> {

@@ -54,7 +54,7 @@ async fn sample_hello_world_fs() {
 /// - Use standard Rust control flow to drive subsequent activities
 #[tokio::test]
 async fn sample_basic_control_flow_fs() {
-    eprintln!("START: sample_basic_control_flow_fs");
+    
     let td = tempfile::tempdir().unwrap();
     let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
 
@@ -94,7 +94,7 @@ async fn sample_basic_control_flow_fs() {
 /// - Emit replay-safe traces per iteration
 #[tokio::test]
 async fn sample_loop_fs() {
-    eprintln!("START: sample_loop_fs");
+    
     let td = tempfile::tempdir().unwrap();
     let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
 
@@ -131,7 +131,7 @@ async fn sample_loop_fs() {
 /// - On failure, run a compensating activity and log what happened
 #[tokio::test]
 async fn sample_error_handling_fs() {
-    eprintln!("START: sample_error_handling_fs");
+    
     let td = tempfile::tempdir().unwrap();
     let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
 
@@ -179,7 +179,7 @@ async fn sample_error_handling_fs() {
 /// - Deterministic replay ensures join order is stable
 #[tokio::test]
 async fn dtf_legacy_gabbar_greetings_fs() {
-    eprintln!("START: dtf_legacy_gabbar_greetings_fs");
+    
     let td = tempfile::tempdir().unwrap();
     let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
 
@@ -215,7 +215,7 @@ async fn dtf_legacy_gabbar_greetings_fs() {
 /// - Log and validate basic formatting of results
 #[tokio::test]
 async fn sample_system_activities_fs() {
-    eprintln!("START: sample_system_activities_fs");
+    
     let td = tempfile::tempdir().unwrap();
     let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
 
@@ -247,6 +247,38 @@ async fn sample_system_activities_fs() {
     assert_eq!(guid_str.len(), 32);
     assert!(guid_str.chars().all(|c| c.is_ascii_hexdigit()));
 
+    rt.shutdown().await;
+}
+
+/// Sample: start an orchestration and poll its status until completion.
+#[tokio::test]
+async fn sample_status_polling_fs() {
+    
+    use rust_dtf::OrchestrationStatus;
+    let td = tempfile::tempdir().unwrap();
+    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
+
+    let activity_registry = ActivityRegistry::builder().build();
+    let orchestration = |ctx: OrchestrationContext, _input: String| async move {
+        ctx.schedule_timer(20).into_timer().await;
+        Ok("done".to_string())
+    };
+    let orchestration_registry = OrchestrationRegistry::builder()
+        .register("StatusSample", orchestration)
+        .build();
+
+    let rt = runtime::Runtime::start_with_store(store, Arc::new(activity_registry), orchestration_registry).await;
+    let _h = rt.clone().start_orchestration("inst-status-sample", "StatusSample", "").await.unwrap();
+
+    // Poll status until Completed
+    loop {
+        match rt.get_orchestration_status("inst-status-sample").await {
+            OrchestrationStatus::Completed { output } => { assert_eq!(output, "done"); break; }
+            OrchestrationStatus::Failed { error } => panic!("unexpected failure: {error}"),
+            OrchestrationStatus::Running => tokio::time::sleep(std::time::Duration::from_millis(5)).await,
+            OrchestrationStatus::NotFound => panic!("instance not found"),
+        }
+    }
     rt.shutdown().await;
 }
 

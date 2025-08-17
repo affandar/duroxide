@@ -67,7 +67,6 @@ async fn orchestration_completes_and_replays_deterministically_with(store: StdAr
 
 #[tokio::test]
 async fn orchestration_completes_and_replays_deterministically_fs() {
-    eprintln!("START: orchestration_completes_and_replays_deterministically_fs");
     let td = tempfile::tempdir().unwrap();
     let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
     orchestration_completes_and_replays_deterministically_with(store).await;
@@ -75,7 +74,6 @@ async fn orchestration_completes_and_replays_deterministically_fs() {
 
 #[test]
 fn action_order_is_deterministic_in_first_turn() {
-    eprintln!("START: action_order_is_deterministic_in_first_turn");
     let orchestrator = |ctx: OrchestrationContext| async move {
         let _ = ctx.new_guid();
         let f_a = ctx.schedule_activity("A", "1");
@@ -127,7 +125,6 @@ async fn sequential_activity_chain_completes_with(store: StdArc<dyn HistoryStore
 
 #[tokio::test]
 async fn sequential_activity_chain_completes_fs() {
-    eprintln!("START: sequential_activity_chain_completes_fs");
     let td = tempfile::tempdir().unwrap();
     let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
     sequential_activity_chain_completes_with(store).await;
