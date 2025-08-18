@@ -50,94 +50,6 @@ async fn sample_hello_world_fs() {
     rt.shutdown().await;
 }
 
-/// Mixed string and typed activities with typed orchestration, showcasing select on typed+string
-#[tokio::test]
-async fn sample_mixed_string_and_typed_typed_orch_fs() {
-    let td = tempfile::tempdir().unwrap();
-    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
-
-    // String activity: returns uppercased string
-    // Typed activity: Add two numbers
-    let activity_registry = ActivityRegistry::builder()
-        .register("Upper", |input: String| async move { Ok(input.to_uppercase()) })
-        .register_typed::<AddReq, AddRes, _, _>("Add", |req| async move { Ok(AddRes { sum: req.a + req.b }) })
-        .build();
-
-    // Typed orchestrator input/output
-    let orch = |ctx: OrchestrationContext, req: AddReq| async move {
-        // Kick off a typed activity and a string activity, race them with select!
-        let f_typed = ctx
-            .schedule_activity_typed::<AddReq, AddRes>("Add", &req)
-            .into_activity_typed::<AddRes>()
-            .map(|r| r.map(|v| format!("sum={}", v.sum)))
-            .fuse();
-        let f_str = ctx
-            .schedule_activity("Upper", "hello")
-            .into_activity()
-            .map(|r| r.map(|v| format!("up={v}")))
-            .fuse();
-        pin_mut!(f_typed, f_str);
-        let first = select! {
-            a = f_typed => a,
-            b = f_str => b,
-        };
-        // Return whichever completed first
-        Ok::<_, String>(first.unwrap())
-    };
-    let orchestration_registry = OrchestrationRegistry::builder()
-        .register_typed::<AddReq, String, _, _>("MixedTypedOrch", orch)
-        .build();
-
-    let rt = runtime::Runtime::start_with_store(store, Arc::new(activity_registry), orchestration_registry).await;
-    let h = rt.clone().start_orchestration_typed::<AddReq, String>("inst-mixed-typed", "MixedTypedOrch", AddReq { a: 1, b: 2 }).await.unwrap();
-    let (_hist, out) = h.await.unwrap();
-    let s = out.unwrap();
-    assert!(s == "sum=3" || s == "up=HELLO");
-    rt.shutdown().await;
-}
-
-/// Mixed string and typed activities with string orchestration, showcasing select on typed+string
-#[tokio::test]
-async fn sample_mixed_string_and_typed_string_orch_fs() {
-    let td = tempfile::tempdir().unwrap();
-    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
-
-    let activity_registry = ActivityRegistry::builder()
-        .register("Upper", |input: String| async move { Ok(input.to_uppercase()) })
-        .register_typed::<AddReq, AddRes, _, _>("Add", |req| async move { Ok(AddRes { sum: req.a + req.b }) })
-        .build();
-
-    // String orchestrator mixes typed and string activity calls
-    let orch = |ctx: OrchestrationContext, _in: String| async move {
-        let f_typed = ctx
-            .schedule_activity_typed::<AddReq, AddRes>("Add", &AddReq { a: 5, b: 7 })
-            .into_activity_typed::<AddRes>()
-            .map(|r| r.map(|v| format!("sum={}", v.sum)))
-            .fuse();
-        let f_str = ctx
-            .schedule_activity("Upper", "race")
-            .into_activity()
-            .map(|r| r.map(|v| format!("up={v}")))
-            .fuse();
-        pin_mut!(f_typed, f_str);
-        let first = select! {
-            a = f_typed => a,
-            b = f_str => b,
-        };
-        Ok::<_, String>(first.unwrap())
-    };
-    let orch_reg = OrchestrationRegistry::builder()
-        .register("MixedStringOrch", orch)
-        .build();
-
-    let rt = runtime::Runtime::start_with_store(store, Arc::new(activity_registry), orch_reg).await;
-    let h = rt.clone().start_orchestration("inst-mixed-string", "MixedStringOrch", "").await.unwrap();
-    let (_hist, out) = h.await.unwrap();
-    let s = out.unwrap();
-    assert!(s == "sum=12" || s == "up=RACE");
-    rt.shutdown().await;
-}
-
 /// Basic control flow: branch on a flag returned by an activity.
 ///
 /// Highlights:
@@ -609,5 +521,93 @@ async fn sample_typed_event_fs() {
     let h = rt.clone().start_orchestration_typed::<(), String>("inst-typed-ack", "WaitAck", ()).await.unwrap();
     let (_hist, out) = h.await.unwrap();
     assert_eq!(out.unwrap(), serde_json::to_string(&Ack { ok: true }).unwrap());
+    rt.shutdown().await;
+}
+
+/// Mixed string and typed activities with typed orchestration, showcasing select on typed+string
+#[tokio::test]
+async fn sample_mixed_string_and_typed_typed_orch_fs() {
+    let td = tempfile::tempdir().unwrap();
+    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
+
+    // String activity: returns uppercased string
+    // Typed activity: Add two numbers
+    let activity_registry = ActivityRegistry::builder()
+        .register("Upper", |input: String| async move { Ok(input.to_uppercase()) })
+        .register_typed::<AddReq, AddRes, _, _>("Add", |req| async move { Ok(AddRes { sum: req.a + req.b }) })
+        .build();
+
+    // Typed orchestrator input/output
+    let orch = |ctx: OrchestrationContext, req: AddReq| async move {
+        // Kick off a typed activity and a string activity, race them with select!
+        let f_typed = ctx
+            .schedule_activity_typed::<AddReq, AddRes>("Add", &req)
+            .into_activity_typed::<AddRes>()
+            .map(|r| r.map(|v| format!("sum={}", v.sum)))
+            .fuse();
+        let f_str = ctx
+            .schedule_activity("Upper", "hello")
+            .into_activity()
+            .map(|r| r.map(|v| format!("up={v}")))
+            .fuse();
+        pin_mut!(f_typed, f_str);
+        let first = select! {
+            a = f_typed => a,
+            b = f_str => b,
+        };
+        // Return whichever completed first
+        Ok::<_, String>(first.unwrap())
+    };
+    let orchestration_registry = OrchestrationRegistry::builder()
+        .register_typed::<AddReq, String, _, _>("MixedTypedOrch", orch)
+        .build();
+
+    let rt = runtime::Runtime::start_with_store(store, Arc::new(activity_registry), orchestration_registry).await;
+    let h = rt.clone().start_orchestration_typed::<AddReq, String>("inst-mixed-typed", "MixedTypedOrch", AddReq { a: 1, b: 2 }).await.unwrap();
+    let (_hist, out) = h.await.unwrap();
+    let s = out.unwrap();
+    assert!(s == "sum=3" || s == "up=HELLO");
+    rt.shutdown().await;
+}
+
+/// Mixed string and typed activities with string orchestration, showcasing select on typed+string
+#[tokio::test]
+async fn sample_mixed_string_and_typed_string_orch_fs() {
+    let td = tempfile::tempdir().unwrap();
+    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
+
+    let activity_registry = ActivityRegistry::builder()
+        .register("Upper", |input: String| async move { Ok(input.to_uppercase()) })
+        .register_typed::<AddReq, AddRes, _, _>("Add", |req| async move { Ok(AddRes { sum: req.a + req.b }) })
+        .build();
+
+    // String orchestrator mixes typed and string activity calls
+    let orch = |ctx: OrchestrationContext, _in: String| async move {
+        let f_typed = ctx
+            .schedule_activity_typed::<AddReq, AddRes>("Add", &AddReq { a: 5, b: 7 })
+            .into_activity_typed::<AddRes>()
+            .map(|r| r.map(|v| format!("sum={}", v.sum)))
+            .fuse();
+        let f_str = ctx
+            .schedule_activity("Upper", "race")
+            .into_activity()
+            .map(|r| r.map(|v| format!("up={v}")))
+            .fuse();
+        pin_mut!(f_typed, f_str);
+        let first = select! {
+            a = f_typed => a,
+            b = f_str => b,
+        };
+        Ok::<_, String>(first.unwrap())
+    };
+    let orch_reg = OrchestrationRegistry::builder()
+        .register("MixedStringOrch", orch)
+        .build();
+
+    let rt = runtime::Runtime::start_with_store(store, Arc::new(activity_registry), orch_reg).await;
+    let h = rt.clone().start_orchestration("inst-mixed-string", "MixedStringOrch", "").await.unwrap();
+    let (_hist, out) = h.await.unwrap();
+    let s = out.unwrap();
+    assert!(s == "sum=12" || s == "up=RACE");
     rt.shutdown().await;
 }

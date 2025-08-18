@@ -1,5 +1,6 @@
 ## Durable Task Rust Core – TODOs
 
+- ContinueAsNew support
 - Need to understand this oneshot channel to await on
 - sharding and scale out to multiple runtimes
 - versioning strategy
@@ -7,6 +8,7 @@
 - harden queue read semantics (see docs/reliability-queue-and-history.md)
 - strongly typed activity and orchestration calls?
 - typed parameters for activities and orchestrations
+- implement Unpin typed future wrappers for `_typed` adapters (see docs/typed-futures-design.md)
 - cancellations via JoinHandles?
 - test hung because the initial orchestration takes longer to start!
 - Add proper metrics.
