@@ -3,6 +3,8 @@ use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex, oneshot};
 use tokio::task::JoinHandle;
 use crate::{Action, Event, OrchestrationContext, run_turn_with};
+use serde::{de::DeserializeOwned, Serialize};
+use crate::_typed_codec::{Json, Codec};
 use crate::providers::{HistoryStore, WorkItem};
 use crate::providers::in_memory::InMemoryHistoryStore;
 use tracing::{debug, warn, info, error};
@@ -68,13 +70,35 @@ pub struct OrchestrationRegistryBuilder {
 }
 
 impl OrchestrationRegistryBuilder {
-    /// Register an orchestration function that returns `Result<String, String>`.
+    /// Register a typed orchestration function. Input/output are serialized internally.
+    /// Register a string-IO orchestrator (back-compat)
     pub fn register<F, Fut>(mut self, name: impl Into<String>, f: F) -> Self
     where
         F: Fn(OrchestrationContext, String) -> Fut + Send + Sync + 'static,
         Fut: std::future::Future<Output = Result<String, String>> + Send + 'static,
     {
         self.map.insert(name.into(), Arc::new(FnOrchestration(f)));
+        self
+    }
+
+    /// Register a typed orchestrator; serialized internally.
+    pub fn register_typed<In, Out, F, Fut>(mut self, name: impl Into<String>, f: F) -> Self
+    where
+        In: DeserializeOwned + Send + 'static,
+        Out: Serialize + Send + 'static,
+        F: Fn(OrchestrationContext, In) -> Fut + Send + Sync + Clone + 'static,
+        Fut: std::future::Future<Output = Result<Out, String>> + Send + 'static,
+    {
+        let f_clone = f.clone();
+        let wrapper = move |ctx: OrchestrationContext, input_s: String| {
+            let f_inner = f_clone.clone();
+            async move {
+                let input: In = Json::decode(&input_s)?;
+                let out: Out = f_inner(ctx, input).await?;
+                Json::encode(&out)
+            }
+        };
+        self.map.insert(name.into(), Arc::new(FnOrchestration(wrapper)));
         self
     }
 
@@ -169,13 +193,19 @@ pub struct Runtime {
 impl Runtime {
     /// Enqueue a new orchestration instance start. The runtime will pick this up
     /// in the background and drive it to completion.
-    pub async fn start_orchestration(self: Arc<Self>, instance: &str, orchestration_name: &str, input: impl Into<String>) -> Result<JoinHandle<(Vec<Event>, Result<String, String>)>, String> {
+    /// Start a typed orchestration; input/output are serialized internally.
+    pub async fn start_orchestration_typed<In, Out>(self: Arc<Self>, instance: &str, orchestration_name: &str, input: In) -> Result<JoinHandle<(Vec<Event>, Result<Out, String>)>, String>
+    where
+        In: Serialize,
+        Out: DeserializeOwned + Send + 'static,
+    {
         // Ensure instance exists
         let _ = self.history_store.create_instance(instance).await; // best-effort
         // Append start marker if empty
         let hist = self.history_store.read(instance).await;
         if hist.is_empty() {
-            let started = vec![Event::OrchestrationStarted { name: orchestration_name.to_string(), input: input.into() }];
+            let payload = Json::encode(&input).map_err(|e| format!("encode: {e}"))?;
+            let started = vec![Event::OrchestrationStarted { name: orchestration_name.to_string(), input: payload }];
             self.history_store.append(instance, started).await.map_err(|e| format!("failed to append OrchestrationStarted: {e}"))?;
             // best-effort: record orchestration name metadata for provider bootstrap
             let _ = self.history_store.set_instance_orchestration(instance, orchestration_name).await;
@@ -185,10 +215,35 @@ impl Runtime {
         }
         // Enqueue a start request; background worker will dedupe and run exactly one execution
         let _ = self.start_tx.send(StartRequest { instance: instance.to_string(), orchestration_name: orchestration_name.to_string() });
-        // Register a oneshot waiter for the result and return a handle awaiting it
+        // Register a oneshot waiter for string result and return a handle decoding to typed Out
         let (tx, rx) = oneshot::channel::<(Vec<Event>, Result<String, String>)>();
         self.result_waiters.lock().await.entry(instance.to_string()).or_default().push(tx);
-        Ok(tokio::spawn(async move { rx.await.expect("result")}))
+        Ok(tokio::spawn(async move {
+            let (hist, res_s) = rx.await.expect("result");
+            let res_t: Result<Out, String> = match res_s {
+                Ok(s) => Json::decode::<Out>(&s),
+                Err(e) => Err(e),
+            };
+            (hist, res_t)
+        }))
+    }
+
+    /// Start an orchestration using raw String input/output (back-compat API).
+    pub async fn start_orchestration(self: Arc<Self>, instance: &str, orchestration_name: &str, input: impl Into<String>) -> Result<JoinHandle<(Vec<Event>, Result<String, String>)>, String> {
+        // Ensure instance exists
+        let _ = self.history_store.create_instance(instance).await;
+        let hist = self.history_store.read(instance).await;
+        if hist.is_empty() {
+            let started = vec![Event::OrchestrationStarted { name: orchestration_name.to_string(), input: input.into() }];
+            self.history_store.append(instance, started).await.map_err(|e| format!("failed to append OrchestrationStarted: {e}"))?;
+            let _ = self.history_store.set_instance_orchestration(instance, orchestration_name).await;
+        } else {
+            warn!(instance, "instance already has history; duplicate start accepted (deduped)");
+        }
+        let _ = self.start_tx.send(StartRequest { instance: instance.to_string(), orchestration_name: orchestration_name.to_string() });
+        let (tx, rx) = oneshot::channel::<(Vec<Event>, Result<String, String>)>();
+        self.result_waiters.lock().await.entry(instance.to_string()).or_default().push(tx);
+        Ok(tokio::spawn(async move { rx.await.expect("result") }))
     }
 
     /// Returns the current status of an orchestration instance by inspecting its history.
@@ -505,10 +560,14 @@ impl Runtime {
                     Err(e) => Event::OrchestrationFailed { error: e.clone() },
                 };
                 history.push(term_local);
-                // Notify any waiters
+                // Notify any waiters with string result
                 if let Some(waiters) = self.result_waiters.lock().await.remove(instance) {
+                    let out_s: Result<String, String> = match &out {
+                        Ok(s) => Ok(s.clone()),
+                        Err(e) => Err(e.clone()),
+                    };
                     for w in waiters {
-                        let _ = w.send((history.clone(), out.clone()));
+                        let _ = w.send((history.clone(), out_s.clone()));
                     }
                 }
                 // If child, enqueue completion to parent

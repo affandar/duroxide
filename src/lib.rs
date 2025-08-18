@@ -25,7 +25,40 @@ pub mod logging;
 pub use runtime::{OrchestrationRegistry, OrchestrationRegistryBuilder, OrchestrationHandler, OrchestrationStatus};
 
 use serde::{Deserialize, Serialize};
+use crate::_typed_codec::Codec;
 use crate::logging::LogLevel;
+
+// Internal codec utilities for typed I/O (kept private; public API remains ergonomic)
+mod _typed_codec {
+    use serde::{Serialize, de::DeserializeOwned};
+    use serde_json::Value;
+    pub trait Codec {
+        fn encode<T: Serialize>(v: &T) -> Result<String, String>;
+        fn decode<T: DeserializeOwned>(s: &str) -> Result<T, String>;
+    }
+    pub struct Json;
+    impl Codec for Json {
+        fn encode<T: Serialize>(v: &T) -> Result<String, String> {
+            // If the value is a JSON string, return raw content to preserve historic behavior
+            match serde_json::to_value(v) {
+                Ok(Value::String(s)) => Ok(s),
+                Ok(val) => serde_json::to_string(&val).map_err(|e| e.to_string()),
+                Err(e) => Err(e.to_string()),
+            }
+        }
+        fn decode<T: DeserializeOwned>(s: &str) -> Result<T, String> {
+            // Try parse as JSON first
+            match serde_json::from_str::<T>(s) {
+                Ok(v) => Ok(v),
+                Err(_) => {
+                    // Fallback: treat raw string as JSON string value
+                    let val = Value::String(s.to_string());
+                    serde_json::from_value(val).map_err(|e| e.to_string())
+                }
+            }
+        }
+    }
+}
 
 /// Append-only orchestration history entries persisted by a provider and
 /// consumed during replay. Variants use stable correlation IDs to pair
@@ -227,8 +260,8 @@ impl OrchestrationContext {
 
     /// Return current wall-clock time from a system activity in milliseconds since epoch.
     pub async fn system_now_ms(&self) -> u128 {
-        let v = self
-            .schedule_activity("__system_now", "".to_string())
+        let v: String = self
+            .schedule_activity("__system_now", "")
             .into_activity()
             .await
             .unwrap_or_else(|e| panic!("system_now failed: {e}"));
@@ -239,7 +272,7 @@ impl OrchestrationContext {
     /// integration paths; for deterministic GUIDs prefer `new_guid()`.
     pub async fn system_new_guid(&self) -> String {
         self
-            .schedule_activity("__system_new_guid", "".to_string())
+            .schedule_activity("__system_new_guid", "")
             .into_activity()
             .await
             .unwrap_or_else(|e| panic!("system_new_guid failed: {e}"))
@@ -350,6 +383,7 @@ impl Future for DurableFuture {
 impl DurableFuture {
     /// Converts this unified future into a future that resolves only for
     /// an activity completion or failure.
+    /// Await an activity result as a raw String (back-compat API).
     pub fn into_activity(self) -> impl Future<Output = Result<String, String>> {
         struct Map(DurableFuture);
         impl Future for Map {
@@ -364,6 +398,26 @@ impl DurableFuture {
             }
         }
         Map(self)
+    }
+
+    /// Await an activity result decoded to a typed value.
+    pub fn into_activity_typed<Out: serde::de::DeserializeOwned>(self) -> impl Future<Output = Result<Out, String>> {
+        struct Map(DurableFuture);
+        impl Future for Map {
+            type Output = Result<String, String>;
+            fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+                let this = unsafe { self.map_unchecked_mut(|s| &mut s.0) };
+                match this.poll(cx) {
+                    Poll::Ready(DurableOutput::Activity(v)) => Poll::Ready(v),
+                    Poll::Ready(other) => panic!("into_activity used on non-activity future: {other:?}"),
+                    Poll::Pending => Poll::Pending,
+                }
+            }
+        }
+        async move {
+            let s = Map(self).await?;
+            crate::_typed_codec::Json::decode::<Out>(&s)
+        }
     }
 
     /// Converts this unified future into a future that resolves when the
@@ -386,6 +440,7 @@ impl DurableFuture {
 
     /// Converts this unified future into a future that resolves with the
     /// payload of the correlated external event.
+    /// Await an external event as a raw String (back-compat API).
     pub fn into_event(self) -> impl Future<Output = String> {
         struct Map(DurableFuture);
         impl Future for Map {
@@ -402,8 +457,14 @@ impl DurableFuture {
         Map(self)
     }
 
+    /// Await an external event decoded to a typed value.
+    pub fn into_event_typed<T: serde::de::DeserializeOwned>(self) -> impl Future<Output = T> {
+        async move { crate::_typed_codec::Json::decode::<T>(&Self::into_event(self).await).expect("decode") }
+    }
+
     /// Converts this unified future into a future that resolves only for
     /// a sub-orchestration completion or failure.
+    /// Await a sub-orchestration result as a raw String (back-compat API).
     pub fn into_sub_orchestration(self) -> impl Future<Output = Result<String, String>> {
         struct Map(DurableFuture);
         impl Future for Map {
@@ -418,6 +479,16 @@ impl DurableFuture {
             }
         }
         Map(self)
+    }
+
+    /// Await a sub-orchestration result decoded to a typed value.
+    pub fn into_sub_orchestration_typed<Out: serde::de::DeserializeOwned>(self) -> impl Future<Output = Result<Out, String>> {
+        async move {
+            match Self::into_sub_orchestration(self).await {
+                Ok(s) => crate::_typed_codec::Json::decode::<Out>(&s),
+                Err(e) => Err(e),
+            }
+        }
     }
 }
 
@@ -439,6 +510,12 @@ impl OrchestrationContext {
         inner.claimed_activity_ids.insert(adopted_id);
         drop(inner);
         DurableFuture(Kind::Activity { id: adopted_id, name, input, scheduled: Cell::new(false), ctx: self.clone() })
+    }
+
+    /// Typed helper that serializes input and later decodes output via `into_activity_typed`.
+    pub fn schedule_activity_typed<In: serde::Serialize, Out: serde::de::DeserializeOwned>(&self, name: impl Into<String>, input: &In) -> DurableFuture {
+        let payload = crate::_typed_codec::Json::encode(input).expect("encode");
+        self.schedule_activity(name, payload)
     }
 
     /// Schedule a timer and return a `DurableFuture` correlated to it.
@@ -476,6 +553,11 @@ impl OrchestrationContext {
         DurableFuture(Kind::External { id: adopted_id, name, scheduled: Cell::new(false), ctx: self.clone() })
     }
 
+    /// Typed external wait adapter pairs with `into_event_typed` for decoding.
+    pub fn schedule_wait_typed<T: serde::de::DeserializeOwned>(&self, name: impl Into<String>) -> DurableFuture {
+        self.schedule_wait(name)
+    }
+
     /// Schedule a sub-orchestration by name with deterministic child instance id derived
     /// from parent context and correlation id.
     pub fn schedule_sub_orchestration(&self, name: impl Into<String>, input: impl Into<String>) -> DurableFuture {
@@ -492,6 +574,11 @@ impl OrchestrationContext {
         let child_instance = if instance.is_empty() { format!("sub::{id}") } else { instance };
         drop(inner);
         DurableFuture(Kind::SubOrch { id, name, instance: child_instance, input, scheduled: Cell::new(false), ctx: self.clone() })
+    }
+
+    pub fn schedule_sub_orchestration_typed<In: serde::Serialize, Out: serde::de::DeserializeOwned>(&self, name: impl Into<String>, input: &In) -> DurableFuture {
+        let payload = crate::_typed_codec::Json::encode(input).expect("encode");
+        self.schedule_sub_orchestration(name, payload)
     }
 
     /// Schedule a detached orchestration with an explicit instance id.
@@ -513,6 +600,16 @@ impl OrchestrationContext {
         let id = adopted.unwrap_or_else(|| inner.next_id());
         inner.history.push(Event::OrchestrationChained { id, name: name.clone(), instance: instance.clone(), input: input.clone() });
         inner.record_action(Action::StartOrchestrationDetached { id, name, instance, input });
+    }
+
+    pub fn schedule_orchestration_typed<In: serde::Serialize>(
+        &self,
+        name: impl Into<String>,
+        instance: impl Into<String>,
+        input: &In,
+    ) {
+        let payload = crate::_typed_codec::Json::encode(input).expect("encode");
+        self.schedule_orchestration(name, instance, payload)
     }
 
     // removed: schedule_orchestration(name, input) without instance id (must pass instance id)

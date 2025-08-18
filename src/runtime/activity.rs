@@ -4,6 +4,8 @@ use async_trait::async_trait;
 
 use super::ActivityWorkItem;
 use crate::providers::{HistoryStore, WorkItem};
+use crate::_typed_codec::{Json, Codec};
+use serde::{de::DeserializeOwned, Serialize};
 
 /// Trait implemented by activity handlers that can be invoked by the runtime.
 #[async_trait]
@@ -46,13 +48,34 @@ impl ActivityRegistryBuilder {
         for (k, v) in reg.inner.iter() { map.insert(k.clone(), v.clone()); }
         ActivityRegistryBuilder { map }
     }
-    /// Register a function as an activity that returns `Result<String, String>`.
+    /// Register a string-IO activity (back-compat).
     pub fn register<F, Fut>(mut self, name: impl Into<String>, f: F) -> Self
     where
         F: Fn(String) -> Fut + Send + Sync + 'static,
         Fut: std::future::Future<Output = Result<String, String>> + Send + 'static,
     {
         self.map.insert(name.into(), Arc::new(FnActivity(f)));
+        self
+    }
+
+    /// Register a typed activity function. Input/output are serialized internally.
+    pub fn register_typed<In, Out, F, Fut>(mut self, name: impl Into<String>, f: F) -> Self
+    where
+        In: DeserializeOwned + Send + 'static,
+        Out: Serialize + Send + 'static,
+        F: Fn(In) -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = Result<Out, String>> + Send + 'static,
+    {
+        let f_clone = std::sync::Arc::new(f);
+        let wrapper = move |input_s: String| {
+            let f_inner = f_clone.clone();
+            async move {
+                let input: In = Json::decode(&input_s)?;
+                let out: Out = (f_inner)(input).await?;
+                Json::encode(&out)
+            }
+        };
+        self.map.insert(name.into(), Arc::new(FnActivity(wrapper)));
         self
     }
     /// Finalize and produce an `ActivityRegistry`.
