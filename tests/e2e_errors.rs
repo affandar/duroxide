@@ -8,6 +8,11 @@ use rust_dtf::providers::in_memory::InMemoryHistoryStore;
 use rust_dtf::providers::fs::FsHistoryStore;
 use std::sync::Arc as StdArc;
 
+use serde::{Serialize, Deserialize};
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct AOnly { a: i32 }
+
 fn parse_activity_result(s: &Result<String, String>) -> Result<String, String> { s.clone() }
 
 async fn error_handling_compensation_on_ship_failure_with(store: StdArc<dyn HistoryStore>) {
@@ -341,6 +346,63 @@ async fn orchestration_propagates_activity_failure_fs() {
         rust_dtf::OrchestrationStatus::Failed { error } => assert_eq!(error, "bad"),
         other => panic!("unexpected status: {other:?}"),
     }
+    rt.shutdown().await;
+}
+
+#[tokio::test]
+async fn typed_activity_decode_error_fs() {
+    let td = tempfile::tempdir().unwrap();
+    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
+    // activity expects AOnly, returns stringified 'a'
+    let activity_registry = ActivityRegistry::builder()
+        .register_typed::<AOnly, String, _, _>("FmtA", |req| async move { Ok(format!("a={}", req.a)) })
+        .build();
+    let orch = |ctx: OrchestrationContext, _in: String| async move {
+        // Pass invalid payload (not JSON for AOnly)
+        let res = ctx.schedule_activity("FmtA", "not-json").into_activity().await;
+        // The activity worker decodes input; expect Err
+        assert!(res.is_err());
+        Ok("ok".to_string())
+    };
+    let orchestration_registry = OrchestrationRegistry::builder()
+        .register("BadInputToTypedActivity", orch)
+        .build();
+    let rt = runtime::Runtime::start_with_store(store, Arc::new(activity_registry), orchestration_registry).await;
+    let (_hist, out) = rt.clone().start_orchestration("inst-typed-bad", "BadInputToTypedActivity", "").await.unwrap().await.unwrap();
+    assert_eq!(out.unwrap(), "ok");
+    rt.shutdown().await;
+}
+
+#[tokio::test]
+async fn typed_event_decode_error_fs() {
+    let td = tempfile::tempdir().unwrap();
+    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
+    let activity_registry = ActivityRegistry::builder().build();
+    let orch = |ctx: OrchestrationContext, _in: String| async move {
+        // attempt to decode event into AOnly
+        let fut = ctx.schedule_wait_typed::<AOnly>("Evt").into_event_typed::<AOnly>();
+        Ok(match futures::FutureExt::catch_unwind(std::panic::AssertUnwindSafe(fut)).await {
+            Ok(v) => {
+                // If it somehow decodes, convert to string
+                let _val: AOnly = v;
+                "ok".to_string()
+            },
+            Err(_) => "decode_err".to_string(),
+        })
+    };
+    let orchestration_registry = OrchestrationRegistry::builder()
+        .register_typed::<String, String, _, _>("TypedEvt", orch)
+        .build();
+    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+    let rt_c = rt.clone();
+    let store_for_wait = store.clone();
+    tokio::spawn(async move {
+        let _ = crate::common::wait_for_subscription(store_for_wait, "inst-typed-evt", "Evt", 1000).await;
+        // invalid payload for AOnly
+        rt_c.raise_event("inst-typed-evt", "Evt", "not-json").await;
+    });
+    let (_hist, out) = rt.clone().start_orchestration_typed::<String, String>("inst-typed-evt", "TypedEvt", "".to_string()).await.unwrap().await.unwrap();
+    assert_eq!(out.unwrap(), "decode_err");
     rt.shutdown().await;
 }
 
