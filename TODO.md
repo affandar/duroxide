@@ -1,5 +1,9 @@
 ## Durable Task Rust Core – TODOs
 
+- On next session: review tests covering ContinueAsNew and multi-execution IDs
+	- Files: `tests/e2e_continue_as_new.rs` (both tests)
+	- Also revisit runtime APIs to surface `list_executions` and `get_execution_history` consistently
+
 - ContinueAsNew support
 - Need to understand this oneshot channel to await on
 - sharding and scale out to multiple runtimes
