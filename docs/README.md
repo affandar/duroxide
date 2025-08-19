@@ -14,6 +14,9 @@ This project is a minimal deterministic orchestration core inspired by Durable T
 
 - Architecture and execution model: see `architecture.md`
 - API reference and usage: see `api.md`
+- External events semantics: see `external-events.md`
+- ContinueAsNew semantics: see `continue-as-new.md`
+- Active instances and gating: see `active-instances-and-gating.md`
 
 ### Quick start
 
