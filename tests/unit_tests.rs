@@ -6,6 +6,7 @@ use std::sync::Arc;
 use rust_dtf::providers::in_memory::InMemoryHistoryStore;
 
 // Helper to create runtime with registries for tests
+#[allow(dead_code)]
 async fn create_test_runtime(activity_registry: ActivityRegistry) -> Arc<runtime::Runtime> {
     // Create a minimal orchestration registry for basic tests
     let orchestration_registry = OrchestrationRegistry::builder().build();

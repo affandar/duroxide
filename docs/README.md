@@ -22,3 +22,29 @@ This project is a minimal deterministic orchestration core inspired by Durable T
 - Drive a single instance to completion using the runtime (async) or the `Executor` (sync/test helper).
 
 
+## Samples and Tests
+
+Start with these end-to-end tests to learn the API and patterns by example:
+
+- `tests/e2e_samples.rs` – documented “learning” samples
+  - Hello world, control flow branching, loops and accumulation
+  - Error handling and compensation
+  - Parallel fan‑out/fan‑in (`futures::join`)
+  - System activities (`system_now_ms`, `system_new_guid`)
+  - Sub‑orchestrations: basic, fan‑out, and chained
+  - Detached orchestration scheduling (fire‑and‑forget)
+  - Mixed typed and string I/O samples, including `select!` over heterogeneous futures
+
+- `tests/e2e_continue_as_new.rs` – ContinueAsNew scenarios
+  - Multi‑execution rollover: orchestrator loops via `ctx.continue_as_new(new_input)`; provider stores all executions
+  - External event routing to the latest execution
+  - History assertions using execution‑aware provider APIs
+
+You can run individual samples with:
+
+```bash
+cargo test --test e2e_samples -- --nocapture
+cargo test --test e2e_continue_as_new -- --nocapture
+```
+
+

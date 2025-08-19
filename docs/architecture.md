@@ -5,7 +5,7 @@ Deterministic orchestration hinges on separating decision-making (user code) fro
 ### Components
 
 - Orchestrator (user code): async function polled once per turn. It reads history and requests new work via `Action`s.
-- Runtime (in-process): executes activities and timers, routes external events, and appends resulting `Event`s.
+- Runtime (in-process): executes activities and timers, routes external events, and appends resulting `Event`s. It also runs a polling engine that consumes a provider-backed work queue (`WorkItem`) for completions and external signals, and auto-resumes incomplete instances at startup.
 - Provider: persistence boundary that stores history per instance (`HistoryStore`).
 - Workers: activity worker executes registered handlers; timer worker schedules real-time waits.
 
@@ -39,12 +39,24 @@ classDiagram
       +TimerFired(id, fire_at_ms)
       +ExternalSubscribed(id, name)
       +ExternalEvent(id, name, data)
+      +OrchestrationStarted(name, input)
+      +OrchestrationCompleted(output)
+      +OrchestrationFailed(error)
+      +OrchestrationChained(id, name, instance, input)
+      +SubOrchestrationScheduled(id, name, instance, input)
+      +SubOrchestrationCompleted(id, result)
+      +SubOrchestrationFailed(id, error)
+      +ParentLinked(parent_instance, parent_id)
+      +OrchestrationContinuedAsNew(input)
     }
 
     class Action {
       +CallActivity(id, name, input)
       +CreateTimer(id, delay_ms)
       +WaitExternal(id, name)
+      +StartOrchestrationDetached(id, name, instance, input)
+      +StartSubOrchestration(id, name, instance, input)
+      +ContinueAsNew(input)
     }
 ```
 
@@ -54,7 +66,7 @@ classDiagram
 flowchart TD
     A[Start turn with history] --> B[Poll orchestrator once]
     B -->|Ready| C[Output captured]
-    C --> H[Persist any new events]
+    C --> H[Persist any new events + handle ContinueAsNew]
     H --> Z[Stop]
     B -->|Pending + Actions| D[Execute actions via runtime]
     D --> E[Workers complete]
@@ -67,5 +79,15 @@ flowchart TD
 - All schedule/subscribe ops allocate or adopt a correlation `id`.
 - Completions are matched by `id` and buffered in history; composition via `select`/`join` is deterministic.
 - We avoid relying on “next event in log” matching; multiple completions in one batch are safe.
+
+### Multi-execution (ContinueAsNew)
+
+- `ContinueAsNew` ends the current execution and starts a fresh one with new input.
+- Providers persist all executions. Filesystem layout: `root/{instance}/{execution_id}.jsonl`.
+- Runtime behavior:
+  - Appends `OrchestrationContinuedAsNew` to the current execution.
+  - Calls `reset_for_continue_as_new` on the provider to create the next execution with `OrchestrationStarted`.
+  - Enqueues a `StartOrchestration` work item and notifies waiters for the initial start with an empty success.
+  - External events are routed to the latest execution.
 
 

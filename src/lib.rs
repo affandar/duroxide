@@ -100,6 +100,9 @@ pub enum Event {
 
     /// Parent linkage recorded in a child orchestration history.
     ParentLinked { parent_instance: String, parent_id: u64 },
+
+    /// Orchestration continued as new with fresh input (terminal for this execution).
+    OrchestrationContinuedAsNew { input: String },
 }
 
 /// Declarative decisions produced by an orchestration turn. The host/provider
@@ -116,6 +119,9 @@ pub enum Action {
     StartOrchestrationDetached { id: u64, name: String, instance: String, input: String },
     /// Start a sub-orchestration by name and child instance id.
     StartSubOrchestration { id: u64, name: String, instance: String, input: String },
+
+    /// Continue the current orchestration as a new execution with new input (terminal for current execution).
+    ContinueAsNew { input: String },
 }
 
 #[derive(Debug)]
@@ -163,7 +169,8 @@ impl CtxInner {
                 Event::OrchestrationStarted { .. }
                 | Event::OrchestrationCompleted { .. }
                 | Event::OrchestrationFailed { .. }
-                | Event::ParentLinked { .. } => None,
+                | Event::ParentLinked { .. }
+                | Event::OrchestrationContinuedAsNew { .. } => None,
             };
             if let Some(id) = id_opt { max_id = max_id.max(id); }
         }
@@ -276,6 +283,17 @@ impl OrchestrationContext {
             .into_activity()
             .await
             .unwrap_or_else(|e| panic!("system_new_guid failed: {e}"))
+    }
+
+    pub fn continue_as_new(&self, input: impl Into<String>) {
+        let mut inner = self.inner.lock().unwrap();
+        let input: String = input.into();
+        inner.record_action(Action::ContinueAsNew { input });
+    }
+
+    pub fn continue_as_new_typed<In: serde::Serialize>(&self, input: &In) {
+        let payload = crate::_typed_codec::Json::encode(input).expect("encode");
+        self.continue_as_new(payload);
     }
 }
 
@@ -649,8 +667,9 @@ where
         Poll::Ready(out) => {
             ctx.inner.lock().unwrap().logging_enabled_this_poll = true;
             let logs = ctx.take_log_buffer();
+            let actions = ctx.take_actions();
             let hist_after = ctx.inner.lock().unwrap().history.clone();
-            (hist_after, Vec::new(), logs, Some(out))
+            (hist_after, actions, logs, Some(out))
         }
         Poll::Pending => {
             let actions = ctx.take_actions();
@@ -675,8 +694,9 @@ where
         Poll::Ready(out) => {
             ctx.inner.lock().unwrap().logging_enabled_this_poll = true;
             let logs = ctx.take_log_buffer();
+            let actions = ctx.take_actions();
             let hist_after = ctx.inner.lock().unwrap().history.clone();
-            (hist_after, Vec::new(), logs, Some(out))
+            (hist_after, actions, logs, Some(out))
         }
         Poll::Pending => {
             let actions = ctx.take_actions();

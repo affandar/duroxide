@@ -49,6 +49,38 @@ pub trait HistoryStore: Send + Sync {
     async fn set_instance_orchestration(&self, _instance: &str, _orchestration: &str) -> Result<(), String> { Ok(()) }
     /// Retrieve orchestration name metadata for an instance, if present.
     async fn get_instance_orchestration(&self, _instance: &str) -> Option<String> { None }
+
+    // --- Multi-execution scaffolding (default single-execution fallback) ---
+    /// Return latest execution id for an instance (default: 1 if history exists).
+    async fn latest_execution_id(&self, instance: &str) -> Option<u64> {
+        let h = self.read(instance).await;
+        if h.is_empty() { None } else { Some(1) }
+    }
+
+    /// List all execution ids (default: [1] if history exists).
+    async fn list_executions(&self, instance: &str) -> Vec<u64> {
+        let h = self.read(instance).await;
+        if h.is_empty() { Vec::new() } else { vec![1] }
+    }
+
+    /// Read history for a specific execution (default: same as `read`).
+    async fn read_with_execution(&self, instance: &str, _execution_id: u64) -> Vec<Event> {
+        self.read(instance).await
+    }
+
+    /// Append events for a specific execution (default: same as `append`).
+    async fn append_with_execution(&self, instance: &str, _execution_id: u64, new_events: Vec<Event>) -> Result<(), String> {
+        self.append(instance, new_events).await
+    }
+
+    /// Reset for ContinueAsNew: create a new execution with OrchestrationStarted. Default: overwrite existing history.
+    async fn reset_for_continue_as_new(&self, instance: &str, orchestration: &str, input: &str) -> Result<u64, String> {
+        // Default implementation: clear and write a fresh start; new execution id is 1
+        self.remove_instance(instance).await.ok();
+        self.create_instance(instance).await?;
+        self.append(instance, vec![Event::OrchestrationStarted { name: orchestration.to_string(), input: input.to_string() }]).await?;
+        Ok(1)
+    }
 }
 
 // Providers are datastores only; runtime owns queues and workers.

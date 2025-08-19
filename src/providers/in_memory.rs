@@ -8,7 +8,8 @@ const CAP: usize = 1024;
 
 #[derive(Default)]
 pub struct InMemoryHistoryStore {
-    inner: Mutex<HashMap<String, Vec<Event>>>,
+    // Multi-execution: instance -> executions (execution_id starts at 1)
+    inner: Mutex<HashMap<String, Vec<Vec<Event>>>>,
     work_q: Mutex<Vec<WorkItem>>, // simple FIFO
     meta: Mutex<HashMap<String, String>>, // instance -> orchestration name
 }
@@ -16,19 +17,14 @@ pub struct InMemoryHistoryStore {
 #[async_trait::async_trait]
 impl HistoryStore for InMemoryHistoryStore {
     async fn read(&self, instance: &str) -> Vec<Event> {
-        self.inner.lock().await.get(instance).cloned().unwrap_or_default()
+        let g = self.inner.lock().await;
+        match g.get(instance) {
+            Some(execs) => execs.last().cloned().unwrap_or_default(),
+            None => Vec::new(),
+        }
     }
     async fn append(&self, instance: &str, new_events: Vec<Event>) -> Result<(), String> {
-        let mut g = self.inner.lock().await;
-        let ent = match g.get_mut(instance) {
-            Some(v) => v,
-            None => return Err(format!("instance not found: {instance}")),
-        };
-        if ent.len() + new_events.len() > CAP {
-            return Err(format!("history cap exceeded (cap={}, have={}, append={})", CAP, ent.len(), new_events.len()));
-        }
-        ent.extend(new_events);
-        Ok(())
+        self.append_with_execution(instance, self.latest_execution_id(instance).await.unwrap_or(1), new_events).await
     }
     async fn reset(&self) {
         self.inner.lock().await.clear();
@@ -49,7 +45,7 @@ impl HistoryStore for InMemoryHistoryStore {
     async fn create_instance(&self, instance: &str) -> Result<(), String> {
         let mut g = self.inner.lock().await;
         if g.contains_key(instance) { return Err(format!("instance already exists: {instance}")); }
-        g.insert(instance.to_string(), Vec::new());
+        g.insert(instance.to_string(), vec![Vec::new()]);
         Ok(())
     }
 
@@ -77,6 +73,44 @@ impl HistoryStore for InMemoryHistoryStore {
 
     async fn get_instance_orchestration(&self, instance: &str) -> Option<String> {
         self.meta.lock().await.get(instance).cloned()
+    }
+
+    async fn latest_execution_id(&self, instance: &str) -> Option<u64> {
+        let g = self.inner.lock().await;
+        g.get(instance).map(|v| v.len() as u64)
+    }
+
+    async fn list_executions(&self, instance: &str) -> Vec<u64> {
+        let g = self.inner.lock().await;
+        match g.get(instance) { Some(v) if !v.is_empty() => (1..=v.len() as u64).collect(), _ => Vec::new() }
+    }
+
+    async fn read_with_execution(&self, instance: &str, execution_id: u64) -> Vec<Event> {
+        let g = self.inner.lock().await;
+        match g.get(instance) {
+            Some(execs) => execs.get((execution_id.saturating_sub(1)) as usize).cloned().unwrap_or_default(),
+            None => Vec::new(),
+        }
+    }
+
+    async fn append_with_execution(&self, instance: &str, execution_id: u64, new_events: Vec<Event>) -> Result<(), String> {
+        let mut g = self.inner.lock().await;
+        let execs = g.get_mut(instance).ok_or_else(|| format!("instance not found: {instance}"))?;
+        let idx = (execution_id.saturating_sub(1)) as usize;
+        if idx >= execs.len() { return Err(format!("execution not found: {}#{}", instance, execution_id)); }
+        let cur = &mut execs[idx];
+        if cur.len() + new_events.len() > CAP {
+            return Err(format!("history cap exceeded (cap={}, have={}, append={})", CAP, cur.len(), new_events.len()));
+        }
+        cur.extend(new_events);
+        Ok(())
+    }
+
+    async fn reset_for_continue_as_new(&self, instance: &str, _orchestration: &str, input: &str) -> Result<u64, String> {
+        let mut g = self.inner.lock().await;
+        let execs = g.get_mut(instance).ok_or_else(|| format!("instance not found: {instance}"))?;
+        execs.push(vec![Event::OrchestrationStarted { name: self.meta.lock().await.get(instance).cloned().unwrap_or_default(), input: input.to_string() }]);
+        Ok(execs.len() as u64)
     }
 }
 

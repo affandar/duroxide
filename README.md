@@ -16,27 +16,28 @@ Getting started samples
 
 What it is
 - Deterministic orchestration core with correlated event IDs and replay safety
-- Message-driven runtime built on Tokio (activity worker pool, timer worker, external event router)
-- Storage-agnostic via `HistoryStore` (in-memory, filesystem today)
+- Message-driven runtime built on Tokio: activity worker pool, timer worker, external event router, and a provider-backed work queue
+- Storage-agnostic via `HistoryStore` (in-memory and filesystem providers today)
 
 How it works (brief)
-- The orchestrator runs turn-by-turn. Each turn it is polled once, may schedule actions, then the host blocks waiting for completions.
-- Every operation has a correlation id. Scheduling is recorded as history events (e.g., `ActivityScheduled`), and completions are matched by id (e.g., `ActivityCompleted`).
-- The runtime dispatches actions to workers over channels. Workers send completions back; the runtime appends them to history and starts the next turn.
-- Logging is replay-safe by treating it as a system activity via `ctx.trace_*` helpers. Logs are emitted on completion and also persisted as `TraceEmitted` events.
-- Providers enforce a history cap (1024 here). If an append would exceed the cap, they return an error; the runtime fails the run to preserve determinism (no truncation).
+- The orchestrator runs turn-by-turn. Each turn it is polled once, may schedule actions, then the runtime waits for completions.
+- Every operation has a correlation id. Scheduling is recorded as history events (e.g., `ActivityScheduled`) and completions are matched by id (e.g., `ActivityCompleted`).
+- The runtime dispatches actions to workers over channels and consumes a provider-backed work queue (`WorkItem`) for completions and external events. It appends new events to history and advances the next turn.
+- Logging is replay-safe via `tracing` and the `ctx.trace_*` helpers (implemented as a deterministic system activity). We do not persist trace events in history.
+- Providers enforce a history cap (default 1024; tests use a smaller cap). If an append would exceed the cap, they return an error; the runtime fails the run to preserve determinism (no truncation).
 
 Key types
-- `OrchestrationContext`: schedules work (`schedule_activity`, `schedule_timer`, `schedule_wait`) and exposes `trace_info/warn/error/debug`.
-- `DurableFuture`: returned by `schedule_*`; use `into_activity()`, `into_timer()`, `into_event()` for typed awaits.
-- `Event`/`Action`: immutable history entries and host-side actions.
+- `OrchestrationContext`: schedules work (`schedule_activity`, `schedule_timer`, `schedule_wait`, `schedule_sub_orchestration`, `schedule_orchestration`) and exposes `trace_*`, `continue_as_new`.
+- `DurableFuture`: returned by `schedule_*`; use `into_activity()`, `into_timer()`, `into_event()`, `into_sub_orchestration()` (and `_typed` variants) to await.
+- `Event`/`Action`: immutable history entries and host-side actions, including `ContinueAsNew`.
 - `HistoryStore`: persistence abstraction (`InMemoryHistoryStore`, `FsHistoryStore`).
+- `OrchestrationRegistry` / `ActivityRegistry`: register orchestrations/activities in-memory.
 
 Project layout
 - `src/lib.rs` — orchestration primitives and single-turn executor
-- `src/runtime/` — runtime, activity registry/worker, timer worker
+- `src/runtime/` — runtime, registries, workers, and polling engine
 - `src/providers/` — in-memory and filesystem history stores
-- `tests/` — unit and e2e tests
+- `tests/` — unit and e2e tests (see `e2e_samples.rs` to learn by example)
 
 Install (when published)
 ```toml
@@ -47,23 +48,24 @@ rust-dtf = "0.1"
 Hello world (activities + runtime)
 ```rust
 use std::sync::Arc;
-use rust_dtf::OrchestrationContext;
-use rust_dtf::runtime::{Runtime, activity::ActivityRegistry};
+use rust_dtf::{OrchestrationContext, OrchestrationRegistry};
+use rust_dtf::runtime::{self, activity::ActivityRegistry};
+use rust_dtf::providers::fs::FsHistoryStore;
 
-async fn hello_orch(ctx: OrchestrationContext) -> String {
-    ctx.trace_info("hello started");
-    let res = ctx.schedule_activity("Hello", "Rust").into_activity().await.unwrap();
-    ctx.trace_info(format!("hello result={res}"));
-    res
-}
-
-# async fn run() {
-let registry = ActivityRegistry::builder()
-    .register_result("Hello", |name: String| async move { Ok(format!("Hello, {name}!")) })
+# #[tokio::main]
+# async fn main() {
+let store = std::sync::Arc::new(FsHistoryStore::new("./data", true));
+let activities = ActivityRegistry::builder()
+    .register("Hello", |name: String| async move { Ok(format!("Hello, {name}!")) })
     .build();
-
-let rt = Runtime::start(Arc::new(registry)).await;
-let h = rt.clone().spawn_instance_to_completion("inst-hello-1", hello_orch).await;
+let orch = |ctx: OrchestrationContext, name: String| async move {
+    ctx.trace_info("hello started");
+    let res = ctx.schedule_activity("Hello", name).into_activity().await.unwrap();
+    Ok::<_, String>(res)
+};
+let orchestrations = OrchestrationRegistry::builder().register("HelloWorld", orch).build();
+let rt = runtime::Runtime::start_with_store(store, Arc::new(activities), orchestrations).await;
+let h = rt.clone().start_orchestration("inst-hello-1", "HelloWorld", "Rust").await.unwrap();
 let (_history, output) = h.await.unwrap();
 assert_eq!(output.unwrap(), "Hello, Rust!");
 rt.shutdown().await;
@@ -108,6 +110,15 @@ async fn comp_sample(ctx: OrchestrationContext) -> String {
     }
 }
 ```
+
+ContinueAsNew and multi-execution
+- Use `ctx.continue_as_new(new_input)` to end the current execution and immediately start a fresh execution with the provided input.
+- Providers keep all executions’ histories (e.g., filesystem stores `instance/{execution_id}.jsonl`).
+- The initial `start_orchestration` handle resolves with an empty success when `ContinueAsNew` occurs; the latest execution can be observed via status APIs.
+
+Status and control-plane
+- `Runtime::get_orchestration_status(instance)` -> Running | Completed { output } | Failed { error } | NotFound
+- Filesystem provider exposes execution-aware methods (`list_executions`, `read_with_execution`, etc.) for diagnostics.
 
 Local development
 - Build: `cargo build`

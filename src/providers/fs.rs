@@ -5,11 +5,6 @@ use serde_json;
 use crate::Event;
 use super::{HistoryStore, WorkItem};
 
-#[cfg(test)]
-const CAP: usize = 64;
-#[cfg(not(test))]
-const CAP: usize = 1024;
-
 /// Simple filesystem-backed history store writing JSONL per instance.
 #[derive(Clone)]
 pub struct FsHistoryStore { root: PathBuf, queue_file: PathBuf, cap: usize }
@@ -34,14 +29,18 @@ impl FsHistoryStore {
         s.cap = cap;
         s
     }
-    fn inst_path(&self, instance: &str) -> PathBuf { self.root.join(format!("{instance}.jsonl")) }
+    fn inst_root(&self, instance: &str) -> PathBuf { self.root.join(instance) }
+    fn exec_path(&self, instance: &str, execution_id: u64) -> PathBuf {
+        self.inst_root(instance).join(format!("{}.jsonl", execution_id))
+    }
 }
 
 #[async_trait::async_trait]
 impl HistoryStore for FsHistoryStore {
     /// Read the entire JSONL file for the instance and deserialize each line.
     async fn read(&self, instance: &str) -> Vec<Event> {
-        let path = self.inst_path(instance);
+        let latest = self.latest_execution_id(instance).await.unwrap_or(1);
+        let path = self.exec_path(instance, latest);
         let data = fs::read_to_string(&path).await.unwrap_or_default();
         let mut out = Vec::new();
         for line in data.lines() {
@@ -54,10 +53,11 @@ impl HistoryStore for FsHistoryStore {
     /// Append events with a simple capacity guard by rewriting the file.
     async fn append(&self, instance: &str, new_events: Vec<Event>) -> Result<(), String> {
         fs::create_dir_all(&self.root).await.ok();
-        // Read current to enforce CAP
-        let existing = self.read(instance).await;
-        // If the instance file does not exist, treat as error (must call create_instance first)
-        let path = self.inst_path(instance);
+        // Read current latest to enforce CAP
+        let latest = self.latest_execution_id(instance).await.unwrap_or(1);
+        let existing = self.read_with_execution(instance, latest).await;
+        // If the exec file does not exist, treat as error (must call create_instance first)
+        let path = self.exec_path(instance, latest);
         if !fs::try_exists(&path).await.map_err(|e| e.to_string())? {
             return Err(format!("instance not found: {instance}"));
         }
@@ -80,13 +80,18 @@ impl HistoryStore for FsHistoryStore {
         let _ = fs::remove_dir_all(&self.root).await;
     }
 
-    /// List instances by scanning filenames with `.jsonl` suffix.
+    /// List instances by scanning instance directories (multi-execution) and legacy `.jsonl` files.
     async fn list_instances(&self) -> Vec<String> {
         let mut out = Vec::new();
         if let Ok(mut rd) = fs::read_dir(&self.root).await {
             while let Ok(Some(ent)) = rd.next_entry().await {
+                let path = ent.path();
                 if let Some(name) = ent.file_name().to_str() {
-                    if let Some(stem) = name.strip_suffix(".jsonl") { out.push(stem.to_string()); }
+                    if path.is_dir() {
+                        out.push(name.to_string());
+                    } else if let Some(stem) = name.strip_suffix(".jsonl") {
+                        out.push(stem.to_string());
+                    }
                 }
             }
         }
@@ -98,27 +103,28 @@ impl HistoryStore for FsHistoryStore {
         let mut out = String::new();
         for inst in self.list_instances().await {
             out.push_str(&format!("instance={inst}\n"));
-            for ev in self.read(&inst).await { out.push_str(&format!("  {ev:#?}\n")); }
+            if let Some(lat) = self.latest_execution_id(&inst).await { for eid in 1..=lat { for ev in self.read_with_execution(&inst, eid).await { out.push_str(&format!("  exec#{eid} {ev:#?}\n")); } } }
         }
         out
     }
 
     async fn create_instance(&self, instance: &str) -> Result<(), String> {
         fs::create_dir_all(&self.root).await.map_err(|e| e.to_string())?;
-        let path = self.inst_path(instance);
-        if fs::try_exists(&path).await.map_err(|e| e.to_string())? {
+        let inst_dir = self.inst_root(instance);
+        if fs::try_exists(&inst_dir).await.map_err(|e| e.to_string())? {
             return Err(format!("instance already exists: {instance}"));
         }
-        let _ = fs::OpenOptions::new().create_new(true).write(true).open(&path).await.map_err(|e| e.to_string())?;
+        fs::create_dir_all(&inst_dir).await.map_err(|e| e.to_string())?;
+        let _ = fs::OpenOptions::new().create_new(true).write(true).open(self.exec_path(instance, 1)).await.map_err(|e| e.to_string())?;
         Ok(())
     }
 
     async fn remove_instance(&self, instance: &str) -> Result<(), String> {
-        let path = self.inst_path(instance);
-        if !fs::try_exists(&path).await.map_err(|e| e.to_string())? {
+        let inst_dir = self.inst_root(instance);
+        if !fs::try_exists(&inst_dir).await.map_err(|e| e.to_string())? {
             return Err(format!("instance not found: {instance}"));
         }
-        fs::remove_file(&path).await.map_err(|e| e.to_string())?;
+        fs::remove_dir_all(&inst_dir).await.map_err(|e| e.to_string())?;
         Ok(())
     }
 
@@ -159,6 +165,56 @@ impl HistoryStore for FsHistoryStore {
     async fn get_instance_orchestration(&self, instance: &str) -> Option<String> {
         let meta_path = self.root.join(format!("{instance}.meta"));
         std::fs::read_to_string(meta_path).ok()
+    }
+
+    async fn latest_execution_id(&self, instance: &str) -> Option<u64> {
+        let inst_dir = self.inst_root(instance);
+        let mut max_eid = 0u64;
+        if let Ok(mut rd) = fs::read_dir(&inst_dir).await {
+            while let Ok(Some(ent)) = rd.next_entry().await {
+                if let Some(name) = ent.file_name().to_str() {
+                    if let Some(stem) = name.strip_suffix(".jsonl") {
+                        if let Ok(id) = stem.parse::<u64>() { max_eid = max_eid.max(id); }
+                    }
+                }
+            }
+        }
+        if max_eid == 0 { None } else { Some(max_eid) }
+    }
+
+    async fn list_executions(&self, instance: &str) -> Vec<u64> {
+        match self.latest_execution_id(instance).await { Some(lat) => (1..=lat).collect(), None => Vec::new() }
+    }
+
+    async fn read_with_execution(&self, instance: &str, execution_id: u64) -> Vec<Event> {
+        let path = self.exec_path(instance, execution_id);
+        let data = fs::read_to_string(&path).await.unwrap_or_default();
+        let mut out = Vec::new();
+        for line in data.lines() { if line.trim().is_empty() { continue; } if let Ok(ev) = serde_json::from_str::<Event>(line) { out.push(ev) } }
+        out
+    }
+
+    async fn append_with_execution(&self, instance: &str, execution_id: u64, new_events: Vec<Event>) -> Result<(), String> {
+        fs::create_dir_all(self.inst_root(instance)).await.ok();
+        let existing = self.read_with_execution(instance, execution_id).await;
+        let path = self.exec_path(instance, execution_id);
+        if !fs::try_exists(&path).await.map_err(|e| e.to_string())? {
+            return Err(format!("execution not found: {}#{}", instance, execution_id));
+        }
+        if existing.len() + new_events.len() > self.cap { return Err(format!("history cap exceeded (cap={}, have={}, append={})", self.cap, existing.len(), new_events.len())); }
+        let mut file = fs::OpenOptions::new().create(true).append(true).open(&path).await.unwrap();
+        for ev in new_events { let line = serde_json::to_string(&ev).unwrap(); file.write_all(line.as_bytes()).await.unwrap(); file.write_all(b"\n").await.unwrap(); }
+        file.flush().await.ok();
+        Ok(())
+    }
+
+    async fn reset_for_continue_as_new(&self, instance: &str, orchestration: &str, input: &str) -> Result<u64, String> {
+        let lat = self.latest_execution_id(instance).await.unwrap_or(0) + 1;
+        fs::create_dir_all(self.inst_root(instance)).await.map_err(|e| e.to_string())?;
+        let path = self.exec_path(instance, lat);
+        let _ = fs::OpenOptions::new().create_new(true).write(true).open(&path).await.map_err(|e| e.to_string())?;
+        self.append_with_execution(instance, lat, vec![Event::OrchestrationStarted { name: orchestration.to_string(), input: input.to_string() }]).await?;
+        Ok(lat)
     }
 }
 

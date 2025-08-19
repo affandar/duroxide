@@ -456,6 +456,54 @@ async fn sample_detached_orchestration_scheduling_fs() {
     rt.shutdown().await;
 }
 
+/// ContinueAsNew sample: roll over input across executions until a condition is met.
+///
+/// Highlights:
+/// - Use `ctx.continue_as_new(new_input)` to terminate current execution and start a new one
+/// - Provider keeps all execution histories; latest execution holds the final result
+#[tokio::test]
+async fn sample_continue_as_new_fs() {
+    let td = tempfile::tempdir().unwrap();
+    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
+
+    let activity_registry = ActivityRegistry::builder().build();
+    let orch = |ctx: OrchestrationContext, input: String| async move {
+        let n: u32 = input.parse().unwrap_or(0);
+        if n < 3 {
+            ctx.trace_info(format!("CAN sample n={n} -> continue"));
+            ctx.continue_as_new((n + 1).to_string());
+            Ok(String::new())
+        } else {
+            Ok(format!("final:{n}"))
+        }
+    };
+    let orchestration_registry = OrchestrationRegistry::builder()
+        .register("CanSample", orch)
+        .build();
+
+    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+    // Initial handle finishes after ContinueAsNew; final result is available after latest execution completes
+    let h = rt.clone().start_orchestration("inst-sample-can", "CanSample", "0").await.unwrap();
+    let (_hist, out) = h.await.unwrap();
+    assert_eq!(out.unwrap(), "");
+    // Poll until final completion
+    use rust_dtf::OrchestrationStatus;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let mut final_out = None;
+    while std::time::Instant::now() < deadline {
+        match rt.get_orchestration_status("inst-sample-can").await {
+            OrchestrationStatus::Completed { output } => { final_out = Some(output); break; }
+            OrchestrationStatus::Failed { error } => panic!("failed: {error}"),
+            _ => tokio::time::sleep(std::time::Duration::from_millis(10)).await,
+        }
+    }
+    assert_eq!(final_out.unwrap(), "final:3");
+    // Check executions exist
+    let execs = store.list_executions("inst-sample-can").await;
+    assert_eq!(execs, vec![1,2,3,4]);
+    rt.shutdown().await;
+}
+
 
 // Typed samples
 

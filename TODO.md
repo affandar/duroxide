@@ -1,10 +1,10 @@
 ## Durable Task Rust Core – TODOs
 
+- "pub-sub" external events
 - On next session: review tests covering ContinueAsNew and multi-execution IDs
 	- Files: `tests/e2e_continue_as_new.rs` (both tests)
 	- Also revisit runtime APIs to surface `list_executions` and `get_execution_history` consistently
 
-- ContinueAsNew support
 - Need to understand this oneshot channel to await on
 - sharding and scale out to multiple runtimes
 - versioning strategy
@@ -25,6 +25,7 @@
 
 ## DONE
 
+- ContinueAsNew support
 - tests for orchestration state, 
 - tests for provider <-> runtime resumption of multiple orchestrations. 
 - dequeue multiple item batch
