@@ -51,3 +51,10 @@ cargo test --test e2e_continue_as_new -- --nocapture
 ```
 
 
+## Maintaining docs
+
+When changing behavior or adding new areas:
+- Update affected docs and examples.
+- Add new documents under `docs/` and link them here.
+
+
