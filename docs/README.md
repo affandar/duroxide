@@ -22,6 +22,7 @@ This project is a minimal deterministic orchestration core inspired by Durable T
 
 - Typed API design: `proposals/typed-api-design.md`
 - Typed futures (Unpin) adapters: `proposals/typed-futures-design.md`
+- Reliability: transactional rounds and at-least-once plan: `proposals/reliability-transactional-rounds.md`
 
 ### Quick start
 
