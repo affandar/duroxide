@@ -408,10 +408,10 @@ impl Runtime {
                     // Helper to check if instance is active; if not, re-enqueue the item to avoid drops
                     let mut maybe_forward = true;
                     enum GatePolicy { RequireActive, RequireInactive }
-            let (target_instance, policy): (Option<String>, GatePolicy) = match &item {
-                        WorkItem::StartOrchestration { instance, orchestration } => {
+        let (target_instance, policy): (Option<String>, GatePolicy) = match &item {
+            WorkItem::StartOrchestration { instance, orchestration, input } => {
                 // Only forward start when instance is not active; if active, abandon to retry later.
-                let _ = orchestration; // unused here
+        let _ = (orchestration, input); // unused here
                 (Some(instance.clone()), GatePolicy::RequireInactive)
                         }
                         WorkItem::ActivityCompleted { instance, id, result } => {
@@ -454,11 +454,15 @@ impl Runtime {
                     }
                     if !maybe_forward { continue; }
             match item {
-                        WorkItem::StartOrchestration { instance, orchestration } => {
-                            // Push to local start queue only; do not re-enqueue to provider to avoid loops
-                let _ = rt_for_poll.start_tx.send(StartRequest { instance, orchestration_name: orchestration });
-                // Ack immediately; dedupe at start worker handles duplicates
-                let _ = rt_for_poll.history_store.ack(&token).await;
+                        WorkItem::StartOrchestration { instance, orchestration, input } => {
+                            // Exactly-once: call start_orchestration which writes OrchestrationStarted idempotently.
+                            // If instance already exists, start_orchestration dedupes by history.
+                            match rt_for_poll.clone().start_orchestration(&instance, &orchestration, input).await {
+                                Ok(_h) => { /* spawned; ack below */ },
+                                Err(e) => { warn!(instance=%instance, orchestration=%orchestration, error=%e, "start_orchestration failed from queue"); }
+                            }
+                            // Ack regardless; idempotent start prevents duplicates.
+                            let _ = rt_for_poll.history_store.ack(&token).await;
                         }
                         WorkItem::ActivityCompleted { instance, id, result } => {
                 let _ = rt_for_poll.router_tx.send(OrchestratorMsg::ActivityCompleted { instance, id, result, ack_token: Some(token) });
@@ -519,9 +523,8 @@ impl Runtime {
                 panic!("instance already active: {instance}");
             }
         }
-        // Look up the orchestration handler
-        let orchestration_handler = self.orchestration_registry.get(orchestration_name)
-            .unwrap_or_else(|| panic!("orchestration not found: {orchestration_name}"));
+    // Look up the orchestration handler later after loading history so we can fail gracefully
+    let orchestration_handler_opt = self.orchestration_registry.get(orchestration_name);
 
         // Ensure removal of active flag even if the task panics
         struct ActiveGuard { rt: Arc<Runtime>, inst: String }
@@ -554,6 +557,28 @@ impl Runtime {
             _ => None,
         });
 
+        // If orchestration not registered, fail gracefully and exit
+        if orchestration_handler_opt.is_none() {
+            let err = format!("unregistered:{}", orchestration_name);
+            // Append terminal failed event (idempotent at provider)
+            if let Err(e) = self.history_store.append(instance, vec![Event::OrchestrationFailed { error: err.clone() }]).await {
+                error!(instance, error=%e, "failed to append OrchestrationFailed for unknown orchestration");
+                panic!("history append failed: {e}");
+            }
+            // Reflect in local history and notify waiters
+            history.push(Event::OrchestrationFailed { error: err.clone() });
+            if let Some(waiters) = self.result_waiters.lock().await.remove(instance) {
+                for w in waiters { let _ = w.send((history.clone(), Err(err.clone()))); }
+            }
+            // If this is a child, enqueue failure to parent
+            if let Some((pinst, pid)) = parent_link.clone() {
+                let _ = self.history_store.enqueue_work(WorkItem::SubOrchFailed { parent_instance: pinst, parent_id: pid, error: err.clone() }).await;
+            }
+            return (history, Err(err));
+        }
+
+        let orchestration_handler = orchestration_handler_opt.unwrap();
+
         let mut turn_index: u64 = 0;
         loop {
             let orchestrator_fn = |ctx: OrchestrationContext| {
@@ -577,9 +602,9 @@ impl Runtime {
                     .unwrap_or_else(|| orchestration_name.to_string());
                 let _new_exec = self.history_store.reset_for_continue_as_new(instance, &orch_name, &input).await
                     .unwrap_or(1);
-                // Enqueue start locally and to provider; start worker will re-enqueue if instance still active
+                // Enqueue start locally; provider queue not needed for ContinueAsNew and can starve other items
                 let _ = self.start_tx.send(StartRequest { instance: instance.to_string(), orchestration_name: orch_name.clone() });
-                let _ = self.history_store.enqueue_work(crate::providers::WorkItem::StartOrchestration { instance: instance.to_string(), orchestration: orch_name }).await;
+                let _ = input; // already persisted via reset_for_continue_as_new
                 // Notify any waiters so initial handle resolves (empty output for continued-as-new)
                 if let Some(waiters) = self.result_waiters.lock().await.remove(instance) {
                     for w in waiters { let _ = w.send((history.clone(), Ok(String::new()))); }
@@ -600,13 +625,15 @@ impl Runtime {
                         panic!("history append failed: {e}");
                     }
                 }
-                // Best-effort dispatch for detached orchestration starts that were emitted in this final turn
-                // TODO : this can't be best effort, has to be Exactly-Once. Lets tackle this when add transactional semantics to processing
+                // Exactly-once dispatch for detached orchestration starts recorded in this turn:
+                // enqueue provider work-items; poller will perform the idempotent start.
                 for e in deltas {
                     if let Event::OrchestrationChained { id, name, instance: child_inst, input } = e {
-                        match self.clone().start_orchestration(&child_inst, &name, input).await {
-                            Ok(_h) => { debug!(instance, id, name=%name, child_instance=%child_inst, "started detached orchestration (final turn)"); }
-                            Err(err) => { warn!(instance, id, name=%name, child_instance=%child_inst, error=%err, "detached start failed (final turn)"); }
+                        let wi = crate::providers::WorkItem::StartOrchestration { instance: child_inst.clone(), orchestration: name.clone(), input: input.clone() };
+                        if let Err(err) = self.history_store.enqueue_work(wi).await {
+                            warn!(instance, id, name=%name, child_instance=%child_inst, error=%err, "failed to enqueue detached start; will rely on bootstrap rehydration");
+                        } else {
+                            debug!(instance, id, name=%name, child_instance=%child_inst, "enqueued detached orchestration start (final turn)");
                         }
                     }
                 }
@@ -710,10 +737,12 @@ impl Runtime {
                         let _ = (id, name); // no-op
                     }
                     Action::StartOrchestrationDetached { id, name, instance: child_inst, input } => {
-                        // Fire-and-forget: try to start a new orchestration instance using the provided instance id (no parent prefix).
-                        match self.clone().start_orchestration(&child_inst, &name, input).await {
-                            Ok(_h) => { debug!(instance, id, name=%name, child_instance=%child_inst, "started detached orchestration"); }
-                            Err(e) => { warn!(instance, id, name=%name, child_instance=%child_inst, error=%e, "detached start failed (likely duplicate instance)"); }
+                        // Enqueue detached orchestration start for exactly-once start via provider poller
+                        let wi = crate::providers::WorkItem::StartOrchestration { instance: child_inst.clone(), orchestration: name.clone(), input: input.clone() };
+                        if let Err(e) = self.history_store.enqueue_work(wi).await {
+                            warn!(instance, id, name=%name, child_instance=%child_inst, error=%e, "failed to enqueue detached start; will rely on bootstrap rehydration");
+                        } else {
+                            debug!(instance, id, name=%name, child_instance=%child_inst, "enqueued detached orchestration start");
                         }
                     }
                     Action::StartSubOrchestration { id, name, instance: child_inst, input } => {

@@ -3,7 +3,7 @@ use crate::Event;
 /// Provider-backed work queue items the runtime consumes continually.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub enum WorkItem {
-    StartOrchestration { instance: String, orchestration: String },
+    StartOrchestration { instance: String, orchestration: String, input: String },
     ActivityCompleted { instance: String, id: u64, result: String },
     ActivityFailed { instance: String, id: u64, error: String },
     TimerFired { instance: String, id: u64, fire_at_ms: u64 },
