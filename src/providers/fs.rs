@@ -33,6 +33,8 @@ impl FsHistoryStore {
     fn exec_path(&self, instance: &str, execution_id: u64) -> PathBuf {
         self.inst_root(instance).join(format!("{}.jsonl", execution_id))
     }
+    fn lock_dir(&self) -> PathBuf { self.root.join(".locks") }
+    fn lock_path(&self, token: &str) -> PathBuf { self.lock_dir().join(format!("{token}.lock")) }
 }
 
 #[async_trait::async_trait]
@@ -213,6 +215,79 @@ impl HistoryStore for FsHistoryStore {
         }
         let _ = std::fs::rename(&tmp, &self.queue_file);
         Some(first)
+    }
+
+    async fn dequeue_peek_lock(&self) -> Option<(WorkItem, String)> {
+        // Pop first item but write it to a lock sidecar to keep invisible until ack/abandon
+        let content = std::fs::read_to_string(&self.queue_file).ok()?;
+        let mut items: Vec<WorkItem> = content
+            .lines()
+            .filter_map(|l| serde_json::from_str::<WorkItem>(l).ok())
+            .collect();
+        if items.is_empty() { return None; }
+        let first = items.remove(0);
+        // Rewrite remaining items atomically
+        let tmp = self.queue_file.with_extension("jsonl.tmp");
+        {
+            let mut tf = std::fs::OpenOptions::new().create(true).write(true).truncate(true).open(&tmp).ok()?;
+            for it in &items {
+                let line = serde_json::to_string(&it).ok()?;
+                use std::io::Write as _;
+                let _ = tf.write_all(line.as_bytes());
+                let _ = tf.write_all(b"\n");
+            }
+        }
+        let _ = std::fs::rename(&tmp, &self.queue_file);
+        // Create lock token and persist the locked item
+        let now_ns = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let pid = std::process::id();
+        let token = format!("{now_ns:x}-{pid:x}");
+        let _ = std::fs::create_dir_all(self.lock_dir());
+        let lock_path = self.lock_path(&token);
+        let line = serde_json::to_string(&first).ok()?;
+        let _ = std::fs::write(&lock_path, line);
+        Some((first, token))
+    }
+
+    async fn ack(&self, token: &str) -> Result<(), String> {
+        let path = self.lock_path(token);
+        if path.exists() {
+            std::fs::remove_file(&path).map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    }
+
+    async fn abandon(&self, token: &str) -> Result<(), String> {
+        // Read locked item and re-enqueue at front, then remove lock
+        let path = self.lock_path(token);
+        if !path.exists() { return Ok(()); }
+        let data = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+        let item: WorkItem = serde_json::from_str(&data).map_err(|e| e.to_string())?;
+        // Prepend to queue
+        let content = std::fs::read_to_string(&self.queue_file).unwrap_or_default();
+        let mut items: Vec<WorkItem> = content
+            .lines()
+            .filter_map(|l| serde_json::from_str::<WorkItem>(l).ok())
+            .collect();
+        items.insert(0, item);
+        // Rewrite file atomically
+        let tmp = self.queue_file.with_extension("jsonl.tmp");
+        {
+            let mut tf = std::fs::OpenOptions::new().create(true).write(true).truncate(true).open(&tmp).map_err(|e| e.to_string())?;
+            for it in &items {
+                let line = serde_json::to_string(&it).map_err(|e| e.to_string())?;
+                use std::io::Write as _;
+                tf.write_all(line.as_bytes()).map_err(|e| e.to_string())?;
+                tf.write_all(b"\n").map_err(|e| e.to_string())?;
+            }
+        }
+        std::fs::rename(&tmp, &self.queue_file).map_err(|e| e.to_string())?;
+        // Remove lock
+        std::fs::remove_file(&path).map_err(|e| e.to_string())?;
+        Ok(())
     }
 
     async fn set_instance_orchestration(&self, instance: &str, orchestration: &str) -> Result<(), String> {

@@ -12,6 +12,8 @@ pub struct InMemoryHistoryStore {
     inner: Mutex<HashMap<String, Vec<Vec<Event>>>>,
     work_q: Mutex<Vec<WorkItem>>, // simple FIFO
     meta: Mutex<HashMap<String, String>>, // instance -> orchestration name
+    // Peek-lock state: token -> item. Items here are invisible until ack/abandon.
+    invisible: Mutex<HashMap<String, WorkItem>>,
 }
 
 #[async_trait::async_trait]
@@ -67,6 +69,30 @@ impl HistoryStore for InMemoryHistoryStore {
         let mut q = self.work_q.lock().await;
         if q.is_empty() { return None; }
         Some(q.remove(0))
+    }
+
+    async fn dequeue_peek_lock(&self) -> Option<(WorkItem, String)> {
+        let mut q = self.work_q.lock().await;
+        if q.is_empty() { return None; }
+        let item = q.remove(0);
+        // Generate a simple token
+        let token = format!("{}:{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).ok()?.as_nanos(), q.len());
+        self.invisible.lock().await.insert(token.clone(), item.clone());
+        Some((item, token))
+    }
+
+    async fn ack(&self, token: &str) -> Result<(), String> {
+        self.invisible.lock().await.remove(token);
+        Ok(())
+    }
+
+    async fn abandon(&self, token: &str) -> Result<(), String> {
+        if let Some(item) = self.invisible.lock().await.remove(token) {
+            // Return to front to preserve ordering as much as possible
+            let mut q = self.work_q.lock().await;
+            q.insert(0, item);
+        }
+        Ok(())
     }
 
     async fn set_instance_orchestration(&self, instance: &str, orchestration: &str) -> Result<(), String> {

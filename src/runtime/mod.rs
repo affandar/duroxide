@@ -118,13 +118,13 @@ pub struct TimerWorkItem { pub instance: String, pub id: u64, pub fire_at_ms: u6
 
 /// Messages delivered back to the orchestrator loop by workers and routers.
 pub enum OrchestratorMsg {
-    ActivityCompleted { instance: String, id: u64, result: String },
-    ActivityFailed { instance: String, id: u64, error: String },
-    TimerFired { instance: String, id: u64, fire_at_ms: u64 },
-    ExternalEvent { instance: String, id: u64, name: String, data: String },
-    ExternalByName { instance: String, name: String, data: String },
-    SubOrchCompleted { instance: String, id: u64, result: String },
-    SubOrchFailed { instance: String, id: u64, error: String },
+    ActivityCompleted { instance: String, id: u64, result: String, ack_token: Option<String> },
+    ActivityFailed { instance: String, id: u64, error: String, ack_token: Option<String> },
+    TimerFired { instance: String, id: u64, fire_at_ms: u64, ack_token: Option<String> },
+    ExternalEvent { instance: String, id: u64, name: String, data: String, ack_token: Option<String> },
+    ExternalByName { instance: String, name: String, data: String, ack_token: Option<String> },
+    SubOrchCompleted { instance: String, id: u64, result: String, ack_token: Option<String> },
+    SubOrchFailed { instance: String, id: u64, error: String, ack_token: Option<String> },
 }
 
 /// Request to start a new orchestration instance.
@@ -162,13 +162,13 @@ impl CompletionRouter {
 
 fn kind_of(msg: &OrchestratorMsg) -> &'static str {
     match msg {
-        OrchestratorMsg::ActivityCompleted { .. } => "ActivityCompleted",
-        OrchestratorMsg::ActivityFailed { .. } => "ActivityFailed",
-        OrchestratorMsg::TimerFired { .. } => "TimerFired",
-        OrchestratorMsg::ExternalEvent { .. } => "ExternalEvent",
-        OrchestratorMsg::ExternalByName { .. } => "ExternalByName",
-        OrchestratorMsg::SubOrchCompleted { .. } => "SubOrchCompleted",
-        OrchestratorMsg::SubOrchFailed { .. } => "SubOrchFailed",
+    OrchestratorMsg::ActivityCompleted { .. } => "ActivityCompleted",
+    OrchestratorMsg::ActivityFailed { .. } => "ActivityFailed",
+    OrchestratorMsg::TimerFired { .. } => "TimerFired",
+    OrchestratorMsg::ExternalEvent { .. } => "ExternalEvent",
+    OrchestratorMsg::ExternalByName { .. } => "ExternalByName",
+    OrchestratorMsg::SubOrchCompleted { .. } => "SubOrchCompleted",
+    OrchestratorMsg::SubOrchFailed { .. } => "SubOrchFailed",
     }
 }
 
@@ -404,32 +404,39 @@ impl Runtime {
             }
 
             loop {
-                if let Some(item) = rt_for_poll.history_store.dequeue_work().await {
+                if let Some((item, token)) = rt_for_poll.history_store.dequeue_peek_lock().await {
                     // Helper to check if instance is active; if not, re-enqueue the item to avoid drops
                     let mut maybe_forward = true;
                     enum GatePolicy { RequireActive, RequireInactive }
-                    let (target_instance, reenqueue, policy): (Option<String>, Option<WorkItem>, GatePolicy) = match &item {
+            let (target_instance, policy): (Option<String>, GatePolicy) = match &item {
                         WorkItem::StartOrchestration { instance, orchestration } => {
-                            // Only forward start when instance is not active; if active, re-enqueue.
-                            (Some(instance.clone()), Some(WorkItem::StartOrchestration { instance: instance.clone(), orchestration: orchestration.clone() }), GatePolicy::RequireInactive)
+                // Only forward start when instance is not active; if active, abandon to retry later.
+                let _ = orchestration; // unused here
+                (Some(instance.clone()), GatePolicy::RequireInactive)
                         }
                         WorkItem::ActivityCompleted { instance, id, result } => {
-                            (Some(instance.clone()), Some(WorkItem::ActivityCompleted { instance: instance.clone(), id: *id, result: result.clone() }), GatePolicy::RequireActive)
+                let _ = (id, result);
+                (Some(instance.clone()), GatePolicy::RequireActive)
                         }
                         WorkItem::ActivityFailed { instance, id, error } => {
-                            (Some(instance.clone()), Some(WorkItem::ActivityFailed { instance: instance.clone(), id: *id, error: error.clone() }), GatePolicy::RequireActive)
+                let _ = (id, error);
+                (Some(instance.clone()), GatePolicy::RequireActive)
                         }
                         WorkItem::TimerFired { instance, id, fire_at_ms } => {
-                            (Some(instance.clone()), Some(WorkItem::TimerFired { instance: instance.clone(), id: *id, fire_at_ms: *fire_at_ms }), GatePolicy::RequireActive)
+                let _ = (id, fire_at_ms);
+                (Some(instance.clone()), GatePolicy::RequireActive)
                         }
                         WorkItem::ExternalRaised { instance, name, data } => {
-                            (Some(instance.clone()), Some(WorkItem::ExternalRaised { instance: instance.clone(), name: name.clone(), data: data.clone() }), GatePolicy::RequireActive)
+                let _ = (name, data);
+                (Some(instance.clone()), GatePolicy::RequireActive)
                         }
                         WorkItem::SubOrchCompleted { parent_instance, parent_id, result } => {
-                            (Some(parent_instance.clone()), Some(WorkItem::SubOrchCompleted { parent_instance: parent_instance.clone(), parent_id: *parent_id, result: result.clone() }), GatePolicy::RequireActive)
+                let _ = (parent_id, result);
+                (Some(parent_instance.clone()), GatePolicy::RequireActive)
                         }
                         WorkItem::SubOrchFailed { parent_instance, parent_id, error } => {
-                            (Some(parent_instance.clone()), Some(WorkItem::SubOrchFailed { parent_instance: parent_instance.clone(), parent_id: *parent_id, error: error.clone() }), GatePolicy::RequireActive)
+                let _ = (parent_id, error);
+                (Some(parent_instance.clone()), GatePolicy::RequireActive)
                         }
                     };
                     if let Some(inst) = target_instance {
@@ -439,34 +446,38 @@ impl Runtime {
                             GatePolicy::RequireInactive => is_active,
                         };
                         if should_wait {
-                            if let Some(it) = reenqueue { let _ = rt_for_poll.history_store.enqueue_work(it).await; }
+                // Abandon so another poll can retry later
+                let _ = rt_for_poll.history_store.abandon(&token).await;
                             tokio::time::sleep(std::time::Duration::from_millis(5)).await;
                             maybe_forward = false;
                         }
                     }
                     if !maybe_forward { continue; }
-                    match item {
+            match item {
                         WorkItem::StartOrchestration { instance, orchestration } => {
                             // Push to local start queue only; do not re-enqueue to provider to avoid loops
-                            let _ = rt_for_poll.start_tx.send(StartRequest { instance, orchestration_name: orchestration });
+                let _ = rt_for_poll.start_tx.send(StartRequest { instance, orchestration_name: orchestration });
+                // Ack immediately; dedupe at start worker handles duplicates
+                let _ = rt_for_poll.history_store.ack(&token).await;
                         }
                         WorkItem::ActivityCompleted { instance, id, result } => {
-                            let _ = rt_for_poll.router_tx.send(OrchestratorMsg::ActivityCompleted { instance, id, result });
+                let _ = rt_for_poll.router_tx.send(OrchestratorMsg::ActivityCompleted { instance, id, result, ack_token: Some(token) });
                         }
                         WorkItem::ActivityFailed { instance, id, error } => {
-                            let _ = rt_for_poll.router_tx.send(OrchestratorMsg::ActivityFailed { instance, id, error });
+                let _ = rt_for_poll.router_tx.send(OrchestratorMsg::ActivityFailed { instance, id, error, ack_token: Some(token) });
                         }
                         WorkItem::TimerFired { instance, id, fire_at_ms } => {
-                            let _ = rt_for_poll.router_tx.send(OrchestratorMsg::TimerFired { instance, id, fire_at_ms });
+                let _ = rt_for_poll.router_tx.send(OrchestratorMsg::TimerFired { instance, id, fire_at_ms, ack_token: Some(token) });
                         }
                         WorkItem::ExternalRaised { instance, name, data } => {
-                            let _ = rt_for_poll.router_tx.send(OrchestratorMsg::ExternalByName { instance, name, data });
+                            info!(instance=%instance, name=%name, "poller: forwarding external");
+                            let _ = rt_for_poll.router_tx.send(OrchestratorMsg::ExternalByName { instance, name, data, ack_token: Some(token) });
                         }
                         WorkItem::SubOrchCompleted { parent_instance, parent_id, result } => {
-                            let _ = rt_for_poll.router_tx.send(OrchestratorMsg::SubOrchCompleted { instance: parent_instance, id: parent_id, result });
+                let _ = rt_for_poll.router_tx.send(OrchestratorMsg::SubOrchCompleted { instance: parent_instance, id: parent_id, result, ack_token: Some(token) });
                         }
                         WorkItem::SubOrchFailed { parent_instance, parent_id, error } => {
-                            let _ = rt_for_poll.router_tx.send(OrchestratorMsg::SubOrchFailed { instance: parent_instance, id: parent_id, error });
+                let _ = rt_for_poll.router_tx.send(OrchestratorMsg::SubOrchFailed { instance: parent_instance, id: parent_id, error, ack_token: Some(token) });
                         }
                     }
                 } else {
@@ -590,6 +601,7 @@ impl Runtime {
                     }
                 }
                 // Best-effort dispatch for detached orchestration starts that were emitted in this final turn
+                // TODO : this can't be best effort, has to be Exactly-Once. Lets tackle this when add transactional semantics to processing
                 for e in deltas {
                     if let Event::OrchestrationChained { id, name, instance: child_inst, input } = e {
                         match self.clone().start_orchestration(&child_inst, &name, input).await {
@@ -724,12 +736,12 @@ impl Runtime {
                                 match rt_for_child.start_orchestration(&child_full, &name_clone, input_clone).await {
                                     Ok(h) => match h.await {
                                         Ok((_hist, out)) => match out {
-                                            Ok(res) => { let _ = router_tx.send(OrchestratorMsg::SubOrchCompleted { instance: parent_inst, id, result: res }); }
-                                            Err(err) => { let _ = router_tx.send(OrchestratorMsg::SubOrchFailed { instance: parent_inst, id, error: err }); }
+                                            Ok(res) => { let _ = router_tx.send(OrchestratorMsg::SubOrchCompleted { instance: parent_inst, id, result: res, ack_token: None }); }
+                                            Err(err) => { let _ = router_tx.send(OrchestratorMsg::SubOrchFailed { instance: parent_inst, id, error: err, ack_token: None }); }
                                         },
-                                        Err(e) => { let _ = router_tx.send(OrchestratorMsg::SubOrchFailed { instance: parent_inst, id, error: format!("child join error: {e}") }); }
+                                        Err(e) => { let _ = router_tx.send(OrchestratorMsg::SubOrchFailed { instance: parent_inst, id, error: format!("child join error: {e}"), ack_token: None }); }
                                     },
-                                    Err(e) => { let _ = router_tx.send(OrchestratorMsg::SubOrchFailed { instance: parent_inst, id, error: e }); }
+                                    Err(e) => { let _ = router_tx.send(OrchestratorMsg::SubOrchFailed { instance: parent_inst, id, error: e, ack_token: None }); }
                                 }
                             });
                         }
@@ -739,13 +751,21 @@ impl Runtime {
 
             // Receive at least one completion, then drain a bounded batch
             let first = comp_rx.recv().await.expect("completion");
-            append_completion(&mut history, first);
+            let mut ack_tokens_persist_after: Vec<String> = Vec::new();
+            let mut ack_tokens_immediate: Vec<String> = Vec::new();
+            if let (Some(t), changed) = append_completion(&mut history, first) { if changed { ack_tokens_persist_after.push(t); } else { ack_tokens_immediate.push(t); } }
             for _ in 0..128 {
                 match comp_rx.try_recv() {
-                    Ok(msg) => append_completion(&mut history, msg),
+                    Ok(msg) => {
+                        if let (Some(t), changed) = append_completion(&mut history, msg) {
+                            if changed { ack_tokens_persist_after.push(t); } else { ack_tokens_immediate.push(t); }
+                        }
+                    },
                     Err(_) => break,
                 }
             }
+            // Ack immediately for messages that resulted in no history change (e.g., dropped externals)
+            for t in ack_tokens_immediate.drain(..) { let _ = self.history_store.ack(&t).await; }
 
             // Persist any further events appended during completion handling
             if history.len() > persisted_len {
@@ -758,6 +778,11 @@ impl Runtime {
                     panic!("history append failed: {e}");
                 }
                 appended_any = true;
+                // Ack any peek-locked items now that the history is persisted
+                for t in ack_tokens_persist_after.drain(..) { let _ = self.history_store.ack(&t).await; }
+            } else {
+                // No persistence occurred (duplicate completions); ack tokens if any
+                for t in ack_tokens_persist_after.drain(..) { let _ = self.history_store.ack(&t).await; }
             }
 
             if appended_any {
@@ -793,9 +818,9 @@ async fn run_timer_worker(mut rx: mpsc::Receiver<TimerWorkItem>, store: Arc<dyn 
     }
 }
 
-fn append_completion(history: &mut Vec<Event>, msg: OrchestratorMsg) {
+fn append_completion(history: &mut Vec<Event>, msg: OrchestratorMsg) -> (Option<String>, bool) {
     match msg {
-        OrchestratorMsg::ActivityCompleted { instance, id, result } => {
+    OrchestratorMsg::ActivityCompleted { instance, id, result, ack_token } => {
             // If this completion corresponds to system trace, emit to tracing only
             let is_system_trace = history.iter().rev().any(|e| matches!(e, Event::ActivityScheduled { id: cid, name, .. } if *cid == id && name == "__system_trace"));
             if is_system_trace {
@@ -809,24 +834,27 @@ fn append_completion(history: &mut Vec<Event>, msg: OrchestratorMsg) {
                     info!(instance=%instance, id, "{}", result);
                 }
             }
-            history.push(Event::ActivityCompleted { id, result })
+            history.push(Event::ActivityCompleted { id, result });
+            return (ack_token, true);
         }
-        OrchestratorMsg::ActivityFailed { id, error, .. } => history.push(Event::ActivityFailed { id, error }),
-        OrchestratorMsg::TimerFired { id, fire_at_ms, .. } => history.push(Event::TimerFired { id, fire_at_ms }),
-        OrchestratorMsg::ExternalEvent { id, name, data, .. } => history.push(Event::ExternalEvent { id, name, data }),
-        OrchestratorMsg::ExternalByName { instance, name, data } => {
+        OrchestratorMsg::ActivityFailed { id, error, ack_token, .. } => { history.push(Event::ActivityFailed { id, error }); return (ack_token, true); }
+        OrchestratorMsg::TimerFired { id, fire_at_ms, ack_token, .. } => { history.push(Event::TimerFired { id, fire_at_ms }); return (ack_token, true); }
+        OrchestratorMsg::ExternalEvent { id, name, data, ack_token, .. } => { history.push(Event::ExternalEvent { id, name, data }); return (ack_token, true); }
+        OrchestratorMsg::ExternalByName { instance, name, data, ack_token } => {
             // Find latest subscription id for this name
             if let Some(id) = history.iter().rev().find_map(|e| match e {
                 Event::ExternalSubscribed { id, name: n } if n == &name => Some(*id), _ => None
             }) {
                 history.push(Event::ExternalEvent { id, name, data });
+                return (ack_token, true);
             } else {
                 // No matching subscription recorded yet in this execution; drop and warn
                 warn!(instance=%instance, event_name=%name, "dropping external event with no active subscription");
             }
+            return (ack_token, false);
         }
-        OrchestratorMsg::SubOrchCompleted { id, result, .. } => history.push(Event::SubOrchestrationCompleted { id, result }),
-        OrchestratorMsg::SubOrchFailed { id, error, .. } => history.push(Event::SubOrchestrationFailed { id, error }),
+        OrchestratorMsg::SubOrchCompleted { id, result, ack_token, .. } => { history.push(Event::SubOrchestrationCompleted { id, result }); return (ack_token, true); }
+        OrchestratorMsg::SubOrchFailed { id, error, ack_token, .. } => { history.push(Event::SubOrchestrationFailed { id, error }); return (ack_token, true); }
     }
 }
 
@@ -835,9 +863,17 @@ impl Runtime {
     pub async fn raise_event(&self, instance: &str, name: impl Into<String>, data: impl Into<String>) {
         let name_str = name.into();
         let data_str = data.into();
-        if let Err(e) = self.history_store.enqueue_work(WorkItem::ExternalRaised { instance: instance.to_string(), name: name_str.clone(), data: data_str }).await {
+        // Best-effort: only enqueue if a subscription for this name exists in the latest execution
+        let hist = self.history_store.read(instance).await;
+        let has_subscription = hist.iter().any(|e| matches!(e, Event::ExternalSubscribed { name, .. } if name == &name_str));
+        if !has_subscription {
+            warn!(instance, event_name=%name_str, "raise_event: dropping external event with no active subscription");
+            return;
+        }
+    if let Err(e) = self.history_store.enqueue_work(WorkItem::ExternalRaised { instance: instance.to_string(), name: name_str.clone(), data: data_str.clone() }).await {
             warn!(instance, name=%name_str, error=%e, "raise_event: failed to enqueue ExternalRaised");
         }
+    info!(instance, name=%name_str, data=%data_str, "raise_event: enqueued external");
     }
 }
 
