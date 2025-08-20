@@ -38,10 +38,10 @@ pub trait HistoryStore {
 }
 
 impl<'a> Round<'a> {
-    /// Stage appending events to an instance’s history.
+    /// Stage appending events to an instance’s history (MUST be idempotent by correlation id/kind).
     pub async fn append(&mut self, instance: &str, events: Vec<Event>) -> Result<(), String>;
 
-    /// Stage enqueuing work items (activities, timers, sub‑orchestration starts, external‑raised).
+    /// Stage enqueuing work items (MUST be idempotent by a stable key like correlation id + kind).
     pub async fn enqueue(&mut self, items: Vec<WorkItem>) -> Result<(), String>;
 
     /// Dequeue a single visible work item without removing it yet (remove on commit).
@@ -49,9 +49,6 @@ impl<'a> Round<'a> {
 
     /// Acknowledge the dequeued item from this round. Effective only on commit.
     pub async fn ack(&mut self, token: &str) -> Result<(), String>;
-
-    /// Convenience: idempotent insert for queue by id/kind (no‑op if exists).
-    pub async fn enqueue_if_absent(&mut self, items: Vec<WorkItem>) -> Result<(), String>;
 
     /// Commit/rollback managed by the provider around the closure; explicit calls optional.
 }
@@ -73,7 +70,7 @@ History:
 - Provider MAY drop duplicates silently; runtime already tolerates duplicates by checking history before dispatch.
 
 Queue:
-- Scheduling side should use enqueue_if_absent with a stable key per item (e.g., correlation id + kind).
+- enqueue must be idempotent with a stable key per item (e.g., correlation id + kind).
 - Completion items are unique by provider‑generated queue id, and only removed on commit of the paired append.
 
 ## Runtime Flow Changes
@@ -87,8 +84,8 @@ New:
 store.run_round(|round| async move {
     // Record schedule/subscription events first
     round.append(instance, schedule_events).await?;
-    // Enqueue the matching work items atomically
-    round.enqueue_if_absent(work_items).await?;
+    // Enqueue the matching work items atomically (idempotent)
+    round.enqueue(work_items).await?;
     Ok(())
 }).await?;
 ```
@@ -97,21 +94,31 @@ Effects: Either both schedule events and work items are visible, or neither. No 
 
 2) Worker completion processing (activities/timers/sub‑orch)
 
-Current: dequeue → append completion → ack (non‑atomic).
+Current: dequeue → append completion → run orchestrator → schedule (append new schedule events + enqueue new work) → ack (spread across calls).
 
-New:
+New (transactional):
 ```rust
 store.run_round(|round| async move {
     if let Some(dq) = round.dequeue().await? {
-        let events = build_completion_events(&dq.item, …);
-        round.append(&dq.item.instance, events).await?;
-        round.ack(&dq.token).await?; // removed only if append is persisted
+        // a) Append the completion
+        let completion_events = build_completion_events(&dq.item, …);
+        round.append(&dq.item.instance, completion_events).await?;
+
+        // b) Run the orchestrator turn(s) to the next await, producing schedule/subscription events and work items
+        let (schedule_events, work_items) = drive_orchestrator_once(&dq.item.instance).await?;
+
+        // c) Persist follow‑on scheduling atomically with the completion
+        if !schedule_events.is_empty() { round.append(&dq.item.instance, schedule_events).await?; }
+        if !work_items.is_empty() { round.enqueue(work_items).await?; }
+
+        // d) Ack the completion only if everything above is durable
+        round.ack(&dq.token).await?;
     }
     Ok(())
 }).await?;
 ```
 
-Effects: If commit fails, the item is not acked and will be re‑delivered. If commit succeeds, both history and ack are durable.
+Effects: Either the completion and the follow‑on scheduling both land, or neither. If commit fails, the item is re‑delivered and dedupe prevents double‑append/duplicate enqueue.
 
 3) External events (raised via runtime.raise_event)
 
@@ -167,36 +174,39 @@ If a provider can’t implement atomic rounds, we can still achieve at‑least�
 Provider capabilities required:
 - dequeue_peek_lock() -> (item, token, invisible_until)
 - ack(token), abandon(token)
-- append_idempotent(instance, events): drop duplicates by correlation id/kind
-- enqueue_if_absent(items): ensure idempotent scheduling by stable key
+- append(instance, events): MUST be idempotent by correlation id/kind
+- enqueue(items): MUST be idempotent by a stable key
 
 Runtime flows:
 
 1) Turn scheduling (actions -> schedule events + work items)
-- Step A: append_idempotent(schedule_events)
-- Step B: enqueue_if_absent(work_items)
+- Step A: append(schedule_events) [idempotent]
+- Step B: enqueue(work_items) [idempotent]
 - Rationale: if we crash after A but before B, retry will append no‑op and then enqueue. If we did B before A and crashed, workers might process items before schedule exists, causing replay mismatch.
 
 2) Completion processing (activities/timers/sub‑orch)
 - dequeue_peek_lock() -> (wi, token)
 - If history already contains completion for wi.id: ack(token) and return (dedupe fast‑path)
-- Else try append_idempotent(completion_events)
+- Else:
+    - append(completion_events)
+    - run orchestrator turn to produce schedule events + work items
+    - append(schedule_events); enqueue(work_items)
     - On success: ack(token)
-    - On failure: abandon(token) so it’s retried later
+    - On any failure: abandon(token) so it’s retried later
 - Crash cases:
     - After append success but before ack: item will redeliver; fast‑path detects completion and acks.
     - Before append: no history change; item reappears; safe to retry.
 
 3) External events
 - Keep ExternalRaised as queue items. On dequeue:
-    - If subscription present (id known): append_idempotent(ExternalEvent{id}) then ack
+    - If subscription present (id known): append(ExternalEvent{id}) then ack
     - If no subscription: warn and ack (drop) to avoid tight retry loops; semantics unchanged.
 
 4) ContinueAsNew
 - Sequence without round:
-    - append_idempotent(OrchestrationContinuedAsNew)
+    - append(OrchestrationContinuedAsNew)
     - reset_for_continue_as_new(instance, name, input) is idempotent (no‑op if new execution exists and has OrchestrationStarted)
-    - Optionally enqueue initial work for the new execution via enqueue_if_absent
+    - Optionally enqueue initial work for the new execution via enqueue
 - Crash after CAN but before reset: retry detects terminal event and calls reset idempotently.
 
 Edge cases and guarantees:
