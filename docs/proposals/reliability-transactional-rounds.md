@@ -157,3 +157,55 @@ These reduce churn and simplify provider burden.
 - Should dequeue expose a lease with timeout now or later? Initial single‑host can skip; multi‑host requires it.
 - What’s the right behavior for ExternalRaised with no subscription present: ack immediately (drop) vs. requeue? Current design: warn and drop with ack to avoid tight redeliveries.
 - Do we need per‑instance rounds vs global? For simplicity, scope rounds to single instance history + global queue ops.
+
+---
+
+## Fallback: Non‑transactional providers (peek‑lock mode)
+
+If a provider can’t implement atomic rounds, we can still achieve at‑least‑once with bounded duplicates using a peek‑lock queue and idempotent operations:
+
+Provider capabilities required:
+- dequeue_peek_lock() -> (item, token, invisible_until)
+- ack(token), abandon(token)
+- append_idempotent(instance, events): drop duplicates by correlation id/kind
+- enqueue_if_absent(items): ensure idempotent scheduling by stable key
+
+Runtime flows:
+
+1) Turn scheduling (actions -> schedule events + work items)
+- Step A: append_idempotent(schedule_events)
+- Step B: enqueue_if_absent(work_items)
+- Rationale: if we crash after A but before B, retry will append no‑op and then enqueue. If we did B before A and crashed, workers might process items before schedule exists, causing replay mismatch.
+
+2) Completion processing (activities/timers/sub‑orch)
+- dequeue_peek_lock() -> (wi, token)
+- If history already contains completion for wi.id: ack(token) and return (dedupe fast‑path)
+- Else try append_idempotent(completion_events)
+    - On success: ack(token)
+    - On failure: abandon(token) so it’s retried later
+- Crash cases:
+    - After append success but before ack: item will redeliver; fast‑path detects completion and acks.
+    - Before append: no history change; item reappears; safe to retry.
+
+3) External events
+- Keep ExternalRaised as queue items. On dequeue:
+    - If subscription present (id known): append_idempotent(ExternalEvent{id}) then ack
+    - If no subscription: warn and ack (drop) to avoid tight retry loops; semantics unchanged.
+
+4) ContinueAsNew
+- Sequence without round:
+    - append_idempotent(OrchestrationContinuedAsNew)
+    - reset_for_continue_as_new(instance, name, input) is idempotent (no‑op if new execution exists and has OrchestrationStarted)
+    - Optionally enqueue initial work for the new execution via enqueue_if_absent
+- Crash after CAN but before reset: retry detects terminal event and calls reset idempotently.
+
+Edge cases and guarantees:
+- Enqueued‑without‑schedule is prevented by strict ordering (append schedule first, then enqueue).
+- Duplicate completions are dropped by append_idempotent and fast‑path history checks.
+- At‑least‑once is preserved because we only ack after successful append; abandon on failure.
+- Idempotent enqueue prevents multiple identical work items after retries.
+
+Tests to add for this mode:
+- Crash window simulation: after schedule append success but before enqueue; ensure eventual enqueue happens once.
+- Completion: append success then crash before ack; ensure single completion in history and eventual ack.
+- External: early raise before subscription gets acked/dropped; post‑subscribe raise succeeds once.
