@@ -45,6 +45,12 @@ async fn continue_as_new_multiexec_fs() {
     let execs = store.list_executions("inst-can-1").await;
     assert_eq!(execs, vec![1, 2, 3]);
 
+    // read() must reflect the latest execution's history
+    let latest = *execs.last().unwrap();
+    let latest_hist = store.read_with_execution("inst-can-1", latest).await;
+    let current_hist = store.read("inst-can-1").await;
+    assert_eq!(current_hist, latest_hist);
+
     let e1 = store.read_with_execution("inst-can-1", 1).await;
     assert!(e1.iter().any(|e| matches!(e, Event::OrchestrationStarted { input, .. } if input == "0")));
     assert!(e1.iter().any(|e| matches!(e, Event::OrchestrationContinuedAsNew { input } if input == "1")));
@@ -117,6 +123,13 @@ async fn continue_as_new_event_routes_to_latest_fs() {
     let e2 = store.read_with_execution("inst-can-evt", 2).await;
     assert!(e2.iter().any(|e| matches!(e, Event::ExternalSubscribed { name, .. } if name == "Go")));
     assert!(e2.iter().any(|e| matches!(e, Event::ExternalEvent { name, .. } if name == "Go")));
+
+    // read() must reflect the latest execution's history
+    let execs = store.list_executions("inst-can-evt").await;
+    let latest = *execs.last().unwrap();
+    let latest_hist = store.read_with_execution("inst-can-evt", latest).await;
+    let current_hist = store.read("inst-can-evt").await;
+    assert_eq!(current_hist, latest_hist);
 
     rt.shutdown().await;
 }

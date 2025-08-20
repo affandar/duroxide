@@ -1,5 +1,7 @@
 ## Durable Task Rust Core – TODOs
 
+- transactional processing - harden queue read semantics (see docs/reliability-queue-and-history.md)
+- review how active_instances in the runtime work, why are we reenqueuing events in certain cases
 - "pub-sub" external events
 - On next session: review tests covering ContinueAsNew and multi-execution IDs
 	- Files: `tests/e2e_continue_as_new.rs` (both tests)
@@ -9,7 +11,6 @@
 - sharding and scale out to multiple runtimes
 - versioning strategy
 - mermaid diagrams for orchestrations???
-- harden queue read semantics (see docs/reliability-queue-and-history.md)
 - strongly typed activity and orchestration calls?
 - typed parameters for activities and orchestrations
 - implement Unpin typed future wrappers for `_typed` adapters (see docs/typed-futures-design.md)

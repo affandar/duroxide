@@ -18,6 +18,11 @@ This project is a minimal deterministic orchestration core inspired by Durable T
 - ContinueAsNew semantics: see `continue-as-new.md`
 - Active instances and gating: see `active-instances-and-gating.md`
 
+### Proposals
+
+- Typed API design: `proposals/typed-api-design.md`
+- Typed futures (Unpin) adapters: `proposals/typed-futures-design.md`
+
 ### Quick start
 
 - Define activities in a registry and start the in-process runtime.

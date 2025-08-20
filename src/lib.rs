@@ -63,7 +63,7 @@ mod _typed_codec {
 /// Append-only orchestration history entries persisted by a provider and
 /// consumed during replay. Variants use stable correlation IDs to pair
 /// scheduling operations with their completions.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum Event {
     /// Orchestration instance was created and started by name with input.
     OrchestrationStarted { name: String, input: String },

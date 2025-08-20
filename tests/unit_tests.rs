@@ -207,4 +207,70 @@ async fn orchestration_status_apis() {
     rt.shutdown().await;
 }
 
+// Providers: filesystem multi-execution persistence and latest read() contract
+#[tokio::test]
+async fn providers_fs_multi_execution_persistence_and_latest_read() {
+    let tmp = tempfile::tempdir().unwrap();
+    let fs = FsHistoryStore::new(tmp.path(), true);
+
+    // Create instance and write execution #1 with CAN terminal
+    fs.create_instance("pfs").await.unwrap();
+    fs.append_with_execution(
+        "pfs",
+        1,
+        vec![
+            Event::OrchestrationStarted { name: "O".into(), input: "0".into() },
+            Event::OrchestrationContinuedAsNew { input: "1".into() },
+        ],
+    ).await.unwrap();
+    let e1_before = fs.read_with_execution("pfs", 1).await;
+
+    // Create execution #2 via reset_for_continue_as_new; complete it
+    let _eid2 = fs.reset_for_continue_as_new("pfs", "O", "1").await.unwrap();
+    fs.append_with_execution("pfs", 2, vec![Event::OrchestrationCompleted { output: "ok".into() }]).await.unwrap();
+
+    // Execution list must contain both
+    let execs = fs.list_executions("pfs").await;
+    assert_eq!(execs, vec![1, 2]);
+
+    // Older execution history remains unchanged
+    let e1_after = fs.read_with_execution("pfs", 1).await;
+    assert_eq!(e1_before, e1_after);
+
+    // Latest read() equals latest execution history
+    let latest_hist = fs.read_with_execution("pfs", 2).await;
+    let current_hist = fs.read("pfs").await;
+    assert_eq!(current_hist, latest_hist);
+}
+
+// Providers: in-memory multi-execution persistence and latest read() contract
+#[tokio::test]
+async fn providers_inmem_multi_execution_persistence_and_latest_read() {
+    let mem = InMemoryHistoryStore::default();
+
+    mem.create_instance("pmem").await.unwrap();
+    mem.append_with_execution(
+        "pmem",
+        1,
+        vec![
+            Event::OrchestrationStarted { name: "O".into(), input: "0".into() },
+            Event::OrchestrationContinuedAsNew { input: "1".into() },
+        ],
+    ).await.unwrap();
+    let e1_before = mem.read_with_execution("pmem", 1).await;
+
+    let _eid2 = mem.reset_for_continue_as_new("pmem", "O", "1").await.unwrap();
+    mem.append_with_execution("pmem", 2, vec![Event::OrchestrationCompleted { output: "ok".into() }]).await.unwrap();
+
+    let execs = mem.list_executions("pmem").await;
+    assert_eq!(execs, vec![1, 2]);
+
+    let e1_after = mem.read_with_execution("pmem", 1).await;
+    assert_eq!(e1_before, e1_after);
+
+    let latest_hist = mem.read_with_execution("pmem", 2).await;
+    let current_hist = mem.read("pmem").await;
+    assert_eq!(current_hist, latest_hist);
+}
+
 
