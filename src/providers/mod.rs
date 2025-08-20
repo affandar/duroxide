@@ -1,9 +1,9 @@
 use crate::Event;
 
 /// Provider-backed work queue items the runtime consumes continually.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub enum WorkItem {
-    StartOrchestration { instance: String, orchestration: String },
+    StartOrchestration { instance: String, orchestration: String, input: String },
     ActivityCompleted { instance: String, id: u64, result: String },
     ActivityFailed { instance: String, id: u64, error: String },
     TimerFired { instance: String, id: u64, fire_at_ms: u64 },
@@ -44,6 +44,20 @@ pub trait HistoryStore: Send + Sync {
 
     /// Dequeue the next available work item (if any).
     async fn dequeue_work(&self) -> Option<WorkItem> { None }
+
+    /// Dequeue-next using peek-lock semantics. Returns (item, token) when supported.
+    /// The item remains invisible until `ack(token)` or `abandon(token)` is called
+    /// (implementations may use a best-effort invisibility without timeouts).
+    /// Default: not supported.
+    async fn dequeue_peek_lock(&self) -> Option<(WorkItem, String)> { None }
+
+    /// Acknowledge a previously peek-locked token, permanently removing it.
+    /// Default: no-op success for providers that don't support peek-lock.
+    async fn ack(&self, _token: &str) -> Result<(), String> { Ok(()) }
+
+    /// Abandon a previously peek-locked token, making the item visible again.
+    /// Default: no-op success for providers that don't support peek-lock.
+    async fn abandon(&self, _token: &str) -> Result<(), String> { Ok(()) }
 
     /// Persist orchestration name metadata for an instance.
     async fn set_instance_orchestration(&self, _instance: &str, _orchestration: &str) -> Result<(), String> { Ok(()) }

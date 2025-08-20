@@ -1,12 +1,10 @@
 ## Durable Task Rust Core – TODOs
 
+- profiling replay and providers
+- performance improvements for runtime
 - transactional processing - harden queue read semantics (see docs/reliability-queue-and-history.md)
 - review how active_instances in the runtime work, why are we reenqueuing events in certain cases
 - "pub-sub" external events
-- On next session: review tests covering ContinueAsNew and multi-execution IDs
-	- Files: `tests/e2e_continue_as_new.rs` (both tests)
-	- Also revisit runtime APIs to surface `list_executions` and `get_execution_history` consistently
-
 - Need to understand this oneshot channel to await on
 - sharding and scale out to multiple runtimes
 - versioning strategy
@@ -15,7 +13,6 @@
 - typed parameters for activities and orchestrations
 - implement Unpin typed future wrappers for `_typed` adapters (see docs/typed-futures-design.md)
 - cancellations via JoinHandles?
-- test hung because the initial orchestration takes longer to start!
 - Add proper metrics.
 - Build a website to visualize execution.
 - Write an Azure Blob based provider.
@@ -26,7 +23,10 @@
 
 ## DONE
 
-- ContinueAsNew support
+- On next session: review tests covering ContinueAsNew and multi-execution IDs
+	- Files: `tests/e2e_continue_as_new.rs` (both tests)
+	- Also revisit runtime APIs to surface `list_executions` and `get_execution_history` consistently- ContinueAsNew support
+- test hung because the initial orchestration takes longer to start!
 - tests for orchestration state, 
 - tests for provider <-> runtime resumption of multiple orchestrations. 
 - dequeue multiple item batch
