@@ -64,12 +64,52 @@ impl HistoryStore for FsHistoryStore {
         if existing.len() + new_events.len() > self.cap {
             return Err(format!("history cap exceeded (cap={}, have={}, append={})", self.cap, existing.len(), new_events.len()));
         }
-        // Append only new events without truncation
+        // Build a seen set for idempotent completion-like events
+        use std::collections::HashSet;
+        let mut seen: HashSet<(u64, &'static str)> = HashSet::new();
+    for ev in existing.iter() {
+            match ev {
+                Event::ActivityCompleted { id, .. } => { seen.insert((*id, "ac")); }
+                Event::ActivityFailed { id, .. } => { seen.insert((*id, "af")); }
+                Event::TimerFired { id, .. } => { seen.insert((*id, "tf")); }
+                Event::ExternalEvent { id, .. } => { seen.insert((*id, "xe")); }
+                Event::SubOrchestrationCompleted { id, .. } => { seen.insert((*id, "sc")); }
+                Event::SubOrchestrationFailed { id, .. } => { seen.insert((*id, "sf")); }
+        // Use synthetic id=0 slots to dedupe terminal events
+        Event::OrchestrationCompleted { .. } => { seen.insert((0, "oc")); }
+        Event::OrchestrationFailed { .. } => { seen.insert((0, "of")); }
+                _ => {}
+            }
+        }
+        // Append only not-yet-seen completion-like events; always append schedule-like ones
         let mut file = fs::OpenOptions::new().create(true).append(true).open(&path).await.unwrap();
         for ev in new_events {
+            let dup = match &ev {
+                Event::ActivityCompleted { id, .. } => seen.contains(&(*id, "ac")),
+                Event::ActivityFailed { id, .. } => seen.contains(&(*id, "af")),
+                Event::TimerFired { id, .. } => seen.contains(&(*id, "tf")),
+                Event::ExternalEvent { id, .. } => seen.contains(&(*id, "xe")),
+                Event::SubOrchestrationCompleted { id, .. } => seen.contains(&(*id, "sc")),
+                Event::SubOrchestrationFailed { id, .. } => seen.contains(&(*id, "sf")),
+                Event::OrchestrationCompleted { .. } => seen.contains(&(0, "oc")),
+                Event::OrchestrationFailed { .. } => seen.contains(&(0, "of")),
+                _ => false,
+            };
+            if dup { continue; }
             let line = serde_json::to_string(&ev).unwrap();
             file.write_all(line.as_bytes()).await.unwrap();
             file.write_all(b"\n").await.unwrap();
+            match &ev {
+                Event::ActivityCompleted { id, .. } => { seen.insert((*id, "ac")); }
+                Event::ActivityFailed { id, .. } => { seen.insert((*id, "af")); }
+                Event::TimerFired { id, .. } => { seen.insert((*id, "tf")); }
+                Event::ExternalEvent { id, .. } => { seen.insert((*id, "xe")); }
+                Event::SubOrchestrationCompleted { id, .. } => { seen.insert((*id, "sc")); }
+                Event::SubOrchestrationFailed { id, .. } => { seen.insert((*id, "sf")); }
+                Event::OrchestrationCompleted { .. } => { seen.insert((0, "oc")); }
+                Event::OrchestrationFailed { .. } => { seen.insert((0, "of")); }
+                _ => {}
+            }
         }
         file.flush().await.ok();
         Ok(())
@@ -129,17 +169,31 @@ impl HistoryStore for FsHistoryStore {
     }
 
     async fn enqueue_work(&self, item: WorkItem) -> Result<(), String> {
-        // sync file writes are fine here
-        let mut f = std::fs::OpenOptions::new().create(true).append(true).open(&self.queue_file).map_err(|e| e.to_string())?;
-        let line = serde_json::to_string(&item).map_err(|e| e.to_string())?;
-        use std::io::Write as _;
-        f.write_all(line.as_bytes()).map_err(|e| e.to_string())?;
-        f.write_all(b"\n").map_err(|e| e.to_string())?;
+        // Idempotent enqueue: load current items and only append if not present
+        let content = std::fs::read_to_string(&self.queue_file).unwrap_or_default();
+        let mut items: Vec<WorkItem> = content
+            .lines()
+            .filter_map(|l| serde_json::from_str::<WorkItem>(l).ok())
+            .collect();
+        if items.contains(&item) { return Ok(()); }
+        items.push(item);
+        // Rewrite file atomically
+        let tmp = self.queue_file.with_extension("jsonl.tmp");
+        {
+            let mut tf = std::fs::OpenOptions::new().create(true).write(true).truncate(true).open(&tmp).map_err(|e| e.to_string())?;
+            for it in &items {
+                let line = serde_json::to_string(&it).map_err(|e| e.to_string())?;
+                use std::io::Write as _;
+                tf.write_all(line.as_bytes()).map_err(|e| e.to_string())?;
+                tf.write_all(b"\n").map_err(|e| e.to_string())?;
+            }
+        }
+        std::fs::rename(&tmp, &self.queue_file).map_err(|e| e.to_string())?;
         Ok(())
     }
 
     async fn dequeue_work(&self) -> Option<WorkItem> {
-        // naive: read all, pop first, rewrite rest
+        // naive: read all, pop first, rewrite rest atomically
         let content = std::fs::read_to_string(&self.queue_file).ok()?;
         let mut items: Vec<WorkItem> = content
             .lines()
@@ -147,13 +201,17 @@ impl HistoryStore for FsHistoryStore {
             .collect();
         if items.is_empty() { return None; }
         let first = items.remove(0);
-        let mut f = std::fs::OpenOptions::new().write(true).truncate(true).open(&self.queue_file).ok()?;
-        for it in items {
-            let line = serde_json::to_string(&it).ok()?;
-            use std::io::Write as _;
-            let _ = f.write_all(line.as_bytes());
-            let _ = f.write_all(b"\n");
+        let tmp = self.queue_file.with_extension("jsonl.tmp");
+        {
+            let mut tf = std::fs::OpenOptions::new().create(true).write(true).truncate(true).open(&tmp).ok()?;
+            for it in &items {
+                let line = serde_json::to_string(&it).ok()?;
+                use std::io::Write as _;
+                let _ = tf.write_all(line.as_bytes());
+                let _ = tf.write_all(b"\n");
+            }
         }
+        let _ = std::fs::rename(&tmp, &self.queue_file);
         Some(first)
     }
 

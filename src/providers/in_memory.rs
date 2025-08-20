@@ -56,7 +56,10 @@ impl HistoryStore for InMemoryHistoryStore {
     }
 
     async fn enqueue_work(&self, item: WorkItem) -> Result<(), String> {
-        self.work_q.lock().await.push(item);
+        let mut q = self.work_q.lock().await;
+        if !q.contains(&item) {
+            q.push(item);
+        }
         Ok(())
     }
 
@@ -102,7 +105,36 @@ impl HistoryStore for InMemoryHistoryStore {
         if cur.len() + new_events.len() > CAP {
             return Err(format!("history cap exceeded (cap={}, have={}, append={})", CAP, cur.len(), new_events.len()));
         }
-        cur.extend(new_events);
+        // Idempotent append for completion-like events by (kind,id)
+        use std::collections::HashSet;
+        let mut seen: HashSet<(u64, &'static str)> = HashSet::new();
+    for e in cur.iter() {
+            match e {
+                Event::ActivityCompleted { id, .. } => { seen.insert((*id, "ac")); }
+                Event::ActivityFailed { id, .. } => { seen.insert((*id, "af")); }
+                Event::TimerFired { id, .. } => { seen.insert((*id, "tf")); }
+                Event::ExternalEvent { id, .. } => { seen.insert((*id, "xe")); }
+                Event::SubOrchestrationCompleted { id, .. } => { seen.insert((*id, "sc")); }
+                Event::SubOrchestrationFailed { id, .. } => { seen.insert((*id, "sf")); }
+        Event::OrchestrationCompleted { .. } => { seen.insert((0, "oc")); }
+        Event::OrchestrationFailed { .. } => { seen.insert((0, "of")); }
+                _ => {}
+            }
+        }
+        for e in new_events.into_iter() {
+            let dup = match &e {
+                Event::ActivityCompleted { id, .. } => seen.contains(&(*id, "ac")),
+                Event::ActivityFailed { id, .. } => seen.contains(&(*id, "af")),
+                Event::TimerFired { id, .. } => seen.contains(&(*id, "tf")),
+                Event::ExternalEvent { id, .. } => seen.contains(&(*id, "xe")),
+                Event::SubOrchestrationCompleted { id, .. } => seen.contains(&(*id, "sc")),
+                Event::SubOrchestrationFailed { id, .. } => seen.contains(&(*id, "sf")),
+                Event::OrchestrationCompleted { .. } => seen.contains(&(0, "oc")),
+                Event::OrchestrationFailed { .. } => seen.contains(&(0, "of")),
+                _ => false,
+            };
+            if !dup { cur.push(e); }
+        }
         Ok(())
     }
 
