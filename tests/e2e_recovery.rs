@@ -226,31 +226,21 @@ async fn recovery_multiple_orchestrations_fs_provider() {
         rt2_c.raise_event("inst-wait", "Go", "ok").await;
     });
 
-    // Poll status for each instance until completion, with a reasonable timeout
+    // Use wait helper for each instance
     for (inst, name, input) in &cases {
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(6);
-        loop {
-            let st = rt2.get_orchestration_status(inst).await;
-            match st {
-                OrchestrationStatus::Completed { output } => {
-                    // Minimal sanity check per orchestration
-                    match *name {
-                        "EchoWait" => assert_eq!(output, format!("done:{input}")),
-                        "UpperOnly" => assert_eq!(output, format!("upper:{}", input.to_uppercase())),
-                        "WaitEvent" => assert_eq!(output, format!("acked:{input}")),
-                        "ComputeSum" => assert_eq!(output, "sum=5"),
-                        "TwoTimers" => assert_eq!(output, format!("twodone:{input}")),
-                        _ => unreachable!(),
-                    }
-                    break;
+        match rt2.wait_for_orchestration(inst, std::time::Duration::from_secs(6)).await.unwrap() {
+            OrchestrationStatus::Completed { output } => {
+                match *name {
+                    "EchoWait" => assert_eq!(output, format!("done:{input}")),
+                    "UpperOnly" => assert_eq!(output, format!("upper:{}", input.to_uppercase())),
+                    "WaitEvent" => assert_eq!(output, format!("acked:{input}")),
+                    "ComputeSum" => assert_eq!(output, "sum=5"),
+                    "TwoTimers" => assert_eq!(output, format!("twodone:{input}")),
+                    _ => unreachable!(),
                 }
-                OrchestrationStatus::Failed { error } => panic!("{inst} failed: {error}"),
-                OrchestrationStatus::Running => {
-                    if std::time::Instant::now() > deadline { panic!("timeout waiting for {inst}"); }
-                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-                }
-                OrchestrationStatus::NotFound => panic!("{inst} not found after restart"),
             }
+            OrchestrationStatus::Failed { error } => panic!("{inst} failed: {error}"),
+            OrchestrationStatus::Running | OrchestrationStatus::NotFound => unreachable!(),
         }
     }
 

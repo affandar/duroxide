@@ -61,18 +61,8 @@ async fn code_swap_triggers_nondeterminism() {
     let reg_b = OrchestrationRegistry::builder().register("SwapTest", orch_b).build();
     let rt_b = runtime::Runtime::start_with_store(store.clone(), StdArc::new(activity_registry), reg_b).await;
 
-    // Instead of running to completion, poll status until terminal
-    let term = tokio::time::timeout(std::time::Duration::from_secs(5), async {
-        loop {
-            match rt_b.get_orchestration_status("inst-swap").await {
-                OrchestrationStatus::Completed { .. } | OrchestrationStatus::Failed { .. } => break,
-                _ => tokio::time::sleep(std::time::Duration::from_millis(20)).await,
-            }
-        }
-    }).await;
-
-    assert!(term.is_ok(), "timed out waiting for terminal status");
-    match rt_b.get_orchestration_status("inst-swap").await {
+    // Wait for terminal status using helper
+    match rt_b.wait_for_orchestration("inst-swap", std::time::Duration::from_secs(5)).await.unwrap() {
         OrchestrationStatus::Failed { error } => assert!(error.contains("nondeterministic"), "error: {error}"),
         other => panic!("expected failure with nondeterminism, got: {other:?}"),
     }

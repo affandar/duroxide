@@ -2,7 +2,6 @@ use std::sync::Arc as StdArc;
 use semver::Version;
 use rust_dtf::{OrchestrationContext, OrchestrationRegistry, Event};
 use rust_dtf::runtime::{self, activity::ActivityRegistry};
-use rust_dtf::providers::HistoryStore;
 
 #[tokio::test]
 async fn start_uses_latest_version() {
@@ -147,17 +146,12 @@ async fn continue_as_new_upgrades_version_deterministically() {
     assert_eq!(out.unwrap(), "");
     assert!(hist.iter().any(|e| matches!(e, Event::OrchestrationContinuedAsNew { .. })));
 
-    // Poll history until final completion appears with expected output
-    let mut got = None;
-    for _ in 0..100u32 {
-        let hcur = store.read("inst-can-upgrade").await;
-        if let Some(Event::OrchestrationCompleted { output }) = hcur.last() {
-            got = Some(output.clone());
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    // Wait for terminal status using helper and assert final output
+    match rt.wait_for_orchestration("inst-can-upgrade", std::time::Duration::from_secs(5)).await.unwrap() {
+        rust_dtf::OrchestrationStatus::Completed { output } => assert_eq!(output, "v2_done:from_v1_to_v2"),
+        rust_dtf::OrchestrationStatus::Failed { error } => panic!("unexpected failure: {error}"),
+        _ => unreachable!(),
     }
-    assert_eq!(got.as_deref(), Some("v2_done:from_v1_to_v2"));
     rt.shutdown().await;
 }
 
