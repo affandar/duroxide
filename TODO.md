@@ -1,5 +1,7 @@
 ## Durable Task Rust Core – TODOs
 
+- write a real world orchestration
+- example versioned crates with orchestrations and loaders
 - proper timer implementation in the provider
 - profiling replay and providers
 - performance improvements for runtime

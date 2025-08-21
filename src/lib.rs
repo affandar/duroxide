@@ -116,12 +116,13 @@ pub enum Action {
     /// Subscribe to an external event by name.
     WaitExternal { id: u64, name: String },
     /// Start a detached orchestration (no result routing back to parent).
-    StartOrchestrationDetached { id: u64, name: String, instance: String, input: String },
-    /// Start a sub-orchestration by name and child instance id.
-    StartSubOrchestration { id: u64, name: String, instance: String, input: String },
+    StartOrchestrationDetached { id: u64, name: String, version: Option<String>, instance: String, input: String },
+    /// Start a sub-orchestration by name and child instance id. Optional version selects target orchestration version.
+    StartSubOrchestration { id: u64, name: String, version: Option<String>, instance: String, input: String },
 
     /// Continue the current orchestration as a new execution with new input (terminal for current execution).
-    ContinueAsNew { input: String },
+    /// Optional version string selects the target orchestration version for the new execution.
+    ContinueAsNew { input: String, version: Option<String> },
 }
 
 #[derive(Debug)]
@@ -288,12 +289,18 @@ impl OrchestrationContext {
     pub fn continue_as_new(&self, input: impl Into<String>) {
         let mut inner = self.inner.lock().unwrap();
         let input: String = input.into();
-        inner.record_action(Action::ContinueAsNew { input });
+        inner.record_action(Action::ContinueAsNew { input, version: None });
     }
 
     pub fn continue_as_new_typed<In: serde::Serialize>(&self, input: &In) {
         let payload = crate::_typed_codec::Json::encode(input).expect("encode");
         self.continue_as_new(payload);
+    }
+
+    /// ContinueAsNew to a specific target version (string is parsed as semver later).
+    pub fn continue_as_new_versioned(&self, version: impl Into<String>, input: impl Into<String>) {
+        let mut inner = self.inner.lock().unwrap();
+        inner.record_action(Action::ContinueAsNew { input: input.into(), version: Some(version.into()) });
     }
 }
 
@@ -324,7 +331,7 @@ enum Kind {
     Activity { id: u64, name: String, input: String, scheduled: Cell<bool>, ctx: OrchestrationContext },
     Timer { id: u64, delay_ms: u64, scheduled: Cell<bool>, ctx: OrchestrationContext },
     External { id: u64, name: String, scheduled: Cell<bool>, ctx: OrchestrationContext },
-    SubOrch { id: u64, name: String, instance: String, input: String, scheduled: Cell<bool>, ctx: OrchestrationContext },
+    SubOrch { id: u64, name: String, version: Option<String>, instance: String, input: String, scheduled: Cell<bool>, ctx: OrchestrationContext },
 }
 
 impl Future for DurableFuture {
@@ -378,7 +385,7 @@ impl Future for DurableFuture {
                 }
                 Poll::Pending
             }
-            Kind::SubOrch { id, name, instance, input, scheduled, ctx } => {
+            Kind::SubOrch { id, name, version, instance, input, scheduled, ctx } => {
                 let mut inner = ctx.inner.lock().unwrap();
                 // Completion present?
                 if let Some(outcome) = inner.history.iter().rev().find_map(|e| match e {
@@ -390,7 +397,7 @@ impl Future for DurableFuture {
                 let already_scheduled = inner.history.iter().any(|e| matches!(e, Event::SubOrchestrationScheduled { id: cid, .. } if cid == id));
                 if !already_scheduled && !scheduled.replace(true) {
                     inner.history.push(Event::SubOrchestrationScheduled { id: *id, name: name.clone(), instance: instance.clone(), input: input.clone() });
-                    inner.record_action(Action::StartSubOrchestration { id: *id, name: name.clone(), instance: instance.clone(), input: input.clone() });
+                    inner.record_action(Action::StartSubOrchestration { id: *id, name: name.clone(), version: version.clone(), instance: instance.clone(), input: input.clone() });
                 }
                 Poll::Pending
             }
@@ -591,12 +598,33 @@ impl OrchestrationContext {
         // Use a portable placeholder that the runtime can disambiguate by prefixing parent instance
         let child_instance = if instance.is_empty() { format!("sub::{id}") } else { instance };
         drop(inner);
-        DurableFuture(Kind::SubOrch { id, name, instance: child_instance, input, scheduled: Cell::new(false), ctx: self.clone() })
+        DurableFuture(Kind::SubOrch { id, name, version: None, instance: child_instance, input, scheduled: Cell::new(false), ctx: self.clone() })
     }
 
     pub fn schedule_sub_orchestration_typed<In: serde::Serialize, Out: serde::de::DeserializeOwned>(&self, name: impl Into<String>, input: &In) -> DurableFuture {
         let payload = crate::_typed_codec::Json::encode(input).expect("encode");
         self.schedule_sub_orchestration(name, payload)
+    }
+
+    /// Versioned sub-orchestration start (string I/O). If `version` is None, registry policy is used.
+    pub fn schedule_sub_orchestration_versioned(&self, name: impl Into<String>, version: Option<String>, input: impl Into<String>) -> DurableFuture {
+        let name: String = name.into();
+        let input: String = input.into();
+        let mut inner = self.inner.lock().unwrap();
+        let adopted = inner.history.iter().find_map(|e| match e {
+            Event::SubOrchestrationScheduled { id, name: n, input: inp, instance: inst } if n == &name && inp == &input => Some((*id, inst.clone())),
+            _ => None,
+        });
+        let (id, instance) = if let Some((id, inst)) = adopted { (id, inst) } else { (inner.next_id(), String::new()) };
+        let child_instance = if instance.is_empty() { format!("sub::{id}") } else { instance };
+        drop(inner);
+        DurableFuture(Kind::SubOrch { id, name, version, instance: child_instance, input, scheduled: Cell::new(false), ctx: self.clone() })
+    }
+
+    /// Versioned typed sub-orchestration.
+    pub fn schedule_sub_orchestration_versioned_typed<In: serde::Serialize, Out: serde::de::DeserializeOwned>(&self, name: impl Into<String>, version: Option<String>, input: &In) -> DurableFuture {
+        let payload = crate::_typed_codec::Json::encode(input).expect("encode");
+        self.schedule_sub_orchestration_versioned(name, version, payload)
     }
 
     /// Schedule a detached orchestration with an explicit instance id.
@@ -617,7 +645,7 @@ impl OrchestrationContext {
         });
         let id = adopted.unwrap_or_else(|| inner.next_id());
         inner.history.push(Event::OrchestrationChained { id, name: name.clone(), instance: instance.clone(), input: input.clone() });
-        inner.record_action(Action::StartOrchestrationDetached { id, name, instance, input });
+        inner.record_action(Action::StartOrchestrationDetached { id, name, version: None, instance, input });
     }
 
     pub fn schedule_orchestration_typed<In: serde::Serialize>(
@@ -630,14 +658,52 @@ impl OrchestrationContext {
         self.schedule_orchestration(name, instance, payload)
     }
 
+    /// Versioned detached orchestration start (string I/O). If `version` is None, registry policy is used for the child.
+    pub fn schedule_orchestration_versioned(
+        &self,
+        name: impl Into<String>,
+        version: Option<String>,
+        instance: impl Into<String>,
+        input: impl Into<String>,
+    ) {
+        let name: String = name.into();
+        let instance: String = instance.into();
+        let input: String = input.into();
+        let mut inner = self.inner.lock().unwrap();
+        let adopted = inner.history.iter().find_map(|e| match e {
+            Event::OrchestrationChained { id, name: n, instance: inst, input: inp } if n == &name && inp == &input && inst == &instance => Some(*id),
+            _ => None,
+        });
+        let id = adopted.unwrap_or_else(|| inner.next_id());
+        inner.history.push(Event::OrchestrationChained { id, name: name.clone(), instance: instance.clone(), input: input.clone() });
+        let version_for_note = version.clone();
+        inner.record_action(Action::StartOrchestrationDetached { id, name, version, instance, input });
+        drop(inner);
+        if let Some(ver) = version_for_note {
+            // best-effort: stash as a side-effect by pinning child on the host when dispatched (handled in runtime)
+            let _ = ver; // signaling only; runtime will resolve by policy unless explicitly set elsewhere
+        }
+    }
+
+    pub fn schedule_orchestration_versioned_typed<In: serde::Serialize>(
+        &self,
+        name: impl Into<String>,
+        version: Option<String>,
+        instance: impl Into<String>,
+        input: &In,
+    ) {
+        let payload = crate::_typed_codec::Json::encode(input).expect("encode");
+        self.schedule_orchestration_versioned(name, version, instance, payload)
+    }
+
     // removed: schedule_orchestration(name, input) without instance id (must pass instance id)
 }
 
 fn noop_waker() -> Waker {
-    unsafe fn clone(_: *const ()) -> RawWaker { RawWaker::new(std::ptr::null(), &VTABLE) }
-    unsafe fn wake(_: *const ()) {}
-    unsafe fn wake_by_ref(_: *const ()) {}
-    unsafe fn drop(_: *const ()) {}
+    unsafe fn clone (_: *const ()) -> RawWaker { RawWaker::new(std::ptr::null(), &VTABLE) }
+    unsafe fn wake (_: *const ()) {}
+    unsafe fn wake_by_ref (_: *const ()) {}
+    unsafe fn drop (_: *const ()) {}
     static VTABLE: RawWakerVTable = RawWakerVTable::new(clone, wake, wake_by_ref, drop);
     unsafe { Waker::from_raw(RawWaker::new(std::ptr::null(), &VTABLE)) }
 }
