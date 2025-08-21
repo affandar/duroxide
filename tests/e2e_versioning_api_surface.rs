@@ -103,10 +103,12 @@ async fn continue_as_new_versioned_typed_explicit() {
     let rt = runtime::Runtime::start_with_store(StdArc::new(rust_dtf::providers::in_memory::InMemoryHistoryStore::default()), StdArc::new(ActivityRegistry::builder().build()), reg).await;
     let h = rt.clone().start_orchestration("i5", "Up", "").await.unwrap();
     let (_hist, _out) = h.await.unwrap();
-    // Poll for completion and assert payload preserved
-    let mut got = None;
-    for _ in 0..100 { if let rust_dtf::OrchestrationStatus::Completed { output } = rt.get_orchestration_status("i5").await { got = Some(output); break; } tokio::time::sleep(std::time::Duration::from_millis(20)).await; }
-    assert_eq!(got.as_deref(), Some("done"));
+    // Use wait helper instead of polling
+    match rt.wait_for_orchestration("i5", std::time::Duration::from_secs(3)).await.unwrap() {
+        runtime::OrchestrationStatus::Completed { output } => assert_eq!(output.as_str(), "done"),
+        runtime::OrchestrationStatus::Failed { error } => panic!("unexpected failure: {error}"),
+        _ => unreachable!(),
+    }
     rt.shutdown().await;
 }
 

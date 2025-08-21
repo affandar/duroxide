@@ -272,14 +272,11 @@ async fn sample_status_polling_fs() {
     let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
     let _h = rt.clone().start_orchestration("inst-status-sample", "StatusSample", "").await.unwrap();
 
-    // Poll status until Completed
-    loop {
-        match rt.get_orchestration_status("inst-status-sample").await {
-            OrchestrationStatus::Completed { output } => { assert_eq!(output, "done"); break; }
-            OrchestrationStatus::Failed { error } => panic!("unexpected failure: {error}"),
-            OrchestrationStatus::Running => tokio::time::sleep(std::time::Duration::from_millis(5)).await,
-            OrchestrationStatus::NotFound => panic!("instance not found"),
-        }
+    // New helper: wait until terminal (Completed/Failed) or timeout.
+    match rt.wait_for_orchestration("inst-status-sample", std::time::Duration::from_secs(2)).await.unwrap() {
+        OrchestrationStatus::Completed { output } => assert_eq!(output, "done"),
+        OrchestrationStatus::Failed { error } => panic!("unexpected failure: {error}"),
+        _ => unreachable!(),
     }
     rt.shutdown().await;
 }
@@ -440,16 +437,10 @@ async fn sample_detached_orchestration_scheduling_fs() {
     // The scheduled instances are plain W1/W2 (no prefixing)
     let insts = vec!["W1".to_string(), "W2".to_string()];
     for inst in insts {
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        loop {
-            match rt.get_orchestration_status(&inst).await {
-                OrchestrationStatus::Completed { output } => { assert!(output == "A" || output == "B"); break; }
-                OrchestrationStatus::Failed { error } => panic!("scheduled orchestration failed: {error}"),
-                OrchestrationStatus::Running | OrchestrationStatus::NotFound => {
-                    if std::time::Instant::now() > deadline { panic!("timeout waiting for {inst}"); }
-                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-                }
-            }
+        match rt.wait_for_orchestration(&inst, std::time::Duration::from_secs(5)).await.unwrap() {
+            OrchestrationStatus::Completed { output } => { assert!(output == "A" || output == "B"); },
+            OrchestrationStatus::Failed { error } => panic!("scheduled orchestration failed: {error}"),
+            _ => unreachable!(),
         }
     }
 
@@ -486,18 +477,12 @@ async fn sample_continue_as_new_fs() {
     let h = rt.clone().start_orchestration("inst-sample-can", "CanSample", "0").await.unwrap();
     let (_hist, out) = h.await.unwrap();
     assert_eq!(out.unwrap(), "");
-    // Poll until final completion
-    use rust_dtf::OrchestrationStatus;
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    let mut final_out = None;
-    while std::time::Instant::now() < deadline {
-        match rt.get_orchestration_status("inst-sample-can").await {
-            OrchestrationStatus::Completed { output } => { final_out = Some(output); break; }
-            OrchestrationStatus::Failed { error } => panic!("failed: {error}"),
-            _ => tokio::time::sleep(std::time::Duration::from_millis(10)).await,
-        }
+    // Use wait helper instead of manual polling
+    match rt.wait_for_orchestration("inst-sample-can", std::time::Duration::from_secs(5)).await.unwrap() {
+        runtime::OrchestrationStatus::Completed { output } => assert_eq!(output, "final:3"),
+        runtime::OrchestrationStatus::Failed { error } => panic!("failed: {error}"),
+        _ => unreachable!(),
     }
-    assert_eq!(final_out.unwrap(), "final:3");
     // Check executions exist
     let execs = store.list_executions("inst-sample-can").await;
     assert_eq!(execs, vec![1,2,3,4]);
@@ -799,6 +784,75 @@ async fn sample_versioning_continue_as_new_upgrade_fs() {
     // Exec2 must start with the v1-marked payload, proving v1 ran first and handed off via CAN
     let e2 = store.read_with_execution("inst-can-upgrade", 2).await;
     assert!(e2.iter().any(|e| matches!(e, rust_dtf::Event::OrchestrationStarted { input, .. } if input == "v1:state")));
+
+    rt.shutdown().await;
+}
+
+/// Cancellation: cancel a parent orchestration and observe cascading cancellation to children.
+///
+/// Highlights:
+/// - Parent starts a child and awaits it
+/// - We cancel the parent instance via the runtime API
+/// - The parent fails deterministically with a canonical "canceled: <reason>"
+/// - The child is also canceled (downward propagation), and its history shows cancellation
+#[tokio::test]
+async fn sample_cancellation_parent_cascades_to_children_fs() {
+    use rust_dtf::Event;
+    let td = tempfile::tempdir().unwrap();
+    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
+
+    // Child: waits forever (until canceled). This demonstrates cooperative cancellation via runtime.
+    let child = |ctx: OrchestrationContext, _input: String| async move {
+        let _ = ctx.schedule_wait("Go").into_event().await;
+        Ok("done".to_string())
+    };
+
+    // Parent: starts child and awaits its completion.
+    let parent = |ctx: OrchestrationContext, _input: String| async move {
+        let _ = ctx
+            .schedule_sub_orchestration("ChildSample", "seed")
+            .into_sub_orchestration()
+            .await?;
+        Ok::<_, String>("parent_done".to_string())
+    };
+
+    let orchestration_registry = OrchestrationRegistry::builder()
+        .register("ChildSample", child)
+        .register("ParentSample", parent)
+        .build();
+    let activity_registry = ActivityRegistry::builder().build();
+    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+
+    // Start the parent orchestration
+    let _h = rt.clone().start_orchestration("inst-sample-cancel", "ParentSample", "").await.unwrap();
+
+    // Allow scheduling turn to run and child to start
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    // Cancel the parent; the runtime will append OrchestrationCancelRequested and then OrchestrationFailed
+    rt.cancel_instance("inst-sample-cancel", "user_request").await;
+
+    // Wait for the parent to fail deterministically with a canceled error
+    let ok = common::wait_for_history(store.clone(), "inst-sample-cancel", |hist| {
+        hist.iter().rev().any(|e| matches!(e, Event::OrchestrationFailed { error } if error.starts_with("canceled: user_request")))
+    }, 5_000).await;
+    assert!(ok, "timeout waiting for parent cancel failure");
+
+    // Find child instance (prefix is parent::sub::<id>) and check it was canceled too
+    let children: Vec<String> = store
+        .list_instances()
+        .await
+        .into_iter()
+        .filter(|i| i.starts_with("inst-sample-cancel::"))
+        .collect();
+    assert!(!children.is_empty());
+    for child in children {
+        let ok_child = common::wait_for_history(store.clone(), &child, |hist| {
+            hist.iter().any(|e| matches!(e, Event::OrchestrationCancelRequested { .. })) &&
+            hist.iter().any(|e| matches!(e, Event::OrchestrationFailed { error } if error.starts_with("canceled: parent canceled")))
+        }, 5_000).await;
+        assert!(ok_child, "timeout waiting for child cancel for {child}");
+    }
 
     rt.shutdown().await;
 }

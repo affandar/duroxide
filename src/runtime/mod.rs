@@ -30,6 +30,10 @@ pub enum OrchestrationStatus {
     Failed { error: String },
 }
 
+/// Error type returned by orchestration wait helpers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WaitError { Timeout, Other(String) }
+
 /// Trait implemented by orchestration handlers that can be invoked by the runtime.
 #[async_trait]
 pub trait OrchestrationHandler: Send + Sync {
@@ -810,6 +814,68 @@ impl Runtime {
         let reason_s = reason.into();
         // Only enqueue if instance is active, else best-effort: provider queue will deliver when it becomes active
         let _ = self.history_store.enqueue_work(WorkItem::CancelInstance { instance: instance.to_string(), reason: reason_s }).await;
+    }
+
+    /// Wait until the orchestration reaches a terminal state (Completed/Failed) or the timeout elapses.
+    pub async fn wait_for_orchestration(&self, instance: &str, timeout: std::time::Duration) -> Result<OrchestrationStatus, WaitError> {
+        let deadline = std::time::Instant::now() + timeout;
+        // quick path
+        match self.get_orchestration_status(instance).await {
+            OrchestrationStatus::Completed { output } => return Ok(OrchestrationStatus::Completed { output }),
+            OrchestrationStatus::Failed { error } => return Ok(OrchestrationStatus::Failed { error }),
+            _ => {}
+        }
+        // poll with backoff
+        let mut delay_ms: u64 = 5;
+        while std::time::Instant::now() < deadline {
+            match self.get_orchestration_status(instance).await {
+                OrchestrationStatus::Completed { output } => return Ok(OrchestrationStatus::Completed { output }),
+                OrchestrationStatus::Failed { error } => return Ok(OrchestrationStatus::Failed { error }),
+                _ => {
+                    tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+                    delay_ms = (delay_ms.saturating_mul(2)).min(100);
+                }
+            }
+        }
+        Err(WaitError::Timeout)
+    }
+
+    /// Typed variant: returns Ok(Ok<T>) on Completed with decoded output, Ok(Err(String)) on Failed.
+    pub async fn wait_for_orchestration_typed<Out: serde::de::DeserializeOwned>(&self, instance: &str, timeout: std::time::Duration) -> Result<Result<Out, String>, WaitError> {
+        match self.wait_for_orchestration(instance, timeout).await? {
+            OrchestrationStatus::Completed { output } => match crate::_typed_codec::Json::decode::<Out>(&output) {
+                Ok(v) => Ok(Ok(v)),
+                Err(e) => Err(WaitError::Other(format!("decode failed: {e}"))),
+            },
+            OrchestrationStatus::Failed { error } => Ok(Err(error)),
+            _ => unreachable!("wait_for_orchestration returns only terminal or timeout"),
+        }
+    }
+
+    /// Blocking wrapper around wait_for_orchestration.
+    pub fn wait_for_orchestration_blocking(&self, instance: &str, timeout: std::time::Duration) -> Result<OrchestrationStatus, WaitError> {
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            tokio::task::block_in_place(|| handle.block_on(self.wait_for_orchestration(instance, timeout)))
+        } else {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|e| WaitError::Other(e.to_string()))?;
+            rt.block_on(self.wait_for_orchestration(instance, timeout))
+        }
+    }
+
+    /// Blocking wrapper for typed wait.
+    pub fn wait_for_orchestration_typed_blocking<Out: serde::de::DeserializeOwned>(&self, instance: &str, timeout: std::time::Duration) -> Result<Result<Out, String>, WaitError> {
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            tokio::task::block_in_place(|| handle.block_on(self.wait_for_orchestration_typed::<Out>(instance, timeout)))
+        } else {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|e| WaitError::Other(e.to_string()))?;
+            rt.block_on(self.wait_for_orchestration_typed::<Out>(instance, timeout))
+        }
     }
 }
 
