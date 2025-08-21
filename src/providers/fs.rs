@@ -194,28 +194,7 @@ impl HistoryStore for FsHistoryStore {
         Ok(())
     }
 
-    async fn dequeue_work(&self) -> Option<WorkItem> {
-        // naive: read all, pop first, rewrite rest atomically
-        let content = std::fs::read_to_string(&self.queue_file).ok()?;
-        let mut items: Vec<WorkItem> = content
-            .lines()
-            .filter_map(|l| serde_json::from_str::<WorkItem>(l).ok())
-            .collect();
-        if items.is_empty() { return None; }
-        let first = items.remove(0);
-        let tmp = self.queue_file.with_extension("jsonl.tmp");
-        {
-            let mut tf = std::fs::OpenOptions::new().create(true).write(true).truncate(true).open(&tmp).ok()?;
-            for it in &items {
-                let line = serde_json::to_string(&it).ok()?;
-                use std::io::Write as _;
-                let _ = tf.write_all(line.as_bytes());
-                let _ = tf.write_all(b"\n");
-            }
-        }
-        let _ = std::fs::rename(&tmp, &self.queue_file);
-        Some(first)
-    }
+    // dequeue_work removed; runtime uses peek-lock only
 
     async fn dequeue_peek_lock(&self) -> Option<(WorkItem, String)> {
         // Pop first item but write it to a lock sidecar to keep invisible until ack/abandon

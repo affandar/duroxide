@@ -65,11 +65,7 @@ impl HistoryStore for InMemoryHistoryStore {
         Ok(())
     }
 
-    async fn dequeue_work(&self) -> Option<WorkItem> {
-        let mut q = self.work_q.lock().await;
-        if q.is_empty() { return None; }
-        Some(q.remove(0))
-    }
+    // dequeue_work removed; runtime uses peek-lock only
 
     async fn dequeue_peek_lock(&self) -> Option<(WorkItem, String)> {
         let mut q = self.work_q.lock().await;

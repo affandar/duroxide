@@ -43,9 +43,6 @@ pub trait HistoryStore: Send + Sync {
     /// Enqueue a work item for the runtime to act on.
     async fn enqueue_work(&self, _item: WorkItem) -> Result<(), String> { Err("work queue not supported".into()) }
 
-    /// Dequeue the next available work item (if any).
-    async fn dequeue_work(&self) -> Option<WorkItem> { None }
-
     /// Dequeue-next using peek-lock semantics. Returns (item, token) when supported.
     /// The item remains invisible until `ack(token)` or `abandon(token)` is called
     /// (implementations may use a best-effort invisibility without timeouts).
@@ -88,13 +85,10 @@ pub trait HistoryStore: Send + Sync {
         self.append(instance, new_events).await
     }
 
-    /// Reset for ContinueAsNew: create a new execution with OrchestrationStarted. Default: overwrite existing history.
-    async fn reset_for_continue_as_new(&self, instance: &str, orchestration: &str, input: &str) -> Result<u64, String> {
-        // Default implementation: clear and write a fresh start; new execution id is 1
-        self.remove_instance(instance).await.ok();
-        self.create_instance(instance).await?;
-        self.append(instance, vec![Event::OrchestrationStarted { name: orchestration.to_string(), input: input.to_string() }]).await?;
-        Ok(1)
+    /// Reset for ContinueAsNew: create a new execution with OrchestrationStarted.
+    /// Default: not supported. Providers must implement explicit multi-execution semantics.
+    async fn reset_for_continue_as_new(&self, _instance: &str, _orchestration: &str, _input: &str) -> Result<u64, String> {
+        Err("reset_for_continue_as_new not supported by this provider".into())
     }
 }
 
