@@ -354,6 +354,10 @@ impl Runtime {
                 let _ = (parent_id, error);
                 (Some(parent_instance.clone()), GatePolicy::RequireActive)
                         }
+                        WorkItem::CancelInstance { instance, reason } => {
+                let _ = reason;
+                (Some(instance.clone()), GatePolicy::RequireActive)
+                        }
                     };
                     if let Some(inst) = target_instance {
                         let is_active = rt_for_poll.active_instances.lock().await.contains(&inst);
@@ -363,6 +367,17 @@ impl Runtime {
                         };
                         if should_wait {
                             // Abandon so another poll can retry later
+                            let kind = match &item {
+                                WorkItem::StartOrchestration { .. } => "StartOrchestration",
+                                WorkItem::ActivityCompleted { .. } => "ActivityCompleted",
+                                WorkItem::ActivityFailed { .. } => "ActivityFailed",
+                                WorkItem::TimerFired { .. } => "TimerFired",
+                                WorkItem::ExternalRaised { .. } => "ExternalRaised",
+                                WorkItem::SubOrchCompleted { .. } => "SubOrchCompleted",
+                                WorkItem::SubOrchFailed { .. } => "SubOrchFailed",
+                                WorkItem::CancelInstance { .. } => "CancelInstance",
+                            };
+                            warn!(instance=%inst, kind=%kind, "poller: no active receiver; abandoning work item");
                             let _ = rt_for_poll.history_store.abandon(&token).await;
                             tokio::time::sleep(std::time::Duration::from_millis(Self::POLLER_GATE_DELAY_MS)).await;
                             maybe_forward = false;
@@ -398,6 +413,20 @@ impl Runtime {
                         }
                         WorkItem::SubOrchFailed { parent_instance, parent_id, error } => {
                 let _ = rt_for_poll.router_tx.send(OrchestratorMsg::SubOrchFailed { instance: parent_instance, id: parent_id, error, ack_token: Some(token) });
+                        }
+                        WorkItem::CancelInstance { instance, reason } => {
+                            // Try direct send to inbox to detect receiver presence; otherwise abandon and retry
+                            let mut sent = false;
+                            if let Some(tx) = rt_for_poll.router.inboxes.lock().await.get(&instance) {
+                                if tx.send(OrchestratorMsg::CancelRequested { instance: instance.clone(), reason: reason.clone(), ack_token: Some(token.clone()) }).is_ok() {
+                                    sent = true;
+                                }
+                            }
+                            if !sent {
+                                warn!(instance=%instance, "poller: cancel requested but no active receiver; abandoning");
+                                let _ = rt_for_poll.history_store.abandon(&token).await;
+                                tokio::time::sleep(std::time::Duration::from_millis(Self::POLLER_GATE_DELAY_MS)).await;
+                            }
                         }
                     }
                 } else {
@@ -691,6 +720,25 @@ impl Runtime {
             // Record which completions were appended in this iteration to validate on the next run_turn
             detect::collect_last_appended(&history, len_before_completions, &mut last_appended_completions);
 
+            // If a cancel request was appended in this batch, terminate deterministically.
+            if history.iter().skip(len_before_completions).any(|e| matches!(e, Event::OrchestrationCancelRequested { .. })) {
+                let reason = history.iter().rev().find_map(|e| match e { Event::OrchestrationCancelRequested { reason } => Some(reason.clone()), _ => None }).unwrap_or_else(|| "canceled".to_string());
+                let term = Event::OrchestrationFailed { error: format!("canceled: {}", reason) };
+                if let Err(e) = self.history_store.append(instance, vec![term.clone()]).await { error!(instance, turn_index, error=%e, "failed to append terminal cancel"); panic!("history append failed: {e}"); }
+                history.push(term.clone());
+                // Notify any waiters with canceled error
+                if let Some(waiters) = self.result_waiters.lock().await.remove(instance) {
+                    for w in waiters { let _ = w.send((history.clone(), Err(format!("canceled: {}", reason)))); }
+                }
+                // Downward propagation: cancel any scheduled sub-orchestrations without completion
+                let scheduled_children: Vec<(u64, String)> = history.iter().filter_map(|e| match e {
+                    Event::SubOrchestrationScheduled { id, instance: child, .. } => Some((*id, child.clone())), _ => None
+                }).collect();
+                let completed_ids: std::collections::HashSet<u64> = history.iter().filter_map(|e| match e { Event::SubOrchestrationCompleted { id, .. } | Event::SubOrchestrationFailed { id, .. } => Some(*id), _ => None }).collect();
+                for (id, child_suffix) in scheduled_children { if !completed_ids.contains(&id) { let child_full = format!("{}::{}", instance, child_suffix); let _ = self.history_store.enqueue_work(WorkItem::CancelInstance { instance: child_full, reason: "parent canceled".into() }).await; } }
+                return (history, Err(format!("canceled: {}", reason)));
+            }
+
             // Validate that each newly appended completion correlates to a start event of the same kind.
             // If a completion's correlation id points to a different kind of start (or none), classify as nondeterministic.
             if !last_appended_completions.is_empty() {
@@ -755,6 +803,13 @@ impl Runtime {
             warn!(instance, name=%name_str, error=%e, "raise_event: failed to enqueue ExternalRaised");
         }
     info!(instance, name=%name_str, data=%data_str, "raise_event: enqueued external");
+    }
+
+    /// Request cancellation of a running orchestration instance.
+    pub async fn cancel_instance(&self, instance: &str, reason: impl Into<String>) {
+        let reason_s = reason.into();
+        // Only enqueue if instance is active, else best-effort: provider queue will deliver when it becomes active
+        let _ = self.history_store.enqueue_work(WorkItem::CancelInstance { instance: instance.to_string(), reason: reason_s }).await;
     }
 }
 

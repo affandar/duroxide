@@ -107,6 +107,9 @@ pub enum Event {
 
     /// Orchestration continued as new with fresh input (terminal for this execution).
     OrchestrationContinuedAsNew { input: String },
+
+    /// Cancellation has been requested for the orchestration (terminal will follow deterministically).
+    OrchestrationCancelRequested { reason: String },
 }
 
 /// Declarative decisions produced by an orchestration turn. The host/provider
@@ -175,7 +178,8 @@ impl CtxInner {
                 | Event::OrchestrationCompleted { .. }
                 | Event::OrchestrationFailed { .. }
                 | Event::ParentLinked { .. }
-                | Event::OrchestrationContinuedAsNew { .. } => None,
+                | Event::OrchestrationContinuedAsNew { .. }
+                | Event::OrchestrationCancelRequested { .. } => None,
             };
             if let Some(id) = id_opt { max_id = max_id.max(id); }
         }

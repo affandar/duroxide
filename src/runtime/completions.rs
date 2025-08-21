@@ -62,6 +62,12 @@ pub fn append_completion(history: &mut Vec<Event>, msg: OrchestratorMsg) -> (Opt
             history.push(Event::SubOrchestrationFailed { id, error });
             (ack_token, true)
         }
+        OrchestratorMsg::CancelRequested { reason, ack_token, .. } => {
+            // Idempotent append of cancel request
+            if history.iter().any(|e| matches!(e, Event::OrchestrationCancelRequested { .. })) { return (ack_token, false); }
+            history.push(Event::OrchestrationCancelRequested { reason });
+            (ack_token, true)
+        }
     }
 }
 
