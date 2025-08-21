@@ -1,5 +1,6 @@
 ## Durable Task Rust Core – TODOs
 
+- proper timer implementation in the provider
 - profiling replay and providers
 - performance improvements for runtime
 - transactional processing - harden queue read semantics (see docs/reliability-queue-and-history.md)

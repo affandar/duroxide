@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex, oneshot};
 use tokio::task::JoinHandle;
-use crate::{Action, Event, OrchestrationContext, run_turn_with};
+use crate::{Action, Event, OrchestrationContext, run_turn_with_claims};
 use serde::{de::DeserializeOwned, Serialize};
 use crate::_typed_codec::{Json, Codec};
 use crate::providers::{HistoryStore, WorkItem};
@@ -191,6 +191,95 @@ pub struct Runtime {
 }
 
 impl Runtime {
+    fn detect_frontier_nondeterminism(&self, prior: &[Event], deltas: &[Event]) -> Option<String> {
+        let prior_has_any_schedule = prior.iter().any(|e| matches!(
+            e,
+            Event::ActivityScheduled { .. }
+                | Event::TimerCreated { .. }
+                | Event::ExternalSubscribed { .. }
+                | Event::SubOrchestrationScheduled { .. }
+        ));
+        let prior_has_any_completion = prior.iter().any(|e| matches!(
+            e,
+            Event::ActivityCompleted { .. }
+                | Event::ActivityFailed { .. }
+                | Event::TimerFired { .. }
+                | Event::ExternalEvent { .. }
+                | Event::SubOrchestrationCompleted { .. }
+                | Event::SubOrchestrationFailed { .. }
+        ));
+        if prior_has_any_schedule && !prior_has_any_completion {
+            for e in deltas.iter() {
+                let existed_before = match e {
+                    Event::ActivityScheduled { name, input, .. } => prior.iter().any(|pe| matches!(pe, Event::ActivityScheduled { name: pn, input: pi, .. } if pn == name && pi == input)),
+                    Event::TimerCreated { id: did, .. } => prior.iter().any(|pe| matches!(pe, Event::TimerCreated { id: pid, .. } if pid == did)),
+                    Event::ExternalSubscribed { name, .. } => prior.iter().any(|pe| matches!(pe, Event::ExternalSubscribed { name: pn, .. } if pn == name)),
+                    Event::SubOrchestrationScheduled { name, input, .. } => prior.iter().any(|pe| matches!(pe, Event::SubOrchestrationScheduled { name: pn, input: pi, .. } if pn == name && pi == input)),
+                    _ => true,
+                };
+                if !existed_before {
+                    return Some("nondeterministic: new schedule was introduced at same decision frontier (no new completion)".to_string());
+                }
+            }
+        }
+        None
+    }
+
+    fn detect_await_mismatch(&self, last: &[(&'static str, u64)], claims: &crate::ClaimedIdsSnapshot) -> Option<String> {
+        for (kind, id) in last {
+            let ok = match *kind {
+                "activity" => claims.activities.contains(id),
+                "timer" => claims.timers.contains(id),
+                "external" => claims.externals.contains(id),
+                "suborchestration" => claims.sub_orchestrations.contains(id),
+                _ => true,
+            };
+            if !ok {
+                return Some(format!("nondeterministic: {} completion observed for id={} that current code did not await", kind, id));
+            }
+        }
+        None
+    }
+
+    fn collect_last_appended(&self, history: &[Event], start_idx: usize, out: &mut Vec<(&'static str, u64)>) {
+        for e in history[start_idx..].iter() {
+            match e {
+                Event::ActivityCompleted { id, .. } | Event::ActivityFailed { id, .. } => { out.push(("activity", *id)); }
+                Event::TimerFired { id, .. } => { out.push(("timer", *id)); }
+                Event::ExternalEvent { id, .. } => { out.push(("external", *id)); }
+                Event::SubOrchestrationCompleted { id, .. } | Event::SubOrchestrationFailed { id, .. } => { out.push(("suborchestration", *id)); }
+                _ => {}
+            }
+        }
+    }
+
+    fn detect_completion_kind_mismatch(&self, prior: &[Event], last: &[(&'static str, u64)]) -> Option<String> {
+        for (kind, id) in last {
+            let scheduled_kind = prior.iter().find_map(|e| match e {
+                Event::ActivityScheduled { id: cid, .. } if cid == id => Some("activity"),
+                Event::TimerCreated { id: cid, .. } if cid == id => Some("timer"),
+                Event::ExternalSubscribed { id: cid, .. } if cid == id => Some("external"),
+                Event::SubOrchestrationScheduled { id: cid, .. } if cid == id => Some("suborchestration"),
+                _ => None,
+            });
+            match scheduled_kind {
+                Some(sk) if sk == *kind => {}
+                Some(sk) => {
+                    return Some(format!(
+                        "nondeterministic: completion kind '{}' for id={} does not match scheduled kind '{}'",
+                        kind, id, sk
+                    ));
+                }
+                None => {
+                    return Some(format!(
+                        "nondeterministic: completion kind '{}' for id={} has no matching schedule in prior history",
+                        kind, id
+                    ));
+                }
+            }
+        }
+        None
+    }
     /// Enqueue a new orchestration instance start. The runtime will pick this up
     /// in the background and drive it to completion.
     /// Start a typed orchestration; input/output are serialized internally.
@@ -543,6 +632,7 @@ impl Runtime {
         let mut history: Vec<Event> = self.history_store.read(instance).await;
         let mut comp_rx = self.router.register(instance).await;
 
+        // TODO : activities should be renqueued at the end of the turn?
         // Rehydrate pending activities and timers from history
         rehydrate_pending(instance, &history, &self.activity_tx, &self.timer_tx).await;
 
@@ -580,6 +670,8 @@ impl Runtime {
         let orchestration_handler = orchestration_handler_opt.unwrap();
 
         let mut turn_index: u64 = 0;
+        // Track completions appended in the previous iteration to validate against current code's awaited ids
+        let mut last_appended_completions: Vec<(&'static str, u64)> = Vec::new();
         loop {
             let orchestrator_fn = |ctx: OrchestrationContext| {
                 let handler = orchestration_handler.clone();
@@ -587,8 +679,35 @@ impl Runtime {
                 async move { handler.invoke(ctx, input_clone).await }
             };
             let baseline_len = history.len();
-            let (hist_after, actions, _logs, out_opt) = run_turn_with(history, turn_index, &orchestrator_fn);
+            let (hist_after, actions, _logs, out_opt, claims) = run_turn_with_claims(history, turn_index, &orchestrator_fn);
+            // Determinism guard: If prior history already contained at least one schedule event, and contained no
+            // completion events yet (still at the same decision frontier), then the orchestrator must not introduce
+            // net-new schedule events that were not present in prior history. This catches code swaps where, e.g.,
+            // A1 was scheduled previously but the new code tries to schedule B1 without any new completion.
+            if let Some(err) = self.detect_frontier_nondeterminism(&hist_after[..baseline_len], &hist_after[baseline_len..]) {
+                let _ = self.history_store.append(instance, vec![Event::OrchestrationFailed { error: err.clone() }]).await;
+                history = hist_after.clone();
+                history.push(Event::OrchestrationFailed { error: err.clone() });
+                if let Some(waiters) = self.result_waiters.lock().await.remove(instance) {
+                    for w in waiters { let _ = w.send((history.clone(), Err(err.clone()))); }
+                }
+                return (history, Err(err));
+            }
             history = hist_after;
+            // (nondeterminism validation happens after completion batches, using last_appended_completions)
+            // Validate any completions appended in the previous iteration against what the current code awaited.
+            if !last_appended_completions.is_empty() {
+                if let Some(err) = self.detect_await_mismatch(&last_appended_completions, &claims) {
+                    let _ = self.history_store.append(instance, vec![Event::OrchestrationFailed { error: err.clone() }]).await;
+                    history.push(Event::OrchestrationFailed { error: err.clone() });
+                    if let Some(waiters) = self.result_waiters.lock().await.remove(instance) {
+                        for w in waiters { let _ = w.send((history.clone(), Err(err.clone()))); }
+                    }
+                    return (history, Err(err));
+                }
+                // Clear after validation
+                last_appended_completions.clear();
+            }
             // Handle ContinueAsNew as terminal for this execution, regardless of out_opt
             if let Some(Action::ContinueAsNew { input }) = actions.iter().find_map(|a| match a { Action::ContinueAsNew { input } => Some(Action::ContinueAsNew { input: input.clone() }), _ => None }) {
                 // Append terminal continued-as-new event and create a new execution
@@ -779,6 +898,7 @@ impl Runtime {
             }
 
             // Receive at least one completion, then drain a bounded batch
+            let len_before_completions = history.len();
             let first = comp_rx.recv().await.expect("completion");
             let mut ack_tokens_persist_after: Vec<String> = Vec::new();
             let mut ack_tokens_immediate: Vec<String> = Vec::new();
@@ -812,6 +932,22 @@ impl Runtime {
             } else {
                 // No persistence occurred (duplicate completions); ack tokens if any
                 for t in ack_tokens_persist_after.drain(..) { let _ = self.history_store.ack(&t).await; }
+            }
+
+            // Record which completions were appended in this iteration to validate on the next run_turn
+            self.collect_last_appended(&history, len_before_completions, &mut last_appended_completions);
+
+            // Validate that each newly appended completion correlates to a start event of the same kind.
+            // If a completion's correlation id points to a different kind of start (or none), classify as nondeterministic.
+            if !last_appended_completions.is_empty() {
+                if let Some(err) = self.detect_completion_kind_mismatch(&history[..len_before_completions], &last_appended_completions) {
+                    let _ = self.history_store.append(instance, vec![Event::OrchestrationFailed { error: err.clone() }]).await;
+                    history.push(Event::OrchestrationFailed { error: err.clone() });
+                    if let Some(waiters) = self.result_waiters.lock().await.remove(instance) {
+                        for w in waiters { let _ = w.send((history.clone(), Err(err.clone()))); }
+                    }
+                    return (history, Err(err));
+                }
             }
 
             if appended_any {

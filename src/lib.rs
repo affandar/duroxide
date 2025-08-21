@@ -707,6 +707,64 @@ where
     }
 }
 
+/// Snapshot of IDs claimed by the orchestrator during a single poll turn.
+#[derive(Debug, Clone, Default)]
+pub struct ClaimedIdsSnapshot {
+    pub activities: std::collections::HashSet<u64>,
+    pub timers: std::collections::HashSet<u64>,
+    pub externals: std::collections::HashSet<u64>,
+    pub sub_orchestrations: std::collections::HashSet<u64>,
+}
+
+impl OrchestrationContext {
+    /// Internal: export a snapshot of correlation IDs that were claimed during this poll.
+    pub(crate) fn claimed_ids_snapshot(&self) -> ClaimedIdsSnapshot {
+        let inner = self.inner.lock().unwrap();
+        ClaimedIdsSnapshot {
+            activities: inner.claimed_activity_ids.clone(),
+            timers: inner.claimed_timer_ids.clone(),
+            externals: inner.claimed_external_ids.clone(),
+            sub_orchestrations: inner
+                .history
+                .iter()
+                .filter_map(|e| match e {
+                    Event::SubOrchestrationScheduled { id, .. } => Some(*id),
+                    _ => None,
+                })
+                .collect(),
+        }
+    }
+}
+
+/// Same as `run_turn_with` but also returns which correlation IDs were claimed during the poll.
+pub fn run_turn_with_claims<O, F>(history: Vec<Event>, turn_index: u64, orchestrator: impl Fn(OrchestrationContext) -> F) -> (Vec<Event>, Vec<Action>, Vec<(LogLevel, String)>, Option<O>, ClaimedIdsSnapshot)
+where
+    F: Future<Output = O>,
+{
+    let ctx = OrchestrationContext::new(history);
+    ctx.set_turn_index(turn_index);
+    ctx.inner.lock().unwrap().logging_enabled_this_poll = false;
+    let mut fut = orchestrator(ctx.clone());
+    let res = match poll_once(&mut fut) {
+        Poll::Ready(out) => {
+            ctx.inner.lock().unwrap().logging_enabled_this_poll = true;
+            let logs = ctx.take_log_buffer();
+            let actions = ctx.take_actions();
+            let hist_after = ctx.inner.lock().unwrap().history.clone();
+            let claims = ctx.claimed_ids_snapshot();
+            (hist_after, actions, logs, Some(out), claims)
+        }
+        Poll::Pending => {
+            let actions = ctx.take_actions();
+            let hist_after = ctx.inner.lock().unwrap().history.clone();
+            let logs = ctx.take_log_buffer();
+            let claims = ctx.claimed_ids_snapshot();
+            (hist_after, actions, logs, None, claims)
+        }
+    };
+    res
+}
+
 /// Helper for single-threaded, host-driven execution in tests and samples.
 pub struct Executor;
 
