@@ -23,6 +23,10 @@ pub mod logging;
 
 // Re-export key runtime types for convenience
 pub use runtime::{OrchestrationRegistry, OrchestrationRegistryBuilder, OrchestrationHandler, OrchestrationStatus};
+// Internal system activity names
+pub(crate) const SYSTEM_TRACE_ACTIVITY: &str = "__system_trace";
+pub(crate) const SYSTEM_NOW_ACTIVITY: &str = "__system_now";
+pub(crate) const SYSTEM_NEW_GUID_ACTIVITY: &str = "__system_new_guid";
 
 use serde::{Deserialize, Serialize};
 use crate::_typed_codec::Codec;
@@ -251,7 +255,7 @@ impl OrchestrationContext {
     /// Emit a structured trace entry using the system trace activity.
     pub fn trace(&self, level: impl Into<String>, message: impl Into<String>) {
         let payload = format!("{}:{}", level.into(), message.into());
-        let mut fut = self.schedule_activity("__system_trace", payload);
+        let mut fut = self.schedule_activity(crate::SYSTEM_TRACE_ACTIVITY, payload);
         let _ = poll_once(&mut fut);
     }
 
@@ -267,7 +271,7 @@ impl OrchestrationContext {
     /// Return current wall-clock time from a system activity in milliseconds since epoch.
     pub async fn system_now_ms(&self) -> u128 {
         let v: String = self
-            .schedule_activity("__system_now", "")
+            .schedule_activity(crate::SYSTEM_NOW_ACTIVITY, "")
             .into_activity()
             .await
             .unwrap_or_else(|e| panic!("system_now failed: {e}"));
@@ -278,7 +282,7 @@ impl OrchestrationContext {
     /// integration paths; for deterministic GUIDs prefer `new_guid()`.
     pub async fn system_new_guid(&self) -> String {
         self
-            .schedule_activity("__system_new_guid", "")
+            .schedule_activity(crate::SYSTEM_NEW_GUID_ACTIVITY, "")
             .into_activity()
             .await
             .unwrap_or_else(|e| panic!("system_new_guid failed: {e}"))

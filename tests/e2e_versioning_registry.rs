@@ -60,19 +60,25 @@ async fn policy_exact_pins_resolve_for_start() {
 }
 
 #[test]
-#[should_panic(expected = "duplicate orchestration registration")]
-fn duplicate_default_version_panics() {
-    let _ = OrchestrationRegistry::builder()
+fn duplicate_default_version_returns_error() {
+    let res = OrchestrationRegistry::builder()
         .register("OrderFlow", handler_echo())
-        .register("OrderFlow", handler_echo());
+        .register("OrderFlow", handler_echo())
+        .build_result();
+    assert!(res.is_err());
+    let msg = res.err().unwrap();
+    assert!(msg.contains("duplicate orchestration registration"));
 }
 
 #[test]
-#[should_panic(expected = "duplicate orchestration registration")]
-fn duplicate_specific_version_panics() {
-    let _ = OrchestrationRegistry::builder()
+fn duplicate_specific_version_returns_error() {
+    let res = OrchestrationRegistry::builder()
         .register_versioned("OrderFlow", "1.2.0", handler_echo())
-        .register_versioned("OrderFlow", "1.2.0", handler_echo());
+        .register_versioned("OrderFlow", "1.2.0", handler_echo())
+        .build_result();
+    assert!(res.is_err());
+    let msg = res.err().unwrap();
+    assert!(msg.contains("duplicate orchestration registration"));
 }
 
 #[test]

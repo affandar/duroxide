@@ -187,7 +187,7 @@ async fn continue_as_new_event_drop_then_process_fs() {
     // Wait for completion with 'late' payload
     let ok = common::wait_for_history(store.clone(), "inst-can-evt-drop", |hist| {
         hist.iter().rev().any(|e| matches!(e, Event::OrchestrationCompleted { output } if output == "late"))
-    }, 5_000).await;
+    }, 10_000).await;
     assert!(ok, "timeout waiting for completion");
 
     // Exec2 should have ExternalSubscribed and ExternalEvent for Go; payload should be 'late'

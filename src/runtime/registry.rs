@@ -16,7 +16,7 @@ pub enum VersionPolicy { Latest, Exact(Version) }
 
 impl OrchestrationRegistry {
     pub fn builder() -> OrchestrationRegistryBuilder {
-        OrchestrationRegistryBuilder { map: HashMap::new(), policy: HashMap::new() }
+        OrchestrationRegistryBuilder { map: HashMap::new(), policy: HashMap::new(), errors: Vec::new() }
     }
 
     pub async fn resolve_for_start(&self, name: &str) -> Option<(Version, Arc<dyn OrchestrationHandler>)> {
@@ -56,6 +56,7 @@ impl OrchestrationRegistry {
 pub struct OrchestrationRegistryBuilder {
     map: HashMap<String, std::collections::BTreeMap<Version, Arc<dyn OrchestrationHandler>>>,
     policy: HashMap<String, VersionPolicy>,
+    errors: Vec<String>,
 }
 
 impl OrchestrationRegistryBuilder {
@@ -69,7 +70,8 @@ impl OrchestrationRegistryBuilder {
         let v = Version::parse("1.0.0").unwrap();
         let entry = self.map.entry(name.clone()).or_default();
         if entry.contains_key(&v) {
-            panic!("duplicate orchestration registration: {}@{} (explicitly register a later version)", name, v);
+            self.errors.push(format!("duplicate orchestration registration: {}@{}", name, v));
+            return self;
         }
         entry.insert(v, Arc::new(FnOrchestration(f)));
         self
@@ -108,7 +110,8 @@ impl OrchestrationRegistryBuilder {
         let v = Version::parse(version.as_ref()).expect("semver");
         let entry = self.map.entry(name.clone()).or_default();
         if entry.contains_key(&v) {
-            panic!("duplicate orchestration registration: {}@{}", name, v);
+            self.errors.push(format!("duplicate orchestration registration: {}@{}", name, v));
+            return self;
         }
         if let Some((latest, _)) = entry.iter().next_back() {
             if &v <= latest {
@@ -126,6 +129,14 @@ impl OrchestrationRegistryBuilder {
 
     pub fn build(self) -> OrchestrationRegistry {
         OrchestrationRegistry { inner: Arc::new(self.map), policy: Arc::new(tokio::sync::Mutex::new(self.policy)) }
+    }
+
+    pub fn build_result(self) -> Result<OrchestrationRegistry, String> {
+        if self.errors.is_empty() {
+            Ok(OrchestrationRegistry { inner: Arc::new(self.map), policy: Arc::new(tokio::sync::Mutex::new(self.policy)) })
+        } else {
+            Err(self.errors.join("; "))
+        }
     }
 }
 
