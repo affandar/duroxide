@@ -1,12 +1,11 @@
 ## Durable Task Rust Core – TODOs
 
+- add cancellation and status from within the orchestration
 - write a real world orchestration
 - example versioned crates with orchestrations and loaders
 - proper timer implementation in the provider
 - profiling replay and providers
 - performance improvements for runtime
-- transactional processing - harden queue read semantics (see docs/reliability-queue-and-history.md)
-- review how active_instances in the runtime work, why are we reenqueuing events in certain cases
 - "pub-sub" external events
 - Need to understand this oneshot channel to await on
 - sharding and scale out to multiple runtimes
@@ -26,6 +25,8 @@
 
 ## DONE
 
+- transactional processing - harden queue read semantics (see docs/reliability-queue-and-history.md)
+- review how active_instances in the runtime work, why are we reenqueuing events in certain cases
 - On next session: review tests covering ContinueAsNew and multi-execution IDs
 	- Files: `tests/e2e_continue_as_new.rs` (both tests)
 	- Also revisit runtime APIs to surface `list_executions` and `get_execution_history` consistently- ContinueAsNew support

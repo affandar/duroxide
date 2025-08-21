@@ -659,3 +659,146 @@ async fn sample_mixed_string_and_typed_string_orch_fs() {
     assert!(s == "sum=12" || s == "up=RACE");
     rt.shutdown().await;
 }
+
+/// Versioning: default latest vs pinned exact on start
+///
+/// Highlights:
+/// - Register two versions of the same orchestration using semver (1.0.0 and 2.0.0)
+/// - Default policy (Latest) picks the highest on new starts
+/// - Changing policy to Exact pins new starts to a specific version
+#[tokio::test]
+async fn sample_versioning_start_latest_vs_exact_fs() {
+    let td = tempfile::tempdir().unwrap();
+    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
+
+    // Two versions: return a string indicating which version executed
+    let v1 = |_: OrchestrationContext, _in: String| async move { Ok("v1".to_string()) };
+    let v2 = |_: OrchestrationContext, _in: String| async move { Ok("v2".to_string()) };
+
+    let reg = OrchestrationRegistry::builder()
+        // Default registration is 1.0.0
+        .register("Versioned", v1)
+        // Add a later version 2.0.0
+        .register_versioned("Versioned", "2.0.0", v2)
+        .build();
+    let acts = ActivityRegistry::builder().build();
+    let rt = runtime::Runtime::start_with_store(store, Arc::new(acts), reg.clone()).await;
+
+    // With default policy (Latest), a new start should run v2
+    let h_latest = rt.clone().start_orchestration("inst-vers-latest", "Versioned", "").await.unwrap();
+    let (_hist_l, out_l) = h_latest.await.unwrap();
+    assert_eq!(out_l.unwrap(), "v2");
+
+    // Pin new starts to 1.0.0 via policy, verify it runs v1
+    reg.set_version_policy("Versioned", rust_dtf::runtime::VersionPolicy::Exact(semver::Version::parse("1.0.0").unwrap())).await;
+    let h_exact = rt.clone().start_orchestration("inst-vers-exact", "Versioned", "").await.unwrap();
+    let (_hist_e, out_e) = h_exact.await.unwrap();
+    assert_eq!(out_e.unwrap(), "v1");
+
+    rt.shutdown().await;
+}
+
+/// Versioning: sub-orchestration explicit version vs default policy
+///
+/// Highlights:
+/// - Parent calls child once with an explicit version and once without
+/// - The explicit call uses 1.0.0; the policy (Latest) uses 2.0.0
+#[tokio::test]
+async fn sample_versioning_sub_orchestration_explicit_vs_policy_fs() {
+    let td = tempfile::tempdir().unwrap();
+    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
+
+    let child_v1 = |_: OrchestrationContext, _in: String| async move { Ok("c1".to_string()) };
+    let child_v2 = |_: OrchestrationContext, _in: String| async move { Ok("c2".to_string()) };
+    let parent = |ctx: OrchestrationContext, _in: String| async move {
+        // Explicit versioned call -> expect c1
+        let a = ctx
+            .schedule_sub_orchestration_versioned("Child", Some("1.0.0".to_string()), "exp")
+            .into_sub_orchestration()
+            .await
+            .unwrap();
+        // Policy-based call (Latest) -> expect c2
+        let b = ctx
+            .schedule_sub_orchestration("Child", "pol")
+            .into_sub_orchestration()
+            .await
+            .unwrap();
+        Ok(format!("{a}-{b}"))
+    };
+
+    let reg = OrchestrationRegistry::builder()
+        .register("ParentVers", parent)
+        .register("Child", child_v1)
+        .register_versioned("Child", "2.0.0", child_v2)
+        .build();
+    let acts = ActivityRegistry::builder().build();
+    let rt = runtime::Runtime::start_with_store(store, Arc::new(acts), reg).await;
+
+    let h = rt.clone().start_orchestration("inst-sub-vers", "ParentVers", "").await.unwrap();
+    let (_hist, out) = h.await.unwrap();
+    assert_eq!(out.unwrap(), "c1-c2");
+
+    rt.shutdown().await;
+}
+
+/// Versioning + ContinueAsNew: safe upgrade of a long-running (infinite) orchestration
+///
+/// Highlights:
+/// - Use `continue_as_new(new_input)` to roll to a fresh execution that picks the default version
+///   from the registry policy (Latest by default, or a pinned Exact if set)
+/// - Avoids nondeterminism because the new execution starts fresh at the version boundary
+/// - Carry forward state via the CAN input, or transform as needed during upgrade
+#[tokio::test]
+async fn sample_versioning_continue_as_new_upgrade_fs() {
+    use rust_dtf::OrchestrationStatus;
+    let td = tempfile::tempdir().unwrap();
+    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
+
+    // v1: simulate deciding to upgrade at a maintenance boundary (e.g., at the end of a cycle)
+    // In a real infinite loop, you'd do some work (timer/activity), then CAN to v2.
+    let v1 = |ctx: OrchestrationContext, input: String| async move {
+        ctx.trace_info("v1: upgrading via ContinueAsNew (default policy)".to_string());
+        // Roll to a fresh execution, marking the payload so we can attribute it to v1 deterministically
+        ctx.continue_as_new(format!("v1:{input}"));
+        Ok(String::new())
+    };
+    // v2: represents the upgraded logic. Here we just simulate one step and complete for the sample.
+    let v2 = |ctx: OrchestrationContext, input: String| async move {
+        ctx.trace_info(format!("v2: resumed with input={input}"));
+        Ok(format!("upgraded:{input}"))
+    };
+
+    let reg = OrchestrationRegistry::builder()
+        .register("LongRunner", v1)                // implicit 1.0.0
+        .register_versioned("LongRunner", "2.0.0", v2)
+        .build();
+    let acts = ActivityRegistry::builder().build();
+    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(acts), reg).await;
+
+    // Start on v1; the first handle will resolve at the CAN boundary
+    // Pin initial start to v1 explicitly to demonstrate upgrade via CAN; default policy remains Latest (v2)
+    let h = rt.clone().start_orchestration_versioned("inst-can-upgrade", "LongRunner", "1.0.0", "state" ).await.unwrap();
+    let _ = h.await.unwrap();
+
+    // Poll for the new execution (v2) to complete
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        match rt.get_orchestration_status("inst-can-upgrade").await {
+            OrchestrationStatus::Completed { output } => { assert_eq!(output, "upgraded:v1:state"); break; }
+            OrchestrationStatus::Failed { error } => panic!("unexpected failure: {error}"),
+            _ if std::time::Instant::now() < deadline => tokio::time::sleep(std::time::Duration::from_millis(10)).await,
+            _ => panic!("timeout waiting for upgraded completion"),
+        }
+    }
+
+    // Verify two executions exist, exec1 continued-as-new, exec2 completed with v2 output
+    let execs = store.list_executions("inst-can-upgrade").await;
+    assert_eq!(execs, vec![1, 2]);
+    let e1 = store.read_with_execution("inst-can-upgrade", 1).await;
+    assert!(e1.iter().any(|e| matches!(e, rust_dtf::Event::OrchestrationContinuedAsNew { .. })));
+    // Exec2 must start with the v1-marked payload, proving v1 ran first and handed off via CAN
+    let e2 = store.read_with_execution("inst-can-upgrade", 2).await;
+    assert!(e2.iter().any(|e| matches!(e, rust_dtf::Event::OrchestrationStarted { input, .. } if input == "v1:state")));
+
+    rt.shutdown().await;
+}
