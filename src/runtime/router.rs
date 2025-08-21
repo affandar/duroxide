@@ -11,6 +11,7 @@ pub enum OrchestratorMsg {
     ExternalByName { instance: String, name: String, data: String, ack_token: Option<String> },
     SubOrchCompleted { instance: String, id: u64, result: String, ack_token: Option<String> },
     SubOrchFailed { instance: String, id: u64, error: String, ack_token: Option<String> },
+    CancelRequested { instance: String, reason: String, ack_token: Option<String> },
 }
 
 /// Request to start a new orchestration instance.
@@ -33,7 +34,8 @@ impl CompletionRouter {
             | OrchestratorMsg::ExternalEvent { instance, .. }
             | OrchestratorMsg::ExternalByName { instance, .. }
             | OrchestratorMsg::SubOrchCompleted { instance, .. }
-            | OrchestratorMsg::SubOrchFailed { instance, .. } => instance.clone(),
+            | OrchestratorMsg::SubOrchFailed { instance, .. }
+            | OrchestratorMsg::CancelRequested { instance, .. } => instance.clone(),
         };
         let kind = kind_of(&msg);
         if let Some(tx) = self.inboxes.lock().await.get(&key) {
@@ -55,6 +57,7 @@ pub fn kind_of(msg: &OrchestratorMsg) -> &'static str {
     OrchestratorMsg::ExternalByName { .. } => "ExternalByName",
     OrchestratorMsg::SubOrchCompleted { .. } => "SubOrchCompleted",
     OrchestratorMsg::SubOrchFailed { .. } => "SubOrchFailed",
+    OrchestratorMsg::CancelRequested { .. } => "CancelRequested",
     }
 }
 
