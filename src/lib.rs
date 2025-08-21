@@ -243,8 +243,6 @@ impl OrchestrationContext {
     /// Indicates whether logging is enabled for the current poll. This is
     /// flipped on when a decision is recorded to minimize log noise.
     pub fn is_logging_enabled(&self) -> bool { self.inner.lock().unwrap().logging_enabled_this_poll }
-    #[allow(dead_code)]
-    pub(crate) fn set_logging_enabled(&self, enabled: bool) { self.inner.lock().unwrap().logging_enabled_this_poll = enabled; }
     /// Drain the buffered log messages accumulated during the last turn.
     pub fn take_log_buffer(&self) -> Vec<(LogLevel, String)> { std::mem::take(&mut self.inner.lock().unwrap().log_buffer) }
     /// Buffer a structured log message for the current turn.

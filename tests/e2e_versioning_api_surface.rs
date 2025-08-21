@@ -1,5 +1,4 @@
 use std::sync::Arc as StdArc;
-use semver::Version;
 use rust_dtf::{OrchestrationRegistry, OrchestrationContext};
 use rust_dtf::runtime::{self, activity::ActivityRegistry};
 

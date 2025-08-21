@@ -92,7 +92,7 @@ async fn race_event_vs_timer_event_wins_with(store: StdArc<dyn HistoryStore>) {
     let orchestrator = |ctx: OrchestrationContext, _input: String| async move {
         // Subscribe first to ensure we can receive the event deterministically
         let ev = ctx.schedule_wait("Race").into_event();
-        let t = ctx.schedule_timer(50).into_timer();
+        let t = ctx.schedule_timer(100).into_timer();
         let race = select(ev, t);
         match race.await {
             Either::Left((data, _)) => Ok(data),
