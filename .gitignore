@@ -1,3 +1,5 @@
+dtf-data/
+apps/*/dtf-data/
 # Build artifacts
 /target
 

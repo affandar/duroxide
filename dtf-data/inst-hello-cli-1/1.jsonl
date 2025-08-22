@@ -1,5 +1,0 @@
-{"OrchestrationStarted":{"name":"HelloOrchestration","version":"1.0.0","input":"","parent_instance":null,"parent_id":null}}
-{"ActivityScheduled":{"id":1,"name":"__system_trace","input":"INFO:hello-cli started1"}}
-{"ActivityScheduled":{"id":2,"name":"Hello","input":"Rust"}}
-{"ActivityCompleted":{"id":2,"result":"Hello, Rust!"}}
-{"OrchestrationCompleted":{"output":"Hello, Rust!"}}
