@@ -269,15 +269,7 @@ impl HistoryStore for FsHistoryStore {
         Ok(())
     }
 
-    async fn set_instance_orchestration(&self, instance: &str, orchestration: &str) -> Result<(), String> {
-        let meta_path = self.root.join(format!("{instance}.meta"));
-        std::fs::write(meta_path, orchestration).map_err(|e| e.to_string())
-    }
-
-    async fn get_instance_orchestration(&self, instance: &str) -> Option<String> {
-        let meta_path = self.root.join(format!("{instance}.meta"));
-        std::fs::read_to_string(meta_path).ok()
-    }
+    // metadata APIs removed
 
     async fn latest_execution_id(&self, instance: &str) -> Option<u64> {
         let inst_dir = self.inst_root(instance);
@@ -320,12 +312,12 @@ impl HistoryStore for FsHistoryStore {
         Ok(())
     }
 
-    async fn reset_for_continue_as_new(&self, instance: &str, orchestration: &str, input: &str) -> Result<u64, String> {
+    async fn reset_for_continue_as_new(&self, instance: &str, orchestration: &str, version: &str, input: &str, parent_instance: Option<&str>, parent_id: Option<u64>) -> Result<u64, String> {
         let lat = self.latest_execution_id(instance).await.unwrap_or(0) + 1;
         fs::create_dir_all(self.inst_root(instance)).await.map_err(|e| e.to_string())?;
         let path = self.exec_path(instance, lat);
         let _ = fs::OpenOptions::new().create_new(true).write(true).open(&path).await.map_err(|e| e.to_string())?;
-        self.append_with_execution(instance, lat, vec![Event::OrchestrationStarted { name: orchestration.to_string(), input: input.to_string() }]).await?;
+        self.append_with_execution(instance, lat, vec![Event::OrchestrationStarted { name: orchestration.to_string(), version: version.to_string(), input: input.to_string(), parent_instance: parent_instance.map(|s| s.to_string()), parent_id }]).await?;
         Ok(lat)
     }
 }

@@ -45,7 +45,7 @@ SubOrchestrationCompleted { id, result }
 SubOrchestrationFailed { id, error }
 ```
 
-Child histories record parent linkage implicitly via the child instance naming scheme (see below). A dedicated `ParentLinked` event can be used later if needed for richer linkage.
+Child histories record parent linkage in the `OrchestrationStarted` event via `parent_instance` and `parent_id`.
 
 Existing terminal events remain:
 
@@ -159,7 +159,7 @@ let root = |ctx: OrchestrationContext, input: String| async move {
 
 ### Future enhancements
 
-- Explicit `ParentLinked` event in child history including `(parent_instance, parent_id)` for richer introspection.
+  
 - API to specify explicit child instance ids.
 - Provider-backed durable completion routing (enqueue `SubOrchCompleted/Failed` items), leasing, DLQ.
 - Visualization: render sub-orchestration edges in Mermaid diagrams under each parent.

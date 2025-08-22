@@ -18,6 +18,8 @@ use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
 // Public orchestration primitives and executor
 
 pub mod runtime;
+// Re-export descriptor type for public API ergonomics
+pub use runtime::OrchestrationDescriptor;
 pub mod providers;
 pub mod logging;
 
@@ -70,7 +72,8 @@ mod _typed_codec {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum Event {
     /// Orchestration instance was created and started by name with input.
-    OrchestrationStarted { name: String, input: String },
+    /// Version is required; parent linkage is present when this is a child orchestration.
+    OrchestrationStarted { name: String, version: String, input: String, parent_instance: Option<String>, parent_id: Option<u64> },
     /// Orchestration completed with a final result.
     OrchestrationCompleted { output: String },
     /// Orchestration failed with a final error.
@@ -101,9 +104,6 @@ pub enum Event {
     SubOrchestrationCompleted { id: u64, result: String },
     /// Sub-orchestration failed and returned an error to the parent.
     SubOrchestrationFailed { id: u64, error: String },
-
-    /// Parent linkage recorded in a child orchestration history.
-    ParentLinked { parent_instance: String, parent_id: u64 },
 
     /// Orchestration continued as new with fresh input (terminal for this execution).
     OrchestrationContinuedAsNew { input: String },
@@ -177,7 +177,6 @@ impl CtxInner {
                 Event::OrchestrationStarted { .. }
                 | Event::OrchestrationCompleted { .. }
                 | Event::OrchestrationFailed { .. }
-                | Event::ParentLinked { .. }
                 | Event::OrchestrationContinuedAsNew { .. }
                 | Event::OrchestrationCancelRequested { .. } => None,
             };

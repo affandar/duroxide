@@ -2,6 +2,7 @@ use std::sync::Arc as StdArc;
 use semver::Version;
 use rust_dtf::{OrchestrationContext, OrchestrationRegistry, Event};
 use rust_dtf::runtime::{self, activity::ActivityRegistry};
+use rust_dtf::providers::HistoryStore;
 
 #[tokio::test]
 async fn start_uses_latest_version() {
@@ -153,6 +154,51 @@ async fn continue_as_new_upgrades_version_deterministically() {
         _ => unreachable!(),
     }
     rt.shutdown().await;
+}
+
+/// When history pins a version that is not present in the registry anymore,
+/// the instance should be deterministically canceled with a missing version error.
+#[tokio::test]
+async fn missing_pinned_version_cancels_on_replay_fs() {
+    let td = tempfile::tempdir().unwrap();
+    let store = StdArc::new(rust_dtf::providers::fs::FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
+
+    // Child v1 waits forever to ensure the parent doesn't complete before restart
+    let child_v1 = |_ctx: OrchestrationContext, _input: String| async move {
+        futures::future::pending::<Result<String, String>>().await
+    };
+    // Parent awaits child and propagates its result/error
+    let parent = |ctx: OrchestrationContext, _input: String| async move {
+        ctx.schedule_sub_orchestration("ChildMissing", "seed").into_sub_orchestration().await
+    };
+    let reg1 = OrchestrationRegistry::builder()
+        .register_versioned("ChildMissing", "1.0.0", child_v1)
+        .register("ParentMissing", parent)
+        .build();
+    let activities = ActivityRegistry::builder().build();
+    let rt1 = runtime::Runtime::start_with_store(store.clone(), StdArc::new(activities), reg1).await;
+
+    // Start parent; it will schedule child and block
+    let _h = rt1.clone().start_orchestration("inst-missing-pin", "ParentMissing", "").await.unwrap();
+    // Give it time to schedule and write child's OrchestrationStarted with version 1.0.0
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    rt1.shutdown().await;
+
+    // Restart with registry that no longer has ChildMissing@1.0.0, but does have 2.0.0
+    let child_v2 = |_ctx: OrchestrationContext, _input: String| async move { Ok("new".into()) };
+    let reg2 = OrchestrationRegistry::builder()
+        .register("ParentMissing", parent)
+        .register_versioned("ChildMissing", "2.0.0", child_v2)
+        .build();
+    let activities2 = ActivityRegistry::builder().build();
+    let rt2 = runtime::Runtime::start_with_store(store.clone(), StdArc::new(activities2), reg2).await;
+
+    // Expect the parent to fail with missing version error upon replay
+    match rt2.wait_for_orchestration("inst-missing-pin", std::time::Duration::from_secs(5)).await.unwrap() {
+        runtime::OrchestrationStatus::Failed { error } => assert!(error.contains("missing version ChildMissing@1.0.0")),
+        other => panic!("expected Failed, got {:?}", other),
+    }
+    rt2.shutdown().await;
 }
 
 

@@ -35,7 +35,7 @@ Two background workers enforce gates using `active_instances`:
 
 - When an orchestrator calls `ctx.continue_as_new(new_input)`, the runtime:
   - Appends `OrchestrationContinuedAsNew` to the current execution (terminal for this execution).
-  - Asks the provider to create a new execution and appends a fresh `OrchestrationStarted { input: new_input }`.
+  - Asks the provider to create a new execution and appends a fresh `OrchestrationStarted { name, version, input: new_input, parent_instance?, parent_id? }`.
   - Enqueues a `StartOrchestration` for the same instance (both locally and in the provider queue).
 - The existing run still holds the active flag until it returns; both the local start worker and the poller will hold the next start (RequireInactive) until the flag is released.
 - External/worker completions arriving between executions are held by the poller (RequireActive) until the new run is active.

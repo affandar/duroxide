@@ -95,16 +95,35 @@ pub trait HistoryStore {
   async fn remove_instance(&self, instance: &str) -> Result<(), String>;
   async fn enqueue_work(&self, item: WorkItem) -> Result<(), String>;
   async fn dequeue_work(&self) -> Option<WorkItem>;
-  async fn set_instance_orchestration(&self, instance: &str, orchestration: &str) -> Result<(), String>;
-  async fn get_instance_orchestration(&self, instance: &str) -> Option<String>;
   // multi-execution (ContinueAsNew)
   async fn latest_execution_id(&self, instance: &str) -> Option<u64>;
   async fn list_executions(&self, instance: &str) -> Vec<u64>;
   async fn read_with_execution(&self, instance: &str, execution_id: u64) -> Vec<Event>;
   async fn append_with_execution(&self, instance: &str, execution_id: u64, new_events: Vec<Event>) -> Result<(), String>;
-  async fn reset_for_continue_as_new(&self, instance: &str, orchestration: &str, input: &str) -> Result<u64, String>;
+  async fn reset_for_continue_as_new(&self, instance: &str, orchestration: &str, version: &str, input: &str, parent_instance: Option<&str>, parent_id: Option<u64>) -> Result<u64, String>;
 }
 ```
+
+### Introspection
+
+The runtime exposes a descriptor API to fetch orchestration metadata directly from history.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OrchestrationDescriptor {
+  pub name: String,
+  pub version: String,
+  pub parent_instance: Option<String>,
+  pub parent_id: Option<u64>,
+}
+
+impl Runtime {
+  /// Returns the descriptor for an instance, or None if no history exists.
+  pub async fn get_orchestration_descriptor(&self, instance: &str) -> Option<OrchestrationDescriptor>;
+}
+```
+
+This reads the latest `OrchestrationStarted { name, version, input, parent_instance?, parent_id? }` from history and returns it.
 
 ### Example orchestrator
 

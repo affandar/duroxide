@@ -161,6 +161,35 @@ async fn runtime_duplicate_orchestration_deduped_single_execution() {
 }
 
 #[tokio::test]
+async fn orchestration_descriptor_root_and_child() {
+    // Root orchestrations
+    let activity_registry = ActivityRegistry::builder().build();
+    let parent = |ctx: OrchestrationContext, _| async move {
+        let _ = ctx.schedule_sub_orchestration("ChildDsc", "x").into_sub_orchestration().await;
+        Ok("done".into())
+    };
+    let child = |_ctx: OrchestrationContext, _input: String| async move { Ok("child".into()) };
+    let reg = OrchestrationRegistry::builder().register("ParentDsc", parent).register("ChildDsc", child).build();
+    let rt = runtime::Runtime::start(Arc::new(activity_registry), reg).await;
+    let _h = rt.clone().start_orchestration("inst-desc", "ParentDsc", "seed").await.unwrap();
+    // wait for completion
+    let _ = rt.wait_for_orchestration("inst-desc", std::time::Duration::from_secs(2)).await;
+    // Root descriptor
+    let d = rt.get_orchestration_descriptor("inst-desc").await.unwrap();
+    assert_eq!(d.name, "ParentDsc");
+    assert!(!d.version.is_empty());
+    assert!(d.parent_instance.is_none());
+    assert!(d.parent_id.is_none());
+    // Child descriptor
+    let dchild = rt.get_orchestration_descriptor("inst-desc::sub::1").await.unwrap();
+    assert_eq!(dchild.name, "ChildDsc");
+    assert!(dchild.version.len() > 0);
+    assert_eq!(dchild.parent_instance.as_deref(), Some("inst-desc"));
+    assert_eq!(dchild.parent_id, Some(1));
+    rt.shutdown().await;
+}
+
+#[tokio::test]
 async fn orchestration_status_apis() {
     use rust_dtf::OrchestrationStatus;
 
@@ -219,14 +248,14 @@ async fn providers_fs_multi_execution_persistence_and_latest_read() {
         "pfs",
         1,
         vec![
-            Event::OrchestrationStarted { name: "O".into(), input: "0".into() },
+            Event::OrchestrationStarted { name: "O".into(), version: "0.0.0".into(), input: "0".into(), parent_instance: None, parent_id: None },
             Event::OrchestrationContinuedAsNew { input: "1".into() },
         ],
     ).await.unwrap();
     let e1_before = fs.read_with_execution("pfs", 1).await;
 
     // Create execution #2 via reset_for_continue_as_new; complete it
-    let _eid2 = fs.reset_for_continue_as_new("pfs", "O", "1").await.unwrap();
+    let _eid2 = fs.reset_for_continue_as_new("pfs", "O", "0.0.0", "1", None, None).await.unwrap();
     fs.append_with_execution("pfs", 2, vec![Event::OrchestrationCompleted { output: "ok".into() }]).await.unwrap();
 
     // Execution list must contain both
@@ -253,13 +282,13 @@ async fn providers_inmem_multi_execution_persistence_and_latest_read() {
         "pmem",
         1,
         vec![
-            Event::OrchestrationStarted { name: "O".into(), input: "0".into() },
+            Event::OrchestrationStarted { name: "O".into(), version: "0.0.0".into(), input: "0".into(), parent_instance: None, parent_id: None },
             Event::OrchestrationContinuedAsNew { input: "1".into() },
         ],
     ).await.unwrap();
     let e1_before = mem.read_with_execution("pmem", 1).await;
 
-    let _eid2 = mem.reset_for_continue_as_new("pmem", "O", "1").await.unwrap();
+    let _eid2 = mem.reset_for_continue_as_new("pmem", "O", "0.0.0", "1", None, None).await.unwrap();
     mem.append_with_execution("pmem", 2, vec![Event::OrchestrationCompleted { output: "ok".into() }]).await.unwrap();
 
     let execs = mem.list_executions("pmem").await;

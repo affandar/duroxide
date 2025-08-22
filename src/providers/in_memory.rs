@@ -11,7 +11,6 @@ pub struct InMemoryHistoryStore {
     // Multi-execution: instance -> executions (execution_id starts at 1)
     inner: Mutex<HashMap<String, Vec<Vec<Event>>>>,
     work_q: Mutex<Vec<WorkItem>>, // simple FIFO
-    meta: Mutex<HashMap<String, String>>, // instance -> orchestration name
     // Peek-lock state: token -> item. Items here are invisible until ack/abandon.
     invisible: Mutex<HashMap<String, WorkItem>>,
 }
@@ -91,14 +90,7 @@ impl HistoryStore for InMemoryHistoryStore {
         Ok(())
     }
 
-    async fn set_instance_orchestration(&self, instance: &str, orchestration: &str) -> Result<(), String> {
-        self.meta.lock().await.insert(instance.to_string(), orchestration.to_string());
-        Ok(())
-    }
-
-    async fn get_instance_orchestration(&self, instance: &str) -> Option<String> {
-        self.meta.lock().await.get(instance).cloned()
-    }
+    // metadata APIs removed
 
     async fn latest_execution_id(&self, instance: &str) -> Option<u64> {
         let g = self.inner.lock().await;
@@ -160,10 +152,10 @@ impl HistoryStore for InMemoryHistoryStore {
         Ok(())
     }
 
-    async fn reset_for_continue_as_new(&self, instance: &str, _orchestration: &str, input: &str) -> Result<u64, String> {
+    async fn reset_for_continue_as_new(&self, instance: &str, orchestration: &str, version: &str, input: &str, parent_instance: Option<&str>, parent_id: Option<u64>) -> Result<u64, String> {
         let mut g = self.inner.lock().await;
         let execs = g.get_mut(instance).ok_or_else(|| format!("instance not found: {instance}"))?;
-        execs.push(vec![Event::OrchestrationStarted { name: self.meta.lock().await.get(instance).cloned().unwrap_or_default(), input: input.to_string() }]);
+        execs.push(vec![Event::OrchestrationStarted { name: orchestration.to_string(), version: version.to_string(), input: input.to_string(), parent_instance: parent_instance.map(|s| s.to_string()), parent_id }]);
         Ok(execs.len() as u64)
     }
 }

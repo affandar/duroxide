@@ -107,18 +107,37 @@ impl super::Runtime {
             panic!("history append failed: {e}");
         }
         history.push(term);
-        // Resolve target version: explicit arg wins; else use registry policy resolution
-        let orch_name = self.history_store.get_instance_orchestration(instance).await
-            .unwrap_or_else(|| orchestration_name.to_string());
-        if let Some(ver_str) = version {
-            if let Ok(v) = semver::Version::parse(&ver_str) {
-                self.pinned_versions.lock().await.insert(instance.to_string(), v);
-            }
+        // Resolve orchestration name from history
+        let orch_name = {
+            let hist = self.history_store.read(instance).await;
+            hist.iter().find_map(|e| match e { crate::Event::OrchestrationStarted { name, .. } => Some(name.clone()), _ => None })
+                .unwrap_or_else(|| orchestration_name.to_string())
+        };
+        // Determine target version for the next execution and pin it
+        let target_version_str: String = if let Some(ver_str) = version.clone() {
+            if let Ok(v) = semver::Version::parse(&ver_str) { self.pinned_versions.lock().await.insert(instance.to_string(), v); }
+            ver_str
         } else if let Some((v, _h)) = self.orchestration_registry.resolve_for_start(&orch_name).await {
-            self.pinned_versions.lock().await.insert(instance.to_string(), v);
-        }
+            self.pinned_versions.lock().await.insert(instance.to_string(), v.clone());
+            v.to_string()
+        } else if let Some(v) = self.pinned_versions.lock().await.get(instance).cloned() {
+            v.to_string()
+        } else {
+            "0.0.0".to_string()
+        };
         // Reset to a new execution and enqueue start
-        let _new_exec = self.history_store.reset_for_continue_as_new(instance, &orch_name, &input).await
+        // Preserve parent linkage and include version string in the new OrchestrationStarted
+        let hist_for_link = self.history_store.read(instance).await;
+        let mut parent_instance: Option<String> = None;
+        let mut parent_id: Option<u64> = None;
+        for e in hist_for_link.iter().rev() {
+            if let crate::Event::OrchestrationStarted { parent_instance: pi, parent_id: pd, .. } = e {
+                parent_instance = pi.clone();
+                parent_id = *pd;
+                break;
+            }
+        }
+        let _new_exec = self.history_store.reset_for_continue_as_new(instance, &orch_name, &target_version_str, &input, parent_instance.as_deref(), parent_id).await
             .unwrap_or(1);
         let _ = self.start_tx.send(super::StartRequest { instance: instance.to_string(), orchestration_name: orch_name.clone() });
         // Notify any waiters so initial handle resolves (empty output for continued-as-new)
