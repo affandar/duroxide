@@ -52,7 +52,7 @@ pub struct InstanceSnapshot {
 
 Extraction rules (from `Event`):
 
-- `OrchestrationStarted { name, input }` → instance name + input
+- `OrchestrationStarted { name, version, input, parent_instance?, parent_id? }` → instance name + version + input
 - Activity: `ActivityScheduled` → Pending; upgrade to Completed/Failed when matching `ActivityCompleted/Failed` with same `id` appears
 - Timer: `TimerCreated` → Pending; upgrade to Completed when `TimerFired` with same `id` appears (carry last `fire_at_ms` seen)
 - External: `ExternalSubscribed` → Pending; upgrade to Completed when matching `ExternalEvent` appears

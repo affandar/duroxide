@@ -46,7 +46,7 @@ classDiagram
       +SubOrchestrationScheduled(id, name, instance, input)
       +SubOrchestrationCompleted(id, result)
       +SubOrchestrationFailed(id, error)
-      +ParentLinked(parent_instance, parent_id)
+      +OrchestrationStarted(name, version, input, parent_instance?, parent_id?)
       +OrchestrationContinuedAsNew(input)
     }
 

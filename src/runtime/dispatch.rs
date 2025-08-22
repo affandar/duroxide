@@ -71,7 +71,7 @@ pub async fn dispatch_start_sub_orchestration(rt: &Arc<Runtime>, parent_instance
     let input_clone = input.clone();
     let router_tx = rt.router_tx.clone();
     let rt_for_child = rt.clone();
-    // Resolve version pin for the child
+    // Resolve version pin for the child (handled again inside start)
     if let Some(ver_str) = version.clone() {
         if let Ok(v) = semver::Version::parse(&ver_str) {
             rt_for_child.pinned_versions.lock().await.insert(child_full.clone(), v);
@@ -81,7 +81,9 @@ pub async fn dispatch_start_sub_orchestration(rt: &Arc<Runtime>, parent_instance
     }
     debug!(parent_instance, id, name=%name, child_instance=%child_full, "start child orchestration");
     tokio::spawn(async move {
-        match rt_for_child.start_orchestration(&child_full, &name_clone, input_clone).await {
+        // Try to parse version for pinning (will be pinned in start_internal_rx as well)
+        let version_pin = version.clone().and_then(|s| semver::Version::parse(&s).ok());
+        match rt_for_child.start_orchestration_with_parent(&child_full, &name_clone, input_clone, parent_inst.clone(), id, version_pin).await {
             Ok(h) => match h.await {
                 Ok((_hist, out)) => match out {
                     Ok(res) => { let _ = router_tx.send(super::OrchestratorMsg::SubOrchCompleted { instance: parent_inst, id, result: res, ack_token: None }); }

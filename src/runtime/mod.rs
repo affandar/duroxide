@@ -92,7 +92,32 @@ pub struct Runtime {
     start_tx: mpsc::UnboundedSender<StartRequest>,
 }
 
+/// Introspection: descriptor of an orchestration derived from history.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OrchestrationDescriptor {
+    pub name: String,
+    pub version: String,
+    pub parent_instance: Option<String>,
+    pub parent_id: Option<u64>,
+}
+
 impl Runtime {
+    /// Return the most recent descriptor `{ name, version, parent_instance?, parent_id? }` for an instance.
+    /// Returns `None` if the instance/history does not exist or no OrchestrationStarted is present.
+    pub async fn get_orchestration_descriptor(&self, instance: &str) -> Option<crate::runtime::OrchestrationDescriptor> {
+        let hist = self.history_store.read(instance).await;
+        for e in hist.iter().rev() {
+            if let Event::OrchestrationStarted { name, version, parent_instance, parent_id, .. } = e {
+                return Some(crate::runtime::OrchestrationDescriptor {
+                    name: name.clone(),
+                    version: version.clone(),
+                    parent_instance: parent_instance.clone(),
+                    parent_id: *parent_id,
+                });
+            }
+        }
+        None
+    }
     // Associated constants for runtime behavior
     const COMPLETION_BATCH_LIMIT: usize = 128;
     const REENQUEUE_DELAY_MS: u64 = 5;
@@ -104,29 +129,43 @@ impl Runtime {
         orchestration_name: &str,
         input: String,
         pin_version: Option<Version>,
+        parent_instance: Option<String>,
+        parent_id: Option<u64>,
     ) -> Result<oneshot::Receiver<(Vec<Event>, Result<String, String>)>, String> {
         // Ensure instance exists (best-effort)
         let _ = self.history_store.create_instance(instance).await;
         // Append start marker if empty
         let hist = self.history_store.read(instance).await;
         if hist.is_empty() {
-            if let Some(v) = pin_version {
-                self.pinned_versions.lock().await.insert(instance.to_string(), v);
-            } else if !self.pinned_versions.lock().await.contains_key(instance) {
-                if let Some((resolved_v, _handler)) = self.orchestration_registry.resolve_for_start(orchestration_name).await {
-                    self.pinned_versions.lock().await.insert(instance.to_string(), resolved_v.clone());
-                }
-            }
-            let started = vec![Event::OrchestrationStarted { name: orchestration_name.to_string(), input }];
+            // Determine version to pin and to write into the start event
+            let maybe_resolved: Option<Version> = if let Some(v) = pin_version {
+                Some(v)
+            } else if let Some(v) = self.pinned_versions.lock().await.get(instance).cloned() {
+                Some(v)
+            } else if let Some((resolved_v, _handler)) = self.orchestration_registry.resolve_for_start(orchestration_name).await {
+                Some(resolved_v)
+            } else {
+                None
+            };
+            // If resolved, pin for handler resolution and write that version; otherwise use a fallback string version
+            let version_str_for_event: String = if let Some(v) = maybe_resolved.clone() {
+                self.pinned_versions.lock().await.insert(instance.to_string(), v.clone());
+                v.to_string()
+            } else {
+                "0.0.0".to_string()
+            };
+            let started = vec![Event::OrchestrationStarted {
+                name: orchestration_name.to_string(),
+                version: version_str_for_event,
+                input,
+                parent_instance,
+                parent_id,
+            }];
             self
                 .history_store
                 .append(instance, started)
                 .await
                 .map_err(|e| format!("failed to append OrchestrationStarted: {e}"))?;
-            let _ = self
-                .history_store
-                .set_instance_orchestration(instance, orchestration_name)
-                .await;
         } else {
             // Allow duplicate starts as a warning for detached or at-least-once semantics
             warn!(instance, "instance already has history; duplicate start accepted (deduped)");
@@ -157,7 +196,7 @@ impl Runtime {
         Out: DeserializeOwned + Send + 'static,
     {
         let payload = Json::encode(&input).map_err(|e| format!("encode: {e}"))?;
-        let rx = self.clone().start_internal_rx(instance, orchestration_name, payload, None).await?;
+        let rx = self.clone().start_internal_rx(instance, orchestration_name, payload, None, None, None).await?;
         Ok(tokio::spawn(async move {
             let (hist, res_s) = rx.await.expect("result");
             let res_t: Result<Out, String> = match res_s {
@@ -176,7 +215,7 @@ impl Runtime {
     {
         let v = semver::Version::parse(version.as_ref()).map_err(|e| e.to_string())?;
         let payload = Json::encode(&input).map_err(|e| format!("encode: {e}"))?;
-        let rx = self.clone().start_internal_rx(instance, orchestration_name, payload, Some(v)).await?;
+        let rx = self.clone().start_internal_rx(instance, orchestration_name, payload, Some(v), None, None).await?;
         Ok(tokio::spawn(async move {
             let (hist, res_s) = rx.await.expect("result");
             let res_t: Result<Out, String> = match res_s {
@@ -189,14 +228,20 @@ impl Runtime {
 
     /// Start an orchestration using raw String input/output (back-compat API).
     pub async fn start_orchestration(self: Arc<Self>, instance: &str, orchestration_name: &str, input: impl Into<String>) -> Result<JoinHandle<(Vec<Event>, Result<String, String>)>, String> {
-        let rx = self.clone().start_internal_rx(instance, orchestration_name, input.into(), None).await?;
+        let rx = self.clone().start_internal_rx(instance, orchestration_name, input.into(), None, None, None).await?;
         Ok(tokio::spawn(async move { rx.await.expect("result") }))
     }
 
     /// Start an orchestration with an explicit version (string I/O).
     pub async fn start_orchestration_versioned(self: Arc<Self>, instance: &str, orchestration_name: &str, version: impl AsRef<str>, input: impl Into<String>) -> Result<JoinHandle<(Vec<Event>, Result<String, String>)>, String> {
         let v = semver::Version::parse(version.as_ref()).map_err(|e| e.to_string())?;
-        let rx = self.clone().start_internal_rx(instance, orchestration_name, input.into(), Some(v)).await?;
+        let rx = self.clone().start_internal_rx(instance, orchestration_name, input.into(), Some(v), None, None).await?;
+        Ok(tokio::spawn(async move { rx.await.expect("result") }))
+    }
+
+    /// Internal: start an orchestration and record parent linkage.
+    pub(crate) async fn start_orchestration_with_parent(self: Arc<Self>, instance: &str, orchestration_name: &str, input: impl Into<String>, parent_instance: String, parent_id: u64, version: Option<semver::Version>) -> Result<JoinHandle<(Vec<Event>, Result<String, String>)>, String> {
+        let rx = self.clone().start_internal_rx(instance, orchestration_name, input.into(), version, Some(parent_instance), Some(parent_id)).await?;
         Ok(tokio::spawn(async move { rx.await.expect("result") }))
     }
 
@@ -306,15 +351,9 @@ impl Runtime {
             let instances = rt_for_poll.history_store.list_instances().await;
             for inst in instances {
                 let hist = rt_for_poll.history_store.read(&inst).await;
-                // Determine orchestration name either from provider meta or from OrchestrationStarted
-                let mut orchestration_name = rt_for_poll.history_store.get_instance_orchestration(&inst).await;
-                if orchestration_name.is_none() {
-                    orchestration_name = hist.iter().find_map(|e| match e {
-                        Event::OrchestrationStarted { name, .. } => Some(name.clone()),
-                        _ => None,
-                    });
-                }
-                if let Some(name) = orchestration_name {
+                // Determine orchestration name from OrchestrationStarted
+                let orchestration_name_opt = hist.iter().find_map(|e| match e { Event::OrchestrationStarted { name, .. } => Some(name.clone()), _ => None });
+                if let Some(name) = orchestration_name_opt {
                     // Skip if terminal event present
                     let is_terminal = hist.iter().rev().any(|e| matches!(e, Event::OrchestrationCompleted { .. } | Event::OrchestrationFailed { .. }));
                     if !is_terminal {
@@ -469,18 +508,11 @@ impl Runtime {
         {
             let mut act = self.active_instances.lock().await;
             if !act.insert(instance.to_string()) {
-                panic!("instance already active: {instance}");
+                // Already active: re-enqueue and bail out gracefully
+                let _ = self.start_tx.send(StartRequest { instance: instance.to_string(), orchestration_name: orchestration_name.to_string() });
+                return (Vec::new(), Err("already_active".into()));
             }
         }
-    // Look up the orchestration handler later after loading history so we can fail gracefully
-    // Prefer pinned version for this instance if present; else fall back to latest by name
-    let pinned_v = self.pinned_versions.lock().await.get(instance).cloned();
-    let orchestration_handler_opt = if let Some(v) = pinned_v {
-        self.orchestration_registry.resolve_exact(orchestration_name, &v)
-    } else {
-        self.orchestration_registry.get(orchestration_name)
-    };
-
         // Ensure removal of active flag even if the task panics
         struct ActiveGuard { rt: Arc<Runtime>, inst: String }
         impl Drop for ActiveGuard {
@@ -497,26 +529,51 @@ impl Runtime {
         // Load existing history from store (now exists). For ContinueAsNew we may start with a
         // fresh execution that only has OrchestrationStarted; we always want the latest execution.
         let mut history: Vec<Event> = self.history_store.read(instance).await;
+        // Pin version from history if present for this orchestration; ignore placeholder "0.0.0"
+        if let Some(ver_str) = history.iter().rev().find_map(|e| match e {
+            Event::OrchestrationStarted { name: n, version, .. } if n == orchestration_name => Some(version.clone()),
+            _ => None,
+        }) {
+            if ver_str != "0.0.0" {
+                if let Ok(v) = semver::Version::parse(&ver_str) {
+                    self.pinned_versions.lock().await.insert(instance.to_string(), v);
+                }
+            }
+        }
         let mut comp_rx = self.router.register(instance).await;
 
         // TODO : activities should be renqueued at the end of the turn?
         // Rehydrate pending activities and timers from history
         completions::rehydrate_pending(instance, &history, &self.activity_tx, &self.timer_tx).await;
 
-    // Capture input from the most recent OrchestrationStarted for this orchestration
-    let current_input = history.iter().rev().find_map(|e| match e {
-            Event::OrchestrationStarted { name: n, input } if n == orchestration_name => Some(input.clone()),
-            _ => None,
-        }).unwrap_or_default();
-        // If this is a child (ParentLinked exists), remember linkage for notifying parent at terminal
-        let parent_link = history.iter().find_map(|e| match e {
-            Event::ParentLinked { parent_instance, parent_id } => Some((parent_instance.clone(), *parent_id)),
-            _ => None,
-        });
+        // Capture input and parent linkage from the most recent OrchestrationStarted for this orchestration
+        let mut current_input: String = String::new();
+        let mut parent_link: Option<(String, u64)> = None;
+        for e in history.iter().rev() {
+            if let Event::OrchestrationStarted { name: n, input, parent_instance, parent_id, .. } = e {
+                if n == orchestration_name {
+                    current_input = input.clone();
+                    if let (Some(pinst), Some(pid)) = (parent_instance.clone(), *parent_id) { parent_link = Some((pinst, pid)); }
+                    break;
+                }
+            }
+        }
+
+        // Resolve handler now, preferring pinned version from history
+        let pinned_v = self.pinned_versions.lock().await.get(instance).cloned();
+        let orchestration_handler_opt = if let Some(v) = pinned_v.clone() {
+            self.orchestration_registry.resolve_exact(orchestration_name, &v)
+        } else {
+            self.orchestration_registry.get(orchestration_name)
+        };
 
         // If orchestration not registered, fail gracefully and exit
         if orchestration_handler_opt.is_none() {
-            let err = format!("unregistered:{}", orchestration_name);
+            let err = if let Some(v) = pinned_v {
+                format!("canceled: missing version {}@{}", orchestration_name, v)
+            } else {
+                format!("unregistered:{}", orchestration_name)
+            };
             // Append terminal failed event (idempotent at provider)
             if let Err(e) = self.history_store.append(instance, vec![Event::OrchestrationFailed { error: err.clone() }]).await {
                 error!(instance, error=%e, "failed to append OrchestrationFailed for unknown orchestration");

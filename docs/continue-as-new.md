@@ -11,7 +11,7 @@ Key points
 Flow
 1. Orchestrator calls `ctx.continue_as_new(new_input)`.
 2. Runtime appends terminal `OrchestrationContinuedAsNew` to the current execution.
-3. Provider resets to a new execution file and appends `OrchestrationStarted { input: new_input }`.
+3. Provider resets to a new execution file and appends `OrchestrationStarted { name, version, input: new_input, parent_instance?, parent_id? }`.
 4. Runtime enqueues a new start for the instance and drives the new execution.
 
 Practical tips

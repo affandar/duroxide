@@ -57,10 +57,7 @@ pub trait HistoryStore: Send + Sync {
     /// Default: no-op success for providers that don't support peek-lock.
     async fn abandon(&self, _token: &str) -> Result<(), String> { Ok(()) }
 
-    /// Persist orchestration name metadata for an instance.
-    async fn set_instance_orchestration(&self, _instance: &str, _orchestration: &str) -> Result<(), String> { Ok(()) }
-    /// Retrieve orchestration name metadata for an instance, if present.
-    async fn get_instance_orchestration(&self, _instance: &str) -> Option<String> { None }
+    // Metadata APIs removed; orchestration info is derived from history only.
 
     // --- Multi-execution scaffolding (default single-execution fallback) ---
     /// Return latest execution id for an instance (default: 1 if history exists).
@@ -85,9 +82,9 @@ pub trait HistoryStore: Send + Sync {
         self.append(instance, new_events).await
     }
 
-    /// Reset for ContinueAsNew: create a new execution with OrchestrationStarted.
+    /// Reset for ContinueAsNew: create a new execution with OrchestrationStarted including version and optional parent linkage.
     /// Default: not supported. Providers must implement explicit multi-execution semantics.
-    async fn reset_for_continue_as_new(&self, _instance: &str, _orchestration: &str, _input: &str) -> Result<u64, String> {
+    async fn reset_for_continue_as_new(&self, _instance: &str, _orchestration: &str, _version: &str, _input: &str, _parent_instance: Option<&str>, _parent_id: Option<u64>) -> Result<u64, String> {
         Err("reset_for_continue_as_new not supported by this provider".into())
     }
 }
