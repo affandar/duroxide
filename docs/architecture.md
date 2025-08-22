@@ -5,7 +5,7 @@ Deterministic orchestration hinges on separating decision-making (user code) fro
 ### Components
 
 - Orchestrator (user code): async function polled once per turn. It reads history and requests new work via `Action`s.
-- Runtime (in-process): executes activities and timers, routes external events, and appends resulting `Event`s. It also runs a polling engine that consumes a provider-backed work queue (`WorkItem`) for completions and external signals, and auto-resumes incomplete instances at startup.
+- Runtime (in-process): executes activities and timers, routes external events, and appends resulting `Event`s. It runs three dispatchers that consume provider-backed queues (`WorkItem`) via peek-lock: OrchestrationDispatcher (Orchestrator queue), WorkDispatcher (Worker queue), and TimerDispatcher (Timer queue). Auto-resumes incomplete instances at startup.
 - Provider: persistence boundary that stores history per instance (`HistoryStore`).
 - Workers: activity worker executes registered handlers; timer worker schedules real-time waits.
 
@@ -15,15 +15,21 @@ Deterministic orchestration hinges on separating decision-making (user code) fro
 sequenceDiagram
     participant U as User Orchestrator
     participant R as Runtime
-    participant W as Workers
+    participant OD as OrchestrationDispatcher
+    participant WD as WorkDispatcher
+    participant TD as TimerDispatcher
     participant P as Provider (HistoryStore)
 
     U->>R: run_turn(history)
     R->>U: poll orchestrator once
-    U-->>R: Actions (CallActivity/CreateTimer/WaitExternal)
-    R->>W: dispatch work
-    W->>R: OrchestratorMsg (ActivityCompleted/TimerFired/ExternalEvent)
-    R->>P: append Events
+    U-->>R: Decisions (ScheduleActivity/CreateTimer/Subscribe/Start...)
+    R->>P: append Events (schedule/subscriptions)
+    R->>WD: enqueue ActivityExecute (Worker queue)
+    R->>TD: enqueue TimerSchedule (Timer queue)
+    WD->>P: enqueue ActivityCompleted/Failed (Orchestrator queue)
+    TD->>P: enqueue TimerFired (Orchestrator queue)
+    OD->>R: deliver completions to orchestrator loop
+    R->>P: append Events (completions)
     R->>U: next run_turn with updated history
 ```
 

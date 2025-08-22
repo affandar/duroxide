@@ -3,7 +3,7 @@ use rust_dtf::{Event, OrchestrationContext, OrchestrationRegistry};
 use rust_dtf::runtime::{self, activity::ActivityRegistry};
 use rust_dtf::providers::HistoryStore;
 use rust_dtf::providers::fs::FsHistoryStore;
-use rust_dtf::providers::WorkItem;
+use rust_dtf::providers::{WorkItem, QueueKind};
 mod common;
 
 // Simulate crash windows by interleaving dequeue and persistence.
@@ -32,9 +32,9 @@ async fn crash_after_dequeue_before_append_completion_fs() {
 
     // Enqueue the external work item
     let wi = WorkItem::ExternalRaised { instance: inst.to_string(), name: "Evt".to_string(), data: "ok".to_string() };
-    let _ = store.enqueue_work(wi.clone()).await;
+    let _ = store.enqueue_work(QueueKind::Orchestrator, wi.clone()).await;
     // Simulate crash-before-append by enqueuing duplicate before runtime gets to append
-    let _ = store.enqueue_work(wi.clone()).await;
+    let _ = store.enqueue_work(QueueKind::Orchestrator, wi.clone()).await;
 
     // Wait for completion, ensure a single ExternalEvent recorded
     let ok = common::wait_for_history(store.clone(), inst, |h| h.iter().any(|e| matches!(e, Event::OrchestrationCompleted { output } if output == "ok")), 5_000).await;
@@ -75,8 +75,8 @@ async fn crash_after_append_before_ack_timer_fs() {
 
     // Inject duplicate TimerFired simulating a crash after append-before-ack
     let wi = WorkItem::TimerFired { instance: inst.to_string(), id, fire_at_ms };
-    let _ = store.enqueue_work(wi.clone()).await;
-    let _ = store.enqueue_work(wi.clone()).await;
+    let _ = store.enqueue_work(QueueKind::Orchestrator, wi.clone()).await;
+    let _ = store.enqueue_work(QueueKind::Orchestrator, wi.clone()).await;
 
     let ok = common::wait_for_history(store.clone(), inst, |h| h.iter().any(|e| matches!(e, Event::OrchestrationCompleted { output } if output == "t")), 5_000).await;
     assert!(ok, "timeout waiting for completion");

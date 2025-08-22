@@ -2,7 +2,7 @@ use std::sync::Arc;
 use tracing::{debug, warn};
 
 use crate::{Event};
-use crate::providers::WorkItem;
+use crate::providers::{WorkItem, QueueKind};
 
 use super::Runtime;
 
@@ -32,12 +32,8 @@ pub async fn dispatch_create_timer(rt: &Arc<Runtime>, instance: &str, history: &
         Event::TimerCreated { id: cid, fire_at_ms } if *cid == id => Some(*fire_at_ms), _ => None
     }).unwrap_or(0);
     debug!(instance, id, fire_at_ms, delay_ms, "dispatch timer");
-    if let Err(e) = rt.timer_tx.send(super::TimerWorkItem { instance: instance.to_string(), id, fire_at_ms, delay_ms }).await {
-        if let Some(waiters) = rt.result_waiters.lock().await.remove(instance) {
-            for w in waiters { let _ = w.send((history.to_vec(), Err(format!("timer dispatch failed: {e}")))); }
-        }
-        panic!("timer dispatch failed: {e}");
-    }
+    // Enqueue provider-backed schedule; a TimerDispatcher can later materialize TimerFired
+    let _ = rt.history_store.enqueue_work(QueueKind::Timer, WorkItem::TimerSchedule { instance: instance.to_string(), id, fire_at_ms }).await;
 }
 
 pub async fn dispatch_wait_external(_rt: &Arc<Runtime>, instance: &str, _history: &[Event], id: u64, name: String) {
@@ -49,7 +45,7 @@ pub async fn dispatch_start_detached(rt: &Arc<Runtime>, instance: &str, id: u64,
     if let Some(ver_str) = version.clone() { if let Ok(v) = semver::Version::parse(&ver_str) { rt.pinned_versions.lock().await.insert(child_instance.clone(), v); } }
     else if let Some((v, _h)) = rt.orchestration_registry.resolve_for_start(&name).await { rt.pinned_versions.lock().await.insert(child_instance.clone(), v); }
     let wi = WorkItem::StartOrchestration { instance: child_instance.clone(), orchestration: name.clone(), input: input.clone() };
-    if let Err(e) = rt.history_store.enqueue_work(wi).await {
+    if let Err(e) = rt.history_store.enqueue_work(QueueKind::Orchestrator, wi).await {
         warn!(instance, id, name=%name, child_instance=%child_instance, error=%e, "failed to enqueue detached start; will rely on bootstrap rehydration");
     } else {
         debug!(instance, id, name=%name, child_instance=%child_instance, "enqueued detached orchestration start");

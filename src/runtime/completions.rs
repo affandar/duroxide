@@ -1,5 +1,7 @@
 use tracing::{debug, error, warn};
 use crate::Event;
+use std::sync::Arc;
+use crate::providers::{HistoryStore, WorkItem, QueueKind};
 use super::router::OrchestratorMsg;
 
 pub fn append_completion(history: &mut Vec<Event>, msg: OrchestratorMsg) -> (Option<String>, bool) {
@@ -71,20 +73,15 @@ pub fn append_completion(history: &mut Vec<Event>, msg: OrchestratorMsg) -> (Opt
     }
 }
 
-pub async fn rehydrate_pending(instance: &str, history: &[Event], activity_tx: &tokio::sync::mpsc::Sender<super::ActivityWorkItem>, timer_tx: &tokio::sync::mpsc::Sender<super::TimerWorkItem>) {
+pub async fn rehydrate_pending(instance: &str, history: &[Event], activity_tx: &tokio::sync::mpsc::Sender<super::ActivityWorkItem>, history_store: &Arc<dyn HistoryStore>) {
     for e in history {
         match e {
             Event::ActivityScheduled { id, name, input } => {
                 let _ = activity_tx.send(super::ActivityWorkItem { instance: instance.to_string(), id: *id, name: name.clone(), input: input.clone() }).await;
             }
             Event::TimerCreated { id, fire_at_ms } => {
-                let now = super::Runtime::now_ms_static();
-                if *fire_at_ms <= now {
-                    let _ = timer_tx.send(super::TimerWorkItem { instance: instance.to_string(), id: *id, fire_at_ms: *fire_at_ms, delay_ms: 0 }).await;
-                } else {
-                    let delay = fire_at_ms.saturating_sub(now);
-                    let _ = timer_tx.send(super::TimerWorkItem { instance: instance.to_string(), id: *id, fire_at_ms: *fire_at_ms, delay_ms: delay }).await;
-                }
+                // Enqueue a schedule request; TimerDispatcher will deliver TimerFired after delay
+                let _ = history_store.enqueue_work(QueueKind::Timer, WorkItem::TimerSchedule { instance: instance.to_string(), id: *id, fire_at_ms: *fire_at_ms }).await;
             }
             _ => {}
         }

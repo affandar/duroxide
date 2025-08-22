@@ -1,11 +1,17 @@
 use crate::Event;
 
+/// Logical queues for provider-backed work distribution.
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub enum QueueKind { Orchestrator, Worker, Timer }
+
 /// Provider-backed work queue items the runtime consumes continually.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub enum WorkItem {
     StartOrchestration { instance: String, orchestration: String, input: String },
+    ActivityExecute { instance: String, id: u64, name: String, input: String },
     ActivityCompleted { instance: String, id: u64, result: String },
     ActivityFailed { instance: String, id: u64, error: String },
+    TimerSchedule { instance: String, id: u64, fire_at_ms: u64 },
     TimerFired { instance: String, id: u64, fire_at_ms: u64 },
     ExternalRaised { instance: String, name: String, data: String },
     SubOrchCompleted { parent_instance: String, parent_id: u64, result: String },
@@ -40,22 +46,22 @@ pub trait HistoryStore: Send + Sync {
         Ok(())
     }
 
-    /// Enqueue a work item for the runtime to act on.
-    async fn enqueue_work(&self, _item: WorkItem) -> Result<(), String> { Err("work queue not supported".into()) }
+    /// Enqueue a work item for the runtime to act on, into the specified logical queue.
+    async fn enqueue_work(&self, _kind: QueueKind, _item: WorkItem) -> Result<(), String> { Err("work queue not supported".into()) }
 
-    /// Dequeue-next using peek-lock semantics. Returns (item, token) when supported.
+    /// Dequeue-next from the specified logical queue using peek-lock semantics. Returns (item, token) when supported.
     /// The item remains invisible until `ack(token)` or `abandon(token)` is called
     /// (implementations may use a best-effort invisibility without timeouts).
     /// Default: not supported.
-    async fn dequeue_peek_lock(&self) -> Option<(WorkItem, String)> { None }
+    async fn dequeue_peek_lock(&self, _kind: QueueKind) -> Option<(WorkItem, String)> { None }
 
-    /// Acknowledge a previously peek-locked token, permanently removing it.
+    /// Acknowledge a previously peek-locked token in the specified queue, permanently removing it.
     /// Default: no-op success for providers that don't support peek-lock.
-    async fn ack(&self, _token: &str) -> Result<(), String> { Ok(()) }
+    async fn ack(&self, _kind: QueueKind, _token: &str) -> Result<(), String> { Ok(()) }
 
-    /// Abandon a previously peek-locked token, making the item visible again.
+    /// Abandon a previously peek-locked token in the specified queue, making the item visible again.
     /// Default: no-op success for providers that don't support peek-lock.
-    async fn abandon(&self, _token: &str) -> Result<(), String> { Ok(()) }
+    async fn abandon(&self, _kind: QueueKind, _token: &str) -> Result<(), String> { Ok(()) }
 
     // Metadata APIs removed; orchestration info is derived from history only.
 

@@ -3,7 +3,7 @@ use rust_dtf::{Event, OrchestrationContext, OrchestrationRegistry};
 use rust_dtf::runtime::{self, activity::ActivityRegistry};
 use rust_dtf::providers::HistoryStore;
 use rust_dtf::providers::fs::FsHistoryStore;
-use rust_dtf::providers::WorkItem;
+use rust_dtf::providers::{WorkItem, QueueKind};
 mod common;
 
 #[tokio::test]
@@ -27,8 +27,8 @@ async fn external_duplicate_workitems_dedup_fs() {
 
     // enqueue duplicate externals
     let wi = WorkItem::ExternalRaised { instance: inst.to_string(), name: "Evt".to_string(), data: "ok".to_string() };
-    let _ = store.enqueue_work(wi.clone()).await;
-    let _ = store.enqueue_work(wi.clone()).await;
+    let _ = store.enqueue_work(QueueKind::Orchestrator, wi.clone()).await;
+    let _ = store.enqueue_work(QueueKind::Orchestrator, wi.clone()).await;
 
     // wait for completion
     let ok = common::wait_for_history(store.clone(), inst, |h| h.iter().any(|e| matches!(e, Event::OrchestrationCompleted { output } if output == "ok")), 5_000).await;
@@ -71,8 +71,8 @@ async fn timer_duplicate_workitems_dedup_fs() {
 
     // enqueue duplicate TimerFired for the same id
     let wi = WorkItem::TimerFired { instance: inst.to_string(), id, fire_at_ms };
-    let _ = store.enqueue_work(wi.clone()).await;
-    let _ = store.enqueue_work(wi.clone()).await;
+    let _ = store.enqueue_work(QueueKind::Orchestrator, wi.clone()).await;
+    let _ = store.enqueue_work(QueueKind::Orchestrator, wi.clone()).await;
 
     // wait for completion
     let ok = common::wait_for_history(store.clone(), inst, |h| h.iter().any(|e| matches!(e, Event::OrchestrationCompleted { output } if output == "t")), 5_000).await;
@@ -120,8 +120,8 @@ async fn activity_duplicate_completion_workitems_dedup_fs() {
 
     // enqueue duplicate ActivityCompleted with result matching the worker to avoid mismatches
     let wi = WorkItem::ActivityCompleted { instance: inst.to_string(), id, result: "x".to_string() };
-    let _ = store.enqueue_work(wi.clone()).await;
-    let _ = store.enqueue_work(wi.clone()).await;
+    let _ = store.enqueue_work(QueueKind::Orchestrator, wi.clone()).await;
+    let _ = store.enqueue_work(QueueKind::Orchestrator, wi.clone()).await;
 
     // wait for completion and assert single ActivityCompleted recorded
     let ok = common::wait_for_history(store.clone(), inst, |h| h.iter().any(|e| matches!(e, Event::OrchestrationCompleted { output } if output == "x")), 5_000).await;

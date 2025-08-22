@@ -3,7 +3,7 @@ use tokio::sync::mpsc;
 use async_trait::async_trait;
 
 use super::ActivityWorkItem;
-use crate::providers::{HistoryStore, WorkItem};
+use crate::providers::{HistoryStore, WorkItem, QueueKind};
 use crate::_typed_codec::{Json, Codec};
 use serde::{de::DeserializeOwned, Serialize};
 
@@ -100,17 +100,17 @@ impl ActivityWorker {
             if let Some(handler) = self.registry.get(&wi.name) {
                 match handler.invoke(wi.input).await {
                     Ok(result) => {
-                        if let Err(e) = self.history_store.enqueue_work(WorkItem::ActivityCompleted { instance: wi.instance, id: wi.id, result }).await {
+                        if let Err(e) = self.history_store.enqueue_work(QueueKind::Orchestrator, WorkItem::ActivityCompleted { instance: wi.instance, id: wi.id, result }).await {
                             panic!("activity worker: enqueue completion failed (id={}): {}", wi.id, e);
                         }
                     }
                     Err(error) => {
-                        if let Err(e) = self.history_store.enqueue_work(WorkItem::ActivityFailed { instance: wi.instance, id: wi.id, error }).await {
+                        if let Err(e) = self.history_store.enqueue_work(QueueKind::Orchestrator, WorkItem::ActivityFailed { instance: wi.instance, id: wi.id, error }).await {
                             panic!("activity worker: enqueue failure failed (id={}): {}", wi.id, e);
                         }
                     }
                 }
-            } else if let Err(e) = self.history_store.enqueue_work(WorkItem::ActivityFailed {
+            } else if let Err(e) = self.history_store.enqueue_work(QueueKind::Orchestrator, WorkItem::ActivityFailed {
                 instance: wi.instance,
                 id: wi.id,
                 error: format!("unregistered:{}", wi.name),

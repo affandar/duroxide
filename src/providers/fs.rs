@@ -3,11 +3,11 @@ use tokio::{fs, io::AsyncWriteExt};
 use serde_json;
 
 use crate::Event;
-use super::{HistoryStore, WorkItem};
+use super::{HistoryStore, WorkItem, QueueKind};
 
 /// Simple filesystem-backed history store writing JSONL per instance.
 #[derive(Clone)]
-pub struct FsHistoryStore { root: PathBuf, queue_file: PathBuf, cap: usize }
+pub struct FsHistoryStore { root: PathBuf, orch_queue_file: PathBuf, work_queue_file: PathBuf, timer_queue_file: PathBuf, cap: usize }
 
 impl FsHistoryStore {
     /// Create a new store rooted at the given directory path.
@@ -17,11 +17,15 @@ impl FsHistoryStore {
         if reset_on_create {
             let _ = std::fs::remove_dir_all(&path);
         }
-        let queue_file = path.join("work-queue.jsonl");
+        let orch_q = path.join("orch-queue.jsonl");
+        let work_q = path.join("work-queue.jsonl");
+        let timer_q = path.join("timer-queue.jsonl");
         // best-effort create
         let _ = std::fs::create_dir_all(&path);
-        let _ = std::fs::OpenOptions::new().create(true).append(true).open(&queue_file);
-        Self { root: path, queue_file, cap: 1024 }
+        let _ = std::fs::OpenOptions::new().create(true).append(true).open(&orch_q);
+        let _ = std::fs::OpenOptions::new().create(true).append(true).open(&work_q);
+        let _ = std::fs::OpenOptions::new().create(true).append(true).open(&timer_q);
+        Self { root: path, orch_queue_file: orch_q, work_queue_file: work_q, timer_queue_file: timer_q, cap: 1024 }
     }
     /// Create a new store with a custom history cap (useful for tests).
     pub fn new_with_cap(root: impl AsRef<Path>, reset_on_create: bool, cap: usize) -> Self {
@@ -33,8 +37,9 @@ impl FsHistoryStore {
     fn exec_path(&self, instance: &str, execution_id: u64) -> PathBuf {
         self.inst_root(instance).join(format!("{}.jsonl", execution_id))
     }
-    fn lock_dir(&self) -> PathBuf { self.root.join(".locks") }
-    fn lock_path(&self, token: &str) -> PathBuf { self.lock_dir().join(format!("{token}.lock")) }
+    fn lock_dir(&self, kind: QueueKind) -> PathBuf { match kind { QueueKind::Orchestrator => self.root.join(".locks/orch"), QueueKind::Worker => self.root.join(".locks/work"), QueueKind::Timer => self.root.join(".locks/timer") } }
+    fn lock_path(&self, kind: QueueKind, token: &str) -> PathBuf { self.lock_dir(kind).join(format!("{token}.lock")) }
+    fn queue_file(&self, kind: QueueKind) -> &PathBuf { match kind { QueueKind::Orchestrator => &self.orch_queue_file, QueueKind::Worker => &self.work_queue_file, QueueKind::Timer => &self.timer_queue_file } }
 }
 
 #[async_trait::async_trait]
@@ -170,9 +175,10 @@ impl HistoryStore for FsHistoryStore {
         Ok(())
     }
 
-    async fn enqueue_work(&self, item: WorkItem) -> Result<(), String> {
+    async fn enqueue_work(&self, kind: QueueKind, item: WorkItem) -> Result<(), String> {
         // Idempotent enqueue: load current items and only append if not present
-        let content = std::fs::read_to_string(&self.queue_file).unwrap_or_default();
+        let qf = self.queue_file(kind).clone();
+        let content = std::fs::read_to_string(&qf).unwrap_or_default();
         let mut items: Vec<WorkItem> = content
             .lines()
             .filter_map(|l| serde_json::from_str::<WorkItem>(l).ok())
@@ -180,7 +186,7 @@ impl HistoryStore for FsHistoryStore {
         if items.contains(&item) { return Ok(()); }
         items.push(item);
         // Rewrite file atomically
-        let tmp = self.queue_file.with_extension("jsonl.tmp");
+        let tmp = qf.with_extension("jsonl.tmp");
         {
             let mut tf = std::fs::OpenOptions::new().create(true).write(true).truncate(true).open(&tmp).map_err(|e| e.to_string())?;
             for it in &items {
@@ -190,15 +196,16 @@ impl HistoryStore for FsHistoryStore {
                 tf.write_all(b"\n").map_err(|e| e.to_string())?;
             }
         }
-        std::fs::rename(&tmp, &self.queue_file).map_err(|e| e.to_string())?;
+        std::fs::rename(&tmp, &qf).map_err(|e| e.to_string())?;
         Ok(())
     }
 
     // dequeue_work removed; runtime uses peek-lock only
 
-    async fn dequeue_peek_lock(&self) -> Option<(WorkItem, String)> {
+    async fn dequeue_peek_lock(&self, kind: QueueKind) -> Option<(WorkItem, String)> {
         // Pop first item but write it to a lock sidecar to keep invisible until ack/abandon
-        let content = std::fs::read_to_string(&self.queue_file).ok()?;
+        let qf = self.queue_file(kind).clone();
+        let content = std::fs::read_to_string(&qf).ok()?;
         let mut items: Vec<WorkItem> = content
             .lines()
             .filter_map(|l| serde_json::from_str::<WorkItem>(l).ok())
@@ -206,7 +213,7 @@ impl HistoryStore for FsHistoryStore {
         if items.is_empty() { return None; }
         let first = items.remove(0);
         // Rewrite remaining items atomically
-        let tmp = self.queue_file.with_extension("jsonl.tmp");
+        let tmp = qf.with_extension("jsonl.tmp");
         {
             let mut tf = std::fs::OpenOptions::new().create(true).write(true).truncate(true).open(&tmp).ok()?;
             for it in &items {
@@ -216,7 +223,7 @@ impl HistoryStore for FsHistoryStore {
                 let _ = tf.write_all(b"\n");
             }
         }
-        let _ = std::fs::rename(&tmp, &self.queue_file);
+        let _ = std::fs::rename(&tmp, &qf);
         // Create lock token and persist the locked item
         let now_ns = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -224,36 +231,37 @@ impl HistoryStore for FsHistoryStore {
             .as_nanos();
         let pid = std::process::id();
         let token = format!("{now_ns:x}-{pid:x}");
-        let _ = std::fs::create_dir_all(self.lock_dir());
-        let lock_path = self.lock_path(&token);
+        let _ = std::fs::create_dir_all(self.lock_dir(kind));
+        let lock_path = self.lock_path(kind, &token);
         let line = serde_json::to_string(&first).ok()?;
         let _ = std::fs::write(&lock_path, line);
         Some((first, token))
     }
 
-    async fn ack(&self, token: &str) -> Result<(), String> {
-        let path = self.lock_path(token);
+    async fn ack(&self, kind: QueueKind, token: &str) -> Result<(), String> {
+        let path = self.lock_path(kind, token);
         if path.exists() {
             std::fs::remove_file(&path).map_err(|e| e.to_string())?;
         }
         Ok(())
     }
 
-    async fn abandon(&self, token: &str) -> Result<(), String> {
+    async fn abandon(&self, kind: QueueKind, token: &str) -> Result<(), String> {
         // Read locked item and re-enqueue at front, then remove lock
-        let path = self.lock_path(token);
+        let path = self.lock_path(kind, token);
         if !path.exists() { return Ok(()); }
         let data = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
         let item: WorkItem = serde_json::from_str(&data).map_err(|e| e.to_string())?;
         // Prepend to queue
-        let content = std::fs::read_to_string(&self.queue_file).unwrap_or_default();
+        let qf = self.queue_file(kind).clone();
+        let content = std::fs::read_to_string(&qf).unwrap_or_default();
         let mut items: Vec<WorkItem> = content
             .lines()
             .filter_map(|l| serde_json::from_str::<WorkItem>(l).ok())
             .collect();
         items.insert(0, item);
         // Rewrite file atomically
-        let tmp = self.queue_file.with_extension("jsonl.tmp");
+        let tmp = qf.with_extension("jsonl.tmp");
         {
             let mut tf = std::fs::OpenOptions::new().create(true).write(true).truncate(true).open(&tmp).map_err(|e| e.to_string())?;
             for it in &items {
@@ -263,7 +271,7 @@ impl HistoryStore for FsHistoryStore {
                 tf.write_all(b"\n").map_err(|e| e.to_string())?;
             }
         }
-        std::fs::rename(&tmp, &self.queue_file).map_err(|e| e.to_string())?;
+        std::fs::rename(&tmp, &qf).map_err(|e| e.to_string())?;
         // Remove lock
         std::fs::remove_file(&path).map_err(|e| e.to_string())?;
         Ok(())
