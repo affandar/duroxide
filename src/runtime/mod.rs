@@ -110,19 +110,19 @@ impl Runtime {
         for d in decisions {
             match d {
                 crate::runtime::replay::Decision::ContinueAsNew { .. } => { /* handled by caller */ }
-                crate::runtime::replay::Decision::ScheduleActivity { id, name, input } => {
+                crate::runtime::replay::Decision::CallActivity { id, name, input } => {
                     dispatch::dispatch_call_activity(self, instance, history, id, name, input).await;
                 }
                 crate::runtime::replay::Decision::CreateTimer { id, delay_ms } => {
                     dispatch::dispatch_create_timer(self, instance, history, id, delay_ms).await;
                 }
-                crate::runtime::replay::Decision::SubscribeExternal { id, name } => {
+                crate::runtime::replay::Decision::WaitExternal { id, name } => {
                     dispatch::dispatch_wait_external(self, instance, history, id, name).await;
                 }
-                crate::runtime::replay::Decision::StartDetached { id, name, version, instance: child_inst, input } => {
+                crate::runtime::replay::Decision::StartOrchestrationDetached { id, name, version, instance: child_inst, input } => {
                     dispatch::dispatch_start_detached(self, instance, id, name, version, child_inst, input).await;
                 }
-                crate::runtime::replay::Decision::StartSubOrch { id, name, version, child_suffix, input } => {
+                crate::runtime::replay::Decision::StartSubOrchestration { id, name, version, instance: child_suffix, input } => {
                     dispatch::dispatch_start_sub_orchestration(self, instance, history, id, name, version, child_suffix, input).await;
                 }
             }
@@ -149,6 +149,7 @@ impl Runtime {
     const REENQUEUE_DELAY_MS: u64 = 5;
     const POLLER_GATE_DELAY_MS: u64 = 5;
     const POLLER_IDLE_SLEEP_MS: u64 = 10;
+    const ORCH_IDLE_DEHYDRATE_MS: u64 = 1000;
     async fn start_internal_rx(
         self: Arc<Self>,
         instance: &str,
@@ -292,31 +293,8 @@ impl Runtime {
         let router = Arc::new(CompletionRouter { inboxes: Mutex::new(HashMap::new()) });
         let mut joins: Vec<JoinHandle<()>> = Vec::new();
 
-        // spawn activity worker with system trace handler pre-registered
-        // copy user registrations
-        let mut builder = activity::ActivityRegistryBuilder::from_registry(&activity_registry);
-        // add system activities
-        builder = builder.register(crate::SYSTEM_TRACE_ACTIVITY, |input: String| async move {
-            // input format: "LEVEL:message"
-            Ok(input)
-        });
-        builder = builder.register(crate::SYSTEM_NOW_ACTIVITY, |_input: String| async move {
-            let now_ms = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis();
-            Ok(now_ms.to_string())
-        });
-        builder = builder.register(crate::SYSTEM_NEW_GUID_ACTIVITY, |_input: String| async move {
-            // TODO : find the right way to build a guid
-            // Pseudo-guid: 32-hex digits from current nanos since epoch
-            let nanos = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos();
-            Ok(format!("{nanos:032x}"))
-        });
-        let reg_clone = builder.build();
+        // spawn activity worker; system activities are already pre-registered by builder()
+        let reg_clone = (*activity_registry).clone();
         let store_for_worker = history_store.clone();
         joins.push(tokio::spawn(async move {
             activity::ActivityWorker::new(reg_clone, store_for_worker).run(activity_rx).await
@@ -424,13 +402,34 @@ impl Runtime {
                             let _ = self.history_store.ack(QueueKind::Orchestrator, &token).await;
                         }
                         WorkItem::ActivityCompleted { instance, id, result } => {
-                            let _ = self.router_tx.send(OrchestratorMsg::ActivityCompleted { instance, id, result, ack_token: Some(token) });
+                            if !self.router.inboxes.lock().await.contains_key(&instance) {
+                                let orch_name = self.history_store.read(&instance).await.iter().find_map(|e| match e { Event::OrchestrationStarted { name, .. } => Some(name.clone()), _ => None }).unwrap_or_default();
+                                let _ = self.start_tx.send(StartRequest { instance: instance.clone(), orchestration_name: orch_name });
+                                let _ = self.history_store.abandon(QueueKind::Orchestrator, &token).await;
+                                tokio::time::sleep(std::time::Duration::from_millis(Self::POLLER_GATE_DELAY_MS)).await;
+                            } else {
+                                let _ = self.router_tx.send(OrchestratorMsg::ActivityCompleted { instance, id, result, ack_token: Some(token) });
+                            }
                         }
                         WorkItem::ActivityFailed { instance, id, error } => {
-                            let _ = self.router_tx.send(OrchestratorMsg::ActivityFailed { instance, id, error, ack_token: Some(token) });
+                            if !self.router.inboxes.lock().await.contains_key(&instance) {
+                                let orch_name = self.history_store.read(&instance).await.iter().find_map(|e| match e { Event::OrchestrationStarted { name, .. } => Some(name.clone()), _ => None }).unwrap_or_default();
+                                let _ = self.start_tx.send(StartRequest { instance: instance.clone(), orchestration_name: orch_name });
+                                let _ = self.history_store.abandon(QueueKind::Orchestrator, &token).await;
+                                tokio::time::sleep(std::time::Duration::from_millis(Self::POLLER_GATE_DELAY_MS)).await;
+                            } else {
+                                let _ = self.router_tx.send(OrchestratorMsg::ActivityFailed { instance, id, error, ack_token: Some(token) });
+                            }
                         }
                         WorkItem::TimerFired { instance, id, fire_at_ms } => {
-                            let _ = self.router_tx.send(OrchestratorMsg::TimerFired { instance, id, fire_at_ms, ack_token: Some(token) });
+                            if !self.router.inboxes.lock().await.contains_key(&instance) {
+                                let orch_name = self.history_store.read(&instance).await.iter().find_map(|e| match e { Event::OrchestrationStarted { name, .. } => Some(name.clone()), _ => None }).unwrap_or_default();
+                                let _ = self.start_tx.send(StartRequest { instance: instance.clone(), orchestration_name: orch_name });
+                                let _ = self.history_store.abandon(QueueKind::Orchestrator, &token).await;
+                                tokio::time::sleep(std::time::Duration::from_millis(Self::POLLER_GATE_DELAY_MS)).await;
+                            } else {
+                                let _ = self.router_tx.send(OrchestratorMsg::TimerFired { instance, id, fire_at_ms, ack_token: Some(token) });
+                            }
                         }
                         WorkItem::TimerSchedule { .. } => {
                             // Let WorkDispatcher handle
@@ -438,20 +437,44 @@ impl Runtime {
                             tokio::time::sleep(std::time::Duration::from_millis(Self::POLLER_GATE_DELAY_MS)).await;
                         }
                         WorkItem::ExternalRaised { instance, name, data } => {
-                            let _ = self.router_tx.send(OrchestratorMsg::ExternalByName { instance, name, data, ack_token: Some(token) });
+                            // If no inbox yet (dehydrated), re-enqueue start and abandon so this is redelivered
+                            if !self.router.inboxes.lock().await.contains_key(&instance) {
+                                let _ = self.start_tx.send(StartRequest { instance: instance.clone(), orchestration_name: self.history_store.read(&instance).await.iter().find_map(|e| match e { Event::OrchestrationStarted { name, .. } => Some(name.clone()), _ => None }).unwrap_or_default() });
+                                let _ = self.history_store.abandon(QueueKind::Orchestrator, &token).await;
+                                tokio::time::sleep(std::time::Duration::from_millis(Self::POLLER_GATE_DELAY_MS)).await;
+                            } else {
+                                let _ = self.router_tx.send(OrchestratorMsg::ExternalByName { instance, name, data, ack_token: Some(token) });
+                            }
                         }
                         WorkItem::SubOrchCompleted { parent_instance, parent_id, result } => {
-                            let _ = self.router_tx.send(OrchestratorMsg::SubOrchCompleted { instance: parent_instance, id: parent_id, result, ack_token: Some(token) });
+                            if !self.router.inboxes.lock().await.contains_key(&parent_instance) {
+                                let orch_name = self.history_store.read(&parent_instance).await.iter().find_map(|e| match e { Event::OrchestrationStarted { name, .. } => Some(name.clone()), _ => None }).unwrap_or_default();
+                                let _ = self.start_tx.send(StartRequest { instance: parent_instance.clone(), orchestration_name: orch_name });
+                                let _ = self.history_store.abandon(QueueKind::Orchestrator, &token).await;
+                                tokio::time::sleep(std::time::Duration::from_millis(Self::POLLER_GATE_DELAY_MS)).await;
+                            } else {
+                                let _ = self.router_tx.send(OrchestratorMsg::SubOrchCompleted { instance: parent_instance, id: parent_id, result, ack_token: Some(token) });
+                            }
                         }
                         WorkItem::SubOrchFailed { parent_instance, parent_id, error } => {
-                            let _ = self.router_tx.send(OrchestratorMsg::SubOrchFailed { instance: parent_instance, id: parent_id, error, ack_token: Some(token) });
+                            if !self.router.inboxes.lock().await.contains_key(&parent_instance) {
+                                let orch_name = self.history_store.read(&parent_instance).await.iter().find_map(|e| match e { Event::OrchestrationStarted { name, .. } => Some(name.clone()), _ => None }).unwrap_or_default();
+                                let _ = self.start_tx.send(StartRequest { instance: parent_instance.clone(), orchestration_name: orch_name });
+                                let _ = self.history_store.abandon(QueueKind::Orchestrator, &token).await;
+                                tokio::time::sleep(std::time::Duration::from_millis(Self::POLLER_GATE_DELAY_MS)).await;
+                            } else {
+                                let _ = self.router_tx.send(OrchestratorMsg::SubOrchFailed { instance: parent_instance, id: parent_id, error, ack_token: Some(token) });
+                            }
                         }
                         WorkItem::CancelInstance { instance, reason } => {
-                            let mut sent = false;
-                            if let Some(tx) = self.router.inboxes.lock().await.get(&instance) {
-                                if tx.send(OrchestratorMsg::CancelRequested { instance: instance.clone(), reason: reason.clone(), ack_token: Some(token.clone()) }).is_ok() { sent = true; }
+                            if !self.router.inboxes.lock().await.contains_key(&instance) {
+                                let orch_name = self.history_store.read(&instance).await.iter().find_map(|e| match e { Event::OrchestrationStarted { name, .. } => Some(name.clone()), _ => None }).unwrap_or_default();
+                                let _ = self.start_tx.send(StartRequest { instance: instance.clone(), orchestration_name: orch_name });
+                                let _ = self.history_store.abandon(QueueKind::Orchestrator, &token).await;
+                                tokio::time::sleep(std::time::Duration::from_millis(Self::POLLER_GATE_DELAY_MS)).await;
+                            } else {
+                                let _ = self.router_tx.send(OrchestratorMsg::CancelRequested { instance, reason, ack_token: Some(token) });
                             }
-                            if !sent { let _ = self.history_store.abandon(QueueKind::Orchestrator, &token).await; tokio::time::sleep(std::time::Duration::from_millis(Self::POLLER_GATE_DELAY_MS)).await; }
                         }
                         WorkItem::ActivityExecute { instance, id, name, input } => {
                             let _ = self.activity_tx.send(ActivityWorkItem { instance, id, name, input }).await;
@@ -762,9 +785,25 @@ impl Runtime {
 
             self.apply_decisions(instance, &history, decisions).await;
 
-            // Receive at least one completion, then drain a bounded batch
+            // Receive at least one completion, or dehydrate on idle timeout
             let len_before_completions = history.len();
-            let first = comp_rx.recv().await.expect("completion");
+            let first_opt = tokio::time::timeout(std::time::Duration::from_millis(Self::ORCH_IDLE_DEHYDRATE_MS), comp_rx.recv()).await;
+            let first = match first_opt {
+                Ok(Some(msg)) => msg,
+                Ok(None) => { self.router.unregister(instance).await; return (history, Ok(String::new())); }
+                Err(_timeout) => {
+                    // Dehydrate only if no outstanding result waiters
+                    let has_waiters = self.result_waiters.lock().await.contains_key(instance);
+                    if has_waiters {
+                        tokio::time::sleep(std::time::Duration::from_millis(Self::POLLER_IDLE_SLEEP_MS)).await;
+                        continue;
+                    } else {
+                        // Unregister inbox and release active guard by returning
+                        self.router.unregister(instance).await;
+                        return (history, Ok(String::new()));
+                    }
+                }
+            };
             let mut ack_tokens_persist_after: Vec<String> = Vec::new();
             let mut ack_tokens_immediate: Vec<String> = Vec::new();
             if let (Some(t), changed) = completions::append_completion(&mut history, first) { if changed { ack_tokens_persist_after.push(t); } else { ack_tokens_immediate.push(t); } }

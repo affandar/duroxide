@@ -26,6 +26,9 @@ impl CompletionRouter {
         self.inboxes.lock().await.insert(instance.to_string(), tx);
         rx
     }
+    pub async fn unregister(&self, instance: &str) {
+        self.inboxes.lock().await.remove(instance);
+    }
     pub async fn forward(&self, msg: OrchestratorMsg) {
         let key = match &msg {
             OrchestratorMsg::ActivityCompleted { instance, .. }

@@ -33,7 +33,28 @@ pub struct ActivityRegistry { inner: Arc<HashMap<String, Arc<dyn ActivityHandler
 
 impl ActivityRegistry {
     /// Create a new builder for registering activities.
-    pub fn builder() -> ActivityRegistryBuilder { ActivityRegistryBuilder { map: HashMap::new() } }
+    pub fn builder() -> ActivityRegistryBuilder {
+        let mut b = ActivityRegistryBuilder { map: HashMap::new() };
+        // Pre-register system activities before any user registration
+        b = b.register(crate::SYSTEM_TRACE_ACTIVITY, |input: String| async move {
+            Ok(input)
+        });
+        b = b.register(crate::SYSTEM_NOW_ACTIVITY, |_input: String| async move {
+            let now_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis();
+            Ok(now_ms.to_string())
+        });
+        b = b.register(crate::SYSTEM_NEW_GUID_ACTIVITY, |_input: String| async move {
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos();
+            Ok(format!("{nanos:032x}"))
+        });
+        b
+    }
     /// Look up a handler by name.
     pub fn get(&self, name: &str) -> Option<Arc<dyn ActivityHandler>> { self.inner.get(name).cloned() }
 }
