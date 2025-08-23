@@ -352,9 +352,23 @@ async fn continue_as_new_upgrades_version_deterministically() {
     let (hist, out) = h.await.unwrap();
     // Initial handle resolves at continue-as-new boundary (empty string)
     assert_eq!(out.unwrap(), "");
-    assert!(
-        hist.iter()
-            .any(|e| matches!(e, Event::OrchestrationContinuedAsNew { .. }))
+    assert!(hist.iter().any(|e| matches!(e, Event::OrchestrationContinuedAsNew { .. })));
+
+    // Wait for terminal status using helper and assert final output
+    match rt
+        .wait_for_orchestration("inst-can-upgrade", std::time::Duration::from_secs(5))
+        .await
+        .unwrap()
+    {
+        runtime::OrchestrationStatus::Completed { output } => {
+            assert_eq!(output, "v2_done:from_v1_to_v2")
+        }
+        runtime::OrchestrationStatus::Failed { error } => panic!("unexpected failure: {error}"),
+        _ => unreachable!(),
+    }
+    rt.shutdown().await;
+}
+
 use rust_dtf::{OrchestrationContext, OrchestrationRegistry};
 use semver::Version;
 

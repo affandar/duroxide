@@ -348,14 +348,7 @@ async fn event_drop_then_retry_after_subscribe_fs() {
 // Test: Execution ID validation for ContinueAsNew scenarios
 // This test verifies that completions from old executions are properly ignored
 
-use rust_dtf::providers::HistoryStore;
-use rust_dtf::providers::fs::FsHistoryStore;
-use rust_dtf::providers::{QueueKind, WorkItem};
-use rust_dtf::runtime::registry::ActivityRegistry;
-use rust_dtf::runtime::{self};
-use rust_dtf::{OrchestrationContext, OrchestrationRegistry};
-use std::sync::Arc as StdArc;
-mod common;
+// merged section imports are already present at the top of this file
 
 #[tokio::test]
 async fn old_execution_completions_are_ignored() {

@@ -226,14 +226,7 @@ async fn activity_duplicate_completion_workitems_dedup_fs() {
 
     rt.shutdown().await;
 }
-use rust_dtf::providers::HistoryStore;
-use rust_dtf::providers::fs::FsHistoryStore;
-use rust_dtf::providers::{QueueKind, WorkItem};
-use rust_dtf::runtime::registry::ActivityRegistry;
-use rust_dtf::runtime::{self};
-use rust_dtf::{Event, OrchestrationContext, OrchestrationRegistry};
-use std::sync::Arc as StdArc;
-mod common;
+// merged file: imports above already declared; avoid reimporting
 
 // Simulate crash windows by interleaving dequeue and persistence.
 // We approximate by injecting duplicates around the same window; idempotence + peek-lock should ensure correctness.
