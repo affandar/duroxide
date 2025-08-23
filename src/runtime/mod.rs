@@ -702,7 +702,7 @@ impl Runtime {
         })
     }
 
-    // TODO : add parallelization of activity execution
+    // TODO : HERE HERE HERE : continue simplifying
     fn start_work_dispatcher(self: Arc<Self>, activities: Arc<registry::ActivityRegistry>) -> JoinHandle<()> {
         tokio::spawn(async move {
             loop {
@@ -792,8 +792,6 @@ impl Runtime {
                             let store = self.history_store.clone();
                             tokio::spawn(async move {
                                 tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
-                                // Small slack to bias external events ahead of timer in close races
-                                tokio::time::sleep(std::time::Duration::from_millis(Self::POLLER_GATE_DELAY_MS)).await;
                                 let _ = store
                                     .enqueue_work(
                                         QueueKind::Orchestrator,
