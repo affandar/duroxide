@@ -20,3 +20,7 @@ apps/*/dtf-data/
 
 # Test artifacts and temporary data
 .testdata/
+
+# Coverage outputs
+coverage.lcov
+/target/llvm-cov/**
