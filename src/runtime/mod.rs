@@ -15,6 +15,7 @@ pub mod dispatch;
 pub mod registry;
 pub mod router;
 pub mod status;
+mod timers;
 use async_trait::async_trait;
 use std::collections::HashSet;
 
@@ -800,25 +801,20 @@ impl Runtime {
             });
         }
 
-        // Fallback in-process timer service
+        // Fallback in-process timer service (refactored)
         tokio::spawn(async move {
-            use std::cmp::Reverse;
-            use std::collections::{BinaryHeap, HashMap, HashSet};
-            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<(WorkItem, String)>();
-            let notify = std::sync::Arc::new(tokio::sync::Notify::new());
-            let notify_rx = notify.clone();
+            let (svc_jh, svc_tx) = crate::runtime::timers::TimerService::start(self.history_store.clone(), Self::POLLER_IDLE_SLEEP_MS);
 
             // Intake task: keep pulling schedules and forwarding to service, then ack
             let intake_rt = self.clone();
-            let intake_tx = tx.clone();
+            let intake_tx = svc_tx.clone();
             tokio::spawn(async move {
                 loop {
                     if let Some((item, token)) = intake_rt.history_store.dequeue_peek_lock(QueueKind::Timer).await {
                         match item {
                             WorkItem::TimerSchedule { instance, execution_id, id, fire_at_ms } => {
-                                let _ = intake_tx.send((WorkItem::TimerSchedule { instance, execution_id, id, fire_at_ms }, token.clone()));
+                                let _ = intake_tx.send(WorkItem::TimerSchedule { instance, execution_id, id, fire_at_ms });
                                 let _ = intake_rt.history_store.ack(QueueKind::Timer, &token).await;
-                                notify_rx.notify_one();
                             }
                             other => {
                                 error!(?other, "unexpected WorkItem in Timer dispatcher; state corruption");
@@ -830,55 +826,8 @@ impl Runtime {
                     }
                 }
             });
-
-            // Service state structures
-            let mut min_heap: BinaryHeap<Reverse<(u64, String)>> = BinaryHeap::new();
-            let mut items: HashMap<String, (String, u64, u64)> = HashMap::new(); // key -> (instance, execution_id, id)
-            let mut keys: HashSet<String> = HashSet::new();
-
-            loop {
-                // Drain new schedules
-                while let Ok((WorkItem::TimerSchedule { instance, execution_id, id, fire_at_ms }, _t)) = rx.try_recv() {
-                    let key = format!("{}|{}|{}|{}", instance, execution_id, id, fire_at_ms);
-                    if keys.insert(key.clone()) {
-                        min_heap.push(Reverse((fire_at_ms, key.clone())));
-                        items.insert(key, (instance, execution_id, id));
-                    }
-                }
-
-                // Collect due timers
-                let now = Self::now_ms_static();
-                let mut due: Vec<(String, u64, u64, u64)> = Vec::new();
-                while let Some(Reverse((ts, key))) = min_heap.peek().cloned() {
-                    if ts <= now {
-                        let _ = min_heap.pop();
-                        if let Some((inst, exec, id)) = items.remove(&key) {
-                            keys.remove(&key);
-                            due.push((inst, exec, id, ts));
-                        }
-                    } else {
-                        break;
-                    }
-                }
-                for (instance, execution_id, id, fire_at_ms) in due.drain(..) {
-                    let _ = self.history_store.enqueue_work(
-                        QueueKind::Orchestrator,
-                        WorkItem::TimerFired { instance, execution_id, id, fire_at_ms }
-                    ).await;
-                }
-
-                // Sleep until next due or notification
-                if let Some(Reverse((next_ts, _))) = min_heap.peek().cloned() {
-                    let now = Self::now_ms_static();
-                    let dur = next_ts.saturating_sub(now).max(1);
-                    tokio::select! {
-                        _ = tokio::time::sleep(std::time::Duration::from_millis(dur)) => {},
-                        _ = notify.notified() => {},
-                    }
-                } else {
-                    notify.notified().await;
-                }
-            }
+            // Keep service join handle alive within dispatcher lifetime
+            let _ = svc_jh.await;
         })
     }
 
