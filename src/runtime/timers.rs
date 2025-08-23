@@ -14,14 +14,12 @@ pub struct TimerService {
     keys: HashSet<String>,
     min_heap: BinaryHeap<Reverse<(u64, String)>>,
     poller_idle_ms: u64,
-    gate_delay_ms: u64,
 }
 
 impl TimerService {
     pub fn start(
         store: Arc<dyn HistoryStore>,
         poller_idle_ms: u64,
-        gate_delay_ms: u64,
     ) -> (tokio::task::JoinHandle<()>, tokio::sync::mpsc::UnboundedSender<WorkItem>) {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<WorkItem>();
         let mut svc = TimerService {
@@ -31,7 +29,6 @@ impl TimerService {
             keys: HashSet::new(),
             min_heap: BinaryHeap::new(),
             poller_idle_ms,
-            gate_delay_ms,
         };
         let handle = tokio::spawn(async move { svc.run().await });
         (handle, tx)
@@ -41,13 +38,7 @@ impl TimerService {
         loop {
             // Drain any queued schedules
             while let Ok(item) = self.rx.try_recv() {
-                if let WorkItem::TimerSchedule { instance, execution_id, id, fire_at_ms } = item {
-                    let key = format!("{}|{}|{}|{}", instance, execution_id, id, fire_at_ms);
-                    if self.keys.insert(key.clone()) {
-                        self.min_heap.push(Reverse((fire_at_ms, key.clone())));
-                        self.items.insert(key, (instance, execution_id, id));
-                    }
-                }
+                self.insert_item(item);
             }
 
             // Fire due timers
@@ -64,10 +55,11 @@ impl TimerService {
                     break;
                 }
             }
-            // Bias external events slightly ahead of timer completions in close races
-            if !due.is_empty() && self.gate_delay_ms > 0 {
-                tokio::time::sleep(std::time::Duration::from_millis(self.gate_delay_ms)).await;
-            }
+
+            // // Bias external events slightly ahead of timers in close races
+            // if !due.is_empty() {
+            //     tokio::time::sleep(std::time::Duration::from_millis(3)).await;
+            // }
             for (instance, execution_id, id, fire_at_ms) in due.drain(..) {
                 let _ = self
                     .store
@@ -90,32 +82,28 @@ impl TimerService {
                 tokio::select! {
                     _ = tokio::time::sleep(std::time::Duration::from_millis(dur_ms)) => {},
                     maybe = self.rx.recv() => {
-                        if let Some(item) = maybe {
-                            if let WorkItem::TimerSchedule { instance, execution_id, id, fire_at_ms } = item {
-                                let key = format!("{}|{}|{}|{}", instance, execution_id, id, fire_at_ms);
-                                if self.keys.insert(key.clone()) {
-                                    self.min_heap.push(Reverse((fire_at_ms, key.clone())));
-                                    self.items.insert(key, (instance, execution_id, id));
-                                }
-                            }
-                        } else {
-                            // Channel closed; idle briefly to avoid tight loop
-                            tokio::time::sleep(std::time::Duration::from_millis(self.poller_idle_ms)).await;
+                        match maybe {
+                            Some(item) => self.insert_item(item),
+                            _ => tokio::time::sleep(std::time::Duration::from_millis(self.poller_idle_ms)).await,
                         }
                     }
                 }
             } else {
                 // No timers; block on next schedule
                 match self.rx.recv().await {
-                    Some(WorkItem::TimerSchedule { instance, execution_id, id, fire_at_ms }) => {
-                        let key = format!("{}|{}|{}|{}", instance, execution_id, id, fire_at_ms);
-                        if self.keys.insert(key.clone()) {
-                            self.min_heap.push(Reverse((fire_at_ms, key.clone())));
-                            self.items.insert(key, (instance, execution_id, id));
-                        }
-                    }
+                    Some(item) => self.insert_item(item),
                     _ => tokio::time::sleep(std::time::Duration::from_millis(self.poller_idle_ms)).await,
                 }
+            }
+        }
+    }
+
+    fn insert_item(&mut self, item: WorkItem) {
+        if let WorkItem::TimerSchedule { instance, execution_id, id, fire_at_ms } = item {
+            let key = format!("{}|{}|{}|{}", instance, execution_id, id, fire_at_ms);
+            if self.keys.insert(key.clone()) {
+                self.min_heap.push(Reverse((fire_at_ms, key.clone())));
+                self.items.insert(key, (instance, execution_id, id));
             }
         }
     }
@@ -137,7 +125,7 @@ mod tests {
     #[tokio::test]
     async fn fires_due_timers_in_order() {
         let store: Arc<dyn HistoryStore> = Arc::new(InMemoryHistoryStore::default());
-        let (_jh, tx) = TimerService::start(store.clone(), 5, 5);
+        let (_jh, tx) = TimerService::start(store.clone(), 5);
         // schedule three timers: immediate, +10ms, +5ms
         let now = now_ms();
         let _ = tx.send(WorkItem::TimerSchedule { instance: "i".into(), execution_id: 1, id: 1, fire_at_ms: now });

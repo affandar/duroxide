@@ -804,7 +804,6 @@ impl Runtime {
             let (svc_jh, svc_tx) = crate::runtime::timers::TimerService::start(
                 self.history_store.clone(),
                 Self::POLLER_IDLE_SLEEP_MS,
-                Self::POLLER_GATE_DELAY_MS,
             );
 
             // Intake task: keep pulling schedules and forwarding to service, then ack
