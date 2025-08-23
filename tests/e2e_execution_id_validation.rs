@@ -48,7 +48,7 @@ async fn old_execution_completions_are_ignored() {
         .unwrap();
 
     // Wait for the orchestration to complete (should complete via ContinueAsNew)
-    let (history, result) = handle.await.expect("orchestration should complete");
+    let (_history, result) = handle.await.expect("orchestration should complete");
     println!("First execution result: {:?}", result);
     
     // The first execution should complete successfully via ContinueAsNew

@@ -107,6 +107,7 @@ async fn timer_duplicate_workitems_dedup_fs() {
     // enqueue duplicate TimerFired for the same id
     let wi = WorkItem::TimerFired {
         instance: inst.to_string(),
+        execution_id: 1,
         id,
         fire_at_ms,
     };
@@ -190,6 +191,7 @@ async fn activity_duplicate_completion_workitems_dedup_fs() {
     // enqueue duplicate ActivityCompleted with result matching the worker to avoid mismatches
     let wi = WorkItem::ActivityCompleted {
         instance: inst.to_string(),
+        execution_id: 1,
         id,
         result: "x".to_string(),
     };

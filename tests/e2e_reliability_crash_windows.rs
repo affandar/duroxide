@@ -106,6 +106,7 @@ async fn crash_after_append_before_ack_timer_fs() {
     // Inject duplicate TimerFired simulating a crash after append-before-ack
     let wi = WorkItem::TimerFired {
         instance: inst.to_string(),
+        execution_id: 1,
         id,
         fire_at_ms,
     };
