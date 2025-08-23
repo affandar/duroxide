@@ -2,8 +2,8 @@
 // This test verifies that completions from old executions are properly ignored
 
 use rust_dtf::providers::HistoryStore;
-use rust_dtf::providers::{QueueKind, WorkItem};
 use rust_dtf::providers::fs::FsHistoryStore;
+use rust_dtf::providers::{QueueKind, WorkItem};
 use rust_dtf::runtime::registry::ActivityRegistry;
 use rust_dtf::runtime::{self};
 use rust_dtf::{OrchestrationContext, OrchestrationRegistry};
@@ -29,7 +29,9 @@ async fn old_execution_completions_are_ignored() {
         Ok("orchestration_complete".to_string())
     };
 
-    let reg = OrchestrationRegistry::builder().register("ExecutionIdTest", orch).build();
+    let reg = OrchestrationRegistry::builder()
+        .register("ExecutionIdTest", orch)
+        .build();
     let rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(activity_registry), reg).await;
 
     // Start the orchestration
@@ -49,7 +51,7 @@ async fn old_execution_completions_are_ignored() {
             WorkItem::ActivityCompleted {
                 instance: "inst-exec-test".to_string(),
                 execution_id: 0, // Old execution ID (current is 1)
-                id: 999, // Some activity ID
+                id: 999,         // Some activity ID
                 result: "old_execution_result".to_string(),
             },
         )
@@ -64,13 +66,16 @@ async fn old_execution_completions_are_ignored() {
         rust_dtf::Event::ActivityCompleted { result, .. } => result == "old_execution_result",
         _ => false,
     });
-    
-    assert!(!has_old_completion, "Old execution completion should be ignored due to execution ID mismatch");
-    
+
+    assert!(
+        !has_old_completion,
+        "Old execution completion should be ignored due to execution ID mismatch"
+    );
+
     println!("✓ Old execution completion was properly ignored due to execution ID validation");
 }
 
-#[tokio::test] 
+#[tokio::test]
 async fn future_execution_completions_are_ignored() {
     let td = tempfile::tempdir().unwrap();
     let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
@@ -83,7 +88,9 @@ async fn future_execution_completions_are_ignored() {
         Ok("completed".to_string())
     };
 
-    let reg = OrchestrationRegistry::builder().register("FutureExecTest", orch).build();
+    let reg = OrchestrationRegistry::builder()
+        .register("FutureExecTest", orch)
+        .build();
     let rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(activity_registry), reg).await;
 
     // Start the orchestration
@@ -118,8 +125,8 @@ async fn future_execution_completions_are_ignored() {
         rust_dtf::Event::ActivityCompleted { result, .. } => result == "future_completion",
         _ => false,
     });
-    
+
     assert!(!has_future_completion, "Future execution completion should be ignored");
-    
+
     println!("✓ Future execution completion was properly ignored");
 }

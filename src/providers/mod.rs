@@ -18,6 +18,7 @@ pub enum WorkItem {
     },
     ActivityExecute {
         instance: String,
+        execution_id: u64,
         id: u64,
         name: String,
         input: String,
@@ -36,6 +37,7 @@ pub enum WorkItem {
     },
     TimerSchedule {
         instance: String,
+        execution_id: u64,
         id: u64,
         fire_at_ms: u64,
     },

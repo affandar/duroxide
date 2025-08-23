@@ -24,12 +24,14 @@ pub async fn dispatch_call_activity(
     } else {
         debug!(instance, id, name=%name, "dispatch activity");
         // Enqueue provider-backed execution; WorkDispatcher will execute and enqueue completion/failure
+        let execution_id = rt.get_execution_id_for_instance(instance).await;
         let _ = rt
             .history_store
             .enqueue_work(
                 QueueKind::Worker,
                 WorkItem::ActivityExecute {
                     instance: instance.to_string(),
+                    execution_id,
                     id,
                     name,
                     input,
@@ -58,12 +60,14 @@ pub async fn dispatch_create_timer(rt: &Arc<Runtime>, instance: &str, history: &
         .unwrap_or(0);
     debug!(instance, id, fire_at_ms, delay_ms, "dispatch timer");
     // Enqueue provider-backed schedule; a TimerDispatcher can later materialize TimerFired
+    let execution_id = rt.get_execution_id_for_instance(instance).await;
     let _ = rt
         .history_store
         .enqueue_work(
             QueueKind::Timer,
             WorkItem::TimerSchedule {
                 instance: instance.to_string(),
+                execution_id,
                 id,
                 fire_at_ms,
             },

@@ -36,9 +36,9 @@ pub fn append_completion(history: &mut Vec<Event>, msg: OrchestratorMsg) -> (Opt
         }
         OrchestratorMsg::ActivityFailed {
             execution_id: _,
-            id, 
-            error, 
-            ack_token, 
+            id,
+            error,
+            ack_token,
             ..
         } => {
             if history
@@ -66,7 +66,7 @@ pub fn append_completion(history: &mut Vec<Event>, msg: OrchestratorMsg) -> (Opt
             history.push(Event::TimerFired { id, fire_at_ms });
             (ack_token, true)
         }
-        
+
         OrchestratorMsg::ExternalByName {
             name, data, ack_token, ..
         } => {
@@ -93,9 +93,9 @@ pub fn append_completion(history: &mut Vec<Event>, msg: OrchestratorMsg) -> (Opt
         }
         OrchestratorMsg::SubOrchCompleted {
             execution_id: _,
-            id, 
-            result, 
-            ack_token, 
+            id,
+            result,
+            ack_token,
             ..
         } => {
             if history
@@ -109,9 +109,9 @@ pub fn append_completion(history: &mut Vec<Event>, msg: OrchestratorMsg) -> (Opt
         }
         OrchestratorMsg::SubOrchFailed {
             execution_id: _,
-            id, 
-            error, 
-            ack_token, 
+            id,
+            error,
+            ack_token,
             ..
         } => {
             if history
@@ -146,6 +146,7 @@ pub async fn rehydrate_pending(instance: &str, history: &[Event], history_store:
                         QueueKind::Worker,
                         WorkItem::ActivityExecute {
                             instance: instance.to_string(),
+                            execution_id: 1, // best-effort during rehydration; orchestrator will validate on completion
                             id: *id,
                             name: name.clone(),
                             input: input.clone(),
@@ -160,6 +161,7 @@ pub async fn rehydrate_pending(instance: &str, history: &[Event], history_store:
                         QueueKind::Timer,
                         WorkItem::TimerSchedule {
                             instance: instance.to_string(),
+                            execution_id: 1, // best-effort during rehydration; orchestrator will validate on completion
                             id: *id,
                             fire_at_ms: *fire_at_ms,
                         },

@@ -2,8 +2,8 @@
 // This file consolidates all nondeterminism-related tests to verify the robust detection system
 
 use rust_dtf::providers::HistoryStore;
-use rust_dtf::providers::{QueueKind, WorkItem};
 use rust_dtf::providers::fs::FsHistoryStore;
+use rust_dtf::providers::{QueueKind, WorkItem};
 use rust_dtf::runtime::registry::ActivityRegistry;
 use rust_dtf::runtime::{self};
 use rust_dtf::{Event, OrchestrationContext, OrchestrationRegistry, OrchestrationStatus};
@@ -80,7 +80,8 @@ async fn code_swap_triggers_nondeterminism() {
             QueueKind::Timer,
             WorkItem::TimerSchedule {
                 instance: "inst-swap".to_string(),
-                id: 999, // Use a high ID that won't conflict with orchestration timers
+                execution_id: 1,
+                id: 999,       // Use a high ID that won't conflict with orchestration timers
                 fire_at_ms: 0, // Fire immediately
             },
         )
@@ -105,8 +106,8 @@ async fn completion_kind_mismatch_triggers_nondeterminism() {
     let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
 
     let activity_registry = ActivityRegistry::builder()
-        .register("TestActivity", |input: String| async move { 
-            Ok(format!("result:{}", input)) 
+        .register("TestActivity", |input: String| async move {
+            Ok(format!("result:{}", input))
         })
         .build();
 
@@ -118,7 +119,9 @@ async fn completion_kind_mismatch_triggers_nondeterminism() {
         Ok("timer_completed".to_string())
     };
 
-    let reg = OrchestrationRegistry::builder().register("KindMismatchTest", orch).build();
+    let reg = OrchestrationRegistry::builder()
+        .register("KindMismatchTest", orch)
+        .build();
     let rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(activity_registry), reg).await;
 
     // Start the orchestration
@@ -167,10 +170,10 @@ async fn completion_kind_mismatch_triggers_nondeterminism() {
         OrchestrationStatus::Failed { error } => {
             println!("Got expected error: {}", error);
             assert!(
-                error.contains("nondeterministic") && 
-                error.contains("kind mismatch") && 
-                error.contains("timer") && 
-                error.contains("activity"),
+                error.contains("nondeterministic")
+                    && error.contains("kind mismatch")
+                    && error.contains("timer")
+                    && error.contains("activity"),
                 "Expected nondeterminism error about kind mismatch between timer and activity, got: {error}"
             );
         }
@@ -184,8 +187,8 @@ async fn unexpected_completion_id_triggers_nondeterminism() {
     let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
 
     let activity_registry = ActivityRegistry::builder()
-        .register("TestActivity", |input: String| async move { 
-            Ok(format!("result:{}", input)) 
+        .register("TestActivity", |input: String| async move {
+            Ok(format!("result:{}", input))
         })
         .build();
 
@@ -195,7 +198,9 @@ async fn unexpected_completion_id_triggers_nondeterminism() {
         Ok("external_completed".to_string())
     };
 
-    let reg = OrchestrationRegistry::builder().register("UnexpectedIdTest", orch).build();
+    let reg = OrchestrationRegistry::builder()
+        .register("UnexpectedIdTest", orch)
+        .build();
     let rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(activity_registry), reg).await;
 
     // Start the orchestration
@@ -230,9 +235,7 @@ async fn unexpected_completion_id_triggers_nondeterminism() {
         OrchestrationStatus::Failed { error } => {
             println!("Got expected error: {}", error);
             assert!(
-                error.contains("nondeterministic") && 
-                error.contains("no matching schedule") && 
-                error.contains("999"),
+                error.contains("nondeterministic") && error.contains("no matching schedule") && error.contains("999"),
                 "Expected nondeterminism error about unexpected completion ID 999, got: {error}"
             );
         }

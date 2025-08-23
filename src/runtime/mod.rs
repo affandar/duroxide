@@ -274,9 +274,56 @@ impl Runtime {
         if let Some(&exec_id) = self.current_execution_ids.lock().await.get(instance) {
             return exec_id;
         }
-        
+
         // Fall back to querying the store
         self.history_store.latest_execution_id(instance).await.unwrap_or(1)
+    }
+
+    /// Common handler for orchestrator-queue items that target a specific instance.
+    /// Validates execution ID (if provided), ensures the instance is active (rehydrates) or
+    /// forwards the message to the in-proc router with the provided ack token.
+    async fn orchestrator_deliver_or_rehydrate<F>(
+        self: &Arc<Self>,
+        instance: &str,
+        exec_id_check: Option<u64>,
+        token: String,
+        build_msg: F,
+    ) where
+        F: FnOnce(String) -> OrchestratorMsg,
+    {
+        // Validate execution ID first (if provided)
+        if let Some(execution_id) = exec_id_check {
+            if !self.validate_completion_execution_id(instance, execution_id).await {
+                let _ = self.history_store.ack(QueueKind::Orchestrator, &token).await;
+                return;
+            }
+        }
+
+        // Ensure instance is active; if dehydrated, rehydrate and abandon for redelivery
+        if !self.router.inboxes.lock().await.contains_key(instance) {
+            let orch_name_opt = self.history_store.read(instance).await.iter().find_map(|e| match e {
+                Event::OrchestrationStarted { name, .. } => Some(name.clone()),
+                _ => None,
+            });
+            let orch_name = match orch_name_opt {
+                Some(n) => n,
+                None => {
+                    error!(
+                        instance,
+                        "rehydration requested but no OrchestrationStarted found; state corruption"
+                    );
+                    panic!("no OrchestrationStarted in history for instance");
+                }
+            };
+            self.ensure_instance_active(instance, &orch_name).await;
+            let _ = self.history_store.abandon(QueueKind::Orchestrator, &token).await;
+            tokio::time::sleep(std::time::Duration::from_millis(Self::POLLER_GATE_DELAY_MS)).await;
+            return;
+        }
+
+        // Active: forward with ack token
+        let msg = build_msg(token);
+        let _ = self.router_tx.send(msg);
     }
 
     /// Validate that a completion's execution_id matches the current running execution.
@@ -485,7 +532,6 @@ impl Runtime {
         runtime
     }
 
-    // TODO : HERE HERE HERE : continue simplifying
     fn start_orchestration_dispatcher(self: Arc<Self>) -> JoinHandle<()> {
         tokio::spawn(async move {
             loop {
@@ -501,67 +547,43 @@ impl Runtime {
                             }
                             let _ = self.history_store.ack(QueueKind::Orchestrator, &token).await;
                         }
-                        WorkItem::ActivityCompleted { instance, execution_id, id, result } => {
-                            // Validate execution ID first
-                            if !self.validate_completion_execution_id(&instance, execution_id).await {
-                                let _ = self.history_store.ack(QueueKind::Orchestrator, &token).await;
-                                continue;
-                            }
-                            
-                            if !self.router.inboxes.lock().await.contains_key(&instance) {
-                                let orch_name = self
-                                    .history_store
-                                    .read(&instance)
-                                    .await
-                                    .iter()
-                                    .find_map(|e| match e {
-                                        Event::OrchestrationStarted { name, .. } => Some(name.clone()),
-                                        _ => None,
-                                    })
-                                    .unwrap_or_default();
-                                self.ensure_instance_active(&instance, &orch_name).await;
-                                let _ = self.history_store.abandon(QueueKind::Orchestrator, &token).await;
-                                tokio::time::sleep(std::time::Duration::from_millis(Self::POLLER_GATE_DELAY_MS)).await;
-                            } else {
-                                let _ = self.router_tx.send(OrchestratorMsg::ActivityCompleted {
-                                    instance,
+                        WorkItem::ActivityCompleted {
+                            instance,
+                            execution_id,
+                            id,
+                            result,
+                        } => {
+                            self.orchestrator_deliver_or_rehydrate(&instance, Some(execution_id), token, {
+                                let instance_c = instance.clone();
+                                let result_c = result.clone();
+                                move |t| OrchestratorMsg::ActivityCompleted {
+                                    instance: instance_c,
                                     execution_id,
                                     id,
-                                    result,
-                                    ack_token: Some(token),
-                                });
-                            }
+                                    result: result_c,
+                                    ack_token: Some(t),
+                                }
+                            })
+                            .await;
                         }
-                        WorkItem::ActivityFailed { instance, execution_id, id, error } => {
-                            // Validate execution ID first
-                            if !self.validate_completion_execution_id(&instance, execution_id).await {
-                                let _ = self.history_store.ack(QueueKind::Orchestrator, &token).await;
-                                continue;
-                            }
-                            
-                            if !self.router.inboxes.lock().await.contains_key(&instance) {
-                                let orch_name = self
-                                    .history_store
-                                    .read(&instance)
-                                    .await
-                                    .iter()
-                                    .find_map(|e| match e {
-                                        Event::OrchestrationStarted { name, .. } => Some(name.clone()),
-                                        _ => None,
-                                    })
-                                    .unwrap_or_default();
-                                self.ensure_instance_active(&instance, &orch_name).await;
-                                let _ = self.history_store.abandon(QueueKind::Orchestrator, &token).await;
-                                tokio::time::sleep(std::time::Duration::from_millis(Self::POLLER_GATE_DELAY_MS)).await;
-                            } else {
-                                let _ = self.router_tx.send(OrchestratorMsg::ActivityFailed {
-                                    instance,
+                        WorkItem::ActivityFailed {
+                            instance,
+                            execution_id,
+                            id,
+                            error,
+                        } => {
+                            self.orchestrator_deliver_or_rehydrate(&instance, Some(execution_id), token, {
+                                let instance_c = instance.clone();
+                                let error_c = error.clone();
+                                move |t| OrchestratorMsg::ActivityFailed {
+                                    instance: instance_c,
                                     execution_id,
                                     id,
-                                    error,
-                                    ack_token: Some(token),
-                                });
-                            }
+                                    error: error_c,
+                                    ack_token: Some(t),
+                                }
+                            })
+                            .await;
                         }
                         WorkItem::TimerFired {
                             instance,
@@ -569,65 +591,32 @@ impl Runtime {
                             id,
                             fire_at_ms,
                         } => {
-                            // Validate execution ID first
-                            if !self.validate_completion_execution_id(&instance, execution_id).await {
-                                let _ = self.history_store.ack(QueueKind::Orchestrator, &token).await;
-                                continue;
-                            }
-                            
-                            if !self.router.inboxes.lock().await.contains_key(&instance) {
-                                let orch_name = self
-                                    .history_store
-                                    .read(&instance)
-                                    .await
-                                    .iter()
-                                    .find_map(|e| match e {
-                                        Event::OrchestrationStarted { name, .. } => Some(name.clone()),
-                                        _ => None,
-                                    })
-                                    .unwrap_or_default();
-                                self.ensure_instance_active(&instance, &orch_name).await;
-                                let _ = self.history_store.abandon(QueueKind::Orchestrator, &token).await;
-                                tokio::time::sleep(std::time::Duration::from_millis(Self::POLLER_GATE_DELAY_MS)).await;
-                            } else {
-                                let _ = self.router_tx.send(OrchestratorMsg::TimerFired {
-                                    instance,
+                            self.orchestrator_deliver_or_rehydrate(&instance, Some(execution_id), token, {
+                                let instance_c = instance.clone();
+                                move |t| OrchestratorMsg::TimerFired {
+                                    instance: instance_c,
                                     execution_id,
                                     id,
                                     fire_at_ms,
-                                    ack_token: Some(token),
-                                });
-                            }
+                                    ack_token: Some(t),
+                                }
+                            })
+                            .await;
                         }
-                        WorkItem::TimerSchedule { .. } => {
-                            // Let WorkDispatcher handle
-                            let _ = self.history_store.abandon(QueueKind::Orchestrator, &token).await;
-                            tokio::time::sleep(std::time::Duration::from_millis(Self::POLLER_GATE_DELAY_MS)).await;
-                        }
+                        // No TimerSchedule should land on Orchestrator queue
                         WorkItem::ExternalRaised { instance, name, data } => {
-                            // If no inbox yet (dehydrated), re-enqueue start and abandon so this is redelivered
-                            if !self.router.inboxes.lock().await.contains_key(&instance) {
-                                let orch_name = self
-                                    .history_store
-                                    .read(&instance)
-                                    .await
-                                    .iter()
-                                    .find_map(|e| match e {
-                                        Event::OrchestrationStarted { name, .. } => Some(name.clone()),
-                                        _ => None,
-                                    })
-                                    .unwrap_or_default();
-                                self.ensure_instance_active(&instance, &orch_name).await;
-                                let _ = self.history_store.abandon(QueueKind::Orchestrator, &token).await;
-                                tokio::time::sleep(std::time::Duration::from_millis(Self::POLLER_GATE_DELAY_MS)).await;
-                            } else {
-                                let _ = self.router_tx.send(OrchestratorMsg::ExternalByName {
-                                    instance,
-                                    name,
-                                    data,
-                                    ack_token: Some(token),
-                                });
-                            }
+                            self.orchestrator_deliver_or_rehydrate(&instance, None, token, {
+                                let instance_c = instance.clone();
+                                let name_c = name.clone();
+                                let data_c = data.clone();
+                                move |t| OrchestratorMsg::ExternalByName {
+                                    instance: instance_c,
+                                    name: name_c,
+                                    data: data_c,
+                                    ack_token: Some(t),
+                                }
+                            })
+                            .await;
                         }
                         WorkItem::SubOrchCompleted {
                             parent_instance,
@@ -635,35 +624,17 @@ impl Runtime {
                             parent_id,
                             result,
                         } => {
-                            // Validate execution ID first
-                            if !self.validate_completion_execution_id(&parent_instance, parent_execution_id).await {
-                                let _ = self.history_store.ack(QueueKind::Orchestrator, &token).await;
-                                continue;
-                            }
-                            
-                            if !self.router.inboxes.lock().await.contains_key(&parent_instance) {
-                                let orch_name = self
-                                    .history_store
-                                    .read(&parent_instance)
-                                    .await
-                                    .iter()
-                                    .find_map(|e| match e {
-                                        Event::OrchestrationStarted { name, .. } => Some(name.clone()),
-                                        _ => None,
-                                    })
-                                    .unwrap_or_default();
-                                self.ensure_instance_active(&parent_instance, &orch_name).await;
-                                let _ = self.history_store.abandon(QueueKind::Orchestrator, &token).await;
-                                tokio::time::sleep(std::time::Duration::from_millis(Self::POLLER_GATE_DELAY_MS)).await;
-                            } else {
-                                let _ = self.router_tx.send(OrchestratorMsg::SubOrchCompleted {
+                            let inst = parent_instance.clone();
+                            self.orchestrator_deliver_or_rehydrate(&inst, Some(parent_execution_id), token, move |t| {
+                                OrchestratorMsg::SubOrchCompleted {
                                     instance: parent_instance,
                                     execution_id: parent_execution_id,
                                     id: parent_id,
                                     result,
-                                    ack_token: Some(token),
-                                });
-                            }
+                                    ack_token: Some(t),
+                                }
+                            })
+                            .await;
                         }
                         WorkItem::SubOrchFailed {
                             parent_instance,
@@ -671,35 +642,17 @@ impl Runtime {
                             parent_id,
                             error,
                         } => {
-                            // Validate execution ID first
-                            if !self.validate_completion_execution_id(&parent_instance, parent_execution_id).await {
-                                let _ = self.history_store.ack(QueueKind::Orchestrator, &token).await;
-                                continue;
-                            }
-                            
-                            if !self.router.inboxes.lock().await.contains_key(&parent_instance) {
-                                let orch_name = self
-                                    .history_store
-                                    .read(&parent_instance)
-                                    .await
-                                    .iter()
-                                    .find_map(|e| match e {
-                                        Event::OrchestrationStarted { name, .. } => Some(name.clone()),
-                                        _ => None,
-                                    })
-                                    .unwrap_or_default();
-                                self.ensure_instance_active(&parent_instance, &orch_name).await;
-                                let _ = self.history_store.abandon(QueueKind::Orchestrator, &token).await;
-                                tokio::time::sleep(std::time::Duration::from_millis(Self::POLLER_GATE_DELAY_MS)).await;
-                            } else {
-                                let _ = self.router_tx.send(OrchestratorMsg::SubOrchFailed {
+                            let inst = parent_instance.clone();
+                            self.orchestrator_deliver_or_rehydrate(&inst, Some(parent_execution_id), token, move |t| {
+                                OrchestratorMsg::SubOrchFailed {
                                     instance: parent_instance,
                                     execution_id: parent_execution_id,
                                     id: parent_id,
                                     error,
-                                    ack_token: Some(token),
-                                });
-                            }
+                                    ack_token: Some(t),
+                                }
+                            })
+                            .await;
                         }
                         WorkItem::CancelInstance { instance, reason } => {
                             // Attempt to deliver; if inbox missing or dropped, rehydrate by enqueuing a start
@@ -713,25 +666,33 @@ impl Runtime {
                                 .await
                                 .is_err()
                             {
-                                let orch_name = self
-                                    .history_store
-                                    .read(&instance)
-                                    .await
-                                    .iter()
-                                    .find_map(|e| match e {
+                                let orch_name_opt =
+                                    self.history_store.read(&instance).await.iter().find_map(|e| match e {
                                         Event::OrchestrationStarted { name, .. } => Some(name.clone()),
                                         _ => None,
-                                    })
-                                    .unwrap_or_default();
+                                    });
+                                let orch_name = match orch_name_opt {
+                                    Some(n) => n,
+                                    None => {
+                                        error!(
+                                            instance,
+                                            "rehydration requested but no OrchestrationStarted found; state corruption"
+                                        );
+                                        panic!("no OrchestrationStarted in history for instance");
+                                    }
+                                };
                                 self.ensure_instance_active(&instance, &orch_name).await;
                                 let _ = self.history_store.abandon(QueueKind::Orchestrator, &token).await;
                                 tokio::time::sleep(std::time::Duration::from_millis(Self::POLLER_GATE_DELAY_MS)).await;
                             }
                         }
-                        WorkItem::ActivityExecute { .. } => {
-                            // Misrouted; abandon and let Worker dispatcher handle
-                            let _ = self.history_store.abandon(QueueKind::Orchestrator, &token).await;
-                            tokio::time::sleep(std::time::Duration::from_millis(Self::POLLER_GATE_DELAY_MS)).await;
+                        // No ActivityExecute should land on Orchestrator queue
+                        other => {
+                            error!(
+                                ?other,
+                                "unexpected WorkItem in Orchestrator dispatcher; state corruption"
+                            );
+                            panic!("unexpected WorkItem in Orchestrator dispatcher");
                         }
                     }
                 } else {
@@ -749,6 +710,7 @@ impl Runtime {
                     match item {
                         WorkItem::ActivityExecute {
                             instance,
+                            execution_id,
                             id,
                             name,
                             input,
@@ -757,22 +719,20 @@ impl Runtime {
                             if let Some(handler) = activities.get(&name) {
                                 match handler.invoke(input).await {
                                     Ok(result) => {
-                                                                                let execution_id = self.get_execution_id_for_instance(&instance).await;
                                         let _ = self
                                             .history_store
                                             .enqueue_work(
-                                QueueKind::Orchestrator,
-                                WorkItem::ActivityCompleted {
-                                    instance: instance.clone(),
-                                    execution_id,
-                                    id,
-                                    result,
-                                },
-                            )
+                                                QueueKind::Orchestrator,
+                                                WorkItem::ActivityCompleted {
+                                                    instance: instance.clone(),
+                                                    execution_id,
+                                                    id,
+                                                    result,
+                                                },
+                                            )
                                             .await;
                                     }
                                     Err(error) => {
-                                        let execution_id = self.get_execution_id_for_instance(&instance).await;
                                         let _ = self
                                             .history_store
                                             .enqueue_work(
@@ -788,26 +748,24 @@ impl Runtime {
                                     }
                                 }
                             } else {
-                                                                let execution_id = self.get_execution_id_for_instance(&instance).await;
                                 let _ = self
                                     .history_store
                                     .enqueue_work(
-                        QueueKind::Orchestrator,
-                        WorkItem::ActivityFailed {
-                            instance: instance.clone(),
-                            execution_id,
-                            id,
-                            error: format!("unregistered:{}", name),
-                        },
-                    )
+                                        QueueKind::Orchestrator,
+                                        WorkItem::ActivityFailed {
+                                            instance: instance.clone(),
+                                            execution_id,
+                                            id,
+                                            error: format!("unregistered:{}", name),
+                                        },
+                                    )
                                     .await;
                             }
                             let _ = self.history_store.ack(QueueKind::Worker, &token).await;
                         }
-                        _other => {
-                            // Not our kind; abandon so other dispatcher can handle
-                            let _ = self.history_store.abandon(QueueKind::Worker, &token).await;
-                            tokio::time::sleep(std::time::Duration::from_millis(Self::POLLER_GATE_DELAY_MS)).await;
+                        other => {
+                            error!(?other, "unexpected WorkItem in Worker dispatcher; state corruption");
+                            panic!("unexpected WorkItem in Worker dispatcher");
                         }
                     }
                 } else {
@@ -824,6 +782,7 @@ impl Runtime {
                     match item {
                         WorkItem::TimerSchedule {
                             instance,
+                            execution_id,
                             id,
                             fire_at_ms,
                         } => {
@@ -831,30 +790,27 @@ impl Runtime {
                             let now = Self::now_ms_static();
                             let delay = fire_at_ms.saturating_sub(now);
                             let store = self.history_store.clone();
-                            let rt = self.clone();
                             tokio::spawn(async move {
                                 tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
                                 // Small slack to bias external events ahead of timer in close races
                                 tokio::time::sleep(std::time::Duration::from_millis(Self::POLLER_GATE_DELAY_MS)).await;
-                                                                let execution_id = rt.get_execution_id_for_instance(&instance).await;
                                 let _ = store
                                     .enqueue_work(
-                        QueueKind::Orchestrator,
-                        WorkItem::TimerFired {
-                            instance,
-                            execution_id,
-                            id,
-                            fire_at_ms,
-                        },
-                    )
+                                        QueueKind::Orchestrator,
+                                        WorkItem::TimerFired {
+                                            instance,
+                                            execution_id,
+                                            id,
+                                            fire_at_ms,
+                                        },
+                                    )
                                     .await;
                             });
                             let _ = self.history_store.ack(QueueKind::Timer, &token).await;
                         }
-                        _other => {
-                            // Not our kind; abandon so other dispatcher can handle
-                            let _ = self.history_store.abandon(QueueKind::Timer, &token).await;
-                            tokio::time::sleep(std::time::Duration::from_millis(Self::POLLER_GATE_DELAY_MS)).await;
+                        other => {
+                            error!(?other, "unexpected WorkItem in Timer dispatcher; state corruption");
+                            panic!("unexpected WorkItem in Timer dispatcher");
                         }
                     }
                 } else {
@@ -921,10 +877,13 @@ impl Runtime {
         // Load existing history from store (now exists). For ContinueAsNew we may start with a
         // fresh execution that only has OrchestrationStarted; we always want the latest execution.
         let mut history: Vec<Event> = self.history_store.read(instance).await;
-        
+
         // Track the current execution ID for this instance
         let current_execution_id = self.history_store.latest_execution_id(instance).await.unwrap_or(1);
-        self.current_execution_ids.lock().await.insert(instance.to_string(), current_execution_id);
+        self.current_execution_ids
+            .lock()
+            .await
+            .insert(instance.to_string(), current_execution_id);
         // Pin version from history if present for this orchestration; ignore placeholder "0.0.0"
         if let Some(ver_str) = history.iter().rev().find_map(|e| match e {
             Event::OrchestrationStarted { name: n, version, .. } if n == orchestration_name => Some(version.clone()),
