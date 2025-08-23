@@ -702,7 +702,6 @@ impl Runtime {
         })
     }
 
-    // TODO : HERE HERE HERE : continue simplifying
     fn start_work_dispatcher(self: Arc<Self>, activities: Arc<registry::ActivityRegistry>) -> JoinHandle<()> {
         tokio::spawn(async move {
             loop {
@@ -782,16 +781,11 @@ impl Runtime {
                     if let Some((item, token)) = self.history_store.dequeue_peek_lock(QueueKind::Timer).await {
                         match item {
                             WorkItem::TimerSchedule { instance, execution_id, id, fire_at_ms } => {
-                                let now = Self::now_ms_static();
-                                let delay = fire_at_ms.saturating_sub(now);
-                                let store = self.history_store.clone();
-                                tokio::spawn(async move {
-                                    tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
-                                    let _ = store.enqueue_work(
-                                        QueueKind::Orchestrator,
-                                        WorkItem::TimerFired { instance, execution_id, id, fire_at_ms }
-                                    ).await;
-                                });
+                                // Provider supports delayed visibility: enqueue TimerFired with fire_at_ms and let provider deliver when due
+                                let _ = self.history_store.enqueue_work(
+                                    QueueKind::Orchestrator,
+                                    WorkItem::TimerFired { instance, execution_id, id, fire_at_ms }
+                                ).await;
                                 let _ = self.history_store.ack(QueueKind::Timer, &token).await;
                             }
                             other => {
