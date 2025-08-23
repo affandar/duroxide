@@ -61,31 +61,28 @@ pub use crate::runtime::registry::{OrchestrationRegistry, OrchestrationRegistryB
 
 // Legacy VersionedOrchestrationRegistry removed; use OrchestrationRegistry instead
 
-/// Work item enqueued to the activity worker.
-#[derive(Clone)]
-pub struct ActivityWorkItem { pub instance: String, pub id: u64, pub name: String, pub input: String }
+// ActivityWorkItem removed; activities are executed by WorkDispatcher via provider queues
 
 // TimerWorkItem no longer used; timers flow via provider-backed queues
 
-pub use router::{CompletionRouter, OrchestratorMsg, StartRequest};
+pub use router::{InstanceRouter, OrchestratorMsg};
 
 /// In-process runtime that executes activities and timers and persists
 /// history via a `HistoryStore`. 
 pub struct Runtime {
-    activity_tx: mpsc::Sender<ActivityWorkItem>,
+    // removed: in-proc activity channel
     router_tx: mpsc::UnboundedSender<OrchestratorMsg>,
-    router: Arc<CompletionRouter>,
+    router: Arc<InstanceRouter>,
     joins: Mutex<Vec<JoinHandle<()>>>,
     instance_joins: Mutex<Vec<JoinHandle<()>>>,
     history_store: Arc<dyn HistoryStore>,
     active_instances: Mutex<HashSet<String>>,
-    pending_starts: Mutex<HashSet<String>>,
+    // pending_starts removed
     result_waiters: Mutex<HashMap<String, Vec<oneshot::Sender<(Vec<Event>, Result<String, String>)>>>>,
     orchestration_registry: OrchestrationRegistry,
     // Pinned versions for instances started in this runtime (in-memory for now)
     pinned_versions: Mutex<HashMap<String, Version>>,
-    // queue for start requests so callers only enqueue and runtime manages execution
-    start_tx: mpsc::UnboundedSender<StartRequest>,
+    // StartRequest layer removed; instances are activated directly
 }
 
 /// Introspection: descriptor of an orchestration derived from history.
@@ -144,10 +141,18 @@ impl Runtime {
     }
     // Associated constants for runtime behavior
     const COMPLETION_BATCH_LIMIT: usize = 128;
-    const REENQUEUE_DELAY_MS: u64 = 5;
     const POLLER_GATE_DELAY_MS: u64 = 5;
     const POLLER_IDLE_SLEEP_MS: u64 = 10;
     const ORCH_IDLE_DEHYDRATE_MS: u64 = 1000;
+
+    async fn ensure_instance_active(self: &Arc<Self>, instance: &str, orchestration_name: &str) -> bool {
+        if self.active_instances.lock().await.contains(instance) { return false; }
+        let inner = self.clone().spawn_instance_to_completion(instance, orchestration_name);
+        // Wrap to normalize handle type to JoinHandle<()>
+        let wrapper = tokio::spawn(async move { let _ = inner.await; });
+        self.instance_joins.lock().await.push(wrapper);
+        true
+    }
     async fn start_internal_rx(
         self: Arc<Self>,
         instance: &str,
@@ -196,7 +201,7 @@ impl Runtime {
             warn!(instance, "instance already has history; duplicate start accepted (deduped)");
         }
         // Enqueue a start request; background worker will dedupe and run exactly one execution
-        let _ = self.start_tx.send(StartRequest { instance: instance.to_string(), orchestration_name: orchestration_name.to_string() });
+        self.ensure_instance_active(instance, orchestration_name).await;
         // Register a oneshot waiter for string result
         let (tx, rx) = oneshot::channel::<(Vec<Event>, Result<String, String>)>();
         self
@@ -286,9 +291,8 @@ impl Runtime {
             .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
             .try_init();
 
-        let (activity_tx, _activity_rx) = mpsc::channel::<ActivityWorkItem>(512);
         let (router_tx, mut router_rx) = mpsc::unbounded_channel::<OrchestratorMsg>();
-        let router = Arc::new(CompletionRouter { inboxes: Mutex::new(HashMap::new()) });
+        let router = Arc::new(InstanceRouter { inboxes: Mutex::new(HashMap::new()) });
         let mut joins: Vec<JoinHandle<()>> = Vec::new();
 
 
@@ -301,41 +305,7 @@ impl Runtime {
         }));
 
         // start request queue + worker
-        let (start_tx, mut start_rx) = mpsc::unbounded_channel::<StartRequest>();
-
-        let runtime = Arc::new(Self { activity_tx, router_tx, router, joins: Mutex::new(joins), instance_joins: Mutex::new(Vec::new()), history_store, active_instances: Mutex::new(HashSet::new()), pending_starts: Mutex::new(HashSet::new()), result_waiters: Mutex::new(HashMap::new()), orchestration_registry, start_tx, pinned_versions: Mutex::new(HashMap::new()) });
-
-        // background worker to process start requests
-        let rt_for_worker = runtime.clone();
-        let worker = tokio::spawn(async move {
-            while let Some(req) = start_rx.recv().await {
-                let inst = req.instance.clone();
-                let orch = req.orchestration_name.clone();
-                // If already active, re-enqueue shortly to allow previous execution to release the guard (e.g., ContinueAsNew)
-                if rt_for_worker.active_instances.lock().await.contains(&inst) {
-                    let tx = rt_for_worker.start_tx.clone();
-                    tokio::spawn(async move {
-                        tokio::time::sleep(std::time::Duration::from_millis(Self::REENQUEUE_DELAY_MS)).await;
-                        let _ = tx.send(StartRequest { instance: inst, orchestration_name: orch });
-                    });
-                    continue;
-                }
-                // Deduplicate: skip if already pending
-                {
-                    let mut pend = rt_for_worker.pending_starts.lock().await;
-                    if pend.contains(&req.instance) {
-                        warn!(instance=%req.instance, orchestration=%req.orchestration_name, "start worker: duplicate start suppressed (pending)");
-                        continue;
-                    }
-                    pend.insert(req.instance.clone());
-                }
-                // Spawn to completion without awaiting so we can process more starts
-                let _handle = rt_for_worker.clone().spawn_instance_to_completion(&req.instance, &req.orchestration_name);
-                // Clear pending flag immediately; active guard prevents double-run
-                rt_for_worker.pending_starts.lock().await.remove(&req.instance);
-            }
-        });
-        runtime.joins.lock().await.push(worker);
+        let runtime = Arc::new(Self { router_tx, router, joins: Mutex::new(joins), instance_joins: Mutex::new(Vec::new()), history_store, active_instances: Mutex::new(HashSet::new()), result_waiters: Mutex::new(HashMap::new()), orchestration_registry, pinned_versions: Mutex::new(HashMap::new()) });
 
         // background orchestrator dispatcher (extracted from inline poller)
         let handle = runtime.clone().start_orchestration_dispatcher();
@@ -363,7 +333,7 @@ impl Runtime {
                 if let Some(name) = orchestration_name_opt {
                     let is_terminal = hist.iter().rev().any(|e| matches!(e, Event::OrchestrationCompleted { .. } | Event::OrchestrationFailed { .. }));
                     if !is_terminal {
-                        let _ = self.start_tx.send(StartRequest { instance: inst.clone(), orchestration_name: name });
+                        self.ensure_instance_active(&inst, &name).await;
                     }
                 }
             }
@@ -386,7 +356,7 @@ impl Runtime {
                         WorkItem::ActivityCompleted { instance, id, result } => {
                             if !self.router.inboxes.lock().await.contains_key(&instance) {
                                 let orch_name = self.history_store.read(&instance).await.iter().find_map(|e| match e { Event::OrchestrationStarted { name, .. } => Some(name.clone()), _ => None }).unwrap_or_default();
-                                let _ = self.start_tx.send(StartRequest { instance: instance.clone(), orchestration_name: orch_name });
+                                self.ensure_instance_active(&instance, &orch_name).await;
                                 let _ = self.history_store.abandon(QueueKind::Orchestrator, &token).await;
                                 tokio::time::sleep(std::time::Duration::from_millis(Self::POLLER_GATE_DELAY_MS)).await;
                             } else {
@@ -396,7 +366,7 @@ impl Runtime {
                         WorkItem::ActivityFailed { instance, id, error } => {
                             if !self.router.inboxes.lock().await.contains_key(&instance) {
                                 let orch_name = self.history_store.read(&instance).await.iter().find_map(|e| match e { Event::OrchestrationStarted { name, .. } => Some(name.clone()), _ => None }).unwrap_or_default();
-                                let _ = self.start_tx.send(StartRequest { instance: instance.clone(), orchestration_name: orch_name });
+                                self.ensure_instance_active(&instance, &orch_name).await;
                                 let _ = self.history_store.abandon(QueueKind::Orchestrator, &token).await;
                                 tokio::time::sleep(std::time::Duration::from_millis(Self::POLLER_GATE_DELAY_MS)).await;
                             } else {
@@ -406,7 +376,7 @@ impl Runtime {
                         WorkItem::TimerFired { instance, id, fire_at_ms } => {
                             if !self.router.inboxes.lock().await.contains_key(&instance) {
                                 let orch_name = self.history_store.read(&instance).await.iter().find_map(|e| match e { Event::OrchestrationStarted { name, .. } => Some(name.clone()), _ => None }).unwrap_or_default();
-                                let _ = self.start_tx.send(StartRequest { instance: instance.clone(), orchestration_name: orch_name });
+                                self.ensure_instance_active(&instance, &orch_name).await;
                                 let _ = self.history_store.abandon(QueueKind::Orchestrator, &token).await;
                                 tokio::time::sleep(std::time::Duration::from_millis(Self::POLLER_GATE_DELAY_MS)).await;
                             } else {
@@ -421,7 +391,8 @@ impl Runtime {
                         WorkItem::ExternalRaised { instance, name, data } => {
                             // If no inbox yet (dehydrated), re-enqueue start and abandon so this is redelivered
                             if !self.router.inboxes.lock().await.contains_key(&instance) {
-                                let _ = self.start_tx.send(StartRequest { instance: instance.clone(), orchestration_name: self.history_store.read(&instance).await.iter().find_map(|e| match e { Event::OrchestrationStarted { name, .. } => Some(name.clone()), _ => None }).unwrap_or_default() });
+                                let orch_name = self.history_store.read(&instance).await.iter().find_map(|e| match e { Event::OrchestrationStarted { name, .. } => Some(name.clone()), _ => None }).unwrap_or_default();
+                                self.ensure_instance_active(&instance, &orch_name).await;
                                 let _ = self.history_store.abandon(QueueKind::Orchestrator, &token).await;
                                 tokio::time::sleep(std::time::Duration::from_millis(Self::POLLER_GATE_DELAY_MS)).await;
                             } else {
@@ -431,7 +402,7 @@ impl Runtime {
                         WorkItem::SubOrchCompleted { parent_instance, parent_id, result } => {
                             if !self.router.inboxes.lock().await.contains_key(&parent_instance) {
                                 let orch_name = self.history_store.read(&parent_instance).await.iter().find_map(|e| match e { Event::OrchestrationStarted { name, .. } => Some(name.clone()), _ => None }).unwrap_or_default();
-                                let _ = self.start_tx.send(StartRequest { instance: parent_instance.clone(), orchestration_name: orch_name });
+                                self.ensure_instance_active(&parent_instance, &orch_name).await;
                                 let _ = self.history_store.abandon(QueueKind::Orchestrator, &token).await;
                                 tokio::time::sleep(std::time::Duration::from_millis(Self::POLLER_GATE_DELAY_MS)).await;
                             } else {
@@ -441,7 +412,7 @@ impl Runtime {
                         WorkItem::SubOrchFailed { parent_instance, parent_id, error } => {
                             if !self.router.inboxes.lock().await.contains_key(&parent_instance) {
                                 let orch_name = self.history_store.read(&parent_instance).await.iter().find_map(|e| match e { Event::OrchestrationStarted { name, .. } => Some(name.clone()), _ => None }).unwrap_or_default();
-                                let _ = self.start_tx.send(StartRequest { instance: parent_instance.clone(), orchestration_name: orch_name });
+                                self.ensure_instance_active(&parent_instance, &orch_name).await;
                                 let _ = self.history_store.abandon(QueueKind::Orchestrator, &token).await;
                                 tokio::time::sleep(std::time::Duration::from_millis(Self::POLLER_GATE_DELAY_MS)).await;
                             } else {
@@ -452,14 +423,15 @@ impl Runtime {
                             // Attempt to deliver; if inbox missing or dropped, rehydrate by enqueuing a start
                             if self.router.try_send(OrchestratorMsg::CancelRequested { instance: instance.clone(), reason: reason.clone(), ack_token: Some(token.clone()) }).await.is_err() {
                                 let orch_name = self.history_store.read(&instance).await.iter().find_map(|e| match e { Event::OrchestrationStarted { name, .. } => Some(name.clone()), _ => None }).unwrap_or_default();
-                                let _ = self.start_tx.send(StartRequest { instance: instance.clone(), orchestration_name: orch_name });
+                                self.ensure_instance_active(&instance, &orch_name).await;
                                 let _ = self.history_store.abandon(QueueKind::Orchestrator, &token).await;
                                 tokio::time::sleep(std::time::Duration::from_millis(Self::POLLER_GATE_DELAY_MS)).await;
                             }
                         }
-                        WorkItem::ActivityExecute { instance, id, name, input } => {
-                            let _ = self.activity_tx.send(ActivityWorkItem { instance, id, name, input }).await;
-                            let _ = self.history_store.ack(QueueKind::Orchestrator, &token).await;
+                        WorkItem::ActivityExecute { .. } => {
+                            // Misrouted; abandon and let Worker dispatcher handle
+                            let _ = self.history_store.abandon(QueueKind::Orchestrator, &token).await;
+                            tokio::time::sleep(std::time::Duration::from_millis(Self::POLLER_GATE_DELAY_MS)).await;
                         }
                     }
                 } else {
@@ -561,8 +533,7 @@ impl Runtime {
         {
             let mut act = self.active_instances.lock().await;
             if !act.insert(instance.to_string()) {
-                // Already active: re-enqueue and bail out gracefully
-                let _ = self.start_tx.send(StartRequest { instance: instance.to_string(), orchestration_name: orchestration_name.to_string() });
+                // Already active: bail out gracefully
                 return (Vec::new(), Err("already_active".into()));
             }
         }
@@ -597,7 +568,7 @@ impl Runtime {
 
         // TODO : activities should be renqueued at the end of the turn?
         // Rehydrate pending activities and timers from history
-        completions::rehydrate_pending(instance, &history, &self.activity_tx, &self.history_store).await;
+        completions::rehydrate_pending(instance, &history, &self.history_store).await;
 
         // Capture input and parent linkage from the most recent OrchestrationStarted for this orchestration
         let mut current_input: String = String::new();

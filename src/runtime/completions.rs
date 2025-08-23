@@ -73,11 +73,11 @@ pub fn append_completion(history: &mut Vec<Event>, msg: OrchestratorMsg) -> (Opt
     }
 }
 
-pub async fn rehydrate_pending(instance: &str, history: &[Event], activity_tx: &tokio::sync::mpsc::Sender<super::ActivityWorkItem>, history_store: &Arc<dyn HistoryStore>) {
+pub async fn rehydrate_pending(instance: &str, history: &[Event], history_store: &Arc<dyn HistoryStore>) {
     for e in history {
         match e {
             Event::ActivityScheduled { id, name, input } => {
-                let _ = activity_tx.send(super::ActivityWorkItem { instance: instance.to_string(), id: *id, name: name.clone(), input: input.clone() }).await;
+                let _ = history_store.enqueue_work(QueueKind::Worker, WorkItem::ActivityExecute { instance: instance.to_string(), id: *id, name: name.clone(), input: input.clone() }).await;
             }
             Event::TimerCreated { id, fire_at_ms } => {
                 // Enqueue a schedule request; TimerDispatcher will deliver TimerFired after delay
@@ -91,7 +91,7 @@ pub async fn rehydrate_pending(instance: &str, history: &[Event], activity_tx: &
 
 impl super::Runtime {
     pub(crate) async fn handle_continue_as_new(
-        &self,
+        self: &std::sync::Arc<Self>,
         instance: &str,
         orchestration_name: &str,
         history: &mut Vec<Event>,
@@ -136,7 +136,13 @@ impl super::Runtime {
         }
         let _new_exec = self.history_store.reset_for_continue_as_new(instance, &orch_name, &target_version_str, &input, parent_instance.as_deref(), parent_id).await
             .unwrap_or(1);
-        let _ = self.start_tx.send(super::StartRequest { instance: instance.to_string(), orchestration_name: orch_name.clone() });
+        // Defer restart slightly so the current execution can release the active guard
+        let rt = self.clone();
+        let inst = instance.to_string();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(super::Runtime::POLLER_GATE_DELAY_MS)).await;
+            rt.ensure_instance_active(&inst, &orch_name).await;
+        });
         // Notify any waiters so initial handle resolves (empty output for continued-as-new)
         if let Some(waiters) = self.result_waiters.lock().await.remove(instance) {
             for w in waiters { let _ = w.send((history.clone(), Ok(String::new()))); }

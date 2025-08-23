@@ -14,13 +14,11 @@ pub enum OrchestratorMsg {
     CancelRequested { instance: String, reason: String, ack_token: Option<String> },
 }
 
-/// Request to start a new orchestration instance.
-#[derive(Clone, Debug)]
-pub struct StartRequest { pub instance: String, pub orchestration_name: String }
+// StartRequest removed; instances are activated directly by the runtime
 
-pub struct CompletionRouter { pub(crate) inboxes: Mutex<HashMap<String, mpsc::UnboundedSender<OrchestratorMsg>>> }
+pub struct InstanceRouter { pub(crate) inboxes: Mutex<HashMap<String, mpsc::UnboundedSender<OrchestratorMsg>>> }
 
-impl CompletionRouter {
+impl InstanceRouter {
     pub async fn register(&self, instance: &str) -> mpsc::UnboundedReceiver<OrchestratorMsg> {
         let (tx, rx) = mpsc::unbounded_channel();
         self.inboxes.lock().await.insert(instance.to_string(), tx);
