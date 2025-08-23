@@ -205,7 +205,7 @@ Runtime flows:
 4) ContinueAsNew
 - Sequence without round:
     - append(OrchestrationContinuedAsNew)
-    - reset_for_continue_as_new(instance, name, input) is idempotent (no‑op if new execution exists and has OrchestrationStarted)
+    - create_new_execution(instance, name, input) is idempotent (no‑op if new execution exists and has OrchestrationStarted)
     - Optionally enqueue initial work for the new execution via enqueue
 - Crash after CAN but before reset: retry detects terminal event and calls reset idempotently.
 

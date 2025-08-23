@@ -597,7 +597,7 @@ pub trait HistoryStore: Send + Sync {
     // Multi-execution support
     async fn latest_execution_id(&self, instance: &str) -> Option<u64>;
     async fn read_with_execution(&self, instance: &str, execution_id: u64) -> Vec<Event>;
-    async fn reset_for_continue_as_new(&self, instance: &str, orchestration: &str, version: &str, input: &str, parent_instance: Option<&str>, parent_id: Option<u64>) -> Result<u64, String>;
+    async fn create_new_execution(&self, instance: &str, orchestration: &str, version: &str, input: &str, parent_instance: Option<&str>, parent_id: Option<u64>) -> Result<u64, String>;
     
     // Multi-queue work management
     async fn enqueue_work(&self, kind: QueueKind, item: WorkItem) -> Result<(), String>;

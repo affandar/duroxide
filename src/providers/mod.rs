@@ -84,8 +84,7 @@ pub trait HistoryStore: Send + Sync {
     /// Return a pretty-printed dump of all instances (test utility).
     async fn dump_all_pretty(&self) -> String;
 
-    /// Create a new, empty instance. Implementations should return an error if the
-    /// instance already exists. Default no-op for stores that don't track instances eagerly.
+    /// Create a new, empty instance. Expected to be idempotent; 
     async fn create_instance(&self, _instance: &str) -> Result<(), String> {
         Ok(())
     }
@@ -128,9 +127,6 @@ pub trait HistoryStore: Send + Sync {
         Ok(())
     }
 
-    // Metadata APIs removed; orchestration info is derived from history only.
-
-    // --- Multi-execution scaffolding (default single-execution fallback) ---
     /// Return latest execution id for an instance (default: 1 if history exists).
     async fn latest_execution_id(&self, instance: &str) -> Option<u64> {
         let h = self.read(instance).await;
@@ -158,9 +154,9 @@ pub trait HistoryStore: Send + Sync {
         self.append(instance, new_events).await
     }
 
-    /// Reset for ContinueAsNew: create a new execution with OrchestrationStarted including version and optional parent linkage.
+    /// Create a new execution with OrchestrationStarted including version and optional parent linkage.
     /// Default: not supported. Providers must implement explicit multi-execution semantics.
-    async fn reset_for_continue_as_new(
+    async fn create_new_execution(
         &self,
         _instance: &str,
         _orchestration: &str,
@@ -169,11 +165,9 @@ pub trait HistoryStore: Send + Sync {
         _parent_instance: Option<&str>,
         _parent_id: Option<u64>,
     ) -> Result<u64, String> {
-        Err("reset_for_continue_as_new not supported by this provider".into())
+        Err("create_new_execution not supported by this provider".into())
     }
 }
-
-// Providers are datastores only; runtime owns queues and workers.
 
 /// Filesystem-backed provider for local development.
 pub mod fs;

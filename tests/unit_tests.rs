@@ -327,7 +327,7 @@ async fn providers_fs_multi_execution_persistence_and_latest_read() {
 
     // Create execution #2 via reset_for_continue_as_new; complete it
     let _eid2 = fs
-        .reset_for_continue_as_new("pfs", "O", "0.0.0", "1", None, None)
+        .create_new_execution("pfs", "O", "0.0.0", "1", None, None)
         .await
         .unwrap();
     fs.append_with_execution("pfs", 2, vec![Event::OrchestrationCompleted { output: "ok".into() }])
@@ -373,7 +373,7 @@ async fn providers_inmem_multi_execution_persistence_and_latest_read() {
     let e1_before = mem.read_with_execution("pmem", 1).await;
 
     let _eid2 = mem
-        .reset_for_continue_as_new("pmem", "O", "0.0.0", "1", None, None)
+        .create_new_execution("pmem", "O", "0.0.0", "1", None, None)
         .await
         .unwrap();
     mem.append_with_execution("pmem", 2, vec![Event::OrchestrationCompleted { output: "ok".into() }])

@@ -461,7 +461,7 @@ impl HistoryStore for FsHistoryStore {
         Ok(())
     }
 
-    async fn reset_for_continue_as_new(
+    async fn create_new_execution(
         &self,
         instance: &str,
         orchestration: &str,

@@ -102,7 +102,7 @@ pub trait HistoryStore {
   async fn list_executions(&self, instance: &str) -> Vec<u64>;
   async fn read_with_execution(&self, instance: &str, execution_id: u64) -> Vec<Event>;
   async fn append_with_execution(&self, instance: &str, execution_id: u64, new_events: Vec<Event>) -> Result<(), String>;
-  async fn reset_for_continue_as_new(&self, instance: &str, orchestration: &str, version: &str, input: &str, parent_instance: Option<&str>, parent_id: Option<u64>) -> Result<u64, String>;
+  async fn create_new_execution(&self, instance: &str, orchestration: &str, version: &str, input: &str, parent_instance: Option<&str>, parent_id: Option<u64>) -> Result<u64, String>;
 }
 
 pub enum QueueKind { Orchestrator, Worker, Timer }

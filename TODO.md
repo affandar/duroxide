@@ -1,5 +1,7 @@
 ## Durable Task Rust Core – TODOs
 
+- Cleanup the docs before making public
+- CLI tooling to manipulate history/queue state for devops
 - add cancellation and status from within the orchestration
 - write a real world orchestration
 - example versioned crates with orchestrations and loaders

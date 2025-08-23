@@ -234,7 +234,7 @@ impl super::Runtime {
         }
         let _new_exec = self
             .history_store
-            .reset_for_continue_as_new(
+            .create_new_execution(
                 instance,
                 &orch_name,
                 &target_version_str,
