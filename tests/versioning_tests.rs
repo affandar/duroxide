@@ -155,12 +155,7 @@ async fn continue_as_new_versioned_typed_explicit() {
     }
     rt.shutdown().await;
 }
-use rust_dtf::providers::HistoryStore;
-use rust_dtf::runtime::registry::ActivityRegistry;
-use rust_dtf::runtime::{self};
-use rust_dtf::{Event, OrchestrationContext, OrchestrationRegistry};
-use semver::Version;
-use std::sync::Arc as StdArc;
+// merged sections below reuse imports from the top of this file
 
 #[tokio::test]
 async fn start_uses_latest_version() {
