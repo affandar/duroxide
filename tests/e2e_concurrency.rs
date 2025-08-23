@@ -1,11 +1,11 @@
-use futures::future::{join3};
+use futures::future::join3;
 use std::sync::Arc;
 mod common;
-use rust_dtf::{Event, OrchestrationContext, OrchestrationRegistry};
-use rust_dtf::runtime::{self};
-use rust_dtf::runtime::registry::ActivityRegistry;
 use rust_dtf::providers::HistoryStore;
 use rust_dtf::providers::fs::FsHistoryStore;
+use rust_dtf::runtime::registry::ActivityRegistry;
+use rust_dtf::runtime::{self};
+use rust_dtf::{Event, OrchestrationContext, OrchestrationRegistry};
 use std::sync::Arc as StdArc;
 
 async fn concurrent_orchestrations_different_activities_with(store: StdArc<dyn HistoryStore>) {
@@ -41,9 +41,16 @@ async fn concurrent_orchestrations_different_activities_with(store: StdArc<dyn H
         .register("UpperOrchestration", o2)
         .build();
 
-    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
-    let h1 = rt.clone().start_orchestration("inst-multi-1", "AddOrchestration", "").await;
-    let h2 = rt.clone().start_orchestration("inst-multi-2", "UpperOrchestration", "").await;
+    let rt =
+        runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+    let h1 = rt
+        .clone()
+        .start_orchestration("inst-multi-1", "AddOrchestration", "")
+        .await;
+    let h2 = rt
+        .clone()
+        .start_orchestration("inst-multi-2", "UpperOrchestration", "")
+        .await;
 
     let store_for_wait1 = store.clone();
     let rt_c = rt.clone();
@@ -61,15 +68,45 @@ async fn concurrent_orchestrations_different_activities_with(store: StdArc<dyn H
     let (hist1, out1) = h1.unwrap().await.unwrap();
     let (hist2, out2) = h2.unwrap().await.unwrap();
 
-    assert!(out1.as_ref().unwrap().contains("o1:sum=5;evt=E1"), "unexpected out1: {out1:?}");
-    assert!(out2.as_ref().unwrap().contains("o2:up=HI;evt=E2"), "unexpected out2: {out2:?}");
+    assert!(
+        out1.as_ref().unwrap().contains("o1:sum=5;evt=E1"),
+        "unexpected out1: {out1:?}"
+    );
+    assert!(
+        out2.as_ref().unwrap().contains("o2:up=HI;evt=E2"),
+        "unexpected out2: {out2:?}"
+    );
 
-    assert!(hist1.iter().any(|e| matches!(e, Event::ActivityCompleted { id, result } if *id == 1 && result == "5")));
-    assert!(hist2.iter().any(|e| matches!(e, Event::ActivityCompleted { id, result } if *id == 1 && result == "HI")));
-    assert!(hist1.iter().any(|e| matches!(e, Event::ExternalEvent { id, data, .. } if *id == 2 && data == "E1")));
-    assert!(hist2.iter().any(|e| matches!(e, Event::ExternalEvent { id, data, .. } if *id == 2 && data == "E2")));
-    assert!(hist1.iter().any(|e| matches!(e, Event::TimerFired { id, .. } if *id == 3)));
-    assert!(hist2.iter().any(|e| matches!(e, Event::TimerFired { id, .. } if *id == 3)));
+    assert!(
+        hist1
+            .iter()
+            .any(|e| matches!(e, Event::ActivityCompleted { id, result } if *id == 1 && result == "5"))
+    );
+    assert!(
+        hist2
+            .iter()
+            .any(|e| matches!(e, Event::ActivityCompleted { id, result } if *id == 1 && result == "HI"))
+    );
+    assert!(
+        hist1
+            .iter()
+            .any(|e| matches!(e, Event::ExternalEvent { id, data, .. } if *id == 2 && data == "E1"))
+    );
+    assert!(
+        hist2
+            .iter()
+            .any(|e| matches!(e, Event::ExternalEvent { id, data, .. } if *id == 2 && data == "E2"))
+    );
+    assert!(
+        hist1
+            .iter()
+            .any(|e| matches!(e, Event::TimerFired { id, .. } if *id == 3))
+    );
+    assert!(
+        hist2
+            .iter()
+            .any(|e| matches!(e, Event::TimerFired { id, .. } if *id == 3))
+    );
 
     rt.shutdown().await;
 }
@@ -101,7 +138,10 @@ async fn concurrent_orchestrations_same_activities_with(store: StdArc<dyn Histor
     };
 
     let activity_registry = ActivityRegistry::builder()
-        .register("Proc", |input: String| async move { let n = input.parse::<i64>().unwrap_or(0); Ok((n + 1).to_string()) })
+        .register("Proc", |input: String| async move {
+            let n = input.parse::<i64>().unwrap_or(0);
+            Ok((n + 1).to_string())
+        })
         .build();
 
     let orchestration_registry = OrchestrationRegistry::builder()
@@ -109,9 +149,16 @@ async fn concurrent_orchestrations_same_activities_with(store: StdArc<dyn Histor
         .register("ProcOrchestration2", o2)
         .build();
 
-    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
-    let h1 = rt.clone().start_orchestration("inst-same-acts-1", "ProcOrchestration1", "").await;
-    let h2 = rt.clone().start_orchestration("inst-same-acts-2", "ProcOrchestration2", "").await;
+    let rt =
+        runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+    let h1 = rt
+        .clone()
+        .start_orchestration("inst-same-acts-1", "ProcOrchestration1", "")
+        .await;
+    let h2 = rt
+        .clone()
+        .start_orchestration("inst-same-acts-2", "ProcOrchestration2", "")
+        .await;
 
     let store_for_wait3 = store.clone();
     let rt_c = rt.clone();
@@ -132,12 +179,36 @@ async fn concurrent_orchestrations_same_activities_with(store: StdArc<dyn Histor
     assert_eq!(out1.unwrap(), "o1:a=11;evt=P1");
     assert_eq!(out2.unwrap(), "o2:a=21;evt=P2");
 
-    assert!(hist1.iter().any(|e| matches!(e, Event::ActivityCompleted { id, result } if *id == 1 && result == "11")));
-    assert!(hist2.iter().any(|e| matches!(e, Event::ActivityCompleted { id, result } if *id == 1 && result == "21")));
-    assert!(hist1.iter().any(|e| matches!(e, Event::ExternalEvent { id, data, .. } if *id == 2 && data == "P1")));
-    assert!(hist2.iter().any(|e| matches!(e, Event::ExternalEvent { id, data, .. } if *id == 2 && data == "P2")));
-    assert!(hist1.iter().any(|e| matches!(e, Event::TimerFired { id, .. } if *id == 3)));
-    assert!(hist2.iter().any(|e| matches!(e, Event::TimerFired { id, .. } if *id == 3)));
+    assert!(
+        hist1
+            .iter()
+            .any(|e| matches!(e, Event::ActivityCompleted { id, result } if *id == 1 && result == "11"))
+    );
+    assert!(
+        hist2
+            .iter()
+            .any(|e| matches!(e, Event::ActivityCompleted { id, result } if *id == 1 && result == "21"))
+    );
+    assert!(
+        hist1
+            .iter()
+            .any(|e| matches!(e, Event::ExternalEvent { id, data, .. } if *id == 2 && data == "P1"))
+    );
+    assert!(
+        hist2
+            .iter()
+            .any(|e| matches!(e, Event::ExternalEvent { id, data, .. } if *id == 2 && data == "P2"))
+    );
+    assert!(
+        hist1
+            .iter()
+            .any(|e| matches!(e, Event::TimerFired { id, .. } if *id == 3))
+    );
+    assert!(
+        hist2
+            .iter()
+            .any(|e| matches!(e, Event::TimerFired { id, .. } if *id == 3))
+    );
 
     rt.shutdown().await;
 }
@@ -148,5 +219,3 @@ async fn concurrent_orchestrations_same_activities_fs() {
     let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
     concurrent_orchestrations_same_activities_with(store).await;
 }
-
-

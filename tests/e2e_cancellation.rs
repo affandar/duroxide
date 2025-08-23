@@ -1,9 +1,9 @@
-use std::sync::Arc as StdArc;
-use rust_dtf::{Event, OrchestrationContext, OrchestrationRegistry};
-use rust_dtf::runtime::{self};
-use rust_dtf::runtime::registry::ActivityRegistry;
 use rust_dtf::providers::HistoryStore;
 use rust_dtf::providers::fs::FsHistoryStore;
+use rust_dtf::runtime::registry::ActivityRegistry;
+use rust_dtf::runtime::{self};
+use rust_dtf::{Event, OrchestrationContext, OrchestrationRegistry};
+use std::sync::Arc as StdArc;
 mod common;
 
 #[tokio::test]
@@ -31,10 +31,19 @@ async fn cancel_parent_down_propagates_to_child_fs() {
         .register("Parent", parent)
         .build();
     let activity_registry = ActivityRegistry::builder().build();
-    let rt = runtime::Runtime::start_with_store(store.clone(), std::sync::Arc::new(activity_registry), orchestration_registry).await;
+    let rt = runtime::Runtime::start_with_store(
+        store.clone(),
+        std::sync::Arc::new(activity_registry),
+        orchestration_registry,
+    )
+    .await;
 
     // Start parent
-    let _h = rt.clone().start_orchestration("inst-cancel-1", "Parent", "").await.unwrap();
+    let _h = rt
+        .clone()
+        .start_orchestration("inst-cancel-1", "Parent", "")
+        .await
+        .unwrap();
 
     // Give it a moment to schedule the child
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -46,11 +55,20 @@ async fn cancel_parent_down_propagates_to_child_fs() {
     let deadline = std::time::Instant::now() + std::time::Duration::from_millis(5000);
     loop {
         let hist = store.read("inst-cancel-1").await;
-        if hist.iter().any(|e| matches!(e, Event::OrchestrationFailed { error } if error.starts_with("canceled: by_test"))) {
-            assert!(hist.iter().any(|e| matches!(e, Event::OrchestrationCancelRequested { .. })), "missing cancel requested event for parent");
+        if hist
+            .iter()
+            .any(|e| matches!(e, Event::OrchestrationFailed { error } if error.starts_with("canceled: by_test")))
+        {
+            assert!(
+                hist.iter()
+                    .any(|e| matches!(e, Event::OrchestrationCancelRequested { .. })),
+                "missing cancel requested event for parent"
+            );
             break;
         }
-        if std::time::Instant::now() > deadline { panic!("timeout waiting for parent canceled"); }
+        if std::time::Instant::now() > deadline {
+            panic!("timeout waiting for parent canceled");
+        }
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
 
@@ -68,10 +86,18 @@ async fn cancel_parent_down_propagates_to_child_fs() {
         let deadline = std::time::Instant::now() + std::time::Duration::from_millis(5000);
         loop {
             let hist = store.read(&child).await;
-            let has_cancel = hist.iter().any(|e| matches!(e, Event::OrchestrationCancelRequested { .. }));
-            let has_failed = hist.iter().any(|e| matches!(e, Event::OrchestrationFailed { error } if error.starts_with("canceled: parent canceled")));
-            if has_cancel && has_failed { break; }
-            if std::time::Instant::now() > deadline { panic!("child {} did not cancel in time", child); }
+            let has_cancel = hist
+                .iter()
+                .any(|e| matches!(e, Event::OrchestrationCancelRequested { .. }));
+            let has_failed = hist.iter().any(
+                |e| matches!(e, Event::OrchestrationFailed { error } if error.starts_with("canceled: parent canceled")),
+            );
+            if has_cancel && has_failed {
+                break;
+            }
+            if std::time::Instant::now() > deadline {
+                panic!("child {} did not cancel in time", child);
+            }
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
     }
@@ -86,13 +112,20 @@ async fn cancel_after_completion_is_noop_fs() {
 
     let orch = |_ctx: OrchestrationContext, _input: String| async move { Ok("ok".to_string()) };
 
-    let orchestration_registry = OrchestrationRegistry::builder()
-        .register("Quick", orch)
-        .build();
+    let orchestration_registry = OrchestrationRegistry::builder().register("Quick", orch).build();
     let activity_registry = ActivityRegistry::builder().build();
-    let rt = runtime::Runtime::start_with_store(store.clone(), std::sync::Arc::new(activity_registry), orchestration_registry).await;
+    let rt = runtime::Runtime::start_with_store(
+        store.clone(),
+        std::sync::Arc::new(activity_registry),
+        orchestration_registry,
+    )
+    .await;
 
-    let h = rt.clone().start_orchestration("inst-cancel-noop", "Quick", "").await.unwrap();
+    let h = rt
+        .clone()
+        .start_orchestration("inst-cancel-noop", "Quick", "")
+        .await
+        .unwrap();
     let (_hist, out) = h.await.unwrap();
     assert_eq!(out.unwrap(), "ok");
 
@@ -101,8 +134,15 @@ async fn cancel_after_completion_is_noop_fs() {
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
     let hist = store.read("inst-cancel-noop").await;
-    assert!(hist.iter().any(|e| matches!(e, Event::OrchestrationCompleted { output } if output == "ok")));
-    assert!(!hist.iter().any(|e| matches!(e, Event::OrchestrationCancelRequested { .. })));
+    assert!(
+        hist.iter()
+            .any(|e| matches!(e, Event::OrchestrationCompleted { output } if output == "ok"))
+    );
+    assert!(
+        !hist
+            .iter()
+            .any(|e| matches!(e, Event::OrchestrationCancelRequested { .. }))
+    );
 
     rt.shutdown().await;
 }
@@ -133,9 +173,18 @@ async fn cancel_child_directly_signals_parent_fs() {
         .register("ParentD", parent)
         .build();
     let activity_registry = ActivityRegistry::builder().build();
-    let rt = runtime::Runtime::start_with_store(store.clone(), std::sync::Arc::new(activity_registry), orchestration_registry).await;
+    let rt = runtime::Runtime::start_with_store(
+        store.clone(),
+        std::sync::Arc::new(activity_registry),
+        orchestration_registry,
+    )
+    .await;
 
-    let h = rt.clone().start_orchestration("inst-chdirect", "ParentD", "").await.unwrap();
+    let h = rt
+        .clone()
+        .start_orchestration("inst-chdirect", "ParentD", "")
+        .await
+        .unwrap();
     // Wait a bit for child schedule, then cancel child directly
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     let child_inst = "inst-chdirect::sub::1";
@@ -143,7 +192,10 @@ async fn cancel_child_directly_signals_parent_fs() {
 
     let (_hist, out) = h.await.unwrap();
     let s = out.unwrap();
-    assert!(s.starts_with("child_err:canceled: by_test_child"), "unexpected parent out: {s}");
+    assert!(
+        s.starts_with("child_err:canceled: by_test_child"),
+        "unexpected parent out: {s}"
+    );
 
     // Parent should have SubOrchestrationFailed for the child id 1
     let ph = store.read("inst-chdirect").await;
@@ -172,13 +224,20 @@ async fn cancel_continue_as_new_second_exec_fs() {
         }
     };
 
-    let orchestration_registry = OrchestrationRegistry::builder()
-        .register("CanCancel", orch)
-        .build();
+    let orchestration_registry = OrchestrationRegistry::builder().register("CanCancel", orch).build();
     let activity_registry = ActivityRegistry::builder().build();
-    let rt = runtime::Runtime::start_with_store(store.clone(), std::sync::Arc::new(activity_registry), orchestration_registry).await;
+    let rt = runtime::Runtime::start_with_store(
+        store.clone(),
+        std::sync::Arc::new(activity_registry),
+        orchestration_registry,
+    )
+    .await;
 
-    let h = rt.clone().start_orchestration("inst-can-can", "CanCancel", "start").await.unwrap();
+    let h = rt
+        .clone()
+        .start_orchestration("inst-can-can", "CanCancel", "start")
+        .await
+        .unwrap();
     let (_hist, out) = h.await.unwrap();
     assert_eq!(out.unwrap(), "");
 
@@ -186,14 +245,25 @@ async fn cancel_continue_as_new_second_exec_fs() {
     rt.cancel_instance("inst-can-can", "by_test_can").await;
 
     // Wait for canceled failure
-    let ok = common::wait_for_history(store.clone(), "inst-can-can", |hist| {
-        hist.iter().rev().any(|e| matches!(e, Event::OrchestrationFailed { error } if error.starts_with("canceled: by_test_can")))
-    }, 5000).await;
+    let ok = common::wait_for_history(
+        store.clone(),
+        "inst-can-can",
+        |hist| {
+            hist.iter().rev().any(
+                |e| matches!(e, Event::OrchestrationFailed { error } if error.starts_with("canceled: by_test_can")),
+            )
+        },
+        5000,
+    )
+    .await;
     assert!(ok, "timeout waiting for cancel failure");
 
     // Ensure cancel requested recorded
     let hist = store.read("inst-can-can").await;
-    assert!(hist.iter().any(|e| matches!(e, Event::OrchestrationCancelRequested { .. })));
+    assert!(
+        hist.iter()
+            .any(|e| matches!(e, Event::OrchestrationCancelRequested { .. }))
+    );
 
     rt.shutdown().await;
 }
@@ -216,16 +286,28 @@ async fn orchestration_completes_before_activity_finishes_fs() {
     });
     let activity_registry = ab.build();
     let orchestration_registry = OrchestrationRegistry::builder().register("QuickDone", orch).build();
-    let rt = runtime::Runtime::start_with_store(store.clone(), std::sync::Arc::new(activity_registry), orchestration_registry).await;
+    let rt = runtime::Runtime::start_with_store(
+        store.clone(),
+        std::sync::Arc::new(activity_registry),
+        orchestration_registry,
+    )
+    .await;
 
-    let h = rt.clone().start_orchestration("inst-orch-done-first", "QuickDone", "").await.unwrap();
+    let h = rt
+        .clone()
+        .start_orchestration("inst-orch-done-first", "QuickDone", "")
+        .await
+        .unwrap();
     let (_hist, out) = h.await.unwrap();
     assert_eq!(out.unwrap(), "done");
 
     // Give activity time to finish; no additional terminal events should be added
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
     let hist = store.read("inst-orch-done-first").await;
-    assert!(hist.iter().any(|e| matches!(e, Event::OrchestrationCompleted { output } if output == "done")));
+    assert!(
+        hist.iter()
+            .any(|e| matches!(e, Event::OrchestrationCompleted { output } if output == "done"))
+    );
 
     rt.shutdown().await;
 }
@@ -248,18 +330,28 @@ async fn orchestration_fails_before_activity_finishes_fs() {
     });
     let activity_registry = ab.build();
     let orchestration_registry = OrchestrationRegistry::builder().register("QuickFail", orch).build();
-    let rt = runtime::Runtime::start_with_store(store.clone(), std::sync::Arc::new(activity_registry), orchestration_registry).await;
+    let rt = runtime::Runtime::start_with_store(
+        store.clone(),
+        std::sync::Arc::new(activity_registry),
+        orchestration_registry,
+    )
+    .await;
 
-    let h = rt.clone().start_orchestration("inst-orch-fail-first", "QuickFail", "").await.unwrap();
+    let h = rt
+        .clone()
+        .start_orchestration("inst-orch-fail-first", "QuickFail", "")
+        .await
+        .unwrap();
     let (_hist, out) = h.await.unwrap();
     assert!(out.is_err());
 
     // Give activity time to finish; no change to terminal failure
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
     let hist = store.read("inst-orch-fail-first").await;
-    assert!(hist.iter().any(|e| matches!(e, Event::OrchestrationFailed { error } if error == "boom")));
+    assert!(
+        hist.iter()
+            .any(|e| matches!(e, Event::OrchestrationFailed { error } if error == "boom"))
+    );
 
     rt.shutdown().await;
 }
-
-

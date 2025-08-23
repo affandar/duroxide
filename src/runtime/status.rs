@@ -1,4 +1,4 @@
-use crate::{Event};
+use crate::Event;
 
 impl super::Runtime {
     /// Returns the current status of an orchestration instance by inspecting its history.
@@ -9,8 +9,12 @@ impl super::Runtime {
         }
         for e in hist.iter().rev() {
             match e {
-                Event::OrchestrationFailed { error } => return super::OrchestrationStatus::Failed { error: error.clone() },
-                Event::OrchestrationCompleted { output } => return super::OrchestrationStatus::Completed { output: output.clone() },
+                Event::OrchestrationFailed { error } => {
+                    return super::OrchestrationStatus::Failed { error: error.clone() };
+                }
+                Event::OrchestrationCompleted { output } => {
+                    return super::OrchestrationStatus::Completed { output: output.clone() };
+                }
                 _ => {}
             }
         }
@@ -18,7 +22,11 @@ impl super::Runtime {
     }
 
     /// Return status for a specific execution. Currently single-execution only; `execution_id` is ignored.
-    pub async fn get_orchestration_status_with_execution(&self, instance: &str, _execution_id: u64) -> super::OrchestrationStatus {
+    pub async fn get_orchestration_status_with_execution(
+        &self,
+        instance: &str,
+        _execution_id: u64,
+    ) -> super::OrchestrationStatus {
         self.get_orchestration_status(instance).await
     }
 
@@ -33,5 +41,3 @@ impl super::Runtime {
         self.history_store.read(instance).await
     }
 }
-
-

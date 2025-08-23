@@ -1,22 +1,64 @@
 use std::collections::HashMap;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{Mutex, mpsc};
 use tracing::warn;
 
 /// Messages delivered back to the orchestrator loop by workers and routers.
 pub enum OrchestratorMsg {
-    ActivityCompleted { instance: String, id: u64, result: String, ack_token: Option<String> },
-    ActivityFailed { instance: String, id: u64, error: String, ack_token: Option<String> },
-    TimerFired { instance: String, id: u64, fire_at_ms: u64, ack_token: Option<String> },
-    ExternalEvent { instance: String, id: u64, name: String, data: String, ack_token: Option<String> },
-    ExternalByName { instance: String, name: String, data: String, ack_token: Option<String> },
-    SubOrchCompleted { instance: String, id: u64, result: String, ack_token: Option<String> },
-    SubOrchFailed { instance: String, id: u64, error: String, ack_token: Option<String> },
-    CancelRequested { instance: String, reason: String, ack_token: Option<String> },
+    ActivityCompleted {
+        instance: String,
+        id: u64,
+        result: String,
+        ack_token: Option<String>,
+    },
+    ActivityFailed {
+        instance: String,
+        id: u64,
+        error: String,
+        ack_token: Option<String>,
+    },
+    TimerFired {
+        instance: String,
+        id: u64,
+        fire_at_ms: u64,
+        ack_token: Option<String>,
+    },
+    ExternalEvent {
+        instance: String,
+        id: u64,
+        name: String,
+        data: String,
+        ack_token: Option<String>,
+    },
+    ExternalByName {
+        instance: String,
+        name: String,
+        data: String,
+        ack_token: Option<String>,
+    },
+    SubOrchCompleted {
+        instance: String,
+        id: u64,
+        result: String,
+        ack_token: Option<String>,
+    },
+    SubOrchFailed {
+        instance: String,
+        id: u64,
+        error: String,
+        ack_token: Option<String>,
+    },
+    CancelRequested {
+        instance: String,
+        reason: String,
+        ack_token: Option<String>,
+    },
 }
 
 // StartRequest removed; instances are activated directly by the runtime
 
-pub struct InstanceRouter { pub(crate) inboxes: Mutex<HashMap<String, mpsc::UnboundedSender<OrchestratorMsg>>> }
+pub struct InstanceRouter {
+    pub(crate) inboxes: Mutex<HashMap<String, mpsc::UnboundedSender<OrchestratorMsg>>>,
+}
 
 impl InstanceRouter {
     pub async fn register(&self, instance: &str) -> mpsc::UnboundedReceiver<OrchestratorMsg> {
@@ -78,15 +120,13 @@ impl InstanceRouter {
 
 pub fn kind_of(msg: &OrchestratorMsg) -> &'static str {
     match msg {
-    OrchestratorMsg::ActivityCompleted { .. } => "ActivityCompleted",
-    OrchestratorMsg::ActivityFailed { .. } => "ActivityFailed",
-    OrchestratorMsg::TimerFired { .. } => "TimerFired",
-    OrchestratorMsg::ExternalEvent { .. } => "ExternalEvent",
-    OrchestratorMsg::ExternalByName { .. } => "ExternalByName",
-    OrchestratorMsg::SubOrchCompleted { .. } => "SubOrchCompleted",
-    OrchestratorMsg::SubOrchFailed { .. } => "SubOrchFailed",
-    OrchestratorMsg::CancelRequested { .. } => "CancelRequested",
+        OrchestratorMsg::ActivityCompleted { .. } => "ActivityCompleted",
+        OrchestratorMsg::ActivityFailed { .. } => "ActivityFailed",
+        OrchestratorMsg::TimerFired { .. } => "TimerFired",
+        OrchestratorMsg::ExternalEvent { .. } => "ExternalEvent",
+        OrchestratorMsg::ExternalByName { .. } => "ExternalByName",
+        OrchestratorMsg::SubOrchCompleted { .. } => "SubOrchCompleted",
+        OrchestratorMsg::SubOrchFailed { .. } => "SubOrchFailed",
+        OrchestratorMsg::CancelRequested { .. } => "CancelRequested",
     }
 }
-
-

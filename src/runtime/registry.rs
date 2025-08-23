@@ -1,11 +1,11 @@
+use super::OrchestrationHandler;
+use crate::_typed_codec::Codec;
+use crate::OrchestrationContext;
+use async_trait::async_trait;
+use semver::Version;
 use std::collections::HashMap;
 use std::sync::Arc;
-use semver::Version;
-use crate::{OrchestrationContext};
-use async_trait::async_trait;
-use crate::_typed_codec::Codec;
-use super::OrchestrationHandler;
-use tracing::{info, warn, error, debug};
+use tracing::{debug, error, info, warn};
 
 #[derive(Clone, Default)]
 pub struct OrchestrationRegistry {
@@ -14,15 +14,28 @@ pub struct OrchestrationRegistry {
 }
 
 #[derive(Clone, Debug)]
-pub enum VersionPolicy { Latest, Exact(Version) }
+pub enum VersionPolicy {
+    Latest,
+    Exact(Version),
+}
 
 impl OrchestrationRegistry {
     pub fn builder() -> OrchestrationRegistryBuilder {
-        OrchestrationRegistryBuilder { map: HashMap::new(), policy: HashMap::new(), errors: Vec::new() }
+        OrchestrationRegistryBuilder {
+            map: HashMap::new(),
+            policy: HashMap::new(),
+            errors: Vec::new(),
+        }
     }
 
     pub async fn resolve_for_start(&self, name: &str) -> Option<(Version, Arc<dyn OrchestrationHandler>)> {
-        let pol = self.policy.lock().await.get(name).cloned().unwrap_or(VersionPolicy::Latest);
+        let pol = self
+            .policy
+            .lock()
+            .await
+            .get(name)
+            .cloned()
+            .unwrap_or(VersionPolicy::Latest);
         match pol {
             VersionPolicy::Latest => {
                 let m = self.inner.get(name)?;
@@ -47,11 +60,18 @@ impl OrchestrationRegistry {
     pub async fn set_version_policy(&self, name: &str, policy: VersionPolicy) {
         self.policy.lock().await.insert(name.to_string(), policy);
     }
-    pub async fn unpin(&self, name: &str) { self.set_version_policy(name, VersionPolicy::Latest).await; }
+    pub async fn unpin(&self, name: &str) {
+        self.set_version_policy(name, VersionPolicy::Latest).await;
+    }
 
-    pub fn list_orchestration_names(&self) -> Vec<String> { self.inner.keys().cloned().collect() }
+    pub fn list_orchestration_names(&self) -> Vec<String> {
+        self.inner.keys().cloned().collect()
+    }
     pub fn list_orchestration_versions(&self, name: &str) -> Vec<Version> {
-        self.inner.get(name).map(|m| m.keys().cloned().collect()).unwrap_or_default()
+        self.inner
+            .get(name)
+            .map(|m| m.keys().cloned().collect())
+            .unwrap_or_default()
     }
 }
 
@@ -72,7 +92,8 @@ impl OrchestrationRegistryBuilder {
         let v = Version::parse("1.0.0").unwrap();
         let entry = self.map.entry(name.clone()).or_default();
         if entry.contains_key(&v) {
-            self.errors.push(format!("duplicate orchestration registration: {}@{}", name, v));
+            self.errors
+                .push(format!("duplicate orchestration registration: {}@{}", name, v));
             return self;
         }
         entry.insert(v, Arc::new(FnOrchestration(f)));
@@ -98,7 +119,10 @@ impl OrchestrationRegistryBuilder {
         };
         let name = name.into();
         let v = Version::parse("1.0.0").unwrap();
-        self.map.entry(name).or_default().insert(v, Arc::new(FnOrchestration(wrapper)));
+        self.map
+            .entry(name)
+            .or_default()
+            .insert(v, Arc::new(FnOrchestration(wrapper)));
         self
     }
 
@@ -112,12 +136,16 @@ impl OrchestrationRegistryBuilder {
         let v = Version::parse(version.as_ref()).expect("semver");
         let entry = self.map.entry(name.clone()).or_default();
         if entry.contains_key(&v) {
-            self.errors.push(format!("duplicate orchestration registration: {}@{}", name, v));
+            self.errors
+                .push(format!("duplicate orchestration registration: {}@{}", name, v));
             return self;
         }
         if let Some((latest, _)) = entry.iter().next_back() {
             if &v <= latest {
-                panic!("non-monotonic orchestration version for {}: {} is not later than existing latest {}", name, v, latest);
+                panic!(
+                    "non-monotonic orchestration version for {}: {} is not later than existing latest {}",
+                    name, v, latest
+                );
             }
         }
         entry.insert(v, Arc::new(FnOrchestration(f)));
@@ -130,18 +158,23 @@ impl OrchestrationRegistryBuilder {
     }
 
     pub fn build(self) -> OrchestrationRegistry {
-        OrchestrationRegistry { inner: Arc::new(self.map), policy: Arc::new(tokio::sync::Mutex::new(self.policy)) }
+        OrchestrationRegistry {
+            inner: Arc::new(self.map),
+            policy: Arc::new(tokio::sync::Mutex::new(self.policy)),
+        }
     }
 
     pub fn build_result(self) -> Result<OrchestrationRegistry, String> {
         if self.errors.is_empty() {
-            Ok(OrchestrationRegistry { inner: Arc::new(self.map), policy: Arc::new(tokio::sync::Mutex::new(self.policy)) })
+            Ok(OrchestrationRegistry {
+                inner: Arc::new(self.map),
+                policy: Arc::new(tokio::sync::Mutex::new(self.policy)),
+            })
         } else {
             Err(self.errors.join("; "))
         }
     }
 }
-
 
 // ---------------- Activity registry (moved here)
 
@@ -161,20 +194,29 @@ where
     F: Fn(String) -> Fut + Send + Sync + 'static,
     Fut: std::future::Future<Output = Result<String, String>> + Send + 'static,
 {
-    async fn invoke(&self, input: String) -> Result<String, String> { (self.0)(input).await }
+    async fn invoke(&self, input: String) -> Result<String, String> {
+        (self.0)(input).await
+    }
 }
 
 #[derive(Clone, Default)]
-pub struct ActivityRegistry { pub(crate) inner: Arc<HashMap<String, Arc<dyn ActivityHandler>>> }
+pub struct ActivityRegistry {
+    pub(crate) inner: Arc<HashMap<String, Arc<dyn ActivityHandler>>>,
+}
 
-pub struct ActivityRegistryBuilder { map: HashMap<String, Arc<dyn ActivityHandler>> }
+pub struct ActivityRegistryBuilder {
+    map: HashMap<String, Arc<dyn ActivityHandler>>,
+}
 
 impl ActivityRegistry {
     pub fn builder() -> ActivityRegistryBuilder {
         let mut b = ActivityRegistryBuilder { map: HashMap::new() };
         // Pre-register system activities before any user registration
         b = b.register(crate::SYSTEM_TRACE_ACTIVITY, |input: String| async move {
-            let (level, msg) = match input.split_once(':') { Some((l, m)) => (l.to_string(), m.to_string()), None => ("INFO".to_string(), input) };
+            let (level, msg) = match input.split_once(':') {
+                Some((l, m)) => (l.to_string(), m.to_string()),
+                None => ("INFO".to_string(), input),
+            };
             match level.as_str() {
                 "ERROR" => error!(message=%msg, "system trace"),
                 "WARN" | "WARNING" => warn!(message=%msg, "system trace"),
@@ -199,13 +241,17 @@ impl ActivityRegistry {
         });
         b
     }
-    pub fn get(&self, name: &str) -> Option<Arc<dyn ActivityHandler>> { self.inner.get(name).cloned() }
+    pub fn get(&self, name: &str) -> Option<Arc<dyn ActivityHandler>> {
+        self.inner.get(name).cloned()
+    }
 }
 
 impl ActivityRegistryBuilder {
     pub fn from_registry(reg: &ActivityRegistry) -> Self {
         let mut map: HashMap<String, Arc<dyn ActivityHandler>> = HashMap::new();
-        for (k, v) in reg.inner.iter() { map.insert(k.clone(), v.clone()); }
+        for (k, v) in reg.inner.iter() {
+            map.insert(k.clone(), v.clone());
+        }
         ActivityRegistryBuilder { map }
     }
     pub fn register<F, Fut>(mut self, name: impl Into<String>, f: F) -> Self
@@ -235,7 +281,9 @@ impl ActivityRegistryBuilder {
         self.map.insert(name.into(), Arc::new(FnActivity(wrapper)));
         self
     }
-    pub fn build(self) -> ActivityRegistry { ActivityRegistry { inner: Arc::new(self.map) } }
+    pub fn build(self) -> ActivityRegistry {
+        ActivityRegistry {
+            inner: Arc::new(self.map),
+        }
+    }
 }
-
-

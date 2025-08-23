@@ -1,9 +1,9 @@
-use std::sync::Arc as StdArc;
-use rust_dtf::{Event, OrchestrationContext, OrchestrationRegistry};
-use rust_dtf::runtime::{self};
-use rust_dtf::runtime::registry::ActivityRegistry;
 use rust_dtf::providers::HistoryStore;
 use rust_dtf::providers::fs::FsHistoryStore;
+use rust_dtf::runtime::registry::ActivityRegistry;
+use rust_dtf::runtime::{self};
+use rust_dtf::{Event, OrchestrationContext, OrchestrationRegistry};
+use std::sync::Arc as StdArc;
 mod common;
 
 // Basic ContinueAsNew loop: rolls input across executions and finally completes.
@@ -25,21 +25,36 @@ async fn continue_as_new_multiexec_fs() {
         }
     };
 
-    let orchestration_registry = OrchestrationRegistry::builder()
-        .register("Counter", counter)
-        .build();
+    let orchestration_registry = OrchestrationRegistry::builder().register("Counter", counter).build();
     let activity_registry = ActivityRegistry::builder().build();
-    let rt = runtime::Runtime::start_with_store(store.clone(), std::sync::Arc::new(activity_registry), orchestration_registry).await;
+    let rt = runtime::Runtime::start_with_store(
+        store.clone(),
+        std::sync::Arc::new(activity_registry),
+        orchestration_registry,
+    )
+    .await;
 
     // The initial start handle will resolve when the first execution continues-as-new.
-    let h = rt.clone().start_orchestration("inst-can-1", "Counter", "0").await.unwrap();
+    let h = rt
+        .clone()
+        .start_orchestration("inst-can-1", "Counter", "0")
+        .await
+        .unwrap();
     let (_hist, out) = h.await.unwrap();
     assert_eq!(out.unwrap(), "");
 
     // Wait until the latest execution completes with expected output
-    let ok = common::wait_for_history(store.clone(), "inst-can-1", |hist| {
-        hist.iter().rev().any(|e| matches!(e, Event::OrchestrationCompleted { output } if output == "done:2"))
-    }, 5_000).await;
+    let ok = common::wait_for_history(
+        store.clone(),
+        "inst-can-1",
+        |hist| {
+            hist.iter()
+                .rev()
+                .any(|e| matches!(e, Event::OrchestrationCompleted { output } if output == "done:2"))
+        },
+        5_000,
+    )
+    .await;
     assert!(ok, "timeout waiting for completion");
 
     // Verify multi-execution histories exist: execs 1,2 continued-as-new; exec 3 completed
@@ -53,18 +68,36 @@ async fn continue_as_new_multiexec_fs() {
     assert_eq!(current_hist, latest_hist);
 
     let e1 = store.read_with_execution("inst-can-1", 1).await;
-    assert!(e1.iter().any(|e| matches!(e, Event::OrchestrationStarted { input, .. } if input == "0")));
-    assert!(e1.iter().any(|e| matches!(e, Event::OrchestrationContinuedAsNew { input } if input == "1")));
+    assert!(
+        e1.iter()
+            .any(|e| matches!(e, Event::OrchestrationStarted { input, .. } if input == "0"))
+    );
+    assert!(
+        e1.iter()
+            .any(|e| matches!(e, Event::OrchestrationContinuedAsNew { input } if input == "1"))
+    );
     assert!(!e1.iter().any(|e| matches!(e, Event::OrchestrationCompleted { .. })));
 
     let e2 = store.read_with_execution("inst-can-1", 2).await;
-    assert!(e2.iter().any(|e| matches!(e, Event::OrchestrationStarted { input, .. } if input == "1")));
-    assert!(e2.iter().any(|e| matches!(e, Event::OrchestrationContinuedAsNew { input } if input == "2")));
+    assert!(
+        e2.iter()
+            .any(|e| matches!(e, Event::OrchestrationStarted { input, .. } if input == "1"))
+    );
+    assert!(
+        e2.iter()
+            .any(|e| matches!(e, Event::OrchestrationContinuedAsNew { input } if input == "2"))
+    );
     assert!(!e2.iter().any(|e| matches!(e, Event::OrchestrationCompleted { .. })));
 
     let e3 = store.read_with_execution("inst-can-1", 3).await;
-    assert!(e3.iter().any(|e| matches!(e, Event::OrchestrationStarted { input, .. } if input == "2")));
-    assert!(e3.iter().any(|e| matches!(e, Event::OrchestrationCompleted { output } if output == "done:2")));
+    assert!(
+        e3.iter()
+            .any(|e| matches!(e, Event::OrchestrationStarted { input, .. } if input == "2"))
+    );
+    assert!(
+        e3.iter()
+            .any(|e| matches!(e, Event::OrchestrationCompleted { output } if output == "done:2"))
+    );
 
     rt.shutdown().await;
 }
@@ -92,11 +125,14 @@ async fn continue_as_new_event_routes_to_latest_fs() {
         }
     };
 
-    let orchestration_registry = OrchestrationRegistry::builder()
-        .register("EvtCAN", orch)
-        .build();
+    let orchestration_registry = OrchestrationRegistry::builder().register("EvtCAN", orch).build();
     let activity_registry = ActivityRegistry::builder().build();
-    let rt = runtime::Runtime::start_with_store(store.clone(), std::sync::Arc::new(activity_registry), orchestration_registry).await;
+    let rt = runtime::Runtime::start_with_store(
+        store.clone(),
+        std::sync::Arc::new(activity_registry),
+        orchestration_registry,
+    )
+    .await;
 
     // Raise event after the second execution subscribes
     let store_for_wait = store.clone();
@@ -106,24 +142,48 @@ async fn continue_as_new_event_routes_to_latest_fs() {
         rt_c.raise_event("inst-can-evt", "Go", "ok").await;
     });
 
-    let h = rt.clone().start_orchestration("inst-can-evt", "EvtCAN", "start").await.unwrap();
+    let h = rt
+        .clone()
+        .start_orchestration("inst-can-evt", "EvtCAN", "start")
+        .await
+        .unwrap();
     let (_hist, out) = h.await.unwrap();
     assert_eq!(out.unwrap(), "");
 
     // Wait for overall completion and assert output via history
-    let ok2 = common::wait_for_history(store.clone(), "inst-can-evt", |hist| {
-        hist.iter().rev().any(|e| matches!(e, Event::OrchestrationCompleted { output } if output == "ok"))
-    }, 5_000).await;
+    let ok2 = common::wait_for_history(
+        store.clone(),
+        "inst-can-evt",
+        |hist| {
+            hist.iter()
+                .rev()
+                .any(|e| matches!(e, Event::OrchestrationCompleted { output } if output == "ok"))
+        },
+        5_000,
+    )
+    .await;
     assert!(ok2, "timeout waiting for completion");
 
     // Exec1 should not contain ExternalEvent; Exec2 should
     let e1 = store.read_with_execution("inst-can-evt", 1).await;
-    assert!(e1.iter().any(|e| matches!(e, Event::OrchestrationContinuedAsNew { input } if input == "wait")));
-    assert!(!e1.iter().any(|e| matches!(e, Event::ExternalEvent { name, .. } if name == "Go")));
+    assert!(
+        e1.iter()
+            .any(|e| matches!(e, Event::OrchestrationContinuedAsNew { input } if input == "wait"))
+    );
+    assert!(
+        !e1.iter()
+            .any(|e| matches!(e, Event::ExternalEvent { name, .. } if name == "Go"))
+    );
 
     let e2 = store.read_with_execution("inst-can-evt", 2).await;
-    assert!(e2.iter().any(|e| matches!(e, Event::ExternalSubscribed { name, .. } if name == "Go")));
-    assert!(e2.iter().any(|e| matches!(e, Event::ExternalEvent { name, .. } if name == "Go")));
+    assert!(
+        e2.iter()
+            .any(|e| matches!(e, Event::ExternalSubscribed { name, .. } if name == "Go"))
+    );
+    assert!(
+        e2.iter()
+            .any(|e| matches!(e, Event::ExternalEvent { name, .. } if name == "Go"))
+    );
 
     // read() must reflect the latest execution's history
     let execs = store.list_executions("inst-can-evt").await;
@@ -162,7 +222,12 @@ async fn continue_as_new_event_drop_then_process_fs() {
         .register("EvtDropThenProcess", orch)
         .build();
     let activity_registry = ActivityRegistry::builder().build();
-    let rt = runtime::Runtime::start_with_store(store.clone(), std::sync::Arc::new(activity_registry), orchestration_registry).await;
+    let rt = runtime::Runtime::start_with_store(
+        store.clone(),
+        std::sync::Arc::new(activity_registry),
+        orchestration_registry,
+    )
+    .await;
 
     // Start orchestrator
     let rt_c1 = rt.clone();
@@ -181,24 +246,45 @@ async fn continue_as_new_event_drop_then_process_fs() {
         rt_c2.raise_event("inst-can-evt-drop", "Go", "late").await;
     });
 
-    let h = rt.clone().start_orchestration("inst-can-evt-drop", "EvtDropThenProcess", "start").await.unwrap();
+    let h = rt
+        .clone()
+        .start_orchestration("inst-can-evt-drop", "EvtDropThenProcess", "start")
+        .await
+        .unwrap();
     let (_hist, out) = h.await.unwrap();
     assert_eq!(out.unwrap(), "");
 
     // Wait for completion with 'late' payload
-    let ok = common::wait_for_history(store.clone(), "inst-can-evt-drop", |hist| {
-        hist.iter().rev().any(|e| matches!(e, Event::OrchestrationCompleted { output } if output == "late"))
-    }, 10_000).await;
+    let ok = common::wait_for_history(
+        store.clone(),
+        "inst-can-evt-drop",
+        |hist| {
+            hist.iter()
+                .rev()
+                .any(|e| matches!(e, Event::OrchestrationCompleted { output } if output == "late"))
+        },
+        10_000,
+    )
+    .await;
     assert!(ok, "timeout waiting for completion");
 
     // Exec2 should have ExternalSubscribed and ExternalEvent for Go; payload should be 'late'
     let e2 = store.read_with_execution("inst-can-evt-drop", 2).await;
-    assert!(e2.iter().any(|e| matches!(e, Event::ExternalSubscribed { name, .. } if name == "Go")));
-    assert!(e2.iter().any(|e| matches!(e, Event::ExternalEvent { name, .. } if name == "Go")));
+    assert!(
+        e2.iter()
+            .any(|e| matches!(e, Event::ExternalSubscribed { name, .. } if name == "Go"))
+    );
+    assert!(
+        e2.iter()
+            .any(|e| matches!(e, Event::ExternalEvent { name, .. } if name == "Go"))
+    );
 
     // Exec1 must not have ExternalEvent
     let e1 = store.read_with_execution("inst-can-evt-drop", 1).await;
-    assert!(!e1.iter().any(|e| matches!(e, Event::ExternalEvent { name, .. } if name == "Go")));
+    assert!(
+        !e1.iter()
+            .any(|e| matches!(e, Event::ExternalEvent { name, .. } if name == "Go"))
+    );
 
     rt.shutdown().await;
 }
@@ -217,11 +303,14 @@ async fn event_drop_then_retry_after_subscribe_fs() {
         Ok(v)
     };
 
-    let orchestration_registry = OrchestrationRegistry::builder()
-        .register("EvtDropRetry", orch)
-        .build();
+    let orchestration_registry = OrchestrationRegistry::builder().register("EvtDropRetry", orch).build();
     let activity_registry = ActivityRegistry::builder().build();
-    let rt = runtime::Runtime::start_with_store(store.clone(), std::sync::Arc::new(activity_registry), orchestration_registry).await;
+    let rt = runtime::Runtime::start_with_store(
+        store.clone(),
+        std::sync::Arc::new(activity_registry),
+        orchestration_registry,
+    )
+    .await;
 
     // Send early event before subscription is recorded (instance will be active due to timer)
     let rt_c1 = rt.clone();
@@ -238,16 +327,21 @@ async fn event_drop_then_retry_after_subscribe_fs() {
         rt_c2.raise_event("inst-drop-retry", "Data", "ok").await;
     });
 
-    let h = rt.clone().start_orchestration("inst-drop-retry", "EvtDropRetry", "x").await.unwrap();
+    let h = rt
+        .clone()
+        .start_orchestration("inst-drop-retry", "EvtDropRetry", "x")
+        .await
+        .unwrap();
     let (_hist, out) = h.await.unwrap();
     assert_eq!(out.unwrap(), "ok");
 
     // Ensure only one ExternalEvent recorded, post-subscription
     let e = store.read("inst-drop-retry").await;
-    let events: Vec<&Event> = e.iter().filter(|ev| matches!(ev, Event::ExternalEvent { name, .. } if name == "Data")).collect();
+    let events: Vec<&Event> = e
+        .iter()
+        .filter(|ev| matches!(ev, Event::ExternalEvent { name, .. } if name == "Data"))
+        .collect();
     assert_eq!(events.len(), 1);
 
     rt.shutdown().await;
 }
-
-

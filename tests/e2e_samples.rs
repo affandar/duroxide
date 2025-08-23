@@ -2,16 +2,16 @@
 //!
 //! Each test demonstrates a common orchestration pattern using
 //! `OrchestrationContext` and the in-process `Runtime`.
-use std::sync::Arc;
-use rust_dtf::{OrchestrationContext, OrchestrationRegistry};
-use rust_dtf::runtime::{self};
-use rust_dtf::runtime::registry::ActivityRegistry;
-use rust_dtf::providers::HistoryStore;
-use rust_dtf::providers::fs::FsHistoryStore;
-use std::sync::Arc as StdArc;
 use futures::future::join;
 use futures::{FutureExt, pin_mut, select};
-use serde::{Serialize, Deserialize};
+use rust_dtf::providers::HistoryStore;
+use rust_dtf::providers::fs::FsHistoryStore;
+use rust_dtf::runtime::registry::ActivityRegistry;
+use rust_dtf::runtime::{self};
+use rust_dtf::{OrchestrationContext, OrchestrationRegistry};
+use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+use std::sync::Arc as StdArc;
 mod common;
 
 /// Hello World: define one activity and call it from an orchestrator.
@@ -44,8 +44,12 @@ async fn sample_hello_world_fs() {
         .register("HelloWorld", orchestration)
         .build();
 
-    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
-    let handle = rt.clone().start_orchestration("inst-sample-hello-1", "HelloWorld", "World").await;
+    let rt =
+        runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+    let handle = rt
+        .clone()
+        .start_orchestration("inst-sample-hello-1", "HelloWorld", "World")
+        .await;
     let (_hist, out) = handle.unwrap().await.unwrap();
     assert_eq!(out.unwrap(), "Hello, World!");
     rt.shutdown().await;
@@ -58,7 +62,6 @@ async fn sample_hello_world_fs() {
 /// - Use standard Rust control flow to drive subsequent activities
 #[tokio::test]
 async fn sample_basic_control_flow_fs() {
-    
     let td = tempfile::tempdir().unwrap();
     let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
 
@@ -84,8 +87,12 @@ async fn sample_basic_control_flow_fs() {
         .register("ControlFlow", orchestration)
         .build();
 
-    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
-    let handle = rt.clone().start_orchestration("inst-sample-cflow-1", "ControlFlow", "").await;
+    let rt =
+        runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+    let handle = rt
+        .clone()
+        .start_orchestration("inst-sample-cflow-1", "ControlFlow", "")
+        .await;
     let (_hist, out) = handle.unwrap().await.unwrap();
     assert_eq!(out.unwrap(), "picked_yes");
     rt.shutdown().await;
@@ -98,7 +105,6 @@ async fn sample_basic_control_flow_fs() {
 /// - Emit replay-safe traces per iteration
 #[tokio::test]
 async fn sample_loop_fs() {
-    
     let td = tempfile::tempdir().unwrap();
     let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
 
@@ -121,8 +127,12 @@ async fn sample_loop_fs() {
         .register("LoopOrchestration", orchestration)
         .build();
 
-    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
-    let handle = rt.clone().start_orchestration("inst-sample-loop-1", "LoopOrchestration", "").await;
+    let rt =
+        runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+    let handle = rt
+        .clone()
+        .start_orchestration("inst-sample-loop-1", "LoopOrchestration", "")
+        .await;
     let (_hist, out) = handle.unwrap().await.unwrap();
     assert_eq!(out.unwrap(), "startxxx");
     rt.shutdown().await;
@@ -135,14 +145,17 @@ async fn sample_loop_fs() {
 /// - On failure, run a compensating activity and log what happened
 #[tokio::test]
 async fn sample_error_handling_fs() {
-    
     let td = tempfile::tempdir().unwrap();
     let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
 
     // Register a fragile activity that may fail, and a recovery activity
     let activity_registry = ActivityRegistry::builder()
         .register("Fragile", |input: String| async move {
-            if input == "bad" { Err("boom".to_string()) } else { Ok("ok".to_string()) }
+            if input == "bad" {
+                Err("boom".to_string())
+            } else {
+                Ok("ok".to_string())
+            }
         })
         .register("Recover", |_input: String| async move { Ok("recovered".to_string()) })
         .build();
@@ -153,7 +166,7 @@ async fn sample_error_handling_fs() {
             Ok(v) => {
                 ctx.trace_info(format!("fragile succeeded value={v}"));
                 Ok(v)
-            },
+            }
             Err(e) => {
                 ctx.trace_warn(format!("fragile failed error={e}"));
                 let rec = ctx.schedule_activity("Recover", "").into_activity().await.unwrap();
@@ -161,7 +174,7 @@ async fn sample_error_handling_fs() {
                     ctx.trace_error(format!("unexpected recovery value={rec}"));
                 }
                 Ok(rec)
-            },
+            }
         }
     };
 
@@ -169,8 +182,12 @@ async fn sample_error_handling_fs() {
         .register("ErrorHandling", orchestration)
         .build();
 
-    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
-    let handle = rt.clone().start_orchestration("inst-sample-err-1", "ErrorHandling", "").await;
+    let rt =
+        runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+    let handle = rt
+        .clone()
+        .start_orchestration("inst-sample-err-1", "ErrorHandling", "")
+        .await;
     let (_hist, out) = handle.unwrap().await.unwrap();
     assert_eq!(out.unwrap(), "recovered");
     rt.shutdown().await;
@@ -183,13 +200,15 @@ async fn sample_error_handling_fs() {
 /// - Deterministic replay ensures join order is stable
 #[tokio::test]
 async fn dtf_legacy_gabbar_greetings_fs() {
-    
     let td = tempfile::tempdir().unwrap();
     let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
 
     // Register a greeting activity used by both branches
     let activity_registry = ActivityRegistry::builder()
-        .register("Greetings", |input: String| async move { Ok(format!("Hello, {input}!")) })
+        .register(
+            "Greetings",
+            |input: String| async move { Ok(format!("Hello, {input}!")) },
+        )
         .build();
 
     let orchestration = |ctx: OrchestrationContext, _input: String| async move {
@@ -204,8 +223,12 @@ async fn dtf_legacy_gabbar_greetings_fs() {
         .register("Greetings", orchestration)
         .build();
 
-    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
-    let handle = rt.clone().start_orchestration("inst-dtf-greetings", "Greetings", "").await;
+    let rt =
+        runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+    let handle = rt
+        .clone()
+        .start_orchestration("inst-dtf-greetings", "Greetings", "")
+        .await;
     let (_hist, out) = handle.unwrap().await.unwrap();
     assert_eq!(out.unwrap(), "Hello, Gabbar!, Hello, Samba!");
     rt.shutdown().await;
@@ -218,7 +241,6 @@ async fn dtf_legacy_gabbar_greetings_fs() {
 /// - Log and validate basic formatting of results
 #[tokio::test]
 async fn sample_system_activities_fs() {
-    
     let td = tempfile::tempdir().unwrap();
     let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
 
@@ -235,8 +257,12 @@ async fn sample_system_activities_fs() {
         .register("SystemActivities", orchestration)
         .build();
 
-    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
-    let handle = rt.clone().start_orchestration("inst-system-acts", "SystemActivities", "").await;
+    let rt =
+        runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+    let handle = rt
+        .clone()
+        .start_orchestration("inst-system-acts", "SystemActivities", "")
+        .await;
     let (_hist, out) = handle.unwrap().await.unwrap();
     let out = out.unwrap();
     // Basic assertions
@@ -256,7 +282,6 @@ async fn sample_system_activities_fs() {
 /// Sample: start an orchestration and poll its status until completion.
 #[tokio::test]
 async fn sample_status_polling_fs() {
-    
     use rust_dtf::OrchestrationStatus;
     let td = tempfile::tempdir().unwrap();
     let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
@@ -270,11 +295,20 @@ async fn sample_status_polling_fs() {
         .register("StatusSample", orchestration)
         .build();
 
-    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
-    let _h = rt.clone().start_orchestration("inst-status-sample", "StatusSample", "").await.unwrap();
+    let rt =
+        runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+    let _h = rt
+        .clone()
+        .start_orchestration("inst-status-sample", "StatusSample", "")
+        .await
+        .unwrap();
 
     // New helper: wait until terminal (Completed/Failed) or timeout.
-    match rt.wait_for_orchestration("inst-status-sample", std::time::Duration::from_secs(2)).await.unwrap() {
+    match rt
+        .wait_for_orchestration("inst-status-sample", std::time::Duration::from_secs(2))
+        .await
+        .unwrap()
+    {
         OrchestrationStatus::Completed { output } => assert_eq!(output, "done"),
         OrchestrationStatus::Failed { error } => panic!("unexpected failure: {error}"),
         _ => unreachable!(),
@@ -301,7 +335,11 @@ async fn sample_sub_orchestration_basic_fs() {
         Ok(up)
     };
     let parent = |ctx: OrchestrationContext, input: String| async move {
-        let r = ctx.schedule_sub_orchestration("ChildUpper", input).into_sub_orchestration().await.unwrap();
+        let r = ctx
+            .schedule_sub_orchestration("ChildUpper", input)
+            .into_sub_orchestration()
+            .await
+            .unwrap();
         Ok(format!("parent:{r}"))
     };
 
@@ -310,8 +348,13 @@ async fn sample_sub_orchestration_basic_fs() {
         .register("Parent", parent)
         .build();
 
-    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
-    let h = rt.clone().start_orchestration("inst-sub-basic", "Parent", "hi").await.unwrap();
+    let rt =
+        runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+    let h = rt
+        .clone()
+        .start_orchestration("inst-sub-basic", "Parent", "hi")
+        .await
+        .unwrap();
     let (_hist, out) = h.await.unwrap();
     assert_eq!(out.unwrap(), "parent:HI");
     rt.shutdown().await;
@@ -341,8 +384,12 @@ async fn sample_sub_orchestration_fanout_fs() {
         Ok(s)
     };
     let parent = |ctx: OrchestrationContext, _input: String| async move {
-        let a = ctx.schedule_sub_orchestration("ChildSum", "1,2").into_sub_orchestration();
-        let b = ctx.schedule_sub_orchestration("ChildSum", "3,4").into_sub_orchestration();
+        let a = ctx
+            .schedule_sub_orchestration("ChildSum", "1,2")
+            .into_sub_orchestration();
+        let b = ctx
+            .schedule_sub_orchestration("ChildSum", "3,4")
+            .into_sub_orchestration();
         let (ra, rb) = join(a, b).await;
         let total = ra.unwrap().parse::<i64>().unwrap() + rb.unwrap().parse::<i64>().unwrap();
         Ok(format!("total={total}"))
@@ -353,8 +400,13 @@ async fn sample_sub_orchestration_fanout_fs() {
         .register("ParentFan", parent)
         .build();
 
-    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
-    let h = rt.clone().start_orchestration("inst-sub-fan", "ParentFan", "").await.unwrap();
+    let rt =
+        runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+    let h = rt
+        .clone()
+        .start_orchestration("inst-sub-fan", "ParentFan", "")
+        .await
+        .unwrap();
     let (_hist, out) = h.await.unwrap();
     assert_eq!(out.unwrap(), "total=10");
     rt.shutdown().await;
@@ -378,11 +430,19 @@ async fn sample_sub_orchestration_chained_fs() {
         Ok(ctx.schedule_activity("AppendX", input).into_activity().await.unwrap())
     };
     let mid = |ctx: OrchestrationContext, input: String| async move {
-        let r = ctx.schedule_sub_orchestration("Leaf", input).into_sub_orchestration().await.unwrap();
+        let r = ctx
+            .schedule_sub_orchestration("Leaf", input)
+            .into_sub_orchestration()
+            .await
+            .unwrap();
         Ok(format!("{r}-mid"))
     };
     let root = |ctx: OrchestrationContext, input: String| async move {
-        let r = ctx.schedule_sub_orchestration("Mid", input).into_sub_orchestration().await.unwrap();
+        let r = ctx
+            .schedule_sub_orchestration("Mid", input)
+            .into_sub_orchestration()
+            .await
+            .unwrap();
         Ok(format!("root:{r}"))
     };
 
@@ -392,8 +452,13 @@ async fn sample_sub_orchestration_chained_fs() {
         .register("Root", root)
         .build();
 
-    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
-    let h = rt.clone().start_orchestration("inst-sub-chain", "Root", "a").await.unwrap();
+    let rt =
+        runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+    let h = rt
+        .clone()
+        .start_orchestration("inst-sub-chain", "Root", "a")
+        .await
+        .unwrap();
     let (_hist, out) = h.await.unwrap();
     assert_eq!(out.unwrap(), "root:ax-mid");
     rt.shutdown().await;
@@ -430,17 +495,30 @@ async fn sample_detached_orchestration_scheduling_fs() {
         .register("Coordinator", coordinator)
         .build();
 
-    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
-    let h = rt.clone().start_orchestration("CoordinatorRoot", "Coordinator", "").await.unwrap();
+    let rt =
+        runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+    let h = rt
+        .clone()
+        .start_orchestration("CoordinatorRoot", "Coordinator", "")
+        .await
+        .unwrap();
     let (_hist, out) = h.await.unwrap();
     assert_eq!(out.unwrap(), "scheduled");
 
     // The scheduled instances are plain W1/W2 (no prefixing)
     let insts = vec!["W1".to_string(), "W2".to_string()];
     for inst in insts {
-        match rt.wait_for_orchestration(&inst, std::time::Duration::from_secs(5)).await.unwrap() {
-            OrchestrationStatus::Completed { output } => { assert!(output == "A" || output == "B"); },
-            OrchestrationStatus::Failed { error } => panic!("scheduled orchestration failed: {error}"),
+        match rt
+            .wait_for_orchestration(&inst, std::time::Duration::from_secs(5))
+            .await
+            .unwrap()
+        {
+            OrchestrationStatus::Completed { output } => {
+                assert!(output == "A" || output == "B");
+            }
+            OrchestrationStatus::Failed { error } => {
+                panic!("scheduled orchestration failed: {error}")
+            }
             _ => unreachable!(),
         }
     }
@@ -469,36 +547,49 @@ async fn sample_continue_as_new_fs() {
             Ok(format!("final:{n}"))
         }
     };
-    let orchestration_registry = OrchestrationRegistry::builder()
-        .register("CanSample", orch)
-        .build();
+    let orchestration_registry = OrchestrationRegistry::builder().register("CanSample", orch).build();
 
-    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+    let rt =
+        runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
     // Initial handle finishes after ContinueAsNew; final result is available after latest execution completes
-    let h = rt.clone().start_orchestration("inst-sample-can", "CanSample", "0").await.unwrap();
+    let h = rt
+        .clone()
+        .start_orchestration("inst-sample-can", "CanSample", "0")
+        .await
+        .unwrap();
     let (_hist, out) = h.await.unwrap();
     assert_eq!(out.unwrap(), "");
     // Use wait helper instead of manual polling
-    match rt.wait_for_orchestration("inst-sample-can", std::time::Duration::from_secs(5)).await.unwrap() {
+    match rt
+        .wait_for_orchestration("inst-sample-can", std::time::Duration::from_secs(5))
+        .await
+        .unwrap()
+    {
         runtime::OrchestrationStatus::Completed { output } => assert_eq!(output, "final:3"),
         runtime::OrchestrationStatus::Failed { error } => panic!("failed: {error}"),
         _ => unreachable!(),
     }
     // Check executions exist
     let execs = store.list_executions("inst-sample-can").await;
-    assert_eq!(execs, vec![1,2,3,4]);
+    assert_eq!(execs, vec![1, 2, 3, 4]);
     rt.shutdown().await;
 }
-
 
 // Typed samples
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-struct AddReq { a: i32, b: i32 }
+struct AddReq {
+    a: i32,
+    b: i32,
+}
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-struct AddRes { sum: i32 }
+struct AddRes {
+    sum: i32,
+}
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-struct Ack { ok: bool }
+struct Ack {
+    ok: bool,
+}
 
 /// Typed activity + typed orchestration: Add two numbers and return a struct
 #[tokio::test]
@@ -522,7 +613,11 @@ async fn sample_typed_activity_and_orchestration_fs() {
         .build();
 
     let rt = runtime::Runtime::start_with_store(store, Arc::new(activity_registry), orchestration_registry).await;
-    let handle = rt.clone().start_orchestration_typed::<AddReq, AddRes>("inst-typed-add", "Adder", AddReq { a: 2, b: 3 }).await.unwrap();
+    let handle = rt
+        .clone()
+        .start_orchestration_typed::<AddReq, AddRes>("inst-typed-add", "Adder", AddReq { a: 2, b: 3 })
+        .await
+        .unwrap();
     let (_hist, out) = handle.await.unwrap();
     assert_eq!(out.unwrap(), AddRes { sum: 5 });
     rt.shutdown().await;
@@ -543,7 +638,8 @@ async fn sample_typed_event_fs() {
         .register_typed::<(), String, _, _>("WaitAck", orch)
         .build();
 
-    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+    let rt =
+        runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
     let store_for_wait = store.clone();
     let rt_c = rt.clone();
     tokio::spawn(async move {
@@ -552,7 +648,11 @@ async fn sample_typed_event_fs() {
         let payload = serde_json::to_string(&Ack { ok: true }).unwrap();
         rt_c.raise_event("inst-typed-ack", "Ready", payload).await;
     });
-    let h = rt.clone().start_orchestration_typed::<(), String>("inst-typed-ack", "WaitAck", ()).await.unwrap();
+    let h = rt
+        .clone()
+        .start_orchestration_typed::<(), String>("inst-typed-ack", "WaitAck", ())
+        .await
+        .unwrap();
     let (_hist, out) = h.await.unwrap();
     assert_eq!(out.unwrap(), serde_json::to_string(&Ack { ok: true }).unwrap());
     rt.shutdown().await;
@@ -597,7 +697,11 @@ async fn sample_mixed_string_and_typed_typed_orch_fs() {
         .build();
 
     let rt = runtime::Runtime::start_with_store(store, Arc::new(activity_registry), orchestration_registry).await;
-    let h = rt.clone().start_orchestration_typed::<AddReq, String>("inst-mixed-typed", "MixedTypedOrch", AddReq { a: 1, b: 2 }).await.unwrap();
+    let h = rt
+        .clone()
+        .start_orchestration_typed::<AddReq, String>("inst-mixed-typed", "MixedTypedOrch", AddReq { a: 1, b: 2 })
+        .await
+        .unwrap();
     let (_hist, out) = h.await.unwrap();
     let s = out.unwrap();
     assert!(s == "sum=3" || s == "up=HELLO");
@@ -639,7 +743,11 @@ async fn sample_mixed_string_and_typed_string_orch_fs() {
         .build();
 
     let rt = runtime::Runtime::start_with_store(store, Arc::new(activity_registry), orch_reg).await;
-    let h = rt.clone().start_orchestration("inst-mixed-string", "MixedStringOrch", "").await.unwrap();
+    let h = rt
+        .clone()
+        .start_orchestration("inst-mixed-string", "MixedStringOrch", "")
+        .await
+        .unwrap();
     let (_hist, out) = h.await.unwrap();
     let s = out.unwrap();
     assert!(s == "sum=12" || s == "up=RACE");
@@ -671,13 +779,25 @@ async fn sample_versioning_start_latest_vs_exact_fs() {
     let rt = runtime::Runtime::start_with_store(store, Arc::new(acts), reg.clone()).await;
 
     // With default policy (Latest), a new start should run v2
-    let h_latest = rt.clone().start_orchestration("inst-vers-latest", "Versioned", "").await.unwrap();
+    let h_latest = rt
+        .clone()
+        .start_orchestration("inst-vers-latest", "Versioned", "")
+        .await
+        .unwrap();
     let (_hist_l, out_l) = h_latest.await.unwrap();
     assert_eq!(out_l.unwrap(), "v2");
 
     // Pin new starts to 1.0.0 via policy, verify it runs v1
-    reg.set_version_policy("Versioned", rust_dtf::runtime::VersionPolicy::Exact(semver::Version::parse("1.0.0").unwrap())).await;
-    let h_exact = rt.clone().start_orchestration("inst-vers-exact", "Versioned", "").await.unwrap();
+    reg.set_version_policy(
+        "Versioned",
+        rust_dtf::runtime::VersionPolicy::Exact(semver::Version::parse("1.0.0").unwrap()),
+    )
+    .await;
+    let h_exact = rt
+        .clone()
+        .start_orchestration("inst-vers-exact", "Versioned", "")
+        .await
+        .unwrap();
     let (_hist_e, out_e) = h_exact.await.unwrap();
     assert_eq!(out_e.unwrap(), "v1");
 
@@ -720,7 +840,11 @@ async fn sample_versioning_sub_orchestration_explicit_vs_policy_fs() {
     let acts = ActivityRegistry::builder().build();
     let rt = runtime::Runtime::start_with_store(store, Arc::new(acts), reg).await;
 
-    let h = rt.clone().start_orchestration("inst-sub-vers", "ParentVers", "").await.unwrap();
+    let h = rt
+        .clone()
+        .start_orchestration("inst-sub-vers", "ParentVers", "")
+        .await
+        .unwrap();
     let (_hist, out) = h.await.unwrap();
     assert_eq!(out.unwrap(), "c1-c2");
 
@@ -755,7 +879,7 @@ async fn sample_versioning_continue_as_new_upgrade_fs() {
     };
 
     let reg = OrchestrationRegistry::builder()
-        .register("LongRunner", v1)                // implicit 1.0.0
+        .register("LongRunner", v1) // implicit 1.0.0
         .register_versioned("LongRunner", "2.0.0", v2)
         .build();
     let acts = ActivityRegistry::builder().build();
@@ -763,14 +887,21 @@ async fn sample_versioning_continue_as_new_upgrade_fs() {
 
     // Start on v1; the first handle will resolve at the CAN boundary
     // Pin initial start to v1 explicitly to demonstrate upgrade via CAN; default policy remains Latest (v2)
-    let h = rt.clone().start_orchestration_versioned("inst-can-upgrade", "LongRunner", "1.0.0", "state" ).await.unwrap();
+    let h = rt
+        .clone()
+        .start_orchestration_versioned("inst-can-upgrade", "LongRunner", "1.0.0", "state")
+        .await
+        .unwrap();
     let _ = h.await.unwrap();
 
     // Poll for the new execution (v2) to complete
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     loop {
         match rt.get_orchestration_status("inst-can-upgrade").await {
-            OrchestrationStatus::Completed { output } => { assert_eq!(output, "upgraded:v1:state"); break; }
+            OrchestrationStatus::Completed { output } => {
+                assert_eq!(output, "upgraded:v1:state");
+                break;
+            }
             OrchestrationStatus::Failed { error } => panic!("unexpected failure: {error}"),
             _ if std::time::Instant::now() < deadline => tokio::time::sleep(std::time::Duration::from_millis(10)).await,
             _ => panic!("timeout waiting for upgraded completion"),
@@ -781,10 +912,16 @@ async fn sample_versioning_continue_as_new_upgrade_fs() {
     let execs = store.list_executions("inst-can-upgrade").await;
     assert_eq!(execs, vec![1, 2]);
     let e1 = store.read_with_execution("inst-can-upgrade", 1).await;
-    assert!(e1.iter().any(|e| matches!(e, rust_dtf::Event::OrchestrationContinuedAsNew { .. })));
+    assert!(
+        e1.iter()
+            .any(|e| matches!(e, rust_dtf::Event::OrchestrationContinuedAsNew { .. }))
+    );
     // Exec2 must start with the v1-marked payload, proving v1 ran first and handed off via CAN
     let e2 = store.read_with_execution("inst-can-upgrade", 2).await;
-    assert!(e2.iter().any(|e| matches!(e, rust_dtf::Event::OrchestrationStarted { input, .. } if input == "v1:state")));
+    assert!(
+        e2.iter()
+            .any(|e| matches!(e, rust_dtf::Event::OrchestrationStarted { input, .. } if input == "v1:state"))
+    );
 
     rt.shutdown().await;
 }
@@ -822,10 +959,15 @@ async fn sample_cancellation_parent_cascades_to_children_fs() {
         .register("ParentSample", parent)
         .build();
     let activity_registry = ActivityRegistry::builder().build();
-    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+    let rt =
+        runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
 
     // Start the parent orchestration
-    let _h = rt.clone().start_orchestration("inst-sample-cancel", "ParentSample", "").await.unwrap();
+    let _h = rt
+        .clone()
+        .start_orchestration("inst-sample-cancel", "ParentSample", "")
+        .await
+        .unwrap();
 
     // Allow scheduling turn to run and child to start
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -834,9 +976,17 @@ async fn sample_cancellation_parent_cascades_to_children_fs() {
     rt.cancel_instance("inst-sample-cancel", "user_request").await;
 
     // Wait for the parent to fail deterministically with a canceled error
-    let ok = common::wait_for_history(store.clone(), "inst-sample-cancel", |hist| {
-        hist.iter().rev().any(|e| matches!(e, Event::OrchestrationFailed { error } if error.starts_with("canceled: user_request")))
-    }, 5_000).await;
+    let ok = common::wait_for_history(
+        store.clone(),
+        "inst-sample-cancel",
+        |hist| {
+            hist.iter().rev().any(
+                |e| matches!(e, Event::OrchestrationFailed { error } if error.starts_with("canceled: user_request")),
+            )
+        },
+        5_000,
+    )
+    .await;
     assert!(ok, "timeout waiting for parent cancel failure");
 
     // Find child instance (prefix is parent::sub::<id>) and check it was canceled too

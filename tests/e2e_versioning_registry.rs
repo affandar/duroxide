@@ -1,11 +1,22 @@
-use semver::Version;
 use rust_dtf::{OrchestrationContext, OrchestrationRegistry};
+use semver::Version;
 
-fn handler_echo() -> impl Fn(OrchestrationContext, String) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String, String>> + Send>> + Send + Sync + Clone + 'static {
+fn handler_echo() -> impl Fn(
+    OrchestrationContext,
+    String,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String, String>> + Send>>
++ Send
++ Sync
++ Clone
++ 'static {
     #[derive(Clone)]
     struct Echo;
     impl Echo {
-        fn call(&self, _ctx: OrchestrationContext, input: String) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String, String>> + Send>> {
+        fn call(
+            &self,
+            _ctx: OrchestrationContext,
+            input: String,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String, String>> + Send>> {
             Box::pin(async move { Ok(input) })
         }
     }
@@ -33,11 +44,14 @@ fn register_multiple_versions_latest_is_highest() {
         .build();
     let mut vs = reg.list_orchestration_versions("OrderFlow");
     vs.sort();
-    assert_eq!(vs, vec![
-        Version::parse("1.0.0").unwrap(),
-        Version::parse("1.1.0").unwrap(),
-        Version::parse("2.0.0").unwrap(),
-    ]);
+    assert_eq!(
+        vs,
+        vec![
+            Version::parse("1.0.0").unwrap(),
+            Version::parse("1.1.0").unwrap(),
+            Version::parse("2.0.0").unwrap(),
+        ]
+    );
 }
 
 #[tokio::test]
@@ -50,7 +64,11 @@ async fn policy_exact_pins_resolve_for_start() {
     let (v_latest, _h) = reg.resolve_for_start("OrderFlow").await.expect("resolve latest");
     assert_eq!(v_latest, Version::parse("1.1.0").unwrap());
     // Pin to 1.0.0
-    reg.set_version_policy("OrderFlow", rust_dtf::runtime::VersionPolicy::Exact(Version::parse("1.0.0").unwrap())).await;
+    reg.set_version_policy(
+        "OrderFlow",
+        rust_dtf::runtime::VersionPolicy::Exact(Version::parse("1.0.0").unwrap()),
+    )
+    .await;
     let (v_pinned, _h) = reg.resolve_for_start("OrderFlow").await.expect("resolve pinned");
     assert_eq!(v_pinned, Version::parse("1.0.0").unwrap());
     // Unpin back to Latest
@@ -94,8 +112,12 @@ fn resolve_exact_missing_returns_none() {
     let reg = OrchestrationRegistry::builder()
         .register("OrderFlow", handler_echo())
         .build();
-    assert!(reg.resolve_exact("OrderFlow", &Version::parse("9.9.9").unwrap()).is_none());
-    assert!(reg.resolve_exact("Missing", &Version::parse("1.0.0").unwrap()).is_none());
+    assert!(
+        reg.resolve_exact("OrderFlow", &Version::parse("9.9.9").unwrap())
+            .is_none()
+    );
+    assert!(
+        reg.resolve_exact("Missing", &Version::parse("1.0.0").unwrap())
+            .is_none()
+    );
 }
-
-
