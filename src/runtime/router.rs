@@ -6,27 +6,23 @@ use tracing::warn;
 pub enum OrchestratorMsg {
     ActivityCompleted {
         instance: String,
+        execution_id: u64,
         id: u64,
         result: String,
         ack_token: Option<String>,
     },
     ActivityFailed {
         instance: String,
+        execution_id: u64,
         id: u64,
         error: String,
         ack_token: Option<String>,
     },
     TimerFired {
         instance: String,
+        execution_id: u64,
         id: u64,
         fire_at_ms: u64,
-        ack_token: Option<String>,
-    },
-    ExternalEvent {
-        instance: String,
-        id: u64,
-        name: String,
-        data: String,
         ack_token: Option<String>,
     },
     ExternalByName {
@@ -37,12 +33,14 @@ pub enum OrchestratorMsg {
     },
     SubOrchCompleted {
         instance: String,
+        execution_id: u64,
         id: u64,
         result: String,
         ack_token: Option<String>,
     },
     SubOrchFailed {
         instance: String,
+        execution_id: u64,
         id: u64,
         error: String,
         ack_token: Option<String>,
@@ -74,7 +72,6 @@ impl InstanceRouter {
             OrchestratorMsg::ActivityCompleted { instance, .. }
             | OrchestratorMsg::ActivityFailed { instance, .. }
             | OrchestratorMsg::TimerFired { instance, .. }
-            | OrchestratorMsg::ExternalEvent { instance, .. }
             | OrchestratorMsg::ExternalByName { instance, .. }
             | OrchestratorMsg::SubOrchCompleted { instance, .. }
             | OrchestratorMsg::SubOrchFailed { instance, .. }
@@ -95,7 +92,6 @@ impl InstanceRouter {
             OrchestratorMsg::ActivityCompleted { instance, .. }
             | OrchestratorMsg::ActivityFailed { instance, .. }
             | OrchestratorMsg::TimerFired { instance, .. }
-            | OrchestratorMsg::ExternalEvent { instance, .. }
             | OrchestratorMsg::ExternalByName { instance, .. }
             | OrchestratorMsg::SubOrchCompleted { instance, .. }
             | OrchestratorMsg::SubOrchFailed { instance, .. }
@@ -123,7 +119,6 @@ pub fn kind_of(msg: &OrchestratorMsg) -> &'static str {
         OrchestratorMsg::ActivityCompleted { .. } => "ActivityCompleted",
         OrchestratorMsg::ActivityFailed { .. } => "ActivityFailed",
         OrchestratorMsg::TimerFired { .. } => "TimerFired",
-        OrchestratorMsg::ExternalEvent { .. } => "ExternalEvent",
         OrchestratorMsg::ExternalByName { .. } => "ExternalByName",
         OrchestratorMsg::SubOrchCompleted { .. } => "SubOrchCompleted",
         OrchestratorMsg::SubOrchFailed { .. } => "SubOrchFailed",

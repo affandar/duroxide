@@ -258,6 +258,30 @@ async fn missing_pinned_version_cancels_on_replay_fs() {
     let activities2 = ActivityRegistry::builder().build();
     let rt2 = runtime::Runtime::start_with_store(store.clone(), StdArc::new(activities2), reg2).await;
 
+    // Poke the instance to activate and run a turn for deterministic failure
+    let _ = store
+        .enqueue_work(
+            rust_dtf::providers::QueueKind::Orchestrator,
+            rust_dtf::providers::WorkItem::ExternalRaised {
+                instance: "inst-missing-pin".to_string(),
+                name: "Noop".to_string(),
+                data: "poke".to_string(),
+            },
+        )
+        .await;
+
+    // Also poke the child instance to trigger its activation and version check
+    let _ = store
+        .enqueue_work(
+            rust_dtf::providers::QueueKind::Orchestrator,
+            rust_dtf::providers::WorkItem::ExternalRaised {
+                instance: "inst-missing-pin::sub::1".to_string(),
+                name: "Noop".to_string(),
+                data: "poke".to_string(),
+            },
+        )
+        .await;
+
     // Expect the parent to fail with missing version error upon replay
     match rt2
         .wait_for_orchestration("inst-missing-pin", std::time::Duration::from_secs(5))

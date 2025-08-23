@@ -156,6 +156,7 @@ pub async fn dispatch_start_sub_orchestration(
                     Ok(res) => {
                         let _ = router_tx.send(super::OrchestratorMsg::SubOrchCompleted {
                             instance: parent_inst,
+                            execution_id: 1, // TODO: Get actual parent execution ID
                             id,
                             result: res,
                             ack_token: None,
@@ -164,6 +165,7 @@ pub async fn dispatch_start_sub_orchestration(
                     Err(err) => {
                         let _ = router_tx.send(super::OrchestratorMsg::SubOrchFailed {
                             instance: parent_inst,
+                            execution_id: 1, // TODO: Get actual parent execution ID
                             id,
                             error: err,
                             ack_token: None,
@@ -173,6 +175,7 @@ pub async fn dispatch_start_sub_orchestration(
                 Err(e) => {
                     let _ = router_tx.send(super::OrchestratorMsg::SubOrchFailed {
                         instance: parent_inst,
+                        execution_id: 1, // TODO: Get actual parent execution ID
                         id,
                         error: format!("child join error: {e}"),
                         ack_token: None,
@@ -182,6 +185,7 @@ pub async fn dispatch_start_sub_orchestration(
             Err(e) => {
                 let _ = router_tx.send(super::OrchestratorMsg::SubOrchFailed {
                     instance: parent_inst,
+                    execution_id: 1, // TODO: Get actual parent execution ID
                     id,
                     error: e,
                     ack_token: None,

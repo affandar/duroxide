@@ -8,6 +8,7 @@ pub fn append_completion(history: &mut Vec<Event>, msg: OrchestratorMsg) -> (Opt
     match msg {
         OrchestratorMsg::ActivityCompleted {
             instance,
+            execution_id: _,
             id,
             result,
             ack_token,
@@ -34,7 +35,11 @@ pub fn append_completion(history: &mut Vec<Event>, msg: OrchestratorMsg) -> (Opt
             (ack_token, true)
         }
         OrchestratorMsg::ActivityFailed {
-            id, error, ack_token, ..
+            execution_id: _,
+            id, 
+            error, 
+            ack_token, 
+            ..
         } => {
             if history
                 .iter()
@@ -46,6 +51,7 @@ pub fn append_completion(history: &mut Vec<Event>, msg: OrchestratorMsg) -> (Opt
             (ack_token, true)
         }
         OrchestratorMsg::TimerFired {
+            execution_id: _,
             id,
             fire_at_ms,
             ack_token,
@@ -60,29 +66,7 @@ pub fn append_completion(history: &mut Vec<Event>, msg: OrchestratorMsg) -> (Opt
             history.push(Event::TimerFired { id, fire_at_ms });
             (ack_token, true)
         }
-        OrchestratorMsg::ExternalEvent {
-            id,
-            name,
-            data,
-            ack_token,
-            ..
-        } => {
-            if history
-                .iter()
-                .any(|e| matches!(e, Event::ExternalSubscribed { id: cid, name: n } if *cid == id && *n == name))
-            {
-                if history
-                    .iter()
-                    .any(|e| matches!(e, Event::ExternalEvent { id: cid, name: n, .. } if *cid == id && *n == name))
-                {
-                    return (ack_token, false);
-                }
-                history.push(Event::ExternalEvent { id, name, data });
-                return (ack_token, true);
-            }
-            warn!(id, name=%name, "dropping external: no active subscription");
-            (ack_token, false)
-        }
+        
         OrchestratorMsg::ExternalByName {
             name, data, ack_token, ..
         } => {
@@ -108,7 +92,11 @@ pub fn append_completion(history: &mut Vec<Event>, msg: OrchestratorMsg) -> (Opt
             }
         }
         OrchestratorMsg::SubOrchCompleted {
-            id, result, ack_token, ..
+            execution_id: _,
+            id, 
+            result, 
+            ack_token, 
+            ..
         } => {
             if history
                 .iter()
@@ -120,7 +108,11 @@ pub fn append_completion(history: &mut Vec<Event>, msg: OrchestratorMsg) -> (Opt
             (ack_token, true)
         }
         OrchestratorMsg::SubOrchFailed {
-            id, error, ack_token, ..
+            execution_id: _,
+            id, 
+            error, 
+            ack_token, 
+            ..
         } => {
             if history
                 .iter()

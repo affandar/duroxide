@@ -85,6 +85,8 @@ pub struct Runtime {
     orchestration_registry: OrchestrationRegistry,
     // Pinned versions for instances started in this runtime (in-memory for now)
     pinned_versions: Mutex<HashMap<String, Version>>,
+    /// Track the current execution ID for each active instance
+    current_execution_ids: Mutex<HashMap<String, u64>>,
     // StartRequest layer removed; instances are activated directly
 }
 
@@ -270,6 +272,44 @@ impl Runtime {
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0)
     }
+    /// Get the current execution ID for an instance, or fetch from store if not tracked
+    async fn get_execution_id_for_instance(&self, instance: &str) -> u64 {
+        // First check in-memory tracking
+        if let Some(&exec_id) = self.current_execution_ids.lock().await.get(instance) {
+            return exec_id;
+        }
+        
+        // Fall back to querying the store
+        self.history_store.latest_execution_id(instance).await.unwrap_or(1)
+    }
+
+    /// Validate that a completion's execution_id matches the current running execution.
+    /// Returns true if valid, false if should be ignored (with warning logged).
+    async fn validate_completion_execution_id(&self, instance: &str, completion_execution_id: u64) -> bool {
+        let current_execution_ids = self.current_execution_ids.lock().await;
+        if let Some(&current_id) = current_execution_ids.get(instance) {
+            if completion_execution_id != current_id {
+                if completion_execution_id < current_id {
+                    warn!(
+                        instance = %instance,
+                        completion_execution_id = completion_execution_id,
+                        current_execution_id = current_id,
+                        "ignoring completion from older execution (likely from ContinueAsNew)"
+                    );
+                } else {
+                    warn!(
+                        instance = %instance,
+                        completion_execution_id = completion_execution_id,
+                        current_execution_id = current_id,
+                        "ignoring completion from future execution (unexpected)"
+                    );
+                }
+                return false;
+            }
+        }
+        true
+    }
+
     /// Enqueue a new orchestration instance start. The runtime will pick this up
     /// in the background and drive it to completion.
     /// Start a typed orchestration; input/output are serialized internally.
@@ -430,6 +470,7 @@ impl Runtime {
             result_waiters: Mutex::new(HashMap::new()),
             orchestration_registry,
             pinned_versions: Mutex::new(HashMap::new()),
+            current_execution_ids: Mutex::new(HashMap::new()),
         });
 
         // background orchestrator dispatcher (extracted from inline poller)
@@ -472,7 +513,13 @@ impl Runtime {
                             }
                             let _ = self.history_store.ack(QueueKind::Orchestrator, &token).await;
                         }
-                        WorkItem::ActivityCompleted { instance, id, result } => {
+                        WorkItem::ActivityCompleted { instance, execution_id, id, result } => {
+                            // Validate execution ID first
+                            if !self.validate_completion_execution_id(&instance, execution_id).await {
+                                let _ = self.history_store.ack(QueueKind::Orchestrator, &token).await;
+                                continue;
+                            }
+                            
                             if !self.router.inboxes.lock().await.contains_key(&instance) {
                                 let orch_name = self
                                     .history_store
@@ -490,13 +537,20 @@ impl Runtime {
                             } else {
                                 let _ = self.router_tx.send(OrchestratorMsg::ActivityCompleted {
                                     instance,
+                                    execution_id,
                                     id,
                                     result,
                                     ack_token: Some(token),
                                 });
                             }
                         }
-                        WorkItem::ActivityFailed { instance, id, error } => {
+                        WorkItem::ActivityFailed { instance, execution_id, id, error } => {
+                            // Validate execution ID first
+                            if !self.validate_completion_execution_id(&instance, execution_id).await {
+                                let _ = self.history_store.ack(QueueKind::Orchestrator, &token).await;
+                                continue;
+                            }
+                            
                             if !self.router.inboxes.lock().await.contains_key(&instance) {
                                 let orch_name = self
                                     .history_store
@@ -514,6 +568,7 @@ impl Runtime {
                             } else {
                                 let _ = self.router_tx.send(OrchestratorMsg::ActivityFailed {
                                     instance,
+                                    execution_id,
                                     id,
                                     error,
                                     ack_token: Some(token),
@@ -522,9 +577,16 @@ impl Runtime {
                         }
                         WorkItem::TimerFired {
                             instance,
+                            execution_id,
                             id,
                             fire_at_ms,
                         } => {
+                            // Validate execution ID first
+                            if !self.validate_completion_execution_id(&instance, execution_id).await {
+                                let _ = self.history_store.ack(QueueKind::Orchestrator, &token).await;
+                                continue;
+                            }
+                            
                             if !self.router.inboxes.lock().await.contains_key(&instance) {
                                 let orch_name = self
                                     .history_store
@@ -542,6 +604,7 @@ impl Runtime {
                             } else {
                                 let _ = self.router_tx.send(OrchestratorMsg::TimerFired {
                                     instance,
+                                    execution_id,
                                     id,
                                     fire_at_ms,
                                     ack_token: Some(token),
@@ -583,9 +646,16 @@ impl Runtime {
                         }
                         WorkItem::SubOrchCompleted {
                             parent_instance,
+                            parent_execution_id,
                             parent_id,
                             result,
                         } => {
+                            // Validate execution ID first
+                            if !self.validate_completion_execution_id(&parent_instance, parent_execution_id).await {
+                                let _ = self.history_store.ack(QueueKind::Orchestrator, &token).await;
+                                continue;
+                            }
+                            
                             if !self.router.inboxes.lock().await.contains_key(&parent_instance) {
                                 let orch_name = self
                                     .history_store
@@ -603,6 +673,7 @@ impl Runtime {
                             } else {
                                 let _ = self.router_tx.send(OrchestratorMsg::SubOrchCompleted {
                                     instance: parent_instance,
+                                    execution_id: parent_execution_id,
                                     id: parent_id,
                                     result,
                                     ack_token: Some(token),
@@ -611,9 +682,16 @@ impl Runtime {
                         }
                         WorkItem::SubOrchFailed {
                             parent_instance,
+                            parent_execution_id,
                             parent_id,
                             error,
                         } => {
+                            // Validate execution ID first
+                            if !self.validate_completion_execution_id(&parent_instance, parent_execution_id).await {
+                                let _ = self.history_store.ack(QueueKind::Orchestrator, &token).await;
+                                continue;
+                            }
+                            
                             if !self.router.inboxes.lock().await.contains_key(&parent_instance) {
                                 let orch_name = self
                                     .history_store
@@ -631,6 +709,7 @@ impl Runtime {
                             } else {
                                 let _ = self.router_tx.send(OrchestratorMsg::SubOrchFailed {
                                     instance: parent_instance,
+                                    execution_id: parent_execution_id,
                                     id: parent_id,
                                     error,
                                     ack_token: Some(token),
@@ -693,25 +772,29 @@ impl Runtime {
                             if let Some(handler) = activities.get(&name) {
                                 match handler.invoke(input).await {
                                     Ok(result) => {
+                                                                                let execution_id = self.get_execution_id_for_instance(&instance).await;
                                         let _ = self
                                             .history_store
                                             .enqueue_work(
-                                                QueueKind::Orchestrator,
-                                                WorkItem::ActivityCompleted {
-                                                    instance: instance.clone(),
-                                                    id,
-                                                    result,
-                                                },
-                                            )
+                                QueueKind::Orchestrator,
+                                WorkItem::ActivityCompleted {
+                                    instance: instance.clone(),
+                                    execution_id,
+                                    id,
+                                    result,
+                                },
+                            )
                                             .await;
                                     }
                                     Err(error) => {
+                                        let execution_id = self.get_execution_id_for_instance(&instance).await;
                                         let _ = self
                                             .history_store
                                             .enqueue_work(
                                                 QueueKind::Orchestrator,
                                                 WorkItem::ActivityFailed {
                                                     instance: instance.clone(),
+                                                    execution_id,
                                                     id,
                                                     error,
                                                 },
@@ -720,16 +803,18 @@ impl Runtime {
                                     }
                                 }
                             } else {
+                                                                let execution_id = self.get_execution_id_for_instance(&instance).await;
                                 let _ = self
                                     .history_store
                                     .enqueue_work(
-                                        QueueKind::Orchestrator,
-                                        WorkItem::ActivityFailed {
-                                            instance: instance.clone(),
-                                            id,
-                                            error: format!("unregistered:{}", name),
-                                        },
-                                    )
+                        QueueKind::Orchestrator,
+                        WorkItem::ActivityFailed {
+                            instance: instance.clone(),
+                            execution_id,
+                            id,
+                            error: format!("unregistered:{}", name),
+                        },
+                    )
                                     .await;
                             }
                             let _ = self.history_store.ack(QueueKind::Worker, &token).await;
@@ -761,19 +846,22 @@ impl Runtime {
                             let now = Self::now_ms_static();
                             let delay = fire_at_ms.saturating_sub(now);
                             let store = self.history_store.clone();
+                            let rt = self.clone();
                             tokio::spawn(async move {
                                 tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
                                 // Small slack to bias external events ahead of timer in close races
                                 tokio::time::sleep(std::time::Duration::from_millis(Self::POLLER_GATE_DELAY_MS)).await;
+                                                                let execution_id = rt.get_execution_id_for_instance(&instance).await;
                                 let _ = store
                                     .enqueue_work(
-                                        QueueKind::Orchestrator,
-                                        WorkItem::TimerFired {
-                                            instance,
-                                            id,
-                                            fire_at_ms,
-                                        },
-                                    )
+                        QueueKind::Orchestrator,
+                        WorkItem::TimerFired {
+                            instance,
+                            execution_id,
+                            id,
+                            fire_at_ms,
+                        },
+                    )
                                     .await;
                             });
                             let _ = self.history_store.ack(QueueKind::Timer, &token).await;
@@ -836,6 +924,7 @@ impl Runtime {
                 // spawn a blocking remove since Drop can't be async
                 let _ = tokio::spawn(async move {
                     rt.active_instances.lock().await.remove(&inst);
+                    rt.current_execution_ids.lock().await.remove(&inst);
                 });
             }
         }
@@ -847,6 +936,10 @@ impl Runtime {
         // Load existing history from store (now exists). For ContinueAsNew we may start with a
         // fresh execution that only has OrchestrationStarted; we always want the latest execution.
         let mut history: Vec<Event> = self.history_store.read(instance).await;
+        
+        // Track the current execution ID for this instance
+        let current_execution_id = self.history_store.latest_execution_id(instance).await.unwrap_or(1);
+        self.current_execution_ids.lock().await.insert(instance.to_string(), current_execution_id);
         // Pin version from history if present for this orchestration; ignore placeholder "0.0.0"
         if let Some(ver_str) = history.iter().rev().find_map(|e| match e {
             Event::OrchestrationStarted { name: n, version, .. } if n == orchestration_name => Some(version.clone()),
@@ -924,7 +1017,8 @@ impl Runtime {
                     .enqueue_work(
                         QueueKind::Orchestrator,
                         WorkItem::SubOrchFailed {
-                            parent_instance: pinst,
+                            parent_instance: pinst.clone(),
+                            parent_execution_id: self.get_execution_id_for_instance(&pinst).await,
                             parent_id: pid,
                             error: err.clone(),
                         },
@@ -1092,7 +1186,8 @@ impl Runtime {
                                 .enqueue_work(
                                     QueueKind::Orchestrator,
                                     WorkItem::SubOrchCompleted {
-                                        parent_instance: pinst,
+                                        parent_instance: pinst.clone(),
+                                        parent_execution_id: self.get_execution_id_for_instance(&pinst).await,
                                         parent_id: pid,
                                         result: s.clone(),
                                     },
@@ -1105,7 +1200,8 @@ impl Runtime {
                                 .enqueue_work(
                                     QueueKind::Orchestrator,
                                     WorkItem::SubOrchFailed {
-                                        parent_instance: pinst,
+                                        parent_instance: pinst.clone(),
+                                        parent_execution_id: self.get_execution_id_for_instance(&pinst).await,
                                         parent_id: pid,
                                         error: e.clone(),
                                     },

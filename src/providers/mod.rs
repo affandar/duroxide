@@ -24,11 +24,13 @@ pub enum WorkItem {
     },
     ActivityCompleted {
         instance: String,
+        execution_id: u64,
         id: u64,
         result: String,
     },
     ActivityFailed {
         instance: String,
+        execution_id: u64,
         id: u64,
         error: String,
     },
@@ -39,6 +41,7 @@ pub enum WorkItem {
     },
     TimerFired {
         instance: String,
+        execution_id: u64,
         id: u64,
         fire_at_ms: u64,
     },
@@ -49,11 +52,13 @@ pub enum WorkItem {
     },
     SubOrchCompleted {
         parent_instance: String,
+        parent_execution_id: u64,
         parent_id: u64,
         result: String,
     },
     SubOrchFailed {
         parent_instance: String,
+        parent_execution_id: u64,
         parent_id: u64,
         error: String,
     },

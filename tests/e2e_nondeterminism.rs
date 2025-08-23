@@ -151,6 +151,7 @@ async fn completion_kind_mismatch_triggers_nondeterminism() {
             QueueKind::Orchestrator,
             WorkItem::ActivityCompleted {
                 instance: "inst-mismatch".to_string(),
+                execution_id: 1,
                 id: timer_id, // This is a timer ID, but we're sending ActivityCompleted!
                 result: "wrong_kind_result".to_string(),
             },
@@ -213,6 +214,7 @@ async fn unexpected_completion_id_triggers_nondeterminism() {
             QueueKind::Orchestrator,
             WorkItem::ActivityCompleted {
                 instance: "inst-unexpected".to_string(),
+                execution_id: 1,
                 id: 999, // This ID was never scheduled by the orchestration
                 result: "unexpected_result".to_string(),
             },
@@ -271,6 +273,7 @@ async fn unexpected_timer_completion_triggers_nondeterminism() {
             QueueKind::Orchestrator,
             WorkItem::TimerFired {
                 instance: "inst-timer".to_string(),
+                execution_id: 1,
                 id: 123,
                 fire_at_ms: 0,
             },
