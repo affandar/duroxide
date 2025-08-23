@@ -776,43 +776,113 @@ impl Runtime {
     }
 
     fn start_timer_dispatcher(self: Arc<Self>) -> JoinHandle<()> {
-        tokio::spawn(async move {
-            loop {
-                if let Some((item, token)) = self.history_store.dequeue_peek_lock(QueueKind::Timer).await {
-                    match item {
-                        WorkItem::TimerSchedule {
-                            instance,
-                            execution_id,
-                            id,
-                            fire_at_ms,
-                        } => {
-                            // Convert schedule into a real-time delay and enqueue TimerFired later
-                            let now = Self::now_ms_static();
-                            let delay = fire_at_ms.saturating_sub(now);
-                            let store = self.history_store.clone();
-                            tokio::spawn(async move {
-                                tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
-                                let _ = store
-                                    .enqueue_work(
+        if self.history_store.supports_delayed_visibility() {
+            return tokio::spawn(async move {
+                loop {
+                    if let Some((item, token)) = self.history_store.dequeue_peek_lock(QueueKind::Timer).await {
+                        match item {
+                            WorkItem::TimerSchedule { instance, execution_id, id, fire_at_ms } => {
+                                let now = Self::now_ms_static();
+                                let delay = fire_at_ms.saturating_sub(now);
+                                let store = self.history_store.clone();
+                                tokio::spawn(async move {
+                                    tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+                                    let _ = store.enqueue_work(
                                         QueueKind::Orchestrator,
-                                        WorkItem::TimerFired {
-                                            instance,
-                                            execution_id,
-                                            id,
-                                            fire_at_ms,
-                                        },
-                                    )
-                                    .await;
-                            });
-                            let _ = self.history_store.ack(QueueKind::Timer, &token).await;
+                                        WorkItem::TimerFired { instance, execution_id, id, fire_at_ms }
+                                    ).await;
+                                });
+                                let _ = self.history_store.ack(QueueKind::Timer, &token).await;
+                            }
+                            other => {
+                                error!(?other, "unexpected WorkItem in Timer dispatcher; state corruption");
+                                panic!("unexpected WorkItem in Timer dispatcher");
+                            }
                         }
-                        other => {
-                            error!(?other, "unexpected WorkItem in Timer dispatcher; state corruption");
-                            panic!("unexpected WorkItem in Timer dispatcher");
+                    } else {
+                        tokio::time::sleep(std::time::Duration::from_millis(Self::POLLER_IDLE_SLEEP_MS)).await;
+                    }
+                }
+            });
+        }
+
+        // Fallback in-process timer service
+        tokio::spawn(async move {
+            use std::cmp::Reverse;
+            use std::collections::{BinaryHeap, HashMap, HashSet};
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<(WorkItem, String)>();
+            let notify = std::sync::Arc::new(tokio::sync::Notify::new());
+            let notify_rx = notify.clone();
+
+            // Intake task: keep pulling schedules and forwarding to service, then ack
+            let intake_rt = self.clone();
+            let intake_tx = tx.clone();
+            tokio::spawn(async move {
+                loop {
+                    if let Some((item, token)) = intake_rt.history_store.dequeue_peek_lock(QueueKind::Timer).await {
+                        match item {
+                            WorkItem::TimerSchedule { instance, execution_id, id, fire_at_ms } => {
+                                let _ = intake_tx.send((WorkItem::TimerSchedule { instance, execution_id, id, fire_at_ms }, token.clone()));
+                                let _ = intake_rt.history_store.ack(QueueKind::Timer, &token).await;
+                                notify_rx.notify_one();
+                            }
+                            other => {
+                                error!(?other, "unexpected WorkItem in Timer dispatcher; state corruption");
+                                panic!("unexpected WorkItem in Timer dispatcher");
+                            }
                         }
+                    } else {
+                        tokio::time::sleep(std::time::Duration::from_millis(Self::POLLER_IDLE_SLEEP_MS)).await;
+                    }
+                }
+            });
+
+            // Service state structures
+            let mut min_heap: BinaryHeap<Reverse<(u64, String)>> = BinaryHeap::new();
+            let mut items: HashMap<String, (String, u64, u64)> = HashMap::new(); // key -> (instance, execution_id, id)
+            let mut keys: HashSet<String> = HashSet::new();
+
+            loop {
+                // Drain new schedules
+                while let Ok((WorkItem::TimerSchedule { instance, execution_id, id, fire_at_ms }, _t)) = rx.try_recv() {
+                    let key = format!("{}|{}|{}|{}", instance, execution_id, id, fire_at_ms);
+                    if keys.insert(key.clone()) {
+                        min_heap.push(Reverse((fire_at_ms, key.clone())));
+                        items.insert(key, (instance, execution_id, id));
+                    }
+                }
+
+                // Collect due timers
+                let now = Self::now_ms_static();
+                let mut due: Vec<(String, u64, u64, u64)> = Vec::new();
+                while let Some(Reverse((ts, key))) = min_heap.peek().cloned() {
+                    if ts <= now {
+                        let _ = min_heap.pop();
+                        if let Some((inst, exec, id)) = items.remove(&key) {
+                            keys.remove(&key);
+                            due.push((inst, exec, id, ts));
+                        }
+                    } else {
+                        break;
+                    }
+                }
+                for (instance, execution_id, id, fire_at_ms) in due.drain(..) {
+                    let _ = self.history_store.enqueue_work(
+                        QueueKind::Orchestrator,
+                        WorkItem::TimerFired { instance, execution_id, id, fire_at_ms }
+                    ).await;
+                }
+
+                // Sleep until next due or notification
+                if let Some(Reverse((next_ts, _))) = min_heap.peek().cloned() {
+                    let now = Self::now_ms_static();
+                    let dur = next_ts.saturating_sub(now).max(1);
+                    tokio::select! {
+                        _ = tokio::time::sleep(std::time::Duration::from_millis(dur)) => {},
+                        _ = notify.notified() => {},
                     }
                 } else {
-                    tokio::time::sleep(std::time::Duration::from_millis(Self::POLLER_IDLE_SLEEP_MS)).await;
+                    notify.notified().await;
                 }
             }
         })
