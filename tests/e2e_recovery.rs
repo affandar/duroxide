@@ -1,11 +1,12 @@
-use std::sync::Arc;
-use rust_dtf::{Event, OrchestrationContext, OrchestrationRegistry};
-use rust_dtf::runtime::{self, activity::ActivityRegistry};
-use rust_dtf::providers::HistoryStore;
-use rust_dtf::providers::in_memory::InMemoryHistoryStore;
-use rust_dtf::providers::fs::FsHistoryStore;
-use std::sync::Arc as StdArc;
 use rust_dtf::OrchestrationStatus;
+use rust_dtf::providers::HistoryStore;
+use rust_dtf::providers::fs::FsHistoryStore;
+use rust_dtf::providers::in_memory::InMemoryHistoryStore;
+use rust_dtf::runtime::registry::ActivityRegistry;
+use rust_dtf::runtime::{self};
+use rust_dtf::{Event, OrchestrationContext, OrchestrationRegistry};
+use std::sync::Arc;
+use std::sync::Arc as StdArc;
 mod common;
 use common::*;
 
@@ -24,16 +25,27 @@ where
     };
 
     let count_scheduled = |hist: &Vec<Event>, input: &str| -> usize {
-        hist.iter().filter(|e| matches!(e, Event::ActivityScheduled { name, input: inp, .. } if name == "Step" && inp == input)).count()
+        hist.iter()
+            .filter(
+                |e| matches!(e, Event::ActivityScheduled { name, input: inp, .. } if name == "Step" && inp == input),
+            )
+            .count()
     };
 
     let store1 = make_store_stage1();
-    let activity_registry = ActivityRegistry::builder().register("Step", |input: String| async move { Ok(input) }).build();
+    let activity_registry = ActivityRegistry::builder()
+        .register("Step", |input: String| async move { Ok(input) })
+        .build();
     let orchestration_registry = OrchestrationRegistry::builder()
         .register("RecoveryTest", orchestrator)
         .build();
 
-    let rt1 = runtime::Runtime::start_with_store(store1.clone(), Arc::new(activity_registry.clone()), orchestration_registry.clone()).await;
+    let rt1 = runtime::Runtime::start_with_store(
+        store1.clone(),
+        Arc::new(activity_registry.clone()),
+        orchestration_registry.clone(),
+    )
+    .await;
     let handle1 = rt1.clone().start_orchestration(&instance, "RecoveryTest", "").await;
 
     // Wait until the subscription for the Resume event has been written to history.
@@ -51,7 +63,12 @@ where
     let store2 = make_store_stage2();
     // Remove the instance before attempting restart; runtime now treats existing instances as an error
     let _ = store2.remove_instance(&instance).await;
-    let rt2 = runtime::Runtime::start_with_store(store2.clone(), Arc::new(activity_registry.clone()), orchestration_registry.clone()).await;
+    let rt2 = runtime::Runtime::start_with_store(
+        store2.clone(),
+        Arc::new(activity_registry.clone()),
+        orchestration_registry.clone(),
+    )
+    .await;
     let rt2_c = rt2.clone();
     let instance_for_spawn = instance.clone();
     tokio::spawn(async move {
@@ -71,10 +88,15 @@ where
 
 #[tokio::test]
 async fn recovery_across_restart_fs_provider() {
-    
     let base = std::env::current_dir().unwrap().join(".testdata");
     std::fs::create_dir_all(&base).unwrap();
-    let dir = base.join(format!("fs_recovery_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis()));
+    let dir = base.join(format!(
+        "fs_recovery_{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis()
+    ));
     std::fs::create_dir_all(&dir).unwrap();
 
     let instance = String::from("inst-recover-fs-1");
@@ -86,7 +108,11 @@ async fn recovery_across_restart_fs_provider() {
 
     let store = StdArc::new(FsHistoryStore::new(&dir, false)) as StdArc<dyn HistoryStore>;
     let hist = store.read(&instance).await;
-    let count = |inp: &str| hist.iter().filter(|e| matches!(e, Event::ActivityScheduled { name, input, .. } if name == "Step" && input == inp)).count();
+    let count = |inp: &str| {
+        hist.iter()
+            .filter(|e| matches!(e, Event::ActivityScheduled { name, input, .. } if name == "Step" && input == inp))
+            .count()
+    };
     assert_eq!(count("1"), 1);
     assert_eq!(count("2"), 1);
     assert_eq!(count("3"), 1);
@@ -95,7 +121,6 @@ async fn recovery_across_restart_fs_provider() {
 
 #[tokio::test]
 async fn recovery_across_restart_inmem_provider() {
-    
     let instance = String::from("inst-recover-mem-1");
     let make_store1 = || StdArc::new(InMemoryHistoryStore::default()) as StdArc<dyn HistoryStore>;
     let make_store2 = || StdArc::new(InMemoryHistoryStore::default()) as StdArc<dyn HistoryStore>;
@@ -107,27 +132,44 @@ async fn recovery_across_restart_inmem_provider() {
     let hist_before = store_before.read(&instance).await;
     let hist_after = store_after.read(&instance).await;
 
-    let count = |hist: &Vec<Event>, inp: &str| hist.iter().filter(|e| matches!(e, Event::ActivityScheduled { name, input, .. } if name == "Step" && input == inp)).count();
+    let count = |hist: &Vec<Event>, inp: &str| {
+        hist.iter()
+            .filter(|e| matches!(e, Event::ActivityScheduled { name, input, .. } if name == "Step" && input == inp))
+            .count()
+    };
     assert_eq!(count(&hist_before, "1"), 0);
     assert_eq!(count(&hist_before, "2"), 0);
     assert_eq!(count(&hist_after, "1"), 0);
     assert_eq!(count(&hist_after, "2"), 0);
 }
 
-
 #[tokio::test]
 async fn recovery_multiple_orchestrations_fs_provider() {
     // Prepare a dedicated directory
     let base = std::env::current_dir().unwrap().join(".testdata");
     std::fs::create_dir_all(&base).unwrap();
-    let dir = base.join(format!("fs_recovery_multi_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis()));
+    let dir = base.join(format!(
+        "fs_recovery_multi_{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis()
+    ));
     std::fs::create_dir_all(&dir).unwrap();
 
     // Orchestrations of different shapes
     let orch_echo_wait = |ctx: OrchestrationContext, input: String| async move {
-        let _a1 = ctx.schedule_activity("Echo", input.clone()).into_activity().await.unwrap();
+        let _a1 = ctx
+            .schedule_activity("Echo", input.clone())
+            .into_activity()
+            .await
+            .unwrap();
         ctx.schedule_timer(200).into_timer().await;
-        let _a2 = ctx.schedule_activity("Echo", input.clone()).into_activity().await.unwrap();
+        let _a2 = ctx
+            .schedule_activity("Echo", input.clone())
+            .into_activity()
+            .await
+            .unwrap();
         Ok(format!("done:{input}"))
     };
     let orch_upper_only = |ctx: OrchestrationContext, input: String| async move {
@@ -147,7 +189,11 @@ async fn recovery_multiple_orchestrations_fs_provider() {
     let orch_two_timers = |ctx: OrchestrationContext, input: String| async move {
         ctx.schedule_timer(150).into_timer().await;
         ctx.schedule_timer(150).into_timer().await;
-        let _ = ctx.schedule_activity("Echo", input.clone()).into_activity().await.unwrap();
+        let _ = ctx
+            .schedule_activity("Echo", input.clone())
+            .into_activity()
+            .await
+            .unwrap();
         Ok(format!("twodone:{input}"))
     };
 
@@ -172,7 +218,12 @@ async fn recovery_multiple_orchestrations_fs_provider() {
 
     // Stage 1: start instances and shut down before all complete
     let store1 = StdArc::new(FsHistoryStore::new(&dir, true)) as StdArc<dyn HistoryStore>;
-    let rt1 = runtime::Runtime::start_with_store(store1.clone(), Arc::new(activity_registry.clone()), orchestration_registry.clone()).await;
+    let rt1 = runtime::Runtime::start_with_store(
+        store1.clone(),
+        Arc::new(activity_registry.clone()),
+        orchestration_registry.clone(),
+    )
+    .await;
 
     let cases = vec![
         ("inst-echo-wait", "EchoWait", "i1"),
@@ -187,30 +238,59 @@ async fn recovery_multiple_orchestrations_fs_provider() {
     }
     // Wait for each orchestration to reach its expected pre-shutdown checkpoint
     // EchoWait: timer created but not yet fired
-    assert!(wait_for_history(store1.clone(), "inst-echo-wait", |h| {
-        let has_timer_created = h.iter().any(|e| matches!(e, Event::TimerCreated { .. }));
-        let has_timer_fired = h.iter().any(|e| matches!(e, Event::TimerFired { .. }));
-        has_timer_created && !has_timer_fired
-    }, 2000).await);
+    assert!(
+        wait_for_history(
+            store1.clone(),
+            "inst-echo-wait",
+            |h| {
+                let has_timer_created = h.iter().any(|e| matches!(e, Event::TimerCreated { .. }));
+                let has_timer_fired = h.iter().any(|e| matches!(e, Event::TimerFired { .. }));
+                has_timer_created && !has_timer_fired
+            },
+            2000
+        )
+        .await
+    );
 
     // UpperOnly: just needs its single activity scheduled/completed
-    assert!(wait_for_history(store1.clone(), "inst-upper", |h| {
-        h.iter().any(|e| matches!(e, Event::ActivityCompleted { .. }))
-    }, 1000).await);
+    assert!(
+        wait_for_history(
+            store1.clone(),
+            "inst-upper",
+            |h| { h.iter().any(|e| matches!(e, Event::ActivityCompleted { .. })) },
+            1000
+        )
+        .await
+    );
 
     // WaitEvent: subscription written
     assert!(wait_for_subscription(store1.clone(), "inst-wait", "Go", 1000).await);
 
     // ComputeSum: either scheduled or completed quickly
-    assert!(wait_for_history(store1.clone(), "inst-sum", |h| {
-        h.iter().any(|e| matches!(e, Event::ActivityScheduled { name, .. } if name == "Add"))
-        || h.iter().any(|e| matches!(e, Event::ActivityCompleted { .. }))
-    }, 2000).await);
+    assert!(
+        wait_for_history(
+            store1.clone(),
+            "inst-sum",
+            |h| {
+                h.iter()
+                    .any(|e| matches!(e, Event::ActivityScheduled { name, .. } if name == "Add"))
+                    || h.iter().any(|e| matches!(e, Event::ActivityCompleted { .. }))
+            },
+            2000
+        )
+        .await
+    );
 
     // TwoTimers: both timers created
-    assert!(wait_for_history(store1.clone(), "inst-2timers", |h| {
-        h.iter().filter(|e| matches!(e, Event::TimerCreated { .. })).count() >= 2
-    }, 1000).await);
+    assert!(
+        wait_for_history(
+            store1.clone(),
+            "inst-2timers",
+            |h| { h.iter().filter(|e| matches!(e, Event::TimerCreated { .. })).count() >= 2 },
+            1000
+        )
+        .await
+    );
     rt1.shutdown().await;
 
     // Stage 2: restart with same store; runtime should auto-resume non-terminal instances
@@ -228,17 +308,19 @@ async fn recovery_multiple_orchestrations_fs_provider() {
 
     // Use wait helper for each instance
     for (inst, name, input) in &cases {
-        match rt2.wait_for_orchestration(inst, std::time::Duration::from_secs(6)).await.unwrap() {
-            OrchestrationStatus::Completed { output } => {
-                match *name {
-                    "EchoWait" => assert_eq!(output, format!("done:{input}")),
-                    "UpperOnly" => assert_eq!(output, format!("upper:{}", input.to_uppercase())),
-                    "WaitEvent" => assert_eq!(output, format!("acked:{input}")),
-                    "ComputeSum" => assert_eq!(output, "sum=5"),
-                    "TwoTimers" => assert_eq!(output, format!("twodone:{input}")),
-                    _ => unreachable!(),
-                }
-            }
+        match rt2
+            .wait_for_orchestration(inst, std::time::Duration::from_secs(6))
+            .await
+            .unwrap()
+        {
+            OrchestrationStatus::Completed { output } => match *name {
+                "EchoWait" => assert_eq!(output, format!("done:{input}")),
+                "UpperOnly" => assert_eq!(output, format!("upper:{}", input.to_uppercase())),
+                "WaitEvent" => assert_eq!(output, format!("acked:{input}")),
+                "ComputeSum" => assert_eq!(output, "sum=5"),
+                "TwoTimers" => assert_eq!(output, format!("twodone:{input}")),
+                _ => unreachable!(),
+            },
             OrchestrationStatus::Failed { error } => panic!("{inst} failed: {error}"),
             OrchestrationStatus::Running | OrchestrationStatus::NotFound => unreachable!(),
         }
@@ -246,6 +328,3 @@ async fn recovery_multiple_orchestrations_fs_provider() {
 
     rt2.shutdown().await;
 }
-
-
-

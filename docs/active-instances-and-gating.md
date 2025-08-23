@@ -22,7 +22,7 @@ This document explains how the runtime uses an in‑memory `active_instances` se
 Two background workers enforce gates using `active_instances`:
 
 1) Start request worker (local queue)
-- If an instance is already active, a duplicate start is deferred: the worker re‑enqueues the `StartRequest` after a short delay (~5ms).
+- If an instance is already active, duplicate starts are ignored by an in-memory `active_instances` guard.
 - If inactive, it marks the instance as pending and spawns `run_instance_to_completion`.
 
 2) Provider poller (work queue)
@@ -89,7 +89,7 @@ Immediately after activation, the runtime scans history to:
 - Activation/deactivation and run loop: `src/runtime/mod.rs::Runtime::run_instance_to_completion`
 - Start worker and gating: `src/runtime/mod.rs` (background start queue worker)
 - Provider poller and `GatePolicy`: `src/runtime/mod.rs` (work queue poller loop)
-- Router and inbox registration: `CompletionRouter` in `src/runtime/mod.rs`
+- Router and inbox registration: `InstanceRouter` in `src/runtime/mod.rs`
 - External delivery/drop: `append_completion` (ExternalByName → ExternalEvent or warn+drop)
 - Rehydration: `rehydrate_pending` in `src/runtime/mod.rs`
 

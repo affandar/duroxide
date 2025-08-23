@@ -2,19 +2,41 @@ use crate::Event;
 
 pub fn detect_frontier_nondeterminism(prior: &[Event], deltas: &[Event]) -> Option<String> {
     // If prior has at least one schedule and no completions yet, and deltas include net-new schedules, flag
-    let had_schedule = prior.iter().any(|e| matches!(e,
-        Event::ActivityScheduled {..} | Event::TimerCreated {..} | Event::ExternalSubscribed {..} |
-        Event::OrchestrationChained {..} | Event::SubOrchestrationScheduled {..}
-    ));
-    let had_completion = prior.iter().any(|e| matches!(e,
-        Event::ActivityCompleted {..} | Event::ActivityFailed {..} | Event::TimerFired {..} |
-        Event::ExternalEvent {..} | Event::SubOrchestrationCompleted {..} | Event::SubOrchestrationFailed {..}
-    ));
+    let had_schedule = prior.iter().any(|e| {
+        matches!(
+            e,
+            Event::ActivityScheduled { .. }
+                | Event::TimerCreated { .. }
+                | Event::ExternalSubscribed { .. }
+                | Event::OrchestrationChained { .. }
+                | Event::SubOrchestrationScheduled { .. }
+        )
+    });
+    let had_completion = prior.iter().any(|e| {
+        matches!(
+            e,
+            Event::ActivityCompleted { .. }
+                | Event::ActivityFailed { .. }
+                | Event::TimerFired { .. }
+                | Event::ExternalEvent { .. }
+                | Event::SubOrchestrationCompleted { .. }
+                | Event::SubOrchestrationFailed { .. }
+        )
+    });
     if had_schedule && !had_completion {
-        let new_schedules = deltas.iter().filter(|e| matches!(e,
-            Event::ActivityScheduled {..} | Event::TimerCreated {..} | Event::ExternalSubscribed {..} |
-            Event::OrchestrationChained {..} | Event::SubOrchestrationScheduled {..}
-        )).count();
+        let new_schedules = deltas
+            .iter()
+            .filter(|e| {
+                matches!(
+                    e,
+                    Event::ActivityScheduled { .. }
+                        | Event::TimerCreated { .. }
+                        | Event::ExternalSubscribed { .. }
+                        | Event::OrchestrationChained { .. }
+                        | Event::SubOrchestrationScheduled { .. }
+                )
+            })
+            .count();
         if new_schedules > 0 {
             return Some("nondeterministic: new schedules introduced at same decision frontier".to_string());
         }
@@ -31,7 +53,12 @@ pub fn detect_await_mismatch(last: &[(&'static str, u64)], claims: &crate::Claim
             "sub" => claims.sub_orchestrations.contains(id),
             _ => true,
         };
-        if !ok { return Some(format!("nondeterministic: completion id={} of kind '{}' was not awaited this turn", id, kind)); }
+        if !ok {
+            return Some(format!(
+                "nondeterministic: completion id={} of kind '{}' was not awaited this turn",
+                id, kind
+            ));
+        }
     }
     None
 }
@@ -55,10 +82,18 @@ pub fn detect_completion_kind_mismatch(prior: &[Event], last: &[(&'static str, u
     let mut id_to_kind: HashMap<u64, &'static str> = HashMap::new();
     for e in prior {
         match e {
-            Event::ActivityScheduled { id, .. } => { id_to_kind.insert(*id, "activity"); },
-            Event::TimerCreated { id, .. } => { id_to_kind.insert(*id, "timer"); },
-            Event::ExternalSubscribed { id, .. } => { id_to_kind.insert(*id, "external"); },
-            Event::SubOrchestrationScheduled { id, .. } => { id_to_kind.insert(*id, "sub"); },
+            Event::ActivityScheduled { id, .. } => {
+                id_to_kind.insert(*id, "activity");
+            }
+            Event::TimerCreated { id, .. } => {
+                id_to_kind.insert(*id, "timer");
+            }
+            Event::ExternalSubscribed { id, .. } => {
+                id_to_kind.insert(*id, "external");
+            }
+            Event::SubOrchestrationScheduled { id, .. } => {
+                id_to_kind.insert(*id, "sub");
+            }
             _ => {}
         }
     }
@@ -70,7 +105,7 @@ pub fn detect_completion_kind_mismatch(prior: &[Event], last: &[(&'static str, u
                     id, expected, kind
                 ));
             }
-            Some(_) => {},
+            Some(_) => {}
             None => {
                 return Some(format!(
                     "nondeterministic: completion kind '{}' for id={} has no matching schedule in prior history",
@@ -81,5 +116,3 @@ pub fn detect_completion_kind_mismatch(prior: &[Event], last: &[(&'static str, u
     }
     None
 }
-
-

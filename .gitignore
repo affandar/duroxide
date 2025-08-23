@@ -1,3 +1,5 @@
+dtf-data/
+apps/*/dtf-data/
 # Build artifacts
 /target
 
@@ -18,3 +20,7 @@
 
 # Test artifacts and temporary data
 .testdata/
+
+# Coverage outputs
+coverage.lcov
+/target/llvm-cov/**

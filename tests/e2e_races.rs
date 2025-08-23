@@ -1,10 +1,11 @@
-use futures::future::{select, Either};
+use futures::future::{Either, select};
 use std::sync::Arc;
 mod common;
-use rust_dtf::{Event, OrchestrationContext, OrchestrationRegistry};
-use rust_dtf::runtime::{self, activity::ActivityRegistry};
 use rust_dtf::providers::HistoryStore;
 use rust_dtf::providers::fs::FsHistoryStore;
+use rust_dtf::runtime::registry::ActivityRegistry;
+use rust_dtf::runtime::{self};
+use rust_dtf::{Event, OrchestrationContext, OrchestrationRegistry};
 use std::sync::Arc as StdArc;
 
 async fn wait_external_completes_with(store: StdArc<dyn HistoryStore>) {
@@ -18,7 +19,8 @@ async fn wait_external_completes_with(store: StdArc<dyn HistoryStore>) {
         .register("WaitExternal", orchestrator)
         .build();
 
-    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+    let rt =
+        runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
     let store_for_wait = store.clone();
     let rt_clone = rt.clone();
     tokio::spawn(async move {
@@ -33,7 +35,10 @@ async fn wait_external_completes_with(store: StdArc<dyn HistoryStore>) {
     assert!(matches!(final_history[0], Event::OrchestrationStarted { .. }));
     assert!(matches!(final_history[1], Event::ExternalSubscribed { .. }));
     assert!(matches!(final_history[2], Event::ExternalEvent { .. }));
-    assert!(matches!(final_history.last().unwrap(), Event::OrchestrationCompleted { .. }));
+    assert!(matches!(
+        final_history.last().unwrap(),
+        Event::OrchestrationCompleted { .. }
+    ));
     assert_eq!(final_history.len(), 4);
 
     rt.shutdown().await;
@@ -60,7 +65,8 @@ async fn race_external_vs_timer_ordering_with(store: StdArc<dyn HistoryStore>) {
         .register("RaceOrchestration", orchestrator)
         .build();
 
-    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+    let rt =
+        runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
     let store_for_wait = store.clone();
     let rt_clone = rt.clone();
     tokio::spawn(async move {
@@ -69,13 +75,25 @@ async fn race_external_vs_timer_ordering_with(store: StdArc<dyn HistoryStore>) {
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         rt_clone.raise_event("inst-race-order-1", "Race", "ok").await;
     });
-    let handle = rt.clone().start_orchestration("inst-race-order-1", "RaceOrchestration", "").await;
+    let handle = rt
+        .clone()
+        .start_orchestration("inst-race-order-1", "RaceOrchestration", "")
+        .await;
     let (final_history, output) = handle.unwrap().await.unwrap();
 
     assert_eq!(output.unwrap(), "timer");
-    let idx_t = final_history.iter().position(|e| matches!(e, Event::TimerFired { .. })).unwrap();
-    if let Some(idx_e) = final_history.iter().position(|e| matches!(e, Event::ExternalEvent { .. })) {
-        assert!(idx_t < idx_e, "expected timer to fire before external: {final_history:#?}");
+    let idx_t = final_history
+        .iter()
+        .position(|e| matches!(e, Event::TimerFired { .. }))
+        .unwrap();
+    if let Some(idx_e) = final_history
+        .iter()
+        .position(|e| matches!(e, Event::ExternalEvent { .. }))
+    {
+        assert!(
+            idx_t < idx_e,
+            "expected timer to fire before external: {final_history:#?}"
+        );
     }
 
     rt.shutdown().await;
@@ -105,19 +123,26 @@ async fn race_event_vs_timer_event_wins_with(store: StdArc<dyn HistoryStore>) {
         .register("RaceEventVsTimer", orchestrator)
         .build();
 
-    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+    let rt =
+        runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
     let store_for_wait = store.clone();
     let rt_clone = rt.clone();
     tokio::spawn(async move {
         let _ = common::wait_for_subscription(store_for_wait, "inst-race-order-2", "Race", 1000).await;
         rt_clone.raise_event("inst-race-order-2", "Race", "ok").await;
     });
-    let handle = rt.clone().start_orchestration("inst-race-order-2", "RaceEventVsTimer", "").await;
+    let handle = rt
+        .clone()
+        .start_orchestration("inst-race-order-2", "RaceEventVsTimer", "")
+        .await;
     let (final_history, output) = handle.unwrap().await.unwrap();
 
     // With batching, timer may win select even if external event is delivered first; assert consistent history ordering
     assert_eq!(output.unwrap(), "ok");
-    let idx_e = final_history.iter().position(|e| matches!(e, Event::ExternalEvent { .. })).unwrap();
+    let idx_e = final_history
+        .iter()
+        .position(|e| matches!(e, Event::ExternalEvent { .. }))
+        .unwrap();
     if let Some(idx_t) = final_history.iter().position(|e| matches!(e, Event::TimerFired { .. })) {
         assert!(idx_e < idx_t, "expected external before timer: {final_history:#?}");
     }
@@ -132,5 +157,3 @@ async fn race_event_vs_timer_event_wins_fs() {
     let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
     race_event_vs_timer_event_wins_with(store).await;
 }
-
-

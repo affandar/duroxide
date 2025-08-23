@@ -80,8 +80,7 @@ impl Runtime {
 
 ### Providers
 
-`HistoryStore` abstracts storage; see the in-memory and filesystem-backed providers.
-
+`HistoryStore` abstracts storage and the multi-queue work API.
 ```rust
 #[async_trait]
 pub trait HistoryStore {
@@ -90,11 +89,14 @@ pub trait HistoryStore {
   async fn reset(&self);
   async fn list_instances(&self) -> Vec<String>;
   async fn dump_all_pretty(&self) -> String;
-  // instance lifecycle and work queue
+  // instance lifecycle
   async fn create_instance(&self, instance: &str) -> Result<(), String>;
   async fn remove_instance(&self, instance: &str) -> Result<(), String>;
-  async fn enqueue_work(&self, item: WorkItem) -> Result<(), String>;
-  async fn dequeue_work(&self) -> Option<WorkItem>;
+  // multi-queue work API (peek-lock)
+  async fn enqueue_work(&self, kind: QueueKind, item: WorkItem) -> Result<(), String>;
+  async fn dequeue_peek_lock(&self, kind: QueueKind) -> Option<(WorkItem, String)>;
+  async fn ack(&self, kind: QueueKind, token: &str) -> Result<(), String>;
+  async fn abandon(&self, kind: QueueKind, token: &str) -> Result<(), String>;
   // multi-execution (ContinueAsNew)
   async fn latest_execution_id(&self, instance: &str) -> Option<u64>;
   async fn list_executions(&self, instance: &str) -> Vec<u64>;
@@ -102,6 +104,8 @@ pub trait HistoryStore {
   async fn append_with_execution(&self, instance: &str, execution_id: u64, new_events: Vec<Event>) -> Result<(), String>;
   async fn reset_for_continue_as_new(&self, instance: &str, orchestration: &str, version: &str, input: &str, parent_instance: Option<&str>, parent_id: Option<u64>) -> Result<u64, String>;
 }
+
+pub enum QueueKind { Orchestrator, Worker, Timer }
 ```
 
 ### Introspection

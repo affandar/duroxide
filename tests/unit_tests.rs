@@ -1,9 +1,10 @@
-use rust_dtf::{run_turn, OrchestrationContext, Event, Action, OrchestrationRegistry};
-use rust_dtf::runtime::{self, activity::ActivityRegistry};
-use rust_dtf::providers::{HistoryStore};
+use rust_dtf::providers::HistoryStore;
 use rust_dtf::providers::fs::FsHistoryStore;
-use std::sync::Arc;
 use rust_dtf::providers::in_memory::InMemoryHistoryStore;
+use rust_dtf::runtime::registry::ActivityRegistry;
+use rust_dtf::runtime::{self};
+use rust_dtf::{Action, Event, OrchestrationContext, OrchestrationRegistry, run_turn};
+use std::sync::Arc;
 
 // Helper to create runtime with registries for tests
 #[allow(dead_code)]
@@ -26,9 +27,13 @@ fn action_emission_single_turn() {
     let (hist_after, actions, _logs, out) = run_turn(history, orchestrator);
     assert!(out.is_none(), "must not complete in first turn");
     assert_eq!(actions.len(), 1, "exactly one action expected");
-    match &actions[0] { Action::CallActivity { name, input, .. } => {
-        assert_eq!(name, "A"); assert_eq!(input, "1");
-    }, _ => panic!("unexpected action kind") }
+    match &actions[0] {
+        Action::CallActivity { name, input, .. } => {
+            assert_eq!(name, "A");
+            assert_eq!(input, "1");
+        }
+        _ => panic!("unexpected action kind"),
+    }
     // History should already contain ActivityScheduled
     assert!(matches!(hist_after[0], Event::ActivityScheduled { .. }));
 }
@@ -38,17 +43,25 @@ fn action_emission_single_turn() {
 fn correlation_out_of_order_completion() {
     // Prepare history: schedule A(1), then an unrelated timer, then the activity completion
     let history = vec![
-        Event::ActivityScheduled { id: 1, name: "A".into(), input: "1".into() },
+        Event::ActivityScheduled {
+            id: 1,
+            name: "A".into(),
+            input: "1".into(),
+        },
         Event::TimerFired { id: 42, fire_at_ms: 0 },
-        Event::ActivityCompleted { id: 1, result: "ok".into() },
+        Event::ActivityCompleted {
+            id: 1,
+            result: "ok".into(),
+        },
     ];
 
-    let orchestrator = |ctx: OrchestrationContext| async move {
-        ctx.schedule_activity("A", "1").into_activity().await
-    };
+    let orchestrator = |ctx: OrchestrationContext| async move { ctx.schedule_activity("A", "1").into_activity().await };
 
     let (_hist_after, actions, _logs, out) = run_turn(history, orchestrator);
-    assert!(actions.is_empty(), "should resolve from existing completion, no new actions");
+    assert!(
+        actions.is_empty(),
+        "should resolve from existing completion, no new actions"
+    );
     assert_eq!(out.unwrap(), Ok("ok".to_string()));
 }
 
@@ -65,13 +78,18 @@ async fn deterministic_replay_activity_only() {
             Ok(input.parse::<i32>().unwrap_or(0).saturating_add(1).to_string())
         })
         .build();
-    
+
     let orchestration_registry = OrchestrationRegistry::builder()
-        .register("TestOrchestration", move |ctx, _input| async move { Ok(orchestrator(ctx).await) })
+        .register("TestOrchestration", move |ctx, _input| async move {
+            Ok(orchestrator(ctx).await)
+        })
         .build();
-    
+
     let rt = runtime::Runtime::start(Arc::new(activity_registry), orchestration_registry).await;
-    let h = rt.clone().start_orchestration("inst-unit-1", "TestOrchestration", "").await;
+    let h = rt
+        .clone()
+        .start_orchestration("inst-unit-1", "TestOrchestration", "")
+        .await;
     let (final_history, output) = h.unwrap().await.unwrap();
     assert_eq!(output.as_ref().unwrap(), "a=3");
 
@@ -89,8 +107,20 @@ async fn history_store_admin_apis() {
     let store = FsHistoryStore::new(tmp.path(), true);
     store.create_instance("i1").await.unwrap();
     store.create_instance("i2").await.unwrap();
-    store.append("i1", vec![Event::TimerCreated { id: 1, fire_at_ms: 10 }]).await.unwrap();
-    store.append("i2", vec![Event::ExternalSubscribed { id: 1, name: "Go".into() }]).await.unwrap();
+    store
+        .append("i1", vec![Event::TimerCreated { id: 1, fire_at_ms: 10 }])
+        .await
+        .unwrap();
+    store
+        .append(
+            "i2",
+            vec![Event::ExternalSubscribed {
+                id: 1,
+                name: "Go".into(),
+            }],
+        )
+        .await
+        .unwrap();
     let instances = store.list_instances().await;
     assert!(instances.contains(&"i1".into()) && instances.contains(&"i2".into()));
     let dump = store.dump_all_pretty().await;
@@ -149,12 +179,23 @@ async fn runtime_duplicate_orchestration_deduped_single_execution() {
     assert_eq!(out2.as_ref().unwrap(), "ok");
 
     // Ensure there is only one terminal event in history
-    let term_count = hist1.iter().filter(|e| matches!(e, Event::OrchestrationCompleted { .. } | Event::OrchestrationFailed { .. })).count();
+    let term_count = hist1
+        .iter()
+        .filter(|e| {
+            matches!(
+                e,
+                Event::OrchestrationCompleted { .. } | Event::OrchestrationFailed { .. }
+            )
+        })
+        .count();
     assert_eq!(term_count, 1, "should have exactly one terminal event");
 
     // Second handle observed the same execution: same length and only one start/terminal
     assert_eq!(hist1.len(), hist2.len());
-    let started_count = hist1.iter().filter(|e| matches!(e, Event::OrchestrationStarted { .. })).count();
+    let started_count = hist1
+        .iter()
+        .filter(|e| matches!(e, Event::OrchestrationStarted { .. }))
+        .count();
     assert_eq!(started_count, 1);
 
     rt.shutdown().await;
@@ -165,15 +206,27 @@ async fn orchestration_descriptor_root_and_child() {
     // Root orchestrations
     let activity_registry = ActivityRegistry::builder().build();
     let parent = |ctx: OrchestrationContext, _| async move {
-        let _ = ctx.schedule_sub_orchestration("ChildDsc", "x").into_sub_orchestration().await;
+        let _ = ctx
+            .schedule_sub_orchestration("ChildDsc", "x")
+            .into_sub_orchestration()
+            .await;
         Ok("done".into())
     };
     let child = |_ctx: OrchestrationContext, _input: String| async move { Ok("child".into()) };
-    let reg = OrchestrationRegistry::builder().register("ParentDsc", parent).register("ChildDsc", child).build();
+    let reg = OrchestrationRegistry::builder()
+        .register("ParentDsc", parent)
+        .register("ChildDsc", child)
+        .build();
     let rt = runtime::Runtime::start(Arc::new(activity_registry), reg).await;
-    let _h = rt.clone().start_orchestration("inst-desc", "ParentDsc", "seed").await.unwrap();
+    let _h = rt
+        .clone()
+        .start_orchestration("inst-desc", "ParentDsc", "seed")
+        .await
+        .unwrap();
     // wait for completion
-    let _ = rt.wait_for_orchestration("inst-desc", std::time::Duration::from_secs(2)).await;
+    let _ = rt
+        .wait_for_orchestration("inst-desc", std::time::Duration::from_secs(2))
+        .await;
     // Root descriptor
     let d = rt.get_orchestration_descriptor("inst-desc").await.unwrap();
     assert_eq!(d.name, "ParentDsc");
@@ -200,9 +253,7 @@ async fn orchestration_status_apis() {
             ctx.schedule_timer(10).into_timer().await;
             Ok("ok".to_string())
         })
-        .register("AlwaysFails", |_ctx, _| async move {
-            Err("boom".to_string())
-        })
+        .register("AlwaysFails", |_ctx, _| async move { Err("boom".to_string()) })
         .build();
 
     let rt = runtime::Runtime::start(Arc::new(activity_registry), orchestration_registry).await;
@@ -213,7 +264,11 @@ async fn orchestration_status_apis() {
 
     // Start a running orchestration; should be Running immediately
     let inst_running = "inst-status-running";
-    let handle_running = rt.clone().start_orchestration(inst_running, "ShortTimer", "").await.unwrap();
+    let handle_running = rt
+        .clone()
+        .start_orchestration(inst_running, "ShortTimer", "")
+        .await
+        .unwrap();
     let s1 = rt.get_orchestration_status(inst_running).await;
     assert!(matches!(s1, OrchestrationStatus::Running));
 
@@ -222,16 +277,24 @@ async fn orchestration_status_apis() {
     assert_eq!(out.as_ref().unwrap(), "ok");
     let s2 = rt.get_orchestration_status(inst_running).await;
     assert!(matches!(s2, OrchestrationStatus::Completed { .. }));
-    if let OrchestrationStatus::Completed { output } = s2 { assert_eq!(output, "ok"); }
+    if let OrchestrationStatus::Completed { output } = s2 {
+        assert_eq!(output, "ok");
+    }
 
     // Failed orchestration
     let inst_fail = "inst-status-fail";
-    let handle_fail = rt.clone().start_orchestration(inst_fail, "AlwaysFails", "").await.unwrap();
+    let handle_fail = rt
+        .clone()
+        .start_orchestration(inst_fail, "AlwaysFails", "")
+        .await
+        .unwrap();
     let (_h2, out2) = handle_fail.await.unwrap();
     assert!(out2.is_err());
     let s3 = rt.get_orchestration_status(inst_fail).await;
     assert!(matches!(s3, OrchestrationStatus::Failed { .. }));
-    if let OrchestrationStatus::Failed { error } = s3 { assert_eq!(error, "boom"); }
+    if let OrchestrationStatus::Failed { error } = s3 {
+        assert_eq!(error, "boom");
+    }
 
     rt.shutdown().await;
 }
@@ -248,15 +311,28 @@ async fn providers_fs_multi_execution_persistence_and_latest_read() {
         "pfs",
         1,
         vec![
-            Event::OrchestrationStarted { name: "O".into(), version: "0.0.0".into(), input: "0".into(), parent_instance: None, parent_id: None },
+            Event::OrchestrationStarted {
+                name: "O".into(),
+                version: "0.0.0".into(),
+                input: "0".into(),
+                parent_instance: None,
+                parent_id: None,
+            },
             Event::OrchestrationContinuedAsNew { input: "1".into() },
         ],
-    ).await.unwrap();
+    )
+    .await
+    .unwrap();
     let e1_before = fs.read_with_execution("pfs", 1).await;
 
     // Create execution #2 via reset_for_continue_as_new; complete it
-    let _eid2 = fs.reset_for_continue_as_new("pfs", "O", "0.0.0", "1", None, None).await.unwrap();
-    fs.append_with_execution("pfs", 2, vec![Event::OrchestrationCompleted { output: "ok".into() }]).await.unwrap();
+    let _eid2 = fs
+        .reset_for_continue_as_new("pfs", "O", "0.0.0", "1", None, None)
+        .await
+        .unwrap();
+    fs.append_with_execution("pfs", 2, vec![Event::OrchestrationCompleted { output: "ok".into() }])
+        .await
+        .unwrap();
 
     // Execution list must contain both
     let execs = fs.list_executions("pfs").await;
@@ -282,14 +358,27 @@ async fn providers_inmem_multi_execution_persistence_and_latest_read() {
         "pmem",
         1,
         vec![
-            Event::OrchestrationStarted { name: "O".into(), version: "0.0.0".into(), input: "0".into(), parent_instance: None, parent_id: None },
+            Event::OrchestrationStarted {
+                name: "O".into(),
+                version: "0.0.0".into(),
+                input: "0".into(),
+                parent_instance: None,
+                parent_id: None,
+            },
             Event::OrchestrationContinuedAsNew { input: "1".into() },
         ],
-    ).await.unwrap();
+    )
+    .await
+    .unwrap();
     let e1_before = mem.read_with_execution("pmem", 1).await;
 
-    let _eid2 = mem.reset_for_continue_as_new("pmem", "O", "0.0.0", "1", None, None).await.unwrap();
-    mem.append_with_execution("pmem", 2, vec![Event::OrchestrationCompleted { output: "ok".into() }]).await.unwrap();
+    let _eid2 = mem
+        .reset_for_continue_as_new("pmem", "O", "0.0.0", "1", None, None)
+        .await
+        .unwrap();
+    mem.append_with_execution("pmem", 2, vec![Event::OrchestrationCompleted { output: "ok".into() }])
+        .await
+        .unwrap();
 
     let execs = mem.list_executions("pmem").await;
     assert_eq!(execs, vec![1, 2]);
@@ -301,5 +390,3 @@ async fn providers_inmem_multi_execution_persistence_and_latest_read() {
     let current_hist = mem.read("pmem").await;
     assert_eq!(current_hist, latest_hist);
 }
-
-
