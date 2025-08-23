@@ -2,7 +2,8 @@ use std::sync::Arc as StdArc;
 use std::time::Duration;
 
 use rust_dtf::{Event, OrchestrationContext, OrchestrationRegistry};
-use rust_dtf::runtime::{self, activity::ActivityRegistry};
+use rust_dtf::runtime::{self};
+use rust_dtf::runtime::registry::ActivityRegistry;
 use rust_dtf::providers::fs::FsHistoryStore;
 
 async fn wait_for_history<F>(store: StdArc<dyn rust_dtf::providers::HistoryStore>, instance: &str, pred: F, timeout_ms: u64) -> bool

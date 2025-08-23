@@ -1,6 +1,8 @@
 use std::sync::Arc as StdArc;
 use rust_dtf::{OrchestrationRegistry, OrchestrationContext};
-use rust_dtf::runtime::{self, activity::ActivityRegistry};
+use rust_dtf::runtime::{self};
+use rust_dtf::runtime::registry::ActivityRegistry;
+use rust_dtf::providers::in_memory::InMemoryHistoryStore;
 
 #[tokio::test]
 async fn runtime_start_versioned_string_uses_explicit_version() {
@@ -12,7 +14,7 @@ async fn runtime_start_versioned_string_uses_explicit_version() {
         .set_policy("S", rust_dtf::runtime::VersionPolicy::Latest)
         .build();
     let acts = ActivityRegistry::builder().build();
-    let rt = runtime::Runtime::start_with_store(StdArc::new(rust_dtf::providers::in_memory::InMemoryHistoryStore::default()), StdArc::new(acts), reg).await;
+    let rt = runtime::Runtime::start_with_store(StdArc::new(InMemoryHistoryStore::default()), StdArc::new(acts), reg).await;
     let h = rt.clone().start_orchestration_versioned("i1", "S", "1.0.0", "").await.unwrap();
     let (_hist, out) = h.await.unwrap();
     assert_eq!(out.unwrap(), "v1");
@@ -30,7 +32,7 @@ async fn runtime_start_versioned_typed_uses_explicit_version() {
         })
         .build();
     let acts = ActivityRegistry::builder().build();
-    let rt = runtime::Runtime::start_with_store(StdArc::new(rust_dtf::providers::in_memory::InMemoryHistoryStore::default()), StdArc::new(acts), reg).await;
+    let rt = runtime::Runtime::start_with_store(StdArc::new(InMemoryHistoryStore::default()), StdArc::new(acts), reg).await;
     let h = rt.clone().start_orchestration_versioned_typed::<i32, i32>("i2", "T", "1.0.0", 0).await.unwrap();
     let (_hist, out) = h.await.unwrap();
     assert_eq!(out.unwrap(), 1);

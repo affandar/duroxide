@@ -2,8 +2,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use semver::Version;
 use crate::{OrchestrationContext};
+use async_trait::async_trait;
 use crate::_typed_codec::Codec;
 use super::OrchestrationHandler;
+use tracing::{info, warn, error, debug};
 
 #[derive(Clone, Default)]
 pub struct OrchestrationRegistry {
@@ -138,6 +140,102 @@ impl OrchestrationRegistryBuilder {
             Err(self.errors.join("; "))
         }
     }
+}
+
+
+// ---------------- Activity registry (moved here)
+
+#[async_trait]
+pub trait ActivityHandler: Send + Sync {
+    async fn invoke(&self, input: String) -> Result<String, String>;
+}
+
+pub struct FnActivity<F, Fut>(pub F)
+where
+    F: Fn(String) -> Fut + Send + Sync + 'static,
+    Fut: std::future::Future<Output = Result<String, String>> + Send + 'static;
+
+#[async_trait]
+impl<F, Fut> ActivityHandler for FnActivity<F, Fut>
+where
+    F: Fn(String) -> Fut + Send + Sync + 'static,
+    Fut: std::future::Future<Output = Result<String, String>> + Send + 'static,
+{
+    async fn invoke(&self, input: String) -> Result<String, String> { (self.0)(input).await }
+}
+
+#[derive(Clone, Default)]
+pub struct ActivityRegistry { pub(crate) inner: Arc<HashMap<String, Arc<dyn ActivityHandler>>> }
+
+pub struct ActivityRegistryBuilder { map: HashMap<String, Arc<dyn ActivityHandler>> }
+
+impl ActivityRegistry {
+    pub fn builder() -> ActivityRegistryBuilder {
+        let mut b = ActivityRegistryBuilder { map: HashMap::new() };
+        // Pre-register system activities before any user registration
+        b = b.register(crate::SYSTEM_TRACE_ACTIVITY, |input: String| async move {
+            let (level, msg) = match input.split_once(':') { Some((l, m)) => (l.to_string(), m.to_string()), None => ("INFO".to_string(), input) };
+            match level.as_str() {
+                "ERROR" => error!(message=%msg, "system trace"),
+                "WARN" | "WARNING" => warn!(message=%msg, "system trace"),
+                "DEBUG" => debug!(message=%msg, "system trace"),
+                _ => info!(message=%msg, "system trace"),
+            }
+            Ok(format!("{}:{}", level, msg))
+        });
+        b = b.register(crate::SYSTEM_NOW_ACTIVITY, |_input: String| async move {
+            let now_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis();
+            Ok(now_ms.to_string())
+        });
+        b = b.register(crate::SYSTEM_NEW_GUID_ACTIVITY, |_input: String| async move {
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos();
+            Ok(format!("{nanos:032x}"))
+        });
+        b
+    }
+    pub fn get(&self, name: &str) -> Option<Arc<dyn ActivityHandler>> { self.inner.get(name).cloned() }
+}
+
+impl ActivityRegistryBuilder {
+    pub fn from_registry(reg: &ActivityRegistry) -> Self {
+        let mut map: HashMap<String, Arc<dyn ActivityHandler>> = HashMap::new();
+        for (k, v) in reg.inner.iter() { map.insert(k.clone(), v.clone()); }
+        ActivityRegistryBuilder { map }
+    }
+    pub fn register<F, Fut>(mut self, name: impl Into<String>, f: F) -> Self
+    where
+        F: Fn(String) -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = Result<String, String>> + Send + 'static,
+    {
+        self.map.insert(name.into(), Arc::new(FnActivity(f)));
+        self
+    }
+    pub fn register_typed<In, Out, F, Fut>(mut self, name: impl Into<String>, f: F) -> Self
+    where
+        In: serde::de::DeserializeOwned + Send + 'static,
+        Out: serde::Serialize + Send + 'static,
+        F: Fn(In) -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = Result<Out, String>> + Send + 'static,
+    {
+        let f_clone = std::sync::Arc::new(f);
+        let wrapper = move |input_s: String| {
+            let f_inner = f_clone.clone();
+            async move {
+                let input: In = crate::_typed_codec::Json::decode(&input_s)?;
+                let out: Out = (f_inner)(input).await?;
+                crate::_typed_codec::Json::encode(&out)
+            }
+        };
+        self.map.insert(name.into(), Arc::new(FnActivity(wrapper)));
+        self
+    }
+    pub fn build(self) -> ActivityRegistry { ActivityRegistry { inner: Arc::new(self.map) } }
 }
 
 

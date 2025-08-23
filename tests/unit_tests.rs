@@ -1,5 +1,6 @@
 use rust_dtf::{run_turn, OrchestrationContext, Event, Action, OrchestrationRegistry};
-use rust_dtf::runtime::{self, activity::ActivityRegistry};
+use rust_dtf::runtime::{self};
+use rust_dtf::runtime::registry::ActivityRegistry;
 use rust_dtf::providers::{HistoryStore};
 use rust_dtf::providers::fs::FsHistoryStore;
 use std::sync::Arc;

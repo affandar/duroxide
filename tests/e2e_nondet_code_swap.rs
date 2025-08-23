@@ -3,15 +3,17 @@
 // It expects a nondeterminism error when a completion arrives for an activity/timer not scheduled by the new code.
 
 use std::sync::Arc as StdArc;
-use rust_dtf::{OrchestrationContext, OrchestrationRegistry, Event, OrchestrationStatus};
-use rust_dtf::runtime::{self, activity::ActivityRegistry};
+use rust_dtf::{Event, OrchestrationContext, OrchestrationRegistry, OrchestrationStatus};
+use rust_dtf::runtime::{self};
+use rust_dtf::runtime::registry::ActivityRegistry;
 use rust_dtf::providers::HistoryStore;
-use rust_dtf::providers::in_memory::InMemoryHistoryStore;
+use rust_dtf::providers::fs::FsHistoryStore;
 mod common;
 
 #[tokio::test]
 async fn code_swap_triggers_nondeterminism() {
-    let store = StdArc::new(InMemoryHistoryStore::default()) as StdArc<dyn HistoryStore>;
+    let td = tempfile::tempdir().unwrap();
+    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
 
     // Register both A1 and B1 activities at all times
     let activity_registry = ActivityRegistry::builder()

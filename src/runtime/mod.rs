@@ -18,8 +18,6 @@ pub mod status;
 use std::collections::HashSet;
 use async_trait::async_trait;
 
-/// Runtime components: activity worker and registry utilities.
-pub mod activity;
 pub mod replay;
 
 /// High-level orchestration status derived from history.
@@ -276,29 +274,23 @@ impl Runtime {
 
     // Status helpers moved to status.rs
     /// Start a new runtime using the in-memory history store.
-    pub async fn start(activity_registry: Arc<activity::ActivityRegistry>, orchestration_registry: OrchestrationRegistry) -> Arc<Self> {
+    pub async fn start(activity_registry: Arc<registry::ActivityRegistry>, orchestration_registry: OrchestrationRegistry) -> Arc<Self> {
         let history_store: Arc<dyn HistoryStore> = Arc::new(InMemoryHistoryStore::default());
         Self::start_with_store(history_store, activity_registry, orchestration_registry).await
     }
 
     /// Start a new runtime with a custom `HistoryStore` implementation.
-    pub async fn start_with_store(history_store: Arc<dyn HistoryStore>, activity_registry: Arc<activity::ActivityRegistry>, orchestration_registry: OrchestrationRegistry) -> Arc<Self> {
+    pub async fn start_with_store(history_store: Arc<dyn HistoryStore>, activity_registry: Arc<registry::ActivityRegistry>, orchestration_registry: OrchestrationRegistry) -> Arc<Self> {
         // Install a default subscriber if none set (ok to call many times)
         let _ = tracing_subscriber::fmt()
             .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
             .try_init();
 
-        let (activity_tx, activity_rx) = mpsc::channel::<ActivityWorkItem>(512);
+        let (activity_tx, _activity_rx) = mpsc::channel::<ActivityWorkItem>(512);
         let (router_tx, mut router_rx) = mpsc::unbounded_channel::<OrchestratorMsg>();
         let router = Arc::new(CompletionRouter { inboxes: Mutex::new(HashMap::new()) });
         let mut joins: Vec<JoinHandle<()>> = Vec::new();
 
-        // spawn activity worker; system activities are already pre-registered by builder()
-        let reg_clone = (*activity_registry).clone();
-        let store_for_worker = history_store.clone();
-        joins.push(tokio::spawn(async move {
-            activity::ActivityWorker::new(reg_clone, store_for_worker).run(activity_rx).await
-        }));
 
         // remove in-proc timer worker; timers flow via WorkDispatcher (TimerSchedule -> TimerFired)
 
@@ -349,8 +341,8 @@ impl Runtime {
         let handle = runtime.clone().start_orchestration_dispatcher();
         runtime.joins.lock().await.push(handle);
 
-        // background work dispatcher (scaffold; future: execute activities, detached/sub-orch starts)
-        let work_handle = runtime.clone().start_work_dispatcher();
+        // background work dispatcher (executes activities)
+        let work_handle = runtime.clone().start_work_dispatcher(activity_registry);
         runtime.joins.lock().await.push(work_handle);
 
         // background timer dispatcher (scaffold); current implementation handled by run_timer_worker
@@ -377,20 +369,10 @@ impl Runtime {
             }
             loop {
                 if let Some((item, token)) = self.history_store.dequeue_peek_lock(QueueKind::Orchestrator).await {
-                    // Gate based on instance activity
-                    enum GatePolicy { RequireActive, RequireInactive }
-                    let (target_instance, policy): (Option<String>, GatePolicy) = match &item {
-                        WorkItem::StartOrchestration { instance, .. } => (Some(instance.clone()), GatePolicy::RequireInactive),
-                        WorkItem::ActivityCompleted { instance, .. } | WorkItem::ActivityFailed { instance, .. } | WorkItem::TimerFired { instance, .. } | WorkItem::ExternalRaised { instance, .. } => (Some(instance.clone()), GatePolicy::RequireActive),
-                        WorkItem::SubOrchCompleted { parent_instance, .. } | WorkItem::SubOrchFailed { parent_instance, .. } => (Some(parent_instance.clone()), GatePolicy::RequireActive),
-                        WorkItem::CancelInstance { instance, .. } => (Some(instance.clone()), GatePolicy::RequireActive),
-                        WorkItem::ActivityExecute { instance, .. } => (Some(instance.clone()), GatePolicy::RequireInactive),
-                        WorkItem::TimerSchedule { instance, .. } => (Some(instance.clone()), GatePolicy::RequireInactive),
-                    };
-                    if let Some(inst) = target_instance {
-                        let is_active = self.active_instances.lock().await.contains(&inst);
-                        let should_wait = match policy { GatePolicy::RequireActive => !is_active, GatePolicy::RequireInactive => is_active };
-                        if should_wait {
+                    // Minimal gating: only gate StartOrchestration if instance already active.
+                    if let WorkItem::StartOrchestration { instance, .. } = &item {
+                        let is_active = self.active_instances.lock().await.contains(instance);
+                        if is_active {
                             let _ = self.history_store.abandon(QueueKind::Orchestrator, &token).await;
                             tokio::time::sleep(std::time::Duration::from_millis(Self::POLLER_GATE_DELAY_MS)).await;
                             continue;
@@ -467,13 +449,12 @@ impl Runtime {
                             }
                         }
                         WorkItem::CancelInstance { instance, reason } => {
-                            if !self.router.inboxes.lock().await.contains_key(&instance) {
+                            // Attempt to deliver; if inbox missing or dropped, rehydrate by enqueuing a start
+                            if self.router.try_send(OrchestratorMsg::CancelRequested { instance: instance.clone(), reason: reason.clone(), ack_token: Some(token.clone()) }).await.is_err() {
                                 let orch_name = self.history_store.read(&instance).await.iter().find_map(|e| match e { Event::OrchestrationStarted { name, .. } => Some(name.clone()), _ => None }).unwrap_or_default();
                                 let _ = self.start_tx.send(StartRequest { instance: instance.clone(), orchestration_name: orch_name });
                                 let _ = self.history_store.abandon(QueueKind::Orchestrator, &token).await;
                                 tokio::time::sleep(std::time::Duration::from_millis(Self::POLLER_GATE_DELAY_MS)).await;
-                            } else {
-                                let _ = self.router_tx.send(OrchestratorMsg::CancelRequested { instance, reason, ack_token: Some(token) });
                             }
                         }
                         WorkItem::ActivityExecute { instance, id, name, input } => {
@@ -488,14 +469,26 @@ impl Runtime {
         })
     }
 
-    fn start_work_dispatcher(self: Arc<Self>) -> JoinHandle<()> {
+    // TODO : add parallelization of activity execution
+    fn start_work_dispatcher(self: Arc<Self>, activities: Arc<registry::ActivityRegistry>) -> JoinHandle<()> {
         tokio::spawn(async move {
             loop {
                 if let Some((item, token)) = self.history_store.dequeue_peek_lock(QueueKind::Worker).await {
                     match item {
                         WorkItem::ActivityExecute { instance, id, name, input } => {
-                            // Execute locally then ack; completion will be enqueued by ActivityWorker
-                            let _ = self.activity_tx.send(ActivityWorkItem { instance, id, name, input }).await;
+                            // Execute activity via registry directly; enqueue completion/failure to orchestrator queue
+                            if let Some(handler) = activities.get(&name) {
+                                match handler.invoke(input).await {
+                                    Ok(result) => {
+                                        let _ = self.history_store.enqueue_work(QueueKind::Orchestrator, WorkItem::ActivityCompleted { instance: instance.clone(), id, result }).await;
+                                    }
+                                    Err(error) => {
+                                        let _ = self.history_store.enqueue_work(QueueKind::Orchestrator, WorkItem::ActivityFailed { instance: instance.clone(), id, error }).await;
+                                    }
+                                }
+                            } else {
+                                let _ = self.history_store.enqueue_work(QueueKind::Orchestrator, WorkItem::ActivityFailed { instance: instance.clone(), id, error: format!("unregistered:{}", name) }).await;
+                            }
                             let _ = self.history_store.ack(QueueKind::Worker, &token).await;
                         }
                         _other => {

@@ -1,9 +1,10 @@
 use std::sync::Arc as StdArc;
-use rust_dtf::{OrchestrationContext, OrchestrationRegistry, Event};
-use rust_dtf::runtime::{self, activity::ActivityRegistry};
-mod common;
+use rust_dtf::{Event, OrchestrationContext, OrchestrationRegistry};
+use rust_dtf::runtime::{self};
+use rust_dtf::runtime::registry::ActivityRegistry;
 use rust_dtf::providers::HistoryStore;
 use rust_dtf::providers::fs::FsHistoryStore;
+mod common;
 
 #[tokio::test]
 async fn cancel_parent_down_propagates_to_child_fs() {

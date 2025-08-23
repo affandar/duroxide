@@ -1,11 +1,12 @@
 use futures::future::{join3};
 use std::sync::Arc;
 use rust_dtf::{run_turn, Event, OrchestrationContext, DurableOutput, Action, OrchestrationRegistry};
-mod common;
-use rust_dtf::runtime::{self, activity::ActivityRegistry};
+use rust_dtf::runtime::{self};
+use rust_dtf::runtime::registry::ActivityRegistry;
 use rust_dtf::providers::HistoryStore;
 use rust_dtf::providers::fs::FsHistoryStore;
 use std::sync::Arc as StdArc;
+mod common;
 
 async fn orchestration_completes_and_replays_deterministically_with(store: StdArc<dyn HistoryStore>) {
     let orchestration = |ctx: OrchestrationContext, _input: String| async move {

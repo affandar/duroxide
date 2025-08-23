@@ -1,9 +1,10 @@
 use std::sync::Arc as StdArc;
 use rust_dtf::{Event, OrchestrationContext, OrchestrationRegistry, OrchestrationStatus};
-use rust_dtf::runtime::{self, activity::ActivityRegistry};
+use rust_dtf::runtime::{self};
+use rust_dtf::runtime::registry::ActivityRegistry;
 use rust_dtf::providers::HistoryStore;
-use rust_dtf::providers::fs::FsHistoryStore;
 use rust_dtf::providers::in_memory::InMemoryHistoryStore;
+use rust_dtf::providers::fs::FsHistoryStore;
 
 #[tokio::test]
 async fn unknown_activity_is_isolated_from_other_orchestrations_fs() {

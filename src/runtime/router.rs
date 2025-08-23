@@ -49,6 +49,33 @@ impl CompletionRouter {
             warn!(instance=%key, kind=%kind, "router: unknown instance, dropping message");
         }
     }
+
+    pub async fn try_send(&self, msg: OrchestratorMsg) -> Result<(), ()> {
+        let key = match &msg {
+            OrchestratorMsg::ActivityCompleted { instance, .. }
+            | OrchestratorMsg::ActivityFailed { instance, .. }
+            | OrchestratorMsg::TimerFired { instance, .. }
+            | OrchestratorMsg::ExternalEvent { instance, .. }
+            | OrchestratorMsg::ExternalByName { instance, .. }
+            | OrchestratorMsg::SubOrchCompleted { instance, .. }
+            | OrchestratorMsg::SubOrchFailed { instance, .. }
+            | OrchestratorMsg::CancelRequested { instance, .. } => instance.clone(),
+        };
+        let kind = kind_of(&msg);
+        let mut map = self.inboxes.lock().await;
+        if let Some(tx) = map.get(&key) {
+            if let Err(_e) = tx.send(msg) {
+                // Receiver dropped; remove stale sender so dispatchers can rehydrate on redelivery
+                map.remove(&key);
+                warn!(instance=%key, kind=%kind, "router: receiver dropped, removing inbox");
+                return Err(());
+            }
+            Ok(())
+        } else {
+            warn!(instance=%key, kind=%kind, "router: unknown instance, cannot send");
+            Err(())
+        }
+    }
 }
 
 pub fn kind_of(msg: &OrchestratorMsg) -> &'static str {

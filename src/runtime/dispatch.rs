@@ -16,9 +16,10 @@ pub async fn dispatch_call_activity(rt: &Arc<Runtime>, instance: &str, history: 
         debug!(instance, id, name=%name, "skip dispatch: activity already completed/failed");
     } else {
         debug!(instance, id, name=%name, "dispatch activity");
-        if let Err(e) = rt.activity_tx.send(super::ActivityWorkItem { instance: instance.to_string(), id, name, input }).await {
-            panic!("activity dispatch failed: {e}");
-        }
+        // Enqueue provider-backed execution; WorkDispatcher will execute and enqueue completion/failure
+        let _ = rt.history_store.enqueue_work(QueueKind::Worker, WorkItem::ActivityExecute {
+            instance: instance.to_string(), id, name, input
+        }).await;
     }
 }
 
