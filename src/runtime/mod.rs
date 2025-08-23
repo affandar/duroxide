@@ -493,8 +493,6 @@ impl Runtime {
         });
         let mut joins: Vec<JoinHandle<()>> = Vec::new();
 
-        // remove in-proc timer worker; timers flow via WorkDispatcher (TimerSchedule -> TimerFired)
-
         // spawn router forwarding task
         let router_clone = router.clone();
         joins.push(tokio::spawn(async move {
@@ -803,7 +801,11 @@ impl Runtime {
 
         // Fallback in-process timer service (refactored)
         tokio::spawn(async move {
-            let (svc_jh, svc_tx) = crate::runtime::timers::TimerService::start(self.history_store.clone(), Self::POLLER_IDLE_SLEEP_MS);
+            let (svc_jh, svc_tx) = crate::runtime::timers::TimerService::start(
+                self.history_store.clone(),
+                Self::POLLER_IDLE_SLEEP_MS,
+                Self::POLLER_GATE_DELAY_MS,
+            );
 
             // Intake task: keep pulling schedules and forwarding to service, then ack
             let intake_rt = self.clone();

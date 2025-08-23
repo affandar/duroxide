@@ -14,12 +14,14 @@ pub struct TimerService {
     keys: HashSet<String>,
     min_heap: BinaryHeap<Reverse<(u64, String)>>,
     poller_idle_ms: u64,
+    gate_delay_ms: u64,
 }
 
 impl TimerService {
     pub fn start(
         store: Arc<dyn HistoryStore>,
         poller_idle_ms: u64,
+        gate_delay_ms: u64,
     ) -> (tokio::task::JoinHandle<()>, tokio::sync::mpsc::UnboundedSender<WorkItem>) {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<WorkItem>();
         let mut svc = TimerService {
@@ -29,6 +31,7 @@ impl TimerService {
             keys: HashSet::new(),
             min_heap: BinaryHeap::new(),
             poller_idle_ms,
+            gate_delay_ms,
         };
         let handle = tokio::spawn(async move { svc.run().await });
         (handle, tx)
@@ -60,6 +63,10 @@ impl TimerService {
                 } else {
                     break;
                 }
+            }
+            // Bias external events slightly ahead of timer completions in close races
+            if !due.is_empty() && self.gate_delay_ms > 0 {
+                tokio::time::sleep(std::time::Duration::from_millis(self.gate_delay_ms)).await;
             }
             for (instance, execution_id, id, fire_at_ms) in due.drain(..) {
                 let _ = self
@@ -130,7 +137,7 @@ mod tests {
     #[tokio::test]
     async fn fires_due_timers_in_order() {
         let store: Arc<dyn HistoryStore> = Arc::new(InMemoryHistoryStore::default());
-        let (_jh, tx) = TimerService::start(store.clone(), 5);
+        let (_jh, tx) = TimerService::start(store.clone(), 5, 5);
         // schedule three timers: immediate, +10ms, +5ms
         let now = now_ms();
         let _ = tx.send(WorkItem::TimerSchedule { instance: "i".into(), execution_id: 1, id: 1, fire_at_ms: now });

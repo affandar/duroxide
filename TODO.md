@@ -1,32 +1,32 @@
 ## Durable Task Rust Core – TODOs
 
+- code coverage
 - Cleanup the docs before making public
 - CLI tooling to manipulate history/queue state for devops
 - add cancellation and status from within the orchestration
-- write a real world orchestration
+- write a real world orchestrations with versioning etc
 - example versioned crates with orchestrations and loaders
 - proper timer implementation in the provider
 - profiling replay and providers
 - performance improvements for runtime
 - "pub-sub" external events
-- Need to understand this oneshot channel to await on
 - sharding and scale out to multiple runtimes
-- versioning strategy
 - mermaid diagrams for orchestrations???
 - strongly typed activity and orchestration calls?
 - typed parameters for activities and orchestrations
-- implement Unpin typed future wrappers for `_typed` adapters (see docs/typed-futures-design.md)
 - cancellations via JoinHandles?
 - Add proper metrics.
 - Build a website to visualize execution.
 - Write an Azure Blob based provider.
 - Batch the calls to logging, don't spin up an activity per
 - Orchestration state? Monitoring? Visiblity? 
-- Support for orchestration chaining + eternal orchestrations
 - Real world samples (provisioning resources in Azure e.g.)
 
 ## DONE
 
+- versioning strategy
+- Support for orchestration chaining + eternal orchestrations
+- Need to understand this oneshot channel to await on
 - transactional processing - harden queue read semantics (see docs/reliability-queue-and-history.md)
 - review how active_instances in the runtime work, why are we reenqueuing events in certain cases
 - On next session: review tests covering ContinueAsNew and multi-execution IDs
@@ -57,4 +57,5 @@
 
 ## POSTPONED
 
+- implement Unpin typed future wrappers for `_typed` adapters (see docs/typed-futures-design.md)
 - redo the orchestration registry change with gpt5 and compare
