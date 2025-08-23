@@ -1,7 +1,7 @@
 use rust_dtf::providers::in_memory::InMemoryHistoryStore;
 use rust_dtf::runtime::registry::ActivityRegistry;
 use rust_dtf::runtime::{self};
-use rust_dtf::{OrchestrationContext, OrchestrationRegistry};
+use rust_dtf::{Event, OrchestrationContext, OrchestrationRegistry};
 use std::sync::Arc as StdArc;
 
 #[tokio::test]
@@ -364,7 +364,7 @@ async fn continue_as_new_upgrades_version_deterministically() {
     rt.shutdown().await;
 }
 
-use rust_dtf::{OrchestrationContext, OrchestrationRegistry};
+// imports already present above for merged section
 use semver::Version;
 
 fn handler_echo() -> impl Fn(

@@ -349,6 +349,7 @@ async fn event_drop_then_retry_after_subscribe_fs() {
 // This test verifies that completions from old executions are properly ignored
 
 // merged section imports are already present at the top of this file
+use rust_dtf::providers::{QueueKind, WorkItem};
 
 #[tokio::test]
 async fn old_execution_completions_are_ignored() {
