@@ -3,6 +3,7 @@
 // It expects a nondeterminism error when a completion arrives for an activity/timer not scheduled by the new code.
 
 use rust_dtf::providers::HistoryStore;
+use rust_dtf::providers::{QueueKind, WorkItem};
 use rust_dtf::providers::fs::FsHistoryStore;
 use rust_dtf::runtime::registry::ActivityRegistry;
 use rust_dtf::runtime::{self};
@@ -72,6 +73,19 @@ async fn code_swap_triggers_nondeterminism() {
     drop(rt_a);
     let reg_b = OrchestrationRegistry::builder().register("SwapTest", orch_b).build();
     let rt_b = runtime::Runtime::start_with_store(store.clone(), StdArc::new(activity_registry), reg_b).await;
+
+    // Poke the instance so it activates and runs a turn (nondeterminism check occurs before completions)
+    // Use a timer that fires immediately to trigger a turn reliably
+    let _ = store
+        .enqueue_work(
+            QueueKind::Timer,
+            WorkItem::TimerSchedule {
+                instance: "inst-swap".to_string(),
+                id: 999, // Use a high ID that won't conflict with orchestration timers
+                fire_at_ms: 0, // Fire immediately
+            },
+        )
+        .await;
 
     // Wait for terminal status using helper
     match rt_b

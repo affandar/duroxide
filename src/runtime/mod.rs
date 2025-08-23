@@ -181,9 +181,12 @@ impl Runtime {
     const ORCH_IDLE_DEHYDRATE_MS: u64 = 1000;
 
     async fn ensure_instance_active(self: &Arc<Self>, instance: &str, orchestration_name: &str) -> bool {
+        debug!("AAD: ensure_instance_active: {:?}", instance);
         if self.active_instances.lock().await.contains(instance) {
+            debug!("AAD: ensure_instance_active: {:?} is already active", instance);
             return false;
         }
+        debug!("AAD: ensure_instance_active: {:?} is not active", instance);
         let inner = self.clone().spawn_instance_to_completion(instance, orchestration_name);
         // Wrap to normalize handle type to JoinHandle<()>
         let wrapper = tokio::spawn(async move {
@@ -246,6 +249,7 @@ impl Runtime {
                 "instance already has history; duplicate start accepted (deduped)"
             );
         }
+        debug!("AAD: start_internal_rx: {:?}", instance);
         // Enqueue a start request; background worker will dedupe and run exactly one execution
         self.ensure_instance_active(instance, orchestration_name).await;
         // Register a oneshot waiter for string result
@@ -446,37 +450,17 @@ impl Runtime {
 
     fn start_orchestration_dispatcher(self: Arc<Self>) -> JoinHandle<()> {
         tokio::spawn(async move {
-            // bootstrap: scan existing instances and enqueue starts for incomplete ones
-            let instances = self.history_store.list_instances().await;
-            for inst in instances {
-                let hist = self.history_store.read(&inst).await;
-                let orchestration_name_opt = hist.iter().find_map(|e| match e {
-                    Event::OrchestrationStarted { name, .. } => Some(name.clone()),
-                    _ => None,
-                });
-                if let Some(name) = orchestration_name_opt {
-                    let is_terminal = hist.iter().rev().any(|e| {
-                        matches!(
-                            e,
-                            Event::OrchestrationCompleted { .. } | Event::OrchestrationFailed { .. }
-                        )
-                    });
-                    if !is_terminal {
-                        self.ensure_instance_active(&inst, &name).await;
-                    }
-                }
-            }
             loop {
                 if let Some((item, token)) = self.history_store.dequeue_peek_lock(QueueKind::Orchestrator).await {
-                    // Minimal gating: only gate StartOrchestration if instance already active.
-                    if let WorkItem::StartOrchestration { instance, .. } = &item {
-                        let is_active = self.active_instances.lock().await.contains(instance);
-                        if is_active {
-                            let _ = self.history_store.abandon(QueueKind::Orchestrator, &token).await;
-                            tokio::time::sleep(std::time::Duration::from_millis(Self::POLLER_GATE_DELAY_MS)).await;
-                            continue;
-                        }
-                    }
+                    // // Minimal gating: only gate StartOrchestration if instance already active.
+                    // if let WorkItem::StartOrchestration { instance, .. } = &item {
+                    //     let is_active = self.active_instances.lock().await.contains(instance);
+                    //     if is_active {
+                    //         let _ = self.history_store.abandon(QueueKind::Orchestrator, &token).await;
+                    //         tokio::time::sleep(std::time::Duration::from_millis(Self::POLLER_GATE_DELAY_MS)).await;
+                    //         continue;
+                    //     }
+                    // }
                     match item {
                         WorkItem::StartOrchestration {
                             instance,
@@ -570,8 +554,10 @@ impl Runtime {
                             tokio::time::sleep(std::time::Duration::from_millis(Self::POLLER_GATE_DELAY_MS)).await;
                         }
                         WorkItem::ExternalRaised { instance, name, data } => {
+                            debug!("AAD: ExternalRaised: {:?}", instance.clone());
                             // If no inbox yet (dehydrated), re-enqueue start and abandon so this is redelivered
                             if !self.router.inboxes.lock().await.contains_key(&instance) {
+                                debug!("AAD: ExternalRaised NO KEY: {:?}", instance.clone());
                                 let orch_name = self
                                     .history_store
                                     .read(&instance)
@@ -586,6 +572,7 @@ impl Runtime {
                                 let _ = self.history_store.abandon(QueueKind::Orchestrator, &token).await;
                                 tokio::time::sleep(std::time::Duration::from_millis(Self::POLLER_GATE_DELAY_MS)).await;
                             } else {
+                                debug!("AAD: ExternalRaised WITH KEY: {:?}", instance.clone());
                                 let _ = self.router_tx.send(OrchestratorMsg::ExternalByName {
                                     instance,
                                     name,
@@ -967,9 +954,14 @@ impl Runtime {
             // completion events yet (still at the same decision frontier), then the orchestrator must not introduce
             // net-new schedule events that were not present in prior history. This catches code swaps where, e.g.,
             // A1 was scheduled previously but the new code tries to schedule B1 without any new completion.
+            debug!("AAD: detect_frontier_nondeterminism baseline_len: {}", baseline_len);
+            debug!("AAD: detect_frontier_nondeterminism hist_after total len: {}", hist_after.len());
+            debug!("AAD: detect_frontier_nondeterminism baseline events: {:#?}", &hist_after[..baseline_len]);
+            debug!("AAD: detect_frontier_nondeterminism new events: {:#?}", &hist_after[baseline_len..]);
             if let Some(err) =
                 detect::detect_frontier_nondeterminism(&hist_after[..baseline_len], &hist_after[baseline_len..])
             {
+                debug!("AAD: detect_frontier_nondeterminism: {:?}", err);
                 let _ = self
                     .history_store
                     .append(instance, vec![Event::OrchestrationFailed { error: err.clone() }])
