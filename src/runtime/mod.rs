@@ -1392,24 +1392,16 @@ impl Runtime {
         let deadline = std::time::Instant::now() + timeout;
         // quick path
         match self.get_orchestration_status(instance).await {
-            OrchestrationStatus::Completed { output } => {
-                return Ok(OrchestrationStatus::Completed { output });
-            }
-            OrchestrationStatus::Failed { error } => {
-                return Ok(OrchestrationStatus::Failed { error });
-            }
+            OrchestrationStatus::Completed { output } => return Ok(OrchestrationStatus::Completed { output }),
+            OrchestrationStatus::Failed { error } => return Ok(OrchestrationStatus::Failed { error }),
             _ => {}
         }
         // poll with backoff
         let mut delay_ms: u64 = 5;
         while std::time::Instant::now() < deadline {
             match self.get_orchestration_status(instance).await {
-                OrchestrationStatus::Completed { output } => {
-                    return Ok(OrchestrationStatus::Completed { output });
-                }
-                OrchestrationStatus::Failed { error } => {
-                    return Ok(OrchestrationStatus::Failed { error });
-                }
+                OrchestrationStatus::Completed { output } => return Ok(OrchestrationStatus::Completed { output }),
+                OrchestrationStatus::Failed { error } => return Ok(OrchestrationStatus::Failed { error }),
                 _ => {
                     tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
                     delay_ms = (delay_ms.saturating_mul(2)).min(100);
