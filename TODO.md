@@ -1,5 +1,6 @@
 ## Durable Task Rust Core – TODOs
 
+- remove the into_activity() and similar methods
 - code coverage
 - Cleanup the docs before making public
 - CLI tooling to manipulate history/queue state for devops
