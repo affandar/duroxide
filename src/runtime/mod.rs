@@ -72,7 +72,7 @@ pub use crate::runtime::registry::{OrchestrationRegistry, OrchestrationRegistryB
 pub use router::{InstanceRouter, OrchestratorMsg};
 
 /// In-process runtime that executes activities and timers and persists
-/// history via a `HistoryStore`. 
+/// history via a `HistoryStore`.
 pub struct Runtime {
     // removed: in-proc activity channel
     router_tx: mpsc::UnboundedSender<OrchestratorMsg>,
@@ -526,7 +526,7 @@ impl Runtime {
     }
 
     fn start_orchestration_dispatcher(self: Arc<Self>) -> JoinHandle<()> {
-                    tokio::spawn(async move {
+        tokio::spawn(async move {
             loop {
                 if let Some((item, token)) = self.history_store.dequeue_peek_lock(QueueKind::Orchestrator).await {
                     match item {
@@ -684,7 +684,7 @@ impl Runtime {
                                 };
                                 self.ensure_instance_active(&instance, &orch_name).await;
                                 let _ = self.history_store.abandon(QueueKind::Orchestrator, &token).await;
-                            tokio::time::sleep(std::time::Duration::from_millis(Self::POLLER_GATE_DELAY_MS)).await;
+                                tokio::time::sleep(std::time::Duration::from_millis(Self::POLLER_GATE_DELAY_MS)).await;
                             }
                         }
                         // No ActivityExecute should land on Orchestrator queue
@@ -707,7 +707,7 @@ impl Runtime {
         tokio::spawn(async move {
             loop {
                 if let Some((item, token)) = self.history_store.dequeue_peek_lock(QueueKind::Worker).await {
-            match item {
+                    match item {
                         WorkItem::ActivityExecute {
                             instance,
                             execution_id,
@@ -781,32 +781,43 @@ impl Runtime {
                 loop {
                     if let Some((item, token)) = self.history_store.dequeue_peek_lock(QueueKind::Timer).await {
                         match item {
-                            WorkItem::TimerSchedule { instance, execution_id, id, fire_at_ms } => {
+                            WorkItem::TimerSchedule {
+                                instance,
+                                execution_id,
+                                id,
+                                fire_at_ms,
+                            } => {
                                 // Provider supports delayed visibility: enqueue TimerFired with fire_at_ms and let provider deliver when due
-                                let _ = self.history_store.enqueue_work(
-                                    QueueKind::Orchestrator,
-                                    WorkItem::TimerFired { instance, execution_id, id, fire_at_ms }
-                                ).await;
+                                let _ = self
+                                    .history_store
+                                    .enqueue_work(
+                                        QueueKind::Orchestrator,
+                                        WorkItem::TimerFired {
+                                            instance,
+                                            execution_id,
+                                            id,
+                                            fire_at_ms,
+                                        },
+                                    )
+                                    .await;
                                 let _ = self.history_store.ack(QueueKind::Timer, &token).await;
                             }
                             other => {
                                 error!(?other, "unexpected WorkItem in Timer dispatcher; state corruption");
                                 panic!("unexpected WorkItem in Timer dispatcher");
+                            }
                         }
+                    } else {
+                        tokio::time::sleep(std::time::Duration::from_millis(Self::POLLER_IDLE_SLEEP_MS)).await;
                     }
-                } else {
-                    tokio::time::sleep(std::time::Duration::from_millis(Self::POLLER_IDLE_SLEEP_MS)).await;
                 }
-            }
-        });
+            });
         }
 
         // Fallback in-process timer service (refactored)
         tokio::spawn(async move {
-            let (svc_jh, svc_tx) = crate::runtime::timers::TimerService::start(
-                self.history_store.clone(),
-                Self::POLLER_IDLE_SLEEP_MS,
-            );
+            let (svc_jh, svc_tx) =
+                crate::runtime::timers::TimerService::start(self.history_store.clone(), Self::POLLER_IDLE_SLEEP_MS);
 
             // Intake task: keep pulling schedules and forwarding to service, then ack
             let intake_rt = self.clone();
@@ -815,8 +826,18 @@ impl Runtime {
                 loop {
                     if let Some((item, token)) = intake_rt.history_store.dequeue_peek_lock(QueueKind::Timer).await {
                         match item {
-                            WorkItem::TimerSchedule { instance, execution_id, id, fire_at_ms } => {
-                                let _ = intake_tx.send(WorkItem::TimerSchedule { instance, execution_id, id, fire_at_ms });
+                            WorkItem::TimerSchedule {
+                                instance,
+                                execution_id,
+                                id,
+                                fire_at_ms,
+                            } => {
+                                let _ = intake_tx.send(WorkItem::TimerSchedule {
+                                    instance,
+                                    execution_id,
+                                    id,
+                                    fire_at_ms,
+                                });
                                 let _ = intake_rt.history_store.ack(QueueKind::Timer, &token).await;
                             }
                             other => {
@@ -1228,7 +1249,7 @@ impl Runtime {
                                 ack_tokens_persist_after.push(t);
                             } else {
                                 ack_tokens_immediate.push(t);
-                        }
+                            }
                         }
                     }
                     Err(_) => break,
@@ -1404,7 +1425,7 @@ impl Runtime {
         {
             warn!(instance, name=%name_str, error=%e, "raise_event: failed to enqueue ExternalRaised");
         }
-    info!(instance, name=%name_str, data=%data_str, "raise_event: enqueued external");
+        info!(instance, name=%name_str, data=%data_str, "raise_event: enqueued external");
     }
 
     /// Request cancellation of a running orchestration instance.

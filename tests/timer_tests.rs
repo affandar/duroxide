@@ -1,5 +1,5 @@
-use rust_dtf::providers::fs::FsHistoryStore;
 use rust_dtf::providers::HistoryStore;
+use rust_dtf::providers::fs::FsHistoryStore;
 use rust_dtf::runtime::registry::ActivityRegistry;
 use rust_dtf::runtime::{self};
 use rust_dtf::{Event, OrchestrationContext, OrchestrationRegistry};
@@ -21,7 +21,11 @@ async fn single_timer_fires_fs() {
     let acts = ActivityRegistry::builder().build();
     let rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(acts), reg).await;
 
-    let h = rt.clone().start_orchestration("inst-one", "OneTimer", "").await.unwrap();
+    let h = rt
+        .clone()
+        .start_orchestration("inst-one", "OneTimer", "")
+        .await
+        .unwrap();
     let (hist, out) = h.await.unwrap();
     assert_eq!(out.unwrap(), "done");
     assert!(hist.iter().any(|e| matches!(e, Event::TimerCreated { .. })));
@@ -45,7 +49,11 @@ async fn multiple_timers_ordering_fs() {
     let acts = ActivityRegistry::builder().build();
     let rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(acts), reg).await;
 
-    let h = rt.clone().start_orchestration("inst-two", "TwoTimers", "").await.unwrap();
+    let h = rt
+        .clone()
+        .start_orchestration("inst-two", "TwoTimers", "")
+        .await
+        .unwrap();
     let (hist, out) = h.await.unwrap();
     assert_eq!(out.unwrap(), "ok");
     // Verify two fired with increasing fire_at_ms
@@ -77,9 +85,15 @@ async fn timer_deduplication_fs() {
 
     let inst = "inst-dedup";
     let _h = rt.clone().start_orchestration(inst, "DedupTimer", "").await.unwrap();
-    assert!(common::wait_for_history(store.clone(), inst, |h| {
-        h.iter().any(|e| matches!(e, Event::TimerCreated { .. }))
-    }, 2_000).await);
+    assert!(
+        common::wait_for_history(
+            store.clone(),
+            inst,
+            |h| { h.iter().any(|e| matches!(e, Event::TimerCreated { .. })) },
+            2_000
+        )
+        .await
+    );
 
     // Inject duplicate TimerFired for same id
     let (id, fire_at) = {
@@ -97,13 +111,25 @@ async fn timer_deduplication_fs() {
         id,
         fire_at_ms: fire_at,
     };
-    let _ = store.enqueue_work(rust_dtf::providers::QueueKind::Orchestrator, wi.clone()).await;
-    let _ = store.enqueue_work(rust_dtf::providers::QueueKind::Orchestrator, wi.clone()).await;
+    let _ = store
+        .enqueue_work(rust_dtf::providers::QueueKind::Orchestrator, wi.clone())
+        .await;
+    let _ = store
+        .enqueue_work(rust_dtf::providers::QueueKind::Orchestrator, wi.clone())
+        .await;
 
-    assert!(common::wait_for_history(store.clone(), inst, |h| {
-        let fired: Vec<&Event> = h.iter().filter(|e| matches!(e, Event::TimerFired { .. })).collect();
-        fired.len() == 1
-    }, 5_000).await);
+    assert!(
+        common::wait_for_history(
+            store.clone(),
+            inst,
+            |h| {
+                let fired: Vec<&Event> = h.iter().filter(|e| matches!(e, Event::TimerFired { .. })).collect();
+                fired.len() == 1
+            },
+            5_000
+        )
+        .await
+    );
 
     rt.shutdown().await;
 }
@@ -123,7 +149,11 @@ async fn timer_wall_clock_delay_fs() {
     let rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(acts), reg).await;
 
     let start = std::time::Instant::now();
-    let h = rt.clone().start_orchestration("inst-delay", "DelayTimer", "").await.unwrap();
+    let h = rt
+        .clone()
+        .start_orchestration("inst-delay", "DelayTimer", "")
+        .await
+        .unwrap();
     let (_hist, out) = h.await.unwrap();
     let elapsed_ms = start.elapsed().as_millis() as u64;
     assert_eq!(out.unwrap(), "ok");
@@ -131,5 +161,3 @@ async fn timer_wall_clock_delay_fs() {
     assert!(elapsed_ms >= 1_200, "expected >=1200ms, got {elapsed_ms}ms");
     rt.shutdown().await;
 }
-
-

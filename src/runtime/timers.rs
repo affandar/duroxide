@@ -20,7 +20,10 @@ impl TimerService {
     pub fn start(
         store: Arc<dyn HistoryStore>,
         poller_idle_ms: u64,
-    ) -> (tokio::task::JoinHandle<()>, tokio::sync::mpsc::UnboundedSender<WorkItem>) {
+    ) -> (
+        tokio::task::JoinHandle<()>,
+        tokio::sync::mpsc::UnboundedSender<WorkItem>,
+    ) {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<WorkItem>();
         let mut svc = TimerService {
             store,
@@ -95,7 +98,13 @@ impl TimerService {
     }
 
     fn insert_item(&mut self, item: WorkItem) {
-        if let WorkItem::TimerSchedule { instance, execution_id, id, fire_at_ms } = item {
+        if let WorkItem::TimerSchedule {
+            instance,
+            execution_id,
+            id,
+            fire_at_ms,
+        } = item
+        {
             let key = format!("{}|{}|{}|{}", instance, execution_id, id, fire_at_ms);
             if self.keys.insert(key.clone()) {
                 self.min_heap.push(Reverse((fire_at_ms, key.clone())));
@@ -124,9 +133,24 @@ mod tests {
         let (_jh, tx) = TimerService::start(store.clone(), 5);
         // schedule three timers: immediate, +10ms, +5ms
         let now = now_ms();
-        let _ = tx.send(WorkItem::TimerSchedule { instance: "i".into(), execution_id: 1, id: 1, fire_at_ms: now });
-        let _ = tx.send(WorkItem::TimerSchedule { instance: "i".into(), execution_id: 1, id: 2, fire_at_ms: now + 10 });
-        let _ = tx.send(WorkItem::TimerSchedule { instance: "i".into(), execution_id: 1, id: 3, fire_at_ms: now + 5 });
+        let _ = tx.send(WorkItem::TimerSchedule {
+            instance: "i".into(),
+            execution_id: 1,
+            id: 1,
+            fire_at_ms: now,
+        });
+        let _ = tx.send(WorkItem::TimerSchedule {
+            instance: "i".into(),
+            execution_id: 1,
+            id: 2,
+            fire_at_ms: now + 10,
+        });
+        let _ = tx.send(WorkItem::TimerSchedule {
+            instance: "i".into(),
+            execution_id: 1,
+            id: 3,
+            fire_at_ms: now + 5,
+        });
 
         // Drain orchestrator queue for three TimerFired items
         let mut fired: Vec<u64> = Vec::new();
@@ -149,5 +173,3 @@ mod tests {
         assert_eq!(fired, vec![1, 3, 2]);
     }
 }
-
-

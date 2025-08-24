@@ -17,6 +17,7 @@ use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
 
 // Public orchestration primitives and executor
 
+pub mod futures;
 pub mod runtime;
 // Re-export descriptor type for public API ergonomics
 pub use runtime::OrchestrationDescriptor;
@@ -363,13 +364,7 @@ impl OrchestrationContext {
 // Unified future/output that allows joining different orchestration primitives
 
 /// Output of a `DurableFuture` when awaited via unified composition.
-#[derive(Debug, Clone)]
-pub enum DurableOutput {
-    Activity(Result<String, String>),
-    Timer,
-    External(String),
-    SubOrchestration(Result<String, String>),
-}
+pub use crate::futures::{DurableFuture, DurableOutput, JoinFuture, SelectFuture};
 
 // NOTE: Current replay model strictly consumes the next history event for each await.
 // This breaks down in races (e.g., select(timer, external)) where the host may append
@@ -381,181 +376,13 @@ pub enum DurableOutput {
 
 /// A unified future for activities, timers, and external events that carries a
 /// correlation ID. Useful for composing with `futures::select`/`join`.
-pub struct DurableFuture(Kind);
+use crate::futures::Kind;
 
-enum Kind {
-    Activity {
-        id: u64,
-        name: String,
-        input: String,
-        scheduled: Cell<bool>,
-        ctx: OrchestrationContext,
-    },
-    Timer {
-        id: u64,
-        delay_ms: u64,
-        scheduled: Cell<bool>,
-        ctx: OrchestrationContext,
-    },
-    External {
-        id: u64,
-        name: String,
-        scheduled: Cell<bool>,
-        ctx: OrchestrationContext,
-    },
-    SubOrch {
-        id: u64,
-        name: String,
-        version: Option<String>,
-        instance: String,
-        input: String,
-        scheduled: Cell<bool>,
-        ctx: OrchestrationContext,
-    },
-}
+// Internal tag to classify DurableFuture kinds for history indexing
+use crate::futures::AggregateDurableFuture;
+use crate::futures::KindTag;
 
-impl Future for DurableFuture {
-    type Output = DurableOutput;
-    fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
-        // Safety: We never move fields that are !Unpin; we only take &mut to mutate inner Cells and use ctx by reference.
-        let this = unsafe { self.get_unchecked_mut() };
-        match &mut this.0 {
-            Kind::Activity {
-                id,
-                name,
-                input,
-                scheduled,
-                ctx,
-            } => {
-                let mut inner = ctx.inner.lock().unwrap();
-                // Is there a completion for this id in history?
-                if let Some(outcome) = inner.history.iter().rev().find_map(|e| match e {
-                    Event::ActivityCompleted { id: cid, result } if cid == id => Some(Ok(result.clone())),
-                    Event::ActivityFailed { id: cid, error } if cid == id => Some(Err(error.clone())),
-                    _ => None,
-                }) {
-                    return Poll::Ready(DurableOutput::Activity(outcome));
-                }
-                // If not yet scheduled in history, emit a CallActivity action once
-                let already_scheduled = inner
-                    .history
-                    .iter()
-                    .any(|e| matches!(e, Event::ActivityScheduled { id: cid, .. } if cid == id));
-                if !already_scheduled && !scheduled.replace(true) {
-                    // Record schedule locally for this turn so subsequent polls observe it
-                    inner.history.push(Event::ActivityScheduled {
-                        id: *id,
-                        name: name.clone(),
-                        input: input.clone(),
-                    });
-                    inner.record_action(Action::CallActivity {
-                        id: *id,
-                        name: name.clone(),
-                        input: input.clone(),
-                    });
-                }
-                Poll::Pending
-            }
-            Kind::Timer {
-                id,
-                delay_ms,
-                scheduled,
-                ctx,
-            } => {
-                let mut inner = ctx.inner.lock().unwrap();
-                if inner
-                    .history
-                    .iter()
-                    .any(|e| matches!(e, Event::TimerFired { id: cid, .. } if cid == id))
-                {
-                    return Poll::Ready(DurableOutput::Timer);
-                }
-                let already_created = inner
-                    .history
-                    .iter()
-                    .any(|e| matches!(e, Event::TimerCreated { id: cid, .. } if cid == id));
-                if !already_created && !scheduled.replace(true) {
-                    let fire_at_ms = inner.now_ms().saturating_add(*delay_ms);
-                    inner.history.push(Event::TimerCreated { id: *id, fire_at_ms });
-                    inner.record_action(Action::CreateTimer {
-                        id: *id,
-                        delay_ms: *delay_ms,
-                    });
-                }
-                Poll::Pending
-            }
-            Kind::External {
-                id,
-                name,
-                scheduled,
-                ctx,
-            } => {
-                let mut inner = ctx.inner.lock().unwrap();
-                if let Some(data) = inner.history.iter().rev().find_map(|e| match e {
-                    Event::ExternalEvent { id: cid, data, .. } if cid == id => Some(data.clone()),
-                    _ => None,
-                }) {
-                    return Poll::Ready(DurableOutput::External(data));
-                }
-                let already_subscribed = inner
-                    .history
-                    .iter()
-                    .any(|e| matches!(e, Event::ExternalSubscribed { id: cid, .. } if cid == id));
-                if !already_subscribed && !scheduled.replace(true) {
-                    inner.history.push(Event::ExternalSubscribed {
-                        id: *id,
-                        name: name.clone(),
-                    });
-                    inner.record_action(Action::WaitExternal {
-                        id: *id,
-                        name: name.clone(),
-                    });
-                }
-                Poll::Pending
-            }
-            Kind::SubOrch {
-                id,
-                name,
-                version,
-                instance,
-                input,
-                scheduled,
-                ctx,
-            } => {
-                let mut inner = ctx.inner.lock().unwrap();
-                // Completion present?
-                if let Some(outcome) = inner.history.iter().rev().find_map(|e| match e {
-                    Event::SubOrchestrationCompleted { id: cid, result } if cid == id => Some(Ok(result.clone())),
-                    Event::SubOrchestrationFailed { id: cid, error } if cid == id => Some(Err(error.clone())),
-                    _ => None,
-                }) {
-                    return Poll::Ready(DurableOutput::SubOrchestration(outcome));
-                }
-                // Schedule once
-                let already_scheduled = inner
-                    .history
-                    .iter()
-                    .any(|e| matches!(e, Event::SubOrchestrationScheduled { id: cid, .. } if cid == id));
-                if !already_scheduled && !scheduled.replace(true) {
-                    inner.history.push(Event::SubOrchestrationScheduled {
-                        id: *id,
-                        name: name.clone(),
-                        instance: instance.clone(),
-                        input: input.clone(),
-                    });
-                    inner.record_action(Action::StartSubOrchestration {
-                        id: *id,
-                        name: name.clone(),
-                        version: version.clone(),
-                        instance: instance.clone(),
-                        input: input.clone(),
-                    });
-                }
-                Poll::Pending
-            }
-        }
-    }
-}
+// DurableFuture's Future impl lives in crate::futures
 
 impl DurableFuture {
     /// Converts this unified future into a future that resolves only for
@@ -973,6 +800,63 @@ impl OrchestrationContext {
     }
 
     // removed: schedule_orchestration(name, input) without instance id (must pass instance id)
+}
+
+// Aggregate future machinery lives in crate::futures
+
+impl OrchestrationContext {
+    /// Deterministic select over two futures: returns (winner_index, DurableOutput)
+    pub fn select2(&self, a: DurableFuture, b: DurableFuture) -> SelectFuture {
+        SelectFuture(AggregateDurableFuture::new_select(self.clone(), vec![a, b]))
+    }
+    /// Deterministic select over N futures
+    pub fn select(&self, futures: Vec<DurableFuture>) -> SelectFuture {
+        SelectFuture(AggregateDurableFuture::new_select(self.clone(), futures))
+    }
+    /// Deterministic join over N futures (history order)
+    pub fn join(&self, futures: Vec<DurableFuture>) -> JoinFuture {
+        JoinFuture(AggregateDurableFuture::new_join(self.clone(), futures))
+    }
+
+    fn find_history_index(hist: &Vec<Event>, id: u64, kind: KindTag) -> Option<usize> {
+        for (idx, e) in hist.iter().enumerate() {
+            match (kind, e) {
+                (KindTag::Activity, Event::ActivityCompleted { id: cid, .. }) if *cid == id => return Some(idx),
+                (KindTag::Activity, Event::ActivityFailed { id: cid, .. }) if *cid == id => return Some(idx),
+                (KindTag::Timer, Event::TimerFired { id: cid, .. }) if *cid == id => return Some(idx),
+                (KindTag::External, Event::ExternalEvent { id: cid, .. }) if *cid == id => return Some(idx),
+                (KindTag::SubOrch, Event::SubOrchestrationCompleted { id: cid, .. }) if *cid == id => return Some(idx),
+                (KindTag::SubOrch, Event::SubOrchestrationFailed { id: cid, .. }) if *cid == id => return Some(idx),
+                _ => {}
+            }
+        }
+        None
+    }
+
+    fn synth_output_from_history(hist: &Vec<Event>, id: u64, kind: KindTag) -> DurableOutput {
+        for e in hist.iter().rev() {
+            match (kind, e) {
+                (KindTag::Activity, Event::ActivityCompleted { id: cid, result }) if *cid == id => {
+                    return DurableOutput::Activity(Ok(result.clone()));
+                }
+                (KindTag::Activity, Event::ActivityFailed { id: cid, error }) if *cid == id => {
+                    return DurableOutput::Activity(Err(error.clone()));
+                }
+                (KindTag::Timer, Event::TimerFired { id: cid, .. }) if *cid == id => return DurableOutput::Timer,
+                (KindTag::External, Event::ExternalEvent { id: cid, data, .. }) if *cid == id => {
+                    return DurableOutput::External(data.clone());
+                }
+                (KindTag::SubOrch, Event::SubOrchestrationCompleted { id: cid, result }) if *cid == id => {
+                    return DurableOutput::SubOrchestration(Ok(result.clone()));
+                }
+                (KindTag::SubOrch, Event::SubOrchestrationFailed { id: cid, error }) if *cid == id => {
+                    return DurableOutput::SubOrchestration(Err(error.clone()));
+                }
+                _ => {}
+            }
+        }
+        DurableOutput::Timer
+    }
 }
 
 fn noop_waker() -> Waker {
