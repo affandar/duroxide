@@ -262,14 +262,7 @@ impl Runtime {
             .push(tx);
         Ok(rx)
     }
-    pub(crate) fn now_ms_static() -> u64 {
-        // Best effort wall-clock for timer rehydration
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .ok()
-            .map(|d| d.as_millis() as u64)
-            .unwrap_or(0)
-    }
+
     /// Get the current execution ID for an instance, or fetch from store if not tracked
     async fn get_execution_id_for_instance(&self, instance: &str) -> u64 {
         // First check in-memory tracking
