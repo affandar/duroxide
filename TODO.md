@@ -7,14 +7,11 @@
 - add cancellation and status from within the orchestration
 - write a real world orchestrations with versioning etc
 - example versioned crates with orchestrations and loaders
-- proper timer implementation in the provider
 - profiling replay and providers
 - performance improvements for runtime
 - "pub-sub" external events
 - sharding and scale out to multiple runtimes
-- mermaid diagrams for orchestrations???
 - strongly typed activity and orchestration calls?
-- typed parameters for activities and orchestrations
 - cancellations via JoinHandles?
 - Add proper metrics.
 - Build a website to visualize execution.
@@ -25,6 +22,8 @@
 
 ## DONE
 
+- typed parameters for activities and orchestrations
+- proper timer implementation in the provider
 - versioning strategy
 - Support for orchestration chaining + eternal orchestrations
 - Need to understand this oneshot channel to await on
@@ -60,3 +59,4 @@
 
 - implement Unpin typed future wrappers for `_typed` adapters (see docs/typed-futures-design.md)
 - redo the orchestration registry change with gpt5 and compare
+- mermaid diagrams for orchestrations???
