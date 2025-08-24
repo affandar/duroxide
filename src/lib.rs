@@ -33,6 +33,7 @@ pub(crate) const SYSTEM_NEW_GUID_ACTIVITY: &str = "__system_new_guid";
 use crate::_typed_codec::Codec;
 use crate::logging::LogLevel;
 use serde::{Deserialize, Serialize};
+use tracing::debug;
 
 // Internal codec utilities for typed I/O (kept private; public API remains ergonomic)
 mod _typed_codec {

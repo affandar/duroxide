@@ -108,6 +108,7 @@ impl Runtime {
         history: &Vec<Event>,
         decisions: Vec<crate::runtime::replay::Decision>,
     ) {
+        debug!("apply_decisions: {instance} {decisions:#?}");
         for d in decisions {
             match d {
                 crate::runtime::replay::Decision::ContinueAsNew { .. } => { /* handled by caller */ }
@@ -541,6 +542,7 @@ impl Runtime {
                             orchestration,
                             input,
                         } => {
+                            debug!("StartOrchestration: {instance} {orchestration} {input}");
                             match self.clone().start_orchestration(&instance, &orchestration, input).await {
                                 _ => {}
                             }
@@ -552,6 +554,7 @@ impl Runtime {
                             id,
                             result,
                         } => {
+                            debug!("ActivityCompleted: {instance} {execution_id} {id} {result}");
                             self.orchestrator_deliver_or_rehydrate(&instance, Some(execution_id), token, {
                                 let instance_c = instance.clone();
                                 let result_c = result.clone();
@@ -571,6 +574,7 @@ impl Runtime {
                             id,
                             error,
                         } => {
+                            debug!("ActivityFailed: {instance} {execution_id} {id} {error}");
                             self.orchestrator_deliver_or_rehydrate(&instance, Some(execution_id), token, {
                                 let instance_c = instance.clone();
                                 let error_c = error.clone();
@@ -590,6 +594,7 @@ impl Runtime {
                             id,
                             fire_at_ms,
                         } => {
+                            debug!("TimerFired: {instance} {execution_id} {id} {fire_at_ms}");
                             self.orchestrator_deliver_or_rehydrate(&instance, Some(execution_id), token, {
                                 let instance_c = instance.clone();
                                 move |t| OrchestratorMsg::TimerFired {
@@ -604,6 +609,7 @@ impl Runtime {
                         }
                         // No TimerSchedule should land on Orchestrator queue
                         WorkItem::ExternalRaised { instance, name, data } => {
+                            debug!("ExternalRaised: {instance} {name} {data}");
                             self.orchestrator_deliver_or_rehydrate(&instance, None, token, {
                                 let instance_c = instance.clone();
                                 let name_c = name.clone();
@@ -623,6 +629,7 @@ impl Runtime {
                             parent_id,
                             result,
                         } => {
+                            debug!("SubOrchCompleted: {parent_instance} {parent_execution_id} {parent_id} {result}");
                             let inst = parent_instance.clone();
                             self.orchestrator_deliver_or_rehydrate(&inst, Some(parent_execution_id), token, move |t| {
                                 OrchestratorMsg::SubOrchCompleted {
@@ -641,6 +648,7 @@ impl Runtime {
                             parent_id,
                             error,
                         } => {
+                            debug!("SubOrchFailed: {parent_instance} {parent_execution_id} {parent_id} {error}");
                             let inst = parent_instance.clone();
                             self.orchestrator_deliver_or_rehydrate(&inst, Some(parent_execution_id), token, move |t| {
                                 OrchestratorMsg::SubOrchFailed {
@@ -654,6 +662,7 @@ impl Runtime {
                             .await;
                         }
                         WorkItem::CancelInstance { instance, reason } => {
+                            debug!("CancelInstance: {instance} {reason}");
                             // Attempt to deliver; if inbox missing or dropped, rehydrate by enqueuing a start
                             if self
                                 .router

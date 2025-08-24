@@ -46,7 +46,6 @@ impl ReplayEngine for DefaultReplayEngine {
         Option<Result<String, String>>,
         crate::ClaimedIdsSnapshot,
     ) {
-        // Adapt the existing replay core; directly return Actions as Decisions
         let orchestrator = |ctx: crate::OrchestrationContext| {
             let h = handler.clone();
             let inp = input.clone();

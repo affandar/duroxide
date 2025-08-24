@@ -1,8 +1,9 @@
 use std::collections::HashMap;
 use tokio::sync::{Mutex, mpsc};
-use tracing::warn;
+use tracing::{debug, warn};
 
 /// Messages delivered back to the orchestrator loop by workers and routers.
+#[derive(Debug)]
 pub enum OrchestratorMsg {
     ActivityCompleted {
         instance: String,
@@ -68,6 +69,7 @@ impl InstanceRouter {
         self.inboxes.lock().await.remove(instance);
     }
     pub async fn forward(&self, msg: OrchestratorMsg) {
+        debug!("forward: {:#?}", msg);
         let key = match &msg {
             OrchestratorMsg::ActivityCompleted { instance, .. }
             | OrchestratorMsg::ActivityFailed { instance, .. }
