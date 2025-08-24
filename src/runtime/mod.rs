@@ -781,12 +781,25 @@ impl Runtime {
                 loop {
                     if let Some((item, token)) = self.history_store.dequeue_peek_lock(QueueKind::Timer).await {
                         match item {
-                            WorkItem::TimerSchedule { instance, execution_id, id, fire_at_ms } => {
+                            WorkItem::TimerSchedule {
+                                instance,
+                                execution_id,
+                                id,
+                                fire_at_ms,
+                            } => {
                                 // Provider supports delayed visibility: enqueue TimerFired with fire_at_ms and let provider deliver when due
-                                let _ = self.history_store.enqueue_work(
-                                    QueueKind::Orchestrator,
-                                    WorkItem::TimerFired { instance, execution_id, id, fire_at_ms }
-                                ).await;
+                                let _ = self
+                                    .history_store
+                                    .enqueue_work(
+                                        QueueKind::Orchestrator,
+                                        WorkItem::TimerFired {
+                                            instance,
+                                            execution_id,
+                                            id,
+                                            fire_at_ms,
+                                        },
+                                    )
+                                    .await;
                                 let _ = self.history_store.ack(QueueKind::Timer, &token).await;
                             }
                             other => {
@@ -803,10 +816,8 @@ impl Runtime {
 
         // Fallback in-process timer service (refactored)
         tokio::spawn(async move {
-            let (svc_jh, svc_tx) = crate::runtime::timers::TimerService::start(
-                self.history_store.clone(),
-                Self::POLLER_IDLE_SLEEP_MS,
-            );
+            let (svc_jh, svc_tx) =
+                crate::runtime::timers::TimerService::start(self.history_store.clone(), Self::POLLER_IDLE_SLEEP_MS);
 
             // Intake task: keep pulling schedules and forwarding to service, then ack
             let intake_rt = self.clone();
@@ -815,8 +826,18 @@ impl Runtime {
                 loop {
                     if let Some((item, token)) = intake_rt.history_store.dequeue_peek_lock(QueueKind::Timer).await {
                         match item {
-                            WorkItem::TimerSchedule { instance, execution_id, id, fire_at_ms } => {
-                                let _ = intake_tx.send(WorkItem::TimerSchedule { instance, execution_id, id, fire_at_ms });
+                            WorkItem::TimerSchedule {
+                                instance,
+                                execution_id,
+                                id,
+                                fire_at_ms,
+                            } => {
+                                let _ = intake_tx.send(WorkItem::TimerSchedule {
+                                    instance,
+                                    execution_id,
+                                    id,
+                                    fire_at_ms,
+                                });
                                 let _ = intake_rt.history_store.ack(QueueKind::Timer, &token).await;
                             }
                             other => {

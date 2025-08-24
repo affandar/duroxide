@@ -2,8 +2,6 @@
 //!
 //! Each test demonstrates a common orchestration pattern using
 //! `OrchestrationContext` and the in-process `Runtime`.
-use futures::future::join;
-use futures::{FutureExt, pin_mut, select};
 use rust_dtf::providers::HistoryStore;
 use rust_dtf::providers::fs::FsHistoryStore;
 use rust_dtf::runtime::registry::ActivityRegistry;
@@ -193,11 +191,117 @@ async fn sample_error_handling_fs() {
     rt.shutdown().await;
 }
 
+/// Timeouts via racing a long-running activity against a timer.
+///
+/// Highlights:
+/// - Schedule a long-running activity and a short timer
+/// - Use `ctx.select` to deterministically pick the earliest completion in history
+/// - If the timer wins, return an error to the user
+#[tokio::test]
+async fn sample_timeout_with_timer_race_fs() {
+    let td = tempfile::tempdir().unwrap();
+    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
+
+    // Register a long-running activity that sleeps before returning
+    let activity_registry = ActivityRegistry::builder()
+        .register("LongOp", |_input: String| async move {
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            Ok("done".to_string())
+        })
+        .build();
+
+    // Orchestration: race LongOp vs 100ms timer and error if timer wins
+    let orchestration = |ctx: OrchestrationContext, _input: String| async move {
+        let act = ctx.schedule_activity("LongOp", "");
+        let t = ctx.schedule_timer(100);
+        let (_idx, out) = ctx.select(vec![act, t]).await;
+        match out {
+            rust_dtf::DurableOutput::Timer => Err("timeout".to_string()),
+            rust_dtf::DurableOutput::Activity(Ok(s)) => Ok(s),
+            rust_dtf::DurableOutput::Activity(Err(e)) => Err(e),
+            other => panic!("unexpected output: {:?}", other),
+        }
+    };
+
+    let orchestration_registry = OrchestrationRegistry::builder()
+        .register("TimeoutSample", orchestration)
+        .build();
+
+    let rt =
+        runtime::Runtime::start_with_store(store, Arc::new(activity_registry), orchestration_registry).await;
+    let handle = rt
+        .clone()
+        .start_orchestration("inst-timeout-sample", "TimeoutSample", "")
+        .await
+        .unwrap();
+    let (_hist, out) = handle.await.unwrap();
+    assert_eq!(out, Err("timeout".to_string()));
+    rt.shutdown().await;
+}
+
+/// Mixed race with select2: activity vs external event, demonstrate using the winner index.
+///
+/// Highlights:
+/// - Schedule a slow activity and subscribe to an external event
+/// - Use `ctx.select2(activity, external)` to pick the earliest completion
+/// - Use the usize index from select2 to branch on which completed first
+#[tokio::test]
+async fn sample_select2_activity_vs_external_fs() {
+    let td = tempfile::tempdir().unwrap();
+    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
+
+    let activity_registry = ActivityRegistry::builder()
+        .register("Sleep", |_input: String| async move {
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+            Ok("slept".to_string())
+        })
+        .build();
+
+    let orchestration = |ctx: OrchestrationContext, _input: String| async move {
+        let act = ctx.schedule_activity("Sleep", "");
+        let evt = ctx.schedule_wait("Go");
+        let (idx, out) = ctx.select2(act, evt).await;
+        // Demonstrate using the index to branch
+        match (idx, out) {
+            (0, rust_dtf::DurableOutput::Activity(Ok(s))) => Ok(format!("activity:{s}")),
+            (1, rust_dtf::DurableOutput::External(payload)) => Ok(format!("event:{payload}")),
+            (0, rust_dtf::DurableOutput::Activity(Err(e))) => Err(e),
+            other => panic!("unexpected: {:?}", other),
+        }
+    };
+
+    let orchestration_registry = OrchestrationRegistry::builder()
+        .register("Select2ActVsEvt", orchestration)
+        .build();
+
+    let rt =
+        runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+
+    // Start orchestration, then raise external after subscription is recorded
+    let store_for_wait = store.clone();
+    let rt_c = rt.clone();
+    tokio::spawn(async move {
+        let _ = common::wait_for_subscription(store_for_wait, "inst-s2-mixed", "Go", 1000).await;
+        rt_c.raise_event("inst-s2-mixed", "Go", "ok").await;
+    });
+
+    let handle = rt
+        .clone()
+        .start_orchestration("inst-s2-mixed", "Select2ActVsEvt", "")
+        .await
+        .unwrap();
+    let (_hist, out) = handle.await.unwrap();
+    let s = out.unwrap();
+    // External event should win (idx==1) because activity sleeps 300ms
+    assert_eq!(s, "event:ok");
+    rt.shutdown().await;
+}
+
 /// Parallel fan-out/fan-in: run two activities concurrently and join results.
 ///
 /// Highlights:
-/// - Use `futures::join` to await multiple `DurableFuture`s concurrently
-/// - Deterministic replay ensures join order is stable
+/// - Use `ctx.join` to await multiple `DurableFuture`s concurrently in history order
+/// - Deterministic replay ensures join order follows history
 #[tokio::test]
 async fn dtf_legacy_gabbar_greetings_fs() {
     let td = tempfile::tempdir().unwrap();
@@ -212,11 +316,21 @@ async fn dtf_legacy_gabbar_greetings_fs() {
         .build();
 
     let orchestration = |ctx: OrchestrationContext, _input: String| async move {
-        // Schedule two greetings in parallel (DTF AsyncDynamicProxyGreetingsTest equivalent)
-        let f1 = ctx.schedule_activity("Greetings", "Gabbar").into_activity();
-        let f2 = ctx.schedule_activity("Greetings", "Samba").into_activity();
-        let (r1, r2) = join(f1, f2).await;
-        Ok(format!("{}, {}", r1.unwrap(), r2.unwrap()))
+        // Schedule two greetings in parallel using deterministic join
+        let a = ctx.schedule_activity("Greetings", "Gabbar");
+        let b = ctx.schedule_activity("Greetings", "Samba");
+        let outs = ctx.join(vec![a, b]).await;
+        let mut vals: Vec<String> = outs
+            .into_iter()
+            .map(|o| match o {
+                rust_dtf::DurableOutput::Activity(Ok(s)) => s,
+                rust_dtf::DurableOutput::Activity(Err(e)) => panic!("activity failed: {e}"),
+                other => panic!("unexpected output: {:?}", other),
+            })
+            .collect();
+        // For a stable assertion build a canonical order
+        vals.sort();
+        Ok(format!("{}, {}", vals[0].clone(), vals[1].clone()))
     };
 
     let orchestration_registry = OrchestrationRegistry::builder()
@@ -364,7 +478,7 @@ async fn sample_sub_orchestration_basic_fs() {
 ///
 /// Highlights:
 /// - Parent starts two child orchestrations in parallel
-/// - Uses `futures::join` to await both and aggregates results
+/// - Uses `ctx.join` to await both in history order and aggregates results
 #[tokio::test]
 async fn sample_sub_orchestration_fanout_fs() {
     let td = tempfile::tempdir().unwrap();
@@ -384,14 +498,18 @@ async fn sample_sub_orchestration_fanout_fs() {
         Ok(s)
     };
     let parent = |ctx: OrchestrationContext, _input: String| async move {
-        let a = ctx
-            .schedule_sub_orchestration("ChildSum", "1,2")
-            .into_sub_orchestration();
-        let b = ctx
-            .schedule_sub_orchestration("ChildSum", "3,4")
-            .into_sub_orchestration();
-        let (ra, rb) = join(a, b).await;
-        let total = ra.unwrap().parse::<i64>().unwrap() + rb.unwrap().parse::<i64>().unwrap();
+        let a = ctx.schedule_sub_orchestration("ChildSum", "1,2");
+        let b = ctx.schedule_sub_orchestration("ChildSum", "3,4");
+        let outs = ctx.join(vec![a, b]).await;
+        let mut nums: Vec<i64> = outs
+            .into_iter()
+            .map(|o| match o {
+                rust_dtf::DurableOutput::SubOrchestration(Ok(s)) => s.parse::<i64>().unwrap(),
+                rust_dtf::DurableOutput::SubOrchestration(Err(e)) => panic!("child failed: {e}"),
+                other => panic!("unexpected output: {:?}", other),
+            })
+            .collect();
+        let total: i64 = nums.drain(..).sum();
         Ok(format!("total={total}"))
     };
 
@@ -673,24 +791,23 @@ async fn sample_mixed_string_and_typed_typed_orch_fs() {
 
     // Typed orchestrator input/output
     let orch = |ctx: OrchestrationContext, req: AddReq| async move {
-        // Kick off a typed activity and a string activity, race them with select!
-        let f_typed = ctx
-            .schedule_activity_typed::<AddReq, AddRes>("Add", &req)
-            .into_activity_typed::<AddRes>()
-            .map(|r| r.map(|v| format!("sum={}", v.sum)))
-            .fuse();
-        let f_str = ctx
-            .schedule_activity("Upper", "hello")
-            .into_activity()
-            .map(|r| r.map(|v| format!("up={v}")))
-            .fuse();
-        pin_mut!(f_typed, f_str);
-        let first = select! {
-            a = f_typed => a,
-            b = f_str => b,
+        // Kick off a typed activity and a string activity, race them with deterministic select
+        let f_typed = ctx.schedule_activity_typed::<AddReq, AddRes>("Add", &req);
+        let f_str = ctx.schedule_activity("Upper", "hello");
+        let (_idx, out) = ctx.select(vec![f_typed, f_str]).await;
+        let s = match out {
+            rust_dtf::DurableOutput::Activity(Ok(raw)) => {
+                // raw is either typed AddRes JSON or plain string result
+                if let Ok(v) = serde_json::from_str::<AddRes>(&raw) {
+                    format!("sum={}", v.sum)
+                } else {
+                    format!("up={raw}")
+                }
+            }
+            rust_dtf::DurableOutput::Activity(Err(e)) => return Err(e),
+            other => panic!("unexpected output: {:?}", other),
         };
-        // Return whichever completed first
-        Ok::<_, String>(first.unwrap())
+        Ok::<_, String>(s)
     };
     let orchestration_registry = OrchestrationRegistry::builder()
         .register_typed::<AddReq, String, _, _>("MixedTypedOrch", orch)
@@ -721,22 +838,21 @@ async fn sample_mixed_string_and_typed_string_orch_fs() {
 
     // String orchestrator mixes typed and string activity calls
     let orch = |ctx: OrchestrationContext, _in: String| async move {
-        let f_typed = ctx
-            .schedule_activity_typed::<AddReq, AddRes>("Add", &AddReq { a: 5, b: 7 })
-            .into_activity_typed::<AddRes>()
-            .map(|r| r.map(|v| format!("sum={}", v.sum)))
-            .fuse();
-        let f_str = ctx
-            .schedule_activity("Upper", "race")
-            .into_activity()
-            .map(|r| r.map(|v| format!("up={v}")))
-            .fuse();
-        pin_mut!(f_typed, f_str);
-        let first = select! {
-            a = f_typed => a,
-            b = f_str => b,
+        let f_typed = ctx.schedule_activity_typed::<AddReq, AddRes>("Add", &AddReq { a: 5, b: 7 });
+        let f_str = ctx.schedule_activity("Upper", "race");
+        let (_idx, out) = ctx.select(vec![f_typed, f_str]).await;
+        let s = match out {
+            rust_dtf::DurableOutput::Activity(Ok(raw)) => {
+                if let Ok(v) = serde_json::from_str::<AddRes>(&raw) {
+                    format!("sum={}", v.sum)
+                } else {
+                    format!("up={raw}")
+                }
+            }
+            rust_dtf::DurableOutput::Activity(Err(e)) => return Err(e),
+            other => panic!("unexpected output: {:?}", other),
         };
-        Ok::<_, String>(first.unwrap())
+        Ok::<_, String>(s)
     };
     let orch_reg = OrchestrationRegistry::builder()
         .register("MixedStringOrch", orch)

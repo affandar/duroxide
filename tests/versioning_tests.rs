@@ -347,7 +347,10 @@ async fn continue_as_new_upgrades_version_deterministically() {
     let (hist, out) = h.await.unwrap();
     // Initial handle resolves at continue-as-new boundary (empty string)
     assert_eq!(out.unwrap(), "");
-    assert!(hist.iter().any(|e| matches!(e, Event::OrchestrationContinuedAsNew { .. })));
+    assert!(
+        hist.iter()
+            .any(|e| matches!(e, Event::OrchestrationContinuedAsNew { .. }))
+    );
 
     // Wait for terminal status using helper and assert final output
     match rt

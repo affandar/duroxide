@@ -84,7 +84,7 @@ pub trait HistoryStore: Send + Sync {
     /// Return a pretty-printed dump of all instances (test utility).
     async fn dump_all_pretty(&self) -> String;
 
-    /// Create a new, empty instance. Expected to be idempotent; 
+    /// Create a new, empty instance. Expected to be idempotent;
     async fn create_instance(&self, _instance: &str) -> Result<(), String> {
         Ok(())
     }
