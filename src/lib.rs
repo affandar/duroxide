@@ -84,6 +84,7 @@ pub enum Event {
     /// Orchestration completed with a final result.
     OrchestrationCompleted { output: String },
     /// Orchestration failed with a final error.
+    OrchestrationFailed { error: String },
     /// Activity was scheduled with a unique ID and input.
     ActivityScheduled { id: u64, name: String, input: String },
     /// Activity completed successfully with a result.
@@ -214,7 +215,7 @@ impl CtxInner {
         Self {
             history,
             actions: Vec::new(),
-            guid_counter: 0,
+            // guid_counter removed
             next_correlation_id: max_id.saturating_add(1),
             turn_index: 0,
             logging_enabled_this_poll: false,
