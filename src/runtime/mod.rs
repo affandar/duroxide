@@ -72,7 +72,7 @@ pub use crate::runtime::registry::{OrchestrationRegistry, OrchestrationRegistryB
 pub use router::{InstanceRouter, OrchestratorMsg};
 
 /// In-process runtime that executes activities and timers and persists
-/// history via a `HistoryStore`.
+/// history via a `HistoryStore`. 
 pub struct Runtime {
     // removed: in-proc activity channel
     router_tx: mpsc::UnboundedSender<OrchestratorMsg>,
@@ -526,7 +526,7 @@ impl Runtime {
     }
 
     fn start_orchestration_dispatcher(self: Arc<Self>) -> JoinHandle<()> {
-        tokio::spawn(async move {
+                    tokio::spawn(async move {
             loop {
                 if let Some((item, token)) = self.history_store.dequeue_peek_lock(QueueKind::Orchestrator).await {
                     match item {
@@ -684,7 +684,7 @@ impl Runtime {
                                 };
                                 self.ensure_instance_active(&instance, &orch_name).await;
                                 let _ = self.history_store.abandon(QueueKind::Orchestrator, &token).await;
-                                tokio::time::sleep(std::time::Duration::from_millis(Self::POLLER_GATE_DELAY_MS)).await;
+                            tokio::time::sleep(std::time::Duration::from_millis(Self::POLLER_GATE_DELAY_MS)).await;
                             }
                         }
                         // No ActivityExecute should land on Orchestrator queue
@@ -707,7 +707,7 @@ impl Runtime {
         tokio::spawn(async move {
             loop {
                 if let Some((item, token)) = self.history_store.dequeue_peek_lock(QueueKind::Worker).await {
-                    match item {
+            match item {
                         WorkItem::ActivityExecute {
                             instance,
                             execution_id,
@@ -792,13 +792,13 @@ impl Runtime {
                             other => {
                                 error!(?other, "unexpected WorkItem in Timer dispatcher; state corruption");
                                 panic!("unexpected WorkItem in Timer dispatcher");
-                            }
                         }
-                    } else {
-                        tokio::time::sleep(std::time::Duration::from_millis(Self::POLLER_IDLE_SLEEP_MS)).await;
                     }
+                } else {
+                    tokio::time::sleep(std::time::Duration::from_millis(Self::POLLER_IDLE_SLEEP_MS)).await;
                 }
-            });
+            }
+        });
         }
 
         // Fallback in-process timer service (refactored)
@@ -1228,7 +1228,7 @@ impl Runtime {
                                 ack_tokens_persist_after.push(t);
                             } else {
                                 ack_tokens_immediate.push(t);
-                            }
+                        }
                         }
                     }
                     Err(_) => break,
@@ -1404,7 +1404,7 @@ impl Runtime {
         {
             warn!(instance, name=%name_str, error=%e, "raise_event: failed to enqueue ExternalRaised");
         }
-        info!(instance, name=%name_str, data=%data_str, "raise_event: enqueued external");
+    info!(instance, name=%name_str, data=%data_str, "raise_event: enqueued external");
     }
 
     /// Request cancellation of a running orchestration instance.

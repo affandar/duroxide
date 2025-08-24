@@ -1,4 +1,4 @@
-use futures::future::join3;
+use futures::future::{join3, select, Either};
 use rust_dtf::providers::HistoryStore;
 use rust_dtf::providers::fs::FsHistoryStore;
 use rust_dtf::runtime::registry::ActivityRegistry;
@@ -122,6 +122,56 @@ fn action_order_is_deterministic_in_first_turn() {
         vec!["CallActivity", "CreateTimer", "WaitExternal"],
         "actions must be recorded in declaration/poll order"
     );
+}
+
+#[tokio::test]
+async fn timers_same_delay_completion_vs_history_order_fs() {
+    // Flaky by design until deterministic selectors are introduced
+    let td = tempfile::tempdir().unwrap();
+    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
+
+    let orchestrator = |ctx: OrchestrationContext, _input: String| async move {
+        let t1 = ctx.schedule_timer(50).into_timer();
+        let t2 = ctx.schedule_timer(50).into_timer();
+        let res = select(t1, t2).await;
+        match res {
+            Either::Left((_a, b)) => { let _ = b.await; Ok("first=t1".to_string()) }
+            Either::Right((_b, a)) => { let _ = a.await; Ok("first=t2".to_string()) }
+        }
+    };
+
+    let reg = OrchestrationRegistry::builder().register("TwoSameTimers", orchestrator).build();
+    let acts = ActivityRegistry::builder().build();
+    let rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(acts), reg).await;
+
+    let h = rt
+        .clone()
+        .start_orchestration("inst-two-same", "TwoSameTimers", "")
+        .await
+        .unwrap();
+    let (hist, out) = h.await.unwrap();
+    let out = out.unwrap();
+
+    // Identify the two timer ids by their TimerCreated order (t1 first, t2 second)
+    let mut created_ids: Vec<u64> = hist
+        .iter()
+        .filter_map(|e| match e { Event::TimerCreated { id, .. } => Some(*id), _ => None })
+        .collect();
+    assert!(created_ids.len() >= 2, "expected at least two TimerCreated events");
+    created_ids.truncate(2);
+    let (t1_id, t2_id) = (created_ids[0], created_ids[1]);
+
+    let idx_t1_fire = hist.iter().position(|e| matches!(e, Event::TimerFired { id, .. } if *id == t1_id)).unwrap();
+    let idx_t2_fire = hist.iter().position(|e| matches!(e, Event::TimerFired { id, .. } if *id == t2_id)).unwrap();
+
+    if out == "first=t1" {
+        assert!(idx_t1_fire <= idx_t2_fire, "t1 completed first by select, but history shows t2 earlier: {hist:#?}");
+    } else {
+        assert_eq!(out.as_str(), "first=t2");
+        assert!(idx_t2_fire <= idx_t1_fire, "t2 completed first by select, but history shows t1 earlier: {hist:#?}");
+    }
+
+    rt.shutdown().await;
 }
 
 async fn sequential_activity_chain_completes_with(store: StdArc<dyn HistoryStore>) {
