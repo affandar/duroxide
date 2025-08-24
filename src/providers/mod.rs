@@ -167,6 +167,13 @@ pub trait HistoryStore: Send + Sync {
     ) -> Result<u64, String> {
         Err("create_new_execution not supported by this provider".into())
     }
+
+    /// Whether the provider supports delayed visibility for timer messages.
+    /// If true, the runtime can rely on the provider to deliver TimerFired at the scheduled time.
+    /// Default: false, which enables the in-process timer fallback service.
+    fn supports_delayed_visibility(&self) -> bool {
+        false
+    }
 }
 
 /// Filesystem-backed provider for local development.

@@ -128,7 +128,7 @@ async fn concurrent_orchestrations_same_activities_with(store: StdArc<dyn Histor
         Ok(format!("o1:a={a};evt={e}"))
     };
     let o2 = |ctx: OrchestrationContext, _input: String| async move {
-        let _guid = ctx.new_guid();
+        let _guid = ctx.system_new_guid().await;
         let f_a = ctx.schedule_activity("Proc", "20");
         let f_e = ctx.schedule_wait("Go");
         let f_t = ctx.schedule_timer(1);
@@ -187,7 +187,7 @@ async fn concurrent_orchestrations_same_activities_with(store: StdArc<dyn Histor
     assert!(
         hist2
             .iter()
-            .any(|e| matches!(e, Event::ActivityCompleted { id, result } if *id == 1 && result == "21"))
+            .any(|e| matches!(e, Event::ActivityCompleted { id, result } if *id == 2 && result == "21"))
     );
     assert!(
         hist1
@@ -197,7 +197,7 @@ async fn concurrent_orchestrations_same_activities_with(store: StdArc<dyn Histor
     assert!(
         hist2
             .iter()
-            .any(|e| matches!(e, Event::ExternalEvent { id, data, .. } if *id == 2 && data == "P2"))
+            .any(|e| matches!(e, Event::ExternalEvent { id, data, .. } if *id == 3 && data == "P2"))
     );
     assert!(
         hist1
@@ -207,7 +207,7 @@ async fn concurrent_orchestrations_same_activities_with(store: StdArc<dyn Histor
     assert!(
         hist2
             .iter()
-            .any(|e| matches!(e, Event::TimerFired { id, .. } if *id == 3))
+            .any(|e| matches!(e, Event::TimerFired { id, .. } if *id == 4))
     );
 
     rt.shutdown().await;

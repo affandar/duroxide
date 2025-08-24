@@ -15,6 +15,7 @@ pub mod dispatch;
 pub mod registry;
 pub mod router;
 pub mod status;
+mod timers;
 use async_trait::async_trait;
 use std::collections::HashSet;
 
@@ -107,6 +108,7 @@ impl Runtime {
         history: &Vec<Event>,
         decisions: Vec<crate::runtime::replay::Decision>,
     ) {
+        debug!("apply_decisions: {instance} {decisions:#?}");
         for d in decisions {
             match d {
                 crate::runtime::replay::Decision::ContinueAsNew { .. } => { /* handled by caller */ }
@@ -260,14 +262,7 @@ impl Runtime {
             .push(tx);
         Ok(rx)
     }
-    pub(crate) fn now_ms_static() -> u64 {
-        // Best effort wall-clock for timer rehydration
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .ok()
-            .map(|d| d.as_millis() as u64)
-            .unwrap_or(0)
-    }
+
     /// Get the current execution ID for an instance, or fetch from store if not tracked
     async fn get_execution_id_for_instance(&self, instance: &str) -> u64 {
         // First check in-memory tracking
@@ -492,8 +487,6 @@ impl Runtime {
         });
         let mut joins: Vec<JoinHandle<()>> = Vec::new();
 
-        // remove in-proc timer worker; timers flow via WorkDispatcher (TimerSchedule -> TimerFired)
-
         // spawn router forwarding task
         let router_clone = router.clone();
         joins.push(tokio::spawn(async move {
@@ -542,6 +535,7 @@ impl Runtime {
                             orchestration,
                             input,
                         } => {
+                            debug!("StartOrchestration: {instance} {orchestration} {input}");
                             match self.clone().start_orchestration(&instance, &orchestration, input).await {
                                 _ => {}
                             }
@@ -553,6 +547,7 @@ impl Runtime {
                             id,
                             result,
                         } => {
+                            debug!("ActivityCompleted: {instance} {execution_id} {id} {result}");
                             self.orchestrator_deliver_or_rehydrate(&instance, Some(execution_id), token, {
                                 let instance_c = instance.clone();
                                 let result_c = result.clone();
@@ -572,6 +567,7 @@ impl Runtime {
                             id,
                             error,
                         } => {
+                            debug!("ActivityFailed: {instance} {execution_id} {id} {error}");
                             self.orchestrator_deliver_or_rehydrate(&instance, Some(execution_id), token, {
                                 let instance_c = instance.clone();
                                 let error_c = error.clone();
@@ -591,6 +587,7 @@ impl Runtime {
                             id,
                             fire_at_ms,
                         } => {
+                            debug!("TimerFired: {instance} {execution_id} {id} {fire_at_ms}");
                             self.orchestrator_deliver_or_rehydrate(&instance, Some(execution_id), token, {
                                 let instance_c = instance.clone();
                                 move |t| OrchestratorMsg::TimerFired {
@@ -605,6 +602,7 @@ impl Runtime {
                         }
                         // No TimerSchedule should land on Orchestrator queue
                         WorkItem::ExternalRaised { instance, name, data } => {
+                            debug!("ExternalRaised: {instance} {name} {data}");
                             self.orchestrator_deliver_or_rehydrate(&instance, None, token, {
                                 let instance_c = instance.clone();
                                 let name_c = name.clone();
@@ -624,6 +622,7 @@ impl Runtime {
                             parent_id,
                             result,
                         } => {
+                            debug!("SubOrchCompleted: {parent_instance} {parent_execution_id} {parent_id} {result}");
                             let inst = parent_instance.clone();
                             self.orchestrator_deliver_or_rehydrate(&inst, Some(parent_execution_id), token, move |t| {
                                 OrchestratorMsg::SubOrchCompleted {
@@ -642,6 +641,7 @@ impl Runtime {
                             parent_id,
                             error,
                         } => {
+                            debug!("SubOrchFailed: {parent_instance} {parent_execution_id} {parent_id} {error}");
                             let inst = parent_instance.clone();
                             self.orchestrator_deliver_or_rehydrate(&inst, Some(parent_execution_id), token, move |t| {
                                 OrchestratorMsg::SubOrchFailed {
@@ -655,6 +655,7 @@ impl Runtime {
                             .await;
                         }
                         WorkItem::CancelInstance { instance, reason } => {
+                            debug!("CancelInstance: {instance} {reason}");
                             // Attempt to deliver; if inbox missing or dropped, rehydrate by enqueuing a start
                             if self
                                 .router
@@ -702,7 +703,6 @@ impl Runtime {
         })
     }
 
-    // TODO : HERE HERE HERE : continue simplifying
     fn start_work_dispatcher(self: Arc<Self>, activities: Arc<registry::ActivityRegistry>) -> JoinHandle<()> {
         tokio::spawn(async move {
             loop {
@@ -776,45 +776,61 @@ impl Runtime {
     }
 
     fn start_timer_dispatcher(self: Arc<Self>) -> JoinHandle<()> {
-        tokio::spawn(async move {
-            loop {
-                if let Some((item, token)) = self.history_store.dequeue_peek_lock(QueueKind::Timer).await {
-                    match item {
-                        WorkItem::TimerSchedule {
-                            instance,
-                            execution_id,
-                            id,
-                            fire_at_ms,
-                        } => {
-                            // Convert schedule into a real-time delay and enqueue TimerFired later
-                            let now = Self::now_ms_static();
-                            let delay = fire_at_ms.saturating_sub(now);
-                            let store = self.history_store.clone();
-                            tokio::spawn(async move {
-                                tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
-                                let _ = store
-                                    .enqueue_work(
-                                        QueueKind::Orchestrator,
-                                        WorkItem::TimerFired {
-                                            instance,
-                                            execution_id,
-                                            id,
-                                            fire_at_ms,
-                                        },
-                                    )
-                                    .await;
-                            });
-                            let _ = self.history_store.ack(QueueKind::Timer, &token).await;
+        if self.history_store.supports_delayed_visibility() {
+            return tokio::spawn(async move {
+                loop {
+                    if let Some((item, token)) = self.history_store.dequeue_peek_lock(QueueKind::Timer).await {
+                        match item {
+                            WorkItem::TimerSchedule { instance, execution_id, id, fire_at_ms } => {
+                                // Provider supports delayed visibility: enqueue TimerFired with fire_at_ms and let provider deliver when due
+                                let _ = self.history_store.enqueue_work(
+                                    QueueKind::Orchestrator,
+                                    WorkItem::TimerFired { instance, execution_id, id, fire_at_ms }
+                                ).await;
+                                let _ = self.history_store.ack(QueueKind::Timer, &token).await;
+                            }
+                            other => {
+                                error!(?other, "unexpected WorkItem in Timer dispatcher; state corruption");
+                                panic!("unexpected WorkItem in Timer dispatcher");
+                            }
                         }
-                        other => {
-                            error!(?other, "unexpected WorkItem in Timer dispatcher; state corruption");
-                            panic!("unexpected WorkItem in Timer dispatcher");
-                        }
+                    } else {
+                        tokio::time::sleep(std::time::Duration::from_millis(Self::POLLER_IDLE_SLEEP_MS)).await;
                     }
-                } else {
-                    tokio::time::sleep(std::time::Duration::from_millis(Self::POLLER_IDLE_SLEEP_MS)).await;
                 }
-            }
+            });
+        }
+
+        // Fallback in-process timer service (refactored)
+        tokio::spawn(async move {
+            let (svc_jh, svc_tx) = crate::runtime::timers::TimerService::start(
+                self.history_store.clone(),
+                Self::POLLER_IDLE_SLEEP_MS,
+            );
+
+            // Intake task: keep pulling schedules and forwarding to service, then ack
+            let intake_rt = self.clone();
+            let intake_tx = svc_tx.clone();
+            tokio::spawn(async move {
+                loop {
+                    if let Some((item, token)) = intake_rt.history_store.dequeue_peek_lock(QueueKind::Timer).await {
+                        match item {
+                            WorkItem::TimerSchedule { instance, execution_id, id, fire_at_ms } => {
+                                let _ = intake_tx.send(WorkItem::TimerSchedule { instance, execution_id, id, fire_at_ms });
+                                let _ = intake_rt.history_store.ack(QueueKind::Timer, &token).await;
+                            }
+                            other => {
+                                error!(?other, "unexpected WorkItem in Timer dispatcher; state corruption");
+                                panic!("unexpected WorkItem in Timer dispatcher");
+                            }
+                        }
+                    } else {
+                        tokio::time::sleep(std::time::Duration::from_millis(Self::POLLER_IDLE_SLEEP_MS)).await;
+                    }
+                }
+            });
+            // Keep service join handle alive within dispatcher lifetime
+            let _ = svc_jh.await;
         })
     }
 
@@ -895,7 +911,6 @@ impl Runtime {
         }
         let mut comp_rx = self.router.register(instance).await;
 
-        // TODO : activities should be renqueued at the end of the turn?
         // Rehydrate pending activities and timers from history
         completions::rehydrate_pending(instance, &history, &self.history_store).await;
 

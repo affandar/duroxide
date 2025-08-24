@@ -10,9 +10,7 @@ mod common;
 
 async fn orchestration_completes_and_replays_deterministically_with(store: StdArc<dyn HistoryStore>) {
     let orchestration = |ctx: OrchestrationContext, _input: String| async move {
-        let start = ctx.now_ms();
-        let _id = ctx.new_guid();
-
+        let start: u64 = 0; // deterministic logical start for test
         let f_a = ctx.schedule_activity("A", "1");
         let f_t = ctx.schedule_timer(5);
         let f_e = ctx.schedule_wait("Go");
@@ -67,8 +65,7 @@ async fn orchestration_completes_and_replays_deterministically_with(store: StdAr
     );
     // For replay, provide a 1-arg closure equivalent to the registered orchestrator
     let replay = |ctx: OrchestrationContext| async move {
-        let start = ctx.now_ms();
-        let _id = ctx.new_guid();
+        let start: u64 = 0; // deterministic logical start for test
         let f_a = ctx.schedule_activity("A", "1");
         let f_t = ctx.schedule_timer(5);
         let f_e = ctx.schedule_wait("Go");
@@ -100,7 +97,6 @@ async fn orchestration_completes_and_replays_deterministically_fs() {
 #[test]
 fn action_order_is_deterministic_in_first_turn() {
     let orchestrator = |ctx: OrchestrationContext| async move {
-        let _ = ctx.new_guid();
         let f_a = ctx.schedule_activity("A", "1");
         let f_t = ctx.schedule_timer(500);
         let f_e = ctx.schedule_wait("Go");

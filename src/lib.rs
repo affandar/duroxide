@@ -33,6 +33,7 @@ pub(crate) const SYSTEM_NEW_GUID_ACTIVITY: &str = "__system_new_guid";
 use crate::_typed_codec::Codec;
 use crate::logging::LogLevel;
 use serde::{Deserialize, Serialize};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 // Internal codec utilities for typed I/O (kept private; public API remains ergonomic)
 mod _typed_codec {
@@ -165,8 +166,7 @@ struct CtxInner {
     history: Vec<Event>,
     actions: Vec<Action>,
 
-    // Deterministic ids and GUIDs
-    guid_counter: u64,
+    // Reserved for future deterministic GUIDs if reintroduced
     next_correlation_id: u64,
 
     // Logging and turn metadata
@@ -215,7 +215,7 @@ impl CtxInner {
         Self {
             history,
             actions: Vec::new(),
-            guid_counter: 0,
+            // guid_counter removed
             next_correlation_id: max_id.saturating_add(1),
             turn_index: 0,
             logging_enabled_this_poll: false,
@@ -233,22 +233,13 @@ impl CtxInner {
     }
 
     fn now_ms(&self) -> u64 {
-        // Logical time is last TimerFired.fire_at_ms seen in history
-        let mut last = 0u64;
-        for ev in &self.history {
-            if let Event::TimerFired { fire_at_ms, .. } = ev {
-                if *fire_at_ms > last {
-                    last = *fire_at_ms;
-                }
-            }
-        }
-        last
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0)
     }
 
-    fn new_guid(&mut self) -> String {
-        self.guid_counter += 1;
-        format!("{:#034x}", self.guid_counter)
-    }
+    // Note: deterministic GUID generation was removed from public API.
 
     fn next_id(&mut self) -> u64 {
         let id = self.next_correlation_id;
@@ -273,13 +264,9 @@ impl OrchestrationContext {
 
     /// Returns the current logical time in milliseconds based on the last
     /// `TimerFired` event in history.
-    pub fn now_ms(&self) -> u64 {
-        self.inner.lock().unwrap().now_ms()
-    }
+    // Removed: use system_now_ms().await for wall-clock time
     /// Returns a deterministic GUID string, incremented per instance.
-    pub fn new_guid(&self) -> String {
-        self.inner.lock().unwrap().new_guid()
-    }
+    // Removed: use system_new_guid().await for GUIDs
 
     fn take_actions(&self) -> Vec<Action> {
         std::mem::take(&mut self.inner.lock().unwrap().actions)
