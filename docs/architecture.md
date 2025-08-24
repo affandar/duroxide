@@ -7,7 +7,7 @@ Deterministic orchestration hinges on separating decision-making (user code) fro
 - Orchestrator (user code): async function polled once per turn. It reads history and requests new work via `Action`s.
 - Runtime (in-process): executes activities and timers, routes external events, and appends resulting `Event`s. It runs three dispatchers that consume provider-backed queues (`WorkItem`) via peek-lock: OrchestrationDispatcher (Orchestrator queue), WorkDispatcher (Worker queue), and TimerDispatcher (Timer queue). Auto-resumes incomplete instances at startup.
 - Provider: persistence boundary that stores history per instance (`HistoryStore`).
-- Workers: activity worker executes registered handlers; timer worker schedules real-time waits.
+- Workers/dispatchers: WorkDispatcher executes registered activities; TimerDispatcher manages timers (provider delayed-visibility or in-process fallback). No separate ActivityWorker component.
 
 ### High-level data flow
 
@@ -92,7 +92,7 @@ flowchart TD
 - Providers persist all executions. Filesystem layout: `root/{instance}/{execution_id}.jsonl`.
 - Runtime behavior:
   - Appends `OrchestrationContinuedAsNew` to the current execution.
-  - Calls `reset_for_continue_as_new` on the provider to create the next execution with `OrchestrationStarted`.
+  - Calls `create_new_execution` on the provider to create the next execution with `OrchestrationStarted { name, version, input, parent_* }`.
   - Enqueues a `StartOrchestration` work item and notifies waiters for the initial start with an empty success.
   - External events are routed to the latest execution.
 

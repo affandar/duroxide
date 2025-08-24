@@ -13,8 +13,6 @@
 ```rust
 pub struct OrchestrationContext { /* ... */ }
 impl OrchestrationContext {
-  pub fn now_ms(&self) -> u64
-  pub fn new_guid(&self) -> String
 
   // String IO
   pub fn schedule_activity(&self, name: impl Into<String>, input: impl Into<String>) -> DurableFuture
@@ -35,6 +33,11 @@ impl OrchestrationContext {
   // Control-flow
   pub fn continue_as_new(&self, input: impl Into<String>)
   pub fn continue_as_new_typed<In: Serialize>(&self, input: &In)
+
+  // Deterministic aggregation
+  pub fn select2(&self, a: DurableFuture, b: DurableFuture) -> SelectFuture
+  pub fn select(&self, futures: Vec<DurableFuture>) -> SelectFuture
+  pub fn join(&self, futures: Vec<DurableFuture>) -> JoinFuture
 
   pub fn trace_info(&self, msg: impl Into<String>)
   pub fn trace_warn(&self, msg: impl Into<String>)

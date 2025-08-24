@@ -1,5 +1,7 @@
 ## rust-dtf
 
+> Notice: This is an experimental project exploring how AI can help build and iteratively improve a moderately complex framework. It’s intended for learning and fun, not for production use.
+
 Deterministic task orchestration in Rust, inspired by Durable Task.
 
 What you can build with this (inspired by .NET Durable Task/Durable Functions patterns)
@@ -16,18 +18,23 @@ Getting started samples
 
 What it is
 - Deterministic orchestration core with correlated event IDs and replay safety
-- Message-driven runtime built on Tokio: activity worker pool, timer worker, external event router, and a provider-backed work queue
+- Message-driven runtime built on Tokio, with three dispatchers and an in-process router:
+  - OrchestrationDispatcher (orchestrator queue)
+  - WorkDispatcher (activities and child/detached starts, worker queue)
+  - TimerDispatcher (timers, timer queue)
+  - InstanceRouter (in-process delivery of completions to active instances)
 - Storage-agnostic via `HistoryStore` (in-memory and filesystem providers today)
 
 How it works (brief)
 - The orchestrator runs turn-by-turn. Each turn it is polled once, may schedule actions, then the runtime waits for completions.
 - Every operation has a correlation id. Scheduling is recorded as history events (e.g., `ActivityScheduled`) and completions are matched by id (e.g., `ActivityCompleted`).
-- The runtime dispatches actions to workers over channels and consumes a provider-backed work queue (`WorkItem`) for completions and external events. It appends new events to history and advances the next turn.
+- The runtime appends new events and advances turns; work is routed through provider-backed queues per role (Orchestrator/Worker/Timer) using peek-lock semantics.
+- Deterministic future aggregation: `ctx.select2`, `ctx.select(Vec)`, and `ctx.join(Vec)` resolve by earliest completion index in history (not polling order).
 - Logging is replay-safe via `tracing` and the `ctx.trace_*` helpers (implemented as a deterministic system activity). We do not persist trace events in history.
 - Providers enforce a history cap (default 1024; tests use a smaller cap). If an append would exceed the cap, they return an error; the runtime fails the run to preserve determinism (no truncation).
 
 Key types
-- `OrchestrationContext`: schedules work (`schedule_activity`, `schedule_timer`, `schedule_wait`, `schedule_sub_orchestration`, `schedule_orchestration`) and exposes `trace_*`, `continue_as_new`.
+- `OrchestrationContext`: schedules work (`schedule_activity`, `schedule_timer`, `schedule_wait`, `schedule_sub_orchestration`, `schedule_orchestration`) and exposes deterministic `select2/select/join`, `trace_*`, `continue_as_new`.
 - `DurableFuture`: returned by `schedule_*`; use `into_activity()`, `into_timer()`, `into_event()`, `into_sub_orchestration()` (and `_typed` variants) to await.
 - `Event`/`Action`: immutable history entries and host-side actions, including `ContinueAsNew`.
 - `HistoryStore`: persistence abstraction (`InMemoryHistoryStore`, `FsHistoryStore`).
@@ -75,26 +82,34 @@ rt.shutdown().await;
 
 Parallel fan-out (DTF-style greetings)
 ```rust
-use futures::future::join;
 async fn fanout(ctx: OrchestrationContext) -> Vec<String> {
-    let g1 = ctx.schedule_activity("Greetings", "Gabbar").into_activity();
-    let g2 = ctx.schedule_activity("Greetings", "Samba").into_activity();
-    let (r1, r2) = join(g1, g2).await;
-    vec![r1.unwrap(), r2.unwrap()]
+    let f1 = ctx.schedule_activity("Greetings", "Gabbar");
+    let f2 = ctx.schedule_activity("Greetings", "Samba");
+    let outs = ctx.join(vec![f1, f2]).await; // history-ordered join
+    outs
+        .into_iter()
+        .map(|o| match o {
+            rust_dtf::DurableOutput::Activity(Ok(s)) => s,
+            other => panic!("unexpected: {:?}", other),
+        })
+        .collect()
 }
 ```
 
 Control flow + timers + externals
 ```rust
-use futures::future::select;
 use rust_dtf::DurableOutput;
 async fn control(ctx: OrchestrationContext) -> String {
-    let race = select(ctx.schedule_timer(10).into_timer(), ctx.schedule_wait("Evt").into_event());
-    match race.await {
-        // event wins
-        Either::Right((data, _left_rest)) => data,
-        // timer wins then wait for event
-        Either::Left((_timer, right_rest)) => right_rest.await,
+    let a = ctx.schedule_timer(10);
+    let b = ctx.schedule_wait("Evt");
+    let (_idx, out) = ctx.select2(a, b).await;
+    match out {
+        DurableOutput::External(data) => data,
+        DurableOutput::Timer => {
+            // timer won; fall back to waiting for the event deterministically
+            ctx.schedule_wait("Evt").into_event().await
+        }
+        other => panic!("unexpected: {:?}", other),
     }
 }
 ```

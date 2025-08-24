@@ -25,7 +25,7 @@ Two background workers enforce gates using `active_instances`:
 - If an instance is already active, duplicate starts are ignored by an in-memory `active_instances` guard.
 - If inactive, it marks the instance as pending and spawns `run_instance_to_completion`.
 
-2) Provider poller (work queue)
+2) Provider poller (work queues)
 - The poller dequeues `WorkItem`s and chooses a `GatePolicy`:
   - `StartOrchestration` → RequireInactive (hold while active)
   - `ActivityCompleted`/`ActivityFailed`/`TimerFired`/`ExternalRaised`/`SubOrch*` → RequireActive (hold until active)

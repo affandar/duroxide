@@ -38,22 +38,18 @@ Start with these end-to-end tests to learn the API and patterns by example:
 - `tests/e2e_samples.rs` – documented “learning” samples
   - Hello world, control flow branching, loops and accumulation
   - Error handling and compensation
-  - Parallel fan‑out/fan‑in (`futures::join`)
+  - Parallel fan‑out/fan‑in (history-ordered `ctx.join`)
   - System activities (`system_now_ms`, `system_new_guid`)
   - Sub‑orchestrations: basic, fan‑out, and chained
   - Detached orchestration scheduling (fire‑and‑forget)
-  - Mixed typed and string I/O samples, including `select!` over heterogeneous futures
+  - Mixed typed and string I/O samples, including deterministic `ctx.select/ctx.select2` over heterogeneous futures
 
-- `tests/e2e_continue_as_new.rs` – ContinueAsNew scenarios
-  - Multi‑execution rollover: orchestrator loops via `ctx.continue_as_new(new_input)`; provider stores all executions
-  - External event routing to the latest execution
-  - History assertions using execution‑aware provider APIs
+- ContinueAsNew scenarios are included in the samples and status APIs; see docs and tests under `tests/`.
 
 You can run individual samples with:
 
 ```bash
 cargo test --test e2e_samples -- --nocapture
-cargo test --test e2e_continue_as_new -- --nocapture
 ```
 
 
