@@ -125,50 +125,56 @@ fn action_order_is_deterministic_in_first_turn() {
 }
 
 #[tokio::test]
-async fn timers_same_delay_completion_vs_history_order_fs() {
+async fn activities_same_delay_completion_vs_history_order_fs() {
     // Flaky by design until deterministic selectors are introduced
     let td = tempfile::tempdir().unwrap();
     let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
 
     let orchestrator = |ctx: OrchestrationContext, _input: String| async move {
-        let t1 = ctx.schedule_timer(50).into_timer();
-        let t2 = ctx.schedule_timer(50).into_timer();
-        let res = select(t1, t2).await;
+        let a1 = ctx.schedule_activity("Sleep", "50").into_activity();
+        let a2 = ctx.schedule_activity("Sleep", "50").into_activity();
+        let res = select(a1, a2).await;
         match res {
-            Either::Left((_a, b)) => { let _ = b.await; Ok("first=t1".to_string()) }
-            Either::Right((_b, a)) => { let _ = a.await; Ok("first=t2".to_string()) }
+            Either::Left((_x, y)) => { let _ = y.await; Ok("first=a1".to_string()) }
+            Either::Right((_y, x)) => { let _ = x.await; Ok("first=a2".to_string()) }
         }
     };
 
-    let reg = OrchestrationRegistry::builder().register("TwoSameTimers", orchestrator).build();
-    let acts = ActivityRegistry::builder().build();
+    let acts = ActivityRegistry::builder()
+        .register("Sleep", |ms: String| async move {
+            let d = ms.parse::<u64>().unwrap_or(0);
+            tokio::time::sleep(std::time::Duration::from_millis(d)).await;
+            Ok(ms)
+        })
+        .build();
+    let reg = OrchestrationRegistry::builder().register("TwoSameActs", orchestrator).build();
     let rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(acts), reg).await;
 
     let h = rt
         .clone()
-        .start_orchestration("inst-two-same", "TwoSameTimers", "")
+        .start_orchestration("inst-two-acts", "TwoSameActs", "")
         .await
         .unwrap();
     let (hist, out) = h.await.unwrap();
     let out = out.unwrap();
 
-    // Identify the two timer ids by their TimerCreated order (t1 first, t2 second)
-    let mut created_ids: Vec<u64> = hist
+    // Identify the two activity ids by ActivityScheduled order for name Sleep
+    let mut ids: Vec<u64> = hist
         .iter()
-        .filter_map(|e| match e { Event::TimerCreated { id, .. } => Some(*id), _ => None })
+        .filter_map(|e| match e { Event::ActivityScheduled { id, name, .. } if name == "Sleep" => Some(*id), _ => None })
         .collect();
-    assert!(created_ids.len() >= 2, "expected at least two TimerCreated events");
-    created_ids.truncate(2);
-    let (t1_id, t2_id) = (created_ids[0], created_ids[1]);
+    assert!(ids.len() >= 2, "expected at least two ActivityScheduled events for Sleep");
+    ids.truncate(2);
+    let (a1_id, a2_id) = (ids[0], ids[1]);
 
-    let idx_t1_fire = hist.iter().position(|e| matches!(e, Event::TimerFired { id, .. } if *id == t1_id)).unwrap();
-    let idx_t2_fire = hist.iter().position(|e| matches!(e, Event::TimerFired { id, .. } if *id == t2_id)).unwrap();
+    let idx_a1 = hist.iter().position(|e| matches!(e, Event::ActivityCompleted { id, .. } if *id == a1_id)).unwrap();
+    let idx_a2 = hist.iter().position(|e| matches!(e, Event::ActivityCompleted { id, .. } if *id == a2_id)).unwrap();
 
-    if out == "first=t1" {
-        assert!(idx_t1_fire <= idx_t2_fire, "t1 completed first by select, but history shows t2 earlier: {hist:#?}");
+    if out == "first=a1" {
+        assert!(idx_a1 <= idx_a2, "a1 completed first by select, but history shows a2 earlier: {hist:#?}");
     } else {
-        assert_eq!(out.as_str(), "first=t2");
-        assert!(idx_t2_fire <= idx_t1_fire, "t2 completed first by select, but history shows t1 earlier: {hist:#?}");
+        assert_eq!(out.as_str(), "first=a2");
+        assert!(idx_a2 <= idx_a1, "a2 completed first by select, but history shows a1 earlier: {hist:#?}");
     }
 
     rt.shutdown().await;
