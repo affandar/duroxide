@@ -282,7 +282,7 @@ async fn select_two_externals_history_order_wins_fs() {
 
     // Restart runtime and wait for completion; with current select semantics, this may fail
     let acts2 = ActivityRegistry::builder().build();
-    let reg2 = OrchestrationRegistry::builder().register("ABSelect", |ctx, s| orchestrator(ctx, s)).build();
+    let reg2 = OrchestrationRegistry::builder().register("ABSelect", move |ctx, s| orchestrator(ctx, s)).build();
     let rt2 = runtime::Runtime::start_with_store(store.clone(), StdArc::new(acts2), reg2).await;
 
     // Wait for completion and inspect output
