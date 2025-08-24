@@ -222,3 +222,83 @@ async fn sequential_activity_chain_completes_fs() {
     let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
     sequential_activity_chain_completes_with(store).await;
 }
+
+#[tokio::test]
+async fn select_two_externals_history_order_wins_fs() {
+    // Force a deterministic repro: subscribe to A then B (and select in A,B order),
+    // stop the runtime, enqueue B then A externally, restart and assert B wins.
+    let td = tempfile::tempdir().unwrap();
+    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
+
+    let orchestrator = |ctx: OrchestrationContext, _input: String| async move {
+        let a = ctx.schedule_wait("A").into_event();
+        let b = ctx.schedule_wait("B").into_event();
+        let which = select(a, b).await;
+        match which {
+            Either::Left((av, rb)) => { let _ = rb.await; Ok(format!("A:{av}")) }
+            Either::Right((bv, ra)) => { let _ = ra.await; Ok(format!("B:{bv}")) }
+        }
+    };
+
+    let acts = ActivityRegistry::builder().build();
+    let reg = OrchestrationRegistry::builder().register("ABSelect", orchestrator).build();
+    let rt1 = runtime::Runtime::start_with_store(store.clone(), StdArc::new(acts), reg).await;
+
+    let _h = rt1
+        .clone()
+        .start_orchestration("inst-ab", "ABSelect", "")
+        .await
+        .unwrap();
+
+    // Wait for both subscriptions to be recorded, then stop the runtime
+    assert!(
+        common::wait_for_history(store.clone(), "inst-ab", |h| {
+            let mut seen_a = false; let mut seen_b = false;
+            for e in h.iter() {
+                if let Event::ExternalSubscribed { name, .. } = e {
+                    if name == "A" { seen_a = true; }
+                    if name == "B" { seen_b = true; }
+                }
+            }
+            seen_a && seen_b
+        }, 3_000).await,
+        "timeout waiting for subscriptions"
+    );
+    rt1.shutdown().await;
+
+    // Enqueue B then A completions while runtime is down
+    let wi_b = rust_dtf::providers::WorkItem::ExternalRaised {
+        instance: "inst-ab".to_string(),
+        name: "B".to_string(),
+        data: "vb".to_string(),
+    };
+    let wi_a = rust_dtf::providers::WorkItem::ExternalRaised {
+        instance: "inst-ab".to_string(),
+        name: "A".to_string(),
+        data: "va".to_string(),
+    };
+    let _ = store.enqueue_work(rust_dtf::providers::QueueKind::Orchestrator, wi_b).await;
+    let _ = store.enqueue_work(rust_dtf::providers::QueueKind::Orchestrator, wi_a).await;
+
+    // Restart runtime and wait for completion; with current select semantics, this may fail
+    let acts2 = ActivityRegistry::builder().build();
+    let reg2 = OrchestrationRegistry::builder().register("ABSelect", |ctx, s| orchestrator(ctx, s)).build();
+    let rt2 = runtime::Runtime::start_with_store(store.clone(), StdArc::new(acts2), reg2).await;
+
+    // Wait for completion and inspect output
+    assert!(
+        common::wait_for_history(store.clone(), "inst-ab", |h| {
+            h.iter().any(|e| matches!(e, Event::OrchestrationCompleted { .. }))
+        }, 5_000).await,
+        "timeout waiting for completion"
+    );
+    let hist = store.read("inst-ab").await;
+    let output = match hist.last().unwrap() {
+        Event::OrchestrationCompleted { output } => output.clone(),
+        _ => String::new(),
+    };
+
+    // Assert B wins because we enqueued B before A, despite select(A,B)
+    assert!(output.starts_with("B:"), "expected B to win, got {output}");
+    rt2.shutdown().await;
+}
