@@ -56,10 +56,6 @@ impl TimerService {
                 }
             }
 
-            // // Bias external events slightly ahead of timers in close races
-            // if !due.is_empty() {
-            //     tokio::time::sleep(std::time::Duration::from_millis(3)).await;
-            // }
             for (instance, execution_id, id, fire_at_ms) in due.drain(..) {
                 let _ = self
                     .store

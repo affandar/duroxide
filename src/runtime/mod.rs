@@ -918,7 +918,6 @@ impl Runtime {
         }
         let mut comp_rx = self.router.register(instance).await;
 
-        // TODO : activities should be renqueued at the end of the turn?
         // Rehydrate pending activities and timers from history
         completions::rehydrate_pending(instance, &history, &self.history_store).await;
 

@@ -128,7 +128,7 @@ async fn concurrent_orchestrations_same_activities_with(store: StdArc<dyn Histor
         Ok(format!("o1:a={a};evt={e}"))
     };
     let o2 = |ctx: OrchestrationContext, _input: String| async move {
-        let _guid = ctx.new_guid();
+        let _guid = ctx.system_new_guid().await;
         let f_a = ctx.schedule_activity("Proc", "20");
         let f_e = ctx.schedule_wait("Go");
         let f_t = ctx.schedule_timer(1);
