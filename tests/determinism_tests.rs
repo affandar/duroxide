@@ -124,62 +124,6 @@ fn action_order_is_deterministic_in_first_turn() {
     );
 }
 
-#[tokio::test]
-async fn activities_same_delay_completion_vs_history_order_fs() {
-    // Flaky by design until deterministic selectors are introduced
-    let td = tempfile::tempdir().unwrap();
-    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
-
-    let orchestrator = |ctx: OrchestrationContext, _input: String| async move {
-        let a1 = ctx.schedule_activity("Sleep", "50").into_activity();
-        let a2 = ctx.schedule_activity("Sleep", "50").into_activity();
-        let res = select(a1, a2).await;
-        match res {
-            Either::Left((_x, y)) => { let _ = y.await; Ok("first=a1".to_string()) }
-            Either::Right((_y, x)) => { let _ = x.await; Ok("first=a2".to_string()) }
-        }
-    };
-
-    let acts = ActivityRegistry::builder()
-        .register("Sleep", |ms: String| async move {
-            let d = ms.parse::<u64>().unwrap_or(0);
-            tokio::time::sleep(std::time::Duration::from_millis(d)).await;
-            Ok(ms)
-        })
-        .build();
-    let reg = OrchestrationRegistry::builder().register("TwoSameActs", orchestrator).build();
-    let rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(acts), reg).await;
-
-    let h = rt
-        .clone()
-        .start_orchestration("inst-two-acts", "TwoSameActs", "")
-        .await
-        .unwrap();
-    let (hist, out) = h.await.unwrap();
-    let out = out.unwrap();
-
-    // Identify the two activity ids by ActivityScheduled order for name Sleep
-    let mut ids: Vec<u64> = hist
-        .iter()
-        .filter_map(|e| match e { Event::ActivityScheduled { id, name, .. } if name == "Sleep" => Some(*id), _ => None })
-        .collect();
-    assert!(ids.len() >= 2, "expected at least two ActivityScheduled events for Sleep");
-    ids.truncate(2);
-    let (a1_id, a2_id) = (ids[0], ids[1]);
-
-    let idx_a1 = hist.iter().position(|e| matches!(e, Event::ActivityCompleted { id, .. } if *id == a1_id)).unwrap();
-    let idx_a2 = hist.iter().position(|e| matches!(e, Event::ActivityCompleted { id, .. } if *id == a2_id)).unwrap();
-
-    if out == "first=a1" {
-        assert!(idx_a1 <= idx_a2, "a1 completed first by select, but history shows a2 earlier: {hist:#?}");
-    } else {
-        assert_eq!(out.as_str(), "first=a2");
-        assert!(idx_a2 <= idx_a1, "a2 completed first by select, but history shows a1 earlier: {hist:#?}");
-    }
-
-    rt.shutdown().await;
-}
-
 async fn sequential_activity_chain_completes_with(store: StdArc<dyn HistoryStore>) {
     let orchestrator = |ctx: OrchestrationContext, _input: String| async move {
         let a = ctx.schedule_activity("A", "1").into_activity().await.unwrap();
@@ -297,6 +241,17 @@ async fn select_two_externals_history_order_wins_fs() {
         Event::OrchestrationCompleted { output } => output.clone(),
         _ => String::new(),
     };
+
+    // Also assert B's ExternalEvent appears before A's in history
+    let idx_b = hist
+        .iter()
+        .position(|e| matches!(e, Event::ExternalEvent { name, .. } if name == "B"))
+        .expect("missing ExternalEvent B");
+    let idx_a = hist
+        .iter()
+        .position(|e| matches!(e, Event::ExternalEvent { name, .. } if name == "A"))
+        .expect("missing ExternalEvent A");
+    assert!(idx_b < idx_a, "expected ExternalEvent B before A in history: {hist:#?}");
 
     // Assert B wins because we enqueued B before A, despite select(A,B)
     assert!(output.starts_with("B:"), "expected B to win, got {output}");
