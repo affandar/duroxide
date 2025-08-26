@@ -1,4 +1,4 @@
-use futures::future::join3;
+
 use std::sync::Arc;
 mod common;
 use rust_dtf::providers::HistoryStore;
@@ -13,16 +13,52 @@ async fn concurrent_orchestrations_different_activities_with(store: StdArc<dyn H
         let f_a = ctx.schedule_activity("Add", "2,3");
         let f_e = ctx.schedule_wait("Go");
         let f_t = ctx.schedule_timer(1);
-        let (a, e, _) = join3(f_a.into_activity(), f_e.into_event(), f_t.into_timer()).await;
-        let a = a.unwrap();
+        let results = ctx.join(vec![f_a, f_e, f_t]).await;
+        
+        // Find activity and external results (order may vary due to history ordering)
+        let mut a = None;
+        let mut e = None;
+        for result in &results {
+            match result {
+                rust_dtf::futures::DurableOutput::Activity(Ok(activity_result)) => {
+                    a = Some(activity_result.clone());
+                }
+                rust_dtf::futures::DurableOutput::External(external_data) => {
+                    e = Some(external_data.clone());
+                }
+                _ => {} // Ignore timer for now
+            }
+        }
+        
+        let a = a.expect("activity result not found");
+        let e = e.expect("external result not found");
+        
         Ok(format!("o1:sum={a};evt={e}"))
     };
     let o2 = |ctx: OrchestrationContext, _input: String| async move {
         let f_a = ctx.schedule_activity("Upper", "hi");
         let f_e = ctx.schedule_wait("Go");
         let f_t = ctx.schedule_timer(1);
-        let (a, e, _) = join3(f_a.into_activity(), f_e.into_event(), f_t.into_timer()).await;
-        let a = a.unwrap();
+        let results = ctx.join(vec![f_a, f_e, f_t]).await;
+        
+        // Find activity and external results (order may vary due to history ordering)
+        let mut a = None;
+        let mut e = None;
+        for result in &results {
+            match result {
+                rust_dtf::futures::DurableOutput::Activity(Ok(activity_result)) => {
+                    a = Some(activity_result.clone());
+                }
+                rust_dtf::futures::DurableOutput::External(external_data) => {
+                    e = Some(external_data.clone());
+                }
+                _ => {} // Ignore timer for now
+            }
+        }
+        
+        let a = a.expect("activity result not found");
+        let e = e.expect("external result not found");
+        
         Ok(format!("o2:up={a};evt={e}"))
     };
 
@@ -123,8 +159,26 @@ async fn concurrent_orchestrations_same_activities_with(store: StdArc<dyn Histor
         let f_a = ctx.schedule_activity("Proc", "10");
         let f_e = ctx.schedule_wait("Go");
         let f_t = ctx.schedule_timer(1);
-        let (a, e, _) = join3(f_a.into_activity(), f_e.into_event(), f_t.into_timer()).await;
-        let a = a.unwrap();
+        let results = ctx.join(vec![f_a, f_e, f_t]).await;
+        
+        // Find activity and external results (order may vary due to history ordering)
+        let mut a = None;
+        let mut e = None;
+        for result in &results {
+            match result {
+                rust_dtf::futures::DurableOutput::Activity(Ok(activity_result)) => {
+                    a = Some(activity_result.clone());
+                }
+                rust_dtf::futures::DurableOutput::External(external_data) => {
+                    e = Some(external_data.clone());
+                }
+                _ => {} // Ignore timer for now
+            }
+        }
+        
+        let a = a.expect("activity result not found");
+        let e = e.expect("external result not found");
+        
         Ok(format!("o1:a={a};evt={e}"))
     };
     let o2 = |ctx: OrchestrationContext, _input: String| async move {
@@ -132,8 +186,26 @@ async fn concurrent_orchestrations_same_activities_with(store: StdArc<dyn Histor
         let f_a = ctx.schedule_activity("Proc", "20");
         let f_e = ctx.schedule_wait("Go");
         let f_t = ctx.schedule_timer(1);
-        let (a, e, _) = join3(f_a.into_activity(), f_e.into_event(), f_t.into_timer()).await;
-        let a = a.unwrap();
+        let results = ctx.join(vec![f_a, f_e, f_t]).await;
+        
+        // Find activity and external results (order may vary due to history ordering)
+        let mut a = None;
+        let mut e = None;
+        for result in &results {
+            match result {
+                rust_dtf::futures::DurableOutput::Activity(Ok(activity_result)) => {
+                    a = Some(activity_result.clone());
+                }
+                rust_dtf::futures::DurableOutput::External(external_data) => {
+                    e = Some(external_data.clone());
+                }
+                _ => {} // Ignore timer for now
+            }
+        }
+        
+        let a = a.expect("activity result not found");
+        let e = e.expect("external result not found");
+        
         Ok(format!("o2:a={a};evt={e}"))
     };
 

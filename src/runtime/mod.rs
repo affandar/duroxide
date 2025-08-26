@@ -24,7 +24,7 @@ pub mod completion_map;
 pub mod orchestration_turn;
 pub mod simplified_execution;
 pub mod completion_aware_futures;
-pub mod integration_tests;
+
 
 /// High-level orchestration status derived from history.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -95,8 +95,8 @@ pub struct Runtime {
     current_execution_ids: Mutex<HashMap<String, u64>>,
     // StartRequest layer removed; instances are activated directly
     
-    /// Feature flag to use simplified execution engine (v2)
-    /// Set via environment variable RUST_DTF_USE_V2_EXECUTION=true
+    /// Feature flag to use simplified execution engine (v2 is default)
+    /// Set via environment variable RUST_DTF_USE_V1_EXECUTION=true to use v1
     use_simplified_execution: bool,
 }
 
@@ -305,6 +305,7 @@ impl Runtime {
 
         // Ensure instance is active; if dehydrated, rehydrate and abandon for redelivery
         if !self.router.inboxes.lock().await.contains_key(instance) {
+            debug!(instance, "instance not active, rehydrating for completion delivery");
             let orch_name_opt = self.history_store.read(instance).await.iter().find_map(|e| match e {
                 Event::OrchestrationStarted { name, .. } => Some(name.clone()),
                 _ => None,
@@ -319,8 +320,10 @@ impl Runtime {
                     panic!("no OrchestrationStarted in history for instance");
                 }
             };
+            debug!(instance, orchestration = %orch_name, "rehydrating instance for completion delivery");
             self.ensure_instance_active(instance, &orch_name).await;
             let _ = self.history_store.abandon(QueueKind::Orchestrator, &token).await;
+            debug!(instance, "abandoned completion message for redelivery after rehydration");
             tokio::time::sleep(std::time::Duration::from_millis(Self::POLLER_GATE_DELAY_MS)).await;
             return;
         }
@@ -504,15 +507,17 @@ impl Runtime {
             }
         }));
 
-        // Check feature flag for simplified execution
-        let use_simplified_execution = std::env::var("RUST_DTF_USE_V2_EXECUTION")
+        // Check feature flag for execution engine selection (V2 is now default)
+        let use_v1_execution = std::env::var("RUST_DTF_USE_V1_EXECUTION")
             .map(|v| v.to_lowercase() == "true" || v == "1")
             .unwrap_or(false);
         
-        if use_simplified_execution {
-            tracing::info!("🚀 Using simplified execution engine (v2) - feature flag enabled");
+        let use_simplified_execution = !use_v1_execution;
+        
+        if use_v1_execution {
+            tracing::info!("📜 Using original execution engine (v1) - feature flag enabled");
         } else {
-            tracing::info!("📜 Using original execution engine (v1) - set RUST_DTF_USE_V2_EXECUTION=true to enable v2");
+            tracing::info!("🚀 Using simplified execution engine (v2) - default engine");
         }
 
         // start request queue + worker
@@ -609,6 +614,7 @@ impl Runtime {
                             fire_at_ms,
                         } => {
                             debug!("TimerFired: {instance} {execution_id} {id} {fire_at_ms}");
+                            debug!("TimerFired completion delivered: {instance} {execution_id} {id}");
                             self.orchestrator_deliver_or_rehydrate(&instance, Some(execution_id), token, {
                                 let instance_c = instance.clone();
                                 move |t| OrchestratorMsg::TimerFired {

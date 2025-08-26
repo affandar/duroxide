@@ -27,14 +27,14 @@ impl Runtime {
         instance: &str,
         orchestration_name: &str,
     ) -> (Vec<Event>, Result<String, String>) {
-        eprintln!("🚀 [V2] Starting instance execution: {} / {}", instance, orchestration_name);
-        debug!(instance, orchestration_name, "🚀 Starting instance execution (v2 - simplified engine)");
+        debug!(instance, orchestration_name, "Starting instance execution (v2 - simplified engine)");
         
         let start_time = std::time::Instant::now();
         // Ensure instance not already active
         {
             let mut act = self.active_instances.lock().await;
             if !act.insert(instance.to_string()) {
+                debug!(instance, "instance already active, returning early");
                 return (Vec::new(), Err("already_active".into()));
             }
         }
@@ -62,48 +62,52 @@ impl Runtime {
 
 
         // Load initial history and set up execution tracking
-        eprintln!("🚀 [V2] Loading history for instance: {}", instance);
-        let mut history = self.history_store.read(instance).await;
-        eprintln!("🚀 [V2] Loaded {} history events", history.len());
+        let full_instance_history = self.history_store.read(instance).await;
+        
+        // Keep full history for operations that need cross-execution data
+        let mut history = full_instance_history.clone();
+
         
         let current_execution_id = self.history_store.latest_execution_id(instance).await.unwrap_or(1);
         self.current_execution_ids
             .lock()
             .await
             .insert(instance.to_string(), current_execution_id);
-        eprintln!("🚀 [V2] Set execution ID {} for instance {}", current_execution_id, instance);
+
 
         // Pin version from history if available
         self.setup_version_pinning(instance, orchestration_name, &history).await;
 
         // Resolve orchestration handler
-        eprintln!("🚀 [V2] Resolving orchestration handler for: {}", orchestration_name);
+
         let handler = match self.resolve_orchestration_handler(instance, orchestration_name).await {
             Ok(h) => {
-                eprintln!("🚀 [V2] Found orchestration handler for: {}", orchestration_name);
+
                 h
             },
             Err(error) => {
-                eprintln!("🚀 [V2] Failed to resolve orchestration handler: {}", error);
+
                 // Handle unregistered orchestration
                 return self.handle_unregistered_orchestration(instance, &mut history, error).await;
             }
         };
 
         // Register for orchestrator messages
-        eprintln!("🚀 [V2] Registering message router for instance: {}", instance);
+
         let mut message_rx = self.router.register(instance).await;
-        eprintln!("🚀 [V2] Registered message router successfully");
+
 
         // Rehydrate any pending work from history
-        eprintln!("🚀 [V2] Rehydrating pending work from history");
+
         super::completions::rehydrate_pending(instance, &history, &self.history_store).await;
-        eprintln!("🚀 [V2] Rehydration complete");
+
 
         // Extract input and parent linkage for the orchestration
         let (input, parent_link) = self.extract_orchestration_context(orchestration_name, &history);
 
         let mut turn_index = 0u64;
+        let mut consecutive_no_progress_turns = 0;
+        const MAX_NO_PROGRESS_TURNS: u32 = 3;
 
         // Check if this is a fresh orchestration start (has OrchestrationStarted but no progress)
         let needs_initial_execution = history.iter().any(|e| matches!(e, Event::OrchestrationStarted { .. })) 
@@ -115,31 +119,32 @@ impl Runtime {
             ));
 
         if needs_initial_execution {
-            eprintln!("🚀 [V2] Fresh orchestration detected - running initial turn");
+
             
             // Execute initial turn without waiting for messages
+            let current_execution_history = Self::extract_current_execution_history(&history);
             let mut turn = OrchestrationTurn::new(
                 instance.to_string(),
                 orchestration_name.to_string(),
                 turn_index,
-                history.clone(),
+                current_execution_history,
             );
 
-            eprintln!("🔧 [V2] About to execute initial orchestration turn");
+
             match turn.execute_orchestration(handler.clone(), input.clone()) {
                 TurnResult::Continue => {
                     // Orchestration made progress, persist and continue
-                    eprintln!("🔧 [V2] Initial turn returned Continue - orchestration made progress but didn't finish");
+
                     if let Err(e) = turn.persist_changes(self.history_store.clone(), &self).await {
                         return self.handle_persistence_error(instance, &history, e).await;
                     }
                     history = turn.final_history();
                     turn_index += 1;
-                    eprintln!("🚀 [V2] Initial turn completed, turn_index now: {}", turn_index);
+
                 }
                 TurnResult::Completed(output) => {
                     // Orchestration completed on first execution
-                    eprintln!("🚀 [V2] Orchestration completed on initial turn");
+
                     let result = (&self).handle_orchestration_completion(
                         instance,
                         &mut turn,
@@ -154,7 +159,7 @@ impl Runtime {
                 }
                 TurnResult::Failed(error) => {
                     // Orchestration failed
-                    eprintln!("🚀 [V2] Orchestration failed on initial turn: {}", error);
+
                     let result = (&self).handle_orchestration_completion(
                         instance,
                         &mut turn,
@@ -169,7 +174,7 @@ impl Runtime {
                 }
                 TurnResult::ContinueAsNew { input: new_input, version } => {
                     // Handle continue-as-new
-                    eprintln!("🚀 [V2] Continue-as-new on initial turn");
+
                     let result = (&self).handle_continue_as_new_v2(
                         instance,
                         orchestration_name,
@@ -184,8 +189,11 @@ impl Runtime {
                     return result;
                 }
                 TurnResult::Cancelled(reason) => {
-                    // Handle cancellation
-                    eprintln!("🚀 [V2] Orchestration cancelled on initial turn: {}", reason);
+                    // Handle cancellation with propagation to child orchestrations
+                    
+                    // Propagate cancellation to sub-orchestrations (same logic as V1)
+                    self.propagate_cancellation_to_children(instance, &history).await;
+
                     let result = (&self).handle_orchestration_completion(
                         instance,
                         &mut turn,
@@ -202,9 +210,36 @@ impl Runtime {
         }
 
         // MAIN EXECUTION LOOP
-        eprintln!("🚀 [V2] Entering main execution loop");
+
+        let mut loop_iterations = 0;
         loop {
-            eprintln!("🚀 [V2] Starting turn {} for instance {}", turn_index, instance);
+            loop_iterations += 1;
+
+            
+            // Emergency brake for debugging
+            if loop_iterations > 10 {
+
+
+
+                // Let's continue a few more to see what happens
+            }
+            
+            if loop_iterations > 15 {
+
+                return self.handle_persistence_error(instance, &history, "emergency exit - infinite loop in main execution".to_string()).await;
+            }
+            
+            // Check for infinite loop prevention
+            if consecutive_no_progress_turns >= MAX_NO_PROGRESS_TURNS {
+                let error = format!(
+                    "execution stalled: {} consecutive turns with no progress in main loop - likely no message delivery or infinite loop", 
+                    consecutive_no_progress_turns
+                );
+
+                return self.handle_persistence_error(instance, &history, error).await;
+            }
+            
+
             debug!(
                 instance = %instance,
                 turn_index = turn_index,
@@ -212,6 +247,7 @@ impl Runtime {
             );
 
             // STAGE 1: RECEIVE AND BATCH COMPLETIONS
+
             let batch_result = self.receive_completion_batch(&mut message_rx).await;
             
             let messages = match batch_result {
@@ -228,11 +264,17 @@ impl Runtime {
                     if has_waiters {
                         // Keep running if there are waiters
                         debug!(instance = %instance, "timeout but has waiters, continuing");
+
                         tokio::time::sleep(Duration::from_millis(Self::POLLER_IDLE_SLEEP_MS)).await;
+                        
+                        // Increment no-progress counter since we didn't receive messages
+                        consecutive_no_progress_turns += 1;
+
                         continue;
                     } else {
                         // No waiters - safe to dehydrate
                         debug!(instance = %instance, "timeout with no waiters, dehydrating instance");
+
                         self.router.unregister(instance).await;
                         return (history, Ok(String::new()));
                     }
@@ -246,11 +288,12 @@ impl Runtime {
             }
 
             // STAGE 2: EXECUTE ORCHESTRATION TURN
+            let current_execution_history = Self::extract_current_execution_history(&history);
             let mut turn = OrchestrationTurn::new(
                 instance.to_string(),
                 orchestration_name.to_string(),
                 turn_index,
-                history.clone(),
+                current_execution_history,
             );
 
             // Prep completions from incoming messages
@@ -274,9 +317,25 @@ impl Runtime {
                     // Acknowledge messages after successful persistence
                     turn.acknowledge_messages(self.history_store.clone()).await;
 
-                    // Only increment turn index if we made progress
+                    // Check for progress and prevent infinite loops
                     if turn.made_progress() {
                         turn_index += 1;
+                        consecutive_no_progress_turns = 0;
+
+                    } else {
+                        consecutive_no_progress_turns += 1;
+
+                        
+                        if consecutive_no_progress_turns >= MAX_NO_PROGRESS_TURNS {
+                            let error = format!(
+                                "execution stalled: {} consecutive turns with no progress - likely infinite loop or unconsumed completions", 
+                                consecutive_no_progress_turns
+                            );
+
+                            
+                            // Return with the current history and error
+                            return self.handle_persistence_error(instance, &history, error).await;
+                        }
                     }
                 }
                 TurnResult::Completed(output) => {
@@ -326,7 +385,11 @@ impl Runtime {
                     return result;
                 }
                 TurnResult::Cancelled(reason) => {
-                    // Handle cancellation
+                    // Handle cancellation with propagation to child orchestrations
+                    
+                    // Propagate cancellation to sub-orchestrations (same logic as V1)
+                    self.propagate_cancellation_to_children(instance, &history).await;
+                    
                     let result = (&self).handle_orchestration_completion(
                         instance,
                         &mut turn,
@@ -590,6 +653,65 @@ impl Runtime {
         }
 
         (history.to_vec(), Err(error))
+    }
+
+    /// Propagate cancellation to child sub-orchestrations (same logic as V1)
+    async fn propagate_cancellation_to_children(&self, instance: &str, history: &[Event]) {
+        use crate::providers::{QueueKind, WorkItem};
+        
+        // Find all scheduled sub-orchestrations
+        let scheduled_children: Vec<(u64, String)> = history
+            .iter()
+            .filter_map(|e| match e {
+                Event::SubOrchestrationScheduled { id, instance: child, .. } => {
+                    Some((*id, child.clone()))
+                }
+                _ => None,
+            })
+            .collect();
+
+        // Find all completed sub-orchestrations 
+        let completed_ids: std::collections::HashSet<u64> = history
+            .iter()
+            .filter_map(|e| match e {
+                Event::SubOrchestrationCompleted { id, .. } 
+                | Event::SubOrchestrationFailed { id, .. } => Some(*id),
+                _ => None,
+            })
+            .collect();
+
+        // Cancel uncompleted children
+        for (id, child_suffix) in scheduled_children {
+            if !completed_ids.contains(&id) {
+                let child_full = format!("{}::{}", instance, child_suffix);
+                let _ = self
+                    .history_store
+                    .enqueue_work(
+                        QueueKind::Orchestrator,
+                        WorkItem::CancelInstance {
+                            instance: child_full,
+                            reason: "parent canceled".into(),
+                        },
+                    )
+                    .await;
+            }
+        }
+    }
+    
+    /// Extract current execution history (from most recent OrchestrationStarted)
+    /// This filters out events from previous executions in continue-as-new scenarios
+    fn extract_current_execution_history(full_history: &[Event]) -> Vec<Event> {
+        let current_execution_start = full_history
+            .iter()
+            .enumerate()
+            .rev()
+            .find_map(|(i, e)| match e {
+                Event::OrchestrationStarted { .. } => Some(i),
+                _ => None,
+            })
+            .unwrap_or(0);
+            
+        full_history[current_execution_start..].to_vec()
     }
 }
 

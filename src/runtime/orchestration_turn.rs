@@ -73,12 +73,41 @@ impl OrchestrationTurn {
             let ack_token = match &msg {
                 OrchestratorMsg::ExternalByName { name, data, .. } => {
                     // Handle external events specially since they need history lookup
+
                     self.completion_map.add_external_completion(
                         name.clone(),
                         data.clone(),
                         &self.baseline_history,
                         Some(token),
                     )
+                }
+                OrchestratorMsg::CancelRequested { reason, .. } => {
+                    // Handle cancellation immediately - add to history delta, don't use completion map
+                    
+                    // Check if orchestration is already terminated
+                    // Since baseline_history is now filtered to current execution only,
+                    // we can simply check for terminal events
+                    let already_terminated = self.baseline_history
+                        .iter()
+                        .any(|e| matches!(e, 
+                            Event::OrchestrationCompleted { .. } 
+                            | Event::OrchestrationFailed { .. }
+                        ));
+                    
+                    // Check for duplicate cancellation (idempotent)
+                    let already_cancelled = self.baseline_history
+                        .iter()
+                        .chain(self.history_delta.iter())
+                        .any(|e| matches!(e, Event::OrchestrationCancelRequested { .. }));
+                    
+                    // Only add cancellation if not already terminated and not already cancelled
+                    if !already_terminated && !already_cancelled {
+                        self.history_delta.push(Event::OrchestrationCancelRequested { 
+                            reason: reason.clone() 
+                        });
+                    }
+                    
+                    Some(token)
                 }
                 _ => {
                     // All other completions use standard processing
@@ -168,15 +197,20 @@ impl OrchestrationTurn {
 
         self.pending_actions = decisions;
 
-        // Determine turn result based on output and decisions
-        if let Some(output) = output_opt {
-            return match output {
-                Ok(result) => TurnResult::Completed(result),
-                Err(error) => TurnResult::Failed(error),
-            };
+        // Check for cancellation first - if cancelled, return immediately
+        let full_history = {
+            let mut h = self.baseline_history.clone();
+            h.extend(self.history_delta.clone());
+            h
+        };
+        
+        if let Some(cancel_event) = full_history.iter().find(|e| matches!(e, Event::OrchestrationCancelRequested { .. })) {
+            if let Event::OrchestrationCancelRequested { reason } = cancel_event {
+                return TurnResult::Cancelled(reason.clone());
+            }
         }
 
-        // Check for continue-as-new decision
+        // Check for continue-as-new decision FIRST (takes precedence over output)
         for decision in &self.pending_actions {
             if let crate::runtime::replay::Decision::ContinueAsNew { input, version } = decision {
                 return TurnResult::ContinueAsNew {
@@ -184,6 +218,14 @@ impl OrchestrationTurn {
                     version: version.clone(),
                 };
             }
+        }
+
+        // Determine turn result based on output and decisions
+        if let Some(output) = output_opt {
+            return match output {
+                Ok(result) => TurnResult::Completed(result),
+                Err(error) => TurnResult::Failed(error),
+            };
         }
 
         // Check for cancellation in the completion map or history
@@ -198,10 +240,10 @@ impl OrchestrationTurn {
         // Check if there are unconsumed completions that indicate non-determinism
         if self.completion_map.has_unconsumed() {
             let unconsumed = self.completion_map.get_unconsumed();
-            let error = format!(
-                "non-deterministic execution: unconsumed completions: {:?}",
-                unconsumed
-            );
+            
+            // Generate more specific error message based on context
+            let error = self.generate_nondeterminism_error(&unconsumed);
+            
             warn!(instance = %self.instance, error = %error, "detected non-determinism");
             return TurnResult::Failed(error);
         }
@@ -209,6 +251,68 @@ impl OrchestrationTurn {
         TurnResult::Continue
     }
 
+    /// Generate a specific non-determinism error message based on the context
+    fn generate_nondeterminism_error(&self, unconsumed: &[(crate::runtime::completion_map::CompletionKind, u64)]) -> String {
+        // Check if this looks like a completion kind mismatch
+        // Look at the history to see what kinds of futures were scheduled
+        let mut expected_kinds = std::collections::HashMap::new();
+        
+        for event in &self.baseline_history {
+            match event {
+                crate::Event::ActivityScheduled { id, .. } => {
+                    expected_kinds.insert(*id, crate::runtime::completion_map::CompletionKind::Activity);
+                }
+                crate::Event::TimerCreated { id, .. } => {
+                    expected_kinds.insert(*id, crate::runtime::completion_map::CompletionKind::Timer);
+                }
+                crate::Event::ExternalSubscribed { id, .. } => {
+                    expected_kinds.insert(*id, crate::runtime::completion_map::CompletionKind::External);
+                }
+                crate::Event::SubOrchestrationScheduled { id, .. } => {
+                    expected_kinds.insert(*id, crate::runtime::completion_map::CompletionKind::SubOrchestration);
+                }
+                _ => {}
+            }
+        }
+        
+        // Check for kind mismatches in unconsumed completions
+        for (completion_kind, completion_id) in unconsumed {
+            if let Some(expected_kind) = expected_kinds.get(completion_id) {
+                if expected_kind != completion_kind {
+                    return format!(
+                        "nondeterministic: completion kind mismatch for id={}, expected '{}', got '{}'",
+                        completion_id,
+                        kind_to_string(*expected_kind),
+                        kind_to_string(*completion_kind)
+                    );
+                }
+            } else {
+                // Unexpected completion ID - no corresponding schedule found
+                return format!(
+                    "nondeterministic: unexpected completion id={} of kind '{}' (no matching schedule)",
+                    completion_id,
+                    kind_to_string(*completion_kind)
+                );
+            }
+        }
+        
+        // If no specific mismatch found, provide the generic message
+        format!("nondeterministic: unconsumed completions: {:?}", unconsumed)
+    }
+}
+
+/// Convert completion kind to string for error messages
+fn kind_to_string(kind: crate::runtime::completion_map::CompletionKind) -> &'static str {
+    match kind {
+        crate::runtime::completion_map::CompletionKind::Activity => "activity",
+        crate::runtime::completion_map::CompletionKind::Timer => "timer", 
+        crate::runtime::completion_map::CompletionKind::External => "external",
+        crate::runtime::completion_map::CompletionKind::SubOrchestration => "suborchestration",
+        crate::runtime::completion_map::CompletionKind::Cancel => "cancel",
+    }
+}
+
+impl OrchestrationTurn {
     /// Stage 3: Persist all state changes atomically
     /// This stage writes all history deltas and dispatches actions
     pub async fn persist_changes(

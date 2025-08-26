@@ -7,6 +7,21 @@ use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
+// Thread-local storage for completion map accessor
+thread_local! {
+    static COMPLETION_MAP_ACCESSOR: RefCell<Option<CompletionMapAccessor>> = RefCell::new(None);
+}
+
+/// Access the thread-local completion map accessor (public for DurableFuture integration)
+pub(crate) fn with_completion_map_accessor<F, R>(f: F) -> R
+where
+    F: FnOnce(Option<&CompletionMapAccessor>) -> R,
+{
+    COMPLETION_MAP_ACCESSOR.with(|accessor_cell| {
+        f(accessor_cell.borrow().as_ref())
+    })
+}
+
 /// A completion map accessor that can be injected into the orchestration context
 /// This allows durable futures to access completions deterministically
 #[derive(Clone)]
@@ -43,10 +58,10 @@ impl CompletionMapAccessor {
     }
 
     pub fn get_completion(&self, kind: CompletionKind, correlation_id: u64) -> Option<CompletionValue> {
-        eprintln!("🔧 [V2] Attempting to get completion: {:?} ID {}", kind, correlation_id);
+
         let result = self.with_completion_map(|map| {
             let ready = map.is_next_ready(kind, correlation_id);
-            eprintln!("🔧 [V2] Completion {:?} ID {} ready: {}", kind, correlation_id, ready);
+
             if ready {
                 map.get_ready_completion(kind, correlation_id)
                     .map(|comp| comp.data)
@@ -55,7 +70,7 @@ impl CompletionMapAccessor {
             }
         })
         .flatten();
-        eprintln!("🔧 [V2] Got completion result: {:?}", result.is_some());
+
         result
     }
 }
@@ -68,10 +83,7 @@ pub trait OrchestrationContextExt {
 
 // We'll store the accessor in the context's inner state by extending CtxInner
 // For now, we'll use a thread-local approach to avoid modifying the core library
-
-thread_local! {
-    static COMPLETION_MAP_ACCESSOR: RefCell<Option<CompletionMapAccessor>> = RefCell::new(None);
-}
+// (Thread-local already declared above)
 
 impl OrchestrationContextExt for OrchestrationContext {
     fn set_completion_map_accessor(&self, accessor: CompletionMapAccessor) {
@@ -112,7 +124,7 @@ impl Future for CompletionAwareDurableFuture {
                 Kind::External { id, .. } => (CompletionKind::External, *id),
                 Kind::SubOrch { id, .. } => (CompletionKind::SubOrchestration, *id),
             };
-            eprintln!("🔧 [V2] Polling future: {:?} ID {}", kind, correlation_id);
+
 
             // Check if this completion is ready in the ordered map
             if accessor.is_completion_ready(kind, correlation_id) {
@@ -183,7 +195,7 @@ where
     F: Future<Output = O>,
 {
     // Set up completion map accessor
-    eprintln!("🔧 [V2] Setting up completion map accessor");
+
     let accessor = CompletionMapAccessor::new();
     accessor.set_completion_map(completion_map);
     
@@ -191,10 +203,15 @@ where
     COMPLETION_MAP_ACCESSOR.with(|a| {
         *a.borrow_mut() = Some(accessor);
     });
-    eprintln!("🔧 [V2] Completion map accessor set up");
+
     
-    // Run the turn normally - futures will now use completion map
-    let result = crate::run_turn_with_claims(history, turn_index, orchestrator);
+    // Run the turn with completion map support
+    let wrapped_orchestrator = move |ctx: crate::OrchestrationContext| {
+        // Call the original orchestrator
+        orchestrator(ctx)
+    };
+    
+    let result = crate::run_turn_with_claims(history, turn_index, wrapped_orchestrator);
     
     // Clean up thread-local
     COMPLETION_MAP_ACCESSOR.with(|a| {

@@ -182,6 +182,8 @@ impl CompletionMap {
             Event::ExternalSubscribed { id, name: sub_name } if sub_name == &name => Some(*id),
             _ => None,
         });
+        
+
 
         if let Some(correlation_id) = subscription_id {
             let key = (CompletionKind::External, correlation_id);

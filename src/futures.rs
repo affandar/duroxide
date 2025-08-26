@@ -15,6 +15,121 @@ pub enum DurableOutput {
 
 pub struct DurableFuture(pub(crate) Kind);
 
+impl DurableFuture {
+    /// Try to poll using completion map (V2 engine)
+    fn try_completion_map_poll(&self) -> Option<Poll<DurableOutput>> {
+        // Access the shared thread-local completion map accessor
+        crate::runtime::completion_aware_futures::with_completion_map_accessor(|accessor_opt| {
+            if let Some(accessor) = accessor_opt {
+                // Extract completion info from this future
+                let (kind, correlation_id) = match &self.0 {
+                    Kind::Activity { id, .. } => (crate::runtime::completion_map::CompletionKind::Activity, *id),
+                    Kind::Timer { id, .. } => (crate::runtime::completion_map::CompletionKind::Timer, *id),
+                    Kind::External { id, .. } => (crate::runtime::completion_map::CompletionKind::External, *id),
+                    Kind::SubOrch { id, .. } => (crate::runtime::completion_map::CompletionKind::SubOrchestration, *id),
+                };
+                
+                // Check completion map for deterministic ordering
+                
+                // Check if this completion is ready in the ordered map
+                if accessor.is_completion_ready(kind, correlation_id) {
+                    if let Some(completion_value) = accessor.get_completion(kind, correlation_id) {
+
+                        // Found ready completion - consume it and add to history
+                        
+                        // IMPORTANT: Add corresponding history event when consuming completion
+                        // This ensures V2 engine maintains history consistency like V1
+                        let history_event = match &completion_value {
+                            crate::runtime::completion_map::CompletionValue::ActivityResult(result) => {
+                                match result {
+                                    Ok(result) => Some(crate::Event::ActivityCompleted { 
+                                        id: correlation_id, 
+                                        result: result.clone() 
+                                    }),
+                                    Err(error) => Some(crate::Event::ActivityFailed { 
+                                        id: correlation_id, 
+                                        error: error.clone() 
+                                    }),
+                                }
+                            },
+                            crate::runtime::completion_map::CompletionValue::TimerFired { fire_at_ms } => {
+                                Some(crate::Event::TimerFired { 
+                                    id: correlation_id, 
+                                    fire_at_ms: *fire_at_ms 
+                                })
+                            },
+                            crate::runtime::completion_map::CompletionValue::ExternalData { data, name } => {
+                                Some(crate::Event::ExternalEvent { 
+                                    id: correlation_id, 
+                                    name: name.clone(),
+                                    data: data.clone() 
+                                })
+                            },
+                            crate::runtime::completion_map::CompletionValue::SubOrchResult(result) => {
+                                match result {
+                                    Ok(result) => Some(crate::Event::SubOrchestrationCompleted { 
+                                        id: correlation_id, 
+                                        result: result.clone() 
+                                    }),
+                                    Err(error) => Some(crate::Event::SubOrchestrationFailed { 
+                                        id: correlation_id, 
+                                        error: error.clone() 
+                                    }),
+                                }
+                            },
+                            crate::runtime::completion_map::CompletionValue::CancelReason(_) => {
+                                // Cancel is handled differently, fall back to normal polling
+                                return None;
+                            }
+                        };
+                        
+                        // Add the history event to the context (we need access to ctx for this)
+                        // For now, let's see if we can access the context through the future
+                        if let Some(event) = history_event {
+                            // We need to add this event to the orchestration context's history
+                            // The context is available in the future's Kind enum
+                            let ctx = match &self.0 {
+                                Kind::Activity { ctx, .. } => Some(ctx),
+                                Kind::Timer { ctx, .. } => Some(ctx),
+                                Kind::External { ctx, .. } => Some(ctx),
+                                Kind::SubOrch { ctx, .. } => Some(ctx),
+                            };
+                            
+                            if let Some(context) = ctx {
+                                // Add completion event to history for consistency  
+                                context.inner.lock().unwrap().history.push(event);
+                            }
+                        }
+                        
+                        let output = match completion_value {
+                            crate::runtime::completion_map::CompletionValue::ActivityResult(result) => DurableOutput::Activity(result),
+                            crate::runtime::completion_map::CompletionValue::TimerFired { .. } => DurableOutput::Timer,
+                            crate::runtime::completion_map::CompletionValue::ExternalData { data, .. } => DurableOutput::External(data),
+                            crate::runtime::completion_map::CompletionValue::SubOrchResult(result) => DurableOutput::SubOrchestration(result),
+                            crate::runtime::completion_map::CompletionValue::CancelReason(_) => {
+                                // Cancel is handled differently, fall back to normal polling
+                                return None;
+                            }
+                        };
+                        return Some(Poll::Ready(output));
+                    }
+                }
+                
+                // Completion not ready yet - fall back to original logic for scheduling
+                
+                // IMPORTANT: We still need to handle scheduling even when using completion map!
+                // The completion map only handles *completed* operations, but we still need to
+                // schedule operations that haven't been scheduled yet.
+                // Fall back to original logic for scheduling side effects, but return early if already scheduled.
+                None // This will cause fall-through to original logic which handles scheduling
+            } else {
+                // No completion map accessor available, fall back to original logic
+                None
+            }
+        })
+    }
+}
+
 pub(crate) enum Kind {
     Activity {
         id: u64,
@@ -47,7 +162,7 @@ pub(crate) enum Kind {
 }
 
 // Internal tag to classify DurableFuture kinds for history indexing
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub(crate) enum KindTag {
     Activity,
     Timer,
@@ -58,8 +173,15 @@ pub(crate) enum KindTag {
 impl Future for DurableFuture {
     type Output = DurableOutput;
     fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
+        // First try completion map approach if available (V2 engine)
+        if let Some(result) = self.as_ref().try_completion_map_poll() {
+            return result;
+        }
+        
         // Safety: We never move fields that are !Unpin; we only take &mut to mutate inner Cells and use ctx by reference.
         let this = unsafe { self.get_unchecked_mut() };
+        
+        // Fall back to original history-based approach (V1 engine or V2 fallback)
         match &mut this.0 {
             Kind::Activity {
                 id,
@@ -246,15 +368,83 @@ impl AggregateDurableFuture {
             mode: AggregateMode::Join,
         }
     }
+    
+    /// Check if there are any available completions that weren't consumed by our children
+    fn check_for_unconsumed_completions(&self) -> Option<Vec<(crate::runtime::completion_map::CompletionKind, u64)>> {
+        // Access the completion map via the thread-local accessor
+        let unconsumed = crate::runtime::completion_aware_futures::with_completion_map_accessor(|accessor_opt| {
+            let mut unconsumed = Vec::new();
+            
+            if let Some(accessor) = accessor_opt {
+                // Check each of our children's expected completions
+                for (cid, tag) in &self.meta {
+                    let kind = match tag {
+                        KindTag::Activity => crate::runtime::completion_map::CompletionKind::Activity,
+                        KindTag::Timer => crate::runtime::completion_map::CompletionKind::Timer,
+                        KindTag::External => crate::runtime::completion_map::CompletionKind::External,
+                        KindTag::SubOrch => crate::runtime::completion_map::CompletionKind::SubOrchestration,
+                    };
+                    
+                    // Check if this completion is available but not consumed
+                    if accessor.is_completion_ready(kind, *cid) {
+                        unconsumed.push((kind, *cid));
+                    }
+                }
+            }
+            
+            unconsumed
+        });
+        
+        if unconsumed.is_empty() {
+            None
+        } else {
+            Some(unconsumed)
+        }
+    }
 }
 
 impl Future for AggregateDurableFuture {
     type Output = AggregateOutput;
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = unsafe { self.get_unchecked_mut() };
-        for f in &mut this.children {
-            let _ = Pin::new(f).poll(cx);
+        
+        // Continue polling children until no more progress is made
+        // Track which children became ready in previous rounds
+        let mut children_ready_status = vec![false; this.children.len()];
+        let mut round = 0;
+        const MAX_POLLING_ROUNDS: usize = 10; // Safety limit
+        
+        loop {
+            let mut any_new_ready = false;
+            round += 1;
+            
+            if round > MAX_POLLING_ROUNDS {
+                // Emergency brake to prevent infinite loops
+                break;
+            }
+            
+            for (i, f) in this.children.iter_mut().enumerate() {
+                let poll_result = Pin::new(f).poll(cx);
+                let is_ready = poll_result.is_ready();
+                
+                // Only count as "new progress" if this child wasn't ready before
+                if is_ready && !children_ready_status[i] {
+                    any_new_ready = true;
+                    children_ready_status[i] = true;
+                }
+            }
+            
+            // If no child became newly ready this round, break out of polling loop
+            if !any_new_ready {
+                break;
+            }
         }
+        
+        // Check for unconsumed completions (non-deterministic execution error)
+        if let Some(unconsumed) = this.check_for_unconsumed_completions() {
+            panic!("non-deterministic execution: unconsumed completions: {:?}", unconsumed);
+        }
+        
         let hist = this.ctx.inner.lock().unwrap().history.clone();
         let mut present: Vec<(usize, usize)> = Vec::new();
         for (i, (cid, tag)) in this.meta.iter().enumerate() {
