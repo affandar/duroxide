@@ -20,6 +20,10 @@ use async_trait::async_trait;
 use std::collections::HashSet;
 
 pub mod replay;
+pub mod completion_map;
+pub mod orchestration_turn;
+pub mod simplified_execution;
+pub mod completion_aware_futures;
 
 /// High-level orchestration status derived from history.
 #[derive(Debug, Clone, PartialEq, Eq)]

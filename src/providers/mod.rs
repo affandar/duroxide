@@ -127,6 +127,15 @@ pub trait HistoryStore: Send + Sync {
         Ok(())
     }
 
+    /// Acknowledge multiple tokens in a single batch operation for efficiency.
+    /// Default implementation calls individual ack() for each token.
+    async fn ack_batch(&self, kind: QueueKind, tokens: &[String]) -> Result<(), String> {
+        for token in tokens {
+            self.ack(kind, token).await?;
+        }
+        Ok(())
+    }
+
     /// Return latest execution id for an instance (default: 1 if history exists).
     async fn latest_execution_id(&self, instance: &str) -> Option<u64> {
         let h = self.read(instance).await;

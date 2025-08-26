@@ -1,0 +1,373 @@
+use std::sync::Arc;
+use crate::{Event, runtime::{OrchestrationHandler, router::OrchestratorMsg}};
+use crate::providers::{HistoryStore, QueueKind};
+use super::completion_map::{CompletionMap, CompletionKind};
+use tracing::{debug, error, warn};
+
+/// Result of executing an orchestration turn
+#[derive(Debug)]
+pub enum TurnResult {
+    /// Turn completed successfully, orchestration continues
+    Continue,
+    /// Orchestration completed with output
+    Completed(String),
+    /// Orchestration failed with error
+    Failed(String),
+    /// Orchestration requested continue-as-new
+    ContinueAsNew { input: String, version: Option<String> },
+    /// Orchestration was cancelled
+    Cancelled(String),
+}
+
+/// Represents a single orchestration turn with clean lifecycle stages
+pub struct OrchestrationTurn {
+    /// Instance identifier
+    instance: String,
+    /// Orchestration name for handler resolution
+    orchestration_name: String,
+    /// Current turn index
+    turn_index: u64,
+    /// Incoming completion messages mapped and ordered
+    completion_map: CompletionMap,
+    /// Acknowledgment tokens to batch-ack after persistence
+    ack_tokens: Vec<String>,
+    /// History events generated during this turn
+    history_delta: Vec<Event>,
+    /// Actions to dispatch after persistence
+    pending_actions: Vec<crate::runtime::replay::Decision>,
+    /// Current history at start of turn
+    baseline_history: Vec<Event>,
+}
+
+impl OrchestrationTurn {
+    /// Create a new orchestration turn
+    pub fn new(
+        instance: String,
+        orchestration_name: String,
+        turn_index: u64,
+        baseline_history: Vec<Event>,
+    ) -> Self {
+        Self {
+            instance,
+            orchestration_name,
+            turn_index,
+            completion_map: CompletionMap::new(),
+            ack_tokens: Vec::new(),
+            history_delta: Vec::new(),
+            pending_actions: Vec::new(),
+            baseline_history,
+        }
+    }
+
+    /// Stage 1: Prepare completion map from incoming orchestrator messages
+    /// This stage accumulates all completions and their ack tokens without side effects
+    pub fn prep_completions(&mut self, messages: Vec<(OrchestratorMsg, String)>) {
+        debug!(
+            instance = %self.instance,
+            turn_index = self.turn_index,
+            message_count = messages.len(),
+            "prepping completion map"
+        );
+
+        for (msg, token) in messages {
+            let ack_token = match &msg {
+                OrchestratorMsg::ExternalByName { name, data, .. } => {
+                    // Handle external events specially since they need history lookup
+                    self.completion_map.add_external_completion(
+                        name.clone(),
+                        data.clone(),
+                        &self.baseline_history,
+                        Some(token),
+                    )
+                }
+                _ => {
+                    // All other completions use standard processing
+                    self.completion_map.add_completion(msg)
+                }
+            };
+
+            // Always collect the ack token for later batching
+            if let Some(token) = ack_token {
+                self.ack_tokens.push(token);
+            }
+        }
+
+        debug!(
+            instance = %self.instance,
+            completion_count = self.completion_map.ordered.len(),
+            ack_token_count = self.ack_tokens.len(),
+            "completion map prepared"
+        );
+    }
+
+    /// Stage 2: Execute one turn of the orchestration using the replay engine
+    /// This stage runs the orchestration logic and generates history deltas and actions
+    pub fn execute_orchestration(
+        &mut self,
+        handler: Arc<dyn OrchestrationHandler>,
+        input: String,
+    ) -> TurnResult {
+        debug!(
+            instance = %self.instance,
+            turn_index = self.turn_index,
+            "executing orchestration turn"
+        );
+
+        // Set up the modified history with completion map context
+        let mut working_history = self.baseline_history.clone();
+        
+        // Add any completion events from the completion map in order
+        // This allows the orchestration to see completions during replay
+        self.apply_completions_to_history(&mut working_history);
+
+        // Use the completion-aware replay execution
+        let completion_map_arc = std::sync::Arc::new(std::sync::Mutex::new(
+            // Clone the completion map for the turn execution
+            // This is a bit awkward but maintains thread safety
+            super::completion_map::CompletionMap::new()
+        ));
+        
+        // CR TODO : why are we copying the completion map state?
+        // Copy completion map state
+        {
+            let mut map_guard = completion_map_arc.lock().unwrap();
+            map_guard.by_id = self.completion_map.by_id.clone();
+            map_guard.ordered = self.completion_map.ordered.clone();
+            map_guard.next_order = self.completion_map.next_order;
+        }
+
+        let (updated_history, decisions, _logs, output_opt, _claims) = 
+            super::completion_aware_futures::run_turn_with_completion_map(
+                working_history,
+                self.turn_index,
+                completion_map_arc.clone(),
+                move |ctx| {
+                    let h = handler.clone();
+                    let inp = input.clone();
+                    async move { h.invoke(ctx, inp).await }
+                },
+            );
+            
+        // CR TODO : to check, who marks these items as consumed? the futures?
+        // Update our completion map with any consumed items
+        {
+            let map_guard = completion_map_arc.lock().unwrap();
+            self.completion_map.by_id = map_guard.by_id.clone();
+            self.completion_map.ordered = map_guard.ordered.clone();
+            self.completion_map.cleanup_consumed();
+        }
+
+        // Calculate the delta from baseline
+        if updated_history.len() > self.baseline_history.len() {
+            self.history_delta = updated_history[self.baseline_history.len()..].to_vec();
+        }
+
+        self.pending_actions = decisions;
+
+        // Determine turn result based on output and decisions
+        if let Some(output) = output_opt {
+            return match output {
+                Ok(result) => TurnResult::Completed(result),
+                Err(error) => TurnResult::Failed(error),
+            };
+        }
+
+        // Check for continue-as-new decision
+        for decision in &self.pending_actions {
+            if let crate::runtime::replay::Decision::ContinueAsNew { input, version } = decision {
+                return TurnResult::ContinueAsNew {
+                    input: input.clone(),
+                    version: version.clone(),
+                };
+            }
+        }
+
+        // Check for cancellation in the completion map or history
+        if self.completion_map.by_id.contains_key(&(CompletionKind::Cancel, 0)) {
+            if let Some(completion) = self.completion_map.get_ready_completion(CompletionKind::Cancel, 0) {
+                if let crate::runtime::completion_map::CompletionValue::CancelReason(reason) = completion.data {
+                    return TurnResult::Cancelled(reason);
+                }
+            }
+        }
+
+        // Check if there are unconsumed completions that indicate non-determinism
+        if self.completion_map.has_unconsumed() {
+            let unconsumed = self.completion_map.get_unconsumed();
+            let error = format!(
+                "non-deterministic execution: unconsumed completions: {:?}",
+                unconsumed
+            );
+            warn!(instance = %self.instance, error = %error, "detected non-determinism");
+            return TurnResult::Failed(error);
+        }
+
+        TurnResult::Continue
+    }
+
+    /// Stage 3: Persist all state changes atomically
+    /// This stage writes all history deltas and dispatches actions
+    pub async fn persist_changes(
+        &mut self,
+        history_store: Arc<dyn HistoryStore>,
+        runtime: &Arc<crate::runtime::Runtime>,
+    ) -> Result<(), String> {
+        debug!(
+            instance = %self.instance,
+            turn_index = self.turn_index,
+            delta_count = self.history_delta.len(),
+            action_count = self.pending_actions.len(),
+            "persisting turn changes"
+        );
+
+        // Persist history delta if any
+        if !self.history_delta.is_empty() {
+            history_store
+                .append(&self.instance, self.history_delta.clone())
+                .await
+                .map_err(|e| format!("failed to append history: {}", e))?;
+
+            debug!(
+                instance = %self.instance,
+                events_appended = self.history_delta.len(),
+                "history delta persisted"
+            );
+        }
+
+        // Apply decisions (dispatch actions) now that history is persisted
+        let full_history = {
+            let mut h = self.baseline_history.clone();
+            h.extend(self.history_delta.clone());
+            h
+        };
+
+        runtime.apply_decisions(&self.instance, &full_history, self.pending_actions.clone()).await;
+
+        debug!(
+            instance = %self.instance,
+            actions_applied = self.pending_actions.len(),
+            "actions dispatched"
+        );
+
+        Ok(())
+    }
+
+    /// Stage 4: Acknowledge all processed messages in batch
+    /// This stage only runs after successful persistence
+    pub async fn acknowledge_messages(&mut self, history_store: Arc<dyn HistoryStore>) {
+        if self.ack_tokens.is_empty() {
+            return;
+        }
+
+        debug!(
+            instance = %self.instance,
+            token_count = self.ack_tokens.len(),
+            "acknowledging processed messages"
+        );
+
+        // Try batch acknowledgment first, fall back to individual if not supported
+        if let Ok(()) = history_store.ack_batch(QueueKind::Orchestrator, &self.ack_tokens).await {
+            debug!(
+                instance = %self.instance,
+                token_count = self.ack_tokens.len(),
+                "batch acknowledgment successful"
+            );
+        } else {
+            // CR TODO : lets not fall back to individual acknowledgments, just log error and let the messages
+            //  get timed out
+            // Fall back to individual acknowledgments
+            for token in &self.ack_tokens {
+                if let Err(e) = history_store.ack(QueueKind::Orchestrator, token).await {
+                    error!(
+                        instance = %self.instance,
+                        token = %token,
+                        error = %e,
+                        "failed to acknowledge message"
+                    );
+                }
+            }
+            debug!(
+                instance = %self.instance,
+                token_count = self.ack_tokens.len(),
+                "individual acknowledgments completed"
+            );
+        }
+
+        self.ack_tokens.clear();
+    }
+
+    /// Helper: Apply completion map entries to history for orchestration execution
+    fn apply_completions_to_history(&mut self, _history: &mut Vec<Event>) {
+        // We don't actually modify history here - the completion map will be consulted
+        // by the modified future polling logic. This method is kept for future use
+        // if we need to inject completion events directly into history.
+        
+        // The completion map will be made available to futures through a different mechanism
+        // to maintain the existing API contract with the orchestration context.
+    }
+
+    /// Get a reference to the completion map for future polling
+    pub fn completion_map(&self) -> &CompletionMap {
+        &self.completion_map
+    }
+
+    /// Get a mutable reference to the completion map for future polling
+    pub fn completion_map_mut(&mut self) -> &mut CompletionMap {
+        &mut self.completion_map
+    }
+
+    /// Check if this turn made any progress (added history or has completions)
+    pub fn made_progress(&self) -> bool {
+        !self.history_delta.is_empty() || !self.completion_map.ordered.is_empty()
+    }
+
+    /// Get the final history after this turn
+    pub fn final_history(&self) -> Vec<Event> {
+        let mut final_hist = self.baseline_history.clone();
+        final_hist.extend(self.history_delta.clone());
+        final_hist
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runtime::router::OrchestratorMsg;
+    use crate::{Event};
+
+    #[test]
+    fn test_turn_lifecycle() {
+        let mut turn = OrchestrationTurn::new(
+            "test-instance".to_string(),
+            "test-orchestration".to_string(),
+            1,
+            vec![Event::OrchestrationStarted {
+                name: "test-orchestration".to_string(),
+                version: "1.0.0".to_string(),
+                input: "test-input".to_string(),
+                parent_instance: None,
+                parent_id: None,
+            }],
+        );
+
+        // Stage 1: Prep completions
+        let messages = vec![
+            (
+                OrchestratorMsg::ActivityCompleted {
+                    instance: "test-instance".to_string(),
+                    execution_id: 1,
+                    id: 1,
+                    result: "success".to_string(),
+                    ack_token: Some("token1".to_string()),
+                },
+                "token1".to_string(),
+            ),
+        ];
+
+        turn.prep_completions(messages);
+        assert_eq!(turn.ack_tokens.len(), 1);
+        assert!(turn.completion_map.is_next_ready(CompletionKind::Activity, 1));
+
+        // Other stages would require actual runtime integration to test properly
+    }
+}
