@@ -16,7 +16,7 @@ pub enum DurableOutput {
 pub struct DurableFuture(pub(crate) Kind);
 
 impl DurableFuture {
-    /// Try to poll using completion map (V2 engine)
+    /// Try to poll using completion map (deterministic execution)
     fn try_completion_map_poll(&self) -> Option<Poll<DurableOutput>> {
         // Access the shared thread-local completion map accessor
         crate::runtime::completion_aware_futures::with_completion_map_accessor(|accessor_opt| {
@@ -38,7 +38,7 @@ impl DurableFuture {
                         // Found ready completion - consume it and add to history
                         
                         // IMPORTANT: Add corresponding history event when consuming completion
-                        // This ensures V2 engine maintains history consistency like V1
+                        // This ensures history consistency
                         let history_event = match &completion_value {
                             crate::runtime::completion_map::CompletionValue::ActivityResult(result) => {
                                 match result {
@@ -173,7 +173,7 @@ pub(crate) enum KindTag {
 impl Future for DurableFuture {
     type Output = DurableOutput;
     fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
-        // First try completion map approach if available (V2 engine)
+        // First try completion map approach if available
         if let Some(result) = self.as_ref().try_completion_map_poll() {
             return result;
         }
@@ -181,7 +181,7 @@ impl Future for DurableFuture {
         // Safety: We never move fields that are !Unpin; we only take &mut to mutate inner Cells and use ctx by reference.
         let this = unsafe { self.get_unchecked_mut() };
         
-        // Fall back to original history-based approach (V1 engine or V2 fallback)
+        // Fall back to history-based approach
         match &mut this.0 {
             Kind::Activity {
                 id,

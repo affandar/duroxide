@@ -1,10 +1,17 @@
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
-use tracing::{debug, error, info};
+use tracing::{debug, error};
 
 use crate::{Event, runtime::{Runtime, OrchestrationHandler, router::OrchestratorMsg}};
 use super::orchestration_turn::{OrchestrationTurn, TurnResult};
+
+/// Result of a single orchestration execution
+#[derive(Debug)]
+enum ExecutionResult {
+    Completed(Vec<Event>, Result<String, String>),
+    ContinueAsNew,
+}
 
 /// Result of attempting to receive a batch of completion messages
 enum BatchResult {
@@ -14,22 +21,22 @@ enum BatchResult {
 }
 
 impl Runtime {
-    /// Simplified run_instance_to_completion with clear stage separation
-    /// 
-    /// This is the new simplified execution engine (v2).
+    /// Execute an orchestration instance to completion
     /// 
     /// Architecture:
     /// - Outer loop: Dequeue orchestrator messages, ensure instance is active
     /// - Inner loop: Process batches of completions in deterministic turns
     /// - Four-stage turn lifecycle: prep -> execute -> persist -> ack
-    pub async fn run_instance_to_completion_v2(
+    /// - Deterministic completion processing with robust error handling
+    pub async fn run_instance_to_completion(
         self: Arc<Self>,
         instance: &str,
         orchestration_name: &str,
     ) -> (Vec<Event>, Result<String, String>) {
-        debug!(instance, orchestration_name, "Starting instance execution (v2 - simplified engine)");
+        println!("🚨 DEBUG: run_instance_to_completion called for {}", instance);
+        debug!(instance, orchestration_name, "Starting instance execution");
         
-        let start_time = std::time::Instant::now();
+        println!("🚨 DEBUG: About to check active instances");
         // Ensure instance not already active
         {
             let mut act = self.active_instances.lock().await;
@@ -38,8 +45,45 @@ impl Runtime {
                 return (Vec::new(), Err("already_active".into()));
             }
         }
+        println!("🚨 DEBUG: Active instance check passed, starting restart loop");
+
+        // Execution loop that can restart for continue-as-new
+        let mut is_continue_as_new = false;
+        let mut restart_iterations = 0;
+        loop {
+            restart_iterations += 1;
+            debug!(instance, orchestration_name, restart_iterations, is_continue_as_new, "🔄 Restart loop iteration");
+            
+            if restart_iterations > 10 {
+                debug!(instance, "Too many restart iterations, stopping");
+                return (Vec::new(), Err("too many restart iterations".into()));
+            }
+            
+            let _start_time = std::time::Instant::now();
+            match self.clone().run_single_execution(instance, orchestration_name, is_continue_as_new).await {
+                ExecutionResult::Completed(history, result) => {
+                    debug!(instance, "Execution completed, returning");
+                    return (history, result);
+                }
+                ExecutionResult::ContinueAsNew => {
+                    debug!(instance, orchestration_name, "Restarting for continue-as-new");
+                    is_continue_as_new = true; // Next iteration is a continue-as-new restart
+                }
+            }
+        }
+    }
+
+    /// Execute a single orchestration execution (may end with continue-as-new)
+    async fn run_single_execution(
+        self: Arc<Self>,
+        instance: &str,
+        orchestration_name: &str,
+        is_continue_as_new: bool,
+    ) -> ExecutionResult {
+        debug!(instance, orchestration_name, is_continue_as_new, "🚀 Starting single execution");
+        let start_time = std::time::Instant::now();
         
-        // Ensure cleanup even if task panics (copied from v1)
+        // Ensure cleanup even if task panics
         struct ActiveGuard {
             rt: Arc<Runtime>,
             inst: String,
@@ -88,7 +132,8 @@ impl Runtime {
             Err(error) => {
 
                 // Handle unregistered orchestration
-                return self.handle_unregistered_orchestration(instance, &mut history, error).await;
+                let (hist, result) = self.handle_unregistered_orchestration(instance, &mut history, error).await;
+                return ExecutionResult::Completed(hist, result);
             }
         };
 
@@ -99,7 +144,7 @@ impl Runtime {
 
         // Rehydrate any pending work from history
 
-        super::completions::rehydrate_pending(instance, &history, &self.history_store).await;
+        // Instance dehydration/rehydration handled by router
 
 
         // Extract input and parent linkage for the orchestration
@@ -136,7 +181,8 @@ impl Runtime {
                     // Orchestration made progress, persist and continue
 
                     if let Err(e) = turn.persist_changes(self.history_store.clone(), &self).await {
-                        return self.handle_persistence_error(instance, &history, e).await;
+                        let (hist, result) = self.handle_persistence_error(instance, &history, e).await;
+                        return ExecutionResult::Completed(hist, result);
                     }
                     history = turn.final_history();
                     turn_index += 1;
@@ -154,8 +200,8 @@ impl Runtime {
                     ).await;
                     let duration = start_time.elapsed();
                     debug!(instance, orchestration_name, duration_ms = duration.as_millis(),
-                           "✅ Instance execution completed successfully (v2 - simplified engine)");
-                    return result;
+                           "✅ Instance execution completed successfully");
+                    return ExecutionResult::Completed(result.0, result.1);
                 }
                 TurnResult::Failed(error) => {
                     // Orchestration failed
@@ -169,29 +215,34 @@ impl Runtime {
                     ).await;
                     let duration = start_time.elapsed();
                     debug!(instance, orchestration_name, error = %error, duration_ms = duration.as_millis(),
-                           "❌ Instance execution failed (v2 - simplified engine)");
-                    return result;
+                           "❌ Instance execution failed");
+                    return ExecutionResult::Completed(result.0, result.1);
                 }
                 TurnResult::ContinueAsNew { input: new_input, version } => {
                     // Handle continue-as-new
-
-                    let result = (&self).handle_continue_as_new_v2(
+                    match (&self).handle_continue_as_new(
                         instance,
                         orchestration_name,
                         &mut turn,
                         &mut history,
                         new_input,
                         version,
-                    ).await;
-                    let duration = start_time.elapsed();
-                    debug!(instance, orchestration_name, duration_ms = duration.as_millis(),
-                           "🔄 Instance execution continued-as-new (v2 - simplified engine)");
-                    return result;
+                    ).await {
+                        Ok(()) => {
+                            let duration = start_time.elapsed();
+                            debug!(instance, orchestration_name, duration_ms = duration.as_millis(),
+                                   "🔄 Instance execution continued-as-new");
+                            return ExecutionResult::ContinueAsNew;
+                        }
+                        Err(e) => {
+                            return ExecutionResult::Completed(history, Err(e));
+                        }
+                    }
                 }
                 TurnResult::Cancelled(reason) => {
                     // Handle cancellation with propagation to child orchestrations
                     
-                    // Propagate cancellation to sub-orchestrations (same logic as V1)
+                    // Propagate cancellation to sub-orchestrations
                     self.propagate_cancellation_to_children(instance, &history).await;
 
                     let result = (&self).handle_orchestration_completion(
@@ -203,8 +254,8 @@ impl Runtime {
                     ).await;
                     let duration = start_time.elapsed();
                     debug!(instance, orchestration_name, reason = %reason, duration_ms = duration.as_millis(),
-                           "⚠️ Instance execution cancelled (v2 - simplified engine)");
-                    return result;
+                           "⚠️ Instance execution cancelled");
+                    return ExecutionResult::Completed(result.0, result.1);
                 }
             }
         }
@@ -214,6 +265,8 @@ impl Runtime {
         let mut loop_iterations = 0;
         loop {
             loop_iterations += 1;
+            println!("🚨 DEBUG: Main loop iteration {} for {}", loop_iterations, instance);
+            debug!(instance, loop_iterations, "main execution loop iteration");
 
             
             // Emergency brake for debugging
@@ -225,8 +278,8 @@ impl Runtime {
             }
             
             if loop_iterations > 15 {
-
-                return self.handle_persistence_error(instance, &history, "emergency exit - infinite loop in main execution".to_string()).await;
+                let (hist, result) = self.handle_persistence_error(instance, &history, "emergency exit - infinite loop in main execution".to_string()).await;
+                return ExecutionResult::Completed(hist, result);
             }
             
             // Check for infinite loop prevention
@@ -235,8 +288,8 @@ impl Runtime {
                     "execution stalled: {} consecutive turns with no progress in main loop - likely no message delivery or infinite loop", 
                     consecutive_no_progress_turns
                 );
-
-                return self.handle_persistence_error(instance, &history, error).await;
+                let (hist, result) = self.handle_persistence_error(instance, &history, error).await;
+                return ExecutionResult::Completed(hist, result);
             }
             
 
@@ -248,18 +301,24 @@ impl Runtime {
 
             // STAGE 1: RECEIVE AND BATCH COMPLETIONS
 
-            let batch_result = self.receive_completion_batch(&mut message_rx).await;
+            let batch_result = if is_continue_as_new && turn_index == 0 {
+                // For continue-as-new, skip message waiting on first turn and start with empty messages
+                debug!(instance, "continue-as-new restart: skipping message wait, starting with empty messages");
+                BatchResult::Messages(vec![])
+            } else {
+                self.receive_completion_batch(&mut message_rx).await
+            };
             
             let messages = match batch_result {
                 BatchResult::Messages(msgs) => msgs,
                 BatchResult::ChannelClosed => {
-                    // Channel closed - clean exit (like v1 line 1249)
+                    // Channel closed - clean exit
                     debug!(instance = %instance, "channel closed, dehydrating instance");
                     self.router.unregister(instance).await;
-                    return (history, Ok(String::new()));
+                    return ExecutionResult::Completed(history, Ok(String::new()));
                 }
                 BatchResult::Timeout => {
-                    // Timeout - check waiters before dehydrating (like v1 lines 1253-1262)
+                    // Timeout - check waiters before dehydrating
                     let has_waiters = self.has_waiters(instance).await;
                     if has_waiters {
                         // Keep running if there are waiters
@@ -276,7 +335,7 @@ impl Runtime {
                         debug!(instance = %instance, "timeout with no waiters, dehydrating instance");
 
                         self.router.unregister(instance).await;
-                        return (history, Ok(String::new()));
+                        return ExecutionResult::Completed(history, Ok(String::new()));
                     }
                 }
             };
@@ -308,7 +367,8 @@ impl Runtime {
                     // Standard turn - persist changes and continue
                     if let Err(e) = turn.persist_changes(self.history_store.clone(), &self).await {
                         // CR TODO : abandon the messages here as well
-                        return self.handle_persistence_error(instance, &history, e).await;
+                        let (hist, result) = self.handle_persistence_error(instance, &history, e).await;
+                        return ExecutionResult::Completed(hist, result);
                     }
 
                     // Update local history
@@ -334,7 +394,8 @@ impl Runtime {
 
                             
                             // Return with the current history and error
-                            return self.handle_persistence_error(instance, &history, error).await;
+                            let (hist, result) = self.handle_persistence_error(instance, &history, error).await;
+                            return ExecutionResult::Completed(hist, result);
                         }
                     }
                 }
@@ -350,8 +411,8 @@ impl Runtime {
                     
                     let duration = start_time.elapsed();
                     debug!(instance, orchestration_name, duration_ms = duration.as_millis(),
-                           "✅ Instance execution completed successfully (v2 - simplified engine)");
-                    return result;
+                           "✅ Instance execution completed successfully");
+                    return ExecutionResult::Completed(result.0, result.1);
                 }
                 TurnResult::Failed(error) => {
                     // Orchestration failed
@@ -365,29 +426,34 @@ impl Runtime {
                     
                     let duration = start_time.elapsed();
                     debug!(instance, orchestration_name, error = %error, duration_ms = duration.as_millis(),
-                           "❌ Instance execution failed (v2 - simplified engine)");
-                    return result;
+                           "❌ Instance execution failed");
+                    return ExecutionResult::Completed(result.0, result.1);
                 }
                 TurnResult::ContinueAsNew { input: new_input, version } => {
                     // Handle continue-as-new
-                    let result = (&self).handle_continue_as_new_v2(
+                    match (&self).handle_continue_as_new(
                         instance,
                         orchestration_name,
                         &mut turn,
                         &mut history,
                         new_input,
                         version,
-                    ).await;
-                    
-                    let duration = start_time.elapsed();
-                    debug!(instance, orchestration_name, duration_ms = duration.as_millis(),
-                           "🔄 Instance execution continued-as-new (v2 - simplified engine)");
-                    return result;
+                    ).await {
+                        Ok(()) => {
+                            let duration = start_time.elapsed();
+                            debug!(instance, orchestration_name, duration_ms = duration.as_millis(),
+                                   "🔄 Instance execution continued-as-new");
+                            return ExecutionResult::ContinueAsNew;
+                        }
+                        Err(e) => {
+                            return ExecutionResult::Completed(history, Err(e));
+                        }
+                    }
                 }
                 TurnResult::Cancelled(reason) => {
                     // Handle cancellation with propagation to child orchestrations
                     
-                    // Propagate cancellation to sub-orchestrations (same logic as V1)
+                    // Propagate cancellation to sub-orchestrations
                     self.propagate_cancellation_to_children(instance, &history).await;
                     
                     let result = (&self).handle_orchestration_completion(
@@ -400,8 +466,8 @@ impl Runtime {
                     
                     let duration = start_time.elapsed();
                     debug!(instance, orchestration_name, reason = %reason, duration_ms = duration.as_millis(),
-                           "⚠️ Instance execution cancelled (v2 - simplified engine)");
-                    return result;
+                           "⚠️ Instance execution cancelled");
+                    return ExecutionResult::Completed(result.0, result.1);
                 }
             }
         }
@@ -610,8 +676,8 @@ impl Runtime {
         (history.clone(), result)
     }
 
-    /// Handle continue-as-new scenario
-    async fn handle_continue_as_new_v2(
+    /// Handle continue-as-new scenario - persist events and return success
+    async fn handle_continue_as_new(
         self: &Arc<Self>,
         instance: &str,
         orchestration_name: &str,
@@ -619,21 +685,36 @@ impl Runtime {
         history: &mut Vec<Event>,
         input: String,
         version: Option<String>,
-    ) -> (Vec<Event>, Result<String, String>) {
-        // Persist turn changes
+    ) -> Result<(), String> {
+        // Persist turn changes first
         if let Err(e) = turn.persist_changes(self.history_store.clone(), self).await {
-            return self.handle_persistence_error(instance, history, e).await;
+            return Err(format!("failed to persist turn changes: {e}"));
         }
 
         *history = turn.final_history();
 
-        // Acknowledge messages
+        // Acknowledge messages first
         turn.acknowledge_messages(self.history_store.clone()).await;
 
-        // Handle continue-as-new using existing logic
-        self.handle_continue_as_new(instance, orchestration_name, history, input, version).await;
+        // Determine version string
+        let version_str = version.unwrap_or_else(|| "0.0.0".to_string());
         
-        (history.clone(), Ok(String::new()))
+        // Persist the continue-as-new events directly to store
+        if let Err(e) = self.history_store.append(instance, vec![
+            Event::OrchestrationContinuedAsNew { input: input.clone() },
+            Event::OrchestrationStarted {
+                name: orchestration_name.to_string(),
+                version: version_str,
+                parent_instance: None,
+                parent_id: None,
+                input: input.clone(),
+            }
+        ]).await {
+            error!(instance, error = %e, "failed to persist continue-as-new events");
+            return Err(format!("continue-as-new persistence failed: {e}"));
+        }
+
+        Ok(())
     }
 
     /// Handle persistence errors
@@ -655,7 +736,7 @@ impl Runtime {
         (history.to_vec(), Err(error))
     }
 
-    /// Propagate cancellation to child sub-orchestrations (same logic as V1)
+    /// Propagate cancellation to child sub-orchestrations
     async fn propagate_cancellation_to_children(&self, instance: &str, history: &[Event]) {
         use crate::providers::{QueueKind, WorkItem};
         

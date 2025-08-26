@@ -34,7 +34,7 @@ pub struct OrchestrationTurn {
     /// History events generated during this turn
     history_delta: Vec<Event>,
     /// Actions to dispatch after persistence
-    pending_actions: Vec<crate::runtime::replay::Decision>,
+    pending_actions: Vec<crate::Action>,
     /// Current history at start of turn
     baseline_history: Vec<Event>,
 }
@@ -212,7 +212,7 @@ impl OrchestrationTurn {
 
         // Check for continue-as-new decision FIRST (takes precedence over output)
         for decision in &self.pending_actions {
-            if let crate::runtime::replay::Decision::ContinueAsNew { input, version } = decision {
+            if let crate::Action::ContinueAsNew { input, version } = decision {
                 return TurnResult::ContinueAsNew {
                     input: input.clone(),
                     version: version.clone(),
