@@ -6,8 +6,17 @@ use tracing::{debug, error, info};
 use crate::{Event, runtime::{Runtime, OrchestrationHandler, router::OrchestratorMsg}};
 use super::orchestration_turn::{OrchestrationTurn, TurnResult};
 
+/// Result of attempting to receive a batch of completion messages
+enum BatchResult {
+    Messages(Vec<(OrchestratorMsg, String)>),
+    ChannelClosed,
+    Timeout,
+}
+
 impl Runtime {
     /// Simplified run_instance_to_completion with clear stage separation
+    /// 
+    /// This is the new simplified execution engine (v2).
     /// 
     /// Architecture:
     /// - Outer loop: Dequeue orchestrator messages, ensure instance is active
@@ -18,6 +27,10 @@ impl Runtime {
         instance: &str,
         orchestration_name: &str,
     ) -> (Vec<Event>, Result<String, String>) {
+        eprintln!("🚀 [V2] Starting instance execution: {} / {}", instance, orchestration_name);
+        debug!(instance, orchestration_name, "🚀 Starting instance execution (v2 - simplified engine)");
+        
+        let start_time = std::time::Instant::now();
         // Ensure instance not already active
         {
             let mut act = self.active_instances.lock().await;
@@ -25,46 +38,173 @@ impl Runtime {
                 return (Vec::new(), Err("already_active".into()));
             }
         }
-
-        // Ensure cleanup of active flag even on panic
-        let _active_guard = ActiveInstanceGuard {
+        
+        // Ensure cleanup even if task panics (copied from v1)
+        struct ActiveGuard {
+            rt: Arc<Runtime>,
+            inst: String,
+        }
+        impl Drop for ActiveGuard {
+            fn drop(&mut self) {
+                let rt = self.rt.clone();
+                let inst = self.inst.clone();
+                let _ = tokio::spawn(async move {
+                    rt.active_instances.lock().await.remove(&inst);
+                    rt.current_execution_ids.lock().await.remove(&inst);
+                });
+            }
+        }
+        let _active_guard = ActiveGuard {
             rt: self.clone(),
-            instance: instance.to_string(),
+            inst: instance.to_string(),
         };
 
+
+
         // Load initial history and set up execution tracking
+        eprintln!("🚀 [V2] Loading history for instance: {}", instance);
         let mut history = self.history_store.read(instance).await;
+        eprintln!("🚀 [V2] Loaded {} history events", history.len());
+        
         let current_execution_id = self.history_store.latest_execution_id(instance).await.unwrap_or(1);
         self.current_execution_ids
             .lock()
             .await
             .insert(instance.to_string(), current_execution_id);
+        eprintln!("🚀 [V2] Set execution ID {} for instance {}", current_execution_id, instance);
 
         // Pin version from history if available
         self.setup_version_pinning(instance, orchestration_name, &history).await;
 
         // Resolve orchestration handler
+        eprintln!("🚀 [V2] Resolving orchestration handler for: {}", orchestration_name);
         let handler = match self.resolve_orchestration_handler(instance, orchestration_name).await {
-            Ok(h) => h,
+            Ok(h) => {
+                eprintln!("🚀 [V2] Found orchestration handler for: {}", orchestration_name);
+                h
+            },
             Err(error) => {
+                eprintln!("🚀 [V2] Failed to resolve orchestration handler: {}", error);
                 // Handle unregistered orchestration
                 return self.handle_unregistered_orchestration(instance, &mut history, error).await;
             }
         };
 
         // Register for orchestrator messages
+        eprintln!("🚀 [V2] Registering message router for instance: {}", instance);
         let mut message_rx = self.router.register(instance).await;
+        eprintln!("🚀 [V2] Registered message router successfully");
 
         // Rehydrate any pending work from history
+        eprintln!("🚀 [V2] Rehydrating pending work from history");
         super::completions::rehydrate_pending(instance, &history, &self.history_store).await;
+        eprintln!("🚀 [V2] Rehydration complete");
 
         // Extract input and parent linkage for the orchestration
         let (input, parent_link) = self.extract_orchestration_context(orchestration_name, &history);
 
         let mut turn_index = 0u64;
 
+        // Check if this is a fresh orchestration start (has OrchestrationStarted but no progress)
+        let needs_initial_execution = history.iter().any(|e| matches!(e, Event::OrchestrationStarted { .. })) 
+            && !history.iter().any(|e| matches!(e, 
+                Event::ActivityScheduled { .. } | 
+                Event::TimerCreated { .. } | 
+                Event::OrchestrationCompleted { .. } | 
+                Event::OrchestrationFailed { .. }
+            ));
+
+        if needs_initial_execution {
+            eprintln!("🚀 [V2] Fresh orchestration detected - running initial turn");
+            
+            // Execute initial turn without waiting for messages
+            let mut turn = OrchestrationTurn::new(
+                instance.to_string(),
+                orchestration_name.to_string(),
+                turn_index,
+                history.clone(),
+            );
+
+            eprintln!("🔧 [V2] About to execute initial orchestration turn");
+            match turn.execute_orchestration(handler.clone(), input.clone()) {
+                TurnResult::Continue => {
+                    // Orchestration made progress, persist and continue
+                    eprintln!("🔧 [V2] Initial turn returned Continue - orchestration made progress but didn't finish");
+                    if let Err(e) = turn.persist_changes(self.history_store.clone(), &self).await {
+                        return self.handle_persistence_error(instance, &history, e).await;
+                    }
+                    history = turn.final_history();
+                    turn_index += 1;
+                    eprintln!("🚀 [V2] Initial turn completed, turn_index now: {}", turn_index);
+                }
+                TurnResult::Completed(output) => {
+                    // Orchestration completed on first execution
+                    eprintln!("🚀 [V2] Orchestration completed on initial turn");
+                    let result = (&self).handle_orchestration_completion(
+                        instance,
+                        &mut turn,
+                        &mut history,
+                        Ok(output.clone()),
+                        parent_link.clone(),
+                    ).await;
+                    let duration = start_time.elapsed();
+                    debug!(instance, orchestration_name, duration_ms = duration.as_millis(),
+                           "✅ Instance execution completed successfully (v2 - simplified engine)");
+                    return result;
+                }
+                TurnResult::Failed(error) => {
+                    // Orchestration failed
+                    eprintln!("🚀 [V2] Orchestration failed on initial turn: {}", error);
+                    let result = (&self).handle_orchestration_completion(
+                        instance,
+                        &mut turn,
+                        &mut history,
+                        Err(error.clone()),
+                        parent_link.clone(),
+                    ).await;
+                    let duration = start_time.elapsed();
+                    debug!(instance, orchestration_name, error = %error, duration_ms = duration.as_millis(),
+                           "❌ Instance execution failed (v2 - simplified engine)");
+                    return result;
+                }
+                TurnResult::ContinueAsNew { input: new_input, version } => {
+                    // Handle continue-as-new
+                    eprintln!("🚀 [V2] Continue-as-new on initial turn");
+                    let result = (&self).handle_continue_as_new_v2(
+                        instance,
+                        orchestration_name,
+                        &mut turn,
+                        &mut history,
+                        new_input,
+                        version,
+                    ).await;
+                    let duration = start_time.elapsed();
+                    debug!(instance, orchestration_name, duration_ms = duration.as_millis(),
+                           "🔄 Instance execution continued-as-new (v2 - simplified engine)");
+                    return result;
+                }
+                TurnResult::Cancelled(reason) => {
+                    // Handle cancellation
+                    eprintln!("🚀 [V2] Orchestration cancelled on initial turn: {}", reason);
+                    let result = (&self).handle_orchestration_completion(
+                        instance,
+                        &mut turn,
+                        &mut history,
+                        Err(format!("canceled: {}", reason)),
+                        parent_link.clone(),
+                    ).await;
+                    let duration = start_time.elapsed();
+                    debug!(instance, orchestration_name, reason = %reason, duration_ms = duration.as_millis(),
+                           "⚠️ Instance execution cancelled (v2 - simplified engine)");
+                    return result;
+                }
+            }
+        }
+
         // MAIN EXECUTION LOOP
+        eprintln!("🚀 [V2] Entering main execution loop");
         loop {
+            eprintln!("🚀 [V2] Starting turn {} for instance {}", turn_index, instance);
             debug!(
                 instance = %instance,
                 turn_index = turn_index,
@@ -72,19 +212,36 @@ impl Runtime {
             );
 
             // STAGE 1: RECEIVE AND BATCH COMPLETIONS
-            let messages = self.receive_completion_batch(&mut message_rx).await;
+            let batch_result = self.receive_completion_batch(&mut message_rx).await;
             
-            if messages.is_empty() {
-                //CR TODO : test whether we actually deyhdrate or are there always some waiters registered?
-                // Check if we should dehydrate due to inactivity
-                if !self.has_waiters(instance).await {
-                    info!(instance = %instance, "dehydrating instance due to inactivity");
+            let messages = match batch_result {
+                BatchResult::Messages(msgs) => msgs,
+                BatchResult::ChannelClosed => {
+                    // Channel closed - clean exit (like v1 line 1249)
+                    debug!(instance = %instance, "channel closed, dehydrating instance");
                     self.router.unregister(instance).await;
                     return (history, Ok(String::new()));
                 }
-                
-                // Brief sleep and continue if we have waiters
-                tokio::time::sleep(Duration::from_millis(Self::POLLER_IDLE_SLEEP_MS)).await;
+                BatchResult::Timeout => {
+                    // Timeout - check waiters before dehydrating (like v1 lines 1253-1262)
+                    let has_waiters = self.has_waiters(instance).await;
+                    if has_waiters {
+                        // Keep running if there are waiters
+                        debug!(instance = %instance, "timeout but has waiters, continuing");
+                        tokio::time::sleep(Duration::from_millis(Self::POLLER_IDLE_SLEEP_MS)).await;
+                        continue;
+                    } else {
+                        // No waiters - safe to dehydrate
+                        debug!(instance = %instance, "timeout with no waiters, dehydrating instance");
+                        self.router.unregister(instance).await;
+                        return (history, Ok(String::new()));
+                    }
+                }
+            };
+            
+            // Skip empty batches (shouldn't happen with new logic, but safety check)
+            if messages.is_empty() {
+                debug!(instance = %instance, "received empty message batch, continuing");
                 continue;
             }
 
@@ -124,27 +281,37 @@ impl Runtime {
                 }
                 TurnResult::Completed(output) => {
                     // Orchestration completed successfully
-                    return (&self).handle_orchestration_completion(
+                    let result = (&self).handle_orchestration_completion(
                         instance,
                         &mut turn,
                         &mut history,
                         Ok(output.clone()),
                         parent_link.clone(),
                     ).await;
+                    
+                    let duration = start_time.elapsed();
+                    debug!(instance, orchestration_name, duration_ms = duration.as_millis(),
+                           "✅ Instance execution completed successfully (v2 - simplified engine)");
+                    return result;
                 }
                 TurnResult::Failed(error) => {
                     // Orchestration failed
-                    return (&self).handle_orchestration_completion(
+                    let result = (&self).handle_orchestration_completion(
                         instance,
                         &mut turn,
                         &mut history,
                         Err(error.clone()),
                         parent_link.clone(),
                     ).await;
+                    
+                    let duration = start_time.elapsed();
+                    debug!(instance, orchestration_name, error = %error, duration_ms = duration.as_millis(),
+                           "❌ Instance execution failed (v2 - simplified engine)");
+                    return result;
                 }
                 TurnResult::ContinueAsNew { input: new_input, version } => {
                     // Handle continue-as-new
-                    return (&self).handle_continue_as_new_v2(
+                    let result = (&self).handle_continue_as_new_v2(
                         instance,
                         orchestration_name,
                         &mut turn,
@@ -152,28 +319,38 @@ impl Runtime {
                         new_input,
                         version,
                     ).await;
+                    
+                    let duration = start_time.elapsed();
+                    debug!(instance, orchestration_name, duration_ms = duration.as_millis(),
+                           "🔄 Instance execution continued-as-new (v2 - simplified engine)");
+                    return result;
                 }
                 TurnResult::Cancelled(reason) => {
                     // Handle cancellation
-                    return (&self).handle_orchestration_completion(
+                    let result = (&self).handle_orchestration_completion(
                         instance,
                         &mut turn,
                         &mut history,
                         Err(format!("canceled: {}", reason)),
                         parent_link.clone(),
                     ).await;
+                    
+                    let duration = start_time.elapsed();
+                    debug!(instance, orchestration_name, reason = %reason, duration_ms = duration.as_millis(),
+                           "⚠️ Instance execution cancelled (v2 - simplified engine)");
+                    return result;
                 }
             }
         }
     }
 
+
+
     /// Receive a batch of completion messages with timeout for dehydration
     async fn receive_completion_batch(
         &self,
         message_rx: &mut mpsc::UnboundedReceiver<OrchestratorMsg>,
-    ) -> Vec<(OrchestratorMsg, String)> {
-        let mut messages = Vec::new();
-
+    ) -> BatchResult {
         // Wait for first message with timeout
         let first_msg = tokio::time::timeout(
             Duration::from_millis(Self::ORCH_IDLE_DEHYDRATE_MS),
@@ -182,9 +359,17 @@ impl Runtime {
 
         let first_msg = match first_msg {
             Ok(Some(msg)) => msg,
-            Ok(None) => return messages, // Channel closed
-            Err(_) => return messages,   // Timeout
+            Ok(None) => {
+                debug!("message channel closed");
+                return BatchResult::ChannelClosed;
+            }
+            Err(_) => {
+                debug!("message receive timeout");
+                return BatchResult::Timeout;
+            }
         };
+
+        let mut messages = Vec::new();
 
         // Extract ack token from first message
         if let Some(token) = extract_ack_token(&first_msg) {
@@ -204,7 +389,7 @@ impl Runtime {
         }
 
         debug!(message_count = messages.len(), "received completion batch");
-        messages
+        BatchResult::Messages(messages)
     }
 
     /// Set up version pinning from history
@@ -409,21 +594,7 @@ impl Runtime {
 }
 
 /// RAII guard to ensure active instance cleanup
-struct ActiveInstanceGuard {
-    rt: Arc<Runtime>,
-    instance: String,
-}
 
-impl Drop for ActiveInstanceGuard {
-    fn drop(&mut self) {
-        let rt = self.rt.clone();
-        let instance = self.instance.clone();
-        tokio::spawn(async move {
-            rt.active_instances.lock().await.remove(&instance);
-            rt.current_execution_ids.lock().await.remove(&instance);
-        });
-    }
-}
 
 /// Extract ack token from an orchestrator message
 fn extract_ack_token(msg: &OrchestratorMsg) -> Option<String> {

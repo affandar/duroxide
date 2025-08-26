@@ -41,7 +41,7 @@ pub struct CompletionEntry {
 }
 
 /// A deterministic completion map that ensures futures poll in arrival order
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CompletionMap {
     /// Fast lookup by correlation ID and kind
     pub by_id: HashMap<(CompletionKind, u64), CompletionData>,
@@ -109,6 +109,7 @@ impl CompletionMap {
         };
 
         self.by_id.insert(key, completion_data);
+        // CR TODO : how is this ordered? push_back just puts it in the back of the list.
         self.ordered.push_back(CompletionEntry {
             kind,
             correlation_id,
@@ -224,79 +225,8 @@ impl Default for CompletionMap {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::runtime::router::OrchestratorMsg;
+// Include comprehensive tests
+#[path = "completion_map_tests.rs"]
+mod completion_map_tests;
 
-    #[test]
-    fn test_completion_map_ordering() {
-        let mut map = CompletionMap::new();
 
-        // Add completions out of correlation ID order
-        let msg1 = OrchestratorMsg::ActivityCompleted {
-            instance: "test".to_string(),
-            execution_id: 1,
-            id: 3,
-            result: "result3".to_string(),
-            ack_token: Some("token3".to_string()),
-        };
-        let msg2 = OrchestratorMsg::ActivityCompleted {
-            instance: "test".to_string(),
-            execution_id: 1,
-            id: 1,
-            result: "result1".to_string(),
-            ack_token: Some("token1".to_string()),
-        };
-
-        map.add_completion(msg1);
-        map.add_completion(msg2);
-
-        // First added should be ready first (id=3)
-        assert!(map.is_next_ready(CompletionKind::Activity, 3));
-        assert!(!map.is_next_ready(CompletionKind::Activity, 1));
-
-        // Consume first completion
-        let comp = map.get_ready_completion(CompletionKind::Activity, 3);
-        assert!(comp.is_some());
-        assert_eq!(comp.unwrap().correlation_id, 3);
-
-        // Now second should be ready
-        assert!(map.is_next_ready(CompletionKind::Activity, 1));
-    }
-
-    #[test]
-    fn test_duplicate_completions() {
-        let mut map = CompletionMap::new();
-
-        let msg1 = OrchestratorMsg::ActivityCompleted {
-            instance: "test".to_string(),
-            execution_id: 1,
-            id: 1,
-            result: "result1".to_string(),
-            ack_token: Some("token1".to_string()),
-        };
-        let msg2 = OrchestratorMsg::ActivityCompleted {
-            instance: "test".to_string(),
-            execution_id: 1,
-            id: 1, // Same ID
-            result: "result2".to_string(),
-            ack_token: Some("token2".to_string()),
-        };
-
-        let token1 = map.add_completion(msg1);
-        let token2 = map.add_completion(msg2); // Should be ignored
-
-        assert_eq!(token1, Some("token1".to_string()));
-        assert_eq!(token2, Some("token2".to_string())); // Returns token but doesn't add
-
-        // Only one completion should be in the map
-        assert!(map.is_next_ready(CompletionKind::Activity, 1));
-        let comp = map.get_ready_completion(CompletionKind::Activity, 1);
-        assert!(comp.is_some());
-        assert_eq!(comp.unwrap().arrival_order, 0); // First one was kept
-
-        // No more completions
-        assert!(!map.has_unconsumed());
-    }
-}

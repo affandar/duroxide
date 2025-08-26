@@ -24,6 +24,7 @@ pub mod completion_map;
 pub mod orchestration_turn;
 pub mod simplified_execution;
 pub mod completion_aware_futures;
+pub mod integration_tests;
 
 /// High-level orchestration status derived from history.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -93,6 +94,10 @@ pub struct Runtime {
     /// Track the current execution ID for each active instance
     current_execution_ids: Mutex<HashMap<String, u64>>,
     // StartRequest layer removed; instances are activated directly
+    
+    /// Feature flag to use simplified execution engine (v2)
+    /// Set via environment variable RUST_DTF_USE_V2_EXECUTION=true
+    use_simplified_execution: bool,
 }
 
 /// Introspection: descriptor of an orchestration derived from history.
@@ -499,6 +504,17 @@ impl Runtime {
             }
         }));
 
+        // Check feature flag for simplified execution
+        let use_simplified_execution = std::env::var("RUST_DTF_USE_V2_EXECUTION")
+            .map(|v| v.to_lowercase() == "true" || v == "1")
+            .unwrap_or(false);
+        
+        if use_simplified_execution {
+            tracing::info!("🚀 Using simplified execution engine (v2) - feature flag enabled");
+        } else {
+            tracing::info!("📜 Using original execution engine (v1) - set RUST_DTF_USE_V2_EXECUTION=true to enable v2");
+        }
+
         // start request queue + worker
         let runtime = Arc::new(Self {
             router_tx,
@@ -511,6 +527,7 @@ impl Runtime {
             orchestration_registry,
             pinned_versions: Mutex::new(HashMap::new()),
             current_execution_ids: Mutex::new(HashMap::new()),
+            use_simplified_execution,
         });
 
         // background orchestrator dispatcher (extracted from inline poller)
@@ -878,11 +895,16 @@ impl Runtime {
 
     /// Run a single instance to completion by orchestration name, returning
     /// its final history and output.
+    /// 
+    /// This is the original execution engine (v1).
     pub async fn run_instance_to_completion(
         self: Arc<Self>,
         instance: &str,
         orchestration_name: &str,
     ) -> (Vec<Event>, Result<String, String>) {
+        debug!(instance, orchestration_name, "🔄 Starting instance execution (v1 - original engine)");
+        
+        let start_time = std::time::Instant::now();
         // Ensure instance not already active in this runtime
         {
             let mut act = self.active_instances.lock().await;
@@ -1187,6 +1209,10 @@ impl Runtime {
                         }
                     }
                 }
+                
+                let duration = start_time.elapsed();
+                debug!(instance, orchestration_name, duration_ms = duration.as_millis(), 
+                      "✅ Instance execution completed (v1 - original engine)");
                 return (history, out);
             }
 
@@ -1393,7 +1419,18 @@ impl Runtime {
         let this_for_task = self.clone();
         let inst = instance.to_string();
         let orch_name = orchestration_name.to_string();
-        tokio::spawn(async move { this_for_task.run_instance_to_completion(&inst, &orch_name).await })
+        
+        if self.use_simplified_execution {
+            // Use the new simplified execution engine (v2)
+            tokio::spawn(async move { 
+                this_for_task.run_instance_to_completion_v2(&inst, &orch_name).await 
+            })
+        } else {
+            // Use the original execution engine (v1)
+            tokio::spawn(async move { 
+                this_for_task.run_instance_to_completion(&inst, &orch_name).await 
+            })
+        }
     }
 }
 

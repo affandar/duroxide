@@ -120,21 +120,15 @@ impl OrchestrationTurn {
         // This allows the orchestration to see completions during replay
         self.apply_completions_to_history(&mut working_history);
 
-        // Use the completion-aware replay execution
+        // Use completion-aware replay execution
+        // NOTE: We copy the completion map here because:
+        // 1. The orchestration execution needs exclusive access to modify completion state
+        // 2. We need to pass it to async futures that may outlive this scope
+        // 3. Rust's borrow checker doesn't allow Arc<Mutex<&mut T>> to work cleanly
+        // 4. The copy cost is minimal compared to the determinism benefits
         let completion_map_arc = std::sync::Arc::new(std::sync::Mutex::new(
-            // Clone the completion map for the turn execution
-            // This is a bit awkward but maintains thread safety
-            super::completion_map::CompletionMap::new()
+            self.completion_map.clone()
         ));
-        
-        // CR TODO : why are we copying the completion map state?
-        // Copy completion map state
-        {
-            let mut map_guard = completion_map_arc.lock().unwrap();
-            map_guard.by_id = self.completion_map.by_id.clone();
-            map_guard.ordered = self.completion_map.ordered.clone();
-            map_guard.next_order = self.completion_map.next_order;
-        }
 
         let (updated_history, decisions, _logs, output_opt, _claims) = 
             super::completion_aware_futures::run_turn_with_completion_map(
@@ -148,14 +142,24 @@ impl OrchestrationTurn {
                 },
             );
             
-        // CR TODO : to check, who marks these items as consumed? the futures?
-        // Update our completion map with any consumed items
+        // Sync back any consumption state from the orchestration execution
+        // Futures mark items as consumed during polling
         {
-            let map_guard = completion_map_arc.lock().unwrap();
-            self.completion_map.by_id = map_guard.by_id.clone();
-            self.completion_map.ordered = map_guard.ordered.clone();
-            self.completion_map.cleanup_consumed();
+            let executed_map = completion_map_arc.lock().unwrap();
+            // Update consumption state in our completion map
+            for (i, entry) in self.completion_map.ordered.iter_mut().enumerate() {
+                if let Some(executed_entry) = executed_map.ordered.get(i) {
+                    entry.consumed = executed_entry.consumed;
+                }
+            }
+            // Remove consumed entries from by_id map
+            self.completion_map.by_id.retain(|key, _| {
+                executed_map.by_id.contains_key(key)
+            });
         }
+        
+        // Cleanup consumed entries
+        self.completion_map.cleanup_consumed();
 
         // Calculate the delta from baseline
         if updated_history.len() > self.baseline_history.len() {
@@ -265,31 +269,21 @@ impl OrchestrationTurn {
             "acknowledging processed messages"
         );
 
-        // Try batch acknowledgment first, fall back to individual if not supported
-        if let Ok(()) = history_store.ack_batch(QueueKind::Orchestrator, &self.ack_tokens).await {
+        // Try batch acknowledgment - if it fails, let messages timeout rather than fall back
+        if let Err(e) = history_store.ack_batch(QueueKind::Orchestrator, &self.ack_tokens).await {
+            error!(
+                instance = %self.instance,
+                token_count = self.ack_tokens.len(),
+                error = %e,
+                "batch acknowledgment failed - messages will timeout and be redelivered"
+            );
+            // Don't fall back to individual acks - let the provider handle redelivery
+            // This prevents partial acknowledgment scenarios that could cause inconsistency
+        } else {
             debug!(
                 instance = %self.instance,
                 token_count = self.ack_tokens.len(),
                 "batch acknowledgment successful"
-            );
-        } else {
-            // CR TODO : lets not fall back to individual acknowledgments, just log error and let the messages
-            //  get timed out
-            // Fall back to individual acknowledgments
-            for token in &self.ack_tokens {
-                if let Err(e) = history_store.ack(QueueKind::Orchestrator, token).await {
-                    error!(
-                        instance = %self.instance,
-                        token = %token,
-                        error = %e,
-                        "failed to acknowledge message"
-                    );
-                }
-            }
-            debug!(
-                instance = %self.instance,
-                token_count = self.ack_tokens.len(),
-                "individual acknowledgments completed"
             );
         }
 
@@ -371,3 +365,7 @@ mod tests {
         // Other stages would require actual runtime integration to test properly
     }
 }
+
+// Include comprehensive tests
+#[path = "orchestration_turn_tests.rs"]
+mod orchestration_turn_tests;

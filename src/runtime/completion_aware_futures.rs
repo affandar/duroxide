@@ -43,11 +43,20 @@ impl CompletionMapAccessor {
     }
 
     pub fn get_completion(&self, kind: CompletionKind, correlation_id: u64) -> Option<CompletionValue> {
-        self.with_completion_map(|map| {
-            map.get_ready_completion(kind, correlation_id)
-                .map(|comp| comp.data)
+        eprintln!("🔧 [V2] Attempting to get completion: {:?} ID {}", kind, correlation_id);
+        let result = self.with_completion_map(|map| {
+            let ready = map.is_next_ready(kind, correlation_id);
+            eprintln!("🔧 [V2] Completion {:?} ID {} ready: {}", kind, correlation_id, ready);
+            if ready {
+                map.get_ready_completion(kind, correlation_id)
+                    .map(|comp| comp.data)
+            } else {
+                None
+            }
         })
-        .flatten()
+        .flatten();
+        eprintln!("🔧 [V2] Got completion result: {:?}", result.is_some());
+        result
     }
 }
 
@@ -103,6 +112,7 @@ impl Future for CompletionAwareDurableFuture {
                 Kind::External { id, .. } => (CompletionKind::External, *id),
                 Kind::SubOrch { id, .. } => (CompletionKind::SubOrchestration, *id),
             };
+            eprintln!("🔧 [V2] Polling future: {:?} ID {}", kind, correlation_id);
 
             // Check if this completion is ready in the ordered map
             if accessor.is_completion_ready(kind, correlation_id) {
@@ -117,7 +127,7 @@ impl Future for CompletionAwareDurableFuture {
                             return Pin::new(&mut self.inner).poll(cx);
                         }
                     };
-                    
+
                     return Poll::Ready(output);
                 }
             }
@@ -173,6 +183,7 @@ where
     F: Future<Output = O>,
 {
     // Set up completion map accessor
+    eprintln!("🔧 [V2] Setting up completion map accessor");
     let accessor = CompletionMapAccessor::new();
     accessor.set_completion_map(completion_map);
     
@@ -180,6 +191,7 @@ where
     COMPLETION_MAP_ACCESSOR.with(|a| {
         *a.borrow_mut() = Some(accessor);
     });
+    eprintln!("🔧 [V2] Completion map accessor set up");
     
     // Run the turn normally - futures will now use completion map
     let result = crate::run_turn_with_claims(history, turn_index, orchestrator);
@@ -191,6 +203,8 @@ where
     
     result
 }
+
+
 
 #[cfg(test)]
 mod tests {
