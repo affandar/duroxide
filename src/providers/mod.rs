@@ -68,6 +68,11 @@ pub enum WorkItem {
         instance: String,
         reason: String,
     },
+    ContinueAsNew {
+        instance: String,
+        orchestration: String,
+        input: String,
+    },
 }
 
 /// Storage abstraction for append-only orchestration history per instance.

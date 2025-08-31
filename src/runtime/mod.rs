@@ -699,6 +699,28 @@ impl Runtime {
                                 tokio::time::sleep(std::time::Duration::from_millis(Self::POLLER_GATE_DELAY_MS)).await;
                             }
                         }
+                        WorkItem::ContinueAsNew { instance, orchestration, input } => {
+                            debug!("ContinueAsNew: {instance} {orchestration} {input}");
+                            // Start the new execution for continue-as-new
+                            // The OrchestrationStarted event was already persisted by handle_continue_as_new
+                            
+                            // Small delay to allow the previous execution to complete
+                            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                            
+                            // Force remove from active_instances to allow the new execution to start
+                            // This is safe because the previous execution has already completed
+                            // (it enqueued this ContinueAsNew message as its final action)
+                            self.active_instances.lock().await.remove(&instance);
+                            
+                            // Now start the new execution
+                            let inner = self.clone().spawn_instance_to_completion(&instance, &orchestration);
+                            let wrapper = tokio::spawn(async move {
+                                let _ = inner.await;
+                            });
+                            self.instance_joins.lock().await.push(wrapper);
+                            
+                            let _ = self.history_store.ack(QueueKind::Orchestrator, &token).await;
+                        }
                         // No ActivityExecute should land on Orchestrator queue
                         other => {
                             error!(
