@@ -141,101 +141,40 @@ pub async fn dispatch_start_sub_orchestration(
     }
     debug!(parent_instance, id, name=%name, child_instance=%child_full, "start child orchestration");
     
-    // Get the parent execution ID for proper completion tracking
-    let parent_execution_id = rt.get_execution_id_for_instance(parent_instance).await;
+    // Try to parse version for pinning (will be pinned in start_internal_wait as well)
+    let version_pin = version.clone().and_then(|s| semver::Version::parse(&s).ok());
     
-    tokio::spawn(async move {
-        // Try to parse version for pinning (will be pinned in start_internal_rx as well)
-        let version_pin = version.clone().and_then(|s| semver::Version::parse(&s).ok());
-        match rt_for_child
-            .clone()
-            .start_orchestration_with_parent(
-                &child_full,
-                &name_clone,
-                input_clone,
-                parent_inst.clone(),
-                id,
-                version_pin,
-            )
-            .await
-        {
-            Ok(()) => {
-                // Wait for the child orchestration to complete
-                match rt_for_child.wait_for_orchestration(&child_full, std::time::Duration::from_secs(3600)).await {
-                    Ok(super::OrchestrationStatus::Completed { output }) => {
-                        // Enqueue completion to orchestrator queue (same pattern as activities)
-                        let _ = rt_for_child.history_store.enqueue_work(
-                            QueueKind::Orchestrator,
-                            WorkItem::SubOrchCompleted {
-                                parent_instance: parent_inst,
-                                parent_execution_id,
-                                parent_id: id,
-                                result: output,
-                            },
-                        ).await;
-                    }
-                    Ok(super::OrchestrationStatus::Failed { error }) => {
-                        // Enqueue failure to orchestrator queue (same pattern as activities)
-                        let _ = rt_for_child.history_store.enqueue_work(
-                            QueueKind::Orchestrator,
-                            WorkItem::SubOrchFailed {
-                                parent_instance: parent_inst,
-                                parent_execution_id,
-                                parent_id: id,
-                                error,
-                            },
-                        ).await;
-                    }
-                    Ok(super::OrchestrationStatus::Running) => {
-                        // Timeout - enqueue failure
-                        let _ = rt_for_child.history_store.enqueue_work(
-                            QueueKind::Orchestrator,
-                            WorkItem::SubOrchFailed {
-                                parent_instance: parent_inst,
-                                parent_execution_id,
-                                parent_id: id,
-                                error: "child orchestration timed out".to_string(),
-                            },
-                        ).await;
-                    }
-                    Ok(super::OrchestrationStatus::NotFound) => {
-                        // Not found - enqueue failure
-                        let _ = rt_for_child.history_store.enqueue_work(
-                            QueueKind::Orchestrator,
-                            WorkItem::SubOrchFailed {
-                                parent_instance: parent_inst,
-                                parent_execution_id,
-                                parent_id: id,
-                                error: "child orchestration not found".to_string(),
-                            },
-                        ).await;
-                    }
-                    Err(e) => {
-                        // Wait error - enqueue failure
-                        let _ = rt_for_child.history_store.enqueue_work(
-                            QueueKind::Orchestrator,
-                            WorkItem::SubOrchFailed {
-                                parent_instance: parent_inst,
-                                parent_execution_id,
-                                parent_id: id,
-                                error: format!("wait error: {e:?}"),
-                            },
-                        ).await;
-                    }
-                }
-            }
-            Err(e) => {
-                // Start error - enqueue failure
-                let _ = rt_for_child.history_store.enqueue_work(
-                    QueueKind::Orchestrator,
-                    WorkItem::SubOrchFailed {
-                        parent_instance: parent_inst,
-                        parent_execution_id,
-                        parent_id: id,
-                        error: e,
-                    },
-                ).await;
-            }
+    // Just start the sub-orchestration - completion notification is automatic via handle_orchestration_completion!
+    match rt_for_child
+        .start_orchestration_with_parent(
+            &child_full,
+            &name_clone,
+            input_clone,
+            parent_inst.clone(),
+            id,
+            version_pin,
+        )
+        .await
+    {
+        Ok(()) => {
+            debug!(parent_instance, id, child_instance=%child_full, 
+                   "sub-orchestration started successfully - completion will be automatic");
+            // Done! Child will auto-notify parent when it completes via handle_orchestration_completion
         }
-    });
+        Err(e) => {
+            // Only handle start failures - completion failures are handled by the child itself
+            debug!(parent_instance, id, child_instance=%child_full, error=%e, 
+                   "sub-orchestration start failed, enqueuing failure");
+            let parent_execution_id = rt.get_execution_id_for_instance(parent_instance).await;
+            let _ = rt.history_store.enqueue_work(
+                QueueKind::Orchestrator,
+                WorkItem::SubOrchFailed {
+                    parent_instance: parent_inst,
+                    parent_execution_id,
+                    parent_id: id,
+                    error: e,
+                },
+            ).await;
+        }
+    }
 }

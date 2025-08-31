@@ -617,6 +617,9 @@ impl Runtime {
 
         // Notify parent if this is a sub-orchestration
         if let Some((parent_instance, parent_id)) = parent_link {
+            debug!(instance, parent_instance=%parent_instance, parent_id, 
+                   "sub-orchestration completed, notifying parent via queue");
+            
             let work_item = match &result {
                 Ok(output) => crate::providers::WorkItem::SubOrchCompleted {
                     parent_instance: parent_instance.clone(),

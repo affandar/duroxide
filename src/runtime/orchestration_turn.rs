@@ -24,6 +24,7 @@ pub struct OrchestrationTurn {
     /// Instance identifier
     instance: String,
     /// Orchestration name for handler resolution
+    #[allow(dead_code)]
     orchestration_name: String,
     /// Current turn index
     turn_index: u64,
