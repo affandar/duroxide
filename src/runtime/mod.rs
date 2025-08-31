@@ -529,83 +529,64 @@ impl Runtime {
             loop {
                 if let Some((item, token)) = self.history_store.dequeue_peek_lock(QueueKind::Orchestrator).await {
                     match item {
-                        WorkItem::StartOrchestration {
-                            instance,
-                            orchestration,
-                            input,
-                            version,
-                        } => {
-                            debug!("StartOrchestration: {instance} {orchestration} {input} (version: {:?})", version);
-                            self.start_orchestration_execution(&instance, &orchestration, input, version, token).await;
+                        // Orchestration lifecycle events - start new executions
+                        WorkItem::StartOrchestration { ref instance, ref orchestration, ref input, ref version }
+                        | WorkItem::ContinueAsNew { ref instance, ref orchestration, ref input, ref version } => {
+                            let event_type = match &item {
+                                WorkItem::StartOrchestration { .. } => "StartOrchestration",
+                                WorkItem::ContinueAsNew { .. } => "ContinueAsNew",
+                                _ => unreachable!(),
+                            };
+                            debug!("{event_type}: {instance} {orchestration} {input} (version: {:?})", version);
+                            self.start_orchestration_execution(instance, orchestration, input.clone(), version.clone(), token).await;
                         }
-                        WorkItem::ActivityCompleted {
-                            ref instance,
-                            execution_id,
-                            id,
-                            ref result,
-                        } => {
-                            debug!("ActivityCompleted: {instance} {execution_id} {id} {result}");
-                            self.orchestrator_deliver_work_item(item.clone(), Some(execution_id), token).await;
-                        }
-                        WorkItem::ActivityFailed {
-                            ref instance,
-                            execution_id,
-                            id,
-                            ref error,
-                        } => {
-                            debug!("ActivityFailed: {instance} {execution_id} {id} {error}");
-                            self.orchestrator_deliver_work_item(item.clone(), Some(execution_id), token).await;
-                        }
-                        WorkItem::TimerFired {
-                            ref instance,
-                            execution_id,
-                            id,
-                            fire_at_ms,
-                        } => {
-                            debug!("TimerFired: {instance} {execution_id} {id} {fire_at_ms}");
-                            debug!("TimerFired completion delivered: {instance} {execution_id} {id}");
-                            self.orchestrator_deliver_work_item(item.clone(), Some(execution_id), token).await;
-                        }
-                        // No TimerSchedule should land on Orchestrator queue
-                        WorkItem::ExternalRaised { ref instance, ref name, ref data } => {
-                            debug!("ExternalRaised: {instance} {name} {data}");
-                            self.orchestrator_deliver_work_item(item.clone(), None, token).await;
-                        }
-                        WorkItem::SubOrchCompleted {
-                            ref parent_instance,
-                            parent_execution_id,
-                            parent_id,
-                            ref result,
-                        } => {
-                            debug!("SubOrchCompleted: {parent_instance} {parent_execution_id} {parent_id} {result}");
-                            self.orchestrator_deliver_work_item(item.clone(), Some(parent_execution_id), token).await;
-                        }
-                        WorkItem::SubOrchFailed {
-                            ref parent_instance,
-                            parent_execution_id,
-                            parent_id,
-                            ref error,
-                        } => {
-                            debug!("SubOrchFailed: {parent_instance} {parent_execution_id} {parent_id} {error}");
-                            self.orchestrator_deliver_work_item(item.clone(), Some(parent_execution_id), token).await;
-                        }
-                        WorkItem::CancelInstance { ref instance, ref reason } => {
-                            debug!("CancelInstance: {instance} {reason}");
-                            self.orchestrator_deliver_work_item(item.clone(), None, token).await;
-                        }
-                        WorkItem::ContinueAsNew { instance, orchestration, input, version } => {
-                            debug!("ContinueAsNew: {instance} {orchestration} {input} (version: {:?})", version);
-                            // Use unified handler - no special delay or instance management needed
-                            // The previous execution was already cleaned up by handle_continue_as_new
-                            self.start_orchestration_execution(&instance, &orchestration, input, version, token).await;
-                        }
-                        // No ActivityExecute should land on Orchestrator queue
-                        other => {
-                            error!(
-                                ?other,
-                                "unexpected WorkItem in Orchestrator dispatcher; state corruption"
-                            );
-                            panic!("unexpected WorkItem in Orchestrator dispatcher");
+                        
+                        // All completion events - deliver to active instances via router
+                        completion_item => {
+                            // Extract execution ID for validation (if applicable)
+                            let exec_id = match &completion_item {
+                                WorkItem::ActivityCompleted { execution_id, .. }
+                                | WorkItem::ActivityFailed { execution_id, .. }
+                                | WorkItem::TimerFired { execution_id, .. } => Some(*execution_id),
+                                WorkItem::SubOrchCompleted { parent_execution_id, .. }
+                                | WorkItem::SubOrchFailed { parent_execution_id, .. } => Some(*parent_execution_id),
+                                WorkItem::ExternalRaised { .. }
+                                | WorkItem::CancelInstance { .. } => None,
+                                // Invalid items for orchestrator queue
+                                other => {
+                                    error!(?other, "unexpected WorkItem in Orchestrator dispatcher; state corruption");
+                                    panic!("unexpected WorkItem in Orchestrator dispatcher");
+                                }
+                            };
+                            
+                            // Debug log the completion event
+                            match &completion_item {
+                                WorkItem::ActivityCompleted { instance, execution_id, id, result } => {
+                                    debug!("ActivityCompleted: {instance} {execution_id} {id} {result}");
+                                }
+                                WorkItem::ActivityFailed { instance, execution_id, id, error } => {
+                                    debug!("ActivityFailed: {instance} {execution_id} {id} {error}");
+                                }
+                                WorkItem::TimerFired { instance, execution_id, id, fire_at_ms } => {
+                                    debug!("TimerFired: {instance} {execution_id} {id} {fire_at_ms}");
+                                    debug!("TimerFired completion delivered: {instance} {execution_id} {id}");
+                                }
+                                WorkItem::ExternalRaised { instance, name, data } => {
+                                    debug!("ExternalRaised: {instance} {name} {data}");
+                                }
+                                WorkItem::SubOrchCompleted { parent_instance, parent_execution_id, parent_id, result } => {
+                                    debug!("SubOrchCompleted: {parent_instance} {parent_execution_id} {parent_id} {result}");
+                                }
+                                WorkItem::SubOrchFailed { parent_instance, parent_execution_id, parent_id, error } => {
+                                    debug!("SubOrchFailed: {parent_instance} {parent_execution_id} {parent_id} {error}");
+                                }
+                                WorkItem::CancelInstance { instance, reason } => {
+                                    debug!("CancelInstance: {instance} {reason}");
+                                }
+                                _ => unreachable!(), // Already handled above
+                            }
+                            
+                            self.orchestrator_deliver_work_item(completion_item, exec_id, token).await;
                         }
                     }
                 } else {
