@@ -830,9 +830,8 @@ async fn sample_typed_activity_and_orchestration_fs() {
         .build();
 
     let rt = runtime::Runtime::start_with_store(store, Arc::new(activity_registry), orchestration_registry).await;
-    let _handle = rt
-        .clone()
-        .start_orchestration_typed::<AddReq, AddRes>("inst-typed-add", "Adder", AddReq { a: 2, b: 3 })
+    rt.clone()
+        .start_orchestration_typed::<AddReq>("inst-typed-add", "Adder", AddReq { a: 2, b: 3 })
         .await
         .unwrap();
     
@@ -872,9 +871,8 @@ async fn sample_typed_event_fs() {
         let payload = serde_json::to_string(&Ack { ok: true }).unwrap();
         rt_c.raise_event("inst-typed-ack", "Ready", payload).await;
     });
-    let _h = rt
-        .clone()
-        .start_orchestration_typed::<(), String>("inst-typed-ack", "WaitAck", ())
+    rt.clone()
+        .start_orchestration_typed::<()>("inst-typed-ack", "WaitAck", ())
         .await
         .unwrap();
     
@@ -927,9 +925,8 @@ async fn sample_mixed_string_and_typed_typed_orch_fs() {
         .build();
 
     let rt = runtime::Runtime::start_with_store(store, Arc::new(activity_registry), orchestration_registry).await;
-    let _h = rt
-        .clone()
-        .start_orchestration_typed::<AddReq, String>("inst-mixed-typed", "MixedTypedOrch", AddReq { a: 1, b: 2 })
+    rt.clone()
+        .start_orchestration_typed::<AddReq>("inst-mixed-typed", "MixedTypedOrch", AddReq { a: 1, b: 2 })
         .await
         .unwrap();
     
@@ -1155,12 +1152,10 @@ async fn sample_versioning_continue_as_new_upgrade_fs() {
 
     // Start on v1; the first handle will resolve at the CAN boundary
     // Pin initial start to v1 explicitly to demonstrate upgrade via CAN; default policy remains Latest (v2)
-    let h = rt
-        .clone()
+    rt.clone()
         .start_orchestration_versioned("inst-can-upgrade", "LongRunner", "1.0.0", "state")
         .await
         .unwrap();
-    let _ = h.await.unwrap();
 
     // Poll for the new execution (v2) to complete
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);

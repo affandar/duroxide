@@ -145,6 +145,7 @@ pub async fn dispatch_start_sub_orchestration(
         // Try to parse version for pinning (will be pinned in start_internal_rx as well)
         let version_pin = version.clone().and_then(|s| semver::Version::parse(&s).ok());
         match rt_for_child
+            .clone()
             .start_orchestration_with_parent(
                 &child_full,
                 &name_clone,
@@ -155,37 +156,56 @@ pub async fn dispatch_start_sub_orchestration(
             )
             .await
         {
-            Ok(h) => match h.await {
-                Ok((_hist, out)) => match out {
-                    Ok(res) => {
+            Ok(()) => {
+                // Wait for the child orchestration to complete
+                match rt_for_child.wait_for_orchestration(&child_full, std::time::Duration::from_secs(3600)).await {
+                    Ok(super::OrchestrationStatus::Completed { output }) => {
                         let _ = router_tx.send(super::OrchestratorMsg::SubOrchCompleted {
                             instance: parent_inst,
                             execution_id: 1, // TODO: Get actual parent execution ID
                             id,
-                            result: res,
+                            result: output,
                             ack_token: None,
                         });
                     }
-                    Err(err) => {
+                    Ok(super::OrchestrationStatus::Failed { error }) => {
                         let _ = router_tx.send(super::OrchestratorMsg::SubOrchFailed {
                             instance: parent_inst,
                             execution_id: 1, // TODO: Get actual parent execution ID
                             id,
-                            error: err,
+                            error,
                             ack_token: None,
                         });
                     }
-                },
-                Err(e) => {
-                    let _ = router_tx.send(super::OrchestratorMsg::SubOrchFailed {
-                        instance: parent_inst,
-                        execution_id: 1, // TODO: Get actual parent execution ID
-                        id,
-                        error: format!("child join error: {e}"),
-                        ack_token: None,
-                    });
+                    Ok(super::OrchestrationStatus::Running) => {
+                        let _ = router_tx.send(super::OrchestratorMsg::SubOrchFailed {
+                            instance: parent_inst,
+                            execution_id: 1, // TODO: Get actual parent execution ID
+                            id,
+                            error: "child orchestration timed out".to_string(),
+                            ack_token: None,
+                        });
+                    }
+                    Ok(super::OrchestrationStatus::NotFound) => {
+                        let _ = router_tx.send(super::OrchestratorMsg::SubOrchFailed {
+                            instance: parent_inst,
+                            execution_id: 1, // TODO: Get actual parent execution ID
+                            id,
+                            error: "child orchestration not found".to_string(),
+                            ack_token: None,
+                        });
+                    }
+                    Err(e) => {
+                        let _ = router_tx.send(super::OrchestratorMsg::SubOrchFailed {
+                            instance: parent_inst,
+                            execution_id: 1, // TODO: Get actual parent execution ID
+                            id,
+                            error: format!("wait error: {e:?}"),
+                            ack_token: None,
+                        });
+                    }
                 }
-            },
+            }
             Err(e) => {
                 let _ = router_tx.send(super::OrchestratorMsg::SubOrchFailed {
                     instance: parent_inst,

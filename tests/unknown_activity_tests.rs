@@ -38,28 +38,40 @@ async fn unknown_activity_is_isolated_from_other_orchestrations_fs() {
         runtime::Runtime::start_with_store(store.clone(), StdArc::new(activity_registry), orchestration_registry).await;
 
     // Start both orchestrations concurrently
-    let h_fail = rt
-        .clone()
+    rt.clone()
         .start_orchestration("inst-missing-1", "UsesMissing", "")
         .await
         .unwrap();
-    let h_ok = rt
-        .clone()
+    rt.clone()
         .start_orchestration("inst-healthy-1", "Healthy", "yo")
         .await
         .unwrap();
 
-    // Await both and assert expected outcomes
-    let (hist_ok, out_ok) = h_ok.await.unwrap();
-    assert_eq!(out_ok.unwrap(), "healthy:yo");
+    // Wait for both and assert expected outcomes
+    let status_ok = rt.wait_for_orchestration("inst-healthy-1", std::time::Duration::from_secs(5)).await.unwrap();
+    let out_ok = match status_ok {
+        rust_dtf::OrchestrationStatus::Completed { output } => output,
+        rust_dtf::OrchestrationStatus::Failed { error } => panic!("healthy orchestration failed: {error}"),
+        _ => panic!("unexpected orchestration status"),
+    };
+    assert_eq!(out_ok, "healthy:yo");
+    
+    let hist_ok = rt.get_execution_history("inst-healthy-1", 1).await;
     assert!(
         !hist_ok.iter().any(|e| matches!(e, Event::ActivityFailed { .. })),
         "healthy orchestration should not see failures"
     );
     assert!(matches!(hist_ok.last().unwrap(), Event::OrchestrationCompleted { .. }));
 
-    let (hist_fail, out_fail) = h_fail.await.unwrap();
-    assert!(matches!(out_fail, Err(e) if e == "unregistered:Missing"));
+    let status_fail = rt.wait_for_orchestration("inst-missing-1", std::time::Duration::from_secs(5)).await.unwrap();
+    let error_fail = match status_fail {
+        rust_dtf::OrchestrationStatus::Failed { error } => error,
+        rust_dtf::OrchestrationStatus::Completed { output } => panic!("expected failure, got success: {output}"),
+        _ => panic!("unexpected orchestration status"),
+    };
+    assert_eq!(error_fail, "unregistered:Missing");
+    
+    let hist_fail = rt.get_execution_history("inst-missing-1", 1).await;
     assert!(
         hist_fail
             .iter()
@@ -107,22 +119,30 @@ async fn unknown_activity_is_isolated_from_other_orchestrations_inmem() {
     let rt =
         runtime::Runtime::start_with_store(store.clone(), StdArc::new(activity_registry), orchestration_registry).await;
 
-    let h_fail = rt
-        .clone()
+    rt.clone()
         .start_orchestration("inst-missing-im", "UsesMissing", "")
         .await
         .unwrap();
-    let h_ok = rt
-        .clone()
+    rt.clone()
         .start_orchestration("inst-healthy-im", "Healthy", "yo")
         .await
         .unwrap();
 
-    let (_hist_ok, out_ok) = h_ok.await.unwrap();
-    assert_eq!(out_ok.unwrap(), "healthy:yo");
+    let status_ok = rt.wait_for_orchestration("inst-healthy-im", std::time::Duration::from_secs(5)).await.unwrap();
+    let out_ok = match status_ok {
+        rust_dtf::OrchestrationStatus::Completed { output } => output,
+        rust_dtf::OrchestrationStatus::Failed { error } => panic!("healthy orchestration failed: {error}"),
+        _ => panic!("unexpected orchestration status"),
+    };
+    assert_eq!(out_ok, "healthy:yo");
 
-    let (_hist_fail, out_fail) = h_fail.await.unwrap();
-    assert!(matches!(out_fail, Err(e) if e == "unregistered:Missing"));
+    let status_fail = rt.wait_for_orchestration("inst-missing-im", std::time::Duration::from_secs(5)).await.unwrap();
+    let error_fail = match status_fail {
+        rust_dtf::OrchestrationStatus::Failed { error } => error,
+        rust_dtf::OrchestrationStatus::Completed { output } => panic!("expected failure, got success: {output}"),
+        _ => panic!("unexpected orchestration status"),
+    };
+    assert_eq!(error_fail, "unregistered:Missing");
 
     match rt.get_orchestration_status("inst-healthy-im").await {
         OrchestrationStatus::Completed { output } => assert_eq!(output, "healthy:yo"),

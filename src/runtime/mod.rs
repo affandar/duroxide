@@ -3,7 +3,7 @@ use crate::providers::in_memory::InMemoryHistoryStore;
 use crate::providers::{HistoryStore, QueueKind, WorkItem};
 use crate::{Event, OrchestrationContext};
 use semver::Version;
-use serde::{Serialize, de::DeserializeOwned};
+use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{Mutex, mpsc};
@@ -204,8 +204,8 @@ impl Runtime {
     }
 
 
-    /// Start an orchestration and return a JoinHandle that polls for completion using wait_for_orchestration.
-    /// This allows the instance to dehydrate while still providing a handle that resolves on completion.
+    /// Start an orchestration and ensure the instance is active.
+    /// Callers should use wait_for_orchestration to wait for completion.
     async fn start_internal_wait(
         self: Arc<Self>,
         instance: &str,
@@ -214,7 +214,7 @@ impl Runtime {
         pin_version: Option<Version>,
         parent_instance: Option<String>,
         parent_id: Option<u64>,
-    ) -> Result<JoinHandle<(Vec<Event>, Result<String, String>)>, String> {
+    ) -> Result<(), String> {
         // Ensure instance exists (best-effort)
         let _ = self.history_store.create_instance(instance).await;
         // Append start marker if empty
@@ -264,75 +264,7 @@ impl Runtime {
         // Enqueue a start request; background worker will dedupe and run exactly one execution
         self.ensure_instance_active(instance, orchestration_name).await;
         
-        // Return a JoinHandle that polls for completion
-        let runtime = self.clone();
-        let instance_owned = instance.to_string();
-        Ok(tokio::spawn(async move {
-            // Poll for completion with infinite timeout using exponential backoff
-            let mut delay_ms: u64 = 5;
-            let mut poll_count = 0;
-            loop {
-                match runtime.get_orchestration_status(&instance_owned).await {
-                    super::OrchestrationStatus::Completed { output } => {
-                        let history = runtime.history_store.read(&instance_owned).await;
-                        return (history, Ok(output));
-                    }
-                    super::OrchestrationStatus::Failed { error } => {
-                        let history = runtime.history_store.read(&instance_owned).await;
-                        return (history, Err(error));
-                    }
-                    super::OrchestrationStatus::Running => {
-                        // Check if instance is still active - if not, it may have failed due to persistence errors
-                        poll_count += 1;
-                        if poll_count > 20 { // After some polls to allow for normal dehydration
-                            let is_active = runtime.active_instances.lock().await.contains(&instance_owned);
-                            if !is_active {
-                                // Instance is no longer active but has no terminal event
-                                // For history capacity exceeded, the instance fails quickly without completing work
-                                // For normal dehydration, the instance should have pending timers/external events
-                                let history = runtime.history_store.read(&instance_owned).await;
-                                
-                                // Check if this looks like a history capacity issue:
-                                // - Many events in history (approaching capacity)
-                                // - No terminal events
-                                // - Instance not active
-                                let event_count = history.len();
-                                let has_terminal = history.iter().any(|e| matches!(e,
-                                    Event::OrchestrationCompleted { .. } |
-                                    Event::OrchestrationFailed { .. }
-                                ));
-                                
-                                if !has_terminal {
-                                    if event_count > 500 {
-                                        // Likely history capacity exceeded
-                                        return (history, Err("execution failed - likely due to persistence error (e.g., history capacity exceeded)".to_string()));
-                                    } else {
-                                        // Check if there are pending external events or timers that might reactivate
-                                        let has_pending_external_or_timer = history.iter().rev().take(50).any(|e| matches!(e, 
-                                            Event::TimerCreated { .. } | 
-                                            Event::ExternalSubscribed { .. }
-                                        ));
-                                        
-                                        if !has_pending_external_or_timer {
-                                            // No recent timers/externals and not active - likely persistence error
-                                            return (history, Err("execution failed - likely due to persistence error".to_string()));
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        
-                        tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
-                        delay_ms = (delay_ms.saturating_mul(2)).min(100);
-                    }
-                    super::OrchestrationStatus::NotFound => {
-                        // Instance not found - this shouldn't happen after we've started it
-                        let history = runtime.history_store.read(&instance_owned).await;
-                        return (history, Err("instance not found".to_string()));
-                    }
-                }
-            }
-        }))
+        Ok(())
     }
 
     /// Get the current execution ID for an instance, or fetch from store if not tracked
@@ -426,79 +358,63 @@ impl Runtime {
     /// Enqueue a new orchestration instance start. The runtime will pick this up
     /// in the background and drive it to completion.
     /// Start a typed orchestration; input/output are serialized internally.
-    pub async fn start_orchestration_typed<In, Out>(
+    /// Use wait_for_orchestration_typed to wait for completion.
+    pub async fn start_orchestration_typed<In>(
         self: Arc<Self>,
         instance: &str,
         orchestration_name: &str,
         input: In,
-    ) -> Result<JoinHandle<(Vec<Event>, Result<Out, String>)>, String>
+    ) -> Result<(), String>
     where
         In: Serialize,
-        Out: DeserializeOwned + Send + 'static,
     {
         let payload = Json::encode(&input).map_err(|e| format!("encode: {e}"))?;
-        let handle = self
-            .clone()
+        self.clone()
             .start_internal_wait(instance, orchestration_name, payload, None, None, None)
-            .await?;
-        Ok(tokio::spawn(async move {
-            let (hist, res_s) = handle.await.expect("join failed");
-            let res_t: Result<Out, String> = match res_s {
-                Ok(s) => Json::decode::<Out>(&s),
-                Err(e) => Err(e),
-            };
-            (hist, res_t)
-        }))
+            .await
     }
 
     /// Start a typed orchestration with an explicit version (semver string).
-    pub async fn start_orchestration_versioned_typed<In, Out>(
+    /// Use wait_for_orchestration_typed to wait for completion.
+    pub async fn start_orchestration_versioned_typed<In>(
         self: Arc<Self>,
         instance: &str,
         orchestration_name: &str,
         version: impl AsRef<str>,
         input: In,
-    ) -> Result<JoinHandle<(Vec<Event>, Result<Out, String>)>, String>
+    ) -> Result<(), String>
     where
         In: Serialize,
-        Out: DeserializeOwned + Send + 'static,
     {
         let v = semver::Version::parse(version.as_ref()).map_err(|e| e.to_string())?;
         let payload = Json::encode(&input).map_err(|e| format!("encode: {e}"))?;
-        let handle = self
-            .clone()
+        self.clone()
             .start_internal_wait(instance, orchestration_name, payload, Some(v), None, None)
-            .await?;
-        Ok(tokio::spawn(async move {
-            let (hist, res_s) = handle.await.expect("join failed");
-            let res_t: Result<Out, String> = match res_s {
-                Ok(s) => Json::decode::<Out>(&s),
-                Err(e) => Err(e),
-            };
-            (hist, res_t)
-        }))
+            .await
     }
 
     /// Start an orchestration using raw String input/output (back-compat API).
+    /// Use wait_for_orchestration to wait for completion.
     pub async fn start_orchestration(
         self: Arc<Self>,
         instance: &str,
         orchestration_name: &str,
         input: impl Into<String>,
-    ) -> Result<JoinHandle<(Vec<Event>, Result<String, String>)>, String> {
+    ) -> Result<(), String> {
         self.clone()
             .start_internal_wait(instance, orchestration_name, input.into(), None, None, None)
             .await
     }
 
     /// Start an orchestration with an explicit version (string I/O).
+    /// Use wait_for_orchestration to wait for completion.
     pub async fn start_orchestration_versioned(
         self: Arc<Self>,
         instance: &str,
         orchestration_name: &str,
         version: impl AsRef<str>,
         input: impl Into<String>,
-    ) -> Result<JoinHandle<(Vec<Event>, Result<String, String>)>, String> {
+    ) -> Result<(), String> {
         let v = semver::Version::parse(version.as_ref()).map_err(|e| e.to_string())?;
         self.clone()
             .start_internal_wait(instance, orchestration_name, input.into(), Some(v), None, None)
@@ -514,7 +430,7 @@ impl Runtime {
         parent_instance: String,
         parent_id: u64,
         version: Option<semver::Version>,
-    ) -> Result<JoinHandle<(Vec<Event>, Result<String, String>)>, String> {
+    ) -> Result<(), String> {
         self.clone()
             .start_internal_wait(
                 instance,
@@ -606,9 +522,7 @@ impl Runtime {
                             input,
                         } => {
                             debug!("StartOrchestration: {instance} {orchestration} {input}");
-                            match self.clone().start_orchestration(&instance, &orchestration, input).await {
-                                _ => {}
-                            }
+                            let _ = self.clone().start_orchestration(&instance, &orchestration, input).await;
                             let _ = self.history_store.ack(QueueKind::Orchestrator, &token).await;
                         }
                         WorkItem::ActivityCompleted {

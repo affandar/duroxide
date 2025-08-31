@@ -48,9 +48,8 @@ async fn runtime_start_versioned_typed_uses_explicit_version() {
     let acts = ActivityRegistry::builder().build();
     let rt =
         runtime::Runtime::start_with_store(StdArc::new(InMemoryHistoryStore::default()), StdArc::new(acts), reg).await;
-    let _h = rt
-        .clone()
-        .start_orchestration_versioned_typed::<i32, i32>("i2", "T", "1.0.0", 0)
+    rt.clone()
+        .start_orchestration_versioned_typed::<i32>("i2", "T", "1.0.0", 0)
         .await
         .unwrap();
     
@@ -151,14 +150,18 @@ async fn detached_versioned_uses_policy_latest() {
         _ => panic!("unexpected orchestration status"),
     }
     // Start the detached child directly to observe its versioned output
-    let (_hh, out_child) = rt
-        .clone()
+    rt.clone()
         .start_orchestration("i4::child-1", "Leaf", "")
         .await
-        .unwrap()
-        .await
         .unwrap();
-    assert_eq!(out_child.unwrap(), "l2");
+    
+    let child_status = rt.wait_for_orchestration("i4::child-1", std::time::Duration::from_secs(5)).await.unwrap();
+    let out_child = match child_status {
+        rust_dtf::OrchestrationStatus::Completed { output } => output,
+        rust_dtf::OrchestrationStatus::Failed { error } => panic!("child orchestration failed: {error}"),
+        _ => panic!("unexpected child orchestration status"),
+    };
+    assert_eq!(out_child, "l2");
     rt.shutdown().await;
 }
 

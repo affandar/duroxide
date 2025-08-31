@@ -527,14 +527,18 @@ async fn typed_activity_decode_error_fs() {
         .register("BadInputToTypedActivity", orch)
         .build();
     let rt = runtime::Runtime::start_with_store(store, Arc::new(activity_registry), orchestration_registry).await;
-    let (_hist, out) = rt
-        .clone()
+    rt.clone()
         .start_orchestration("inst-typed-bad", "BadInputToTypedActivity", "")
         .await
-        .unwrap()
-        .await
         .unwrap();
-    assert_eq!(out.unwrap(), "ok");
+    
+    let status = rt.wait_for_orchestration("inst-typed-bad", std::time::Duration::from_secs(5)).await.unwrap();
+    let output = match status {
+        rust_dtf::OrchestrationStatus::Completed { output } => output,
+        rust_dtf::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        _ => panic!("unexpected orchestration status"),
+    };
+    assert_eq!(output, "ok");
     rt.shutdown().await;
 }
 
@@ -569,13 +573,16 @@ async fn typed_event_decode_error_fs() {
         // invalid payload for AOnly
         rt_c.raise_event("inst-typed-evt", "Evt", "not-json").await;
     });
-    let (_hist, out) = rt
-        .clone()
-        .start_orchestration_typed::<String, String>("inst-typed-evt", "TypedEvt", "".to_string())
-        .await
-        .unwrap()
+    rt.clone()
+        .start_orchestration_typed::<String>("inst-typed-evt", "TypedEvt", "".to_string())
         .await
         .unwrap();
-    assert_eq!(out.unwrap(), "decode_err");
+    
+    let status = rt.wait_for_orchestration_typed::<String>("inst-typed-evt", std::time::Duration::from_secs(5)).await.unwrap();
+    let output = match status {
+        Ok(output) => output,
+        Err(error) => panic!("orchestration failed: {error}"),
+    };
+    assert_eq!(output, "decode_err");
     rt.shutdown().await;
 }

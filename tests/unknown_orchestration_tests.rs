@@ -16,13 +16,20 @@ async fn unknown_orchestration_fails_gracefully_fs() {
     let rt =
         runtime::Runtime::start_with_store(store.clone(), StdArc::new(activity_registry), orchestration_registry).await;
 
-    let h = rt
-        .clone()
+    rt.clone()
         .start_orchestration("inst-unknown-1", "DoesNotExist", "")
         .await
         .unwrap();
-    let (hist, out) = h.await.unwrap();
-    assert!(matches!(out, Err(e) if e == "unregistered:DoesNotExist"));
+    
+    let status = rt.wait_for_orchestration("inst-unknown-1", std::time::Duration::from_secs(5)).await.unwrap();
+    let error = match status {
+        rust_dtf::OrchestrationStatus::Failed { error } => error,
+        rust_dtf::OrchestrationStatus::Completed { output } => panic!("expected failure, got success: {output}"),
+        _ => panic!("unexpected orchestration status"),
+    };
+    assert_eq!(error, "unregistered:DoesNotExist");
+    
+    let hist = rt.get_execution_history("inst-unknown-1", 1).await;
     assert!(
         hist.iter()
             .any(|e| matches!(e, Event::OrchestrationFailed { error } if error == "unregistered:DoesNotExist"))

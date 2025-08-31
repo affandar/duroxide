@@ -86,17 +86,28 @@ async fn deterministic_replay_activity_only() {
         .build();
 
     let rt = runtime::Runtime::start(Arc::new(activity_registry), orchestration_registry).await;
-    let h = rt
-        .clone()
+    rt.clone()
         .start_orchestration("inst-unit-1", "TestOrchestration", "")
-        .await;
-    let (final_history, output) = h.unwrap().await.unwrap();
-    assert_eq!(output.as_ref().unwrap(), "a=3");
+        .await
+        .unwrap();
+    
+    let status = rt
+        .wait_for_orchestration("inst-unit-1", std::time::Duration::from_secs(5))
+        .await
+        .unwrap();
+    
+    let output = match status {
+        rust_dtf::OrchestrationStatus::Completed { output } => output,
+        _ => panic!("Expected completed status"),
+    };
+    assert_eq!(output, "a=3");
+    
+    let final_history = rt.get_execution_history("inst-unit-1", 1).await;
 
     // Replay must produce same output and no new actions
     let (_h2, acts2, _logs2, out2) = run_turn(final_history.clone(), orchestrator);
     assert!(acts2.is_empty());
-    assert_eq!(out2.unwrap(), output.clone().unwrap());
+    assert_eq!(out2.unwrap(), output);
     rt.shutdown().await;
 }
 

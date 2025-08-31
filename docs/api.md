@@ -70,8 +70,8 @@ pub struct Runtime;
 impl Runtime {
   pub async fn start(activity_registry: Arc<ActivityRegistry>, orchestration_registry: OrchestrationRegistry) -> Arc<Self>
   pub async fn start_with_store(history: Arc<dyn HistoryStore>, activity_registry: Arc<ActivityRegistry>, orchestration_registry: OrchestrationRegistry) -> Arc<Self>
-  pub async fn start_orchestration(&self: Arc<Self>, instance: &str, orchestration_name: &str, input: impl Into<String>) -> Result<JoinHandle<(Vec<Event>, Result<String, String>)>, String>
-  pub async fn start_orchestration_typed<In: Serialize, Out: DeserializeOwned>(&self: Arc<Self>, instance: &str, orchestration_name: &str, input: In) -> Result<JoinHandle<(Vec<Event>, Result<Out, String>)>, String>
+  pub async fn start_orchestration(&self: Arc<Self>, instance: &str, orchestration_name: &str, input: impl Into<String>) -> Result<(), String>
+  pub async fn start_orchestration_typed<In: Serialize>(&self: Arc<Self>, instance: &str, orchestration_name: &str, input: In) -> Result<(), String>
   pub async fn get_orchestration_status(&self, instance: &str) -> OrchestrationStatus
   pub async fn get_orchestration_status_latest(&self, instance: &str) -> OrchestrationStatus
   pub async fn get_orchestration_status_with_execution(&self, instance: &str, execution_id: u64) -> OrchestrationStatus

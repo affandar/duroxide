@@ -21,13 +21,20 @@ async fn single_timer_fires_fs() {
     let acts = ActivityRegistry::builder().build();
     let rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(acts), reg).await;
 
-    let h = rt
-        .clone()
+    rt.clone()
         .start_orchestration("inst-one", "OneTimer", "")
         .await
         .unwrap();
-    let (hist, out) = h.await.unwrap();
-    assert_eq!(out.unwrap(), "done");
+    
+    let status = rt.wait_for_orchestration("inst-one", std::time::Duration::from_secs(5)).await.unwrap();
+    let output = match status {
+        rust_dtf::OrchestrationStatus::Completed { output } => output,
+        rust_dtf::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        _ => panic!("unexpected orchestration status"),
+    };
+    assert_eq!(output, "done");
+    
+    let hist = rt.get_execution_history("inst-one", 1).await;
     assert!(hist.iter().any(|e| matches!(e, Event::TimerCreated { .. })));
     assert!(hist.iter().any(|e| matches!(e, Event::TimerFired { .. })));
     rt.shutdown().await;
@@ -49,13 +56,20 @@ async fn multiple_timers_ordering_fs() {
     let acts = ActivityRegistry::builder().build();
     let rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(acts), reg).await;
 
-    let h = rt
-        .clone()
+    rt.clone()
         .start_orchestration("inst-two", "TwoTimers", "")
         .await
         .unwrap();
-    let (hist, out) = h.await.unwrap();
-    assert_eq!(out.unwrap(), "ok");
+    
+    let status = rt.wait_for_orchestration("inst-two", std::time::Duration::from_secs(5)).await.unwrap();
+    let output = match status {
+        rust_dtf::OrchestrationStatus::Completed { output } => output,
+        rust_dtf::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        _ => panic!("unexpected orchestration status"),
+    };
+    assert_eq!(output, "ok");
+    
+    let hist = rt.get_execution_history("inst-two", 1).await;
     // Verify two fired with increasing fire_at_ms
     let fired: Vec<(u64, u64)> = hist
         .iter()
@@ -149,14 +163,19 @@ async fn timer_wall_clock_delay_fs() {
     let rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(acts), reg).await;
 
     let start = std::time::Instant::now();
-    let h = rt
-        .clone()
+    rt.clone()
         .start_orchestration("inst-delay", "DelayTimer", "")
         .await
         .unwrap();
-    let (_hist, out) = h.await.unwrap();
+    
+    let status = rt.wait_for_orchestration("inst-delay", std::time::Duration::from_secs(10)).await.unwrap();
     let elapsed_ms = start.elapsed().as_millis() as u64;
-    assert_eq!(out.unwrap(), "ok");
+    let output = match status {
+        rust_dtf::OrchestrationStatus::Completed { output } => output,
+        rust_dtf::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        _ => panic!("unexpected orchestration status"),
+    };
+    assert_eq!(output, "ok");
     // Allow some jitter, but ensure at least ~1.2s elapsed
     assert!(elapsed_ms >= 1_200, "expected >=1200ms, got {elapsed_ms}ms");
     rt.shutdown().await;
