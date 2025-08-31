@@ -665,8 +665,8 @@ impl Runtime {
         
         // If no version specified, clear any pinned version to allow default resolution
         // Otherwise use the specified version
-        let version_str = if let Some(v) = version {
-            v
+        let version_str = if let Some(ref v) = version {
+            v.clone()
         } else {
             // Clear pinned version to allow default resolution in the new execution
             self.pinned_versions.lock().await.remove(instance);
@@ -684,17 +684,19 @@ impl Runtime {
             return Err(format!("continue-as-new new execution failed: {e}"));
         }
 
+        // Clean up current execution from active instances
+        // This execution is now complete
+        self.active_instances.lock().await.remove(instance);
+        
         // Enqueue a ContinueAsNew work item to the orchestrator queue
-        // This will be picked up by the orchestration dispatcher and start a new execution
-        // Note: We don't remove from active_instances here - the ActiveGuard will handle that
-        // when this execution completes. The dispatcher will need to handle the case where
-        // the instance is still marked as active.
+        // The dispatcher will handle starting the new execution normally
         if let Err(e) = self.history_store.enqueue_work(
             crate::providers::QueueKind::Orchestrator,
             crate::providers::WorkItem::ContinueAsNew {
                 instance: instance.to_string(),
                 orchestration: orchestration_name.to_string(),
                 input: input.clone(),
+                version: version.clone(),
             },
         ).await {
             error!(instance, error = %e, "failed to enqueue continue-as-new work item");

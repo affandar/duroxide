@@ -15,6 +15,7 @@ pub enum WorkItem {
         instance: String,
         orchestration: String,
         input: String,
+        version: Option<String>,
     },
     ActivityExecute {
         instance: String,
@@ -72,6 +73,7 @@ pub enum WorkItem {
         instance: String,
         orchestration: String,
         input: String,
+        version: Option<String>,
     },
 }
 

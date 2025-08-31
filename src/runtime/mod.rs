@@ -520,10 +520,10 @@ impl Runtime {
                             instance,
                             orchestration,
                             input,
+                            version,
                         } => {
-                            debug!("StartOrchestration: {instance} {orchestration} {input}");
-                            let _ = self.clone().start_orchestration(&instance, &orchestration, input).await;
-                            let _ = self.history_store.ack(QueueKind::Orchestrator, &token).await;
+                            debug!("StartOrchestration: {instance} {orchestration} {input} (version: {:?})", version);
+                            self.start_orchestration_execution(&instance, &orchestration, input, version, token).await;
                         }
                         WorkItem::ActivityCompleted {
                             instance,
@@ -650,23 +650,11 @@ impl Runtime {
                                 }
                             }).await;
                         }
-                        WorkItem::ContinueAsNew { instance, orchestration, input } => {
-                            debug!("ContinueAsNew: {instance} {orchestration} {input}");
-                            // Start the new execution for continue-as-new
-                            // The OrchestrationStarted event was already persisted by handle_continue_as_new
-                            
-                            // Small delay to allow the previous execution to complete
-                            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-                            
-                            // Force remove from active_instances to allow the new execution to start
-                            // This is safe because the previous execution has already completed
-                            // (it enqueued this ContinueAsNew message as its final action)
-                            self.active_instances.lock().await.remove(&instance);
-                            
-                            // Now start the new execution
-                            self.ensure_instance_active(&instance, &orchestration).await;
-                            
-                            let _ = self.history_store.ack(QueueKind::Orchestrator, &token).await;
+                        WorkItem::ContinueAsNew { instance, orchestration, input, version } => {
+                            debug!("ContinueAsNew: {instance} {orchestration} {input} (version: {:?})", version);
+                            // Use unified handler - no special delay or instance management needed
+                            // The previous execution was already cleaned up by handle_continue_as_new
+                            self.start_orchestration_execution(&instance, &orchestration, input, version, token).await;
                         }
                         // No ActivityExecute should land on Orchestrator queue
                         other => {
@@ -867,6 +855,39 @@ impl Runtime {
         tokio::spawn(async move { 
             this_for_task.run_single_execution(&inst, &orch_name).await 
         })
+    }
+
+    /// Unified handler for starting orchestration executions (both new and ContinueAsNew)
+    async fn start_orchestration_execution(
+        self: &Arc<Self>,
+        instance: &str,
+        orchestration: &str,
+        input: String,
+        version: Option<String>,
+        token: String,
+    ) {
+        debug!(
+            "Starting orchestration execution: {} {} {} (version: {:?})", 
+            instance, orchestration, input, version
+        );
+
+        // Common orchestration startup logic (with version support)
+        let result = if let Some(v) = version {
+            self.clone().start_orchestration_versioned(instance, orchestration, v, input).await
+        } else {
+            self.clone().start_orchestration(instance, orchestration, input).await
+        };
+
+        // Common acknowledgment
+        match result {
+            Ok(()) => {
+                let _ = self.history_store.ack(QueueKind::Orchestrator, &token).await;
+            }
+            Err(e) => {
+                error!("Failed to start orchestration execution: {}", e);
+                let _ = self.history_store.abandon(QueueKind::Orchestrator, &token).await;
+            }
+        }
     }
 }
 
