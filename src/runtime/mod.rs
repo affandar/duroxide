@@ -686,11 +686,7 @@ impl Runtime {
                             self.active_instances.lock().await.remove(&instance);
                             
                             // Now start the new execution
-                            let inner = self.clone().spawn_instance_to_completion(&instance, &orchestration);
-                            let wrapper = tokio::spawn(async move {
-                                let _ = inner.await;
-                            });
-                            self.instance_joins.lock().await.push(wrapper);
+                            self.ensure_instance_active(&instance, &orchestration).await;
                             
                             let _ = self.history_store.ack(QueueKind::Orchestrator, &token).await;
                         }
@@ -891,7 +887,7 @@ impl Runtime {
         let orch_name = orchestration_name.to_string();
         
         tokio::spawn(async move { 
-            this_for_task.run_instance_to_completion(&inst, &orch_name).await 
+            this_for_task.run_single_execution(&inst, &orch_name).await 
         })
     }
 }

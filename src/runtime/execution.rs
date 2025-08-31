@@ -23,14 +23,16 @@ impl Runtime {
     /// - Inner loop: Process batches of completions in deterministic turns
     /// - Four-stage turn lifecycle: prep -> execute -> persist -> ack
     /// - Deterministic completion processing with robust error handling
-    pub async fn run_instance_to_completion(
+
+
+    /// Execute a single orchestration execution
+    pub async fn run_single_execution(
         self: Arc<Self>,
         instance: &str,
         orchestration_name: &str,
     ) -> (Vec<Event>, Result<String, String>) {
-        debug!(instance, orchestration_name, "Starting instance execution");
+        debug!(instance, orchestration_name, "🚀 Starting single execution");
         
-
         // Ensure instance not already active
         {
             let mut act = self.active_instances.lock().await;
@@ -39,19 +41,7 @@ impl Runtime {
                 return (Vec::new(), Err("already_active".into()));
             }
         }
-
-
-        // Run the single execution - continue-as-new will be handled via orchestrator queue
-        self.clone().run_single_execution(instance, orchestration_name).await
-    }
-
-    /// Execute a single orchestration execution
-    async fn run_single_execution(
-        self: Arc<Self>,
-        instance: &str,
-        orchestration_name: &str,
-    ) -> (Vec<Event>, Result<String, String>) {
-        debug!(instance, orchestration_name, "🚀 Starting single execution");
+        
         let start_time = std::time::Instant::now();
         
         // Ensure cleanup even if task panics
