@@ -44,12 +44,21 @@ async fn sample_hello_world_fs() {
 
     let rt =
         runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
-    let handle = rt
+    let _handle = rt
         .clone()
         .start_orchestration("inst-sample-hello-1", "HelloWorld", "World")
-        .await;
-    let (_hist, out) = handle.unwrap().await.unwrap();
-    assert_eq!(out.unwrap(), "Hello, World!");
+        .await
+        .unwrap();
+    
+    match rt
+        .wait_for_orchestration("inst-sample-hello-1", std::time::Duration::from_secs(5))
+        .await
+        .unwrap()
+    {
+        runtime::OrchestrationStatus::Completed { output } => assert_eq!(output, "Hello, World!"),
+        runtime::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        _ => panic!("unexpected orchestration status"),
+    }
     rt.shutdown().await;
 }
 
@@ -87,12 +96,21 @@ async fn sample_basic_control_flow_fs() {
 
     let rt =
         runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
-    let handle = rt
+    let _handle = rt
         .clone()
         .start_orchestration("inst-sample-cflow-1", "ControlFlow", "")
-        .await;
-    let (_hist, out) = handle.unwrap().await.unwrap();
-    assert_eq!(out.unwrap(), "picked_yes");
+        .await
+        .unwrap();
+    
+    match rt
+        .wait_for_orchestration("inst-sample-cflow-1", std::time::Duration::from_secs(5))
+        .await
+        .unwrap()
+    {
+        runtime::OrchestrationStatus::Completed { output } => assert_eq!(output, "picked_yes"),
+        runtime::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        _ => panic!("unexpected orchestration status"),
+    }
     rt.shutdown().await;
 }
 
@@ -127,12 +145,21 @@ async fn sample_loop_fs() {
 
     let rt =
         runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
-    let handle = rt
+    let _handle = rt
         .clone()
         .start_orchestration("inst-sample-loop-1", "LoopOrchestration", "")
-        .await;
-    let (_hist, out) = handle.unwrap().await.unwrap();
-    assert_eq!(out.unwrap(), "startxxx");
+        .await
+        .unwrap();
+    
+    match rt
+        .wait_for_orchestration("inst-sample-loop-1", std::time::Duration::from_secs(5))
+        .await
+        .unwrap()
+    {
+        runtime::OrchestrationStatus::Completed { output } => assert_eq!(output, "startxxx"),
+        runtime::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        _ => panic!("unexpected orchestration status"),
+    }
     rt.shutdown().await;
 }
 
@@ -182,12 +209,21 @@ async fn sample_error_handling_fs() {
 
     let rt =
         runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
-    let handle = rt
+    let _handle = rt
         .clone()
         .start_orchestration("inst-sample-err-1", "ErrorHandling", "")
-        .await;
-    let (_hist, out) = handle.unwrap().await.unwrap();
-    assert_eq!(out.unwrap(), "recovered");
+        .await
+        .unwrap();
+    
+    match rt
+        .wait_for_orchestration("inst-sample-err-1", std::time::Duration::from_secs(5))
+        .await
+        .unwrap()
+    {
+        runtime::OrchestrationStatus::Completed { output } => assert_eq!(output, "recovered"),
+        runtime::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        _ => panic!("unexpected orchestration status"),
+    }
     rt.shutdown().await;
 }
 
@@ -229,13 +265,21 @@ async fn sample_timeout_with_timer_race_fs() {
 
     let rt =
         runtime::Runtime::start_with_store(store, Arc::new(activity_registry), orchestration_registry).await;
-    let handle = rt
+    let _handle = rt
         .clone()
         .start_orchestration("inst-timeout-sample", "TimeoutSample", "")
         .await
         .unwrap();
-    let (_hist, out) = handle.await.unwrap();
-    assert_eq!(out, Err("timeout".to_string()));
+    
+    match rt
+        .wait_for_orchestration("inst-timeout-sample", std::time::Duration::from_secs(5))
+        .await
+        .unwrap()
+    {
+        runtime::OrchestrationStatus::Failed { error } => assert_eq!(error, "timeout"),
+        runtime::OrchestrationStatus::Completed { output } => panic!("expected timeout failure, got: {output}"),
+        _ => panic!("unexpected orchestration status"),
+    }
     rt.shutdown().await;
 }
 
@@ -285,13 +329,21 @@ async fn sample_select2_activity_vs_external_fs() {
         rt_c.raise_event("inst-s2-mixed", "Go", "ok").await;
     });
 
-    let handle = rt
+    let _handle = rt
         .clone()
         .start_orchestration("inst-s2-mixed", "Select2ActVsEvt", "")
         .await
         .unwrap();
-    let (_hist, out) = handle.await.unwrap();
-    let s = out.unwrap();
+    
+    let s = match rt
+        .wait_for_orchestration("inst-s2-mixed", std::time::Duration::from_secs(5))
+        .await
+        .unwrap()
+    {
+        runtime::OrchestrationStatus::Completed { output } => output,
+        runtime::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        _ => panic!("unexpected orchestration status"),
+    };
     // External event should win (idx==1) because activity sleeps 300ms
     assert_eq!(s, "event:ok");
     rt.shutdown().await;
@@ -339,12 +391,21 @@ async fn dtf_legacy_gabbar_greetings_fs() {
 
     let rt =
         runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
-    let handle = rt
+    let _handle = rt
         .clone()
         .start_orchestration("inst-dtf-greetings", "Greetings", "")
-        .await;
-    let (_hist, out) = handle.unwrap().await.unwrap();
-    assert_eq!(out.unwrap(), "Hello, Gabbar!, Hello, Samba!");
+        .await
+        .unwrap();
+    
+    match rt
+        .wait_for_orchestration("inst-dtf-greetings", std::time::Duration::from_secs(5))
+        .await
+        .unwrap()
+    {
+        runtime::OrchestrationStatus::Completed { output } => assert_eq!(output, "Hello, Gabbar!, Hello, Samba!"),
+        runtime::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        _ => panic!("unexpected orchestration status"),
+    }
     rt.shutdown().await;
 }
 
@@ -373,12 +434,21 @@ async fn sample_system_activities_fs() {
 
     let rt =
         runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
-    let handle = rt
+    let _handle = rt
         .clone()
         .start_orchestration("inst-system-acts", "SystemActivities", "")
-        .await;
-    let (_hist, out) = handle.unwrap().await.unwrap();
-    let out = out.unwrap();
+        .await
+        .unwrap();
+    
+    let out = match rt
+        .wait_for_orchestration("inst-system-acts", std::time::Duration::from_secs(5))
+        .await
+        .unwrap()
+    {
+        runtime::OrchestrationStatus::Completed { output } => output,
+        runtime::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        _ => panic!("unexpected orchestration status"),
+    };
     // Basic assertions
     assert!(out.contains("n=") && out.contains(",g="));
     let parts: Vec<&str> = out.split([',', '=']).collect();
@@ -464,13 +534,21 @@ async fn sample_sub_orchestration_basic_fs() {
 
     let rt =
         runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
-    let h = rt
+    let _h = rt
         .clone()
         .start_orchestration("inst-sub-basic", "Parent", "hi")
         .await
         .unwrap();
-    let (_hist, out) = h.await.unwrap();
-    assert_eq!(out.unwrap(), "parent:HI");
+    
+    match rt
+        .wait_for_orchestration("inst-sub-basic", std::time::Duration::from_secs(5))
+        .await
+        .unwrap()
+    {
+        runtime::OrchestrationStatus::Completed { output } => assert_eq!(output, "parent:HI"),
+        runtime::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        _ => panic!("unexpected orchestration status"),
+    }
     rt.shutdown().await;
 }
 
@@ -520,13 +598,21 @@ async fn sample_sub_orchestration_fanout_fs() {
 
     let rt =
         runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
-    let h = rt
+    let _h = rt
         .clone()
         .start_orchestration("inst-sub-fan", "ParentFan", "")
         .await
         .unwrap();
-    let (_hist, out) = h.await.unwrap();
-    assert_eq!(out.unwrap(), "total=10");
+    
+    match rt
+        .wait_for_orchestration("inst-sub-fan", std::time::Duration::from_secs(5))
+        .await
+        .unwrap()
+    {
+        runtime::OrchestrationStatus::Completed { output } => assert_eq!(output, "total=10"),
+        runtime::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        _ => panic!("unexpected orchestration status"),
+    }
     rt.shutdown().await;
 }
 
@@ -572,13 +658,21 @@ async fn sample_sub_orchestration_chained_fs() {
 
     let rt =
         runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
-    let h = rt
+    let _h = rt
         .clone()
         .start_orchestration("inst-sub-chain", "Root", "a")
         .await
         .unwrap();
-    let (_hist, out) = h.await.unwrap();
-    assert_eq!(out.unwrap(), "root:ax-mid");
+    
+    match rt
+        .wait_for_orchestration("inst-sub-chain", std::time::Duration::from_secs(5))
+        .await
+        .unwrap()
+    {
+        runtime::OrchestrationStatus::Completed { output } => assert_eq!(output, "root:ax-mid"),
+        runtime::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        _ => panic!("unexpected orchestration status"),
+    }
     rt.shutdown().await;
 }
 
@@ -615,13 +709,21 @@ async fn sample_detached_orchestration_scheduling_fs() {
 
     let rt =
         runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
-    let h = rt
+    let _h = rt
         .clone()
         .start_orchestration("CoordinatorRoot", "Coordinator", "")
         .await
         .unwrap();
-    let (_hist, out) = h.await.unwrap();
-    assert_eq!(out.unwrap(), "scheduled");
+    
+    match rt
+        .wait_for_orchestration("CoordinatorRoot", std::time::Duration::from_secs(5))
+        .await
+        .unwrap()
+    {
+        runtime::OrchestrationStatus::Completed { output } => assert_eq!(output, "scheduled"),
+        runtime::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        _ => panic!("unexpected orchestration status"),
+    }
 
     // The scheduled instances are plain W1/W2 (no prefixing)
     let insts = vec!["W1".to_string(), "W2".to_string()];
@@ -669,23 +771,20 @@ async fn sample_continue_as_new_fs() {
 
     let rt =
         runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
-    // With polling approach, handle waits for final completion across continue-as-new
-    let h = rt
+    let _h = rt
         .clone()
         .start_orchestration("inst-sample-can", "CanSample", "0")
         .await
         .unwrap();
-    let (_hist, out) = h.await.unwrap();
-    assert_eq!(out.unwrap(), "final:3");
-    // Verify status is also correct
+    
     match rt
-        .wait_for_orchestration("inst-sample-can", std::time::Duration::from_secs(1))
+        .wait_for_orchestration("inst-sample-can", std::time::Duration::from_secs(5))
         .await
         .unwrap()
     {
         runtime::OrchestrationStatus::Completed { output } => assert_eq!(output, "final:3"),
-        runtime::OrchestrationStatus::Failed { error } => panic!("failed: {error}"),
-        _ => unreachable!(),
+        runtime::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        _ => panic!("unexpected orchestration status"),
     }
     // Check executions exist
     let execs = store.list_executions("inst-sample-can").await;
@@ -731,13 +830,20 @@ async fn sample_typed_activity_and_orchestration_fs() {
         .build();
 
     let rt = runtime::Runtime::start_with_store(store, Arc::new(activity_registry), orchestration_registry).await;
-    let handle = rt
+    let _handle = rt
         .clone()
         .start_orchestration_typed::<AddReq, AddRes>("inst-typed-add", "Adder", AddReq { a: 2, b: 3 })
         .await
         .unwrap();
-    let (_hist, out) = handle.await.unwrap();
-    assert_eq!(out.unwrap(), AddRes { sum: 5 });
+    
+    match rt
+        .wait_for_orchestration_typed::<AddRes>("inst-typed-add", std::time::Duration::from_secs(5))
+        .await
+        .unwrap()
+    {
+        Ok(result) => assert_eq!(result, AddRes { sum: 5 }),
+        Err(error) => panic!("orchestration failed: {error}"),
+    }
     rt.shutdown().await;
 }
 
@@ -766,13 +872,20 @@ async fn sample_typed_event_fs() {
         let payload = serde_json::to_string(&Ack { ok: true }).unwrap();
         rt_c.raise_event("inst-typed-ack", "Ready", payload).await;
     });
-    let h = rt
+    let _h = rt
         .clone()
         .start_orchestration_typed::<(), String>("inst-typed-ack", "WaitAck", ())
         .await
         .unwrap();
-    let (_hist, out) = h.await.unwrap();
-    assert_eq!(out.unwrap(), serde_json::to_string(&Ack { ok: true }).unwrap());
+    
+    match rt
+        .wait_for_orchestration_typed::<String>("inst-typed-ack", std::time::Duration::from_secs(5))
+        .await
+        .unwrap()
+    {
+        Ok(result) => assert_eq!(result, serde_json::to_string(&Ack { ok: true }).unwrap()),
+        Err(error) => panic!("orchestration failed: {error}"),
+    }
     rt.shutdown().await;
 }
 
@@ -814,13 +927,20 @@ async fn sample_mixed_string_and_typed_typed_orch_fs() {
         .build();
 
     let rt = runtime::Runtime::start_with_store(store, Arc::new(activity_registry), orchestration_registry).await;
-    let h = rt
+    let _h = rt
         .clone()
         .start_orchestration_typed::<AddReq, String>("inst-mixed-typed", "MixedTypedOrch", AddReq { a: 1, b: 2 })
         .await
         .unwrap();
-    let (_hist, out) = h.await.unwrap();
-    let s = out.unwrap();
+    
+    let s = match rt
+        .wait_for_orchestration_typed::<String>("inst-mixed-typed", std::time::Duration::from_secs(5))
+        .await
+        .unwrap()
+    {
+        Ok(result) => result,
+        Err(error) => panic!("orchestration failed: {error}"),
+    };
     assert!(s == "sum=3" || s == "up=HELLO");
     rt.shutdown().await;
 }
@@ -859,13 +979,21 @@ async fn sample_mixed_string_and_typed_string_orch_fs() {
         .build();
 
     let rt = runtime::Runtime::start_with_store(store, Arc::new(activity_registry), orch_reg).await;
-    let h = rt
+    let _h = rt
         .clone()
         .start_orchestration("inst-mixed-string", "MixedStringOrch", "")
         .await
         .unwrap();
-    let (_hist, out) = h.await.unwrap();
-    let s = out.unwrap();
+    
+    let s = match rt
+        .wait_for_orchestration("inst-mixed-string", std::time::Duration::from_secs(5))
+        .await
+        .unwrap()
+    {
+        runtime::OrchestrationStatus::Completed { output } => output,
+        runtime::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        _ => panic!("unexpected orchestration status"),
+    };
     assert!(s == "sum=12" || s == "up=RACE");
     rt.shutdown().await;
 }
@@ -895,13 +1023,21 @@ async fn sample_versioning_start_latest_vs_exact_fs() {
     let rt = runtime::Runtime::start_with_store(store, Arc::new(acts), reg.clone()).await;
 
     // With default policy (Latest), a new start should run v2
-    let h_latest = rt
+    let _h_latest = rt
         .clone()
         .start_orchestration("inst-vers-latest", "Versioned", "")
         .await
         .unwrap();
-    let (_hist_l, out_l) = h_latest.await.unwrap();
-    assert_eq!(out_l.unwrap(), "v2");
+    
+    match rt
+        .wait_for_orchestration("inst-vers-latest", std::time::Duration::from_secs(5))
+        .await
+        .unwrap()
+    {
+        runtime::OrchestrationStatus::Completed { output } => assert_eq!(output, "v2"),
+        runtime::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        _ => panic!("unexpected orchestration status"),
+    }
 
     // Pin new starts to 1.0.0 via policy, verify it runs v1
     reg.set_version_policy(
@@ -909,13 +1045,21 @@ async fn sample_versioning_start_latest_vs_exact_fs() {
         rust_dtf::runtime::VersionPolicy::Exact(semver::Version::parse("1.0.0").unwrap()),
     )
     .await;
-    let h_exact = rt
+    let _h_exact = rt
         .clone()
         .start_orchestration("inst-vers-exact", "Versioned", "")
         .await
         .unwrap();
-    let (_hist_e, out_e) = h_exact.await.unwrap();
-    assert_eq!(out_e.unwrap(), "v1");
+    
+    match rt
+        .wait_for_orchestration("inst-vers-exact", std::time::Duration::from_secs(5))
+        .await
+        .unwrap()
+    {
+        runtime::OrchestrationStatus::Completed { output } => assert_eq!(output, "v1"),
+        runtime::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        _ => panic!("unexpected orchestration status"),
+    }
 
     rt.shutdown().await;
 }
@@ -956,13 +1100,21 @@ async fn sample_versioning_sub_orchestration_explicit_vs_policy_fs() {
     let acts = ActivityRegistry::builder().build();
     let rt = runtime::Runtime::start_with_store(store, Arc::new(acts), reg).await;
 
-    let h = rt
+    let _h = rt
         .clone()
         .start_orchestration("inst-sub-vers", "ParentVers", "")
         .await
         .unwrap();
-    let (_hist, out) = h.await.unwrap();
-    assert_eq!(out.unwrap(), "c1-c2");
+    
+    match rt
+        .wait_for_orchestration("inst-sub-vers", std::time::Duration::from_secs(5))
+        .await
+        .unwrap()
+    {
+        runtime::OrchestrationStatus::Completed { output } => assert_eq!(output, "c1-c2"),
+        runtime::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        _ => panic!("unexpected orchestration status"),
+    }
 
     rt.shutdown().await;
 }

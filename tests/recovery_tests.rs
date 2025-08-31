@@ -75,9 +75,17 @@ where
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
         rt2_c.raise_event(&instance_for_spawn, "Resume", "go").await;
     });
-    let handle2 = rt2.clone().start_orchestration(&instance, "RecoveryTest", "").await;
-    let (_final_hist_runtime, output) = handle2.unwrap().await.unwrap();
-    assert_eq!(output.unwrap(), "1234");
+    let _handle2 = rt2.clone().start_orchestration(&instance, "RecoveryTest", "").await.unwrap();
+    
+    match rt2
+        .wait_for_orchestration(&instance, std::time::Duration::from_secs(5))
+        .await
+        .unwrap()
+    {
+        runtime::OrchestrationStatus::Completed { output } => assert_eq!(output, "1234"),
+        runtime::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        _ => panic!("unexpected orchestration status"),
+    }
 
     let final_hist2 = store2.read(&instance).await;
     assert_eq!(count_scheduled(&final_hist2, "3"), 1);

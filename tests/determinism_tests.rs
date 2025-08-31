@@ -49,14 +49,27 @@ async fn orchestration_completes_and_replays_deterministically_with(store: StdAr
         let _ = crate::common::wait_for_subscription(store_for_wait, "inst-orch-1", "Go", 1000).await;
         rt_clone.raise_event("inst-orch-1", "Go", "ok").await;
     });
-    let handle = rt
+    let _handle = rt
         .clone()
         .start_orchestration("inst-orch-1", "DeterministicOrchestration", "")
-        .await;
-    let (final_history, output) = handle.unwrap().await.unwrap();
-    let output = output.unwrap();
+        .await
+        .unwrap();
+    
+    let output = match rt
+        .wait_for_orchestration("inst-orch-1", std::time::Duration::from_secs(5))
+        .await
+        .unwrap()
+    {
+        runtime::OrchestrationStatus::Completed { output } => output,
+        runtime::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        _ => panic!("unexpected orchestration status"),
+    };
+    
     assert!(output.contains("evt=ok"));
     assert!(output.contains("b=2!"));
+    
+    // Check history for expected events
+    let final_history = rt.get_execution_history("inst-orch-1", 1).await;
     // Includes OrchestrationStarted + 4 schedule/complete pairs + terminal OrchestrationCompleted
     assert_eq!(
         final_history.len(),
@@ -145,12 +158,24 @@ async fn sequential_activity_chain_completes_with(store: StdArc<dyn HistoryStore
         .build();
 
     let rt = runtime::Runtime::start_with_store(store, Arc::new(activity_registry), orchestration_registry).await;
-    let handle = rt
+    let _handle = rt
         .clone()
         .start_orchestration("inst-seq-1", "SequentialOrchestration", "")
-        .await;
-    let (final_history, output) = handle.unwrap().await.unwrap();
-    assert_eq!(output.unwrap(), "c=2bc");
+        .await
+        .unwrap();
+    
+    match rt
+        .wait_for_orchestration("inst-seq-1", std::time::Duration::from_secs(5))
+        .await
+        .unwrap()
+    {
+        runtime::OrchestrationStatus::Completed { output } => assert_eq!(output, "c=2bc"),
+        runtime::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        _ => panic!("unexpected orchestration status"),
+    }
+    
+    // Check history for expected events
+    let final_history = rt.get_execution_history("inst-seq-1", 1).await;
     // Includes OrchestrationStarted + 3 schedule/complete pairs + terminal OrchestrationCompleted
     assert_eq!(
         final_history.len(),

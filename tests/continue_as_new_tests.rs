@@ -35,13 +35,21 @@ async fn continue_as_new_multiexec_fs() {
     .await;
 
     // The initial start handle will resolve when the first execution continues-as-new.
-    let h = rt
+    let _h = rt
         .clone()
         .start_orchestration("inst-can-1", "Counter", "0")
         .await
         .unwrap();
-    let (_hist, out) = h.await.unwrap();
-    assert_eq!(out.unwrap(), "done:2");
+    
+    match rt
+        .wait_for_orchestration("inst-can-1", std::time::Duration::from_secs(5))
+        .await
+        .unwrap()
+    {
+        runtime::OrchestrationStatus::Completed { output } => assert_eq!(output, "done:2"),
+        runtime::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        _ => panic!("unexpected orchestration status"),
+    }
 
     // Verify final completion is also in history
     let ok = common::wait_for_history(
@@ -142,13 +150,21 @@ async fn continue_as_new_event_routes_to_latest_fs() {
         rt_c.raise_event("inst-can-evt", "Go", "ok").await;
     });
 
-    let h = rt
+    let _h = rt
         .clone()
         .start_orchestration("inst-can-evt", "EvtCAN", "start")
         .await
         .unwrap();
-    let (_hist, out) = h.await.unwrap();
-    assert_eq!(out.unwrap(), "ok");
+    
+    match rt
+        .wait_for_orchestration("inst-can-evt", std::time::Duration::from_secs(5))
+        .await
+        .unwrap()
+    {
+        runtime::OrchestrationStatus::Completed { output } => assert_eq!(output, "ok"),
+        runtime::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        _ => panic!("unexpected orchestration status"),
+    }
 
     // Verify final completion is also in history
     let ok2 = common::wait_for_history(
@@ -246,13 +262,21 @@ async fn continue_as_new_event_drop_then_process_fs() {
         rt_c2.raise_event("inst-can-evt-drop", "Go", "late").await;
     });
 
-    let h = rt
+    let _h = rt
         .clone()
         .start_orchestration("inst-can-evt-drop", "EvtDropThenProcess", "start")
         .await
         .unwrap();
-    let (_hist, out) = h.await.unwrap();
-    assert_eq!(out.unwrap(), "late");
+    
+    match rt
+        .wait_for_orchestration("inst-can-evt-drop", std::time::Duration::from_secs(5))
+        .await
+        .unwrap()
+    {
+        runtime::OrchestrationStatus::Completed { output } => assert_eq!(output, "late"),
+        runtime::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        _ => panic!("unexpected orchestration status"),
+    }
 
     // Verify final completion is also in history
     let ok = common::wait_for_history(
@@ -327,13 +351,21 @@ async fn event_drop_then_retry_after_subscribe_fs() {
         rt_c2.raise_event("inst-drop-retry", "Data", "ok").await;
     });
 
-    let h = rt
+    let _h = rt
         .clone()
         .start_orchestration("inst-drop-retry", "EvtDropRetry", "x")
         .await
         .unwrap();
-    let (_hist, out) = h.await.unwrap();
-    assert_eq!(out.unwrap(), "ok");
+    
+    match rt
+        .wait_for_orchestration("inst-drop-retry", std::time::Duration::from_secs(5))
+        .await
+        .unwrap()
+    {
+        runtime::OrchestrationStatus::Completed { output } => assert_eq!(output, "ok"),
+        runtime::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        _ => panic!("unexpected orchestration status"),
+    }
 
     // Ensure only one ExternalEvent recorded, post-subscription
     let e = store.read("inst-drop-retry").await;

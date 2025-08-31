@@ -121,13 +121,21 @@ async fn cancel_after_completion_is_noop_fs() {
     )
     .await;
 
-    let h = rt
+    let _h = rt
         .clone()
         .start_orchestration("inst-cancel-noop", "Quick", "")
         .await
         .unwrap();
-    let (_hist, out) = h.await.unwrap();
-    assert_eq!(out.unwrap(), "ok");
+    
+    match rt
+        .wait_for_orchestration("inst-cancel-noop", std::time::Duration::from_secs(5))
+        .await
+        .unwrap()
+    {
+        runtime::OrchestrationStatus::Completed { output } => assert_eq!(output, "ok"),
+        runtime::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        _ => panic!("unexpected orchestration status"),
+    }
 
     // Cancel after completion should have no effect
     rt.cancel_instance("inst-cancel-noop", "late").await;
@@ -180,7 +188,7 @@ async fn cancel_child_directly_signals_parent_fs() {
     )
     .await;
 
-    let h = rt
+    let _h = rt
         .clone()
         .start_orchestration("inst-chdirect", "ParentD", "")
         .await
@@ -190,8 +198,15 @@ async fn cancel_child_directly_signals_parent_fs() {
     let child_inst = "inst-chdirect::sub::1";
     rt.cancel_instance(child_inst, "by_test_child").await;
 
-    let (_hist, out) = h.await.unwrap();
-    let s = out.unwrap();
+    let s = match rt
+        .wait_for_orchestration("inst-chdirect", std::time::Duration::from_secs(5))
+        .await
+        .unwrap()
+    {
+        runtime::OrchestrationStatus::Completed { output } => output,
+        runtime::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        _ => panic!("unexpected orchestration status"),
+    };
     assert!(
         s.starts_with("child_err:canceled: by_test_child"),
         "unexpected parent out: {s}"
@@ -233,7 +248,7 @@ async fn cancel_continue_as_new_second_exec_fs() {
     )
     .await;
 
-    let h = rt
+    let _h = rt
         .clone()
         .start_orchestration("inst-can-can", "CanCancel", "start")
         .await
@@ -244,10 +259,18 @@ async fn cancel_continue_as_new_second_exec_fs() {
     tokio::time::sleep(std::time::Duration::from_millis(100)).await; // Let first execution complete
     rt.cancel_instance("inst-can-can", "by_test_can").await;
     
-    let (_hist, out) = h.await.unwrap();
-    // With polling approach, handle waits for final result (cancellation)
-    assert!(out.is_err());
-    assert!(out.unwrap_err().starts_with("canceled: by_test_can"));
+    // With polling approach, wait for final result (cancellation)
+    match rt
+        .wait_for_orchestration("inst-can-can", std::time::Duration::from_secs(5))
+        .await
+        .unwrap()
+    {
+        runtime::OrchestrationStatus::Failed { error } => {
+            assert!(error.starts_with("canceled: by_test_can"));
+        }
+        runtime::OrchestrationStatus::Completed { output } => panic!("expected cancellation, got: {output}"),
+        _ => panic!("unexpected orchestration status"),
+    }
 
     // Wait for canceled failure
     let ok = common::wait_for_history(
@@ -298,13 +321,21 @@ async fn orchestration_completes_before_activity_finishes_fs() {
     )
     .await;
 
-    let h = rt
+    let _h = rt
         .clone()
         .start_orchestration("inst-orch-done-first", "QuickDone", "")
         .await
         .unwrap();
-    let (_hist, out) = h.await.unwrap();
-    assert_eq!(out.unwrap(), "done");
+    
+    match rt
+        .wait_for_orchestration("inst-orch-done-first", std::time::Duration::from_secs(5))
+        .await
+        .unwrap()
+    {
+        runtime::OrchestrationStatus::Completed { output } => assert_eq!(output, "done"),
+        runtime::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        _ => panic!("unexpected orchestration status"),
+    }
 
     // Give activity time to finish; no additional terminal events should be added
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
@@ -342,13 +373,21 @@ async fn orchestration_fails_before_activity_finishes_fs() {
     )
     .await;
 
-    let h = rt
+    let _h = rt
         .clone()
         .start_orchestration("inst-orch-fail-first", "QuickFail", "")
         .await
         .unwrap();
-    let (_hist, out) = h.await.unwrap();
-    assert!(out.is_err());
+    
+    match rt
+        .wait_for_orchestration("inst-orch-fail-first", std::time::Duration::from_secs(5))
+        .await
+        .unwrap()
+    {
+        runtime::OrchestrationStatus::Failed { error: _ } => {}, // Expected failure
+        runtime::OrchestrationStatus::Completed { output } => panic!("expected failure, got: {output}"),
+        _ => panic!("unexpected orchestration status"),
+    }
 
     // Give activity time to finish; no change to terminal failure
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;

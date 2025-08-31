@@ -169,14 +169,22 @@ async fn runtime_duplicate_orchestration_deduped_single_execution() {
     let inst = "dup-orch";
 
     // Fire two start requests for the same instance
-    let h1 = rt.clone().start_orchestration(inst, "TestOrch", "").await.unwrap();
-    let h2 = rt.clone().start_orchestration(inst, "TestOrch", "").await.unwrap();
+    let _h1 = rt.clone().start_orchestration(inst, "TestOrch", "").await.unwrap();
+    let _h2 = rt.clone().start_orchestration(inst, "TestOrch", "").await.unwrap();
 
-    // Both handles should resolve to the same single execution/result
-    let (hist1, out1) = h1.await.unwrap();
-    let (hist2, out2) = h2.await.unwrap();
-    assert_eq!(out1.as_ref().unwrap(), "ok");
-    assert_eq!(out2.as_ref().unwrap(), "ok");
+    // Both should resolve to the same single execution/result
+    match rt
+        .wait_for_orchestration(inst, std::time::Duration::from_secs(5))
+        .await
+        .unwrap()
+    {
+        runtime::OrchestrationStatus::Completed { output } => assert_eq!(output, "ok"),
+        runtime::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        _ => panic!("unexpected orchestration status"),
+    }
+    
+    // Check history
+    let hist1 = rt.get_execution_history(inst, 1).await;
 
     // Ensure there is only one terminal event in history
     let term_count = hist1
@@ -190,8 +198,7 @@ async fn runtime_duplicate_orchestration_deduped_single_execution() {
         .count();
     assert_eq!(term_count, 1, "should have exactly one terminal event");
 
-    // Second handle observed the same execution: same length and only one start/terminal
-    assert_eq!(hist1.len(), hist2.len());
+    // Both handles observed the same execution: only one start/terminal
     let started_count = hist1
         .iter()
         .filter(|e| matches!(e, Event::OrchestrationStarted { .. }))
@@ -264,7 +271,7 @@ async fn orchestration_status_apis() {
 
     // Start a running orchestration; should be Running immediately
     let inst_running = "inst-status-running";
-    let handle_running = rt
+    let _handle_running = rt
         .clone()
         .start_orchestration(inst_running, "ShortTimer", "")
         .await
@@ -273,8 +280,15 @@ async fn orchestration_status_apis() {
     assert!(matches!(s1, OrchestrationStatus::Running));
 
     // After completion, should be Completed with output
-    let (_h, out) = handle_running.await.unwrap();
-    assert_eq!(out.as_ref().unwrap(), "ok");
+    match rt
+        .wait_for_orchestration(inst_running, std::time::Duration::from_secs(5))
+        .await
+        .unwrap()
+    {
+        runtime::OrchestrationStatus::Completed { output } => assert_eq!(output, "ok"),
+        runtime::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        _ => panic!("unexpected orchestration status"),
+    }
     let s2 = rt.get_orchestration_status(inst_running).await;
     assert!(matches!(s2, OrchestrationStatus::Completed { .. }));
     if let OrchestrationStatus::Completed { output } = s2 {
@@ -283,13 +297,21 @@ async fn orchestration_status_apis() {
 
     // Failed orchestration
     let inst_fail = "inst-status-fail";
-    let handle_fail = rt
+    let _handle_fail = rt
         .clone()
         .start_orchestration(inst_fail, "AlwaysFails", "")
         .await
         .unwrap();
-    let (_h2, out2) = handle_fail.await.unwrap();
-    assert!(out2.is_err());
+    
+    match rt
+        .wait_for_orchestration(inst_fail, std::time::Duration::from_secs(5))
+        .await
+        .unwrap()
+    {
+        runtime::OrchestrationStatus::Failed { error: _ } => {}, // Expected failure
+        runtime::OrchestrationStatus::Completed { output } => panic!("expected failure, got: {output}"),
+        _ => panic!("unexpected orchestration status"),
+    }
     let s3 = rt.get_orchestration_status(inst_fail).await;
     assert!(matches!(s3, OrchestrationStatus::Failed { .. }));
     if let OrchestrationStatus::Failed { error } = s3 {

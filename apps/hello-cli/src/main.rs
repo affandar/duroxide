@@ -28,13 +28,21 @@ async fn main() -> anyhow::Result<()> {
     // Use filesystem-backed provider so history persists across runs
     let store = Arc::new(FsHistoryStore::new("./dtf-data", true)) as Arc<dyn HistoryStore>;
     let rt = Runtime::start_with_store(store, Arc::new(activity_registry), orchestration_registry).await;
-    let handle = rt
+    let _handle = rt
         .clone()
         .start_orchestration("inst-hello-cli-1", "HelloOrchestration", "")
         .await
         .unwrap();
-    let (_hist, output) = handle.await.unwrap();
-    println!("{}", output.unwrap());
+    
+    match rt
+        .wait_for_orchestration("inst-hello-cli-1", std::time::Duration::from_secs(5))
+        .await
+        .unwrap()
+    {
+        rust_dtf::runtime::OrchestrationStatus::Completed { output } => println!("{}", output),
+        rust_dtf::runtime::OrchestrationStatus::Failed { error } => eprintln!("Orchestration failed: {}", error),
+        _ => eprintln!("Unexpected orchestration status"),
+    }
     rt.shutdown().await;
     Ok(())
 }

@@ -101,8 +101,25 @@ async fn concurrent_orchestrations_different_activities_with(store: StdArc<dyn H
         rt_c2.raise_event("inst-multi-2", "Go", "E2").await;
     });
 
-    let (hist1, out1) = h1.unwrap().await.unwrap();
-    let (hist2, out2) = h2.unwrap().await.unwrap();
+    let out1 = match rt
+        .wait_for_orchestration("inst-multi-1", std::time::Duration::from_secs(5))
+        .await
+        .unwrap()
+    {
+        runtime::OrchestrationStatus::Completed { output } => Ok(output),
+        runtime::OrchestrationStatus::Failed { error } => Err(error),
+        _ => panic!("unexpected orchestration status"),
+    };
+    
+    let out2 = match rt
+        .wait_for_orchestration("inst-multi-2", std::time::Duration::from_secs(5))
+        .await
+        .unwrap()
+    {
+        runtime::OrchestrationStatus::Completed { output } => Ok(output),
+        runtime::OrchestrationStatus::Failed { error } => Err(error),
+        _ => panic!("unexpected orchestration status"),
+    };
 
     assert!(
         out1.as_ref().unwrap().contains("o1:sum=5;evt=E1"),
@@ -112,6 +129,10 @@ async fn concurrent_orchestrations_different_activities_with(store: StdArc<dyn H
         out2.as_ref().unwrap().contains("o2:up=HI;evt=E2"),
         "unexpected out2: {out2:?}"
     );
+    
+    // Check histories
+    let hist1 = rt.get_execution_history("inst-multi-1", 1).await;
+    let hist2 = rt.get_execution_history("inst-multi-2", 1).await;
 
     assert!(
         hist1
@@ -245,11 +266,29 @@ async fn concurrent_orchestrations_same_activities_with(store: StdArc<dyn Histor
         rt_c2.raise_event("inst-same-acts-2", "Go", "P2").await;
     });
 
-    let (hist1, out1) = h1.unwrap().await.unwrap();
-    let (hist2, out2) = h2.unwrap().await.unwrap();
-
-    assert_eq!(out1.unwrap(), "o1:a=11;evt=P1");
-    assert_eq!(out2.unwrap(), "o2:a=21;evt=P2");
+    match rt
+        .wait_for_orchestration("inst-same-acts-1", std::time::Duration::from_secs(5))
+        .await
+        .unwrap()
+    {
+        runtime::OrchestrationStatus::Completed { output } => assert_eq!(output, "o1:a=11;evt=P1"),
+        runtime::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        _ => panic!("unexpected orchestration status"),
+    }
+    
+    match rt
+        .wait_for_orchestration("inst-same-acts-2", std::time::Duration::from_secs(5))
+        .await
+        .unwrap()
+    {
+        runtime::OrchestrationStatus::Completed { output } => assert_eq!(output, "o2:a=21;evt=P2"),
+        runtime::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        _ => panic!("unexpected orchestration status"),
+    }
+    
+    // Check histories
+    let hist1 = rt.get_execution_history("inst-same-acts-1", 1).await;
+    let hist2 = rt.get_execution_history("inst-same-acts-2", 1).await;
 
     assert!(
         hist1
