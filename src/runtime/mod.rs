@@ -641,36 +641,14 @@ impl Runtime {
                         }
                         WorkItem::CancelInstance { instance, reason } => {
                             debug!("CancelInstance: {instance} {reason}");
-                            // Attempt to deliver; if inbox missing or dropped, rehydrate by enqueuing a start
-                            if self
-                                .router
-                                .try_send(OrchestratorMsg::CancelRequested {
+                            // Use generalized delivery with rehydration logic
+                            self.orchestrator_deliver_or_rehydrate(&instance, None, token, |t| {
+                                OrchestratorMsg::CancelRequested {
                                     instance: instance.clone(),
                                     reason: reason.clone(),
-                                    ack_token: Some(token.clone()),
-                                })
-                                .await
-                                .is_err()
-                            {
-                                let orch_name_opt =
-                                    self.history_store.read(&instance).await.iter().find_map(|e| match e {
-                                        Event::OrchestrationStarted { name, .. } => Some(name.clone()),
-                                        _ => None,
-                                    });
-                                let orch_name = match orch_name_opt {
-                                    Some(n) => n,
-                                    None => {
-                                        error!(
-                                            instance,
-                                            "rehydration requested but no OrchestrationStarted found; state corruption"
-                                        );
-                                        panic!("no OrchestrationStarted in history for instance");
-                                    }
-                                };
-                                self.ensure_instance_active(&instance, &orch_name).await;
-                                let _ = self.history_store.abandon(QueueKind::Orchestrator, &token).await;
-                                tokio::time::sleep(std::time::Duration::from_millis(Self::POLLER_GATE_DELAY_MS)).await;
-                            }
+                                    ack_token: Some(t),
+                                }
+                            }).await;
                         }
                         WorkItem::ContinueAsNew { instance, orchestration, input } => {
                             debug!("ContinueAsNew: {instance} {orchestration} {input}");
