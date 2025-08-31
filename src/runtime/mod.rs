@@ -278,18 +278,30 @@ impl Runtime {
         self.history_store.latest_execution_id(instance).await.unwrap_or(1)
     }
 
-    /// Common handler for orchestrator-queue items that target a specific instance.
-    /// Validates execution ID (if provided), ensures the instance is active (rehydrates) or
-    /// forwards the message to the in-proc router with the provided ack token.
-    async fn orchestrator_deliver_or_rehydrate<F>(
+    /// Common handler for orchestrator-queue completion items that target a specific instance.
+    /// Validates execution ID (if provided), ensures the instance is active (rehydrates if needed),
+    /// converts WorkItem to OrchestratorMsg, and forwards to the in-proc router with ack token.
+    async fn orchestrator_deliver_work_item(
         self: &Arc<Self>,
-        instance: &str,
+        work_item: WorkItem,
         exec_id_check: Option<u64>,
         token: String,
-        build_msg: F,
-    ) where
-        F: FnOnce(String) -> OrchestratorMsg,
-    {
+    ) {
+        // Extract instance from work item
+        let instance = match &work_item {
+            WorkItem::ActivityCompleted { instance, .. }
+            | WorkItem::ActivityFailed { instance, .. }
+            | WorkItem::TimerFired { instance, .. }
+            | WorkItem::ExternalRaised { instance, .. } => instance,
+            WorkItem::SubOrchCompleted { parent_instance, .. }
+            | WorkItem::SubOrchFailed { parent_instance, .. } => parent_instance,
+            WorkItem::CancelInstance { instance, .. } => instance,
+            _ => {
+                error!("Unsupported WorkItem type for orchestrator delivery");
+                return;
+            }
+        };
+
         // Validate execution ID first (if provided)
         if let Some(execution_id) = exec_id_check {
             if !self.validate_completion_execution_id(instance, execution_id).await {
@@ -323,9 +335,10 @@ impl Runtime {
             return;
         }
 
-        // Active: forward with ack token
-        let msg = build_msg(token);
-        let _ = self.router_tx.send(msg);
+        // Active: convert WorkItem to OrchestratorMsg and forward
+        if let Some(msg) = crate::runtime::router::OrchestratorMsg::from_work_item(work_item, Some(token)) {
+            let _ = self.router_tx.send(msg);
+        }
     }
 
     /// Validate that a completion's execution_id matches the current running execution.
@@ -526,129 +539,59 @@ impl Runtime {
                             self.start_orchestration_execution(&instance, &orchestration, input, version, token).await;
                         }
                         WorkItem::ActivityCompleted {
-                            instance,
+                            ref instance,
                             execution_id,
                             id,
-                            result,
+                            ref result,
                         } => {
                             debug!("ActivityCompleted: {instance} {execution_id} {id} {result}");
-                            self.orchestrator_deliver_or_rehydrate(&instance, Some(execution_id), token, {
-                                let instance_c = instance.clone();
-                                let result_c = result.clone();
-                                move |t| OrchestratorMsg::ActivityCompleted {
-                                    instance: instance_c,
-                                    execution_id,
-                                    id,
-                                    result: result_c,
-                                    ack_token: Some(t),
-                                }
-                            })
-                            .await;
+                            self.orchestrator_deliver_work_item(item.clone(), Some(execution_id), token).await;
                         }
                         WorkItem::ActivityFailed {
-                            instance,
+                            ref instance,
                             execution_id,
                             id,
-                            error,
+                            ref error,
                         } => {
                             debug!("ActivityFailed: {instance} {execution_id} {id} {error}");
-                            self.orchestrator_deliver_or_rehydrate(&instance, Some(execution_id), token, {
-                                let instance_c = instance.clone();
-                                let error_c = error.clone();
-                                move |t| OrchestratorMsg::ActivityFailed {
-                                    instance: instance_c,
-                                    execution_id,
-                                    id,
-                                    error: error_c,
-                                    ack_token: Some(t),
-                                }
-                            })
-                            .await;
+                            self.orchestrator_deliver_work_item(item.clone(), Some(execution_id), token).await;
                         }
                         WorkItem::TimerFired {
-                            instance,
+                            ref instance,
                             execution_id,
                             id,
                             fire_at_ms,
                         } => {
                             debug!("TimerFired: {instance} {execution_id} {id} {fire_at_ms}");
                             debug!("TimerFired completion delivered: {instance} {execution_id} {id}");
-                            self.orchestrator_deliver_or_rehydrate(&instance, Some(execution_id), token, {
-                                let instance_c = instance.clone();
-                                move |t| OrchestratorMsg::TimerFired {
-                                    instance: instance_c,
-                                    execution_id,
-                                    id,
-                                    fire_at_ms,
-                                    ack_token: Some(t),
-                                }
-                            })
-                            .await;
+                            self.orchestrator_deliver_work_item(item.clone(), Some(execution_id), token).await;
                         }
                         // No TimerSchedule should land on Orchestrator queue
-                        WorkItem::ExternalRaised { instance, name, data } => {
+                        WorkItem::ExternalRaised { ref instance, ref name, ref data } => {
                             debug!("ExternalRaised: {instance} {name} {data}");
-                            self.orchestrator_deliver_or_rehydrate(&instance, None, token, {
-                                let instance_c = instance.clone();
-                                let name_c = name.clone();
-                                let data_c = data.clone();
-                                move |t| OrchestratorMsg::ExternalByName {
-                                    instance: instance_c,
-                                    name: name_c,
-                                    data: data_c,
-                                    ack_token: Some(t),
-                                }
-                            })
-                            .await;
+                            self.orchestrator_deliver_work_item(item.clone(), None, token).await;
                         }
                         WorkItem::SubOrchCompleted {
-                            parent_instance,
+                            ref parent_instance,
                             parent_execution_id,
                             parent_id,
-                            result,
+                            ref result,
                         } => {
                             debug!("SubOrchCompleted: {parent_instance} {parent_execution_id} {parent_id} {result}");
-                            let inst = parent_instance.clone();
-                            self.orchestrator_deliver_or_rehydrate(&inst, Some(parent_execution_id), token, move |t| {
-                                OrchestratorMsg::SubOrchCompleted {
-                                    instance: parent_instance,
-                                    execution_id: parent_execution_id,
-                                    id: parent_id,
-                                    result,
-                                    ack_token: Some(t),
-                                }
-                            })
-                            .await;
+                            self.orchestrator_deliver_work_item(item.clone(), Some(parent_execution_id), token).await;
                         }
                         WorkItem::SubOrchFailed {
-                            parent_instance,
+                            ref parent_instance,
                             parent_execution_id,
                             parent_id,
-                            error,
+                            ref error,
                         } => {
                             debug!("SubOrchFailed: {parent_instance} {parent_execution_id} {parent_id} {error}");
-                            let inst = parent_instance.clone();
-                            self.orchestrator_deliver_or_rehydrate(&inst, Some(parent_execution_id), token, move |t| {
-                                OrchestratorMsg::SubOrchFailed {
-                                    instance: parent_instance,
-                                    execution_id: parent_execution_id,
-                                    id: parent_id,
-                                    error,
-                                    ack_token: Some(t),
-                                }
-                            })
-                            .await;
+                            self.orchestrator_deliver_work_item(item.clone(), Some(parent_execution_id), token).await;
                         }
-                        WorkItem::CancelInstance { instance, reason } => {
+                        WorkItem::CancelInstance { ref instance, ref reason } => {
                             debug!("CancelInstance: {instance} {reason}");
-                            // Use generalized delivery with rehydration logic
-                            self.orchestrator_deliver_or_rehydrate(&instance, None, token, |t| {
-                                OrchestratorMsg::CancelRequested {
-                                    instance: instance.clone(),
-                                    reason: reason.clone(),
-                                    ack_token: Some(t),
-                                }
-                            }).await;
+                            self.orchestrator_deliver_work_item(item.clone(), None, token).await;
                         }
                         WorkItem::ContinueAsNew { instance, orchestration, input, version } => {
                             debug!("ContinueAsNew: {instance} {orchestration} {input} (version: {:?})", version);
