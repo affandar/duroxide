@@ -41,9 +41,9 @@ async fn continue_as_new_multiexec_fs() {
         .await
         .unwrap();
     let (_hist, out) = h.await.unwrap();
-    assert_eq!(out.unwrap(), "");
+    assert_eq!(out.unwrap(), "done:2");
 
-    // Wait until the latest execution completes with expected output
+    // Verify final completion is also in history
     let ok = common::wait_for_history(
         store.clone(),
         "inst-can-1",
@@ -52,7 +52,7 @@ async fn continue_as_new_multiexec_fs() {
                 .rev()
                 .any(|e| matches!(e, Event::OrchestrationCompleted { output } if output == "done:2"))
         },
-        5_000,
+        1_000,
     )
     .await;
     assert!(ok, "timeout waiting for completion");
@@ -148,9 +148,9 @@ async fn continue_as_new_event_routes_to_latest_fs() {
         .await
         .unwrap();
     let (_hist, out) = h.await.unwrap();
-    assert_eq!(out.unwrap(), "");
+    assert_eq!(out.unwrap(), "ok");
 
-    // Wait for overall completion and assert output via history
+    // Verify final completion is also in history
     let ok2 = common::wait_for_history(
         store.clone(),
         "inst-can-evt",
@@ -159,7 +159,7 @@ async fn continue_as_new_event_routes_to_latest_fs() {
                 .rev()
                 .any(|e| matches!(e, Event::OrchestrationCompleted { output } if output == "ok"))
         },
-        5_000,
+        1_000,
     )
     .await;
     assert!(ok2, "timeout waiting for completion");
@@ -252,9 +252,9 @@ async fn continue_as_new_event_drop_then_process_fs() {
         .await
         .unwrap();
     let (_hist, out) = h.await.unwrap();
-    assert_eq!(out.unwrap(), "");
+    assert_eq!(out.unwrap(), "late");
 
-    // Wait for completion with 'late' payload
+    // Verify final completion is also in history
     let ok = common::wait_for_history(
         store.clone(),
         "inst-can-evt-drop",
@@ -263,7 +263,7 @@ async fn continue_as_new_event_drop_then_process_fs() {
                 .rev()
                 .any(|e| matches!(e, Event::OrchestrationCompleted { output } if output == "late"))
         },
-        10_000,
+        1_000,
     )
     .await;
     assert!(ok, "timeout waiting for completion");

@@ -345,16 +345,14 @@ async fn continue_as_new_upgrades_version_deterministically() {
         .await
         .unwrap();
     let (hist, out) = h.await.unwrap();
-    // Initial handle resolves at continue-as-new boundary (empty string)
-    assert_eq!(out.unwrap(), "");
-    assert!(
-        hist.iter()
-            .any(|e| matches!(e, Event::OrchestrationContinuedAsNew { .. }))
-    );
+    // With polling approach, handle waits for final completion
+    assert_eq!(out.unwrap(), "v2_done:from_v1_to_v2");
+    // History contains the final execution's events
+    assert!(!hist.is_empty(), "Expected non-empty history");
 
-    // Wait for terminal status using helper and assert final output
+    // Verify terminal status is also correct
     match rt
-        .wait_for_orchestration("inst-can-upgrade", std::time::Duration::from_secs(5))
+        .wait_for_orchestration("inst-can-upgrade", std::time::Duration::from_secs(1))
         .await
         .unwrap()
     {

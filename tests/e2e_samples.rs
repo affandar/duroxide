@@ -669,17 +669,17 @@ async fn sample_continue_as_new_fs() {
 
     let rt =
         runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
-    // Initial handle finishes after ContinueAsNew; final result is available after latest execution completes
+    // With polling approach, handle waits for final completion across continue-as-new
     let h = rt
         .clone()
         .start_orchestration("inst-sample-can", "CanSample", "0")
         .await
         .unwrap();
     let (_hist, out) = h.await.unwrap();
-    assert_eq!(out.unwrap(), "");
-    // Use wait helper instead of manual polling
+    assert_eq!(out.unwrap(), "final:3");
+    // Verify status is also correct
     match rt
-        .wait_for_orchestration("inst-sample-can", std::time::Duration::from_secs(5))
+        .wait_for_orchestration("inst-sample-can", std::time::Duration::from_secs(1))
         .await
         .unwrap()
     {

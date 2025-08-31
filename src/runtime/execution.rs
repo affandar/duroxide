@@ -545,12 +545,7 @@ impl Runtime {
 
         history.push(Event::OrchestrationFailed { error: error.clone() });
         
-        // Notify waiters
-        if let Some(waiters) = self.result_waiters.lock().await.remove(instance) {
-            for w in waiters {
-                let _ = w.send((history.clone(), Err(error.clone())));
-            }
-        }
+        // Waiters removed - using polling approach instead
 
         (history.clone(), Err(error))
     }
@@ -581,9 +576,9 @@ impl Runtime {
         (input, parent_link)
     }
 
-    /// Check if instance has result waiters
-    async fn has_waiters(&self, instance: &str) -> bool {
-        self.result_waiters.lock().await.contains_key(instance)
+    /// Check if instance has result waiters (always false now - using polling approach)
+    async fn has_waiters(&self, _instance: &str) -> bool {
+        false
     }
 
     /// Handle orchestration completion (success or failure)
@@ -618,12 +613,7 @@ impl Runtime {
         // Acknowledge messages
         turn.acknowledge_messages(self.history_store.clone()).await;
 
-        // Notify waiters
-        if let Some(waiters) = self.result_waiters.lock().await.remove(instance) {
-            for w in waiters {
-                let _ = w.send((history.clone(), result.clone()));
-            }
-        }
+        // Waiters removed - using polling approach instead
 
         // Notify parent if this is a sub-orchestration
         if let Some((parent_instance, parent_id)) = parent_link {
@@ -678,7 +668,7 @@ impl Runtime {
         
         // Read the final history of the current execution before creating the new one
         // This includes the ContinuedAsNew event we just appended
-        let final_history = self.history_store.read(instance).await;
+        let _final_history = self.history_store.read(instance).await;
         
         // If no version specified, clear any pinned version to allow default resolution
         // Otherwise use the specified version
@@ -718,13 +708,8 @@ impl Runtime {
             return Err(format!("continue-as-new enqueue failed: {e}"));
         }
         
-        // Notify any waiters that the current execution has completed
-        // They should get an empty result as the actual result will come from the new execution
-        if let Some(waiters) = self.result_waiters.lock().await.remove(instance) {
-            for w in waiters {
-                let _ = w.send((final_history.clone(), Ok(String::new())));
-            }
-        }
+        // Waiters removed - using polling approach instead
+        // The polling approach will detect the ContinuedAsNew event and handle appropriately
 
         Ok(())
     }
@@ -738,12 +723,7 @@ impl Runtime {
     ) -> (Vec<Event>, Result<String, String>) {
         error!(instance, error=%error, "persistence failed");
         
-        // Notify waiters about the error
-        if let Some(waiters) = self.result_waiters.lock().await.remove(instance) {
-            for w in waiters {
-                let _ = w.send((history.to_vec(), Err(format!("persistence failed: {}", error))));
-            }
-        }
+        // Waiters removed - using polling approach instead
 
         (history.to_vec(), Err(error))
     }

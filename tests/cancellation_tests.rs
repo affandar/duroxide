@@ -238,11 +238,16 @@ async fn cancel_continue_as_new_second_exec_fs() {
         .start_orchestration("inst-can-can", "CanCancel", "start")
         .await
         .unwrap();
-    let (_hist, out) = h.await.unwrap();
-    assert_eq!(out.unwrap(), "");
-
-    // Now cancel the second execution
+    
+    // Cancel the second execution while the handle is waiting
+    // (the handle will wait for final completion including cancellation)
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await; // Let first execution complete
     rt.cancel_instance("inst-can-can", "by_test_can").await;
+    
+    let (_hist, out) = h.await.unwrap();
+    // With polling approach, handle waits for final result (cancellation)
+    assert!(out.is_err());
+    assert!(out.unwrap_err().starts_with("canceled: by_test_can"));
 
     // Wait for canceled failure
     let ok = common::wait_for_history(
