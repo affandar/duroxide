@@ -28,7 +28,6 @@ impl Runtime {
         instance: &str,
         orchestration_name: &str,
     ) -> (Vec<Event>, Result<String, String>) {
-
         debug!(instance, orchestration_name, "Starting instance execution");
         
 
@@ -669,9 +668,6 @@ impl Runtime {
         // Acknowledge messages first
         turn.acknowledge_messages(self.history_store.clone()).await;
 
-        // Determine version string
-        let version_str = version.unwrap_or_else(|| "0.0.0".to_string());
-        
         // First, append the ContinuedAsNew event to close the current execution
         if let Err(e) = self.history_store.append(instance, vec![
             Event::OrchestrationContinuedAsNew { input: input.clone() },
@@ -680,8 +676,19 @@ impl Runtime {
             return Err(format!("continue-as-new persistence failed: {e}"));
         }
         
-        // Then create a new execution with the OrchestrationStarted event
-        // This ensures proper execution ID tracking
+        // Read the final history of the current execution before creating the new one
+        // This includes the ContinuedAsNew event we just appended
+        let final_history = self.history_store.read(instance).await;
+        
+        // If no version specified, clear any pinned version to allow default resolution
+        // Otherwise use the specified version
+        let version_str = if let Some(v) = version {
+            v
+        } else {
+            // Clear pinned version to allow default resolution in the new execution
+            self.pinned_versions.lock().await.remove(instance);
+            "0.0.0".to_string()
+        };
         if let Err(e) = self.history_store.create_new_execution(
             instance,
             orchestration_name,
@@ -710,12 +717,12 @@ impl Runtime {
             error!(instance, error = %e, "failed to enqueue continue-as-new work item");
             return Err(format!("continue-as-new enqueue failed: {e}"));
         }
-
+        
         // Notify any waiters that the current execution has completed
         // They should get an empty result as the actual result will come from the new execution
         if let Some(waiters) = self.result_waiters.lock().await.remove(instance) {
             for w in waiters {
-                let _ = w.send((history.clone(), Ok(String::new())));
+                let _ = w.send((final_history.clone(), Ok(String::new())));
             }
         }
 
