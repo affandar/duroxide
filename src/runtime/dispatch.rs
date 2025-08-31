@@ -130,7 +130,6 @@ pub async fn dispatch_start_sub_orchestration(
     let parent_inst = parent_instance.to_string();
     let name_clone = name.clone();
     let input_clone = input.clone();
-    let router_tx = rt.router_tx.clone();
     let rt_for_child = rt.clone();
     // Resolve version pin for the child (handled again inside start)
     if let Some(ver_str) = version.clone() {
@@ -141,6 +140,10 @@ pub async fn dispatch_start_sub_orchestration(
         rt_for_child.pinned_versions.lock().await.insert(child_full.clone(), v);
     }
     debug!(parent_instance, id, name=%name, child_instance=%child_full, "start child orchestration");
+    
+    // Get the parent execution ID for proper completion tracking
+    let parent_execution_id = rt.get_execution_id_for_instance(parent_instance).await;
+    
     tokio::spawn(async move {
         // Try to parse version for pinning (will be pinned in start_internal_rx as well)
         let version_pin = version.clone().and_then(|s| semver::Version::parse(&s).ok());
@@ -160,60 +163,78 @@ pub async fn dispatch_start_sub_orchestration(
                 // Wait for the child orchestration to complete
                 match rt_for_child.wait_for_orchestration(&child_full, std::time::Duration::from_secs(3600)).await {
                     Ok(super::OrchestrationStatus::Completed { output }) => {
-                        let _ = router_tx.send(super::OrchestratorMsg::SubOrchCompleted {
-                            instance: parent_inst,
-                            execution_id: 1, // TODO: Get actual parent execution ID
-                            id,
-                            result: output,
-                            ack_token: None,
-                        });
+                        // Enqueue completion to orchestrator queue (same pattern as activities)
+                        let _ = rt_for_child.history_store.enqueue_work(
+                            QueueKind::Orchestrator,
+                            WorkItem::SubOrchCompleted {
+                                parent_instance: parent_inst,
+                                parent_execution_id,
+                                parent_id: id,
+                                result: output,
+                            },
+                        ).await;
                     }
                     Ok(super::OrchestrationStatus::Failed { error }) => {
-                        let _ = router_tx.send(super::OrchestratorMsg::SubOrchFailed {
-                            instance: parent_inst,
-                            execution_id: 1, // TODO: Get actual parent execution ID
-                            id,
-                            error,
-                            ack_token: None,
-                        });
+                        // Enqueue failure to orchestrator queue (same pattern as activities)
+                        let _ = rt_for_child.history_store.enqueue_work(
+                            QueueKind::Orchestrator,
+                            WorkItem::SubOrchFailed {
+                                parent_instance: parent_inst,
+                                parent_execution_id,
+                                parent_id: id,
+                                error,
+                            },
+                        ).await;
                     }
                     Ok(super::OrchestrationStatus::Running) => {
-                        let _ = router_tx.send(super::OrchestratorMsg::SubOrchFailed {
-                            instance: parent_inst,
-                            execution_id: 1, // TODO: Get actual parent execution ID
-                            id,
-                            error: "child orchestration timed out".to_string(),
-                            ack_token: None,
-                        });
+                        // Timeout - enqueue failure
+                        let _ = rt_for_child.history_store.enqueue_work(
+                            QueueKind::Orchestrator,
+                            WorkItem::SubOrchFailed {
+                                parent_instance: parent_inst,
+                                parent_execution_id,
+                                parent_id: id,
+                                error: "child orchestration timed out".to_string(),
+                            },
+                        ).await;
                     }
                     Ok(super::OrchestrationStatus::NotFound) => {
-                        let _ = router_tx.send(super::OrchestratorMsg::SubOrchFailed {
-                            instance: parent_inst,
-                            execution_id: 1, // TODO: Get actual parent execution ID
-                            id,
-                            error: "child orchestration not found".to_string(),
-                            ack_token: None,
-                        });
+                        // Not found - enqueue failure
+                        let _ = rt_for_child.history_store.enqueue_work(
+                            QueueKind::Orchestrator,
+                            WorkItem::SubOrchFailed {
+                                parent_instance: parent_inst,
+                                parent_execution_id,
+                                parent_id: id,
+                                error: "child orchestration not found".to_string(),
+                            },
+                        ).await;
                     }
                     Err(e) => {
-                        let _ = router_tx.send(super::OrchestratorMsg::SubOrchFailed {
-                            instance: parent_inst,
-                            execution_id: 1, // TODO: Get actual parent execution ID
-                            id,
-                            error: format!("wait error: {e:?}"),
-                            ack_token: None,
-                        });
+                        // Wait error - enqueue failure
+                        let _ = rt_for_child.history_store.enqueue_work(
+                            QueueKind::Orchestrator,
+                            WorkItem::SubOrchFailed {
+                                parent_instance: parent_inst,
+                                parent_execution_id,
+                                parent_id: id,
+                                error: format!("wait error: {e:?}"),
+                            },
+                        ).await;
                     }
                 }
             }
             Err(e) => {
-                let _ = router_tx.send(super::OrchestratorMsg::SubOrchFailed {
-                    instance: parent_inst,
-                    execution_id: 1, // TODO: Get actual parent execution ID
-                    id,
-                    error: e,
-                    ack_token: None,
-                });
+                // Start error - enqueue failure
+                let _ = rt_for_child.history_store.enqueue_work(
+                    QueueKind::Orchestrator,
+                    WorkItem::SubOrchFailed {
+                        parent_instance: parent_inst,
+                        parent_execution_id,
+                        parent_id: id,
+                        error: e,
+                    },
+                ).await;
             }
         }
     });
