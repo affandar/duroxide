@@ -5,7 +5,7 @@ use crate::providers::WorkItem;
 
 /// Completion messages delivered to active orchestration instances.
 /// These correspond directly to WorkItem completion variants but include ack tokens.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum OrchestratorMsg {
     ActivityCompleted {
         instance: String,

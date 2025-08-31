@@ -115,198 +115,40 @@ impl Runtime {
         let mut consecutive_no_progress_turns = 0;
         const MAX_NO_PROGRESS_TURNS: u32 = 3;
 
-        // Check if this is a fresh orchestration start (has OrchestrationStarted but no progress)
-        // Use current execution history to properly handle continue-as-new scenarios
-        let current_execution_history = Self::extract_current_execution_history(&history);
-        let needs_initial_execution = current_execution_history.iter().any(|e| matches!(e, Event::OrchestrationStarted { .. })) 
-            && !current_execution_history.iter().any(|e| matches!(e, 
-                Event::ActivityScheduled { .. } | 
-                Event::TimerCreated { .. } | 
-                Event::OrchestrationCompleted { .. } | 
-                Event::OrchestrationFailed { .. }
-            ));
+        // Note: We always execute at least one turn, starting with empty messages
 
-        if needs_initial_execution {
-
-            
-            // Execute initial turn without waiting for messages
-            let mut turn = OrchestrationTurn::new(
-                instance.to_string(),
-                orchestration_name.to_string(),
-                turn_index,
-                current_execution_history.clone(),
-            );
-
-
-            match turn.execute_orchestration(handler.clone(), input.clone()) {
-                TurnResult::Continue => {
-                    // Orchestration made progress, persist and continue
-
-                    if let Err(e) = turn.persist_changes(self.history_store.clone(), &self).await {
-                        let (hist, result) = self.handle_persistence_error(instance, &history, e).await;
-                        return (hist, result);
-                    }
-                    history = turn.final_history();
-                    turn_index += 1;
-
-                }
-                TurnResult::Completed(output) => {
-                    // Orchestration completed on first execution
-
-                    let result = (&self).handle_orchestration_completion(
-                        instance,
-                        &mut turn,
-                        &mut history,
-                        Ok(output.clone()),
-                        parent_link.clone(),
-                    ).await;
-                    let duration = start_time.elapsed();
-                    debug!(instance, orchestration_name, duration_ms = duration.as_millis(),
-                           "✅ Instance execution completed successfully");
-                    return (result.0, result.1);
-                }
-                TurnResult::Failed(error) => {
-                    // Orchestration failed
-
-                    let result = (&self).handle_orchestration_completion(
-                        instance,
-                        &mut turn,
-                        &mut history,
-                        Err(error.clone()),
-                        parent_link.clone(),
-                    ).await;
-                    let duration = start_time.elapsed();
-                    debug!(instance, orchestration_name, error = %error, duration_ms = duration.as_millis(),
-                           "❌ Instance execution failed");
-                    return (result.0, result.1);
-                }
-                TurnResult::ContinueAsNew { input: new_input, version } => {
-                    // Handle continue-as-new
-                    match (&self).handle_continue_as_new(
-                        instance,
-                        orchestration_name,
-                        &mut turn,
-                        &mut history,
-                        new_input,
-                        version,
-                    ).await {
-                        Ok(()) => {
-                            let duration = start_time.elapsed();
-                            debug!(instance, orchestration_name, duration_ms = duration.as_millis(),
-                                   "🔄 Instance execution continued-as-new");
-                            // Continue-as-new is now handled via orchestrator queue
-                            // Return success with empty result as the new execution will provide the final result
-                            return (history, Ok(String::new()));
-                        }
-                        Err(e) => {
-                            return (history, Err(e));
-                        }
-                    }
-                }
-                TurnResult::Cancelled(reason) => {
-                    // Handle cancellation with propagation to child orchestrations
-                    
-                    // Propagate cancellation to sub-orchestrations
-                    self.propagate_cancellation_to_children(instance, &history).await;
-
-                    let result = (&self).handle_orchestration_completion(
-                        instance,
-                        &mut turn,
-                        &mut history,
-                        Err(format!("canceled: {}", reason)),
-                        parent_link.clone(),
-                    ).await;
-                    let duration = start_time.elapsed();
-                    debug!(instance, orchestration_name, reason = %reason, duration_ms = duration.as_millis(),
-                           "⚠️ Instance execution cancelled");
-                    return (result.0, result.1);
-                }
-            }
-        }
-
-        // MAIN EXECUTION LOOP
-
+        // UNIFIED EXECUTION LOOP - always execute at least one turn
+        let mut messages = Vec::new(); // Start with empty messages for initial turn
         let mut loop_iterations = 0;
+        
         loop {
             loop_iterations += 1;
+            debug!(instance, loop_iterations, "execution loop iteration");
 
-            debug!(instance, loop_iterations, "main execution loop iteration");
-
-            
             // Emergency brake for debugging
-            if loop_iterations > 10 {
-
-
-
-                // Let's continue a few more to see what happens
-            }
-            
             if loop_iterations > 15 {
-                let (hist, result) = self.handle_persistence_error(instance, &history, "emergency exit - infinite loop in main execution".to_string()).await;
+                let (hist, result) = self.handle_persistence_error(instance, &history, "emergency exit - infinite loop in execution".to_string()).await;
                 return (hist, result);
             }
             
             // Check for infinite loop prevention
             if consecutive_no_progress_turns >= MAX_NO_PROGRESS_TURNS {
                 let error = format!(
-                    "execution stalled: {} consecutive turns with no progress in main loop - likely no message delivery or infinite loop", 
+                    "execution stalled: {} consecutive turns with no progress - likely infinite loop or unconsumed completions", 
                     consecutive_no_progress_turns
                 );
                 let (hist, result) = self.handle_persistence_error(instance, &history, error).await;
                 return (hist, result);
             }
-            
 
             debug!(
                 instance = %instance,
                 turn_index = turn_index,
+                message_count = messages.len(),
                 "starting orchestration turn"
             );
 
-            // STAGE 1: RECEIVE AND BATCH COMPLETIONS
-            let batch_result = self.receive_completion_batch(&mut message_rx).await;
-            
-            let messages = match batch_result {
-                BatchResult::Messages(msgs) => msgs,
-                BatchResult::ChannelClosed => {
-                    // Channel closed - clean exit
-                    debug!(instance = %instance, "channel closed, dehydrating instance");
-                    self.router.unregister(instance).await;
-                    return (history, Ok(String::new()));
-                }
-                BatchResult::Timeout => {
-                    // Timeout - check waiters before dehydrating
-                    let has_waiters = self.has_waiters(instance).await;
-                    if has_waiters {
-                        // Keep running if there are waiters
-                        debug!(instance = %instance, "timeout but has waiters, continuing");
-
-                        tokio::time::sleep(Duration::from_millis(Self::POLLER_IDLE_SLEEP_MS)).await;
-                        
-                        // Don't increment no-progress counter on timeout - we're just waiting for messages
-                        // Only increment when we execute a turn that makes no progress
-                        
-                        continue;
-                    } else {
-                        // No waiters - safe to dehydrate
-                        debug!(instance = %instance, "timeout with no waiters, dehydrating instance");
-
-                        self.router.unregister(instance).await;
-                        return (history, Ok(String::new()));
-                    }
-                }
-            };
-
-            // Skip empty message batches - no turn to execute without completions
-            if messages.is_empty() {
-
-                debug!(instance = %instance, "received empty message batch, waiting for completions");
-                // Don't increment no-progress counter for empty messages - we're just waiting
-                continue;
-            }
-
-
-            // STAGE 2: EXECUTE ORCHESTRATION TURN
+            // STAGE 1: EXECUTE ORCHESTRATION TURN
             let current_execution_history = Self::extract_current_execution_history(&history);
             let mut turn = OrchestrationTurn::new(
                 instance.to_string(),
@@ -315,8 +157,10 @@ impl Runtime {
                 current_execution_history,
             );
 
-            // Prep completions from incoming messages
-            turn.prep_completions(messages);
+            // Prep completions from incoming messages (empty for initial turn)
+            if !messages.is_empty() {
+                turn.prep_completions(messages.clone());
+            }
 
             // Execute the orchestration logic
             let turn_result = turn.execute_orchestration(handler.clone(), input.clone());
@@ -341,18 +185,14 @@ impl Runtime {
                     if turn.made_progress() {
                         turn_index += 1;
                         consecutive_no_progress_turns = 0;
-
                     } else {
                         consecutive_no_progress_turns += 1;
-
                         
                         if consecutive_no_progress_turns >= MAX_NO_PROGRESS_TURNS {
                             let error = format!(
                                 "execution stalled: {} consecutive turns with no progress - likely infinite loop or unconsumed completions", 
                                 consecutive_no_progress_turns
                             );
-
-                            
                             // Return with the current history and error
                             let (hist, result) = self.handle_persistence_error(instance, &history, error).await;
                             return (hist, result);
@@ -432,6 +272,43 @@ impl Runtime {
                     return (result.0, result.1);
                 }
             }
+            
+            // STAGE 2: RECEIVE MESSAGES FOR NEXT ITERATION
+            let batch_result = self.receive_completion_batch(&mut message_rx).await;
+            
+            messages = match batch_result {
+                BatchResult::Messages(msgs) => {
+                    // Skip empty message batches - no turn to execute without completions
+                    if msgs.is_empty() {
+                        debug!(instance = %instance, "received empty message batch, waiting for completions");
+                        // Don't increment no-progress counter for empty messages - we're just waiting
+                        continue;
+                    }
+                    msgs
+                },
+                BatchResult::ChannelClosed => {
+                    // Channel closed - clean exit
+                    debug!(instance = %instance, "channel closed, dehydrating instance");
+                    self.router.unregister(instance).await;
+                    return (history, Ok(String::new()));
+                }
+                BatchResult::Timeout => {
+                    // Timeout - check waiters before dehydrating
+                    let has_waiters = self.has_waiters(instance).await;
+                    if has_waiters {
+                        // Keep running if there are waiters
+                        debug!(instance = %instance, "timeout but has waiters, continuing");
+                        tokio::time::sleep(Duration::from_millis(Self::POLLER_IDLE_SLEEP_MS)).await;
+                        // Don't increment no-progress counter on timeout - we're just waiting for messages
+                        continue;
+                    } else {
+                        // No waiters - safe to dehydrate
+                        debug!(instance = %instance, "timeout with no waiters, dehydrating instance");
+                        self.router.unregister(instance).await;
+                        return (history, Ok(String::new()));
+                    }
+                }
+            };
         }
     }
 
