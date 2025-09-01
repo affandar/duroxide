@@ -112,8 +112,6 @@ impl Runtime {
         let (input, parent_link) = self.extract_orchestration_context(orchestration_name, &history);
 
         let mut turn_index = 0u64;
-        let mut consecutive_no_progress_turns = 0;
-        const MAX_NO_PROGRESS_TURNS: u32 = 3;
 
         // Note: We always execute at least one turn, starting with empty messages
 
@@ -131,15 +129,7 @@ impl Runtime {
                 return (hist, result);
             }
             
-            // Check for infinite loop prevention
-            if consecutive_no_progress_turns >= MAX_NO_PROGRESS_TURNS {
-                let error = format!(
-                    "execution stalled: {} consecutive turns with no progress - likely infinite loop or unconsumed completions", 
-                    consecutive_no_progress_turns
-                );
-                let (hist, result) = self.handle_persistence_error(instance, &history, error).await;
-                return (hist, result);
-            }
+
 
             debug!(
                 instance = %instance,
@@ -181,22 +171,22 @@ impl Runtime {
                     // Acknowledge messages after successful persistence
                     turn.acknowledge_messages(self.history_store.clone()).await;
 
-                    // Check for progress and prevent infinite loops
+                    // Check for progress - new messages should always make progress
                     if turn.made_progress() {
                         turn_index += 1;
-                        consecutive_no_progress_turns = 0;
                     } else {
-                        consecutive_no_progress_turns += 1;
-                        
-                        if consecutive_no_progress_turns >= MAX_NO_PROGRESS_TURNS {
+                        // If we received messages but made no progress, this indicates a serious issue
+                        // Duplicates are already filtered out by CompletionMap, so this should not happen
+                        if !messages.is_empty() {
                             let error = format!(
-                                "execution stalled: {} consecutive turns with no progress - likely infinite loop or unconsumed completions", 
-                                consecutive_no_progress_turns
+                                "execution made no progress despite receiving {} messages - indicates orchestration bug or corruption", 
+                                messages.len()
                             );
-                            // Return with the current history and error
                             let (hist, result) = self.handle_persistence_error(instance, &history, error).await;
                             return (hist, result);
                         }
+                        // If no messages, this is expected (e.g., initial turn or waiting for completions)
+                        debug!(instance = %instance, "turn made no progress (no messages received)");
                     }
                 }
                 TurnResult::Completed(output) => {
