@@ -101,6 +101,8 @@ pub async fn dispatch_start_detached(
         orchestration: name.clone(),
         input: input.clone(),
         version: version.clone(),
+        parent_instance: None,  // Detached orchestrations have no parent
+        parent_id: None,
     };
     if let Err(e) = rt.history_store.enqueue_work(QueueKind::Orchestrator, wi).await {
         warn!(instance, id, name=%name, child_instance=%child_instance, error=%e, "failed to enqueue detached start; will rely on bootstrap rehydration");

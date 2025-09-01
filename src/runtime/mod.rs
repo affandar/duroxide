@@ -189,59 +189,14 @@ impl Runtime {
         parent_instance: Option<String>,
         parent_id: Option<u64>,
     ) -> Result<(), String> {
-        // Ensure instance exists (best-effort)
-        let _ = self.history_store.create_instance(instance).await;
-        // Append start marker if empty
-        let hist = self.history_store.read(instance).await;
-        if hist.is_empty() {
-            // Determine version to pin and to write into the start event
-            let maybe_resolved: Option<Version> = if let Some(v) = pin_version {
-                Some(v)
-            } else if let Some(v) = self.pinned_versions.lock().await.get(instance).cloned() {
-                Some(v)
-            } else if let Some((resolved_v, _handler)) =
-                self.orchestration_registry.resolve_for_start(orchestration_name).await
-            {
-                Some(resolved_v)
-            } else {
-                None
-            };
-            // If resolved, pin for handler resolution and write that version; otherwise use a fallback string version
-            let version_str_for_event: String = if let Some(v) = maybe_resolved.clone() {
-                self.pinned_versions
-                    .lock()
-                    .await
-                    .insert(instance.to_string(), v.clone());
-                v.to_string()
-            } else {
-                "0.0.0".to_string()
-            };
-            let started = vec![Event::OrchestrationStarted {
-                name: orchestration_name.to_string(),
-                version: version_str_for_event,
-                input: input.clone(),
-                parent_instance,
-                parent_id,
-            }];
-            self.history_store
-                .append(instance, started)
-                .await
-                .map_err(|e| format!("failed to append OrchestrationStarted: {e}"))?; // TODO : CR : this error would be fatal
-        } else {
-            // Allow duplicate starts as a warning for detached or at-least-once semantics
-            warn!(
-                instance,
-                "instance already has history; duplicate start accepted (deduped)"
-            );
-        }
-
-        // In the new direct execution model, enqueue a StartOrchestration work item
-        // to trigger the dispatcher to start this orchestration
+        // Just queue the StartOrchestration work item - let start_orchestration_execution handle everything
         let start_work_item = WorkItem::StartOrchestration {
             instance: instance.to_string(),
             orchestration: orchestration_name.to_string(),
-            input: input.clone(),
-            version: None, // Version is already handled above
+            input,
+            version: pin_version.map(|v| v.to_string()),
+            parent_instance,
+            parent_id,
         };
 
         if let Err(e) = self
@@ -249,7 +204,7 @@ impl Runtime {
             .enqueue_work(QueueKind::Orchestrator, start_work_item)
             .await
         {
-            debug!(instance, orchestration_name, error = %e, "failed to enqueue StartOrchestration work item");
+            return Err(format!("failed to enqueue StartOrchestration work item: {}", e));
         }
 
         Ok(())
@@ -417,20 +372,11 @@ impl Runtime {
                             ref orchestration,
                             ref input,
                             ref version,
-                        }
-                        | WorkItem::ContinueAsNew {
-                            ref instance,
-                            ref orchestration,
-                            ref input,
-                            ref version,
+                            ref parent_instance,
+                            ref parent_id,
                         } => {
-                            let event_type = match &item {
-                                WorkItem::StartOrchestration { .. } => "StartOrchestration",
-                                WorkItem::ContinueAsNew { .. } => "ContinueAsNew",
-                                _ => unreachable!(),
-                            };
                             debug!(
-                                "{event_type}: {instance} {orchestration} {input} (version: {:?})",
+                                "StartOrchestration: {instance} {orchestration} {input} (version: {:?})",
                                 version
                             );
                             self.start_orchestration_execution(
@@ -438,6 +384,29 @@ impl Runtime {
                                 orchestration,
                                 input.clone(),
                                 version.clone(),
+                                parent_instance.clone(),
+                                *parent_id,
+                                token,
+                            )
+                            .await;
+                        }
+                        WorkItem::ContinueAsNew {
+                            ref instance,
+                            ref orchestration,
+                            ref input,
+                            ref version,
+                        } => {
+                            debug!(
+                                "ContinueAsNew: {instance} {orchestration} {input} (version: {:?})",
+                                version
+                            );
+                            self.start_orchestration_execution(
+                                instance,
+                                orchestration,
+                                input.clone(),
+                                version.clone(),
+                                None, // ContinueAsNew doesn't have parent
+                                None,
                                 token,
                             )
                             .await;
@@ -730,6 +699,8 @@ impl Runtime {
         orchestration: &str,
         input: String,
         version: Option<String>,
+        parent_instance: Option<String>,
+        parent_id: Option<u64>,
         token: String,
     ) {
         debug!(
@@ -742,6 +713,7 @@ impl Runtime {
         let mut history = self.history_store.read(instance).await;
 
         if history.is_empty() {
+            debug!(instance, orchestration, input, version, "instance has no history; creating initial history");
             // Determine version to pin and to write into the start event
             let maybe_resolved: Option<Version> =
                 if let Some(v) = version.clone().and_then(|s| semver::Version::parse(&s).ok()) {
@@ -771,8 +743,8 @@ impl Runtime {
                 name: orchestration.to_string(),
                 version: version_str_for_event,
                 input: input.clone(),
-                parent_instance: None, // Detached orchestrations have no parent
-                parent_id: None,
+                parent_instance,
+                parent_id,
             }];
 
             if let Err(e) = self.history_store.append(instance, started.clone()).await {

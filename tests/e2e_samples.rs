@@ -19,6 +19,48 @@ mod common;
 /// - Start the `Runtime` with a provider (filesystem here)
 /// - Schedule an activity and await its typed completion
 #[tokio::test]
+async fn simplest_hello_world_fs() {
+    let td = tempfile::tempdir().unwrap();
+    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
+
+    // Register a simple activity: "Hello" -> format a greeting
+    let activity_registry = ActivityRegistry::builder()
+        .register("Hello", |input: String| async move { Ok(format!("Hello, {input}!")) })
+        .build();
+
+    // Orchestrator: emit a trace, call Hello twice, return result using input
+    let orchestration = |ctx: OrchestrationContext, input: String| async move {
+        let res = ctx.schedule_activity("Hello", "Rust").into_activity().await.unwrap();
+        Ok(res)
+    };
+
+    let orchestration_registry = OrchestrationRegistry::builder()
+        .register("HelloWorld", orchestration)
+        .build();
+
+    let rt =
+        runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+    let _handle = rt
+        .clone()
+        .start_orchestration("inst-sample-hello-1", "HelloWorld", "World")
+        .await
+        .unwrap();
+
+    rt
+        .wait_for_orchestration("inst-sample-hello-1", std::time::Duration::from_secs(5))
+        .await
+        .expect("orchestration failed");
+    rt.shutdown().await;
+}
+
+
+/// Hello World: define one activity and call it from an orchestrator.
+///
+/// Highlights:
+/// - Register an activity in an `ActivityRegistry`
+/// - Start the `Runtime` with a provider (filesystem here)
+/// - Schedule an activity and await its typed completion
+#[tokio::test]
 async fn sample_hello_world_fs() {
     let td = tempfile::tempdir().unwrap();
     let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;

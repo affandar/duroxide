@@ -280,15 +280,18 @@ async fn orchestration_status_apis() {
     let s = rt.get_orchestration_status("no-such").await;
     assert!(matches!(s, OrchestrationStatus::NotFound));
 
-    // Start a running orchestration; should be Running immediately
+    // Start a running orchestration; should be Running after dispatcher processes it
     let inst_running = "inst-status-running";
     let _handle_running = rt
         .clone()
         .start_orchestration(inst_running, "ShortTimer", "")
         .await
         .unwrap();
+    // Wait a bit for the orchestrator dispatcher to process the queued work item
+    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
     let s1 = rt.get_orchestration_status(inst_running).await;
-    assert!(matches!(s1, OrchestrationStatus::Running));
+    // The orchestration should be running (waiting for timer)
+    assert!(matches!(s1, OrchestrationStatus::Running), "expected Running, got {:?}", s1);
 
     // After completion, should be Completed with output
     match rt

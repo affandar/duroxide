@@ -16,6 +16,8 @@ pub enum WorkItem {
         orchestration: String,
         input: String,
         version: Option<String>,
+        parent_instance: Option<String>,
+        parent_id: Option<u64>,
     },
     ActivityExecute {
         instance: String,
