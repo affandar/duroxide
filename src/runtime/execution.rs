@@ -1,6 +1,4 @@
 use std::sync::Arc;
-use std::time::Duration;
-use tokio::sync::mpsc;
 use tracing::{debug, error};
 
 use crate::{Event, runtime::{Runtime, OrchestrationHandler, router::OrchestratorMsg}};
@@ -8,12 +6,7 @@ use super::orchestration_turn::{OrchestrationTurn, TurnResult};
 
 
 
-/// Result of attempting to receive a batch of completion messages
-enum BatchResult {
-    Messages(Vec<(OrchestratorMsg, String)>),
-    ChannelClosed,
-    Timeout,
-}
+
 
 impl Runtime {
     /// Execute an orchestration instance to completion
@@ -30,54 +23,17 @@ impl Runtime {
         self: Arc<Self>,
         instance: &str,
         orchestration_name: &str,
+        initial_history: Vec<Event>,
+        completion_messages: Vec<OrchestratorMsg>,
     ) -> (Vec<Event>, Result<String, String>) {
         debug!(instance, orchestration_name, "🚀 Starting single execution");
         
-        // Ensure instance not already active
-        {
-            let mut act = self.active_instances.lock().await;
-            if !act.insert(instance.to_string()) {
-                debug!(instance, "instance already active, returning early");
-                return (Vec::new(), Err("already_active".into()));
-            }
-        }
-        
         let start_time = std::time::Instant::now();
         
-        // Ensure cleanup even if task panics
-        struct ActiveGuard {
-            rt: Arc<Runtime>,
-            inst: String,
-        }
-        impl Drop for ActiveGuard {
-            fn drop(&mut self) {
-                let rt = self.rt.clone();
-                let inst = self.inst.clone();
-                let _ = tokio::spawn(async move {
-                    rt.active_instances.lock().await.remove(&inst);
-                    rt.current_execution_ids.lock().await.remove(&inst);
-                });
-            }
-        }
-        let _active_guard = ActiveGuard {
-            rt: self.clone(),
-            inst: instance.to_string(),
-        };
+        // Use provided history directly
+        let mut history = initial_history;
 
 
-
-        // Load initial history and set up execution tracking
-        let full_instance_history = self.history_store.read(instance).await;
-        
-        // Keep full history for operations that need cross-execution data
-        let mut history = full_instance_history.clone();
-
-        
-        let current_execution_id = self.history_store.latest_execution_id(instance).await.unwrap_or(1);
-        self.current_execution_ids
-            .lock()
-            .await
-            .insert(instance.to_string(), current_execution_id);
 
 
         // Pin version from history if available
@@ -98,26 +54,20 @@ impl Runtime {
             }
         };
 
-        // Register for orchestrator messages
-
-        let mut message_rx = self.router.register(instance).await;
-
-
-        // Rehydrate any pending work from history
-
-        // Instance dehydration/rehydration handled by router
-
-
         // Extract input and parent linkage for the orchestration
         let (input, parent_link) = self.extract_orchestration_context(orchestration_name, &history);
 
         let mut turn_index = 0u64;
-
-        // Note: We always execute at least one turn, starting with empty messages
+        
+        // Convert completion messages to the format expected by turns
+        let mut messages: Vec<(OrchestratorMsg, String)> = completion_messages
+            .into_iter()
+            .filter_map(|msg| {
+                extract_ack_token(&msg).map(|token| (msg, token))
+            })
+            .collect();
 
         // UNIFIED EXECUTION LOOP - always execute at least one turn
-        let mut messages = Vec::new(); // Start with empty messages for initial turn
-        
         loop {
 
 
@@ -253,92 +203,23 @@ impl Runtime {
                 }
             }
             
-            // STAGE 2: RECEIVE MESSAGES FOR NEXT ITERATION
-            let batch_result = self.receive_completion_batch(&mut message_rx).await;
+            // STAGE 2: HANDLE COMPLETION - no more messages to process
+            // Since we're processing all messages in one shot, we're done after the first iteration
+            // unless the orchestration is still waiting for more completions
+            if messages.is_empty() {
+                // No more messages to process - execution is complete for now
+                debug!(instance = %instance, "no more messages to process, execution complete");
+                return (history, Ok(String::new()));
+            }
             
-            messages = match batch_result {
-                BatchResult::Messages(msgs) => {
-                    // Skip empty message batches - no turn to execute without completions
-                    if msgs.is_empty() {
-                        debug!(instance = %instance, "received empty message batch, waiting for completions");
-                        // Don't increment no-progress counter for empty messages - we're just waiting
-                        continue;
-                    }
-                    msgs
-                },
-                BatchResult::ChannelClosed => {
-                    // Channel closed - clean exit
-                    debug!(instance = %instance, "channel closed, dehydrating instance");
-                    self.router.unregister(instance).await;
-                    return (history, Ok(String::new()));
-                }
-                BatchResult::Timeout => {
-                    // Timeout - check waiters before dehydrating
-                    let has_waiters = self.has_waiters(instance).await;
-                    if has_waiters {
-                        // Keep running if there are waiters
-                        debug!(instance = %instance, "timeout but has waiters, continuing");
-                        tokio::time::sleep(Duration::from_millis(Self::POLLER_IDLE_SLEEP_MS)).await;
-                        // Don't increment no-progress counter on timeout - we're just waiting for messages
-                        continue;
-                    } else {
-                        // No waiters - safe to dehydrate
-                        debug!(instance = %instance, "timeout with no waiters, dehydrating instance");
-                        self.router.unregister(instance).await;
-                        return (history, Ok(String::new()));
-                    }
-                }
-            };
+            // Clear messages after processing to avoid infinite loop
+            messages.clear();
         }
     }
 
 
 
-    /// Receive a batch of completion messages with timeout for dehydration
-    async fn receive_completion_batch(
-        &self,
-        message_rx: &mut mpsc::UnboundedReceiver<OrchestratorMsg>,
-    ) -> BatchResult {
-        // Wait for first message with timeout
-        let first_msg = tokio::time::timeout(
-            Duration::from_millis(Self::ORCH_IDLE_DEHYDRATE_MS),
-            message_rx.recv(),
-        ).await;
 
-        let first_msg = match first_msg {
-            Ok(Some(msg)) => msg,
-            Ok(None) => {
-                debug!("message channel closed");
-                return BatchResult::ChannelClosed;
-            }
-            Err(_) => {
-                debug!("message receive timeout");
-                return BatchResult::Timeout;
-            }
-        };
-
-        let mut messages = Vec::new();
-
-        // Extract ack token from first message
-        if let Some(token) = extract_ack_token(&first_msg) {
-            messages.push((first_msg, token));
-        }
-
-        // Collect additional messages up to batch limit
-        for _ in 0..Self::COMPLETION_BATCH_LIMIT {
-            match message_rx.try_recv() {
-                Ok(msg) => {
-                    if let Some(token) = extract_ack_token(&msg) {
-                        messages.push((msg, token));
-                    }
-                }
-                Err(_) => break,
-            }
-        }
-
-        debug!(message_count = messages.len(), "received completion batch");
-        BatchResult::Messages(messages)
-    }
 
     /// Set up version pinning from history
     async fn setup_version_pinning(&self, instance: &str, orchestration_name: &str, history: &[Event]) {
@@ -423,10 +304,7 @@ impl Runtime {
         (input, parent_link)
     }
 
-    /// Check if instance has result waiters (always false now - using polling approach)
-    async fn has_waiters(&self, _instance: &str) -> bool {
-        false
-    }
+
 
     /// Handle orchestration completion (success or failure)
     async fn handle_orchestration_completion(

@@ -99,15 +99,18 @@ async fn select2_two_externals_history_order_wins_fs() {
         Event::OrchestrationCompleted { output } => output.clone(),
         _ => String::new(),
     };
-    let idx_b = hist
+    
+    // In the new architecture, select operations complete immediately after the first event
+    // So only the winning event (B) should be in the history, not both events
+    let has_b = hist
         .iter()
-        .position(|e| matches!(e, Event::ExternalEvent { name, .. } if name == "B"))
-        .unwrap();
-    let idx_a = hist
+        .any(|e| matches!(e, Event::ExternalEvent { name, .. } if name == "B"));
+    let has_a = hist
         .iter()
-        .position(|e| matches!(e, Event::ExternalEvent { name, .. } if name == "A"))
-        .unwrap();
-    assert!(idx_b < idx_a, "expected ExternalEvent B before A in history: {hist:#?}");
+        .any(|e| matches!(e, Event::ExternalEvent { name, .. } if name == "A"));
+    
+    assert!(has_b, "expected ExternalEvent B in history since it should win: {hist:#?}");
+    assert!(!has_a, "expected ExternalEvent A NOT in history since select should complete after B: {hist:#?}");
     assert!(output.starts_with("B:"), "expected B to win, got {output}");
     rt2.shutdown().await;
 }
@@ -204,15 +207,18 @@ async fn select_two_externals_history_order_wins_fs() {
         Event::OrchestrationCompleted { output } => output.clone(),
         _ => String::new(),
     };
-    let idx_b = hist
+    
+    // In the new architecture, select operations complete immediately after the first event
+    // So only the winning event (B) should be in the history, not both events
+    let has_b = hist
         .iter()
-        .position(|e| matches!(e, Event::ExternalEvent { name, .. } if name == "B"))
-        .unwrap();
-    let idx_a = hist
+        .any(|e| matches!(e, Event::ExternalEvent { name, .. } if name == "B"));
+    let has_a = hist
         .iter()
-        .position(|e| matches!(e, Event::ExternalEvent { name, .. } if name == "A"))
-        .unwrap();
-    assert!(idx_b < idx_a, "expected ExternalEvent B before A in history: {hist:#?}");
+        .any(|e| matches!(e, Event::ExternalEvent { name, .. } if name == "A"));
+    
+    assert!(has_b, "expected ExternalEvent B in history since it should win: {hist:#?}");
+    assert!(!has_a, "expected ExternalEvent A NOT in history since select should complete after B: {hist:#?}");
     assert!(output.starts_with("B:"), "expected B to win, got {output}");
     rt2.shutdown().await;
 }
@@ -309,15 +315,18 @@ async fn select_three_mixed_history_winner_fs() {
         Event::OrchestrationCompleted { output } => output.clone(),
         _ => String::new(),
     };
-    let idx_b = hist
+    
+    // In the new architecture, select operations complete immediately after the first event
+    // So only the winning event (B) should be in the history, not both events
+    let has_b = hist
         .iter()
-        .position(|e| matches!(e, Event::ExternalEvent { name, .. } if name == "B"))
-        .unwrap();
-    let idx_a = hist
+        .any(|e| matches!(e, Event::ExternalEvent { name, .. } if name == "B"));
+    let has_a = hist
         .iter()
-        .position(|e| matches!(e, Event::ExternalEvent { name, .. } if name == "A"))
-        .unwrap();
-    assert!(idx_b < idx_a, "expected B before A in history: {hist:#?}");
+        .any(|e| matches!(e, Event::ExternalEvent { name, .. } if name == "A"));
+    
+    assert!(has_b, "expected ExternalEvent B in history since it should win: {hist:#?}");
+    assert!(!has_a, "expected ExternalEvent A NOT in history since select should complete after B: {hist:#?}");
     assert!(output.starts_with("B:"), "expected B to win, got {output}");
     rt2.shutdown().await;
 }

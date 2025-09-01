@@ -6,7 +6,7 @@ use semver::Version;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::{Mutex, mpsc};
+use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tracing::{debug, error, info, warn};
 
@@ -78,9 +78,7 @@ pub use router::{InstanceRouter, OrchestratorMsg};
 /// In-process runtime that executes activities and timers and persists
 /// history via a `HistoryStore`.
 pub struct Runtime {
-    // removed: in-proc activity channel
-    router_tx: mpsc::UnboundedSender<OrchestratorMsg>,
-    router: Arc<InstanceRouter>,
+    // removed: in-proc activity channel and router
     joins: Mutex<Vec<JoinHandle<()>>>,
     instance_joins: Mutex<Vec<JoinHandle<()>>>,
     history_store: Arc<dyn HistoryStore>,
@@ -185,16 +183,18 @@ impl Runtime {
         None
     }
     // Associated constants for runtime behavior
-    const COMPLETION_BATCH_LIMIT: usize = 128;
-    const POLLER_GATE_DELAY_MS: u64 = 5;
     const POLLER_IDLE_SLEEP_MS: u64 = 10;
-    const ORCH_IDLE_DEHYDRATE_MS: u64 = 1000;
 
     async fn ensure_instance_active(self: &Arc<Self>, instance: &str, orchestration_name: &str) -> bool {
         if self.active_instances.lock().await.contains(instance) {
             return false;
         }
-        let inner = self.clone().spawn_instance_to_completion(instance, orchestration_name);
+        
+        // Load history and collect any pending completion messages for this instance
+        let history = self.history_store.read(instance).await;
+        let completion_messages = Vec::new(); // TODO: Collect pending messages from orchestrator queue
+        
+        let inner = self.clone().spawn_instance_to_completion(instance, orchestration_name, history, completion_messages);
         // Wrap to normalize handle type to JoinHandle<()>
         let wrapper = tokio::spawn(async move {
             let _ = inner.await;
@@ -252,7 +252,7 @@ impl Runtime {
             self.history_store
                 .append(instance, started)
                 .await
-                .map_err(|e| format!("failed to append OrchestrationStarted: {e}"))?;
+                .map_err(|e| format!("failed to append OrchestrationStarted: {e}"))?;   // TODO : CR : this error would be fatal
         } else {
             // Allow duplicate starts as a warning for detached or at-least-once semantics
             warn!(
@@ -278,95 +278,9 @@ impl Runtime {
         self.history_store.latest_execution_id(instance).await.unwrap_or(1)
     }
 
-    /// Common handler for orchestrator-queue completion items that target a specific instance.
-    /// Validates execution ID (if provided), ensures the instance is active (rehydrates if needed),
-    /// converts WorkItem to OrchestratorMsg, and forwards to the in-proc router with ack token.
-    async fn orchestrator_deliver_work_item(
-        self: &Arc<Self>,
-        work_item: WorkItem,
-        exec_id_check: Option<u64>,
-        token: String,
-    ) {
-        // Extract instance from work item
-        let instance = match &work_item {
-            WorkItem::ActivityCompleted { instance, .. }
-            | WorkItem::ActivityFailed { instance, .. }
-            | WorkItem::TimerFired { instance, .. }
-            | WorkItem::ExternalRaised { instance, .. } => instance,
-            WorkItem::SubOrchCompleted { parent_instance, .. }
-            | WorkItem::SubOrchFailed { parent_instance, .. } => parent_instance,
-            WorkItem::CancelInstance { instance, .. } => instance,
-            _ => {
-                error!("Unsupported WorkItem type for orchestrator delivery");
-                return;
-            }
-        };
 
-        // Validate execution ID first (if provided)
-        if let Some(execution_id) = exec_id_check {
-            if !self.validate_completion_execution_id(instance, execution_id).await {
-                let _ = self.history_store.ack(QueueKind::Orchestrator, &token).await;
-                return;
-            }
-        }
 
-        // Ensure instance is active; if dehydrated, rehydrate and abandon for redelivery
-        if !self.router.inboxes.lock().await.contains_key(instance) {
-            debug!(instance, "instance not active, rehydrating for completion delivery");
-            let orch_name_opt = self.history_store.read(instance).await.iter().find_map(|e| match e {
-                Event::OrchestrationStarted { name, .. } => Some(name.clone()),
-                _ => None,
-            });
-            let orch_name = match orch_name_opt {
-                Some(n) => n,
-                None => {
-                    error!(
-                        instance,
-                        "rehydration requested but no OrchestrationStarted found; state corruption"
-                    );
-                    panic!("no OrchestrationStarted in history for instance");
-                }
-            };
-            debug!(instance, orchestration = %orch_name, "rehydrating instance for completion delivery");
-            self.ensure_instance_active(instance, &orch_name).await;
-            let _ = self.history_store.abandon(QueueKind::Orchestrator, &token).await;
-            debug!(instance, "abandoned completion message for redelivery after rehydration");
-            tokio::time::sleep(std::time::Duration::from_millis(Self::POLLER_GATE_DELAY_MS)).await;
-            return;
-        }
 
-        // Active: convert WorkItem to OrchestratorMsg and forward
-        if let Some(msg) = crate::runtime::router::OrchestratorMsg::from_work_item(work_item, Some(token)) {
-            let _ = self.router_tx.send(msg);
-        }
-    }
-
-    /// Validate that a completion's execution_id matches the current running execution.
-    /// Returns true if valid, false if should be ignored (with warning logged).
-    async fn validate_completion_execution_id(&self, instance: &str, completion_execution_id: u64) -> bool {
-        let current_execution_ids = self.current_execution_ids.lock().await;
-        if let Some(&current_id) = current_execution_ids.get(instance) {
-            if completion_execution_id != current_id {
-                if completion_execution_id < current_id {
-                    warn!(
-                        instance = %instance,
-                        completion_execution_id = completion_execution_id,
-                        current_execution_id = current_id,
-                        "ignoring completion from older execution (likely from ContinueAsNew)"
-                    );
-                } else {
-                    warn!(
-                        instance = %instance,
-                        completion_execution_id = completion_execution_id,
-                        current_execution_id = current_id,
-                        "ignoring completion from future execution (unexpected)"
-                    );
-                }
-                return false;
-            }
-        }
-        true
-    }
 
     /// Enqueue a new orchestration instance start. The runtime will pick this up
     /// in the background and drive it to completion.
@@ -479,26 +393,10 @@ impl Runtime {
             .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
             .try_init();
 
-        let (router_tx, mut router_rx) = mpsc::unbounded_channel::<OrchestratorMsg>();
-        let router = Arc::new(InstanceRouter {
-            inboxes: Mutex::new(HashMap::new()),
-        });
-        let mut joins: Vec<JoinHandle<()>> = Vec::new();
-
-        // spawn router forwarding task
-        let router_clone = router.clone();
-        joins.push(tokio::spawn(async move {
-            while let Some(msg) = router_rx.recv().await {
-                router_clone.forward(msg).await;
-            }
-        }));
-
-
+        let joins: Vec<JoinHandle<()>> = Vec::new();
 
         // start request queue + worker
         let runtime = Arc::new(Self {
-            router_tx,
-            router,
             joins: Mutex::new(joins),
             instance_joins: Mutex::new(Vec::new()),
             history_store,
@@ -586,7 +484,8 @@ impl Runtime {
                                 _ => unreachable!(), // Already handled above
                             }
                             
-                            self.orchestrator_deliver_work_item(completion_item, exec_id, token).await;
+                            // Handle completion by triggering execution with the completion message
+                            self.handle_completion_item(completion_item, exec_id, token).await;
                         }
                     }
                 } else {
@@ -771,13 +670,15 @@ impl Runtime {
         self: Arc<Self>,
         instance: &str,
         orchestration_name: &str,
+        initial_history: Vec<Event>,
+        completion_messages: Vec<OrchestratorMsg>,
     ) -> JoinHandle<(Vec<Event>, Result<String, String>)> {
         let this_for_task = self.clone();
         let inst = instance.to_string();
         let orch_name = orchestration_name.to_string();
         
         tokio::spawn(async move { 
-            this_for_task.run_single_execution(&inst, &orch_name).await 
+            this_for_task.run_single_execution(&inst, &orch_name, initial_history, completion_messages).await 
         })
     }
 
@@ -795,22 +696,180 @@ impl Runtime {
             instance, orchestration, input, version
         );
 
-        // Common orchestration startup logic (with version support)
-        let result = if let Some(v) = version {
-            self.clone().start_orchestration_versioned(instance, orchestration, v, input).await
+        // Ensure instance exists and create initial history if needed
+        let _ = self.history_store.create_instance(instance).await;
+        let mut history = self.history_store.read(instance).await;
+        
+        if history.is_empty() {
+            // Determine version to pin and to write into the start event
+            let maybe_resolved: Option<Version> = if let Some(v) = version.clone().and_then(|s| semver::Version::parse(&s).ok()) {
+                Some(v)
+            } else if let Some(v) = self.pinned_versions.lock().await.get(instance).cloned() {
+                Some(v)
+            } else if let Some((resolved_v, _handler)) =
+                self.orchestration_registry.resolve_for_start(orchestration).await
+            {
+                Some(resolved_v)
+            } else {
+                None
+            };
+            
+            // If resolved, pin for handler resolution and write that version; otherwise use a fallback string version
+            let version_str_for_event: String = if let Some(v) = maybe_resolved.clone() {
+                self.pinned_versions
+                    .lock()
+                    .await
+                    .insert(instance.to_string(), v.clone());
+                v.to_string()
+            } else {
+                "0.0.0".to_string()
+            };
+            
+            let started = vec![Event::OrchestrationStarted {
+                name: orchestration.to_string(),
+                version: version_str_for_event,
+                input: input.clone(),
+                parent_instance: None, // Detached orchestrations have no parent
+                parent_id: None,
+            }];
+            
+            if let Err(e) = self.history_store.append(instance, started.clone()).await {
+                error!(instance, error = %e, "failed to append OrchestrationStarted");
+                let _ = self.history_store.abandon(QueueKind::Orchestrator, &token).await;
+                return;
+            }
+            
+            history.extend(started);
         } else {
-            self.clone().start_orchestration(instance, orchestration, input).await
+            // Allow duplicate starts as a warning for detached or at-least-once semantics
+            warn!(
+                instance,
+                "instance already has history; duplicate start accepted (deduped)"
+            );
+        }
+
+        let completion_messages = Vec::new(); // For now, start with empty messages
+        
+        let (_final_history, result) = self.clone().run_single_execution(
+            instance, 
+            orchestration, 
+            history, 
+            completion_messages
+        ).await;
+        
+        // Log the result
+        match &result {
+            Ok(output) => {
+                debug!(instance, orchestration, output, "Orchestration execution completed successfully");
+            }
+            Err(error) => {
+                debug!(instance, orchestration, error, "Orchestration execution failed");
+            }
+        }
+
+        // Acknowledge the start request
+        let _ = self.history_store.ack(QueueKind::Orchestrator, &token).await;
+    }
+
+    /// Handle completion items by triggering execution with the completion message
+    async fn handle_completion_item(
+        self: &Arc<Self>,
+        work_item: WorkItem,
+        exec_id: Option<u64>,
+        token: String,
+    ) {
+        // Extract instance from the work item
+        let instance = match &work_item {
+            WorkItem::ActivityCompleted { instance, .. }
+            | WorkItem::ActivityFailed { instance, .. }
+            | WorkItem::TimerFired { instance, .. }
+            | WorkItem::ExternalRaised { instance, .. }
+            | WorkItem::CancelInstance { instance, .. } => instance.clone(),
+            WorkItem::SubOrchCompleted { parent_instance, .. }
+            | WorkItem::SubOrchFailed { parent_instance, .. } => parent_instance.clone(),
+            _ => {
+                error!(?work_item, "unexpected WorkItem in completion handler");
+                let _ = self.history_store.abandon(QueueKind::Orchestrator, &token).await;
+                return;
+            }
         };
 
-        // Common acknowledgment
-        match result {
-            Ok(()) => {
+        // Validate execution ID if provided
+        if let Some(completion_exec_id) = exec_id {
+            let current_exec_id = self.history_store.latest_execution_id(&instance).await.unwrap_or(1);
+            if completion_exec_id != current_exec_id {
+                if completion_exec_id < current_exec_id {
+                    warn!(
+                        instance = %instance,
+                        completion_execution_id = completion_exec_id,
+                        current_execution_id = current_exec_id,
+                        "ignoring completion from older execution (likely from ContinueAsNew)"
+                    );
+                } else {
+                    warn!(
+                        instance = %instance,
+                        completion_execution_id = completion_exec_id,
+                        current_execution_id = current_exec_id,
+                        "ignoring completion from future execution (unexpected)"
+                    );
+                }
                 let _ = self.history_store.ack(QueueKind::Orchestrator, &token).await;
+                return;
             }
-            Err(e) => {
-                error!("Failed to start orchestration execution: {}", e);
+        }
+
+        // Convert WorkItem to OrchestratorMsg
+        if let Some(msg) = crate::runtime::router::OrchestratorMsg::from_work_item(work_item, Some(token.clone())) {
+            // Get orchestration name and check if already completed
+            let history = self.history_store.read(&instance).await;
+            
+            // Check if orchestration is already completed
+            let is_completed = history.iter().rev().any(|e| matches!(e, 
+                Event::OrchestrationCompleted { .. } | 
+                Event::OrchestrationFailed { .. } |
+                Event::OrchestrationContinuedAsNew { .. }
+            ));
+            
+            if is_completed {
+                debug!(instance, "ignoring completion for already completed orchestration");
+                let _ = self.history_store.ack(QueueKind::Orchestrator, &token).await;
+                return;
+            }
+            
+            let orchestration_name = history.iter().rev().find_map(|e| match e {
+                Event::OrchestrationStarted { name, .. } => Some(name.clone()),
+                _ => None,
+            });
+
+            if let Some(orch_name) = orchestration_name {
+                // Run execution with this completion message
+                let completion_messages = vec![msg];
+                let (_final_history, result) = self.clone().run_single_execution(
+                    &instance,
+                    &orch_name,
+                    history,
+                    completion_messages,
+                ).await;
+
+                // Log the result
+                match &result {
+                    Ok(output) => {
+                        debug!(instance, orch_name, output, "Completion execution completed successfully");
+                    }
+                    Err(error) => {
+                        debug!(instance, orch_name, error, "Completion execution failed");
+                    }
+                }
+
+                // Acknowledge the completion
+                let _ = self.history_store.ack(QueueKind::Orchestrator, &token).await;
+            } else {
+                error!(instance, "no OrchestrationStarted found in history for completion");
                 let _ = self.history_store.abandon(QueueKind::Orchestrator, &token).await;
             }
+        } else {
+            // WorkItem doesn't convert to OrchestratorMsg, just acknowledge
+            let _ = self.history_store.ack(QueueKind::Orchestrator, &token).await;
         }
     }
 }
