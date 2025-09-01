@@ -14,6 +14,7 @@ pub async fn dispatch_call_activity(
     name: String,
     input: String,
 ) {
+    // TODO : fault injection : simulate the condition where this activity is already completed/failed
     let already_done = history.iter().rev().any(|e| match e {
         Event::ActivityCompleted { id: cid, .. } if *cid == id => true,
         Event::ActivityFailed { id: cid, .. } if *cid == id => true,
