@@ -117,18 +117,8 @@ impl Runtime {
 
         // UNIFIED EXECUTION LOOP - always execute at least one turn
         let mut messages = Vec::new(); // Start with empty messages for initial turn
-        let mut loop_iterations = 0;
         
         loop {
-            loop_iterations += 1;
-            debug!(instance, loop_iterations, "execution loop iteration");
-
-            // Emergency brake for debugging
-            if loop_iterations > 15 {
-                let (hist, result) = self.handle_persistence_error(instance, &history, "emergency exit - infinite loop in execution".to_string()).await;
-                return (hist, result);
-            }
-            
 
 
             debug!(
