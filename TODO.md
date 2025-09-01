@@ -1,5 +1,7 @@
 ## Durable Task Rust Core – TODOs
 
+- fix up the tracing to not use activities
+- fault inject: "TODO : fault injection :"
 - remove the into_activity() and similar methods
 - code coverage
 - Cleanup the docs before making public

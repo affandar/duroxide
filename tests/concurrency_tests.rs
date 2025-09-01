@@ -78,11 +78,11 @@ async fn concurrent_orchestrations_different_activities_with(store: StdArc<dyn H
 
     let rt =
         runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
-    let h1 = rt
+    let _h1 = rt
         .clone()
         .start_orchestration("inst-multi-1", "AddOrchestration", "")
         .await;
-    let h2 = rt
+    let _h2 = rt
         .clone()
         .start_orchestration("inst-multi-2", "UpperOrchestration", "")
         .await;

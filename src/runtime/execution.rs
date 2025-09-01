@@ -50,179 +50,151 @@ impl Runtime {
         // Extract input and parent linkage for the orchestration
         let (input, parent_link) = self.extract_orchestration_context(orchestration_name, &history);
 
-        let mut turn_index = 0u64;
+        let turn_index = 0u64;
 
         // Convert completion messages to the format expected by turns
-        let mut messages: Vec<(OrchestratorMsg, String)> = completion_messages
+        let messages: Vec<(OrchestratorMsg, String)> = completion_messages
             .into_iter()
             .filter_map(|msg| extract_ack_token(&msg).map(|token| (msg, token)))
             .collect();
 
-        // UNIFIED EXECUTION LOOP - always execute at least one turn
-        loop {
-            debug!(
-                instance = %instance,
-                turn_index = turn_index,
-                message_count = messages.len(),
-                "starting orchestration turn"
-            );
+        debug!(
+            instance = %instance,
+            turn_index = turn_index,
+            message_count = messages.len(),
+            "starting orchestration turn"
+        );
 
-            // STAGE 1: EXECUTE ORCHESTRATION TURN
-            let current_execution_history = Self::extract_current_execution_history(&history);
-            let mut turn = OrchestrationTurn::new(
-                instance.to_string(),
-                orchestration_name.to_string(),
-                turn_index,
-                current_execution_history,
-            );
+        // STAGE 1: EXECUTE ORCHESTRATION TURN
+        let current_execution_history = Self::extract_current_execution_history(&history);
+        let mut turn = OrchestrationTurn::new(
+            instance.to_string(),
+            orchestration_name.to_string(),
+            turn_index,
+            current_execution_history,
+        );
 
-            // Prep completions from incoming messages (empty for initial turn)
-            if !messages.is_empty() {
-                turn.prep_completions(messages.clone());
-            }
+        // Prep completions from incoming messages (empty for initial turn)
+        if !messages.is_empty() {
+            turn.prep_completions(messages.clone());
+        }
 
-            // Execute the orchestration logic
-            let turn_result = turn.execute_orchestration(handler.clone(), input.clone());
+        // Execute the orchestration logic
+        let turn_result = turn.execute_orchestration(handler.clone(), input.clone());
 
-            // STAGE 3: HANDLE TURN RESULT
-            match turn_result {
-                TurnResult::Continue => {
-                    // Standard turn - persist changes and continue
-                    if let Err(e) = turn.persist_changes(self.history_store.clone(), &self).await {
-                        // CR TODO : abandon the messages here as well
-                        let (hist, result) = self.handle_persistence_error(instance, &history, e).await;
-                        return (hist, result);
-                    }
-
-                    // Update local history
-                    history = turn.final_history();
-
-                    // Acknowledge messages after successful persistence
-                    turn.acknowledge_messages(self.history_store.clone()).await;
-
-                    // Check for progress - new messages should always make progress
-                    if turn.made_progress() {
-                        turn_index += 1;
-                    } else {
-                        // If we received messages but made no progress, this indicates a serious issue
-                        // Duplicates are already filtered out by CompletionMap, so this should not happen
-                        if !messages.is_empty() {
-                            let error = format!(
-                                "execution made no progress despite receiving {} messages - indicates orchestration bug or corruption",
-                                messages.len()
-                            );
-                            let (hist, result) = self.handle_persistence_error(instance, &history, error).await;
-                            return (hist, result);
-                        }
-                        // If no messages, this is expected (e.g., initial turn or waiting for completions)
-                        debug!(instance = %instance, "turn made no progress (no messages received)");
-                    }
+        // STAGE 3: HANDLE TURN RESULT
+        match turn_result {
+            TurnResult::Continue => {
+                // Standard turn - persist changes
+                if let Err(e) = turn.persist_changes(self.history_store.clone(), &self).await {
+                    let (hist, result) = self.handle_persistence_error(instance, &history, e).await;
+                    return (hist, result);
                 }
-                TurnResult::Completed(output) => {
-                    // Orchestration completed successfully
-                    let result = (&self)
-                        .handle_orchestration_completion(
-                            instance,
-                            &mut turn,
-                            &mut history,
-                            Ok(output.clone()),
-                            parent_link.clone(),
-                        )
-                        .await;
 
-                    let duration = start_time.elapsed();
-                    debug!(
-                        instance,
-                        orchestration_name,
-                        duration_ms = duration.as_millis(),
-                        "✅ Instance execution completed successfully"
+                // Update local history
+                history = turn.final_history();
+
+                // Acknowledge messages after successful persistence
+                turn.acknowledge_messages(self.history_store.clone()).await;
+
+                // Check for progress - messages should cause progress, otherwise it's an error
+                if !turn.made_progress() && !messages.is_empty() {
+                    let error = format!(
+                        "execution made no progress despite receiving {} messages - indicates orchestration bug or corruption",
+                        messages.len()
                     );
-                    return (result.0, result.1);
+                    let (hist, result) = self.handle_persistence_error(instance, &history, error).await;
+                    return (hist, result);
                 }
-                TurnResult::Failed(error) => {
-                    // Orchestration failed
-                    let result = (&self)
-                        .handle_orchestration_completion(
-                            instance,
-                            &mut turn,
-                            &mut history,
-                            Err(error.clone()),
-                            parent_link.clone(),
-                        )
-                        .await;
 
-                    let duration = start_time.elapsed();
-                    debug!(instance, orchestration_name, error = %error, duration_ms = duration.as_millis(),
-                           "❌ Instance execution failed");
-                    return (result.0, result.1);
-                }
-                TurnResult::ContinueAsNew {
-                    input: new_input,
-                    version,
-                } => {
-                    // Handle continue-as-new
-                    match (&self)
-                        .handle_continue_as_new(
-                            instance,
-                            orchestration_name,
-                            &mut turn,
-                            &mut history,
-                            new_input,
-                            version,
-                        )
-                        .await
-                    {
-                        Ok(()) => {
-                            let duration = start_time.elapsed();
-                            debug!(
-                                instance,
-                                orchestration_name,
-                                duration_ms = duration.as_millis(),
-                                "🔄 Instance execution continued-as-new"
-                            );
-                            // Continue-as-new is now handled via orchestrator queue
-                            // Return success with empty result as the new execution will provide the final result
-                            return (history, Ok(String::new()));
-                        }
-                        Err(e) => {
-                            return (history, Err(e));
-                        }
-                    }
-                }
-                TurnResult::Cancelled(reason) => {
-                    // Handle cancellation with propagation to child orchestrations
-
-                    // Propagate cancellation to sub-orchestrations
-                    self.propagate_cancellation_to_children(instance, &history).await;
-
-                    let result = (&self)
-                        .handle_orchestration_completion(
-                            instance,
-                            &mut turn,
-                            &mut history,
-                            Err(format!("canceled: {}", reason)),
-                            parent_link.clone(),
-                        )
-                        .await;
-
-                    let duration = start_time.elapsed();
-                    debug!(instance, orchestration_name, reason = %reason, duration_ms = duration.as_millis(),
-                           "⚠️ Instance execution cancelled");
-                    return (result.0, result.1);
-                }
-            }
-
-            // STAGE 2: HANDLE COMPLETION - no more messages to process
-            // Since we're processing all messages in one shot, we're done after the first iteration
-            // unless the orchestration is still waiting for more completions
-            if messages.is_empty() {
-                // No more messages to process - execution is complete for now
+                // No further batching within this execution; return control to dispatcher
                 debug!(instance = %instance, "no more messages to process, execution complete");
                 return (history, Ok(String::new()));
             }
+            TurnResult::Completed(output) => {
+                // Orchestration completed successfully
+                let result = (&self)
+                    .handle_orchestration_completion(
+                        instance,
+                        &mut turn,
+                        &mut history,
+                        Ok(output.clone()),
+                        parent_link.clone(),
+                    )
+                    .await;
 
-            // Clear messages after processing to avoid infinite loop
-            messages.clear();
+                let duration = start_time.elapsed();
+                debug!(
+                    instance,
+                    orchestration_name,
+                    duration_ms = duration.as_millis(),
+                    "✅ Instance execution completed successfully"
+                );
+                return (result.0, result.1);
+            }
+            TurnResult::Failed(error) => {
+                // Orchestration failed
+                let result = (&self)
+                    .handle_orchestration_completion(
+                        instance,
+                        &mut turn,
+                        &mut history,
+                        Err(error.clone()),
+                        parent_link.clone(),
+                    )
+                    .await;
+
+                let duration = start_time.elapsed();
+                debug!(instance, orchestration_name, error = %error, duration_ms = duration.as_millis(),
+                       "❌ Instance execution failed");
+                return (result.0, result.1);
+            }
+            TurnResult::ContinueAsNew { input: new_input, version } => {
+                match (&self)
+                    .handle_continue_as_new(
+                        instance,
+                        orchestration_name,
+                        &mut turn,
+                        &mut history,
+                        new_input,
+                        version,
+                    )
+                    .await
+                {
+                    Ok(()) => {
+                        let duration = start_time.elapsed();
+                        debug!(
+                            instance,
+                            orchestration_name,
+                            duration_ms = duration.as_millis(),
+                            "🔄 Instance execution continued-as-new"
+                        );
+                        return (history, Ok(String::new()));
+                    }
+                    Err(e) => {
+                        return (history, Err(e));
+                    }
+                }
+            }
+            TurnResult::Cancelled(reason) => {
+                // Propagate cancellation to sub-orchestrations
+                self.propagate_cancellation_to_children(instance, &history).await;
+
+                let result = (&self)
+                    .handle_orchestration_completion(
+                        instance,
+                        &mut turn,
+                        &mut history,
+                        Err(format!("canceled: {}", reason)),
+                        parent_link.clone(),
+                    )
+                    .await;
+
+                let duration = start_time.elapsed();
+                debug!(instance, orchestration_name, reason = %reason, duration_ms = duration.as_millis(),
+                       "⚠️ Instance execution cancelled");
+                return (result.0, result.1);
+            }
         }
     }
 

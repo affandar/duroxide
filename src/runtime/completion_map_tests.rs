@@ -1,6 +1,5 @@
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::Event;
     use crate::runtime::completion_map::*;
     use crate::runtime::router::OrchestratorMsg;
