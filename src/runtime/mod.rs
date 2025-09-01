@@ -16,7 +16,7 @@ pub mod router;
 pub mod status;
 mod timers;
 use async_trait::async_trait;
-use std::collections::HashSet;
+
 
 
 pub mod completion_map;
@@ -82,7 +82,7 @@ pub struct Runtime {
     joins: Mutex<Vec<JoinHandle<()>>>,
     instance_joins: Mutex<Vec<JoinHandle<()>>>,
     history_store: Arc<dyn HistoryStore>,
-    active_instances: Mutex<HashSet<String>>,
+
     // pending_starts removed
     // result_waiters removed - using polling approach instead
     orchestration_registry: OrchestrationRegistry,
@@ -185,23 +185,8 @@ impl Runtime {
     // Associated constants for runtime behavior
     const POLLER_IDLE_SLEEP_MS: u64 = 10;
 
-    async fn ensure_instance_active(self: &Arc<Self>, instance: &str, orchestration_name: &str) -> bool {
-        if self.active_instances.lock().await.contains(instance) {
-            return false;
-        }
-        
-        // Load history and collect any pending completion messages for this instance
-        let history = self.history_store.read(instance).await;
-        let completion_messages = Vec::new(); // TODO: Collect pending messages from orchestrator queue
-        
-        let inner = self.clone().spawn_instance_to_completion(instance, orchestration_name, history, completion_messages);
-        // Wrap to normalize handle type to JoinHandle<()>
-        let wrapper = tokio::spawn(async move {
-            let _ = inner.await;
-        });
-        self.instance_joins.lock().await.push(wrapper);
-        true
-    }
+    // ensure_instance_active is no longer needed in the direct execution model
+    // Each completion message triggers a direct one-shot execution
 
 
     /// Start an orchestration and ensure the instance is active.
@@ -245,7 +230,7 @@ impl Runtime {
             let started = vec![Event::OrchestrationStarted {
                 name: orchestration_name.to_string(),
                 version: version_str_for_event,
-                input,
+                input: input.clone(),
                 parent_instance,
                 parent_id,
             }];
@@ -261,8 +246,18 @@ impl Runtime {
             );
         }
         
-        // Enqueue a start request; background worker will dedupe and run exactly one execution
-        self.ensure_instance_active(instance, orchestration_name).await;
+        // In the new direct execution model, enqueue a StartOrchestration work item
+        // to trigger the dispatcher to start this orchestration
+        let start_work_item = WorkItem::StartOrchestration {
+            instance: instance.to_string(),
+            orchestration: orchestration_name.to_string(),
+            input: input.clone(),
+            version: None, // Version is already handled above
+        };
+        
+        if let Err(e) = self.history_store.enqueue_work(QueueKind::Orchestrator, start_work_item).await {
+            debug!(instance, orchestration_name, error = %e, "failed to enqueue StartOrchestration work item");
+        }
         
         Ok(())
     }
@@ -400,7 +395,7 @@ impl Runtime {
             joins: Mutex::new(joins),
             instance_joins: Mutex::new(Vec::new()),
             history_store,
-            active_instances: Mutex::new(HashSet::new()),
+
             orchestration_registry,
             pinned_versions: Mutex::new(HashMap::new()),
             current_execution_ids: Mutex::new(HashMap::new()),

@@ -419,9 +419,8 @@ impl Runtime {
             return Err(format!("continue-as-new new execution failed: {e}"));
         }
 
-        // Clean up current execution from active instances
-        // This execution is now complete
-        self.active_instances.lock().await.remove(instance);
+        // In the new direct execution model, no cleanup needed
+        // Each execution is already one-shot and self-contained
         
         // Enqueue a ContinueAsNew work item to the orchestrator queue
         // The dispatcher will handle starting the new execution normally
