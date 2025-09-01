@@ -1,7 +1,10 @@
-use std::sync::Arc;
-use crate::{Event, runtime::{OrchestrationHandler, router::OrchestratorMsg}};
+use super::completion_map::{CompletionKind, CompletionMap};
 use crate::providers::{HistoryStore, QueueKind};
-use super::completion_map::{CompletionMap, CompletionKind};
+use crate::{
+    Event,
+    runtime::{OrchestrationHandler, router::OrchestratorMsg},
+};
+use std::sync::Arc;
 use tracing::{debug, error, warn};
 
 /// Result of executing an orchestration turn
@@ -42,12 +45,7 @@ pub struct OrchestrationTurn {
 
 impl OrchestrationTurn {
     /// Create a new orchestration turn
-    pub fn new(
-        instance: String,
-        orchestration_name: String,
-        turn_index: u64,
-        baseline_history: Vec<Event>,
-    ) -> Self {
+    pub fn new(instance: String, orchestration_name: String, turn_index: u64, baseline_history: Vec<Event>) -> Self {
         Self {
             instance,
             orchestration_name,
@@ -84,30 +82,30 @@ impl OrchestrationTurn {
                 }
                 OrchestratorMsg::CancelRequested { reason, .. } => {
                     // Handle cancellation immediately - add to history delta, don't use completion map
-                    
+
                     // Check if orchestration is already terminated
                     // Since baseline_history is now filtered to current execution only,
                     // we can simply check for terminal events
-                    let already_terminated = self.baseline_history
-                        .iter()
-                        .any(|e| matches!(e, 
-                            Event::OrchestrationCompleted { .. } 
-                            | Event::OrchestrationFailed { .. }
-                        ));
-                    
+                    let already_terminated = self.baseline_history.iter().any(|e| {
+                        matches!(
+                            e,
+                            Event::OrchestrationCompleted { .. } | Event::OrchestrationFailed { .. }
+                        )
+                    });
+
                     // Check for duplicate cancellation (idempotent)
-                    let already_cancelled = self.baseline_history
+                    let already_cancelled = self
+                        .baseline_history
                         .iter()
                         .chain(self.history_delta.iter())
                         .any(|e| matches!(e, Event::OrchestrationCancelRequested { .. }));
-                    
+
                     // Only add cancellation if not already terminated and not already cancelled
                     if !already_terminated && !already_cancelled {
-                        self.history_delta.push(Event::OrchestrationCancelRequested { 
-                            reason: reason.clone() 
-                        });
+                        self.history_delta
+                            .push(Event::OrchestrationCancelRequested { reason: reason.clone() });
                     }
-                    
+
                     Some(token)
                 }
                 _ => {
@@ -132,11 +130,7 @@ impl OrchestrationTurn {
 
     /// Stage 2: Execute one turn of the orchestration using the replay engine
     /// This stage runs the orchestration logic and generates history deltas and actions
-    pub fn execute_orchestration(
-        &mut self,
-        handler: Arc<dyn OrchestrationHandler>,
-        input: String,
-    ) -> TurnResult {
+    pub fn execute_orchestration(&mut self, handler: Arc<dyn OrchestrationHandler>, input: String) -> TurnResult {
         debug!(
             instance = %self.instance,
             turn_index = self.turn_index,
@@ -145,7 +139,7 @@ impl OrchestrationTurn {
 
         // Set up the modified history with completion map context
         let mut working_history = self.baseline_history.clone();
-        
+
         // Add any completion events from the completion map in order
         // This allows the orchestration to see completions during replay
         self.apply_completions_to_history(&mut working_history);
@@ -156,11 +150,9 @@ impl OrchestrationTurn {
         // 2. We need to pass it to async futures that may outlive this scope
         // 3. Rust's borrow checker doesn't allow Arc<Mutex<&mut T>> to work cleanly
         // 4. The copy cost is minimal compared to the determinism benefits
-        let completion_map_arc = std::sync::Arc::new(std::sync::Mutex::new(
-            self.completion_map.clone()
-        ));
+        let completion_map_arc = std::sync::Arc::new(std::sync::Mutex::new(self.completion_map.clone()));
 
-        let (updated_history, decisions, _logs, output_opt, _claims) = 
+        let (updated_history, decisions, _logs, output_opt, _claims) =
             super::completion_aware_futures::run_turn_with_completion_map(
                 working_history,
                 self.turn_index,
@@ -171,7 +163,7 @@ impl OrchestrationTurn {
                     async move { h.invoke(ctx, inp).await }
                 },
             );
-            
+
         // Sync back any consumption state from the orchestration execution
         // Futures mark items as consumed during polling
         {
@@ -183,11 +175,11 @@ impl OrchestrationTurn {
                 }
             }
             // Remove consumed entries from by_id map
-            self.completion_map.by_id.retain(|key, _| {
-                executed_map.by_id.contains_key(key)
-            });
+            self.completion_map
+                .by_id
+                .retain(|key, _| executed_map.by_id.contains_key(key));
         }
-        
+
         // Cleanup consumed entries
         self.completion_map.cleanup_consumed();
 
@@ -204,8 +196,11 @@ impl OrchestrationTurn {
             h.extend(self.history_delta.clone());
             h
         };
-        
-        if let Some(cancel_event) = full_history.iter().find(|e| matches!(e, Event::OrchestrationCancelRequested { .. })) {
+
+        if let Some(cancel_event) = full_history
+            .iter()
+            .find(|e| matches!(e, Event::OrchestrationCancelRequested { .. }))
+        {
             if let Event::OrchestrationCancelRequested { reason } = cancel_event {
                 return TurnResult::Cancelled(reason.clone());
             }
@@ -241,10 +236,10 @@ impl OrchestrationTurn {
         // Check if there are unconsumed completions that indicate non-determinism
         if self.completion_map.has_unconsumed() {
             let unconsumed = self.completion_map.get_unconsumed();
-            
+
             // Generate more specific error message based on context
             let error = self.generate_nondeterminism_error(&unconsumed);
-            
+
             warn!(instance = %self.instance, error = %error, "detected non-determinism");
             return TurnResult::Failed(error);
         }
@@ -253,11 +248,14 @@ impl OrchestrationTurn {
     }
 
     /// Generate a specific non-determinism error message based on the context
-    fn generate_nondeterminism_error(&self, unconsumed: &[(crate::runtime::completion_map::CompletionKind, u64)]) -> String {
+    fn generate_nondeterminism_error(
+        &self,
+        unconsumed: &[(crate::runtime::completion_map::CompletionKind, u64)],
+    ) -> String {
         // Check if this looks like a completion kind mismatch
         // Look at the history to see what kinds of futures were scheduled
         let mut expected_kinds = std::collections::HashMap::new();
-        
+
         for event in &self.baseline_history {
             match event {
                 crate::Event::ActivityScheduled { id, .. } => {
@@ -275,7 +273,7 @@ impl OrchestrationTurn {
                 _ => {}
             }
         }
-        
+
         // Check for kind mismatches in unconsumed completions
         for (completion_kind, completion_id) in unconsumed {
             if let Some(expected_kind) = expected_kinds.get(completion_id) {
@@ -296,7 +294,7 @@ impl OrchestrationTurn {
                 );
             }
         }
-        
+
         // If no specific mismatch found, provide the generic message
         format!("nondeterministic: unconsumed completions: {:?}", unconsumed)
     }
@@ -306,7 +304,7 @@ impl OrchestrationTurn {
 fn kind_to_string(kind: crate::runtime::completion_map::CompletionKind) -> &'static str {
     match kind {
         crate::runtime::completion_map::CompletionKind::Activity => "activity",
-        crate::runtime::completion_map::CompletionKind::Timer => "timer", 
+        crate::runtime::completion_map::CompletionKind::Timer => "timer",
         crate::runtime::completion_map::CompletionKind::External => "external",
         crate::runtime::completion_map::CompletionKind::SubOrchestration => "suborchestration",
         crate::runtime::completion_map::CompletionKind::Cancel => "cancel",
@@ -350,7 +348,9 @@ impl OrchestrationTurn {
             h
         };
 
-        runtime.apply_decisions(&self.instance, &full_history, self.pending_actions.clone()).await;
+        runtime
+            .apply_decisions(&self.instance, &full_history, self.pending_actions.clone())
+            .await;
 
         debug!(
             instance = %self.instance,
@@ -400,7 +400,7 @@ impl OrchestrationTurn {
         // We don't actually modify history here - the completion map will be consulted
         // by the modified future polling logic. This method is kept for future use
         // if we need to inject completion events directly into history.
-        
+
         // The completion map will be made available to futures through a different mechanism
         // to maintain the existing API contract with the orchestration context.
     }
@@ -431,8 +431,8 @@ impl OrchestrationTurn {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Event;
     use crate::runtime::router::OrchestratorMsg;
-    use crate::{Event};
 
     #[test]
     fn test_turn_lifecycle() {
@@ -450,18 +450,16 @@ mod tests {
         );
 
         // Stage 1: Prep completions
-        let messages = vec![
-            (
-                OrchestratorMsg::ActivityCompleted {
-                    instance: "test-instance".to_string(),
-                    execution_id: 1,
-                    id: 1,
-                    result: "success".to_string(),
-                    ack_token: Some("token1".to_string()),
-                },
-                "token1".to_string(),
-            ),
-        ];
+        let messages = vec![(
+            OrchestratorMsg::ActivityCompleted {
+                instance: "test-instance".to_string(),
+                execution_id: 1,
+                id: 1,
+                result: "success".to_string(),
+                ack_token: Some("token1".to_string()),
+            },
+            "token1".to_string(),
+        )];
 
         turn.prep_completions(messages);
         assert_eq!(turn.ack_tokens.len(), 1);

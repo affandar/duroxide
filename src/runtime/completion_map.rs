@@ -1,5 +1,5 @@
-use std::collections::{HashMap, VecDeque};
 use crate::{Event, runtime::router::OrchestratorMsg};
+use std::collections::{HashMap, VecDeque};
 use tracing::debug;
 
 /// The kind of completion for deterministic ordering
@@ -63,35 +63,68 @@ impl CompletionMap {
     /// Add a completion from an orchestrator message
     pub fn add_completion(&mut self, msg: OrchestratorMsg) -> Option<String> {
         let (kind, correlation_id, value, ack_token) = match msg {
-            OrchestratorMsg::ActivityCompleted { id, result, ack_token, .. } => {
-                (CompletionKind::Activity, id, CompletionValue::ActivityResult(Ok(result)), ack_token)
-            }
-            OrchestratorMsg::ActivityFailed { id, error, ack_token, .. } => {
-                (CompletionKind::Activity, id, CompletionValue::ActivityResult(Err(error)), ack_token)
-            }
-            OrchestratorMsg::TimerFired { id, fire_at_ms, ack_token, .. } => {
-                (CompletionKind::Timer, id, CompletionValue::TimerFired { fire_at_ms }, ack_token)
-            }
+            OrchestratorMsg::ActivityCompleted {
+                id, result, ack_token, ..
+            } => (
+                CompletionKind::Activity,
+                id,
+                CompletionValue::ActivityResult(Ok(result)),
+                ack_token,
+            ),
+            OrchestratorMsg::ActivityFailed {
+                id, error, ack_token, ..
+            } => (
+                CompletionKind::Activity,
+                id,
+                CompletionValue::ActivityResult(Err(error)),
+                ack_token,
+            ),
+            OrchestratorMsg::TimerFired {
+                id,
+                fire_at_ms,
+                ack_token,
+                ..
+            } => (
+                CompletionKind::Timer,
+                id,
+                CompletionValue::TimerFired { fire_at_ms },
+                ack_token,
+            ),
             OrchestratorMsg::ExternalByName { ack_token, .. } => {
                 // For external events, we'll use a special correlation strategy
                 // For now, we'll need to find the subscription ID from history
                 // This will be handled by the caller
                 return ack_token;
             }
-            OrchestratorMsg::SubOrchCompleted { id, result, ack_token, .. } => {
-                (CompletionKind::SubOrchestration, id, CompletionValue::SubOrchResult(Ok(result)), ack_token)
-            }
-            OrchestratorMsg::SubOrchFailed { id, error, ack_token, .. } => {
-                (CompletionKind::SubOrchestration, id, CompletionValue::SubOrchResult(Err(error)), ack_token)
-            }
+            OrchestratorMsg::SubOrchCompleted {
+                id, result, ack_token, ..
+            } => (
+                CompletionKind::SubOrchestration,
+                id,
+                CompletionValue::SubOrchResult(Ok(result)),
+                ack_token,
+            ),
+            OrchestratorMsg::SubOrchFailed {
+                id, error, ack_token, ..
+            } => (
+                CompletionKind::SubOrchestration,
+                id,
+                CompletionValue::SubOrchResult(Err(error)),
+                ack_token,
+            ),
             OrchestratorMsg::CancelRequested { reason, ack_token, .. } => {
                 // Cancel uses a special correlation ID of 0
-                (CompletionKind::Cancel, 0, CompletionValue::CancelReason(reason), ack_token)
+                (
+                    CompletionKind::Cancel,
+                    0,
+                    CompletionValue::CancelReason(reason),
+                    ack_token,
+                )
             }
         };
 
         let key = (kind, correlation_id);
-        
+
         // Check for duplicates
         if self.by_id.contains_key(&key) {
             debug!(kind=?kind, correlation_id, "ignoring duplicate completion");
@@ -135,16 +168,18 @@ impl CompletionMap {
     /// Get completion data if it exists and is ready to be consumed
     pub fn get_ready_completion(&mut self, kind: CompletionKind, correlation_id: u64) -> Option<CompletionData> {
         let key = (kind, correlation_id);
-        
+
         // Only return if this is the next completion in order
         if !self.is_next_ready(kind, correlation_id) {
             return None;
         }
 
         // Mark as consumed in the ordered queue
-        if let Some(entry) = self.ordered.iter_mut().find(|entry| 
-            !entry.consumed && entry.kind == kind && entry.correlation_id == correlation_id
-        ) {
+        if let Some(entry) = self
+            .ordered
+            .iter_mut()
+            .find(|entry| !entry.consumed && entry.kind == kind && entry.correlation_id == correlation_id)
+        {
             entry.consumed = true;
         }
 
@@ -158,7 +193,8 @@ impl CompletionMap {
 
     /// Get all unconsumed completions (for error reporting)
     pub fn get_unconsumed(&self) -> Vec<(CompletionKind, u64)> {
-        self.ordered.iter()
+        self.ordered
+            .iter()
             .filter(|entry| !entry.consumed)
             .map(|entry| (entry.kind, entry.correlation_id))
             .collect()
@@ -176,18 +212,22 @@ impl CompletionMap {
     }
 
     /// Handle external events by finding the corresponding subscription
-    pub fn add_external_completion(&mut self, name: String, data: String, history: &[Event], ack_token: Option<String>) -> Option<String> {
+    pub fn add_external_completion(
+        &mut self,
+        name: String,
+        data: String,
+        history: &[Event],
+        ack_token: Option<String>,
+    ) -> Option<String> {
         // Find the most recent subscription for this event name
         let subscription_id = history.iter().rev().find_map(|e| match e {
             Event::ExternalSubscribed { id, name: sub_name } if sub_name == &name => Some(*id),
             _ => None,
         });
-        
-
 
         if let Some(correlation_id) = subscription_id {
             let key = (CompletionKind::External, correlation_id);
-            
+
             // Check for duplicates
             if self.by_id.contains_key(&key) {
                 debug!(name=%name, correlation_id, "ignoring duplicate external completion");
@@ -200,7 +240,10 @@ impl CompletionMap {
             let completion_data = CompletionData {
                 kind: CompletionKind::External,
                 correlation_id,
-                data: CompletionValue::ExternalData { name: name.clone(), data },
+                data: CompletionValue::ExternalData {
+                    name: name.clone(),
+                    data,
+                },
                 arrival_order,
             };
 
@@ -230,5 +273,3 @@ impl Default for CompletionMap {
 // Include comprehensive tests
 #[path = "completion_map_tests.rs"]
 mod completion_map_tests;
-
-

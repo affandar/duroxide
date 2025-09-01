@@ -49,7 +49,7 @@ async fn sample_hello_world_fs() {
         .start_orchestration("inst-sample-hello-1", "HelloWorld", "World")
         .await
         .unwrap();
-    
+
     match rt
         .wait_for_orchestration("inst-sample-hello-1", std::time::Duration::from_secs(5))
         .await
@@ -101,7 +101,7 @@ async fn sample_basic_control_flow_fs() {
         .start_orchestration("inst-sample-cflow-1", "ControlFlow", "")
         .await
         .unwrap();
-    
+
     match rt
         .wait_for_orchestration("inst-sample-cflow-1", std::time::Duration::from_secs(5))
         .await
@@ -150,7 +150,7 @@ async fn sample_loop_fs() {
         .start_orchestration("inst-sample-loop-1", "LoopOrchestration", "")
         .await
         .unwrap();
-    
+
     match rt
         .wait_for_orchestration("inst-sample-loop-1", std::time::Duration::from_secs(5))
         .await
@@ -214,7 +214,7 @@ async fn sample_error_handling_fs() {
         .start_orchestration("inst-sample-err-1", "ErrorHandling", "")
         .await
         .unwrap();
-    
+
     match rt
         .wait_for_orchestration("inst-sample-err-1", std::time::Duration::from_secs(5))
         .await
@@ -263,14 +263,13 @@ async fn sample_timeout_with_timer_race_fs() {
         .register("TimeoutSample", orchestration)
         .build();
 
-    let rt =
-        runtime::Runtime::start_with_store(store, Arc::new(activity_registry), orchestration_registry).await;
+    let rt = runtime::Runtime::start_with_store(store, Arc::new(activity_registry), orchestration_registry).await;
     let _handle = rt
         .clone()
         .start_orchestration("inst-timeout-sample", "TimeoutSample", "")
         .await
         .unwrap();
-    
+
     match rt
         .wait_for_orchestration("inst-timeout-sample", std::time::Duration::from_secs(5))
         .await
@@ -334,7 +333,7 @@ async fn sample_select2_activity_vs_external_fs() {
         .start_orchestration("inst-s2-mixed", "Select2ActVsEvt", "")
         .await
         .unwrap();
-    
+
     let s = match rt
         .wait_for_orchestration("inst-s2-mixed", std::time::Duration::from_secs(5))
         .await
@@ -396,7 +395,7 @@ async fn dtf_legacy_gabbar_greetings_fs() {
         .start_orchestration("inst-dtf-greetings", "Greetings", "")
         .await
         .unwrap();
-    
+
     match rt
         .wait_for_orchestration("inst-dtf-greetings", std::time::Duration::from_secs(5))
         .await
@@ -439,7 +438,7 @@ async fn sample_system_activities_fs() {
         .start_orchestration("inst-system-acts", "SystemActivities", "")
         .await
         .unwrap();
-    
+
     let out = match rt
         .wait_for_orchestration("inst-system-acts", std::time::Duration::from_secs(5))
         .await
@@ -539,7 +538,7 @@ async fn sample_sub_orchestration_basic_fs() {
         .start_orchestration("inst-sub-basic", "Parent", "hi")
         .await
         .unwrap();
-    
+
     match rt
         .wait_for_orchestration("inst-sub-basic", std::time::Duration::from_secs(5))
         .await
@@ -603,7 +602,7 @@ async fn sample_sub_orchestration_fanout_fs() {
         .start_orchestration("inst-sub-fan", "ParentFan", "")
         .await
         .unwrap();
-    
+
     match rt
         .wait_for_orchestration("inst-sub-fan", std::time::Duration::from_secs(5))
         .await
@@ -663,7 +662,7 @@ async fn sample_sub_orchestration_chained_fs() {
         .start_orchestration("inst-sub-chain", "Root", "a")
         .await
         .unwrap();
-    
+
     match rt
         .wait_for_orchestration("inst-sub-chain", std::time::Duration::from_secs(5))
         .await
@@ -714,7 +713,7 @@ async fn sample_detached_orchestration_scheduling_fs() {
         .start_orchestration("CoordinatorRoot", "Coordinator", "")
         .await
         .unwrap();
-    
+
     match rt
         .wait_for_orchestration("CoordinatorRoot", std::time::Duration::from_secs(5))
         .await
@@ -776,7 +775,7 @@ async fn sample_continue_as_new_fs() {
         .start_orchestration("inst-sample-can", "CanSample", "0")
         .await
         .unwrap();
-    
+
     match rt
         .wait_for_orchestration("inst-sample-can", std::time::Duration::from_secs(5))
         .await
@@ -834,7 +833,7 @@ async fn sample_typed_activity_and_orchestration_fs() {
         .start_orchestration_typed::<AddReq>("inst-typed-add", "Adder", AddReq { a: 2, b: 3 })
         .await
         .unwrap();
-    
+
     match rt
         .wait_for_orchestration_typed::<AddRes>("inst-typed-add", std::time::Duration::from_secs(5))
         .await
@@ -875,7 +874,7 @@ async fn sample_typed_event_fs() {
         .start_orchestration_typed::<()>("inst-typed-ack", "WaitAck", ())
         .await
         .unwrap();
-    
+
     match rt
         .wait_for_orchestration_typed::<String>("inst-typed-ack", std::time::Duration::from_secs(5))
         .await
@@ -929,7 +928,7 @@ async fn sample_mixed_string_and_typed_typed_orch_fs() {
         .start_orchestration_typed::<AddReq>("inst-mixed-typed", "MixedTypedOrch", AddReq { a: 1, b: 2 })
         .await
         .unwrap();
-    
+
     let s = match rt
         .wait_for_orchestration_typed::<String>("inst-mixed-typed", std::time::Duration::from_secs(5))
         .await
@@ -981,7 +980,7 @@ async fn sample_mixed_string_and_typed_string_orch_fs() {
         .start_orchestration("inst-mixed-string", "MixedStringOrch", "")
         .await
         .unwrap();
-    
+
     let s = match rt
         .wait_for_orchestration("inst-mixed-string", std::time::Duration::from_secs(5))
         .await
@@ -1025,7 +1024,7 @@ async fn sample_versioning_start_latest_vs_exact_fs() {
         .start_orchestration("inst-vers-latest", "Versioned", "")
         .await
         .unwrap();
-    
+
     match rt
         .wait_for_orchestration("inst-vers-latest", std::time::Duration::from_secs(5))
         .await
@@ -1047,7 +1046,7 @@ async fn sample_versioning_start_latest_vs_exact_fs() {
         .start_orchestration("inst-vers-exact", "Versioned", "")
         .await
         .unwrap();
-    
+
     match rt
         .wait_for_orchestration("inst-vers-exact", std::time::Duration::from_secs(5))
         .await
@@ -1102,7 +1101,7 @@ async fn sample_versioning_sub_orchestration_explicit_vs_policy_fs() {
         .start_orchestration("inst-sub-vers", "ParentVers", "")
         .await
         .unwrap();
-    
+
     match rt
         .wait_for_orchestration("inst-sub-vers", std::time::Duration::from_secs(5))
         .await

@@ -1,4 +1,3 @@
-
 use std::sync::Arc;
 mod common;
 use rust_dtf::providers::HistoryStore;
@@ -14,7 +13,7 @@ async fn concurrent_orchestrations_different_activities_with(store: StdArc<dyn H
         let f_e = ctx.schedule_wait("Go");
         let f_t = ctx.schedule_timer(1);
         let results = ctx.join(vec![f_a, f_e, f_t]).await;
-        
+
         // Find activity and external results (order may vary due to history ordering)
         let mut a = None;
         let mut e = None;
@@ -29,10 +28,10 @@ async fn concurrent_orchestrations_different_activities_with(store: StdArc<dyn H
                 _ => {} // Ignore timer for now
             }
         }
-        
+
         let a = a.expect("activity result not found");
         let e = e.expect("external result not found");
-        
+
         Ok(format!("o1:sum={a};evt={e}"))
     };
     let o2 = |ctx: OrchestrationContext, _input: String| async move {
@@ -40,7 +39,7 @@ async fn concurrent_orchestrations_different_activities_with(store: StdArc<dyn H
         let f_e = ctx.schedule_wait("Go");
         let f_t = ctx.schedule_timer(1);
         let results = ctx.join(vec![f_a, f_e, f_t]).await;
-        
+
         // Find activity and external results (order may vary due to history ordering)
         let mut a = None;
         let mut e = None;
@@ -55,10 +54,10 @@ async fn concurrent_orchestrations_different_activities_with(store: StdArc<dyn H
                 _ => {} // Ignore timer for now
             }
         }
-        
+
         let a = a.expect("activity result not found");
         let e = e.expect("external result not found");
-        
+
         Ok(format!("o2:up={a};evt={e}"))
     };
 
@@ -110,7 +109,7 @@ async fn concurrent_orchestrations_different_activities_with(store: StdArc<dyn H
         runtime::OrchestrationStatus::Failed { error } => Err(error),
         _ => panic!("unexpected orchestration status"),
     };
-    
+
     let out2 = match rt
         .wait_for_orchestration("inst-multi-2", std::time::Duration::from_secs(5))
         .await
@@ -129,7 +128,7 @@ async fn concurrent_orchestrations_different_activities_with(store: StdArc<dyn H
         out2.as_ref().unwrap().contains("o2:up=HI;evt=E2"),
         "unexpected out2: {out2:?}"
     );
-    
+
     // Check histories
     let hist1 = rt.get_execution_history("inst-multi-1", 1).await;
     let hist2 = rt.get_execution_history("inst-multi-2", 1).await;
@@ -181,7 +180,7 @@ async fn concurrent_orchestrations_same_activities_with(store: StdArc<dyn Histor
         let f_e = ctx.schedule_wait("Go");
         let f_t = ctx.schedule_timer(1);
         let results = ctx.join(vec![f_a, f_e, f_t]).await;
-        
+
         // Find activity and external results (order may vary due to history ordering)
         let mut a = None;
         let mut e = None;
@@ -196,10 +195,10 @@ async fn concurrent_orchestrations_same_activities_with(store: StdArc<dyn Histor
                 _ => {} // Ignore timer for now
             }
         }
-        
+
         let a = a.expect("activity result not found");
         let e = e.expect("external result not found");
-        
+
         Ok(format!("o1:a={a};evt={e}"))
     };
     let o2 = |ctx: OrchestrationContext, _input: String| async move {
@@ -208,7 +207,7 @@ async fn concurrent_orchestrations_same_activities_with(store: StdArc<dyn Histor
         let f_e = ctx.schedule_wait("Go");
         let f_t = ctx.schedule_timer(1);
         let results = ctx.join(vec![f_a, f_e, f_t]).await;
-        
+
         // Find activity and external results (order may vary due to history ordering)
         let mut a = None;
         let mut e = None;
@@ -223,10 +222,10 @@ async fn concurrent_orchestrations_same_activities_with(store: StdArc<dyn Histor
                 _ => {} // Ignore timer for now
             }
         }
-        
+
         let a = a.expect("activity result not found");
         let e = e.expect("external result not found");
-        
+
         Ok(format!("o2:a={a};evt={e}"))
     };
 
@@ -275,7 +274,7 @@ async fn concurrent_orchestrations_same_activities_with(store: StdArc<dyn Histor
         runtime::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
         _ => panic!("unexpected orchestration status"),
     }
-    
+
     match rt
         .wait_for_orchestration("inst-same-acts-2", std::time::Duration::from_secs(5))
         .await
@@ -285,7 +284,7 @@ async fn concurrent_orchestrations_same_activities_with(store: StdArc<dyn Histor
         runtime::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
         _ => panic!("unexpected orchestration status"),
     }
-    
+
     // Check histories
     let hist1 = rt.get_execution_history("inst-same-acts-1", 1).await;
     let hist2 = rt.get_execution_history("inst-same-acts-2", 1).await;

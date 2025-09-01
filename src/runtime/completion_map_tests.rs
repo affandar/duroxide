@@ -1,9 +1,9 @@
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Event;
     use crate::runtime::completion_map::*;
     use crate::runtime::router::OrchestratorMsg;
-    use crate::Event;
 
     #[test]
     fn test_completion_map_deterministic_ordering() {
@@ -99,7 +99,7 @@ mod tests {
         assert!(map.is_next_ready(CompletionKind::Activity, 1));
         let comp = map.get_ready_completion(CompletionKind::Activity, 1);
         assert!(comp.is_some());
-        
+
         // Should be the first completion (first wins)
         if let CompletionValue::ActivityResult(Ok(result)) = comp.unwrap().data {
             assert_eq!(result, "first");
@@ -166,7 +166,7 @@ mod tests {
     #[test]
     fn test_completion_map_external_events() {
         let mut map = CompletionMap::new();
-        
+
         // Create history with external subscription
         let history = vec![
             Event::OrchestrationStarted {
@@ -206,17 +206,15 @@ mod tests {
     #[test]
     fn test_completion_map_external_events_no_subscription() {
         let mut map = CompletionMap::new();
-        
+
         // Create history without external subscription
-        let history = vec![
-            Event::OrchestrationStarted {
-                name: "test".to_string(),
-                version: "1.0.0".to_string(),
-                input: "input".to_string(),
-                parent_instance: None,
-                parent_id: None,
-            },
-        ];
+        let history = vec![Event::OrchestrationStarted {
+            name: "test".to_string(),
+            version: "1.0.0".to_string(),
+            input: "input".to_string(),
+            parent_instance: None,
+            parent_id: None,
+        }];
 
         // Add external completion for non-subscribed event
         let token = map.add_external_completion(

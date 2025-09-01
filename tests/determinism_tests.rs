@@ -54,7 +54,7 @@ async fn orchestration_completes_and_replays_deterministically_with(store: StdAr
         .start_orchestration("inst-orch-1", "DeterministicOrchestration", "")
         .await
         .unwrap();
-    
+
     let output = match rt
         .wait_for_orchestration("inst-orch-1", std::time::Duration::from_secs(5))
         .await
@@ -64,10 +64,10 @@ async fn orchestration_completes_and_replays_deterministically_with(store: StdAr
         runtime::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
         _ => panic!("unexpected orchestration status"),
     };
-    
+
     assert!(output.contains("evt=ok"));
     assert!(output.contains("b=2!"));
-    
+
     // Check history for expected events
     let final_history = rt.get_execution_history("inst-orch-1", 1).await;
     // Includes OrchestrationStarted + 4 schedule/complete pairs + terminal OrchestrationCompleted
@@ -163,7 +163,7 @@ async fn sequential_activity_chain_completes_with(store: StdArc<dyn HistoryStore
         .start_orchestration("inst-seq-1", "SequentialOrchestration", "")
         .await
         .unwrap();
-    
+
     match rt
         .wait_for_orchestration("inst-seq-1", std::time::Duration::from_secs(5))
         .await
@@ -173,7 +173,7 @@ async fn sequential_activity_chain_completes_with(store: StdArc<dyn HistoryStore
         runtime::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
         _ => panic!("unexpected orchestration status"),
     }
-    
+
     // Check history for expected events
     let final_history = rt.get_execution_history("inst-seq-1", 1).await;
     // Includes OrchestrationStarted + 3 schedule/complete pairs + terminal OrchestrationCompleted

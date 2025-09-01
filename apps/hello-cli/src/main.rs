@@ -33,7 +33,7 @@ async fn main() -> anyhow::Result<()> {
         .start_orchestration("inst-hello-cli-1", "HelloOrchestration", "")
         .await
         .unwrap();
-    
+
     match rt
         .wait_for_orchestration("inst-hello-cli-1", std::time::Duration::from_secs(5))
         .await

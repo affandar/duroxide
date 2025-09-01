@@ -90,18 +90,18 @@ async fn deterministic_replay_activity_only() {
         .start_orchestration("inst-unit-1", "TestOrchestration", "")
         .await
         .unwrap();
-    
+
     let status = rt
         .wait_for_orchestration("inst-unit-1", std::time::Duration::from_secs(5))
         .await
         .unwrap();
-    
+
     let output = match status {
         rust_dtf::OrchestrationStatus::Completed { output } => output,
         _ => panic!("Expected completed status"),
     };
     assert_eq!(output, "a=3");
-    
+
     let final_history = rt.get_execution_history("inst-unit-1", 1).await;
 
     // Replay must produce same output and no new actions
@@ -193,7 +193,7 @@ async fn runtime_duplicate_orchestration_deduped_single_execution() {
         runtime::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
         _ => panic!("unexpected orchestration status"),
     }
-    
+
     // Check history
     let hist1 = rt.get_execution_history(inst, 1).await;
 
@@ -313,13 +313,13 @@ async fn orchestration_status_apis() {
         .start_orchestration(inst_fail, "AlwaysFails", "")
         .await
         .unwrap();
-    
+
     match rt
         .wait_for_orchestration(inst_fail, std::time::Duration::from_secs(5))
         .await
         .unwrap()
     {
-        runtime::OrchestrationStatus::Failed { error: _ } => {}, // Expected failure
+        runtime::OrchestrationStatus::Failed { error: _ } => {} // Expected failure
         runtime::OrchestrationStatus::Completed { output } => panic!("expected failure, got: {output}"),
         _ => panic!("unexpected orchestration status"),
     }

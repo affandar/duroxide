@@ -1,12 +1,12 @@
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::runtime::completion_map::CompletionKind;
     use crate::runtime::orchestration_turn::*;
     use crate::runtime::router::OrchestratorMsg;
-    use crate::runtime::completion_map::CompletionKind;
-    use crate::{Event, OrchestrationHandler, OrchestrationContext};
-    use std::sync::Arc;
+    use crate::{Event, OrchestrationContext, OrchestrationHandler};
     use async_trait::async_trait;
+    use std::sync::Arc;
 
     // Mock orchestration handler for testing
     struct MockHandler {
@@ -22,15 +22,13 @@ mod tests {
 
     #[test]
     fn test_turn_creation() {
-        let baseline_history = vec![
-            Event::OrchestrationStarted {
-                name: "test-orch".to_string(),
-                version: "1.0.0".to_string(),
-                input: "test-input".to_string(),
-                parent_instance: None,
-                parent_id: None,
-            },
-        ];
+        let baseline_history = vec![Event::OrchestrationStarted {
+            name: "test-orch".to_string(),
+            version: "1.0.0".to_string(),
+            input: "test-input".to_string(),
+            parent_instance: None,
+            parent_id: None,
+        }];
 
         let turn = OrchestrationTurn::new(
             "test-instance".to_string(),
@@ -51,12 +49,7 @@ mod tests {
 
     #[test]
     fn test_prep_completions() {
-        let mut turn = OrchestrationTurn::new(
-            "test-instance".to_string(),
-            "test-orch".to_string(),
-            1,
-            vec![],
-        );
+        let mut turn = OrchestrationTurn::new("test-instance".to_string(), "test-orch".to_string(), 1, vec![]);
 
         let messages = vec![
             (
@@ -119,17 +112,15 @@ mod tests {
             baseline_history,
         );
 
-        let messages = vec![
-            (
-                OrchestratorMsg::ExternalByName {
-                    instance: "test-instance".to_string(),
-                    name: "test-event".to_string(),
-                    data: "event-data".to_string(),
-                    ack_token: Some("external-token".to_string()),
-                },
-                "external-token".to_string(),
-            ),
-        ];
+        let messages = vec![(
+            OrchestratorMsg::ExternalByName {
+                instance: "test-instance".to_string(),
+                name: "test-event".to_string(),
+                data: "event-data".to_string(),
+                ack_token: Some("external-token".to_string()),
+            },
+            "external-token".to_string(),
+        )];
 
         turn.prep_completions(messages);
 
@@ -141,12 +132,7 @@ mod tests {
 
     #[test]
     fn test_prep_completions_duplicate_handling() {
-        let mut turn = OrchestrationTurn::new(
-            "test-instance".to_string(),
-            "test-orch".to_string(),
-            1,
-            vec![],
-        );
+        let mut turn = OrchestrationTurn::new("test-instance".to_string(), "test-orch".to_string(), 1, vec![]);
 
         let messages = vec![
             (
@@ -178,7 +164,9 @@ mod tests {
 
         // Should only have one completion (duplicate detected)
         assert!(turn.completion_map.is_next_ready(CompletionKind::Activity, 1));
-        let comp = turn.completion_map_mut().get_ready_completion(CompletionKind::Activity, 1);
+        let comp = turn
+            .completion_map_mut()
+            .get_ready_completion(CompletionKind::Activity, 1);
         assert!(comp.is_some());
 
         // No more completions
@@ -187,15 +175,13 @@ mod tests {
 
     #[test]
     fn test_execute_orchestration_completed() {
-        let baseline_history = vec![
-            Event::OrchestrationStarted {
-                name: "test-orch".to_string(),
-                version: "1.0.0".to_string(),
-                input: "test-input".to_string(),
-                parent_instance: None,
-                parent_id: None,
-            },
-        ];
+        let baseline_history = vec![Event::OrchestrationStarted {
+            name: "test-orch".to_string(),
+            version: "1.0.0".to_string(),
+            input: "test-input".to_string(),
+            parent_instance: None,
+            parent_id: None,
+        }];
 
         let mut turn = OrchestrationTurn::new(
             "test-instance".to_string(),
@@ -220,15 +206,13 @@ mod tests {
 
     #[test]
     fn test_execute_orchestration_failed() {
-        let baseline_history = vec![
-            Event::OrchestrationStarted {
-                name: "test-orch".to_string(),
-                version: "1.0.0".to_string(),
-                input: "test-input".to_string(),
-                parent_instance: None,
-                parent_id: None,
-            },
-        ];
+        let baseline_history = vec![Event::OrchestrationStarted {
+            name: "test-orch".to_string(),
+            version: "1.0.0".to_string(),
+            input: "test-input".to_string(),
+            parent_instance: None,
+            parent_id: None,
+        }];
 
         let mut turn = OrchestrationTurn::new(
             "test-instance".to_string(),
@@ -253,15 +237,13 @@ mod tests {
 
     #[test]
     fn test_execute_orchestration_with_unconsumed_completions() {
-        let baseline_history = vec![
-            Event::OrchestrationStarted {
-                name: "test-orch".to_string(),
-                version: "1.0.0".to_string(),
-                input: "test-input".to_string(),
-                parent_instance: None,
-                parent_id: None,
-            },
-        ];
+        let baseline_history = vec![Event::OrchestrationStarted {
+            name: "test-orch".to_string(),
+            version: "1.0.0".to_string(),
+            input: "test-input".to_string(),
+            parent_instance: None,
+            parent_id: None,
+        }];
 
         let mut turn = OrchestrationTurn::new(
             "test-instance".to_string(),
@@ -271,18 +253,16 @@ mod tests {
         );
 
         // Add completion that won't be consumed
-        let messages = vec![
-            (
-                OrchestratorMsg::ActivityCompleted {
-                    instance: "test-instance".to_string(),
-                    execution_id: 1,
-                    id: 999, // This won't be consumed by the mock handler
-                    result: "unused-result".to_string(),
-                    ack_token: Some("unused-token".to_string()),
-                },
-                "unused-token".to_string(),
-            ),
-        ];
+        let messages = vec![(
+            OrchestratorMsg::ActivityCompleted {
+                instance: "test-instance".to_string(),
+                execution_id: 1,
+                id: 999, // This won't be consumed by the mock handler
+                result: "unused-result".to_string(),
+                ack_token: Some("unused-token".to_string()),
+            },
+            "unused-token".to_string(),
+        )];
 
         turn.prep_completions(messages);
 
@@ -301,12 +281,12 @@ mod tests {
                 let unconsumed = turn.completion_map.get_unconsumed();
                 assert_eq!(unconsumed.len(), 1);
                 assert_eq!(unconsumed[0], (CompletionKind::Activity, 999));
-                
+
                 // This validates that:
                 // 1. Completions are properly tracked in the map
-                // 2. They persist through orchestration execution  
+                // 2. They persist through orchestration execution
                 // 3. The system can detect unconsumed state
-                // 
+                //
                 // NOTE: The actual non-determinism detection happens in the replay engine
                 // when real orchestrations try to consume completions in the wrong order
             }
@@ -316,15 +296,13 @@ mod tests {
 
     #[test]
     fn test_final_history() {
-        let baseline_history = vec![
-            Event::OrchestrationStarted {
-                name: "test-orch".to_string(),
-                version: "1.0.0".to_string(),
-                input: "test-input".to_string(),
-                parent_instance: None,
-                parent_id: None,
-            },
-        ];
+        let baseline_history = vec![Event::OrchestrationStarted {
+            name: "test-orch".to_string(),
+            version: "1.0.0".to_string(),
+            input: "test-input".to_string(),
+            parent_instance: None,
+            parent_id: None,
+        }];
 
         let mut turn = OrchestrationTurn::new(
             "test-instance".to_string(),
@@ -356,42 +334,33 @@ mod tests {
 
     #[test]
     fn test_made_progress() {
-        let mut turn = OrchestrationTurn::new(
-            "test-instance".to_string(),
-            "test-orch".to_string(),
-            1,
-            vec![],
-        );
+        let mut turn = OrchestrationTurn::new("test-instance".to_string(), "test-orch".to_string(), 1, vec![]);
 
         // Initially no progress
         assert!(!turn.made_progress());
 
         // Add completion - should show progress
-        let messages = vec![
-            (
-                OrchestratorMsg::ActivityCompleted {
-                    instance: "test-instance".to_string(),
-                    execution_id: 1,
-                    id: 1,
-                    result: "result".to_string(),
-                    ack_token: Some("token".to_string()),
-                },
-                "token".to_string(),
-            ),
-        ];
+        let messages = vec![(
+            OrchestratorMsg::ActivityCompleted {
+                instance: "test-instance".to_string(),
+                execution_id: 1,
+                id: 1,
+                result: "result".to_string(),
+                ack_token: Some("token".to_string()),
+            },
+            "token".to_string(),
+        )];
 
         turn.prep_completions(messages);
         assert!(turn.made_progress());
 
         // Clear completions but add history delta - should still show progress
         turn.completion_map = crate::runtime::completion_map::CompletionMap::new();
-        turn.history_delta = vec![
-            Event::ActivityScheduled {
-                id: 1,
-                name: "test".to_string(),
-                input: "input".to_string(),
-            },
-        ];
+        turn.history_delta = vec![Event::ActivityScheduled {
+            id: 1,
+            name: "test".to_string(),
+            input: "input".to_string(),
+        }];
         assert!(turn.made_progress());
 
         // Clear both - no progress

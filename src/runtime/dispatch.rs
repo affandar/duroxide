@@ -141,10 +141,10 @@ pub async fn dispatch_start_sub_orchestration(
         rt_for_child.pinned_versions.lock().await.insert(child_full.clone(), v);
     }
     debug!(parent_instance, id, name=%name, child_instance=%child_full, "start child orchestration");
-    
+
     // Try to parse version for pinning (will be pinned in start_internal_wait as well)
     let version_pin = version.clone().and_then(|s| semver::Version::parse(&s).ok());
-    
+
     // Just start the sub-orchestration - completion notification is automatic via handle_orchestration_completion!
     match rt_for_child
         .start_orchestration_with_parent(
@@ -167,15 +167,18 @@ pub async fn dispatch_start_sub_orchestration(
             debug!(parent_instance, id, child_instance=%child_full, error=%e, 
                    "sub-orchestration start failed, enqueuing failure");
             let parent_execution_id = rt.get_execution_id_for_instance(parent_instance).await;
-            let _ = rt.history_store.enqueue_work(
-                QueueKind::Orchestrator,
-                WorkItem::SubOrchFailed {
-                    parent_instance: parent_inst,
-                    parent_execution_id,
-                    parent_id: id,
-                    error: e,
-                },
-            ).await;
+            let _ = rt
+                .history_store
+                .enqueue_work(
+                    QueueKind::Orchestrator,
+                    WorkItem::SubOrchFailed {
+                        parent_instance: parent_inst,
+                        parent_execution_id,
+                        parent_id: id,
+                        error: e,
+                    },
+                )
+                .await;
         }
     }
 }

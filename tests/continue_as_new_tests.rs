@@ -40,7 +40,7 @@ async fn continue_as_new_multiexec_fs() {
         .start_orchestration("inst-can-1", "Counter", "0")
         .await
         .unwrap();
-    
+
     match rt
         .wait_for_orchestration("inst-can-1", std::time::Duration::from_secs(5))
         .await
@@ -155,7 +155,7 @@ async fn continue_as_new_event_routes_to_latest_fs() {
         .start_orchestration("inst-can-evt", "EvtCAN", "start")
         .await
         .unwrap();
-    
+
     match rt
         .wait_for_orchestration("inst-can-evt", std::time::Duration::from_secs(5))
         .await
@@ -267,7 +267,7 @@ async fn continue_as_new_event_drop_then_process_fs() {
         .start_orchestration("inst-can-evt-drop", "EvtDropThenProcess", "start")
         .await
         .unwrap();
-    
+
     match rt
         .wait_for_orchestration("inst-can-evt-drop", std::time::Duration::from_secs(5))
         .await
@@ -356,7 +356,7 @@ async fn event_drop_then_retry_after_subscribe_fs() {
         .start_orchestration("inst-drop-retry", "EvtDropRetry", "x")
         .await
         .unwrap();
-    
+
     match rt
         .wait_for_orchestration("inst-drop-retry", std::time::Duration::from_secs(5))
         .await

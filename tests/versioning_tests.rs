@@ -21,7 +21,7 @@ async fn runtime_start_versioned_string_uses_explicit_version() {
         .start_orchestration_versioned("i1", "S", "1.0.0", "")
         .await
         .unwrap();
-    
+
     match rt
         .wait_for_orchestration("i1", std::time::Duration::from_secs(5))
         .await
@@ -52,7 +52,7 @@ async fn runtime_start_versioned_typed_uses_explicit_version() {
         .start_orchestration_versioned_typed::<i32>("i2", "T", "1.0.0", 0)
         .await
         .unwrap();
-    
+
     match rt
         .wait_for_orchestration_typed::<i32>("i2", std::time::Duration::from_secs(5))
         .await
@@ -107,7 +107,7 @@ async fn sub_orchestration_versioned_explicit_and_policy() {
         runtime::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
         _ => panic!("unexpected orchestration status"),
     }
-    
+
     let _h2 = rt.clone().start_orchestration("i3-2", "P2", "").await.unwrap();
     match rt
         .wait_for_orchestration("i3-2", std::time::Duration::from_secs(5))
@@ -139,7 +139,7 @@ async fn detached_versioned_uses_policy_latest() {
     let store = StdArc::new(rust_dtf::providers::in_memory::InMemoryHistoryStore::default());
     let rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(acts), reg).await;
     let _h = rt.clone().start_orchestration("i4", "Parent", "").await.unwrap();
-    
+
     match rt
         .wait_for_orchestration("i4", std::time::Duration::from_secs(5))
         .await
@@ -150,12 +150,12 @@ async fn detached_versioned_uses_policy_latest() {
         _ => panic!("unexpected orchestration status"),
     }
     // Start the detached child directly to observe its versioned output
-    rt.clone()
-        .start_orchestration("i4::child-1", "Leaf", "")
+    rt.clone().start_orchestration("i4::child-1", "Leaf", "").await.unwrap();
+
+    let child_status = rt
+        .wait_for_orchestration("i4::child-1", std::time::Duration::from_secs(5))
         .await
         .unwrap();
-    
-    let child_status = rt.wait_for_orchestration("i4::child-1", std::time::Duration::from_secs(5)).await.unwrap();
     let out_child = match child_status {
         rust_dtf::OrchestrationStatus::Completed { output } => output,
         rust_dtf::OrchestrationStatus::Failed { error } => panic!("child orchestration failed: {error}"),
@@ -221,7 +221,7 @@ async fn start_uses_latest_version() {
         .start_orchestration("inst-vlatest", "OrderFlow", "X")
         .await
         .unwrap();
-    
+
     match rt
         .wait_for_orchestration("inst-vlatest", std::time::Duration::from_secs(5))
         .await
@@ -231,7 +231,7 @@ async fn start_uses_latest_version() {
         runtime::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
         _ => panic!("unexpected orchestration status"),
     }
-    
+
     // Check history for completion event
     let hist = rt.get_execution_history("inst-vlatest", 1).await;
     assert!(matches!(hist.last().unwrap(), Event::OrchestrationCompleted { .. }));
@@ -267,7 +267,7 @@ async fn policy_exact_pins_start() {
         .start_orchestration("inst-vpin", "OrderFlow", "Y")
         .await
         .unwrap();
-    
+
     match rt
         .wait_for_orchestration("inst-vpin", std::time::Duration::from_secs(5))
         .await
@@ -315,7 +315,7 @@ async fn sub_orchestration_uses_latest_by_default_and_pinned_when_set() {
         .start_orchestration("inst-child-latest", "ParentFlow", "Z")
         .await
         .unwrap();
-    
+
     match rt
         .wait_for_orchestration("inst-child-latest", std::time::Duration::from_secs(5))
         .await
@@ -337,7 +337,7 @@ async fn sub_orchestration_uses_latest_by_default_and_pinned_when_set() {
         .start_orchestration("inst-child-pinned", "ParentFlow", "Q")
         .await
         .unwrap();
-    
+
     match rt
         .wait_for_orchestration("inst-child-pinned", std::time::Duration::from_secs(5))
         .await
@@ -381,7 +381,7 @@ async fn parent_calls_child_upgrade_child_and_verify_latest_used() {
         .start_orchestration("inst-parent-child-upgrade", "Parent", "inp")
         .await
         .unwrap();
-    
+
     match rt
         .wait_for_orchestration("inst-parent-child-upgrade", std::time::Duration::from_secs(5))
         .await
@@ -391,7 +391,7 @@ async fn parent_calls_child_upgrade_child_and_verify_latest_used() {
         runtime::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
         _ => panic!("unexpected orchestration status"),
     }
-    
+
     // Check history for completion event
     let hist = rt.get_execution_history("inst-parent-child-upgrade", 1).await;
     assert!(matches!(hist.last().unwrap(), Event::OrchestrationCompleted { .. }));
@@ -430,7 +430,7 @@ async fn continue_as_new_upgrades_version_deterministically() {
         .start_orchestration("inst-can-upgrade", "Upgrader", "seed")
         .await
         .unwrap();
-    
+
     // With polling approach, wait for final completion
     match rt
         .wait_for_orchestration("inst-can-upgrade", std::time::Duration::from_secs(5))
@@ -441,7 +441,7 @@ async fn continue_as_new_upgrades_version_deterministically() {
         runtime::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
         _ => panic!("unexpected orchestration status"),
     }
-    
+
     // History contains the final execution's events
     let hist = rt.get_execution_history("inst-can-upgrade", 1).await;
     assert!(!hist.is_empty(), "Expected non-empty history");

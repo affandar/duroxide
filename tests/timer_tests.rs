@@ -25,15 +25,18 @@ async fn single_timer_fires_fs() {
         .start_orchestration("inst-one", "OneTimer", "")
         .await
         .unwrap();
-    
-    let status = rt.wait_for_orchestration("inst-one", std::time::Duration::from_secs(5)).await.unwrap();
+
+    let status = rt
+        .wait_for_orchestration("inst-one", std::time::Duration::from_secs(5))
+        .await
+        .unwrap();
     let output = match status {
         rust_dtf::OrchestrationStatus::Completed { output } => output,
         rust_dtf::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
         _ => panic!("unexpected orchestration status"),
     };
     assert_eq!(output, "done");
-    
+
     let hist = rt.get_execution_history("inst-one", 1).await;
     assert!(hist.iter().any(|e| matches!(e, Event::TimerCreated { .. })));
     assert!(hist.iter().any(|e| matches!(e, Event::TimerFired { .. })));
@@ -60,15 +63,18 @@ async fn multiple_timers_ordering_fs() {
         .start_orchestration("inst-two", "TwoTimers", "")
         .await
         .unwrap();
-    
-    let status = rt.wait_for_orchestration("inst-two", std::time::Duration::from_secs(5)).await.unwrap();
+
+    let status = rt
+        .wait_for_orchestration("inst-two", std::time::Duration::from_secs(5))
+        .await
+        .unwrap();
     let output = match status {
         rust_dtf::OrchestrationStatus::Completed { output } => output,
         rust_dtf::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
         _ => panic!("unexpected orchestration status"),
     };
     assert_eq!(output, "ok");
-    
+
     let hist = rt.get_execution_history("inst-two", 1).await;
     // Verify two fired with increasing fire_at_ms
     let fired: Vec<(u64, u64)> = hist
@@ -167,8 +173,11 @@ async fn timer_wall_clock_delay_fs() {
         .start_orchestration("inst-delay", "DelayTimer", "")
         .await
         .unwrap();
-    
-    let status = rt.wait_for_orchestration("inst-delay", std::time::Duration::from_secs(10)).await.unwrap();
+
+    let status = rt
+        .wait_for_orchestration("inst-delay", std::time::Duration::from_secs(10))
+        .await
+        .unwrap();
     let elapsed_ms = start.elapsed().as_millis() as u64;
     let output = match status {
         rust_dtf::OrchestrationStatus::Completed { output } => output,

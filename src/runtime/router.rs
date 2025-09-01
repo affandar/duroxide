@@ -1,7 +1,7 @@
+use crate::providers::WorkItem;
 use std::collections::HashMap;
 use tokio::sync::{Mutex, mpsc};
 use tracing::{debug, warn};
-use crate::providers::WorkItem;
 
 /// Completion messages delivered to active orchestration instances.
 /// These correspond directly to WorkItem completion variants but include ack tokens.
@@ -59,41 +59,79 @@ pub enum OrchestratorMsg {
 impl OrchestratorMsg {
     pub fn from_work_item(work_item: WorkItem, ack_token: Option<String>) -> Option<Self> {
         match work_item {
-            WorkItem::ActivityCompleted { instance, execution_id, id, result } => {
-                Some(OrchestratorMsg::ActivityCompleted { instance, execution_id, id, result, ack_token })
-            }
-            WorkItem::ActivityFailed { instance, execution_id, id, error } => {
-                Some(OrchestratorMsg::ActivityFailed { instance, execution_id, id, error, ack_token })
-            }
-            WorkItem::TimerFired { instance, execution_id, id, fire_at_ms } => {
-                Some(OrchestratorMsg::TimerFired { instance, execution_id, id, fire_at_ms, ack_token })
-            }
-            WorkItem::ExternalRaised { instance, name, data } => {
-                Some(OrchestratorMsg::ExternalByName { instance, name, data, ack_token })
-            }
-            WorkItem::SubOrchCompleted { parent_instance, parent_execution_id, parent_id, result } => {
-                Some(OrchestratorMsg::SubOrchCompleted { 
-                    instance: parent_instance, 
-                    execution_id: parent_execution_id, 
-                    id: parent_id, 
-                    result, 
-                    ack_token 
-                })
-            }
-            WorkItem::SubOrchFailed { parent_instance, parent_execution_id, parent_id, error } => {
-                Some(OrchestratorMsg::SubOrchFailed { 
-                    instance: parent_instance, 
-                    execution_id: parent_execution_id, 
-                    id: parent_id, 
-                    error, 
-                    ack_token 
-                })
-            }
-            WorkItem::CancelInstance { instance, reason } => {
-                Some(OrchestratorMsg::CancelRequested { instance, reason, ack_token })
-            }
+            WorkItem::ActivityCompleted {
+                instance,
+                execution_id,
+                id,
+                result,
+            } => Some(OrchestratorMsg::ActivityCompleted {
+                instance,
+                execution_id,
+                id,
+                result,
+                ack_token,
+            }),
+            WorkItem::ActivityFailed {
+                instance,
+                execution_id,
+                id,
+                error,
+            } => Some(OrchestratorMsg::ActivityFailed {
+                instance,
+                execution_id,
+                id,
+                error,
+                ack_token,
+            }),
+            WorkItem::TimerFired {
+                instance,
+                execution_id,
+                id,
+                fire_at_ms,
+            } => Some(OrchestratorMsg::TimerFired {
+                instance,
+                execution_id,
+                id,
+                fire_at_ms,
+                ack_token,
+            }),
+            WorkItem::ExternalRaised { instance, name, data } => Some(OrchestratorMsg::ExternalByName {
+                instance,
+                name,
+                data,
+                ack_token,
+            }),
+            WorkItem::SubOrchCompleted {
+                parent_instance,
+                parent_execution_id,
+                parent_id,
+                result,
+            } => Some(OrchestratorMsg::SubOrchCompleted {
+                instance: parent_instance,
+                execution_id: parent_execution_id,
+                id: parent_id,
+                result,
+                ack_token,
+            }),
+            WorkItem::SubOrchFailed {
+                parent_instance,
+                parent_execution_id,
+                parent_id,
+                error,
+            } => Some(OrchestratorMsg::SubOrchFailed {
+                instance: parent_instance,
+                execution_id: parent_execution_id,
+                id: parent_id,
+                error,
+                ack_token,
+            }),
+            WorkItem::CancelInstance { instance, reason } => Some(OrchestratorMsg::CancelRequested {
+                instance,
+                reason,
+                ack_token,
+            }),
             // Non-completion WorkItems don't convert to OrchestratorMsg
-            WorkItem::StartOrchestration { .. } 
+            WorkItem::StartOrchestration { .. }
             | WorkItem::ActivityExecute { .. }
             | WorkItem::TimerSchedule { .. }
             | WorkItem::ContinueAsNew { .. } => None,

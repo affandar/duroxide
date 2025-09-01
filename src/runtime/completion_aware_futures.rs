@@ -1,10 +1,13 @@
-use std::sync::{Arc, Mutex};
+use super::completion_map::{CompletionKind, CompletionMap, CompletionValue};
+use crate::{
+    Event, OrchestrationContext,
+    futures::{DurableFuture, DurableOutput, Kind},
+};
 use std::cell::RefCell;
-use std::rc::Rc;
-use crate::{OrchestrationContext, futures::{DurableFuture, DurableOutput, Kind}, Event};
-use super::completion_map::{CompletionMap, CompletionKind, CompletionValue};
 use std::future::Future;
 use std::pin::Pin;
+use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 
 // Thread-local storage for completion map accessor
@@ -17,9 +20,7 @@ pub(crate) fn with_completion_map_accessor<F, R>(f: F) -> R
 where
     F: FnOnce(Option<&CompletionMapAccessor>) -> R,
 {
-    COMPLETION_MAP_ACCESSOR.with(|accessor_cell| {
-        f(accessor_cell.borrow().as_ref())
-    })
+    COMPLETION_MAP_ACCESSOR.with(|accessor_cell| f(accessor_cell.borrow().as_ref()))
 }
 
 /// A completion map accessor that can be injected into the orchestration context
@@ -58,18 +59,17 @@ impl CompletionMapAccessor {
     }
 
     pub fn get_completion(&self, kind: CompletionKind, correlation_id: u64) -> Option<CompletionValue> {
+        let result = self
+            .with_completion_map(|map| {
+                let ready = map.is_next_ready(kind, correlation_id);
 
-        let result = self.with_completion_map(|map| {
-            let ready = map.is_next_ready(kind, correlation_id);
-
-            if ready {
-                map.get_ready_completion(kind, correlation_id)
-                    .map(|comp| comp.data)
-            } else {
-                None
-            }
-        })
-        .flatten();
+                if ready {
+                    map.get_ready_completion(kind, correlation_id).map(|comp| comp.data)
+                } else {
+                    None
+                }
+            })
+            .flatten();
 
         result
     }
@@ -112,7 +112,7 @@ impl Future for CompletionAwareDurableFuture {
     type Output = DurableOutput;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        // CR TODO : this is a bit of a hack, we should be able to get the completion map from the context. 
+        // CR TODO : this is a bit of a hack, we should be able to get the completion map from the context.
         //  I guess this is to avoid breaking the existing API but its ok to break.
 
         // First try the completion map approach
@@ -124,7 +124,6 @@ impl Future for CompletionAwareDurableFuture {
                 Kind::External { id, .. } => (CompletionKind::External, *id),
                 Kind::SubOrch { id, .. } => (CompletionKind::SubOrchestration, *id),
             };
-
 
             // Check if this completion is ready in the ordered map
             if accessor.is_completion_ready(kind, correlation_id) {
@@ -143,11 +142,11 @@ impl Future for CompletionAwareDurableFuture {
                     return Poll::Ready(output);
                 }
             }
-            
+
             // If completion is not ready in the map, stay pending
             // but still call the original poll to handle scheduling
             let original_result = Pin::new(&mut self.inner).poll(cx);
-            
+
             // If the original would return Ready but completion map says not ready, override to Pending
             match original_result {
                 Poll::Ready(_) => {
@@ -198,42 +197,39 @@ where
 
     let accessor = CompletionMapAccessor::new();
     accessor.set_completion_map(completion_map);
-    
+
     // Store in thread-local for futures to access
     COMPLETION_MAP_ACCESSOR.with(|a| {
         *a.borrow_mut() = Some(accessor);
     });
 
-    
     // Run the turn with completion map support
     let wrapped_orchestrator = move |ctx: crate::OrchestrationContext| {
         // Call the original orchestrator
         orchestrator(ctx)
     };
-    
+
     let result = crate::run_turn_with_claims(history, turn_index, wrapped_orchestrator);
-    
+
     // Clean up thread-local
     COMPLETION_MAP_ACCESSOR.with(|a| {
         *a.borrow_mut() = None;
     });
-    
+
     result
 }
-
-
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::completion_map::{CompletionMap, CompletionData, CompletionValue, CompletionKind};
+    use crate::runtime::completion_map::{CompletionData, CompletionKind, CompletionMap, CompletionValue};
     use std::sync::{Arc, Mutex};
 
     #[test]
     fn test_completion_map_accessor() {
         let accessor = CompletionMapAccessor::new();
         let mut map = CompletionMap::new();
-        
+
         // Add a completion
         map.by_id.insert(
             (CompletionKind::Activity, 1),
@@ -242,7 +238,7 @@ mod tests {
                 correlation_id: 1,
                 data: CompletionValue::ActivityResult(Ok("test".to_string())),
                 arrival_order: 0,
-            }
+            },
         );
         map.ordered.push_back(crate::runtime::completion_map::CompletionEntry {
             kind: CompletionKind::Activity,

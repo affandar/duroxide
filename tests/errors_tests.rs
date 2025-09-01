@@ -68,7 +68,7 @@ async fn error_handling_compensation_on_ship_failure_with(store: StdArc<dyn Hist
         .start_orchestration("inst-err-ship-1", "ErrorHandlingCompensation", "")
         .await
         .unwrap();
-    
+
     match rt
         .wait_for_orchestration("inst-err-ship-1", std::time::Duration::from_secs(5))
         .await
@@ -121,7 +121,7 @@ async fn error_handling_success_path_with(store: StdArc<dyn HistoryStore>) {
         .start_orchestration("inst-err-ok-1", "ErrorHandlingSuccess", "")
         .await
         .unwrap();
-    
+
     match rt
         .wait_for_orchestration("inst-err-ok-1", std::time::Duration::from_secs(5))
         .await
@@ -173,7 +173,7 @@ async fn error_handling_early_debit_failure_with(store: StdArc<dyn HistoryStore>
         .start_orchestration("inst-err-debit-1", "DebitFailureTest", "")
         .await
         .unwrap();
-    
+
     match rt
         .wait_for_orchestration("inst-err-debit-1", std::time::Duration::from_secs(5))
         .await
@@ -222,7 +222,7 @@ async fn unknown_activity_fails_with(store: StdArc<dyn HistoryStore>) {
         .start_orchestration("inst-unknown-act-1", "MissingActivityTest", "")
         .await
         .unwrap();
-    
+
     match rt
         .wait_for_orchestration("inst-unknown-act-1", std::time::Duration::from_secs(5))
         .await
@@ -270,8 +270,12 @@ async fn event_after_completion_is_ignored_fs() {
         let _ = common::wait_for_subscription(store_for_wait, instance, "Once", 1000).await;
         rt_c.raise_event(instance, "Once", "go").await;
     });
-    let _handle = rt.clone().start_orchestration(instance, "PostCompleteTest", "").await.unwrap();
-    
+    let _handle = rt
+        .clone()
+        .start_orchestration(instance, "PostCompleteTest", "")
+        .await
+        .unwrap();
+
     match rt
         .wait_for_orchestration(instance, std::time::Duration::from_secs(5))
         .await
@@ -342,7 +346,7 @@ async fn event_before_subscription_after_start_is_ignored() {
         .start_orchestration(instance, "PreSubscriptionTest", "")
         .await
         .unwrap();
-    
+
     match rt
         .wait_for_orchestration(instance, std::time::Duration::from_secs(5))
         .await
@@ -381,14 +385,16 @@ async fn history_cap_exceeded_with(store: StdArc<dyn HistoryStore>) {
         .start_orchestration("inst-cap-exceed", "HistoryCapTest", "")
         .await
         .unwrap();
-    
+
     // Expect runtime to report Err result via waiter on append failure
     match rt
         .wait_for_orchestration("inst-cap-exceed", std::time::Duration::from_secs(10))
         .await
     {
-        Ok(runtime::OrchestrationStatus::Failed { error: _ }) => {}, // Expected failure due to history capacity
-        Ok(runtime::OrchestrationStatus::Completed { output }) => panic!("expected failure due to history capacity, got: {output}"),
+        Ok(runtime::OrchestrationStatus::Failed { error: _ }) => {} // Expected failure due to history capacity
+        Ok(runtime::OrchestrationStatus::Completed { output }) => {
+            panic!("expected failure due to history capacity, got: {output}")
+        }
         Ok(_) => panic!("unexpected orchestration status"),
         Err(rust_dtf::runtime::WaitError::Timeout) => {
             // This is also acceptable - the orchestration may not be able to write a terminal event due to capacity
@@ -431,17 +437,17 @@ async fn orchestration_immediate_fail_fs() {
         .start_orchestration("inst-fail-imm", "AlwaysErr", "")
         .await
         .unwrap();
-    
+
     match rt
         .wait_for_orchestration("inst-fail-imm", std::time::Duration::from_secs(5))
         .await
         .unwrap()
     {
-        runtime::OrchestrationStatus::Failed { error: _ } => {}, // Expected failure
+        runtime::OrchestrationStatus::Failed { error: _ } => {} // Expected failure
         runtime::OrchestrationStatus::Completed { output } => panic!("expected failure, got: {output}"),
         _ => panic!("unexpected orchestration status"),
     }
-    
+
     // Check history for failure event
     let hist = rt.get_execution_history("inst-fail-imm", 1).await;
     // Expect OrchestrationStarted + OrchestrationFailed
@@ -484,7 +490,7 @@ async fn orchestration_propagates_activity_failure_fs() {
         .start_orchestration("inst-fail-prop", "PropagateFail", "")
         .await
         .unwrap();
-    
+
     match rt
         .wait_for_orchestration("inst-fail-prop", std::time::Duration::from_secs(5))
         .await
@@ -494,7 +500,7 @@ async fn orchestration_propagates_activity_failure_fs() {
         runtime::OrchestrationStatus::Completed { output } => panic!("expected failure, got: {output}"),
         _ => panic!("unexpected orchestration status"),
     }
-    
+
     // Check history for failure event
     let hist = rt.get_execution_history("inst-fail-prop", 1).await;
     assert!(matches!(
@@ -531,8 +537,11 @@ async fn typed_activity_decode_error_fs() {
         .start_orchestration("inst-typed-bad", "BadInputToTypedActivity", "")
         .await
         .unwrap();
-    
-    let status = rt.wait_for_orchestration("inst-typed-bad", std::time::Duration::from_secs(5)).await.unwrap();
+
+    let status = rt
+        .wait_for_orchestration("inst-typed-bad", std::time::Duration::from_secs(5))
+        .await
+        .unwrap();
     let output = match status {
         rust_dtf::OrchestrationStatus::Completed { output } => output,
         rust_dtf::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
@@ -577,8 +586,11 @@ async fn typed_event_decode_error_fs() {
         .start_orchestration_typed::<String>("inst-typed-evt", "TypedEvt", "".to_string())
         .await
         .unwrap();
-    
-    let status = rt.wait_for_orchestration_typed::<String>("inst-typed-evt", std::time::Duration::from_secs(5)).await.unwrap();
+
+    let status = rt
+        .wait_for_orchestration_typed::<String>("inst-typed-evt", std::time::Duration::from_secs(5))
+        .await
+        .unwrap();
     let output = match status {
         Ok(output) => output,
         Err(error) => panic!("orchestration failed: {error}"),

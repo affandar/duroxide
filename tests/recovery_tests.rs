@@ -75,8 +75,12 @@ where
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
         rt2_c.raise_event(&instance_for_spawn, "Resume", "go").await;
     });
-    let _handle2 = rt2.clone().start_orchestration(&instance, "RecoveryTest", "").await.unwrap();
-    
+    let _handle2 = rt2
+        .clone()
+        .start_orchestration(&instance, "RecoveryTest", "")
+        .await
+        .unwrap();
+
     match rt2
         .wait_for_orchestration(&instance, std::time::Duration::from_secs(5))
         .await

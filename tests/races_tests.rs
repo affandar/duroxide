@@ -27,8 +27,12 @@ async fn wait_external_completes_with(store: StdArc<dyn HistoryStore>) {
         let _ = common::wait_for_subscription(store_for_wait, "inst-wait-1", "Only", 1000).await;
         rt_clone.raise_event("inst-wait-1", "Only", "payload").await;
     });
-    let _handle = rt.clone().start_orchestration("inst-wait-1", "WaitExternal", "").await.unwrap();
-    
+    let _handle = rt
+        .clone()
+        .start_orchestration("inst-wait-1", "WaitExternal", "")
+        .await
+        .unwrap();
+
     match rt
         .wait_for_orchestration("inst-wait-1", std::time::Duration::from_secs(5))
         .await
@@ -38,7 +42,7 @@ async fn wait_external_completes_with(store: StdArc<dyn HistoryStore>) {
         runtime::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
         _ => panic!("unexpected orchestration status"),
     }
-    
+
     // Check history for expected events
     let final_history = rt.get_execution_history("inst-wait-1", 1).await;
     // First event is OrchestrationStarted; then subscription, event, and terminal completion
@@ -90,7 +94,7 @@ async fn race_external_vs_timer_ordering_with(store: StdArc<dyn HistoryStore>) {
         .start_orchestration("inst-race-order-1", "RaceOrchestration", "")
         .await
         .unwrap();
-    
+
     match rt
         .wait_for_orchestration("inst-race-order-1", std::time::Duration::from_secs(5))
         .await
@@ -100,7 +104,7 @@ async fn race_external_vs_timer_ordering_with(store: StdArc<dyn HistoryStore>) {
         runtime::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
         _ => panic!("unexpected orchestration status"),
     }
-    
+
     // Check history for expected events
     let final_history = rt.get_execution_history("inst-race-order-1", 1).await;
     let idx_t = final_history
@@ -157,7 +161,7 @@ async fn race_event_vs_timer_event_wins_with(store: StdArc<dyn HistoryStore>) {
         .start_orchestration("inst-race-order-2", "RaceEventVsTimer", "")
         .await
         .unwrap();
-    
+
     let output = match rt
         .wait_for_orchestration("inst-race-order-2", std::time::Duration::from_secs(5))
         .await
@@ -167,10 +171,10 @@ async fn race_event_vs_timer_event_wins_with(store: StdArc<dyn HistoryStore>) {
         runtime::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
         _ => panic!("unexpected orchestration status"),
     };
-    
+
     // With batching, timer may win select even if external event is delivered first; assert consistent history ordering
     assert_eq!(output, "ok");
-    
+
     // Check history for expected events
     let final_history = rt.get_execution_history("inst-race-order-2", 1).await;
     let idx_e = final_history

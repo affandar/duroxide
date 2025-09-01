@@ -48,14 +48,17 @@ async fn unknown_activity_is_isolated_from_other_orchestrations_fs() {
         .unwrap();
 
     // Wait for both and assert expected outcomes
-    let status_ok = rt.wait_for_orchestration("inst-healthy-1", std::time::Duration::from_secs(5)).await.unwrap();
+    let status_ok = rt
+        .wait_for_orchestration("inst-healthy-1", std::time::Duration::from_secs(5))
+        .await
+        .unwrap();
     let out_ok = match status_ok {
         rust_dtf::OrchestrationStatus::Completed { output } => output,
         rust_dtf::OrchestrationStatus::Failed { error } => panic!("healthy orchestration failed: {error}"),
         _ => panic!("unexpected orchestration status"),
     };
     assert_eq!(out_ok, "healthy:yo");
-    
+
     let hist_ok = rt.get_execution_history("inst-healthy-1", 1).await;
     assert!(
         !hist_ok.iter().any(|e| matches!(e, Event::ActivityFailed { .. })),
@@ -63,14 +66,17 @@ async fn unknown_activity_is_isolated_from_other_orchestrations_fs() {
     );
     assert!(matches!(hist_ok.last().unwrap(), Event::OrchestrationCompleted { .. }));
 
-    let status_fail = rt.wait_for_orchestration("inst-missing-1", std::time::Duration::from_secs(5)).await.unwrap();
+    let status_fail = rt
+        .wait_for_orchestration("inst-missing-1", std::time::Duration::from_secs(5))
+        .await
+        .unwrap();
     let error_fail = match status_fail {
         rust_dtf::OrchestrationStatus::Failed { error } => error,
         rust_dtf::OrchestrationStatus::Completed { output } => panic!("expected failure, got success: {output}"),
         _ => panic!("unexpected orchestration status"),
     };
     assert_eq!(error_fail, "unregistered:Missing");
-    
+
     let hist_fail = rt.get_execution_history("inst-missing-1", 1).await;
     assert!(
         hist_fail
@@ -128,7 +134,10 @@ async fn unknown_activity_is_isolated_from_other_orchestrations_inmem() {
         .await
         .unwrap();
 
-    let status_ok = rt.wait_for_orchestration("inst-healthy-im", std::time::Duration::from_secs(5)).await.unwrap();
+    let status_ok = rt
+        .wait_for_orchestration("inst-healthy-im", std::time::Duration::from_secs(5))
+        .await
+        .unwrap();
     let out_ok = match status_ok {
         rust_dtf::OrchestrationStatus::Completed { output } => output,
         rust_dtf::OrchestrationStatus::Failed { error } => panic!("healthy orchestration failed: {error}"),
@@ -136,7 +145,10 @@ async fn unknown_activity_is_isolated_from_other_orchestrations_inmem() {
     };
     assert_eq!(out_ok, "healthy:yo");
 
-    let status_fail = rt.wait_for_orchestration("inst-missing-im", std::time::Duration::from_secs(5)).await.unwrap();
+    let status_fail = rt
+        .wait_for_orchestration("inst-missing-im", std::time::Duration::from_secs(5))
+        .await
+        .unwrap();
     let error_fail = match status_fail {
         rust_dtf::OrchestrationStatus::Failed { error } => error,
         rust_dtf::OrchestrationStatus::Completed { output } => panic!("expected failure, got success: {output}"),

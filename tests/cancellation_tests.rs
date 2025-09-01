@@ -126,7 +126,7 @@ async fn cancel_after_completion_is_noop_fs() {
         .start_orchestration("inst-cancel-noop", "Quick", "")
         .await
         .unwrap();
-    
+
     match rt
         .wait_for_orchestration("inst-cancel-noop", std::time::Duration::from_secs(5))
         .await
@@ -253,12 +253,12 @@ async fn cancel_continue_as_new_second_exec_fs() {
         .start_orchestration("inst-can-can", "CanCancel", "start")
         .await
         .unwrap();
-    
+
     // Cancel the second execution while the handle is waiting
     // (the handle will wait for final completion including cancellation)
     tokio::time::sleep(std::time::Duration::from_millis(100)).await; // Let first execution complete
     rt.cancel_instance("inst-can-can", "by_test_can").await;
-    
+
     // With polling approach, wait for final result (cancellation)
     match rt
         .wait_for_orchestration("inst-can-can", std::time::Duration::from_secs(5))
@@ -326,7 +326,7 @@ async fn orchestration_completes_before_activity_finishes_fs() {
         .start_orchestration("inst-orch-done-first", "QuickDone", "")
         .await
         .unwrap();
-    
+
     match rt
         .wait_for_orchestration("inst-orch-done-first", std::time::Duration::from_secs(5))
         .await
@@ -378,13 +378,13 @@ async fn orchestration_fails_before_activity_finishes_fs() {
         .start_orchestration("inst-orch-fail-first", "QuickFail", "")
         .await
         .unwrap();
-    
+
     match rt
         .wait_for_orchestration("inst-orch-fail-first", std::time::Duration::from_secs(5))
         .await
         .unwrap()
     {
-        runtime::OrchestrationStatus::Failed { error: _ } => {}, // Expected failure
+        runtime::OrchestrationStatus::Failed { error: _ } => {} // Expected failure
         runtime::OrchestrationStatus::Completed { output } => panic!("expected failure, got: {output}"),
         _ => panic!("unexpected orchestration status"),
     }
