@@ -1,8 +1,11 @@
 ## Durable Task Rust Core – TODOs
 
+- Continue the provider simplification
+- Rename to provider
+- Return instance history as well
+- Update history + complete locks + enqueue in the same call
 - fix up the tracing to not use activities
 - fault inject: "TODO : fault injection :"
-- remove the into_activity() and similar methods
 - code coverage
 - Cleanup the docs before making public
 - CLI tooling to manipulate history/queue state for devops
@@ -62,3 +65,4 @@
 - implement Unpin typed future wrappers for `_typed` adapters (see docs/typed-futures-design.md)
 - redo the orchestration registry change with gpt5 and compare
 - mermaid diagrams for orchestrations???
+- remove the into_activity() and similar methods
