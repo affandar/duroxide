@@ -425,20 +425,9 @@ impl Runtime {
             match &item {
                 WorkItem::StartOrchestration { .. } | WorkItem::ContinueAsNew { .. } => {
                     if start_or_continue.is_some() {
-                        // Corrupted state: multiple Start/ContinueAsNew in batch - terminate orchestration
+                        // TODO : CR : this is a corrupted state, the orchestration must be terminated with the appropriate error instead of retrying 
                         error!("Multiple Start/ContinueAsNew in batch - corrupted state");
-                        
-                        // Create failure event and persist it
-                        let failure_event = Event::OrchestrationFailed {
-                            error: "corrupted: multiple start/continue messages in batch".to_string(),
-                        };
-                        
-                        if let Err(e) = self.history_store.append(&instance, vec![failure_event]).await {
-                            error!(instance, error = %e, "failed to persist corrupted state failure");
-                        }
-                        
-                        // Acknowledge the batch since we've handled it (by failing)
-                        let _ = self.history_store.ack_orchestrator(&token).await;
+                        let _ = self.history_store.abandon_orchestrator(&token).await;
                         return;
                     }
                     start_or_continue = Some(item);
@@ -753,61 +742,102 @@ impl Runtime {
             let history = started;
 
             // Run execution with the completion messages
-            self.execute_with_completions(instance, orchestration, history, completion_messages, "Orchestration execution with completions").await;
+            let (_final_history, result) = self
+                .clone()
+                .run_single_execution(instance, orchestration, history, completion_messages)
+                .await;
+
+            // Log the result
+            match &result {
+                Ok(output) => {
+                    debug!(
+                        instance,
+                        orchestration, output, "Orchestration execution with completions completed successfully"
+                    );
+                }
+                Err(error) => {
+                    debug!(instance, orchestration, error, "Orchestration execution with completions failed");
+                }
+            }
+            
+            // Note: Acknowledgment is handled by OrchestrationTurn after persistence
+            // We don't ack here to avoid double-ack
         } else {
             // Instance already started - run with the completion messages
-            self.execute_with_completions(instance, orchestration, history, completion_messages, "Completion batch for existing instance").await;
+            let (_final_history, result) = self
+                .clone()
+                .run_single_execution(instance, orchestration, history, completion_messages)
+                .await;
+
+            match &result {
+                Ok(output) => {
+                    debug!(
+                        instance,
+                        orchestration, output, "Completion batch for existing instance completed"
+                    );
+                }
+                Err(error) => {
+                    debug!(instance, orchestration, error, "Completion batch for existing instance failed");
+                }
+            }
         }
     }
 
 
 
+    // TODO : CR : this function is very similar to the above function, maybe refactor it.
     async fn handle_completion_batch(self: &Arc<Self>, instance: &str, completion_messages: Vec<OrchestratorMsg>, token: String) {
-        // Get orchestration name from history
+        // Get orchestration name and check if already completed
         let history = self.history_store.read(instance).await;
+
+        // TODO : CR : I don't think is_completed can ever be true here because we already checked it in the process_orchestrator_batch function
+        // Check if orchestration is already completed
+        let is_completed = history.iter().rev().any(|e| {
+            matches!(
+                e,
+                Event::OrchestrationCompleted { .. }
+                    | Event::OrchestrationFailed { .. }
+                    | Event::OrchestrationContinuedAsNew { .. }
+            )
+        });
+
+        if is_completed {
+            debug!(instance, "ignoring completion batch for already completed orchestration");
+            let _ = self.history_store.ack_orchestrator(&token).await;
+            return;
+        }
+
         let orchestration_name = history.iter().rev().find_map(|e| match e {
             Event::OrchestrationStarted { name, .. } => Some(name.clone()),
             _ => None,
         });
 
         if let Some(orch_name) = orchestration_name {
-            // Use the common execution logic
-            self.execute_with_completions(instance, &orch_name, history, completion_messages, "Completion batch").await;
+            // Run execution with the completion messages
+            let (_final_history, result) = self
+                .clone()
+                .run_single_execution(instance, &orch_name, history, completion_messages)
+                .await;
+
+            // Log the result
+            match &result {
+                Ok(output) => {
+                    debug!(
+                        instance,
+                        orch_name, output, "Completion batch execution completed successfully"
+                    );
+                }
+                Err(error) => {
+                    debug!(instance, orch_name, error, "Completion batch execution failed");
+                }
+            }
+            
+            // Note: Acknowledgment is handled by OrchestrationTurn after persistence
+            // We don't ack here to avoid double-ack
         } else {
             error!(instance, "no OrchestrationStarted found in history for completion batch");
             let _ = self.history_store.abandon_orchestrator(&token).await;
         }
-    }
-
-    /// Common execution logic for running orchestration with completion messages
-    async fn execute_with_completions(
-        self: &Arc<Self>,
-        instance: &str,
-        orchestration: &str,
-        history: Vec<Event>,
-        completion_messages: Vec<OrchestratorMsg>,
-        context: &str,
-    ) {
-        let (_final_history, result) = self
-            .clone()
-            .run_single_execution(instance, orchestration, history, completion_messages)
-            .await;
-
-        // Log the result
-        match &result {
-            Ok(output) => {
-                debug!(
-                    instance,
-                    orchestration, output, "{} execution completed successfully", context
-                );
-            }
-            Err(error) => {
-                debug!(instance, orchestration, error, "{} execution failed", context);
-            }
-        }
-        
-        // Note: Acknowledgment is handled by OrchestrationTurn after persistence
-        // We don't ack here to avoid double-ack
     }
 
 

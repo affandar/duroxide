@@ -33,8 +33,8 @@ pub struct OrchestrationTurn {
     turn_index: u64,
     /// Incoming completion messages mapped and ordered
     completion_map: CompletionMap,
-    /// Acknowledgment token for batch-ack after persistence
-    ack_token: Option<String>,
+    /// Acknowledgment tokens to batch-ack after persistence
+    ack_tokens: Vec<String>,
     /// History events generated during this turn
     history_delta: Vec<Event>,
     /// Actions to dispatch after persistence
@@ -51,7 +51,7 @@ impl OrchestrationTurn {
             orchestration_name,
             turn_index,
             completion_map: CompletionMap::new(),
-            ack_token: None,
+            ack_tokens: Vec::new(),
             history_delta: Vec::new(),
             pending_actions: Vec::new(),
             baseline_history,
@@ -114,16 +114,16 @@ impl OrchestrationTurn {
                 }
             };
 
-            // Store the ack token for later batching (only store the first one since they're all the same)
-            if self.ack_token.is_none() {
-                self.ack_token = ack_token;
+            // Always collect the ack token for later batching
+            if let Some(token) = ack_token {
+                self.ack_tokens.push(token);
             }
         }
 
         debug!(
             instance = %self.instance,
             completion_count = self.completion_map.ordered.len(),
-            has_ack_token = self.ack_token.is_some(),
+            ack_token_count = self.ack_tokens.len(),
             "completion map prepared"
         );
     }
@@ -364,69 +364,49 @@ impl OrchestrationTurn {
     /// Stage 4: Acknowledge all processed messages in batch
     /// This stage only runs after successful persistence
     pub async fn acknowledge_messages(&mut self, history_store: Arc<dyn HistoryStore>) {
-        if self.ack_token.is_none() {
+        if self.ack_tokens.is_empty() {
             return;
         }
         
         // Check if we should abandon due to nondeterminism
-        // Only trigger if the orchestration hasn't already completed successfully
-        // We need to check the current history from the store since events might have been added there
-        let current_history = history_store.read(&self.instance).await;
-        let has_completed = current_history.iter().any(|e| {
-            matches!(
-                e,
-                Event::OrchestrationCompleted { .. }
-                    | Event::OrchestrationFailed { .. }
-                    | Event::OrchestrationContinuedAsNew { .. }
-            )
-        });
-        
-        if self.completion_map.has_unconsumed() && !has_completed {
-            if let Some(token) = &self.ack_token {
+        if self.completion_map.has_unconsumed() {
+            if self.ack_tokens.len() > 0 {
+                let token = &self.ack_tokens[0];
                 debug!(
                     instance = %self.instance,
-                    "terminating orchestration due to unconsumed completions (nondeterminism)"
+                    token_count = self.ack_tokens.len(),
+                    "abandoning batch due to unconsumed completions (nondeterminism)"
                 );
                 
-                // Add failure event to history delta
-                self.history_delta.push(Event::OrchestrationFailed {
-                    error: "nondeterministic: unconsumed completions detected".to_string(),
-                });
-                
-                // Persist the failure event
-                if let Err(e) = history_store.append(&self.instance, vec![Event::OrchestrationFailed {
-                    error: "nondeterministic: unconsumed completions detected".to_string(),
-                }]).await {
+                // TODO : CR : this is non determinism, this orchestration must be terminated with the appropriate error instead of retrying 
+                //      indefinitely
+                if let Err(e) = history_store.abandon_orchestrator(token).await {
                     error!(
                         instance = %self.instance,
                         error = %e,
-                        "failed to persist nondeterminism failure"
-                    );
-                }
-                
-                // Acknowledge the batch since we've handled it (by failing)
-                if let Err(e) = history_store.ack_orchestrator(token).await {
-                    error!(
-                        instance = %self.instance,
-                        error = %e,
-                        "failed to ack batch after nondeterminism failure"
+                        "failed to abandon batch with unconsumed completions"
                     );
                 }
             }
-            self.ack_token = None;
+            self.ack_tokens.clear();
             return;
         }
 
         debug!(
             instance = %self.instance,
+            token_count = self.ack_tokens.len(),
             "acknowledging processed messages"
         );
 
         // Acknowledge the batch - all messages share the same token
-        if let Some(token) = &self.ack_token {
+        if self.ack_tokens.len() > 0 {
+            // TODO : CR : no point in gathering ack tokens only to not use them. find a more elegant way to do this.
+            // In batch mode, all messages share the same token
+            let token = &self.ack_tokens[0];
             if let Err(e) = history_store.ack_orchestrator(token).await {
                 error!(
                     instance = %self.instance,
+                    token_count = self.ack_tokens.len(),
                     error = %e,
                     "batch acknowledgment failed - messages will timeout and be redelivered"
                 );
@@ -435,12 +415,13 @@ impl OrchestrationTurn {
             } else {
                 debug!(
                     instance = %self.instance,
+                    token_count = self.ack_tokens.len(),
                     "batch acknowledgment successful"
                 );
             }
         }
 
-        self.ack_token = None;
+        self.ack_tokens.clear();
     }
 
     /// Helper: Apply completion map entries to history for orchestration execution
@@ -510,7 +491,7 @@ mod tests {
         )];
 
         turn.prep_completions(messages);
-        assert_eq!(turn.ack_token.is_some(), true);
+        assert_eq!(turn.ack_tokens.len(), 1);
         assert!(turn.completion_map.is_next_ready(CompletionKind::Activity, 1));
 
         // Other stages would require actual runtime integration to test properly

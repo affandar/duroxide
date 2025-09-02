@@ -40,7 +40,7 @@ mod tests {
         assert_eq!(turn.orchestration_name, "test-orch");
         assert_eq!(turn.turn_index, 1);
         assert_eq!(turn.baseline_history, baseline_history);
-        assert!(turn.ack_token.is_none());
+        assert!(turn.ack_tokens.is_empty());
         assert!(turn.history_delta.is_empty());
         assert!(turn.pending_actions.is_empty());
         assert!(!turn.made_progress());
@@ -75,9 +75,10 @@ mod tests {
 
         turn.prep_completions(messages);
 
-        // Should have ack token (only the first one is stored)
-        assert!(turn.ack_token.is_some());
-        assert_eq!(turn.ack_token.as_ref().unwrap(), "token1");
+        // Should have ack tokens
+        assert_eq!(turn.ack_tokens.len(), 2);
+        assert!(turn.ack_tokens.contains(&"token1".to_string()));
+        assert!(turn.ack_tokens.contains(&"token2".to_string()));
 
         // Should have completions in map
         assert!(turn.completion_map.is_next_ready(CompletionKind::Activity, 1));
@@ -124,7 +125,7 @@ mod tests {
 
         // Should have external completion
         assert!(turn.completion_map.is_next_ready(CompletionKind::External, 5));
-        assert!(turn.ack_token.is_some());
+        assert_eq!(turn.ack_tokens.len(), 1);
         assert!(turn.made_progress());
     }
 
@@ -157,8 +158,8 @@ mod tests {
 
         turn.prep_completions(messages);
 
-        // Should have ack token (only the first one is stored)
-        assert!(turn.ack_token.is_some());
+        // Should have both ack tokens (even for duplicates)
+        assert_eq!(turn.ack_tokens.len(), 2);
 
         // Should only have one completion (duplicate detected)
         assert!(turn.completion_map.is_next_ready(CompletionKind::Activity, 1));

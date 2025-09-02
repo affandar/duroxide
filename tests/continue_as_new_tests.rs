@@ -503,3 +503,67 @@ async fn future_execution_completions_are_ignored() {
 
     println!("✓ Future execution completion was properly ignored");
 }
+
+// TEMPORARY TEST: Reproduce nondeterminism with duplicate external events
+#[tokio::test]
+async fn duplicate_external_events_trigger_nondeterminism() {
+    let td = tempfile::tempdir().unwrap();
+    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
+
+    // Orchestration with delay then waits for external event
+    let orch = |ctx: OrchestrationContext, _input: String| async move {
+        ctx.trace_info("delaying before subscription".to_string());
+        // Small delay to allow external events to be sent before subscription
+        ctx.schedule_timer(50).into_timer().await;
+        
+        ctx.trace_info("subscribing to external event".to_string());
+        let result = ctx.schedule_wait("test_signal").into_event().await;
+        Ok(result)
+    };
+
+    let reg = OrchestrationRegistry::builder().register("DuplicateEventTest", orch).build();
+    let activity_registry = ActivityRegistry::builder().build();
+    let rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(activity_registry), reg).await;
+
+    // Start orchestration
+    let _handle = rt
+        .clone()
+        .start_orchestration("inst-duplicate-test", "DuplicateEventTest", "")
+        .await
+        .unwrap();
+
+    // Send two duplicate external events AFTER subscription is established
+    let store_for_wait = store.clone();
+    let rt_clone = rt.clone();
+    tokio::spawn(async move {
+        // Wait for subscription to be established
+        let _ = common::wait_for_subscription(store_for_wait, "inst-duplicate-test", "test_signal", 2_000).await;
+        
+        // Send first event
+        rt_clone.raise_event("inst-duplicate-test", "test_signal", "first").await;
+        
+        // Send duplicate event immediately after
+        rt_clone.raise_event("inst-duplicate-test", "test_signal", "second").await;
+    });
+
+    // Wait for orchestration to complete or fail
+    match rt
+        .wait_for_orchestration("inst-duplicate-test", std::time::Duration::from_secs(3))
+        .await
+        .unwrap()
+    {
+        runtime::OrchestrationStatus::Failed { error } => {
+            println!("✓ Got expected nondeterminism error: {}", error);
+            assert!(error.contains("nondeterministic"), "Expected nondeterminism error, got: {error}");
+        }
+        runtime::OrchestrationStatus::Completed { output } => {
+            println!("Orchestration completed with output: {}", output);
+            // This might happen if only one event is processed
+        }
+        other => {
+            println!("Unexpected status: {:?}", other);
+        }
+    }
+
+    rt.shutdown().await;
+}

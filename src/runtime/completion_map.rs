@@ -228,11 +228,17 @@ impl CompletionMap {
         if let Some(correlation_id) = subscription_id {
             let key = (CompletionKind::External, correlation_id);
 
-            // Check for duplicates
+            // Check for duplicates in completion map
             if self.by_id.contains_key(&key) {
-                debug!(name=%name, correlation_id, "ignoring duplicate external completion");
+                debug!(name=%name, correlation_id, "ignoring duplicate external completion in map");
                 return ack_token;
             }
+
+            // Check if there's already a matching external event in history
+            // If so, consider this completion as "consumed" to avoid nondeterminism
+            let has_existing_external = history.iter().any(|e| {
+                matches!(e, Event::ExternalEvent { name: event_name, .. } if event_name == &name)
+            });
 
             let arrival_order = self.next_order;
             self.next_order += 1;
@@ -252,10 +258,14 @@ impl CompletionMap {
                 kind: CompletionKind::External,
                 correlation_id,
                 arrival_order,
-                consumed: false,
+                consumed: has_existing_external, // Mark as consumed if there's already one in history
             });
 
-            debug!(name=%name, correlation_id, arrival_order, "added external completion to map");
+            if has_existing_external {
+                debug!(name=%name, correlation_id, arrival_order, "added external completion to map (marked as consumed due to existing event in history)");
+            } else {
+                debug!(name=%name, correlation_id, arrival_order, "added external completion to map");
+            }
             ack_token
         } else {
             debug!(name=%name, "dropping external completion: no active subscription");

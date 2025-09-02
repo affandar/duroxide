@@ -297,3 +297,101 @@ async fn unexpected_timer_completion_triggers_nondeterminism() {
         other => panic!("Expected failure with nondeterminism, got: {other:?}"),
     }
 }
+
+#[tokio::test]
+async fn continue_as_new_with_unconsumed_completion_triggers_nondeterminism() {
+    let td = tempfile::tempdir().unwrap();
+    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
+
+    let activity_registry = ActivityRegistry::builder()
+        .register("MyActivity", |_input: String| async move { 
+            // Activity that never completes on its own
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+            }
+            #[allow(unreachable_code)]
+            Ok("activity_result".to_string())
+        })
+        .build();
+
+    // Orchestration that schedules activity then waits for signal before calling CAN
+    let orch = |ctx: OrchestrationContext, input: String| async move {
+        let n: u32 = input.parse().unwrap_or(0);
+        
+        // First iteration: schedule activity
+        if n == 0 {
+            // Schedule an activity - this will create ActivityScheduled event
+            let _activity_future = ctx.schedule_activity("MyActivity", "test_input");
+            
+            // Wait for an external event - this blocks the orchestration
+            let signal = ctx.schedule_wait("proceed_signal").await;
+            
+            // When we get the signal, call continue_as_new
+            // The activity is still pending and its completion might be in the batch
+            ctx.continue_as_new("1");
+            Ok(format!("continuing with signal: {:?}", signal))
+        } else {
+            // Second iteration: just complete
+            Ok(format!("final:iteration_{}", n))
+        }
+    };
+
+    let reg = OrchestrationRegistry::builder()
+        .register("CanNondeterminism", orch)
+        .build();
+    
+    let rt = runtime::Runtime::start_with_store(
+        store.clone(), 
+        StdArc::new(activity_registry), 
+        reg
+    ).await;
+
+    // Start the orchestration
+    let _h = rt.clone()
+        .start_orchestration("inst-can-nondet", "CanNondeterminism", "0")
+        .await
+        .unwrap();
+
+    // Wait for the orchestration to be waiting for the signal
+    let ok = common::wait_for_history(store.clone(), "inst-can-nondet", |hist| {
+        hist.iter().any(|e| matches!(e, Event::ExternalSubscribed { name, .. } if name == "proceed_signal"))
+    }, 2000).await;
+    assert!(ok, "timeout waiting for external subscription");
+
+    // Now manually enqueue an activity completion 
+    // This simulates the activity completing while the orchestration is waiting
+    let completion = WorkItem::ActivityCompleted {
+        instance: "inst-can-nondet".to_string(),
+        execution_id: 1, 
+        id: 1,
+        result: serde_json::to_string(&Ok::<String, String>("activity_completed".to_string())).unwrap(),
+    };
+    store.enqueue_orchestrator_work(completion).await.unwrap();
+
+    // Give it a moment to ensure the completion is in the queue
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    // Now send the signal that will trigger continue_as_new
+    rt.raise_event("inst-can-nondet", "proceed_signal", "go").await;
+
+    // Wait for the orchestration to complete or fail
+    match rt
+        .wait_for_orchestration("inst-can-nondet", std::time::Duration::from_secs(5))
+        .await
+        .unwrap()
+    {
+        OrchestrationStatus::Failed { error } => {
+            println!("Got expected nondeterminism error: {}", error);
+            assert!(
+                error.contains("nondeterministic"),
+                "Expected nondeterminism error, got: {error}"
+            );
+        }
+        OrchestrationStatus::Completed { output } => {
+            panic!("Expected nondeterminism failure but orchestration completed: {output}");
+        }
+        other => panic!("Unexpected status: {other:?}"),
+    }
+
+    rt.shutdown().await;
+}
