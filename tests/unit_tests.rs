@@ -47,6 +47,7 @@ fn correlation_out_of_order_completion() {
             id: 1,
             name: "A".into(),
             input: "1".into(),
+            execution_id: 1,
         },
         Event::TimerFired { id: 42, fire_at_ms: 0 },
         Event::ActivityCompleted {
@@ -119,7 +120,7 @@ async fn history_store_admin_apis() {
     store.create_instance("i1").await.unwrap();
     store.create_instance("i2").await.unwrap();
     store
-        .append("i1", vec![Event::TimerCreated { id: 1, fire_at_ms: 10 }])
+        .append("i1", vec![Event::TimerCreated { id: 1, fire_at_ms: 10, execution_id: 1 }])
         .await
         .unwrap();
     store

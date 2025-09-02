@@ -109,8 +109,49 @@ impl OrchestrationTurn {
                     Some(token)
                 }
                 _ => {
-                    // All other completions use standard processing
-                    self.completion_map.add_completion(msg)
+                    // Smart completion filtering with helpful warnings
+                    
+                    // Check if completion belongs to current execution
+                    if !self.is_completion_for_current_execution(&msg) {
+                        if self.has_continue_as_new_in_history() {
+                            // Expected behavior - warn and ignore
+                            warn!(
+                                instance = %self.instance,
+                                "ignoring completion from previous execution (expected with continue_as_new)"
+                            );
+                        } else {
+                            // Unexpected - this is nondeterminism
+                            error!(
+                                instance = %self.instance,
+                                "nondeterministic: completion from different execution (investigate orchestration logic)"
+                            );
+                            // Still ack the message but don't process it
+                        }
+                        Some(token)
+                    } else if self.is_completion_already_in_history(&msg) {
+                        // Check if completion is already in history (duplicate)
+                        match &msg {
+                            OrchestratorMsg::ExternalByName { .. } => {
+                                // External events: warn and ignore (expected for duplicates)
+                                warn!(
+                                    instance = %self.instance,
+                                    "ignoring duplicate external event (expected behavior)"
+                                );
+                            }
+                            _ => {
+                                // Other completions: this is nondeterminism
+                                error!(
+                                    instance = %self.instance,
+                                    "nondeterministic: duplicate completion detected (investigate orchestration logic)"
+                                );
+                                // Still ack the message but don't process it
+                            }
+                        }
+                        Some(token)
+                    } else {
+                        // Process the completion normally
+                        self.completion_map.add_completion(msg)
+                    }
                 }
             };
 
@@ -126,6 +167,78 @@ impl OrchestrationTurn {
             ack_token_count = self.ack_tokens.len(),
             "completion map prepared"
         );
+    }
+
+    /// Get the current execution ID from the baseline history
+    fn get_current_execution_id(&self) -> u64 {
+        // Look for the most recent OrchestrationStarted event to get execution ID
+        // If not found, default to 1 for backward compatibility
+        self.baseline_history
+            .iter()
+            .rev()
+            .find_map(|e| match e {
+                Event::OrchestrationStarted { .. } => {
+                    // For now, we'll extract execution ID from the history store
+                    // This is a temporary solution until we have execution ID in the event
+                    Some(1) // Default to 1 for now
+                }
+                _ => None,
+            })
+            .unwrap_or(1)
+    }
+
+    /// Check if a completion message belongs to the current execution
+    fn is_completion_for_current_execution(&self, msg: &OrchestratorMsg) -> bool {
+        let current_execution_id = self.get_current_execution_id();
+        match msg {
+            OrchestratorMsg::ActivityCompleted { execution_id, .. } => *execution_id == current_execution_id,
+            OrchestratorMsg::ActivityFailed { execution_id, .. } => *execution_id == current_execution_id,
+            OrchestratorMsg::TimerFired { execution_id, .. } => *execution_id == current_execution_id,
+            OrchestratorMsg::SubOrchCompleted { execution_id, .. } => *execution_id == current_execution_id,
+            OrchestratorMsg::SubOrchFailed { execution_id, .. } => *execution_id == current_execution_id,
+            OrchestratorMsg::ExternalByName { .. } => true, // External events don't have execution IDs
+            OrchestratorMsg::CancelRequested { .. } => true, // Cancellation applies to current execution
+        }
+    }
+
+    /// Check if a completion is already in the baseline history (duplicate)
+    fn is_completion_already_in_history(&self, msg: &OrchestratorMsg) -> bool {
+        match msg {
+            OrchestratorMsg::ActivityCompleted { id, .. } => {
+                self.baseline_history.iter().any(|e| {
+                    matches!(e, Event::ActivityCompleted { id: hist_id, .. } if *hist_id == *id)
+                })
+            }
+            OrchestratorMsg::TimerFired { id, .. } => {
+                self.baseline_history.iter().any(|e| {
+                    matches!(e, Event::TimerFired { id: hist_id, .. } if *hist_id == *id)
+                })
+            }
+            OrchestratorMsg::SubOrchCompleted { id, .. } => {
+                self.baseline_history.iter().any(|e| {
+                    matches!(e, Event::SubOrchestrationCompleted { id: hist_id, .. } if *hist_id == *id)
+                })
+            }
+            OrchestratorMsg::SubOrchFailed { id, .. } => {
+                self.baseline_history.iter().any(|e| {
+                    matches!(e, Event::SubOrchestrationFailed { id: hist_id, .. } if *hist_id == *id)
+                })
+            }
+            OrchestratorMsg::ExternalByName { name, data, .. } => {
+                self.baseline_history.iter().any(|e| {
+                    matches!(e, Event::ExternalEvent { name: hist_name, data: hist_data, .. } 
+                        if hist_name == name && hist_data == data)
+                })
+            }
+            _ => false,
+        }
+    }
+
+    /// Check if this orchestration has used continue_as_new
+    fn has_continue_as_new_in_history(&self) -> bool {
+        self.baseline_history.iter().any(|e| {
+            matches!(e, Event::OrchestrationContinuedAsNew { .. })
+        })
     }
 
     /// Stage 2: Execute one turn of the orchestration using the replay engine
@@ -152,10 +265,12 @@ impl OrchestrationTurn {
         // 4. The copy cost is minimal compared to the determinism benefits
         let completion_map_arc = std::sync::Arc::new(std::sync::Mutex::new(self.completion_map.clone()));
 
+        let execution_id = self.get_current_execution_id();
         let (updated_history, decisions, _logs, output_opt, _claims) =
             super::completion_aware_futures::run_turn_with_completion_map(
                 working_history,
                 self.turn_index,
+                execution_id,
                 completion_map_arc.clone(),
                 move |ctx| {
                     let h = handler.clone();

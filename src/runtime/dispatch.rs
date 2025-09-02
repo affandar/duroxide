@@ -54,7 +54,7 @@ pub async fn dispatch_create_timer(rt: &Arc<Runtime>, instance: &str, history: &
         .iter()
         .rev()
         .find_map(|e| match e {
-            Event::TimerCreated { id: cid, fire_at_ms } if *cid == id => Some(*fire_at_ms),
+            Event::TimerCreated { id: cid, fire_at_ms, execution_id: _ } if *cid == id => Some(*fire_at_ms),
             _ => None,
         })
         .unwrap_or(0);

@@ -316,6 +316,7 @@ mod tests {
                 id: 1,
                 name: "test-activity".to_string(),
                 input: "activity-input".to_string(),
+                execution_id: 1,
             },
             Event::ActivityCompleted {
                 id: 1,
@@ -359,6 +360,7 @@ mod tests {
             id: 1,
             name: "test".to_string(),
             input: "input".to_string(),
+            execution_id: 1,
         }];
         assert!(turn.made_progress());
 

@@ -204,10 +204,12 @@ impl Future for DurableFuture {
                     .iter()
                     .any(|e| matches!(e, Event::ActivityScheduled { id: cid, .. } if cid == id));
                 if !already_scheduled && !scheduled.replace(true) {
+                    let exec_id = inner.execution_id;
                     inner.history.push(Event::ActivityScheduled {
                         id: *id,
                         name: name.clone(),
                         input: input.clone(),
+                        execution_id: exec_id,
                     });
                     inner.record_action(Action::CallActivity {
                         id: *id,
@@ -237,7 +239,8 @@ impl Future for DurableFuture {
                     .any(|e| matches!(e, Event::TimerCreated { id: cid, .. } if cid == id));
                 if !already_created && !scheduled.replace(true) {
                     let fire_at_ms = inner.now_ms().saturating_add(*delay_ms);
-                    inner.history.push(Event::TimerCreated { id: *id, fire_at_ms });
+                    let exec_id = inner.execution_id;
+                    inner.history.push(Event::TimerCreated { id: *id, fire_at_ms, execution_id: exec_id });
                     inner.record_action(Action::CreateTimer {
                         id: *id,
                         delay_ms: *delay_ms,
@@ -296,11 +299,13 @@ impl Future for DurableFuture {
                     .iter()
                     .any(|e| matches!(e, Event::SubOrchestrationScheduled { id: cid, .. } if cid == id));
                 if !already_scheduled && !scheduled.replace(true) {
+                    let exec_id = inner.execution_id;
                     inner.history.push(Event::SubOrchestrationScheduled {
                         id: *id,
                         name: name.clone(),
                         instance: instance.clone(),
                         input: input.clone(),
+                        execution_id: exec_id,
                     });
                     inner.record_action(Action::StartSubOrchestration {
                         id: *id,

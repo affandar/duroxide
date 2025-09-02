@@ -87,14 +87,14 @@ pub enum Event {
     /// Orchestration failed with a final error.
     OrchestrationFailed { error: String },
     /// Activity was scheduled with a unique ID and input.
-    ActivityScheduled { id: u64, name: String, input: String },
+    ActivityScheduled { id: u64, name: String, input: String, execution_id: u64 },
     /// Activity completed successfully with a result.
     ActivityCompleted { id: u64, result: String },
     /// Activity failed with an error string.
     ActivityFailed { id: u64, error: String },
 
     /// Timer was created and will logically fire at `fire_at_ms`.
-    TimerCreated { id: u64, fire_at_ms: u64 },
+    TimerCreated { id: u64, fire_at_ms: u64, execution_id: u64 },
     /// Timer fired at logical time `fire_at_ms`.
     TimerFired { id: u64, fire_at_ms: u64 },
 
@@ -117,6 +117,7 @@ pub enum Event {
         name: String,
         instance: String,
         input: String,
+        execution_id: u64,
     },
     /// Sub-orchestration completed and returned a result to the parent.
     SubOrchestrationCompleted { id: u64, result: String },
@@ -170,6 +171,9 @@ struct CtxInner {
     // Reserved for future deterministic GUIDs if reintroduced
     next_correlation_id: u64,
 
+    // Execution metadata
+    execution_id: u64,
+
     // Logging and turn metadata
     turn_index: u64,
     logging_enabled_this_poll: bool,
@@ -187,7 +191,7 @@ struct CtxInner {
 }
 
 impl CtxInner {
-    fn new(history: Vec<Event>) -> Self {
+    fn new(history: Vec<Event>, execution_id: u64) -> Self {
         // Compute next correlation id based on max id found in history
         let mut max_id = 0u64;
         for ev in &history {
@@ -218,6 +222,7 @@ impl CtxInner {
             actions: Vec::new(),
             // guid_counter removed
             next_correlation_id: max_id.saturating_add(1),
+            execution_id,
             turn_index: 0,
             logging_enabled_this_poll: false,
             log_buffer: Vec::new(),
@@ -257,9 +262,9 @@ pub struct OrchestrationContext {
 
 impl OrchestrationContext {
     /// Construct a new context from an existing history vector.
-    pub fn new(history: Vec<Event>) -> Self {
+    pub fn new(history: Vec<Event>, execution_id: u64) -> Self {
         Self {
-            inner: Arc::new(Mutex::new(CtxInner::new(history))),
+            inner: Arc::new(Mutex::new(CtxInner::new(history, execution_id))),
         }
     }
 
@@ -521,6 +526,7 @@ impl OrchestrationContext {
                     id,
                     name: n,
                     input: inp,
+                    execution_id: _,
                 } if n == &name && inp == &input && !inner.claimed_activity_ids.contains(id) => Some(*id),
                 _ => None,
             })
@@ -611,6 +617,7 @@ impl OrchestrationContext {
                 name: n,
                 input: inp,
                 instance: inst,
+                execution_id: _,
             } if n == &name && inp == &input => Some((*id, inst.clone())),
             _ => None,
         });
@@ -662,6 +669,7 @@ impl OrchestrationContext {
                 name: n,
                 input: inp,
                 instance: inst,
+                execution_id: _,
             } if n == &name && inp == &input => Some((*id, inst.clone())),
             _ => None,
         });
@@ -887,7 +895,7 @@ pub fn run_turn<O, F>(history: Vec<Event>, orchestrator: impl Fn(OrchestrationCo
 where
     F: Future<Output = O>,
 {
-    let ctx = OrchestrationContext::new(history);
+    let ctx = OrchestrationContext::new(history, 1); // Default execution_id for legacy compatibility
     let mut fut = orchestrator(ctx.clone());
     // Reset logging flag at start of poll; it will be flipped to true when a decision is recorded
     ctx.inner.lock().unwrap().logging_enabled_this_poll = false;
@@ -918,7 +926,7 @@ pub fn run_turn_with<O, F>(
 where
     F: Future<Output = O>,
 {
-    let ctx = OrchestrationContext::new(history);
+    let ctx = OrchestrationContext::new(history, 1); // Default execution_id for legacy compatibility
     ctx.set_turn_index(turn_index);
     ctx.inner.lock().unwrap().logging_enabled_this_poll = false;
     let mut fut = orchestrator(ctx.clone());
@@ -972,6 +980,7 @@ impl OrchestrationContext {
 pub fn run_turn_with_claims<O, F>(
     history: Vec<Event>,
     turn_index: u64,
+    execution_id: u64,
     orchestrator: impl Fn(OrchestrationContext) -> F,
 ) -> (
     Vec<Event>,
@@ -983,7 +992,7 @@ pub fn run_turn_with_claims<O, F>(
 where
     F: Future<Output = O>,
 {
-    let ctx = OrchestrationContext::new(history);
+    let ctx = OrchestrationContext::new(history, execution_id);
     ctx.set_turn_index(turn_index);
     ctx.inner.lock().unwrap().logging_enabled_this_poll = false;
     let mut fut = orchestrator(ctx.clone());

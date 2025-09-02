@@ -95,7 +95,7 @@ async fn timer_duplicate_workitems_dedup_fs() {
         let mut t_id = 0u64;
         let mut t_fire = 0u64;
         for e in hist.iter() {
-            if let Event::TimerCreated { id, fire_at_ms } = e {
+            if let Event::TimerCreated { id, fire_at_ms, execution_id: _ } = e {
                 t_id = *id;
                 t_fire = *fire_at_ms;
                 break;
@@ -315,7 +315,7 @@ async fn crash_after_append_before_ack_timer_fs() {
         let mut t_id = 0u64;
         let mut t_fire = 0u64;
         for e in hist.iter() {
-            if let Event::TimerCreated { id, fire_at_ms } = e {
+            if let Event::TimerCreated { id, fire_at_ms, execution_id: _ } = e {
                 t_id = *id;
                 t_fire = *fire_at_ms;
                 break;

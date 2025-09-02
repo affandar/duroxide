@@ -181,6 +181,7 @@ impl DurableFutureExt for DurableFuture {
 pub fn run_turn_with_completion_map<O, F>(
     history: Vec<Event>,
     turn_index: u64,
+    execution_id: u64,
     completion_map: Arc<Mutex<CompletionMap>>,
     orchestrator: impl Fn(OrchestrationContext) -> F,
 ) -> (
@@ -209,7 +210,7 @@ where
         orchestrator(ctx)
     };
 
-    let result = crate::run_turn_with_claims(history, turn_index, wrapped_orchestrator);
+    let result = crate::run_turn_with_claims(history, turn_index, execution_id, wrapped_orchestrator);
 
     // Clean up thread-local
     COMPLETION_MAP_ACCESSOR.with(|a| {
