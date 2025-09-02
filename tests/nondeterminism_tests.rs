@@ -3,7 +3,7 @@
 
 use rust_dtf::providers::HistoryStore;
 use rust_dtf::providers::fs::FsHistoryStore;
-use rust_dtf::providers::{QueueKind, WorkItem};
+use rust_dtf::providers::WorkItem;
 use rust_dtf::runtime::registry::ActivityRegistry;
 use rust_dtf::runtime::{self};
 use rust_dtf::{Event, OrchestrationContext, OrchestrationRegistry, OrchestrationStatus};
@@ -76,8 +76,7 @@ async fn code_swap_triggers_nondeterminism() {
     // Poke the instance so it activates and runs a turn (nondeterminism check occurs before completions)
     // Use a timer that fires immediately to trigger a turn reliably
     let _ = store
-        .enqueue_work(
-            QueueKind::Timer,
+        .enqueue_timer_work(
             WorkItem::TimerSchedule {
                 instance: "inst-swap".to_string(),
                 execution_id: 1,
@@ -150,8 +149,8 @@ async fn completion_kind_mismatch_triggers_nondeterminism() {
 
     // Inject a completion with the WRONG kind - send ActivityCompleted for a timer ID
     let _ = store
-        .enqueue_work(
-            QueueKind::Orchestrator,
+        .enqueue_orchestrator_work(
+
             WorkItem::ActivityCompleted {
                 instance: "inst-mismatch".to_string(),
                 execution_id: 1,
@@ -215,8 +214,8 @@ async fn unexpected_completion_id_triggers_nondeterminism() {
 
     // Inject a completion for an ID that was never scheduled (999)
     let _ = store
-        .enqueue_work(
-            QueueKind::Orchestrator,
+        .enqueue_orchestrator_work(
+
             WorkItem::ActivityCompleted {
                 instance: "inst-unexpected".to_string(),
                 execution_id: 1,
@@ -272,8 +271,7 @@ async fn unexpected_timer_completion_triggers_nondeterminism() {
 
     // Inject an unexpected timer completion (timer ID 123 was never scheduled)
     let _ = store
-        .enqueue_work(
-            QueueKind::Orchestrator,
+        .enqueue_orchestrator_work(
             WorkItem::TimerFired {
                 instance: "inst-timer".to_string(),
                 execution_id: 1,

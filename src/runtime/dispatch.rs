@@ -2,7 +2,7 @@ use std::sync::Arc;
 use tracing::{debug, warn};
 
 use crate::Event;
-use crate::providers::{QueueKind, WorkItem};
+use crate::providers::WorkItem;
 
 use super::Runtime;
 
@@ -28,8 +28,7 @@ pub async fn dispatch_call_activity(
         let execution_id = rt.get_execution_id_for_instance(instance).await;
         let _ = rt
             .history_store
-            .enqueue_work(
-                QueueKind::Worker,
+            .enqueue_worker_work(
                 WorkItem::ActivityExecute {
                     instance: instance.to_string(),
                     execution_id,
@@ -64,8 +63,7 @@ pub async fn dispatch_create_timer(rt: &Arc<Runtime>, instance: &str, history: &
     let execution_id = rt.get_execution_id_for_instance(instance).await;
     let _ = rt
         .history_store
-        .enqueue_work(
-            QueueKind::Timer,
+        .enqueue_timer_work(
             WorkItem::TimerSchedule {
                 instance: instance.to_string(),
                 execution_id,
@@ -105,7 +103,7 @@ pub async fn dispatch_start_detached(
         parent_instance: None,  // Detached orchestrations have no parent
         parent_id: None,
     };
-    if let Err(e) = rt.history_store.enqueue_work(QueueKind::Orchestrator, wi).await {
+    if let Err(e) = rt.history_store.enqueue_orchestrator_work(wi).await {
         warn!(instance, id, name=%name, child_instance=%child_instance, error=%e, "failed to enqueue detached start; will rely on bootstrap rehydration");
     } else {
         debug!(instance, id, name=%name, child_instance=%child_instance, "enqueued detached orchestration start");
@@ -172,8 +170,7 @@ pub async fn dispatch_start_sub_orchestration(
             let parent_execution_id = rt.get_execution_id_for_instance(parent_instance).await;
             let _ = rt
                 .history_store
-                .enqueue_work(
-                    QueueKind::Orchestrator,
+                .enqueue_orchestrator_work(
                     WorkItem::SubOrchFailed {
                         parent_instance: parent_inst,
                         parent_execution_id,

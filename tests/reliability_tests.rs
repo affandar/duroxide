@@ -1,6 +1,6 @@
 use rust_dtf::providers::HistoryStore;
 use rust_dtf::providers::fs::FsHistoryStore;
-use rust_dtf::providers::{QueueKind, WorkItem};
+use rust_dtf::providers::WorkItem;
 use rust_dtf::runtime::registry::ActivityRegistry;
 use rust_dtf::runtime::{self};
 use rust_dtf::{Event, OrchestrationContext, OrchestrationRegistry};
@@ -31,8 +31,8 @@ async fn external_duplicate_workitems_dedup_fs() {
         name: "Evt".to_string(),
         data: "ok".to_string(),
     };
-    let _ = store.enqueue_work(QueueKind::Orchestrator, wi.clone()).await;
-    let _ = store.enqueue_work(QueueKind::Orchestrator, wi.clone()).await;
+    let _ = store.enqueue_orchestrator_work(wi.clone()).await;
+    let _ = store.enqueue_orchestrator_work(wi.clone()).await;
 
     // wait for completion
     let ok = common::wait_for_history(
@@ -111,8 +111,8 @@ async fn timer_duplicate_workitems_dedup_fs() {
         id,
         fire_at_ms,
     };
-    let _ = store.enqueue_work(QueueKind::Orchestrator, wi.clone()).await;
-    let _ = store.enqueue_work(QueueKind::Orchestrator, wi.clone()).await;
+    let _ = store.enqueue_orchestrator_work(wi.clone()).await;
+    let _ = store.enqueue_orchestrator_work(wi.clone()).await;
 
     // wait for completion
     let ok = common::wait_for_history(
@@ -195,8 +195,8 @@ async fn activity_duplicate_completion_workitems_dedup_fs() {
         id,
         result: "x".to_string(),
     };
-    let _ = store.enqueue_work(QueueKind::Orchestrator, wi.clone()).await;
-    let _ = store.enqueue_work(QueueKind::Orchestrator, wi.clone()).await;
+    let _ = store.enqueue_orchestrator_work(wi.clone()).await;
+    let _ = store.enqueue_orchestrator_work(wi.clone()).await;
 
     // wait for completion and assert single ActivityCompleted recorded
     let ok = common::wait_for_history(
@@ -257,9 +257,9 @@ async fn crash_after_dequeue_before_append_completion_fs() {
         name: "Evt".to_string(),
         data: "ok".to_string(),
     };
-    let _ = store.enqueue_work(QueueKind::Orchestrator, wi.clone()).await;
+    let _ = store.enqueue_orchestrator_work(wi.clone()).await;
     // Simulate crash-before-append by enqueuing duplicate before runtime gets to append
-    let _ = store.enqueue_work(QueueKind::Orchestrator, wi.clone()).await;
+    let _ = store.enqueue_orchestrator_work(wi.clone()).await;
 
     // Wait for completion, ensure a single ExternalEvent recorded
     let ok = common::wait_for_history(
@@ -331,8 +331,8 @@ async fn crash_after_append_before_ack_timer_fs() {
         id,
         fire_at_ms,
     };
-    let _ = store.enqueue_work(QueueKind::Orchestrator, wi.clone()).await;
-    let _ = store.enqueue_work(QueueKind::Orchestrator, wi.clone()).await;
+    let _ = store.enqueue_orchestrator_work(wi.clone()).await;
+    let _ = store.enqueue_orchestrator_work(wi.clone()).await;
 
     let ok = common::wait_for_history(
         store.clone(),

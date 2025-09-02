@@ -348,7 +348,7 @@ impl Runtime {
 
             let _ = self
                 .history_store
-                .enqueue_work(crate::providers::QueueKind::Orchestrator, work_item)
+                .enqueue_orchestrator_work(work_item)
                 .await;
         }
 
@@ -424,8 +424,7 @@ impl Runtime {
         // The dispatcher will handle starting the new execution normally
         if let Err(e) = self
             .history_store
-            .enqueue_work(
-                crate::providers::QueueKind::Orchestrator,
+            .enqueue_orchestrator_work(
                 crate::providers::WorkItem::ContinueAsNew {
                     instance: instance.to_string(),
                     orchestration: orchestration_name.to_string(),
@@ -461,7 +460,7 @@ impl Runtime {
 
     /// Propagate cancellation to child sub-orchestrations
     async fn propagate_cancellation_to_children(&self, instance: &str, history: &[Event]) {
-        use crate::providers::{QueueKind, WorkItem};
+        use crate::providers::WorkItem;
 
         // Find all scheduled sub-orchestrations
         let scheduled_children: Vec<(u64, String)> = history
@@ -489,8 +488,7 @@ impl Runtime {
                 let child_full = format!("{}::{}", instance, child_suffix);
                 let _ = self
                     .history_store
-                    .enqueue_work(
-                        QueueKind::Orchestrator,
+                    .enqueue_orchestrator_work(
                         WorkItem::CancelInstance {
                             instance: child_full,
                             reason: "parent canceled".into(),

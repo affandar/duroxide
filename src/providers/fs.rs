@@ -2,7 +2,7 @@ use serde_json;
 use std::path::{Path, PathBuf};
 use tokio::{fs, io::AsyncWriteExt};
 
-use super::{HistoryStore, QueueKind, WorkItem};
+use super::{HistoryStore, WorkItem};
 use crate::Event;
 
 /// Simple filesystem-backed history store writing JSONL per instance.
@@ -51,22 +51,23 @@ impl FsHistoryStore {
     fn exec_path(&self, instance: &str, execution_id: u64) -> PathBuf {
         self.inst_root(instance).join(format!("{}.jsonl", execution_id))
     }
-    fn lock_dir(&self, kind: QueueKind) -> PathBuf {
-        match kind {
-            QueueKind::Orchestrator => self.root.join(".locks/orch"),
-            QueueKind::Worker => self.root.join(".locks/work"),
-            QueueKind::Timer => self.root.join(".locks/timer"),
-        }
+    fn orch_lock_dir(&self) -> PathBuf {
+        self.root.join(".locks/orch")
     }
-    fn lock_path(&self, kind: QueueKind, token: &str) -> PathBuf {
-        self.lock_dir(kind).join(format!("{token}.lock"))
+    fn work_lock_dir(&self) -> PathBuf {
+        self.root.join(".locks/work")
     }
-    fn queue_file(&self, kind: QueueKind) -> &PathBuf {
-        match kind {
-            QueueKind::Orchestrator => &self.orch_queue_file,
-            QueueKind::Worker => &self.work_queue_file,
-            QueueKind::Timer => &self.timer_queue_file,
-        }
+    fn timer_lock_dir(&self) -> PathBuf {
+        self.root.join(".locks/timer")
+    }
+    fn orch_lock_path(&self, token: &str) -> PathBuf {
+        self.orch_lock_dir().join(format!("{token}.lock"))
+    }
+    fn work_lock_path(&self, token: &str) -> PathBuf {
+        self.work_lock_dir().join(format!("{token}.lock"))
+    }
+    fn timer_lock_path(&self, token: &str) -> PathBuf {
+        self.timer_lock_dir().join(format!("{token}.lock"))
     }
 }
 
@@ -262,10 +263,12 @@ impl HistoryStore for FsHistoryStore {
         Ok(())
     }
 
-    async fn enqueue_work(&self, kind: QueueKind, item: WorkItem) -> Result<(), String> {
+    // ===== Orchestrator Queue Methods =====
+    
+    async fn enqueue_orchestrator_work(&self, item: WorkItem) -> Result<(), String> {
         // Idempotent enqueue: load current items and only append if not present
-        let qf = self.queue_file(kind).clone();
-        let content = std::fs::read_to_string(&qf).unwrap_or_default();
+        let qf = &self.orch_queue_file;
+        let content = std::fs::read_to_string(qf).unwrap_or_default();
         let mut items: Vec<WorkItem> = content
             .lines()
             .filter_map(|l| serde_json::from_str::<WorkItem>(l).ok())
@@ -290,16 +293,193 @@ impl HistoryStore for FsHistoryStore {
                 tf.write_all(b"\n").map_err(|e| e.to_string())?;
             }
         }
-        std::fs::rename(&tmp, &qf).map_err(|e| e.to_string())?;
+        std::fs::rename(&tmp, qf).map_err(|e| e.to_string())?;
         Ok(())
     }
 
-    // dequeue_work removed; runtime uses peek-lock only
+    async fn dequeue_orchestrator_peek_lock(&self) -> Option<(Vec<WorkItem>, String)> {
+        // Group items by instance and return all items for the first instance
+        let qf = &self.orch_queue_file;
+        let content = std::fs::read_to_string(qf).ok()?;
+        let all_items: Vec<WorkItem> = content
+            .lines()
+            .filter_map(|l| serde_json::from_str::<WorkItem>(l).ok())
+            .collect();
+        if all_items.is_empty() {
+            return None;
+        }
+        
+        // Group by instance
+        let mut instance_map = std::collections::HashMap::<String, Vec<WorkItem>>::new();
+        for item in all_items.iter() {
+            let instance = match item {
+                WorkItem::StartOrchestration { instance, .. }
+                | WorkItem::ActivityCompleted { instance, .. }
+                | WorkItem::ActivityFailed { instance, .. }
+                | WorkItem::TimerFired { instance, .. }
+                | WorkItem::ExternalRaised { instance, .. }
+                | WorkItem::CancelInstance { instance, .. }
+                | WorkItem::ContinueAsNew { instance, .. } => instance.clone(),
+                WorkItem::SubOrchCompleted { parent_instance, .. }
+                | WorkItem::SubOrchFailed { parent_instance, .. } => parent_instance.clone(),
+                _ => continue,
+            };
+            instance_map.entry(instance).or_default().push(item.clone());
+        }
+        
+        // Take the first instance's items
+        let (target_instance, batch_items) = instance_map.into_iter().next()?;
+        
+        // Remove batch items from all_items
+        let remaining_items: Vec<WorkItem> = all_items.into_iter()
+            .filter(|item| {
+                let item_instance = match item {
+                    WorkItem::StartOrchestration { instance, .. }
+                    | WorkItem::ActivityCompleted { instance, .. }
+                    | WorkItem::ActivityFailed { instance, .. }
+                    | WorkItem::TimerFired { instance, .. }
+                    | WorkItem::ExternalRaised { instance, .. }
+                    | WorkItem::CancelInstance { instance, .. }
+                    | WorkItem::ContinueAsNew { instance, .. } => instance,
+                    WorkItem::SubOrchCompleted { parent_instance, .. }
+                    | WorkItem::SubOrchFailed { parent_instance, .. } => parent_instance,
+                    _ => return true,
+                };
+                item_instance != &target_instance
+            })
+            .collect();
+        
+        // Rewrite remaining items atomically
+        let tmp = qf.with_extension("jsonl.tmp");
+        {
+            let mut tf = std::fs::OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(true)
+                .open(&tmp)
+                .ok()?;
+            for it in &remaining_items {
+                let line = serde_json::to_string(&it).ok()?;
+                use std::io::Write as _;
+                let _ = tf.write_all(line.as_bytes());
+                let _ = tf.write_all(b"\n");
+            }
+        }
+        let _ = std::fs::rename(&tmp, qf);
+        
+        // Create lock token and persist the batch as JSON array
+        let now_ns = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let pid = std::process::id();
+        let token = format!("{now_ns:x}-{pid:x}");
+        let _ = std::fs::create_dir_all(self.orch_lock_dir());
+        let lock_path = self.orch_lock_path(&token);
+        let batch_json = serde_json::to_string(&batch_items).ok()?;
+        let _ = std::fs::write(&lock_path, batch_json);
+        Some((batch_items, token))
+    }
 
-    async fn dequeue_peek_lock(&self, kind: QueueKind) -> Option<(WorkItem, String)> {
+    async fn ack_orchestrator(&self, token: &str) -> Result<(), String> {
+        let path = self.orch_lock_path(token);
+        if path.exists() {
+            std::fs::remove_file(&path).map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    }
+
+    async fn abandon_orchestrator(&self, token: &str) -> Result<(), String> {
+        // Read locked batch and re-enqueue at front, then remove lock
+        let path = self.orch_lock_path(token);
+        if !path.exists() {
+            return Ok(());
+        }
+        let data = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+        
+        // Handle both old single-item format and new batch format for backward compatibility
+        let items_to_restore: Vec<WorkItem> = if let Ok(batch) = serde_json::from_str::<Vec<WorkItem>>(&data) {
+            // New batch format
+            batch
+        } else if let Ok(single_item) = serde_json::from_str::<WorkItem>(&data) {
+            // Old single-item format
+            vec![single_item]
+        } else {
+            return Err("Invalid lock file format".to_string());
+        };
+        
+        // Prepend to queue
+        let qf = &self.orch_queue_file;
+        let content = std::fs::read_to_string(qf).unwrap_or_default();
+        let existing_items: Vec<WorkItem> = content
+            .lines()
+            .filter_map(|l| serde_json::from_str::<WorkItem>(l).ok())
+            .collect();
+        
+        // Prepend the batch items to existing items
+        let mut all_items = items_to_restore;
+        all_items.extend(existing_items);
+        
+        // Rewrite file atomically
+        let tmp = qf.with_extension("jsonl.tmp");
+        {
+            let mut tf = std::fs::OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(true)
+                .open(&tmp)
+                .map_err(|e| e.to_string())?;
+            for it in &all_items {
+                let line = serde_json::to_string(&it).map_err(|e| e.to_string())?;
+                use std::io::Write as _;
+                tf.write_all(line.as_bytes()).map_err(|e| e.to_string())?;
+                tf.write_all(b"\n").map_err(|e| e.to_string())?;
+            }
+        }
+        std::fs::rename(&tmp, &qf).map_err(|e| e.to_string())?;
+        // Remove lock
+        std::fs::remove_file(&path).map_err(|e| e.to_string())?;
+        Ok(())
+    }
+    
+    // ===== Worker Queue Methods =====
+    
+    async fn enqueue_worker_work(&self, item: WorkItem) -> Result<(), String> {
+        // Idempotent enqueue: load current items and only append if not present
+        let qf = &self.work_queue_file;
+        let content = std::fs::read_to_string(qf).unwrap_or_default();
+        let mut items: Vec<WorkItem> = content
+            .lines()
+            .filter_map(|l| serde_json::from_str::<WorkItem>(l).ok())
+            .collect();
+        if items.contains(&item) {
+            return Ok(());
+        }
+        items.push(item);
+        // Rewrite file atomically
+        let tmp = qf.with_extension("jsonl.tmp");
+        {
+            let mut tf = std::fs::OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(true)
+                .open(&tmp)
+                .map_err(|e| e.to_string())?;
+            for it in &items {
+                let line = serde_json::to_string(&it).map_err(|e| e.to_string())?;
+                use std::io::Write as _;
+                tf.write_all(line.as_bytes()).map_err(|e| e.to_string())?;
+                tf.write_all(b"\n").map_err(|e| e.to_string())?;
+            }
+        }
+        std::fs::rename(&tmp, qf).map_err(|e| e.to_string())?;
+        Ok(())
+    }
+    
+    async fn dequeue_worker_peek_lock(&self) -> Option<(WorkItem, String)> {
         // Pop first item but write it to a lock sidecar to keep invisible until ack/abandon
-        let qf = self.queue_file(kind).clone();
-        let content = std::fs::read_to_string(&qf).ok()?;
+        let qf = &self.work_queue_file;
+        let content = std::fs::read_to_string(qf).ok()?;
         let mut items: Vec<WorkItem> = content
             .lines()
             .filter_map(|l| serde_json::from_str::<WorkItem>(l).ok())
@@ -324,7 +504,7 @@ impl HistoryStore for FsHistoryStore {
                 let _ = tf.write_all(b"\n");
             }
         }
-        let _ = std::fs::rename(&tmp, &qf);
+        let _ = std::fs::rename(&tmp, qf);
         // Create lock token and persist the locked item
         let now_ns = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -332,32 +512,32 @@ impl HistoryStore for FsHistoryStore {
             .as_nanos();
         let pid = std::process::id();
         let token = format!("{now_ns:x}-{pid:x}");
-        let _ = std::fs::create_dir_all(self.lock_dir(kind));
-        let lock_path = self.lock_path(kind, &token);
+        let _ = std::fs::create_dir_all(self.work_lock_dir());
+        let lock_path = self.work_lock_path(&token);
         let line = serde_json::to_string(&first).ok()?;
         let _ = std::fs::write(&lock_path, line);
         Some((first, token))
     }
-
-    async fn ack(&self, kind: QueueKind, token: &str) -> Result<(), String> {
-        let path = self.lock_path(kind, token);
+    
+    async fn ack_worker(&self, token: &str) -> Result<(), String> {
+        let path = self.work_lock_path(token);
         if path.exists() {
             std::fs::remove_file(&path).map_err(|e| e.to_string())?;
         }
         Ok(())
     }
-
-    async fn abandon(&self, kind: QueueKind, token: &str) -> Result<(), String> {
+    
+    async fn abandon_worker(&self, token: &str) -> Result<(), String> {
         // Read locked item and re-enqueue at front, then remove lock
-        let path = self.lock_path(kind, token);
+        let path = self.work_lock_path(token);
         if !path.exists() {
             return Ok(());
         }
         let data = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
         let item: WorkItem = serde_json::from_str(&data).map_err(|e| e.to_string())?;
         // Prepend to queue
-        let qf = self.queue_file(kind).clone();
-        let content = std::fs::read_to_string(&qf).unwrap_or_default();
+        let qf = &self.work_queue_file;
+        let content = std::fs::read_to_string(qf).unwrap_or_default();
         let mut items: Vec<WorkItem> = content
             .lines()
             .filter_map(|l| serde_json::from_str::<WorkItem>(l).ok())
@@ -379,7 +559,130 @@ impl HistoryStore for FsHistoryStore {
                 tf.write_all(b"\n").map_err(|e| e.to_string())?;
             }
         }
-        std::fs::rename(&tmp, &qf).map_err(|e| e.to_string())?;
+        std::fs::rename(&tmp, qf).map_err(|e| e.to_string())?;
+        // Remove lock
+        std::fs::remove_file(&path).map_err(|e| e.to_string())?;
+        Ok(())
+    }
+    
+    // ===== Timer Queue Methods =====
+    
+    async fn enqueue_timer_work(&self, item: WorkItem) -> Result<(), String> {
+        // Idempotent enqueue: load current items and only append if not present
+        let qf = &self.timer_queue_file;
+        let content = std::fs::read_to_string(qf).unwrap_or_default();
+        let mut items: Vec<WorkItem> = content
+            .lines()
+            .filter_map(|l| serde_json::from_str::<WorkItem>(l).ok())
+            .collect();
+        if items.contains(&item) {
+            return Ok(());
+        }
+        items.push(item);
+        // Rewrite file atomically
+        let tmp = qf.with_extension("jsonl.tmp");
+        {
+            let mut tf = std::fs::OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(true)
+                .open(&tmp)
+                .map_err(|e| e.to_string())?;
+            for it in &items {
+                let line = serde_json::to_string(&it).map_err(|e| e.to_string())?;
+                use std::io::Write as _;
+                tf.write_all(line.as_bytes()).map_err(|e| e.to_string())?;
+                tf.write_all(b"\n").map_err(|e| e.to_string())?;
+            }
+        }
+        std::fs::rename(&tmp, qf).map_err(|e| e.to_string())?;
+        Ok(())
+    }
+    
+    async fn dequeue_timer_peek_lock(&self) -> Option<(WorkItem, String)> {
+        // Pop first item but write it to a lock sidecar to keep invisible until ack/abandon
+        let qf = &self.timer_queue_file;
+        let content = std::fs::read_to_string(qf).ok()?;
+        let mut items: Vec<WorkItem> = content
+            .lines()
+            .filter_map(|l| serde_json::from_str::<WorkItem>(l).ok())
+            .collect();
+        if items.is_empty() {
+            return None;
+        }
+        let first = items.remove(0);
+        // Rewrite remaining items atomically
+        let tmp = qf.with_extension("jsonl.tmp");
+        {
+            let mut tf = std::fs::OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(true)
+                .open(&tmp)
+                .ok()?;
+            for it in &items {
+                let line = serde_json::to_string(&it).ok()?;
+                use std::io::Write as _;
+                let _ = tf.write_all(line.as_bytes());
+                let _ = tf.write_all(b"\n");
+            }
+        }
+        let _ = std::fs::rename(&tmp, qf);
+        // Create lock token and persist the locked item
+        let now_ns = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let pid = std::process::id();
+        let token = format!("{now_ns:x}-{pid:x}");
+        let _ = std::fs::create_dir_all(self.timer_lock_dir());
+        let lock_path = self.timer_lock_path(&token);
+        let line = serde_json::to_string(&first).ok()?;
+        let _ = std::fs::write(&lock_path, line);
+        Some((first, token))
+    }
+    
+    async fn ack_timer(&self, token: &str) -> Result<(), String> {
+        let path = self.timer_lock_path(token);
+        if path.exists() {
+            std::fs::remove_file(&path).map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    }
+    
+    async fn abandon_timer(&self, token: &str) -> Result<(), String> {
+        // Read locked item and re-enqueue at front, then remove lock
+        let path = self.timer_lock_path(token);
+        if !path.exists() {
+            return Ok(());
+        }
+        let data = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+        let item: WorkItem = serde_json::from_str(&data).map_err(|e| e.to_string())?;
+        // Prepend to queue
+        let qf = &self.timer_queue_file;
+        let content = std::fs::read_to_string(qf).unwrap_or_default();
+        let mut items: Vec<WorkItem> = content
+            .lines()
+            .filter_map(|l| serde_json::from_str::<WorkItem>(l).ok())
+            .collect();
+        items.insert(0, item);
+        // Rewrite file atomically
+        let tmp = qf.with_extension("jsonl.tmp");
+        {
+            let mut tf = std::fs::OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(true)
+                .open(&tmp)
+                .map_err(|e| e.to_string())?;
+            for it in &items {
+                let line = serde_json::to_string(&it).map_err(|e| e.to_string())?;
+                use std::io::Write as _;
+                tf.write_all(line.as_bytes()).map_err(|e| e.to_string())?;
+                tf.write_all(b"\n").map_err(|e| e.to_string())?;
+            }
+        }
+        std::fs::rename(&tmp, qf).map_err(|e| e.to_string())?;
         // Remove lock
         std::fs::remove_file(&path).map_err(|e| e.to_string())?;
         Ok(())

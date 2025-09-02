@@ -1,13 +1,5 @@
 use crate::Event;
 
-/// Logical queues for provider-backed work distribution.
-#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
-pub enum QueueKind {
-    Orchestrator,
-    Worker,
-    Timer,
-}
-
 /// Provider-backed work queue items the runtime consumes continually.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub enum WorkItem {
@@ -111,37 +103,71 @@ pub trait HistoryStore: Send + Sync {
         Ok(())
     }
 
-    /// Enqueue a work item for the runtime to act on, into the specified logical queue.
-    async fn enqueue_work(&self, _kind: QueueKind, _item: WorkItem) -> Result<(), String> {
-        Err("work queue not supported".into())
+    // ===== Orchestrator Queue Methods (batch operations) =====
+    
+    /// Enqueue a work item to the orchestrator queue.
+    async fn enqueue_orchestrator_work(&self, _item: WorkItem) -> Result<(), String> {
+        Err("orchestrator queue not supported".into())
     }
 
-    /// Dequeue-next from the specified logical queue using peek-lock semantics. Returns (item, token) when supported.
-    /// The item remains invisible until `ack(token)` or `abandon(token)` is called
-    /// (implementations may use a best-effort invisibility without timeouts).
-    /// Default: not supported.
-    async fn dequeue_peek_lock(&self, _kind: QueueKind) -> Option<(WorkItem, String)> {
+    /// Dequeue a batch of work items for a single instance from the orchestrator queue.
+    /// Returns all available messages for one instance (up to provider-defined batch size).
+    /// The entire batch is locked under a single token until ack/abandon.
+    async fn dequeue_orchestrator_peek_lock(&self) -> Option<(Vec<WorkItem>, String)> {
         None
     }
 
-    /// Acknowledge a previously peek-locked token in the specified queue, permanently removing it.
-    /// Default: no-op success for providers that don't support peek-lock.
-    async fn ack(&self, _kind: QueueKind, _token: &str) -> Result<(), String> {
+    /// Acknowledge a batch of orchestrator messages, permanently removing them.
+    async fn ack_orchestrator(&self, _token: &str) -> Result<(), String> {
+        Ok(())
+    }
+    
+    /// Abandon a batch of orchestrator messages, making them visible again.
+    async fn abandon_orchestrator(&self, _token: &str) -> Result<(), String> {
+        Ok(())
+    }
+    
+    // ===== Worker Queue Methods (single-item operations) =====
+    
+    /// Enqueue a work item to the worker queue.
+    async fn enqueue_worker_work(&self, _item: WorkItem) -> Result<(), String> {
+        Err("worker queue not supported".into())
+    }
+    
+    /// Dequeue a single work item from the worker queue.
+    async fn dequeue_worker_peek_lock(&self) -> Option<(WorkItem, String)> {
+        None
+    }
+    
+    /// Acknowledge a worker message, permanently removing it.
+    async fn ack_worker(&self, _token: &str) -> Result<(), String> {
+        Ok(())
+    }
+    
+    /// Abandon a worker message, making it visible again.
+    async fn abandon_worker(&self, _token: &str) -> Result<(), String> {
         Ok(())
     }
 
-    /// Abandon a previously peek-locked token in the specified queue, making the item visible again.
-    /// Default: no-op success for providers that don't support peek-lock.
-    async fn abandon(&self, _kind: QueueKind, _token: &str) -> Result<(), String> {
+    // ===== Timer Queue Methods (single-item operations) =====
+    
+    /// Enqueue a work item to the timer queue.
+    async fn enqueue_timer_work(&self, _item: WorkItem) -> Result<(), String> {
+        Err("timer queue not supported".into())
+    }
+    
+    /// Dequeue a single work item from the timer queue.
+    async fn dequeue_timer_peek_lock(&self) -> Option<(WorkItem, String)> {
+        None
+    }
+    
+    /// Acknowledge a timer message, permanently removing it.
+    async fn ack_timer(&self, _token: &str) -> Result<(), String> {
         Ok(())
     }
-
-    /// Acknowledge multiple tokens in a single batch operation for efficiency.
-    /// Default implementation calls individual ack() for each token.
-    async fn ack_batch(&self, kind: QueueKind, tokens: &[String]) -> Result<(), String> {
-        for token in tokens {
-            self.ack(kind, token).await?;
-        }
+    
+    /// Abandon a timer message, making it visible again.
+    async fn abandon_timer(&self, _token: &str) -> Result<(), String> {
         Ok(())
     }
 

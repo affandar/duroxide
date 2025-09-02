@@ -381,7 +381,7 @@ async fn event_drop_then_retry_after_subscribe_fs() {
 // This test verifies that completions from old executions are properly ignored
 
 // merged section imports are already present at the top of this file
-use rust_dtf::providers::{QueueKind, WorkItem};
+use rust_dtf::providers::WorkItem;
 
 #[tokio::test]
 async fn old_execution_completions_are_ignored() {
@@ -419,8 +419,8 @@ async fn old_execution_completions_are_ignored() {
 
     // Inject a completion with OLD execution ID (execution_id=0, but current should be 1)
     let _ = store
-        .enqueue_work(
-            QueueKind::Orchestrator,
+        .enqueue_orchestrator_work(
+
             WorkItem::ActivityCompleted {
                 instance: "inst-exec-test".to_string(),
                 execution_id: 0, // Old execution ID (current is 1)
@@ -478,8 +478,8 @@ async fn future_execution_completions_are_ignored() {
 
     // Inject a completion with a future execution ID (should never happen in practice)
     let _ = store
-        .enqueue_work(
-            QueueKind::Orchestrator,
+        .enqueue_orchestrator_work(
+
             WorkItem::ActivityCompleted {
                 instance: "inst-future".to_string(),
                 execution_id: 999, // Future execution ID

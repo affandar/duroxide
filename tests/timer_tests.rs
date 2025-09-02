@@ -49,9 +49,9 @@ async fn multiple_timers_ordering_fs() {
     let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
 
     let orch = |ctx: OrchestrationContext, _input: String| async move {
-        let t1 = ctx.schedule_timer(10).into_timer();
-        let t2 = ctx.schedule_timer(20).into_timer();
-        let _ = futures::future::join(t1, t2).await;
+        let t1 = ctx.schedule_timer(10);
+        let t2 = ctx.schedule_timer(20);
+        let _ = ctx.join(vec![t1, t2]).await;
         Ok("ok".to_string())
     };
 
@@ -132,10 +132,10 @@ async fn timer_deduplication_fs() {
         fire_at_ms: fire_at,
     };
     let _ = store
-        .enqueue_work(rust_dtf::providers::QueueKind::Orchestrator, wi.clone())
+        .enqueue_orchestrator_work(wi.clone())
         .await;
     let _ = store
-        .enqueue_work(rust_dtf::providers::QueueKind::Orchestrator, wi.clone())
+        .enqueue_orchestrator_work(wi.clone())
         .await;
 
     assert!(

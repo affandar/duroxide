@@ -1,4 +1,4 @@
-use futures::future::join3;
+
 use rust_dtf::providers::HistoryStore;
 use rust_dtf::providers::fs::FsHistoryStore;
 use rust_dtf::runtime::registry::ActivityRegistry;
@@ -15,7 +15,23 @@ async fn orchestration_completes_and_replays_deterministically_with(store: StdAr
         let f_t = ctx.schedule_timer(5);
         let f_e = ctx.schedule_wait("Go");
 
-        let (o_a, _o_t, o_e) = join3(f_a, f_t, f_e).await;
+        let outputs = ctx.join(vec![f_a, f_t, f_e]).await;
+        
+        // Extract outputs by type since join returns in history order
+        let mut o_a = None;
+        let mut o_e = None;
+        
+        for output in outputs {
+            match output {
+                DurableOutput::Activity(_) => o_a = Some(output),
+                DurableOutput::Timer => {}, // ignore timer
+                DurableOutput::External(_) => o_e = Some(output),
+                _ => {},
+            }
+        }
+        
+        let o_a = o_a.expect("Activity result not found");
+        let o_e = o_e.expect("External result not found");
 
         let a = match o_a {
             DurableOutput::Activity(v) => v.unwrap(),
@@ -82,7 +98,23 @@ async fn orchestration_completes_and_replays_deterministically_with(store: StdAr
         let f_a = ctx.schedule_activity("A", "1");
         let f_t = ctx.schedule_timer(5);
         let f_e = ctx.schedule_wait("Go");
-        let (o_a, _o_t, o_e) = join3(f_a, f_t, f_e).await;
+        let outputs = ctx.join(vec![f_a, f_t, f_e]).await;
+        
+        // Extract outputs by type since join returns in history order
+        let mut o_a = None;
+        let mut o_e = None;
+        
+        for output in outputs {
+            match output {
+                DurableOutput::Activity(_) => o_a = Some(output),
+                DurableOutput::Timer => {}, // ignore timer
+                DurableOutput::External(_) => o_e = Some(output),
+                _ => {},
+            }
+        }
+        
+        let o_a = o_a.expect("Activity result not found");
+        let o_e = o_e.expect("External result not found");
         let a = match o_a {
             DurableOutput::Activity(v) => v.unwrap(),
             _ => unreachable!("A must be activity result"),
@@ -113,7 +145,7 @@ fn action_order_is_deterministic_in_first_turn() {
         let f_a = ctx.schedule_activity("A", "1");
         let f_t = ctx.schedule_timer(500);
         let f_e = ctx.schedule_wait("Go");
-        let _ = join3(f_a, f_t, f_e).await;
+        let _ = ctx.join(vec![f_a, f_t, f_e]).await;
         unreachable!("should not complete in the first turn");
     };
 

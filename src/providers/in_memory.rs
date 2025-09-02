@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use tokio::sync::Mutex;
 
-use super::{HistoryStore, QueueKind, WorkItem};
+use super::{HistoryStore, WorkItem};
 use crate::Event;
 
 const CAP: usize = 1024;
@@ -13,8 +13,9 @@ pub struct InMemoryHistoryStore {
     orchestrator_q: Mutex<Vec<WorkItem>>, // simple FIFO
     worker_q: Mutex<Vec<WorkItem>>,       // simple FIFO
     timer_q: Mutex<Vec<WorkItem>>,        // simple FIFO
-    // Peek-lock state per-queue: token -> item. Items here are invisible until ack/abandon.
-    invisible_orchestrator: Mutex<HashMap<String, WorkItem>>,
+    // Peek-lock state per-queue: token -> item(s). Items here are invisible until ack/abandon.
+    // Orchestrator stores Vec<WorkItem> for batch operations
+    invisible_orchestrator: Mutex<HashMap<String, Vec<WorkItem>>>,
     invisible_worker: Mutex<HashMap<String, WorkItem>>,
     invisible_timer: Mutex<HashMap<String, WorkItem>>,
 }
@@ -71,130 +72,168 @@ impl HistoryStore for InMemoryHistoryStore {
         Ok(())
     }
 
-    async fn enqueue_work(&self, kind: QueueKind, item: WorkItem) -> Result<(), String> {
-        match kind {
-            QueueKind::Orchestrator => {
-                let mut q = self.orchestrator_q.lock().await;
-                if !q.contains(&item) {
-                    q.push(item);
-                }
-            }
-            QueueKind::Worker => {
-                let mut q = self.worker_q.lock().await;
-                if !q.contains(&item) {
-                    q.push(item);
-                }
-            }
-            QueueKind::Timer => {
-                let mut q = self.timer_q.lock().await;
-                if !q.contains(&item) {
-                    q.push(item);
-                }
-            }
+    // ===== Orchestrator Queue Methods =====
+    
+    async fn enqueue_orchestrator_work(&self, item: WorkItem) -> Result<(), String> {
+        let mut q = self.orchestrator_q.lock().await;
+        if !q.contains(&item) {
+            q.push(item);
         }
         Ok(())
     }
 
-    // dequeue_work removed; runtime uses peek-lock only
-
-    async fn dequeue_peek_lock(&self, kind: QueueKind) -> Option<(WorkItem, String)> {
-        let (item_opt, token) = match kind {
-            QueueKind::Orchestrator => {
-                let mut q = self.orchestrator_q.lock().await;
-                if q.is_empty() {
-                    return None;
-                }
-                let item = q.remove(0);
-                let token = format!(
-                    "o:{}:{}",
-                    std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .ok()?
-                        .as_nanos(),
-                    q.len()
-                );
-                (Some(item), token)
+    async fn dequeue_orchestrator_peek_lock(&self) -> Option<(Vec<WorkItem>, String)> {
+        let mut q = self.orchestrator_q.lock().await;
+        if q.is_empty() {
+            return None;
+        }
+        
+        // Group items by instance
+        let mut instance_map: HashMap<String, Vec<(usize, WorkItem)>> = HashMap::new();
+        for (idx, item) in q.iter().enumerate() {
+            let instance = match item {
+                WorkItem::StartOrchestration { instance, .. }
+                | WorkItem::ActivityCompleted { instance, .. }
+                | WorkItem::ActivityFailed { instance, .. }
+                | WorkItem::TimerFired { instance, .. }
+                | WorkItem::ExternalRaised { instance, .. }
+                | WorkItem::CancelInstance { instance, .. }
+                | WorkItem::ContinueAsNew { instance, .. } => instance.clone(),
+                WorkItem::SubOrchCompleted { parent_instance, .. }
+                | WorkItem::SubOrchFailed { parent_instance, .. } => parent_instance.clone(),
+                _ => continue,
+            };
+            instance_map.entry(instance).or_default().push((idx, item.clone()));
+        }
+        
+        // Take the first instance
+        if let Some((instance, items)) = instance_map.into_iter().next() {
+            // Remove items from queue in reverse order to maintain indices
+            let mut indices: Vec<usize> = items.iter().map(|(idx, _)| *idx).collect();
+            indices.sort_by(|a, b| b.cmp(a));
+            for idx in indices {
+                q.remove(idx);
             }
-            QueueKind::Worker => {
-                let mut q = self.worker_q.lock().await;
-                if q.is_empty() {
-                    return None;
-                }
-                let item = q.remove(0);
-                let token = format!(
-                    "w:{}:{}",
-                    std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .ok()?
-                        .as_nanos(),
-                    q.len()
-                );
-                (Some(item), token)
-            }
-            QueueKind::Timer => {
-                let mut q = self.timer_q.lock().await;
-                if q.is_empty() {
-                    return None;
-                }
-                let item = q.remove(0);
-                let token = format!(
-                    "t:{}:{}",
-                    std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .ok()?
-                        .as_nanos(),
-                    q.len()
-                );
-                (Some(item), token)
-            }
-        };
-        let item = item_opt?;
-        match kind {
-            QueueKind::Orchestrator => {
-                self.invisible_orchestrator
-                    .lock()
-                    .await
-                    .insert(token.clone(), item.clone());
-            }
-            QueueKind::Worker => {
-                self.invisible_worker.lock().await.insert(token.clone(), item.clone());
-            }
-            QueueKind::Timer => {
-                self.invisible_timer.lock().await.insert(token.clone(), item.clone());
+            
+            let work_items: Vec<WorkItem> = items.into_iter().map(|(_, item)| item).collect();
+            let token = format!(
+                "o:{}:{}:{}",
+                instance,
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .ok()?
+                    .as_nanos(),
+                work_items.len()
+            );
+            
+            // Store the batch in invisible map
+            self.invisible_orchestrator
+                .lock()
+                .await
+                .insert(token.clone(), work_items.clone());
+                
+            Some((work_items, token))
+        } else {
+            None
+        }
+    }
+    
+    async fn ack_orchestrator(&self, token: &str) -> Result<(), String> {
+        self.invisible_orchestrator.lock().await.remove(token);
+        Ok(())
+    }
+    
+    async fn abandon_orchestrator(&self, token: &str) -> Result<(), String> {
+        if let Some(items) = self.invisible_orchestrator.lock().await.remove(token) {
+            let mut q = self.orchestrator_q.lock().await;
+            // Insert at front to maintain FIFO semantics
+            for item in items.into_iter().rev() {
+                q.insert(0, item);
             }
         }
+        Ok(())
+    }
+    
+    // ===== Worker Queue Methods =====
+    
+    async fn enqueue_worker_work(&self, item: WorkItem) -> Result<(), String> {
+        let mut q = self.worker_q.lock().await;
+        if !q.contains(&item) {
+            q.push(item);
+        }
+        Ok(())
+    }
+
+    async fn dequeue_worker_peek_lock(&self) -> Option<(WorkItem, String)> {
+        let mut q = self.worker_q.lock().await;
+        if q.is_empty() {
+            return None;
+        }
+        let item = q.remove(0);
+        let token = format!(
+            "w:{}:{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .ok()?
+                .as_nanos(),
+            q.len()
+        );
+        
+        self.invisible_worker.lock().await.insert(token.clone(), item.clone());
         Some((item, token))
     }
-
-    async fn ack(&self, kind: QueueKind, token: &str) -> Result<(), String> {
-        match kind {
-            QueueKind::Orchestrator => {
-                self.invisible_orchestrator.lock().await.remove(token);
-            }
-            QueueKind::Worker => {
-                self.invisible_worker.lock().await.remove(token);
-            }
-            QueueKind::Timer => {
-                self.invisible_timer.lock().await.remove(token);
-            }
+    
+    async fn ack_worker(&self, token: &str) -> Result<(), String> {
+        self.invisible_worker.lock().await.remove(token);
+        Ok(())
+    }
+    
+    async fn abandon_worker(&self, token: &str) -> Result<(), String> {
+        if let Some(item) = self.invisible_worker.lock().await.remove(token) {
+            let mut q = self.worker_q.lock().await;
+            q.insert(0, item);
         }
         Ok(())
     }
-
-    async fn abandon(&self, kind: QueueKind, token: &str) -> Result<(), String> {
-        let item_opt = match kind {
-            QueueKind::Orchestrator => self.invisible_orchestrator.lock().await.remove(token),
-            QueueKind::Worker => self.invisible_worker.lock().await.remove(token),
-            QueueKind::Timer => self.invisible_timer.lock().await.remove(token),
-        };
-        if let Some(item) = item_opt {
-            let q = match kind {
-                QueueKind::Orchestrator => &self.orchestrator_q,
-                QueueKind::Worker => &self.worker_q,
-                QueueKind::Timer => &self.timer_q,
-            };
-            let mut qg = q.lock().await;
-            qg.insert(0, item);
+    
+    // ===== Timer Queue Methods =====
+    
+    async fn enqueue_timer_work(&self, item: WorkItem) -> Result<(), String> {
+        let mut q = self.timer_q.lock().await;
+        if !q.contains(&item) {
+            q.push(item);
+        }
+        Ok(())
+    }
+    
+    async fn dequeue_timer_peek_lock(&self) -> Option<(WorkItem, String)> {
+        let mut q = self.timer_q.lock().await;
+        if q.is_empty() {
+            return None;
+        }
+        let item = q.remove(0);
+        let token = format!(
+            "t:{}:{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .ok()?
+                .as_nanos(),
+            q.len()
+        );
+        
+        self.invisible_timer.lock().await.insert(token.clone(), item.clone());
+        Some((item, token))
+    }
+    
+    async fn ack_timer(&self, token: &str) -> Result<(), String> {
+        self.invisible_timer.lock().await.remove(token);
+        Ok(())
+    }
+    
+    async fn abandon_timer(&self, token: &str) -> Result<(), String> {
+        if let Some(item) = self.invisible_timer.lock().await.remove(token) {
+            let mut q = self.timer_q.lock().await;
+            q.insert(0, item);
         }
         Ok(())
     }

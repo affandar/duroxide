@@ -2,7 +2,7 @@ use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::sync::Arc;
 
-use crate::providers::{HistoryStore, QueueKind, WorkItem};
+use crate::providers::{HistoryStore, WorkItem};
 
 /// In-process fallback timer service.
 /// Maintains a min-ordered queue of TimerSchedule items and enqueues TimerFired when due.
@@ -62,8 +62,7 @@ impl TimerService {
             for (instance, execution_id, id, fire_at_ms) in due.drain(..) {
                 let _ = self
                     .store
-                    .enqueue_work(
-                        QueueKind::Orchestrator,
+                    .enqueue_orchestrator_work(
                         WorkItem::TimerFired {
                             instance,
                             execution_id,
@@ -156,16 +155,18 @@ mod tests {
         let mut fired: Vec<u64> = Vec::new();
         let deadline = std::time::Instant::now() + std::time::Duration::from_millis(200);
         while fired.len() < 3 && std::time::Instant::now() < deadline {
-            if let Some((wi, tok)) = store.dequeue_peek_lock(QueueKind::Orchestrator).await {
-                match wi {
-                    WorkItem::TimerFired { id, .. } => {
-                        fired.push(id);
-                        let _ = store.ack(QueueKind::Orchestrator, &tok).await;
-                    }
-                    _ => {
-                        let _ = store.abandon(QueueKind::Orchestrator, &tok).await;
+            if let Some((items, tok)) = store.dequeue_orchestrator_peek_lock().await {
+                for wi in items {
+                    match wi {
+                        WorkItem::TimerFired { id, .. } => {
+                            fired.push(id);
+                        }
+                        _ => {
+                            // Unexpected item type
+                        }
                     }
                 }
+                let _ = store.ack_orchestrator(&tok).await;
             } else {
                 tokio::time::sleep(std::time::Duration::from_millis(5)).await;
             }
