@@ -1,10 +1,11 @@
 use std::sync::Arc;
-use tracing::{debug, error};
+use tracing::{debug, error, warn};
 
 use super::orchestration_turn::{OrchestrationTurn, TurnResult};
 use crate::{
     Event,
     runtime::{OrchestrationHandler, Runtime, router::OrchestratorMsg},
+    providers::WorkItem,
 };
 
 impl Runtime {
@@ -513,6 +514,233 @@ impl Runtime {
             .unwrap_or(0);
 
         full_history[current_execution_start..].to_vec()
+    }
+    /// Execute a single orchestration execution collecting all changes atomically
+    pub async fn run_single_execution_atomic(
+        self: Arc<Self>,
+        instance: &str,
+        orchestration_name: &str,
+        initial_history: Vec<Event>,
+        completion_messages: Vec<OrchestratorMsg>,
+    ) -> (Vec<Event>, Vec<WorkItem>, Vec<WorkItem>, Vec<WorkItem>, Result<String, String>) {
+        debug!(instance, orchestration_name, "🚀 Starting atomic single execution");
+
+        // Track all changes
+        let mut history_delta = Vec::new();
+        let mut worker_items = Vec::new();
+        let mut timer_items = Vec::new();
+        let mut orchestrator_items = Vec::new();
+
+        // Use provided history directly
+        let history = initial_history.clone();
+
+        // Pin version from history if available
+        self.setup_version_pinning(instance, orchestration_name, &history).await;
+
+        // Resolve orchestration handler
+        let handler = match self.resolve_orchestration_handler(instance, orchestration_name).await {
+            Ok(h) => h,
+            Err(error) => {
+                // Handle unregistered orchestration
+                let terminal_event = Event::OrchestrationFailed { error: error.clone() };
+                history_delta.push(terminal_event);
+                return (history_delta, worker_items, timer_items, orchestrator_items, Err(error));
+            }
+        };
+
+        // Extract input and parent linkage for the orchestration
+        let (input, parent_link) = self.extract_orchestration_context(orchestration_name, &history);
+
+        // Process completion messages in a single turn
+        let messages: Vec<(OrchestratorMsg, String)> = completion_messages
+            .into_iter()
+            .filter_map(|msg| extract_ack_token(&msg).map(|token| (msg, token)))
+            .collect();
+
+        debug!(
+            instance = %instance,
+            message_count = messages.len(),
+            "starting orchestration turn atomically"
+        );
+
+        // Execute orchestration turn
+        let current_execution_history = Self::extract_current_execution_history(&history);
+        let mut turn = OrchestrationTurn::new(
+            instance.to_string(),
+            orchestration_name.to_string(),
+            0, // turn_index
+            current_execution_history,
+        );
+
+        // Prep completions from incoming messages
+        if !messages.is_empty() {
+            turn.prep_completions(messages.clone());
+        }
+
+        // Execute the orchestration logic
+        let turn_result = turn.execute_orchestration(handler.clone(), input.clone());
+
+        // Collect history delta from turn
+        history_delta.extend(turn.history_delta().to_vec());
+
+        // Check for nondeterminism
+        if turn.has_unconsumed_completions() {
+            warn!(
+                instance = %instance,
+                unconsumed = ?turn.unconsumed_completions(),
+                "Nondeterministic execution: orchestration ended turn with unconsumed completions"
+            );
+            let error = "Nondeterministic execution detected".to_string();
+            let terminal_event = Event::OrchestrationFailed { error: error.clone() };
+            history_delta.push(terminal_event);
+            return (history_delta, worker_items, timer_items, orchestrator_items, Err(error));
+        }
+
+        // Handle turn result and collect work items
+        let result = match turn_result {
+            TurnResult::Continue => {
+                // Collect work items from pending actions
+                for action in turn.pending_actions() {
+                    match action {
+                        crate::Action::CallActivity { id, name, input } => {
+                            let execution_id = self.get_execution_id_for_instance(instance).await;
+                            worker_items.push(WorkItem::ActivityExecute {
+                                instance: instance.to_string(),
+                                execution_id,
+                                id: *id,
+                                name: name.clone(),
+                                input: input.clone(),
+                            });
+                        }
+                        crate::Action::CreateTimer { id, delay_ms } => {
+                            let execution_id = self.get_execution_id_for_instance(instance).await;
+                            let fire_at_ms = Self::calculate_timer_fire_time(&turn.final_history(), *delay_ms);
+                            timer_items.push(WorkItem::TimerSchedule {
+                                instance: instance.to_string(),
+                                execution_id,
+                                id: *id,
+                                fire_at_ms,
+                            });
+                        }
+                        crate::Action::StartSubOrchestration { id, name, version, instance: sub_instance, input } => {
+                            orchestrator_items.push(WorkItem::StartOrchestration {
+                                instance: sub_instance.clone(),
+                                orchestration: name.clone(),
+                                input: input.clone(),
+                                version: version.clone(),
+                                parent_instance: Some(instance.to_string()),
+                                parent_id: Some(*id),
+                            });
+                        }
+                        crate::Action::StartOrchestrationDetached { id: _, name, version, instance: sub_instance, input } => {
+                            orchestrator_items.push(WorkItem::StartOrchestration {
+                                instance: sub_instance.clone(),
+                                orchestration: name.clone(),
+                                input: input.clone(),
+                                version: version.clone(),
+                                parent_instance: None,
+                                parent_id: None,
+                            });
+                        }
+                        _ => {} // Other actions don't generate work items
+                    }
+                }
+                
+                Ok(String::new())
+            }
+            TurnResult::Completed(output) => {
+                // Add completion event
+                let terminal_event = Event::OrchestrationCompleted { output: output.clone() };
+                history_delta.push(terminal_event);
+
+                // Notify parent if this is a sub-orchestration
+                if let Some((parent_instance, parent_id)) = parent_link {
+                    orchestrator_items.push(WorkItem::SubOrchCompleted {
+                        parent_instance: parent_instance.clone(),
+                        parent_execution_id: self.get_execution_id_for_instance(&parent_instance).await,
+                        parent_id,
+                        result: output.clone(),
+                    });
+                }
+
+                Ok(output)
+            }
+            TurnResult::Failed(error) => {
+                // Add failure event
+                let terminal_event = Event::OrchestrationFailed { error: error.clone() };
+                history_delta.push(terminal_event);
+
+                // Notify parent if this is a sub-orchestration
+                if let Some((parent_instance, parent_id)) = parent_link {
+                    orchestrator_items.push(WorkItem::SubOrchFailed {
+                        parent_instance: parent_instance.clone(),
+                        parent_execution_id: self.get_execution_id_for_instance(&parent_instance).await,
+                        parent_id,
+                        error: error.clone(),
+                    });
+                }
+
+                Err(error)
+            }
+            TurnResult::ContinueAsNew { input, .. } => {
+                // Add continue as new event
+                let continued_event = Event::OrchestrationContinuedAsNew {
+                    input: input.clone(),
+                };
+                history_delta.push(continued_event);
+
+                // Enqueue continue as new work item
+                orchestrator_items.push(WorkItem::ContinueAsNew {
+                    instance: instance.to_string(),
+                    orchestration: orchestration_name.to_string(),
+                    input: input.clone(),
+                    version: None, // TODO: Handle version in ContinueAsNew
+                });
+
+                Ok("continued as new".to_string())
+            }
+            TurnResult::Cancelled(reason) => {
+                // Add cancellation as failure event
+                let error = format!("Cancelled: {}", reason);
+                let terminal_event = Event::OrchestrationFailed { error: error.clone() };
+                history_delta.push(terminal_event);
+
+                // Notify parent if this is a sub-orchestration
+                if let Some((parent_instance, parent_id)) = parent_link {
+                    orchestrator_items.push(WorkItem::SubOrchFailed {
+                        parent_instance: parent_instance.clone(),
+                        parent_execution_id: self.get_execution_id_for_instance(&parent_instance).await,
+                        parent_id,
+                        error: error.clone(),
+                    });
+                }
+
+                Err(error)
+            }
+        };
+
+        (history_delta, worker_items, timer_items, orchestrator_items, result)
+    }
+
+    /// Calculate timer fire time based on history
+    fn calculate_timer_fire_time(history: &[Event], delay_ms: u64) -> u64 {
+        // Find the current logical time from the most recent timer event
+        let current_time = history
+            .iter()
+            .rev()
+            .find_map(|e| match e {
+                Event::TimerFired { fire_at_ms, .. } => Some(*fire_at_ms),
+                _ => None,
+            })
+            .unwrap_or_else(|| {
+                // Fallback to system time
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as u64
+            });
+        
+        current_time.saturating_add(delay_ms)
     }
 }
 

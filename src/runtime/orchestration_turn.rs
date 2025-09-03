@@ -476,6 +476,31 @@ impl OrchestrationTurn {
         Ok(())
     }
 
+    // Getter methods for atomic execution
+    pub fn history_delta(&self) -> &[Event] {
+        &self.history_delta
+    }
+    
+    pub fn pending_actions(&self) -> &[crate::Action] {
+        &self.pending_actions
+    }
+    
+    pub fn has_unconsumed_completions(&self) -> bool {
+        self.completion_map.has_unconsumed()
+    }
+    
+    pub fn unconsumed_completions(&self) -> Vec<String> {
+        // Return a list of unconsumed completion descriptions
+        let mut unconsumed = Vec::new();
+        for entry in &self.completion_map.ordered {
+            if !entry.consumed {
+                let desc = format!("{:?}:{}", entry.kind, entry.correlation_id);
+                unconsumed.push(desc);
+            }
+        }
+        unconsumed
+    }
+
     /// Stage 4: Acknowledge all processed messages in batch
     /// This stage only runs after successful persistence
     pub async fn acknowledge_messages(&mut self, history_store: Arc<dyn HistoryStore>) {

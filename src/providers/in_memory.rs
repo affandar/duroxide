@@ -360,6 +360,158 @@ impl HistoryStore for InMemoryHistoryStore {
         }]);
         Ok(execs.len() as u64)
     }
+
+    // ===== New Atomic Orchestration Methods =====
+
+    async fn fetch_orchestration_item(&self) -> Option<super::OrchestrationItem> {
+        // First dequeue a batch of orchestrator messages
+        let (messages, lock_token) = self.dequeue_orchestrator_peek_lock().await?;
+        
+        // Extract instance from the first message
+        let instance = match messages.first()? {
+            WorkItem::StartOrchestration { instance, .. }
+            | WorkItem::ActivityCompleted { instance, .. }
+            | WorkItem::ActivityFailed { instance, .. }
+            | WorkItem::TimerFired { instance, .. }
+            | WorkItem::ExternalRaised { instance, .. }
+            | WorkItem::CancelInstance { instance, .. }
+            | WorkItem::ContinueAsNew { instance, .. } => instance.clone(),
+            WorkItem::SubOrchCompleted { parent_instance, .. }
+            | WorkItem::SubOrchFailed { parent_instance, .. } => parent_instance.clone(),
+            _ => return None,
+        };
+        
+        // Read the history for this instance
+        let history = self.read(&instance).await;
+        
+        // If this is a new instance (StartOrchestration), create it
+        if history.is_empty() && messages.iter().any(|m| matches!(m, WorkItem::StartOrchestration { .. })) {
+            let _ = self.create_instance(&instance).await;
+        }
+        
+        // Extract orchestration metadata from history
+        let (orchestration_name, version, execution_id) = if let Some(event) = history.iter().find(|e| {
+            matches!(e, Event::OrchestrationStarted { .. })
+        }) {
+            match event {
+                Event::OrchestrationStarted { name, version, .. } => {
+                    (name.clone(), version.clone(), self.latest_execution_id(&instance).await.unwrap_or(1))
+                }
+                _ => return None,
+            }
+        } else {
+            // New instance - extract from StartOrchestration message
+            if let Some(WorkItem::StartOrchestration { orchestration, version, .. }) = messages.iter().find(|m| {
+                matches!(m, WorkItem::StartOrchestration { .. })
+            }) {
+                (orchestration.clone(), version.clone().unwrap_or_else(|| "1.0.0".to_string()), 1)
+            } else {
+                return None;
+            }
+        };
+        
+        Some(super::OrchestrationItem {
+            instance,
+            orchestration_name,
+            execution_id,
+            version,
+            history,
+            messages,
+            lock_token,
+        })
+    }
+    
+    async fn ack_orchestration_item(
+        &self,
+        lock_token: &str,
+        history_delta: Vec<Event>,
+        worker_items: Vec<WorkItem>,
+        timer_items: Vec<WorkItem>,
+        orchestrator_items: Vec<WorkItem>,
+    ) -> Result<(), String> {
+        // Get the instance from the invisible orchestrator map
+        let instance = {
+            let invisible = self.invisible_orchestrator.lock().await;
+            let batch = invisible.get(lock_token)
+                .ok_or_else(|| "Lock token not found".to_string())?;
+            
+            match batch.first() {
+                Some(item) => match item {
+                    WorkItem::StartOrchestration { instance, .. }
+                    | WorkItem::ActivityCompleted { instance, .. }
+                    | WorkItem::ActivityFailed { instance, .. }
+                    | WorkItem::TimerFired { instance, .. }
+                    | WorkItem::ExternalRaised { instance, .. }
+                    | WorkItem::CancelInstance { instance, .. }
+                    | WorkItem::ContinueAsNew { instance, .. } => instance.clone(),
+                    WorkItem::SubOrchCompleted { parent_instance, .. }
+                    | WorkItem::SubOrchFailed { parent_instance, .. } => parent_instance.clone(),
+                    _ => return Err("Cannot determine instance from work item".to_string()),
+                },
+                None => return Err("Empty batch in lock".to_string()),
+            }
+        };
+        
+        // Perform all operations with best-effort atomicity
+        let mut errors = Vec::new();
+        
+        // 1. Append history delta
+        if !history_delta.is_empty() {
+            if let Err(e) = self.append(&instance, history_delta).await {
+                errors.push(format!("Failed to append history: {}", e));
+            }
+        }
+        
+        // 2. Enqueue worker items
+        {
+            let mut q = self.worker_q.lock().await;
+            for item in worker_items {
+                q.push(item);
+            }
+        }
+        
+        // 3. Enqueue timer items
+        {
+            let mut q = self.timer_q.lock().await;
+            for item in timer_items {
+                q.push(item);
+            }
+        }
+        
+        // 4. Enqueue orchestrator items
+        {
+            let mut q = self.orchestrator_q.lock().await;
+            for item in orchestrator_items {
+                q.push(item);
+            }
+        }
+        
+        // 5. Acknowledge the batch (release the lock)
+        {
+            let mut invisible = self.invisible_orchestrator.lock().await;
+            invisible.remove(lock_token);
+        }
+        
+        // Return error if any operation failed
+        if !errors.is_empty() {
+            Err(errors.join("; "))
+        } else {
+            Ok(())
+        }
+    }
+    
+    async fn abandon_orchestration_item(
+        &self,
+        lock_token: &str,
+        delay_ms: Option<u64>,
+    ) -> Result<(), String> {
+        if delay_ms.is_some() {
+            tracing::warn!("visibility delay not yet implemented for in_memory provider");
+        }
+        
+        // Simply abandon the orchestrator batch
+        self.abandon_orchestrator(lock_token).await
+    }
 }
 
 // No provider wrapper; runtime owns in-memory queues and workers. This module exposes

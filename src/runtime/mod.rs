@@ -364,9 +364,9 @@ impl Runtime {
     fn start_orchestration_dispatcher(self: Arc<Self>) -> JoinHandle<()> {
         tokio::spawn(async move {
             loop {
-                if let Some((items, token)) = self.history_store.dequeue_orchestrator_peek_lock().await {
-                    // Process batch of items for a single instance
-                    self.process_orchestrator_batch(items, token).await;
+                if let Some(item) = self.history_store.fetch_orchestration_item().await {
+                    // Process orchestration item atomically
+                    self.process_orchestration_item(item).await;
                 } else {
                     tokio::time::sleep(std::time::Duration::from_millis(Self::POLLER_IDLE_SLEEP_MS)).await;
                 }
@@ -374,6 +374,217 @@ impl Runtime {
         })
     }
 
+    async fn process_orchestration_item(self: &Arc<Self>, item: crate::providers::OrchestrationItem) {
+        let instance = &item.instance;
+        let lock_token = &item.lock_token;
+
+        // Check if instance is already terminal
+        let is_terminal = item.history.iter().rev().any(|e| {
+            matches!(
+                e,
+                Event::OrchestrationCompleted { .. }
+                    | Event::OrchestrationFailed { .. }
+                    | Event::OrchestrationContinuedAsNew { .. }
+            )
+        });
+
+        if is_terminal {
+            warn!(instance = %instance, "Instance is terminal, acking batch without processing");
+            let _ = self.history_store.ack_orchestration_item(
+                lock_token,
+                vec![], // No history changes
+                vec![], // No worker items
+                vec![], // No timer items
+                vec![], // No orchestrator items
+            ).await;
+            return;
+        }
+
+        // Separate Start/ContinueAsNew from completion messages
+        let mut start_or_continue: Option<WorkItem> = None;
+        let mut completion_messages: Vec<OrchestratorMsg> = Vec::new();
+
+        for work_item in &item.messages {
+            match work_item {
+                WorkItem::StartOrchestration { .. } | WorkItem::ContinueAsNew { .. } => {
+                    if start_or_continue.is_some() {
+                        // Corrupted state - terminate orchestration
+                        error!("Multiple Start/ContinueAsNew in batch - corrupted state");
+                        let _ = self.history_store.abandon_orchestration_item(lock_token, Some(5000)).await;
+                        return;
+                    }
+                    start_or_continue = Some(work_item.clone());
+                }
+                _ => {
+                    // Convert to OrchestratorMsg with shared token
+                    if let Some(msg) = OrchestratorMsg::from_work_item(work_item.clone(), Some(lock_token.clone())) {
+                        completion_messages.push(msg);
+                    }
+                }
+            }
+        }
+
+        // Process the execution
+        let (history_delta, worker_items, timer_items, orchestrator_items) = if let Some(start_item) = start_or_continue {
+            match start_item {
+                WorkItem::StartOrchestration { orchestration, input, version, parent_instance, parent_id, .. } => {
+                    self.handle_start_orchestration_atomic(
+                        instance,
+                        &orchestration,
+                        &input,
+                        version.as_deref(),
+                        parent_instance.as_deref(),
+                        parent_id,
+                        completion_messages,
+                        &item.history,
+                        lock_token,
+                    ).await
+                }
+                WorkItem::ContinueAsNew { orchestration, input, version, .. } => {
+                    self.handle_continue_as_new_atomic(
+                        instance,
+                        &orchestration,
+                        &input,
+                        version.as_deref(),
+                        completion_messages,
+                        &item.history,
+                        lock_token,
+                    ).await
+                }
+                _ => unreachable!(),
+            }
+        } else if !completion_messages.is_empty() {
+            // Only completion messages - process them
+            self.handle_completion_batch_atomic(instance, completion_messages, &item.history, lock_token).await
+        } else {
+            // Empty effective batch - just ack
+            (vec![], vec![], vec![], vec![])
+        };
+
+        // Atomically commit all changes
+        let _ = self.history_store.ack_orchestration_item(
+            lock_token,
+            history_delta,
+            worker_items,
+            timer_items,
+            orchestrator_items,
+        ).await;
+    }
+
+    // Helper methods for atomic orchestration processing
+    async fn handle_start_orchestration_atomic(
+        self: &Arc<Self>,
+        instance: &str,
+        orchestration: &str,
+        input: &str,
+        version: Option<&str>,
+        parent_instance: Option<&str>,
+        parent_id: Option<u64>,
+        completion_messages: Vec<OrchestratorMsg>,
+        existing_history: &[Event],
+        _lock_token: &str,
+    ) -> (Vec<Event>, Vec<WorkItem>, Vec<WorkItem>, Vec<WorkItem>) {
+        let mut history_delta = Vec::new();
+        let mut worker_items = Vec::new();
+        let mut timer_items = Vec::new();
+        let mut orchestrator_items = Vec::new();
+
+        // Create started event if this is a new instance
+        if existing_history.is_empty() {
+            history_delta.push(Event::OrchestrationStarted {
+                name: orchestration.to_string(),
+                version: version.unwrap_or("1.0.0").to_string(),
+                input: input.to_string(),
+                parent_instance: parent_instance.map(|s| s.to_string()),
+                parent_id,
+            });
+        }
+
+        // Run the atomic execution to get all changes
+        let full_history = [existing_history, &history_delta].concat();
+        let (exec_history_delta, exec_worker_items, exec_timer_items, exec_orchestrator_items, _result) = self
+            .clone()
+            .run_single_execution_atomic(instance, orchestration, full_history.clone(), completion_messages)
+            .await;
+
+        // Combine all changes
+        history_delta.extend(exec_history_delta);
+        worker_items.extend(exec_worker_items);
+        timer_items.extend(exec_timer_items);
+        orchestrator_items.extend(exec_orchestrator_items);
+        
+        (history_delta, worker_items, timer_items, orchestrator_items)
+    }
+
+    async fn handle_continue_as_new_atomic(
+        self: &Arc<Self>,
+        instance: &str,
+        orchestration: &str,
+        input: &str,
+        version: Option<&str>,
+        completion_messages: Vec<OrchestratorMsg>,
+        _existing_history: &[Event],
+        _lock_token: &str,
+    ) -> (Vec<Event>, Vec<WorkItem>, Vec<WorkItem>, Vec<WorkItem>) {
+        let mut history_delta = Vec::new();
+        let mut worker_items = Vec::new();
+        let mut timer_items = Vec::new();
+        let mut orchestrator_items = Vec::new();
+
+        // For ContinueAsNew, we start fresh but keep the instance name
+        history_delta.push(Event::OrchestrationStarted {
+            name: orchestration.to_string(),
+            version: version.unwrap_or("1.0.0").to_string(),
+            input: input.to_string(),
+            parent_instance: None,
+            parent_id: None,
+        });
+        
+        debug!(instance, "ContinueAsNew creating new execution with input: {}", input);
+
+        let initial_history = history_delta.clone();
+        let (exec_history_delta, exec_worker_items, exec_timer_items, exec_orchestrator_items, _result) = self
+            .clone()
+            .run_single_execution_atomic(instance, orchestration, initial_history.clone(), completion_messages)
+            .await;
+
+        // Combine all changes
+        history_delta.extend(exec_history_delta);
+        worker_items.extend(exec_worker_items);
+        timer_items.extend(exec_timer_items);
+        orchestrator_items.extend(exec_orchestrator_items);
+
+        (history_delta, worker_items, timer_items, orchestrator_items)
+    }
+
+    async fn handle_completion_batch_atomic(
+        self: &Arc<Self>,
+        instance: &str,
+        completion_messages: Vec<OrchestratorMsg>,
+        existing_history: &[Event],
+        _lock_token: &str,
+    ) -> (Vec<Event>, Vec<WorkItem>, Vec<WorkItem>, Vec<WorkItem>) {
+        // Extract orchestration name from history
+        let orchestration_name = existing_history
+            .iter()
+            .rev()
+            .find_map(|e| match e {
+                Event::OrchestrationStarted { name, .. } => Some(name.clone()),
+                _ => None,
+            })
+            .unwrap_or_else(|| "Unknown".to_string());
+
+        let initial_history = existing_history.to_vec();
+        let (history_delta, worker_items, timer_items, orchestrator_items, _result) = self
+            .clone()
+            .run_single_execution_atomic(instance, &orchestration_name, initial_history.clone(), completion_messages)
+            .await;
+
+        (history_delta, worker_items, timer_items, orchestrator_items)
+    }
+
+    // TODO: Remove these old methods once all tests are migrated to the new atomic API
+    #[allow(dead_code)]
     async fn process_orchestrator_batch(self: &Arc<Self>, items: Vec<WorkItem>, token: String) {
         // Extract instance from first item (all items in batch are for same instance)
         let instance = match items.first() {
@@ -687,6 +898,7 @@ impl Runtime {
     }
 
     /// Unified handler for starting orchestration executions (both new and ContinueAsNew)
+    #[allow(dead_code)]
     async fn start_orchestration_execution_with_completions(
         self: &Arc<Self>,
         instance: &str,
@@ -786,6 +998,7 @@ impl Runtime {
 
 
     // TODO : CR : this function is very similar to the above function, maybe refactor it.
+    #[allow(dead_code)]
     async fn handle_completion_batch(self: &Arc<Self>, instance: &str, completion_messages: Vec<OrchestratorMsg>, token: String) {
         // Get orchestration name and check if already completed
         let history = self.history_store.read(instance).await;

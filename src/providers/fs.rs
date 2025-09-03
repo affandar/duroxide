@@ -798,4 +798,156 @@ impl HistoryStore for FsHistoryStore {
         .await?;
         Ok(lat)
     }
+
+    // ===== New Atomic Orchestration Methods =====
+
+    async fn fetch_orchestration_item(&self) -> Option<super::OrchestrationItem> {
+        // First dequeue a batch of orchestrator messages
+        let (messages, lock_token) = self.dequeue_orchestrator_peek_lock().await?;
+        
+        // Extract instance from the first message
+        let instance = match messages.first()? {
+            WorkItem::StartOrchestration { instance, .. }
+            | WorkItem::ActivityCompleted { instance, .. }
+            | WorkItem::ActivityFailed { instance, .. }
+            | WorkItem::TimerFired { instance, .. }
+            | WorkItem::ExternalRaised { instance, .. }
+            | WorkItem::CancelInstance { instance, .. }
+            | WorkItem::ContinueAsNew { instance, .. } => instance.clone(),
+            WorkItem::SubOrchCompleted { parent_instance, .. }
+            | WorkItem::SubOrchFailed { parent_instance, .. } => parent_instance.clone(),
+            _ => return None,
+        };
+        
+        // Read the history for this instance
+        let history = self.read(&instance).await;
+        
+        // If this is a new instance (StartOrchestration), create it
+        if history.is_empty() && messages.iter().any(|m| matches!(m, WorkItem::StartOrchestration { .. })) {
+            let _ = self.create_instance(&instance).await;
+        }
+        
+        // Extract orchestration metadata from history
+        let (orchestration_name, version, execution_id) = if let Some(event) = history.iter().find(|e| {
+            matches!(e, Event::OrchestrationStarted { .. })
+        }) {
+            match event {
+                Event::OrchestrationStarted { name, version, .. } => {
+                    (name.clone(), version.clone(), self.latest_execution_id(&instance).await.unwrap_or(1))
+                }
+                _ => return None,
+            }
+        } else {
+            // New instance - extract from StartOrchestration message
+            if let Some(WorkItem::StartOrchestration { orchestration, version, .. }) = messages.iter().find(|m| {
+                matches!(m, WorkItem::StartOrchestration { .. })
+            }) {
+                (orchestration.clone(), version.clone().unwrap_or_else(|| "1.0.0".to_string()), 1)
+            } else {
+                return None;
+            }
+        };
+        
+        Some(super::OrchestrationItem {
+            instance,
+            orchestration_name,
+            execution_id,
+            version,
+            history,
+            messages,
+            lock_token,
+        })
+    }
+    
+    async fn ack_orchestration_item(
+        &self,
+        lock_token: &str,
+        history_delta: Vec<Event>,
+        worker_items: Vec<WorkItem>,
+        timer_items: Vec<WorkItem>,
+        orchestrator_items: Vec<WorkItem>,
+    ) -> Result<(), String> {
+        // Extract instance from lock token - we need to parse the lock file
+        let lock_path = self.orch_lock_path(lock_token);
+        if !lock_path.exists() {
+            return Err("Lock token not found".to_string());
+        }
+        
+        // Read the locked batch to get the instance
+        let data = std::fs::read_to_string(&lock_path).map_err(|e| e.to_string())?;
+        let batch: Vec<WorkItem> = serde_json::from_str(&data)
+            .map_err(|e| format!("Failed to parse lock file: {}", e))?;
+        
+        let instance = match batch.first() {
+            Some(item) => match item {
+                WorkItem::StartOrchestration { instance, .. }
+                | WorkItem::ActivityCompleted { instance, .. }
+                | WorkItem::ActivityFailed { instance, .. }
+                | WorkItem::TimerFired { instance, .. }
+                | WorkItem::ExternalRaised { instance, .. }
+                | WorkItem::CancelInstance { instance, .. }
+                | WorkItem::ContinueAsNew { instance, .. } => instance,
+                WorkItem::SubOrchCompleted { parent_instance, .. }
+                | WorkItem::SubOrchFailed { parent_instance, .. } => parent_instance,
+                _ => return Err("Cannot determine instance from work item".to_string()),
+            },
+            None => return Err("Empty batch in lock file".to_string()),
+        };
+        
+        // Perform all operations with best-effort atomicity
+        let mut errors = Vec::new();
+        
+        // 1. Append history delta
+        if !history_delta.is_empty() {
+            if let Err(e) = self.append(instance, history_delta).await {
+                errors.push(format!("Failed to append history: {}", e));
+            }
+        }
+        
+        // 2. Enqueue worker items
+        for item in worker_items {
+            if let Err(e) = self.enqueue_worker_work(item).await {
+                errors.push(format!("Failed to enqueue worker item: {}", e));
+            }
+        }
+        
+        // 3. Enqueue timer items
+        for item in timer_items {
+            if let Err(e) = self.enqueue_timer_work(item).await {
+                errors.push(format!("Failed to enqueue timer item: {}", e));
+            }
+        }
+        
+        // 4. Enqueue orchestrator items
+        for item in orchestrator_items {
+            if let Err(e) = self.enqueue_orchestrator_work(item).await {
+                errors.push(format!("Failed to enqueue orchestrator item: {}", e));
+            }
+        }
+        
+        // 5. Acknowledge the batch (release the lock)
+        if let Err(e) = self.ack_orchestrator(lock_token).await {
+            errors.push(format!("Failed to ack orchestrator: {}", e));
+        }
+        
+        // Return error if any operation failed
+        if !errors.is_empty() {
+            Err(errors.join("; "))
+        } else {
+            Ok(())
+        }
+    }
+    
+    async fn abandon_orchestration_item(
+        &self,
+        lock_token: &str,
+        delay_ms: Option<u64>,
+    ) -> Result<(), String> {
+        if delay_ms.is_some() {
+            tracing::warn!("visibility delay not yet implemented for fs provider");
+        }
+        
+        // Simply abandon the orchestrator batch
+        self.abandon_orchestrator(lock_token).await
+    }
 }

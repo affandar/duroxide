@@ -1,5 +1,17 @@
 use crate::Event;
 
+/// Orchestration item containing all data needed to process an instance atomically.
+#[derive(Debug, Clone)]
+pub struct OrchestrationItem {
+    pub instance: String,
+    pub orchestration_name: String,
+    pub execution_id: u64,
+    pub version: String,
+    pub history: Vec<Event>,
+    pub messages: Vec<WorkItem>,
+    pub lock_token: String,
+}
+
 /// Provider-backed work queue items the runtime consumes continually.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub enum WorkItem {
@@ -217,6 +229,42 @@ pub trait HistoryStore: Send + Sync {
     /// Default: false, which enables the in-process timer fallback service.
     fn supports_delayed_visibility(&self) -> bool {
         false
+    }
+
+    // ===== New Atomic Orchestration Methods =====
+    
+    /// Fetch next orchestration item (batch of messages + history) atomically.
+    /// This locks the instance until ack_orchestration_item or abandon_orchestration_item is called.
+    /// Returns None if no work is available.
+    async fn fetch_orchestration_item(&self) -> Option<OrchestrationItem> {
+        None
+    }
+    
+    /// Acknowledge orchestration item atomically.
+    /// - Appends new history events
+    /// - Enqueues work items to appropriate queues (worker, timer, orchestrator)
+    /// - Releases the lock
+    /// All operations must succeed or all must fail (best effort for fs/in_memory providers).
+    async fn ack_orchestration_item(
+        &self,
+        _lock_token: &str,
+        _history_delta: Vec<Event>,
+        _worker_items: Vec<WorkItem>,
+        _timer_items: Vec<WorkItem>,
+        _orchestrator_items: Vec<WorkItem>,
+    ) -> Result<(), String> {
+        Err("ack_orchestration_item not supported by this provider".into())
+    }
+    
+    /// Abandon orchestration item with optional visibility delay.
+    /// Makes the instance available again after delay_ms (if provided).
+    /// Used for error scenarios or backoff strategies.
+    async fn abandon_orchestration_item(
+        &self,
+        _lock_token: &str,
+        _delay_ms: Option<u64>,
+    ) -> Result<(), String> {
+        Err("abandon_orchestration_item not supported by this provider".into())
     }
 }
 
