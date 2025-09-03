@@ -6,7 +6,8 @@ use std::sync::Arc;
 
 #[tokio::test]
 async fn test_fetch_orchestration_item_new_instance() {
-    let store: Arc<dyn HistoryStore> = Arc::new(FsHistoryStore::new("test-fs-atomic", true));
+    let td = tempfile::tempdir().unwrap();
+    let store: Arc<dyn HistoryStore> = Arc::new(FsHistoryStore::new(td.path(), true));
     
     // Create instance and enqueue start work
     store.create_instance("test-instance").await.unwrap();
@@ -36,7 +37,8 @@ async fn test_fetch_orchestration_item_new_instance() {
 
 #[tokio::test]
 async fn test_fetch_orchestration_item_existing_instance() {
-    let store: Arc<dyn HistoryStore> = Arc::new(FsHistoryStore::new("test-fs-atomic-existing", true));
+    let td = tempfile::tempdir().unwrap();
+    let store: Arc<dyn HistoryStore> = Arc::new(FsHistoryStore::new(td.path(), true));
     
     // Create instance with some history
     store.create_instance("test-instance").await.unwrap();
@@ -81,7 +83,8 @@ async fn test_fetch_orchestration_item_existing_instance() {
 
 #[tokio::test]
 async fn test_fetch_orchestration_item_no_work() {
-    let store: Arc<dyn HistoryStore> = Arc::new(FsHistoryStore::new("test-fs-atomic-no-work", true));
+    let td = tempfile::tempdir().unwrap();
+    let store: Arc<dyn HistoryStore> = Arc::new(FsHistoryStore::new(td.path(), true));
     
     // No work items
     let item = store.fetch_orchestration_item().await;
@@ -90,7 +93,8 @@ async fn test_fetch_orchestration_item_no_work() {
 
 #[tokio::test]
 async fn test_ack_orchestration_item_atomic() {
-    let store: Arc<dyn HistoryStore> = Arc::new(FsHistoryStore::new("test-fs-ack-atomic", true));
+    let td = tempfile::tempdir().unwrap();
+    let store: Arc<dyn HistoryStore> = Arc::new(FsHistoryStore::new(td.path(), true));
     
     // Setup
     store.create_instance("test-instance").await.unwrap();
@@ -159,7 +163,8 @@ async fn test_ack_orchestration_item_atomic() {
 
 #[tokio::test]
 async fn test_ack_orchestration_item_error_handling() {
-    let store: Arc<dyn HistoryStore> = Arc::new(FsHistoryStore::new("test-fs-ack-error", true));
+    let td = tempfile::tempdir().unwrap();
+    let store: Arc<dyn HistoryStore> = Arc::new(FsHistoryStore::new(td.path(), true));
     
     // Try to ack with invalid token
     let result = store.ack_orchestration_item(
@@ -176,7 +181,8 @@ async fn test_ack_orchestration_item_error_handling() {
 
 #[tokio::test]
 async fn test_abandon_orchestration_item() {
-    let store: Arc<dyn HistoryStore> = Arc::new(FsHistoryStore::new("test-fs-abandon", true));
+    let td = tempfile::tempdir().unwrap();
+    let store: Arc<dyn HistoryStore> = Arc::new(FsHistoryStore::new(td.path(), true));
     
     // Setup
     store.create_instance("test-instance").await.unwrap();
@@ -207,7 +213,8 @@ async fn test_abandon_orchestration_item() {
 
 #[tokio::test]
 async fn test_abandon_orchestration_item_with_delay() {
-    let store: Arc<dyn HistoryStore> = Arc::new(FsHistoryStore::new("test-fs-abandon-delay", true));
+    let td = tempfile::tempdir().unwrap();
+    let store: Arc<dyn HistoryStore> = Arc::new(FsHistoryStore::new(td.path(), true));
     
     // Setup
     store.create_instance("test-instance").await.unwrap();
@@ -234,7 +241,8 @@ async fn test_abandon_orchestration_item_with_delay() {
 
 #[tokio::test]
 async fn test_abandon_orchestration_item_error_handling() {
-    let store: Arc<dyn HistoryStore> = Arc::new(FsHistoryStore::new("test-fs-abandon-error", true));
+    let td = tempfile::tempdir().unwrap();
+    let store: Arc<dyn HistoryStore> = Arc::new(FsHistoryStore::new(td.path(), true));
     
     // Try to abandon with invalid token
     let result = store.abandon_orchestration_item("invalid-token", None).await;

@@ -3,8 +3,6 @@ use rust_dtf::providers::HistoryStore;
 use std::sync::Arc as StdArc;
 use std::time::{Duration, Instant};
 
-pub mod cleanup;
-
 #[allow(dead_code)]
 pub async fn wait_for_history<F>(store: StdArc<dyn HistoryStore>, instance: &str, predicate: F, timeout_ms: u64) -> bool
 where
