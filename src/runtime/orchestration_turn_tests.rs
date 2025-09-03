@@ -39,7 +39,7 @@ mod tests {
         assert_eq!(turn.instance, "test-instance");
         assert_eq!(turn.turn_index, 1);
         assert_eq!(turn.baseline_history, baseline_history);
-        assert!(turn.ack_tokens.is_empty());
+        // Ack tokens are no longer collected in the turn
         assert!(turn.history_delta.is_empty());
         assert!(turn.pending_actions.is_empty());
         assert!(!turn.made_progress());
@@ -74,10 +74,7 @@ mod tests {
 
         turn.prep_completions(messages);
 
-        // Should have ack tokens
-        assert_eq!(turn.ack_tokens.len(), 2);
-        assert!(turn.ack_tokens.contains(&"token1".to_string()));
-        assert!(turn.ack_tokens.contains(&"token2".to_string()));
+        // Ack tokens are no longer collected in the turn
 
         // Should have completions in map
         assert!(turn.completion_map.is_next_ready(CompletionKind::Activity, 1));
@@ -124,7 +121,7 @@ mod tests {
 
         // Should have external completion
         assert!(turn.completion_map.is_next_ready(CompletionKind::External, 5));
-        assert_eq!(turn.ack_tokens.len(), 1);
+        // Ack tokens are no longer collected in the turn
         assert!(turn.made_progress());
     }
 
@@ -157,8 +154,7 @@ mod tests {
 
         turn.prep_completions(messages);
 
-        // Should have both ack tokens (even for duplicates)
-        assert_eq!(turn.ack_tokens.len(), 2);
+        // Ack tokens are no longer collected in the turn
 
         // Should only have one completion (duplicate detected)
         assert!(turn.completion_map.is_next_ready(CompletionKind::Activity, 1));

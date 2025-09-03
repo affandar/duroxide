@@ -33,8 +33,6 @@ pub struct OrchestrationTurn {
     execution_id: u64,
     /// Incoming completion messages mapped and ordered
     completion_map: CompletionMap,
-    /// Acknowledgment tokens to batch-ack after persistence
-    ack_tokens: Vec<String>,
     /// History events generated during this turn
     history_delta: Vec<Event>,
     /// Actions to dispatch after persistence
@@ -51,7 +49,6 @@ impl OrchestrationTurn {
             turn_index,
             execution_id,
             completion_map: CompletionMap::new(),
-            ack_tokens: Vec::new(),
             history_delta: Vec::new(),
             pending_actions: Vec::new(),
             baseline_history,
@@ -59,7 +56,7 @@ impl OrchestrationTurn {
     }
 
     /// Stage 1: Prepare completion map from incoming orchestrator messages
-    /// This stage accumulates all completions and their ack tokens without side effects
+    /// This stage accumulates all completions without provider ack tokens
     pub fn prep_completions(&mut self, messages: Vec<(OrchestratorMsg, String)>) {
         debug!(
             instance = %self.instance,
@@ -69,7 +66,7 @@ impl OrchestrationTurn {
         );
 
         for (msg, token) in messages {
-            let ack_token = match &msg {
+            let _ack_token = match &msg {
                 OrchestratorMsg::ExternalByName { name, data, .. } => {
                     // Handle external events specially since they need history lookup
 
@@ -106,7 +103,7 @@ impl OrchestrationTurn {
                             .push(Event::OrchestrationCancelRequested { reason: reason.clone() });
                     }
 
-                    Some(token)
+                    None
                 }
                 _ => {
                     // Smart completion filtering with helpful warnings
@@ -146,7 +143,7 @@ impl OrchestrationTurn {
                                 );
                             }
                         }
-                        Some(token)
+                        None
                     } else if self.is_completion_already_in_history(&msg) {
                         // Check if completion is already in history (duplicate)
                         match &msg {
@@ -166,7 +163,7 @@ impl OrchestrationTurn {
                                 // Still ack the message but don't process it
                             }
                         }
-                        Some(token)
+                        None
                     } else {
                         // Process the completion normally
                         self.completion_map.add_completion(msg)
@@ -174,16 +171,12 @@ impl OrchestrationTurn {
                 }
             };
 
-            // Always collect the ack token for later batching
-            if let Some(token) = ack_token {
-                self.ack_tokens.push(token);
-            }
+            // Ack tokens are no longer collected; provider acks are handled atomically elsewhere
         }
 
         debug!(
             instance = %self.instance,
             completion_count = self.completion_map.ordered.len(),
-            ack_token_count = self.ack_tokens.len(),
             "completion map prepared"
         );
     }
@@ -516,68 +509,7 @@ impl OrchestrationTurn {
         unconsumed
     }
 
-    /// Stage 4: Acknowledge all processed messages in batch
-    /// This stage only runs after successful persistence
-    pub async fn acknowledge_messages(&mut self, history_store: Arc<dyn HistoryStore>) {
-        if self.ack_tokens.is_empty() {
-            return;
-        }
-
-        // Check if we should abandon due to nondeterminism
-        if self.completion_map.has_unconsumed() {
-            if self.ack_tokens.len() > 0 {
-                let token = &self.ack_tokens[0];
-                debug!(
-                    instance = %self.instance,
-                    token_count = self.ack_tokens.len(),
-                    "abandoning batch due to unconsumed completions (nondeterminism)"
-                );
-
-                // TODO : CR : this is non determinism, this orchestration must be terminated with the appropriate error instead of retrying
-                //      indefinitely
-                if let Err(e) = history_store.abandon_orchestrator(token).await {
-                    error!(
-                        instance = %self.instance,
-                        error = %e,
-                        "failed to abandon batch with unconsumed completions"
-                    );
-                }
-            }
-            self.ack_tokens.clear();
-            return;
-        }
-
-        debug!(
-            instance = %self.instance,
-            token_count = self.ack_tokens.len(),
-            "acknowledging processed messages"
-        );
-
-        // Acknowledge the batch - all messages share the same token
-        if self.ack_tokens.len() > 0 {
-            // TODO : CR : no point in gathering ack tokens only to not use them. find a more elegant way to do this.
-            // In batch mode, all messages share the same token
-            let token = &self.ack_tokens[0];
-            if let Err(e) = history_store.ack_orchestrator(token).await {
-                error!(
-                    instance = %self.instance,
-                    token_count = self.ack_tokens.len(),
-                    error = %e,
-                    "batch acknowledgment failed - messages will timeout and be redelivered"
-                );
-                // Don't fall back to individual acks - let the provider handle redelivery
-                // This prevents partial acknowledgment scenarios that could cause inconsistency
-            } else {
-                debug!(
-                    instance = %self.instance,
-                    token_count = self.ack_tokens.len(),
-                    "batch acknowledgment successful"
-                );
-            }
-        }
-
-        self.ack_tokens.clear();
-    }
+    // Stage 4 removed: provider acks are handled atomically at the dispatcher level
 
     /// Helper: Apply completion map entries to history for orchestration execution
     fn apply_completions_to_history(&mut self, _history: &mut Vec<Event>) {
@@ -646,7 +578,7 @@ mod tests {
         )];
 
         turn.prep_completions(messages);
-        assert_eq!(turn.ack_tokens.len(), 1);
+        // Ack tokens are no longer collected in the turn
         assert!(turn.completion_map.is_next_ready(CompletionKind::Activity, 1));
 
         // Other stages would require actual runtime integration to test properly

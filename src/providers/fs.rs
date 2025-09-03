@@ -90,6 +90,80 @@ impl FsHistoryStore {
             .map_err(|e| e.to_string())?;
         self.append_with_execution(instance, execution_id, history).await
     }
+
+    fn dequeue_orchestrator_peek_lock_internal(&self) -> Option<(Vec<WorkItem>, String)> {
+        let qf = &self.orch_queue_file;
+        let content = std::fs::read_to_string(qf).ok()?;
+        let all_items: Vec<WorkItem> = content
+            .lines()
+            .filter_map(|l| serde_json::from_str::<WorkItem>(l).ok())
+            .collect();
+        if all_items.is_empty() {
+            return None;
+        }
+        let mut instance_map = std::collections::HashMap::<String, Vec<WorkItem>>::new();
+        for item in all_items.iter() {
+            let instance = match item {
+                WorkItem::StartOrchestration { instance, .. }
+                | WorkItem::ActivityCompleted { instance, .. }
+                | WorkItem::ActivityFailed { instance, .. }
+                | WorkItem::TimerFired { instance, .. }
+                | WorkItem::ExternalRaised { instance, .. }
+                | WorkItem::CancelInstance { instance, .. }
+                | WorkItem::ContinueAsNew { instance, .. } => instance.clone(),
+                WorkItem::SubOrchCompleted { parent_instance, .. }
+                | WorkItem::SubOrchFailed { parent_instance, .. } => parent_instance.clone(),
+                _ => continue,
+            };
+            instance_map.entry(instance).or_default().push(item.clone());
+        }
+        let (target_instance, batch_items) = instance_map.into_iter().next()?;
+        let remaining_items: Vec<WorkItem> = all_items
+            .into_iter()
+            .filter(|item| {
+                let item_instance = match item {
+                    WorkItem::StartOrchestration { instance, .. }
+                    | WorkItem::ActivityCompleted { instance, .. }
+                    | WorkItem::ActivityFailed { instance, .. }
+                    | WorkItem::TimerFired { instance, .. }
+                    | WorkItem::ExternalRaised { instance, .. }
+                    | WorkItem::CancelInstance { instance, .. }
+                    | WorkItem::ContinueAsNew { instance, .. } => instance,
+                    WorkItem::SubOrchCompleted { parent_instance, .. }
+                    | WorkItem::SubOrchFailed { parent_instance, .. } => parent_instance,
+                    _ => return true,
+                };
+                item_instance != &target_instance
+            })
+            .collect();
+        let tmp = qf.with_extension("jsonl.tmp");
+        {
+            let mut tf = std::fs::OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(true)
+                .open(&tmp)
+                .ok()?;
+            use std::io::Write as _;
+            for it in &remaining_items {
+                let line = serde_json::to_string(&it).ok()?;
+                let _ = tf.write_all(line.as_bytes());
+                let _ = tf.write_all(b"\n");
+            }
+        }
+        let _ = std::fs::rename(&tmp, qf);
+        let now_ns = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let pid = std::process::id();
+        let token = format!("{now_ns:x}-{pid:x}");
+        let _ = std::fs::create_dir_all(self.orch_lock_dir());
+        let lock_path = self.orch_lock_path(&token);
+        let batch_json = serde_json::to_string(&batch_items).ok()?;
+        let _ = std::fs::write(&lock_path, batch_json);
+        Some((batch_items, token))
+    }
 }
 
 #[async_trait::async_trait]
@@ -318,6 +392,7 @@ impl HistoryStore for FsHistoryStore {
         Ok(())
     }
 
+    /* removed legacy dequeue_orchestrator_peek_lock
     async fn dequeue_orchestrator_peek_lock(&self) -> Option<(Vec<WorkItem>, String)> {
         // Group items by instance and return all items for the first instance
         let qf = &self.orch_queue_file;
@@ -402,67 +477,19 @@ impl HistoryStore for FsHistoryStore {
         let _ = std::fs::write(&lock_path, batch_json);
         Some((batch_items, token))
     }
+    */
 
-    async fn ack_orchestrator(&self, token: &str) -> Result<(), String> {
+    // removed legacy ack_orchestrator
+    /*async fn ack_orchestrator(&self, token: &str) -> Result<(), String> {
         let path = self.orch_lock_path(token);
         if path.exists() {
             std::fs::remove_file(&path).map_err(|e| e.to_string())?;
         }
         Ok(())
     }
+    */
 
-    async fn abandon_orchestrator(&self, token: &str) -> Result<(), String> {
-        // Read locked batch and re-enqueue at front, then remove lock
-        let path = self.orch_lock_path(token);
-        if !path.exists() {
-            return Ok(());
-        }
-        let data = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
-
-        // Handle both old single-item format and new batch format for backward compatibility
-        let items_to_restore: Vec<WorkItem> = if let Ok(batch) = serde_json::from_str::<Vec<WorkItem>>(&data) {
-            // New batch format
-            batch
-        } else if let Ok(single_item) = serde_json::from_str::<WorkItem>(&data) {
-            // Old single-item format
-            vec![single_item]
-        } else {
-            return Err("Invalid lock file format".to_string());
-        };
-
-        // Prepend to queue
-        let qf = &self.orch_queue_file;
-        let content = std::fs::read_to_string(qf).unwrap_or_default();
-        let existing_items: Vec<WorkItem> = content
-            .lines()
-            .filter_map(|l| serde_json::from_str::<WorkItem>(l).ok())
-            .collect();
-
-        // Prepend the batch items to existing items
-        let mut all_items = items_to_restore;
-        all_items.extend(existing_items);
-
-        // Rewrite file atomically
-        let tmp = qf.with_extension("jsonl.tmp");
-        {
-            let mut tf = std::fs::OpenOptions::new()
-                .create(true)
-                .write(true)
-                .truncate(true)
-                .open(&tmp)
-                .map_err(|e| e.to_string())?;
-            for it in &all_items {
-                let line = serde_json::to_string(&it).map_err(|e| e.to_string())?;
-                use std::io::Write as _;
-                tf.write_all(line.as_bytes()).map_err(|e| e.to_string())?;
-                tf.write_all(b"\n").map_err(|e| e.to_string())?;
-            }
-        }
-        std::fs::rename(&tmp, &qf).map_err(|e| e.to_string())?;
-        // Remove lock
-        std::fs::remove_file(&path).map_err(|e| e.to_string())?;
-        Ok(())
-    }
+    /* legacy removed: abandon_orchestrator */
 
     // ===== Worker Queue Methods =====
 
@@ -824,8 +851,8 @@ impl HistoryStore for FsHistoryStore {
     // ===== New Atomic Orchestration Methods =====
 
     async fn fetch_orchestration_item(&self) -> Option<super::OrchestrationItem> {
-        // First dequeue a batch of orchestrator messages
-        let (messages, lock_token) = self.dequeue_orchestrator_peek_lock().await?;
+        // First dequeue a batch of orchestrator messages using internal queue
+        let Some((messages, lock_token)) = self.dequeue_orchestrator_peek_lock_internal() else { return None; };
 
         // Extract instance from the first message
         let instance = match messages.first()? {
@@ -1052,8 +1079,11 @@ impl HistoryStore for FsHistoryStore {
         }
 
         // 5. Acknowledge the batch (release the lock)
-        if let Err(e) = self.ack_orchestrator(lock_token).await {
-            errors.push(format!("Failed to ack orchestrator: {}", e));
+        {
+            let path = self.orch_lock_path(lock_token);
+            if std::path::Path::new(&path).exists() {
+                if let Err(e) = std::fs::remove_file(&path) { errors.push(e.to_string()); }
+            }
         }
 
         // Return error if any operation failed
@@ -1069,7 +1099,20 @@ impl HistoryStore for FsHistoryStore {
             tracing::warn!("visibility delay not yet implemented for fs provider");
         }
 
-        // Simply abandon the orchestrator batch
-        self.abandon_orchestrator(lock_token).await
+        // Simply abandon the orchestrator batch: re-enqueue items at front and remove lock
+        let path = self.orch_lock_path(lock_token);
+        if !std::path::Path::new(&path).exists() { return Ok(()); }
+        let data = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+        let items_to_restore: Vec<WorkItem> = serde_json::from_str(&data).map_err(|e| e.to_string())?;
+        let qf = &self.orch_queue_file;
+        let content = std::fs::read_to_string(qf).unwrap_or_default();
+        let mut new_content = String::new();
+        for wi in items_to_restore.iter() {
+            let line = serde_json::to_string(wi).map_err(|e| e.to_string())?;
+            new_content.push_str(&line); new_content.push('\n');
+        }
+        new_content.push_str(&content);
+        std::fs::write(qf, new_content).map_err(|e| e.to_string())?;
+        std::fs::remove_file(&path).map_err(|e| e.to_string())
     }
 }

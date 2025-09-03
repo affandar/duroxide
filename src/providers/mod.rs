@@ -115,28 +115,11 @@ pub trait HistoryStore: Send + Sync {
         Ok(())
     }
 
-    // ===== Orchestrator Queue Methods (batch operations) =====
+    // ===== Orchestrator Queue Methods (enqueue only; legacy dequeue/ack removed) =====
 
     /// Enqueue a work item to the orchestrator queue.
     async fn enqueue_orchestrator_work(&self, _item: WorkItem) -> Result<(), String> {
         Err("orchestrator queue not supported".into())
-    }
-
-    /// Dequeue a batch of work items for a single instance from the orchestrator queue.
-    /// Returns all available messages for one instance (up to provider-defined batch size).
-    /// The entire batch is locked under a single token until ack/abandon.
-    async fn dequeue_orchestrator_peek_lock(&self) -> Option<(Vec<WorkItem>, String)> {
-        None
-    }
-
-    /// Acknowledge a batch of orchestrator messages, permanently removing them.
-    async fn ack_orchestrator(&self, _token: &str) -> Result<(), String> {
-        Ok(())
-    }
-
-    /// Abandon a batch of orchestrator messages, making them visible again.
-    async fn abandon_orchestrator(&self, _token: &str) -> Result<(), String> {
-        Ok(())
     }
 
     // ===== Worker Queue Methods (single-item operations) =====

@@ -82,7 +82,8 @@ impl HistoryStore for InMemoryHistoryStore {
         Ok(())
     }
 
-    async fn dequeue_orchestrator_peek_lock(&self) -> Option<(Vec<WorkItem>, String)> {
+    // removed legacy dequeue_orchestrator_peek_lock
+    /*async fn dequeue_orchestrator_peek_lock(&self) -> Option<(Vec<WorkItem>, String)> {
         let mut q = self.orchestrator_q.lock().await;
         if q.is_empty() {
             return None;
@@ -136,23 +137,11 @@ impl HistoryStore for InMemoryHistoryStore {
         } else {
             None
         }
-    }
+    }*/
 
-    async fn ack_orchestrator(&self, token: &str) -> Result<(), String> {
-        self.invisible_orchestrator.lock().await.remove(token);
-        Ok(())
-    }
+    // removed legacy ack_orchestrator
 
-    async fn abandon_orchestrator(&self, token: &str) -> Result<(), String> {
-        if let Some(items) = self.invisible_orchestrator.lock().await.remove(token) {
-            let mut q = self.orchestrator_q.lock().await;
-            // Insert at front to maintain FIFO semantics
-            for item in items.into_iter().rev() {
-                q.insert(0, item);
-            }
-        }
-        Ok(())
-    }
+    // removed legacy abandon_orchestrator
 
     // ===== Worker Queue Methods =====
 
@@ -364,8 +353,46 @@ impl HistoryStore for InMemoryHistoryStore {
     // ===== New Atomic Orchestration Methods =====
 
     async fn fetch_orchestration_item(&self) -> Option<super::OrchestrationItem> {
-        // First dequeue a batch of orchestrator messages
-        let (messages, lock_token) = self.dequeue_orchestrator_peek_lock().await?;
+        // First dequeue a batch of orchestrator messages from internal queue
+        let (messages, lock_token) = {
+            let mut q = self.orchestrator_q.lock().await;
+            if q.is_empty() { return None; }
+            let mut items = Vec::new();
+            let mut remaining = Vec::new();
+            // take messages for the first instance we see
+            let instance = match q.first() {
+                Some(WorkItem::StartOrchestration{instance, ..})
+                | Some(WorkItem::ActivityCompleted{instance, ..})
+                | Some(WorkItem::ActivityFailed{instance, ..})
+                | Some(WorkItem::TimerFired{instance, ..})
+                | Some(WorkItem::ExternalRaised{instance, ..})
+                | Some(WorkItem::CancelInstance{instance, ..})
+                | Some(WorkItem::ContinueAsNew{instance, ..}) => instance.clone(),
+                Some(WorkItem::SubOrchCompleted{parent_instance, ..})
+                | Some(WorkItem::SubOrchFailed{parent_instance, ..}) => parent_instance.clone(),
+                _ => return None,
+            };
+            while let Some(item) = q.pop() {
+                let same = match &item {
+                    WorkItem::StartOrchestration{instance:inst,..}
+                    | WorkItem::ActivityCompleted{instance:inst,..}
+                    | WorkItem::ActivityFailed{instance:inst,..}
+                    | WorkItem::TimerFired{instance:inst,..}
+                    | WorkItem::ExternalRaised{instance:inst,..}
+                    | WorkItem::CancelInstance{instance:inst,..}
+                    | WorkItem::ContinueAsNew{instance:inst,..} => inst == &instance,
+                    WorkItem::SubOrchCompleted{parent_instance:inst,..}
+                    | WorkItem::SubOrchFailed{parent_instance:inst,..} => inst == &instance,
+                    _ => false,
+                };
+                if same { items.push(item); } else { remaining.push(item); }
+            }
+            remaining.reverse();
+            for it in remaining { q.push(it); }
+            let token = format!("o:{}:{}", instance, items.len());
+            self.invisible_orchestrator.lock().await.insert(token.clone(), items.clone());
+            (items, token)
+        };
 
         // Extract instance from the first message
         let instance = match messages.first()? {
@@ -570,7 +597,11 @@ impl HistoryStore for InMemoryHistoryStore {
         }
 
         // Simply abandon the orchestrator batch
-        self.abandon_orchestrator(lock_token).await
+        if let Some(items) = self.invisible_orchestrator.lock().await.remove(lock_token) {
+            let mut q = self.orchestrator_q.lock().await;
+            for item in items.into_iter().rev() { q.insert(0, item); }
+        }
+        Ok(())
     }
 }
 
