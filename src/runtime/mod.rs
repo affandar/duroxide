@@ -377,6 +377,14 @@ impl Runtime {
     async fn process_orchestration_item(self: &Arc<Self>, item: crate::providers::OrchestrationItem) {
         let instance = &item.instance;
         let lock_token = &item.lock_token;
+        
+                            debug!(
+                                instance,
+            "Processing orchestration item: messages={}, history_len={}, first_msg={:?}",
+            item.messages.len(),
+            item.history.len(),
+            item.messages.first().map(|m| std::mem::discriminant(m))
+        );
 
         // Check if instance is already terminal
         let is_terminal = item.history.iter().rev().any(|e| {
@@ -437,6 +445,7 @@ impl Runtime {
                         parent_id,
                         completion_messages,
                         &item.history,
+                        item.execution_id,
                         lock_token,
                     ).await
                 }
@@ -448,6 +457,7 @@ impl Runtime {
                         version.as_deref(),
                         completion_messages,
                         &item.history,
+                        item.execution_id,
                         lock_token,
                     ).await
                 }
@@ -455,13 +465,21 @@ impl Runtime {
             }
         } else if !completion_messages.is_empty() {
             // Only completion messages - process them
-            self.handle_completion_batch_atomic(instance, completion_messages, &item.history, lock_token).await
+            self.handle_completion_batch_atomic(instance, completion_messages, &item.history, item.execution_id, lock_token).await
         } else {
             // Empty effective batch - just ack
             (vec![], vec![], vec![], vec![])
         };
 
         // Atomically commit all changes
+                            debug!(
+                                instance,
+            "Acking orchestration item: history_delta={}, worker={}, timer={}, orch={}",
+            history_delta.len(),
+            worker_items.len(),
+            timer_items.len(),
+            orchestrator_items.len()
+        );
         let _ = self.history_store.ack_orchestration_item(
             lock_token,
             history_delta,
@@ -482,6 +500,7 @@ impl Runtime {
         parent_id: Option<u64>,
         completion_messages: Vec<OrchestratorMsg>,
         existing_history: &[Event],
+        execution_id: u64,
         _lock_token: &str,
     ) -> (Vec<Event>, Vec<WorkItem>, Vec<WorkItem>, Vec<WorkItem>) {
         let mut history_delta = Vec::new();
@@ -491,9 +510,26 @@ impl Runtime {
 
         // Create started event if this is a new instance
         if existing_history.is_empty() {
+            // Resolve version using registry policy if not explicitly provided
+            let (resolved_version, should_pin) = if let Some(v) = version {
+                (v.to_string(), true)
+            } else if let Some((v, _handler)) = self.orchestration_registry.resolve_for_start(orchestration).await {
+                (v.to_string(), true)
+            } else {
+                // Use 0.0.0 for unregistered orchestrations (won't be pinned)
+                ("0.0.0".to_string(), false)
+            };
+            
+            // Pin the resolved version only if we found a valid orchestration
+            if should_pin {
+                if let Ok(v) = semver::Version::parse(&resolved_version) {
+                    self.pinned_versions.lock().await.insert(instance.to_string(), v);
+                }
+            }
+            
             history_delta.push(Event::OrchestrationStarted {
                 name: orchestration.to_string(),
-                version: version.unwrap_or("1.0.0").to_string(),
+                version: resolved_version,
                 input: input.to_string(),
                 parent_instance: parent_instance.map(|s| s.to_string()),
                 parent_id,
@@ -504,8 +540,8 @@ impl Runtime {
         let full_history = [existing_history, &history_delta].concat();
         let (exec_history_delta, exec_worker_items, exec_timer_items, exec_orchestrator_items, _result) = self
             .clone()
-            .run_single_execution_atomic(instance, orchestration, full_history.clone(), completion_messages)
-            .await;
+            .run_single_execution_atomic(instance, orchestration, full_history.clone(), execution_id, completion_messages)
+                            .await;
 
         // Combine all changes
         history_delta.extend(exec_history_delta);
@@ -524,6 +560,7 @@ impl Runtime {
         version: Option<&str>,
         completion_messages: Vec<OrchestratorMsg>,
         _existing_history: &[Event],
+        execution_id: u64,
         _lock_token: &str,
     ) -> (Vec<Event>, Vec<WorkItem>, Vec<WorkItem>, Vec<WorkItem>) {
         let mut history_delta = Vec::new();
@@ -531,21 +568,45 @@ impl Runtime {
         let mut timer_items = Vec::new();
         let mut orchestrator_items = Vec::new();
 
-        // For ContinueAsNew, we start fresh but keep the instance name
+        // For ContinueAsNew, we're starting a new execution
+        // Resolve version using registry policy if not explicitly provided
+        let (resolved_version, should_pin) = if let Some(v) = version {
+            (v.to_string(), true)
+        } else if let Some((v, _handler)) = self.orchestration_registry.resolve_for_start(orchestration).await {
+            (v.to_string(), true)
+                    } else {
+                // Use 0.0.0 for unregistered orchestrations (won't be pinned)
+                ("0.0.0".to_string(), false)
+            };
+        
+        // Pin the resolved version for the new execution only if we found a valid orchestration
+        if should_pin {
+            if let Ok(v) = semver::Version::parse(&resolved_version) {
+                self.pinned_versions.lock().await.insert(instance.to_string(), v);
+            }
+        }
+        
+        // Add the OrchestrationStarted event for the new execution
         history_delta.push(Event::OrchestrationStarted {
             name: orchestration.to_string(),
-            version: version.unwrap_or("1.0.0").to_string(),
+            version: resolved_version,
             input: input.to_string(),
             parent_instance: None,
             parent_id: None,
         });
         
         debug!(instance, "ContinueAsNew creating new execution with input: {}", input);
+        debug!(
+            instance,
+            "Initial history for new execution: {:?}",
+            history_delta
+        );
 
+        // Run the new execution with just the OrchestrationStarted event
         let initial_history = history_delta.clone();
         let (exec_history_delta, exec_worker_items, exec_timer_items, exec_orchestrator_items, _result) = self
             .clone()
-            .run_single_execution_atomic(instance, orchestration, initial_history.clone(), completion_messages)
+            .run_single_execution_atomic(instance, orchestration, initial_history.clone(), execution_id, completion_messages)
             .await;
 
         // Combine all changes
@@ -562,6 +623,7 @@ impl Runtime {
         instance: &str,
         completion_messages: Vec<OrchestratorMsg>,
         existing_history: &[Event],
+        execution_id: u64,
         _lock_token: &str,
     ) -> (Vec<Event>, Vec<WorkItem>, Vec<WorkItem>, Vec<WorkItem>) {
         // Extract orchestration name from history
@@ -577,7 +639,7 @@ impl Runtime {
         let initial_history = existing_history.to_vec();
         let (history_delta, worker_items, timer_items, orchestrator_items, _result) = self
             .clone()
-            .run_single_execution_atomic(instance, &orchestration_name, initial_history.clone(), completion_messages)
+            .run_single_execution_atomic(instance, &orchestration_name, initial_history.clone(), execution_id, completion_messages)
             .await;
 
         (history_delta, worker_items, timer_items, orchestrator_items)
@@ -660,10 +722,10 @@ impl Runtime {
                     orchestration,
                     input,
                     version,
-                    parent_instance,
-                    parent_id,
-                } => {
-                    debug!(
+                                    parent_instance,
+                                    parent_id,
+                                } => {
+                                    debug!(
                         "StartOrchestration: {instance} {orchestration} {input} (version: {:?})",
                         version
                     );
@@ -672,8 +734,8 @@ impl Runtime {
                         &orchestration,
                         input,
                         version,
-                        parent_instance,
-                        parent_id,
+                                    parent_instance,
+                                    parent_id,
                         token,
                         completion_messages,
                     )
@@ -684,8 +746,8 @@ impl Runtime {
                     orchestration,
                     input,
                     version,
-                } => {
-                    debug!(
+                                } => {
+                                    debug!(
                         "ContinueAsNew: {instance} {orchestration} {input} (version: {:?})",
                         version
                     );
@@ -706,10 +768,10 @@ impl Runtime {
         } else if !completion_messages.is_empty() {
             // Only completion messages - process them
             self.handle_completion_batch(&instance, completion_messages, token).await;
-        } else {
+                } else {
             // Empty effective batch - just ack
             let _ = self.history_store.ack_orchestrator(&token).await;
-        }
+                }
     }
 
     fn start_work_dispatcher(self: Arc<Self>, activities: Arc<registry::ActivityRegistry>) -> JoinHandle<()> {
@@ -731,7 +793,7 @@ impl Runtime {
                                         let _ = self
                                             .history_store
                                                                                 .enqueue_orchestrator_work(
-                                        WorkItem::ActivityCompleted {
+                                                WorkItem::ActivityCompleted {
                                                     instance: instance.clone(),
                                                     execution_id,
                                                     id,
@@ -920,11 +982,11 @@ impl Runtime {
             // Determine version to use
             let (version_to_use, should_pin) = if let Some(v) = version {
                 (v, true)
-            } else if let Some(v) = self.pinned_versions.lock().await.get(instance).cloned() {
+                } else if let Some(v) = self.pinned_versions.lock().await.get(instance).cloned() {
                 (v.to_string(), false) // Already pinned
             } else if let Some((v, _handler)) = self.orchestration_registry.resolve_for_start(orchestration).await {
                 (v.to_string(), true)
-            } else {
+                } else {
                 // Don't pin if orchestration doesn't exist
                 ("0.0.0".to_string(), false)
             };
@@ -954,20 +1016,20 @@ impl Runtime {
             let history = started;
 
             // Run execution with the completion messages
-            let (_final_history, result) = self
-                .clone()
-                .run_single_execution(instance, orchestration, history, completion_messages)
-                .await;
+        let (_final_history, result) = self
+            .clone()
+            .run_single_execution(instance, orchestration, history, completion_messages)
+            .await;
 
-            // Log the result
-            match &result {
-                Ok(output) => {
-                    debug!(
-                        instance,
+        // Log the result
+        match &result {
+            Ok(output) => {
+                debug!(
+                    instance,
                         orchestration, output, "Orchestration execution with completions completed successfully"
-                    );
-                }
-                Err(error) => {
+                );
+            }
+            Err(error) => {
                     debug!(instance, orchestration, error, "Orchestration execution with completions failed");
                 }
             }
@@ -1000,58 +1062,58 @@ impl Runtime {
     // TODO : CR : this function is very similar to the above function, maybe refactor it.
     #[allow(dead_code)]
     async fn handle_completion_batch(self: &Arc<Self>, instance: &str, completion_messages: Vec<OrchestratorMsg>, token: String) {
-        // Get orchestration name and check if already completed
+            // Get orchestration name and check if already completed
         let history = self.history_store.read(instance).await;
 
         // TODO : CR : I don't think is_completed can ever be true here because we already checked it in the process_orchestrator_batch function
-        // Check if orchestration is already completed
-        let is_completed = history.iter().rev().any(|e| {
-            matches!(
-                e,
-                Event::OrchestrationCompleted { .. }
-                    | Event::OrchestrationFailed { .. }
-                    | Event::OrchestrationContinuedAsNew { .. }
-            )
-        });
+            // Check if orchestration is already completed
+            let is_completed = history.iter().rev().any(|e| {
+                matches!(
+                    e,
+                    Event::OrchestrationCompleted { .. }
+                        | Event::OrchestrationFailed { .. }
+                        | Event::OrchestrationContinuedAsNew { .. }
+                )
+            });
 
-        if is_completed {
+            if is_completed {
             debug!(instance, "ignoring completion batch for already completed orchestration");
             let _ = self.history_store.ack_orchestrator(&token).await;
-            return;
-        }
-
-        let orchestration_name = history.iter().rev().find_map(|e| match e {
-            Event::OrchestrationStarted { name, .. } => Some(name.clone()),
-            _ => None,
-        });
-
-        if let Some(orch_name) = orchestration_name {
-            // Run execution with the completion messages
-            let (_final_history, result) = self
-                .clone()
-                .run_single_execution(instance, &orch_name, history, completion_messages)
-                .await;
-
-            // Log the result
-            match &result {
-                Ok(output) => {
-                    debug!(
-                        instance,
-                        orch_name, output, "Completion batch execution completed successfully"
-                    );
-                }
-                Err(error) => {
-                    debug!(instance, orch_name, error, "Completion batch execution failed");
-                }
+                return;
             }
-            
+
+            let orchestration_name = history.iter().rev().find_map(|e| match e {
+                Event::OrchestrationStarted { name, .. } => Some(name.clone()),
+                _ => None,
+            });
+
+            if let Some(orch_name) = orchestration_name {
+            // Run execution with the completion messages
+                let (_final_history, result) = self
+                    .clone()
+                .run_single_execution(instance, &orch_name, history, completion_messages)
+                    .await;
+
+                // Log the result
+                match &result {
+                    Ok(output) => {
+                        debug!(
+                            instance,
+                        orch_name, output, "Completion batch execution completed successfully"
+                        );
+                    }
+                    Err(error) => {
+                    debug!(instance, orch_name, error, "Completion batch execution failed");
+                    }
+                }
+
             // Note: Acknowledgment is handled by OrchestrationTurn after persistence
             // We don't ack here to avoid double-ack
-        } else {
+            } else {
             error!(instance, "no OrchestrationStarted found in history for completion batch");
             let _ = self.history_store.abandon_orchestrator(&token).await;
+            }
         }
-    }
 
 
 }

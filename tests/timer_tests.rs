@@ -6,6 +6,7 @@ use rust_dtf::{Event, OrchestrationContext, OrchestrationRegistry};
 use std::sync::Arc as StdArc;
 
 mod common;
+use common::cleanup::cleanup_temp_dir;
 
 #[tokio::test]
 async fn single_timer_fires_fs() {
@@ -41,6 +42,9 @@ async fn single_timer_fires_fs() {
     assert!(hist.iter().any(|e| matches!(e, Event::TimerCreated { .. })));
     assert!(hist.iter().any(|e| matches!(e, Event::TimerFired { .. })));
     rt.shutdown().await;
+    
+    // Explicit cleanup to ensure temp directory is removed
+    cleanup_temp_dir(&td);
 }
 
 #[tokio::test]

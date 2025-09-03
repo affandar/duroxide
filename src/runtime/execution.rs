@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use tracing::{debug, error, warn};
+use tracing::{debug, error};
 
 use super::orchestration_turn::{OrchestrationTurn, TurnResult};
 use crate::{
@@ -67,11 +67,13 @@ impl Runtime {
         );
 
         // STAGE 1: EXECUTE ORCHESTRATION TURN
+        let execution_id = self.get_execution_id_for_instance(instance).await;
         let current_execution_history = Self::extract_current_execution_history(&history);
         let mut turn = OrchestrationTurn::new(
             instance.to_string(),
             orchestration_name.to_string(),
             turn_index,
+            execution_id,
             current_execution_history,
         );
 
@@ -521,6 +523,7 @@ impl Runtime {
         instance: &str,
         orchestration_name: &str,
         initial_history: Vec<Event>,
+        execution_id: u64,
         completion_messages: Vec<OrchestratorMsg>,
     ) -> (Vec<Event>, Vec<WorkItem>, Vec<WorkItem>, Vec<WorkItem>, Result<String, String>) {
         debug!(instance, orchestration_name, "🚀 Starting atomic single execution");
@@ -569,6 +572,7 @@ impl Runtime {
             instance.to_string(),
             orchestration_name.to_string(),
             0, // turn_index
+            execution_id,
             current_execution_history,
         );
 
@@ -583,18 +587,8 @@ impl Runtime {
         // Collect history delta from turn
         history_delta.extend(turn.history_delta().to_vec());
 
-        // Check for nondeterminism
-        if turn.has_unconsumed_completions() {
-            warn!(
-                instance = %instance,
-                unconsumed = ?turn.unconsumed_completions(),
-                "Nondeterministic execution: orchestration ended turn with unconsumed completions"
-            );
-            let error = "Nondeterministic execution detected".to_string();
-            let terminal_event = Event::OrchestrationFailed { error: error.clone() };
-            history_delta.push(terminal_event);
-            return (history_delta, worker_items, timer_items, orchestrator_items, Err(error));
-        }
+        // Check for nondeterminism is now handled by the turn execution itself
+        // The turn will return TurnResult::Failed with a specific error message
 
         // Handle turn result and collect work items
         let result = match turn_result {
@@ -623,8 +617,10 @@ impl Runtime {
                             });
                         }
                         crate::Action::StartSubOrchestration { id, name, version, instance: sub_instance, input } => {
+                            // Construct the full child instance name with parent prefix
+                            let child_full = format!("{}::{}", instance, sub_instance);
                             orchestrator_items.push(WorkItem::StartOrchestration {
-                                instance: sub_instance.clone(),
+                                instance: child_full,
                                 orchestration: name.clone(),
                                 input: input.clone(),
                                 version: version.clone(),
@@ -649,6 +645,55 @@ impl Runtime {
                 Ok(String::new())
             }
             TurnResult::Completed(output) => {
+                // Process any pending actions before completing
+                for action in turn.pending_actions() {
+                    match action {
+                        crate::Action::CallActivity { id, name, input } => {
+                            let execution_id = self.get_execution_id_for_instance(instance).await;
+                            worker_items.push(WorkItem::ActivityExecute {
+                                instance: instance.to_string(),
+                                execution_id,
+                                id: *id,
+                                name: name.clone(),
+                                input: input.clone(),
+                            });
+                        }
+                        crate::Action::CreateTimer { id, delay_ms } => {
+                            let execution_id = self.get_execution_id_for_instance(instance).await;
+                            let fire_at_ms = Self::calculate_timer_fire_time(&history, *delay_ms);
+                            timer_items.push(WorkItem::TimerSchedule {
+                                instance: instance.to_string(),
+                                execution_id,
+                                id: *id,
+                                fire_at_ms,
+                            });
+                        }
+                        crate::Action::StartSubOrchestration { id, name, version, instance: sub_instance, input } => {
+                            // Construct the full child instance name with parent prefix
+                            let child_full = format!("{}::{}", instance, sub_instance);
+                            orchestrator_items.push(WorkItem::StartOrchestration {
+                                instance: child_full,
+                                orchestration: name.clone(),
+                                input: input.clone(),
+                                version: version.clone(),
+                                parent_instance: Some(instance.to_string()),
+                                parent_id: Some(*id),
+                            });
+                        }
+                        crate::Action::StartOrchestrationDetached { id: _, name, version, instance: sub_instance, input } => {
+                            orchestrator_items.push(WorkItem::StartOrchestration {
+                                instance: sub_instance.clone(),
+                                orchestration: name.clone(),
+                                input: input.clone(),
+                                version: version.clone(),
+                                parent_instance: None,
+                                parent_id: None,
+                            });
+                        }
+                        _ => {} // Other actions don't generate work items
+                    }
+                }
+
                 // Add completion event
                 let terminal_event = Event::OrchestrationCompleted { output: output.clone() };
                 history_delta.push(terminal_event);
@@ -682,28 +727,34 @@ impl Runtime {
 
                 Err(error)
             }
-            TurnResult::ContinueAsNew { input, .. } => {
-                // Add continue as new event
-                let continued_event = Event::OrchestrationContinuedAsNew {
-                    input: input.clone(),
-                };
-                history_delta.push(continued_event);
-
+            TurnResult::ContinueAsNew { input, version } => {
+                // For atomic execution, we don't add the ContinuedAsNew event here
+                // It will be handled by the provider when transitioning executions
+                
                 // Enqueue continue as new work item
                 orchestrator_items.push(WorkItem::ContinueAsNew {
                     instance: instance.to_string(),
                     orchestration: orchestration_name.to_string(),
                     input: input.clone(),
-                    version: None, // TODO: Handle version in ContinueAsNew
+                    version: version.clone(),
                 });
 
                 Ok("continued as new".to_string())
             }
             TurnResult::Cancelled(reason) => {
                 // Add cancellation as failure event
-                let error = format!("Cancelled: {}", reason);
+                let error = format!("canceled: {}", reason);
                 let terminal_event = Event::OrchestrationFailed { error: error.clone() };
                 history_delta.push(terminal_event);
+
+                // Propagate cancellation to children
+                let full_history = {
+                    let mut h = history.clone();
+                    h.extend(history_delta.iter().cloned());
+                    h
+                };
+                let cancel_work_items = self.get_child_cancellation_work_items(instance, &full_history).await;
+                orchestrator_items.extend(cancel_work_items);
 
                 // Notify parent if this is a sub-orchestration
                 if let Some((parent_instance, parent_id)) = parent_link {
@@ -719,7 +770,51 @@ impl Runtime {
             }
         };
 
+        debug!(
+            instance,
+            "run_single_execution_atomic complete: history_delta={}, worker={}, timer={}, orch={}", 
+            history_delta.len(), 
+            worker_items.len(), 
+            timer_items.len(), 
+            orchestrator_items.len()
+        );
         (history_delta, worker_items, timer_items, orchestrator_items, result)
+    }
+
+    /// Get work items to cancel child sub-orchestrations
+    async fn get_child_cancellation_work_items(&self, instance: &str, history: &[Event]) -> Vec<WorkItem> {
+        // Find all scheduled sub-orchestrations
+        let scheduled_children: Vec<(u64, String)> = history
+            .iter()
+            .filter_map(|e| match e {
+                Event::SubOrchestrationScheduled {
+                    id, instance: child, ..
+                } => Some((*id, child.clone())),
+                _ => None,
+            })
+            .collect();
+
+        // Find all completed sub-orchestrations
+        let completed_ids: std::collections::HashSet<u64> = history
+            .iter()
+            .filter_map(|e| match e {
+                Event::SubOrchestrationCompleted { id, .. } | Event::SubOrchestrationFailed { id, .. } => Some(*id),
+                _ => None,
+            })
+            .collect();
+
+        // Create cancel work items for uncompleted children
+        let mut cancel_items = Vec::new();
+        for (id, child_suffix) in scheduled_children {
+            if !completed_ids.contains(&id) {
+                let child_full = format!("{}::{}", instance, child_suffix);
+                cancel_items.push(WorkItem::CancelInstance {
+                    instance: child_full,
+                    reason: "parent canceled".to_string(),
+                });
+            }
+        }
+        cancel_items
     }
 
     /// Calculate timer fire time based on history

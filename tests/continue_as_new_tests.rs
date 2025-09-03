@@ -76,7 +76,6 @@ async fn continue_as_new_multiexec_fs() {
     assert_eq!(current_hist, latest_hist);
 
     let e1 = store.read_with_execution("inst-can-1", 1).await;
-    println!("Execution 1 history: {:?}", e1);
     assert!(
         e1.iter()
             .any(|e| matches!(e, Event::OrchestrationStarted { input, .. } if input == "0"))

@@ -381,7 +381,22 @@ impl HistoryStore for InMemoryHistoryStore {
             _ => return None,
         };
         
-        // Read the history for this instance
+        // Special handling for ContinueAsNew - it represents a transition to a new execution
+        if let Some(WorkItem::ContinueAsNew { orchestration, input: _, version, .. }) = messages.first() {
+            // For in-memory, we just use execution_id = 1 for simplicity
+            // The key point is that history starts fresh
+            return Some(super::OrchestrationItem {
+                instance: instance.clone(),
+                orchestration_name: orchestration.clone(),
+                execution_id: 1, // In-memory provider doesn't track execution IDs
+                version: version.as_deref().unwrap_or("1.0.0").to_string(),
+                history: vec![], // New execution starts with empty history
+                messages, // Keep all messages including ContinueAsNew
+                lock_token,
+            });
+        }
+        
+        // For all other cases, read the current history
         let history = self.read(&instance).await;
         
         // If this is a new instance (StartOrchestration), create it
@@ -395,7 +410,7 @@ impl HistoryStore for InMemoryHistoryStore {
         }) {
             match event {
                 Event::OrchestrationStarted { name, version, .. } => {
-                    (name.clone(), version.clone(), self.latest_execution_id(&instance).await.unwrap_or(1))
+                    (name.clone(), version.clone(), 1) // In-memory uses execution_id = 1
                 }
                 _ => return None,
             }
@@ -452,13 +467,43 @@ impl HistoryStore for InMemoryHistoryStore {
             }
         };
         
+        // Check if this was a ContinueAsNew transition
+        let is_continue_as_new = {
+            let invisible = self.invisible_orchestrator.lock().await;
+            invisible.get(lock_token)
+                .and_then(|batch| batch.first())
+                .map_or(false, |item| matches!(item, WorkItem::ContinueAsNew { .. }))
+        };
+        
         // Perform all operations with best-effort atomicity
         let mut errors = Vec::new();
         
         // 1. Append history delta
         if !history_delta.is_empty() {
-            if let Err(e) = self.append(&instance, history_delta).await {
-                errors.push(format!("Failed to append history: {}", e));
+            if is_continue_as_new {
+                // For ContinueAsNew in in-memory provider, we replace the history
+                // First add the ContinuedAsNew event to existing history
+                let mut current_history = self.read(&instance).await;
+                if let Some(WorkItem::ContinueAsNew { input, .. }) = {
+                    let invisible = self.invisible_orchestrator.lock().await;
+                    invisible.get(lock_token).and_then(|batch| batch.first()).cloned()
+                } {
+                    current_history.push(Event::OrchestrationContinuedAsNew { input });
+                }
+                
+                // Now replace with the new execution's history
+                // In-memory provider stores all executions, so we append the new one
+                let mut store = self.inner.lock().await;
+                let executions = store.entry(instance.clone()).or_insert_with(Vec::new);
+                // Add the old history with ContinuedAsNew event as the last execution
+                executions.push(current_history);
+                // Add the new execution's history
+                executions.push(history_delta);
+            } else {
+                // Normal append
+                if let Err(e) = self.append(&instance, history_delta).await {
+                    errors.push(format!("Failed to append history: {}", e));
+                }
             }
         }
         

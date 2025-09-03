@@ -31,6 +31,8 @@ pub struct OrchestrationTurn {
     orchestration_name: String,
     /// Current turn index
     turn_index: u64,
+    /// Current execution ID
+    execution_id: u64,
     /// Incoming completion messages mapped and ordered
     completion_map: CompletionMap,
     /// Acknowledgment tokens to batch-ack after persistence
@@ -45,11 +47,12 @@ pub struct OrchestrationTurn {
 
 impl OrchestrationTurn {
     /// Create a new orchestration turn
-    pub fn new(instance: String, orchestration_name: String, turn_index: u64, baseline_history: Vec<Event>) -> Self {
+    pub fn new(instance: String, orchestration_name: String, turn_index: u64, execution_id: u64, baseline_history: Vec<Event>) -> Self {
         Self {
             instance,
             orchestration_name,
             turn_index,
+            execution_id,
             completion_map: CompletionMap::new(),
             ack_tokens: Vec::new(),
             history_delta: Vec::new(),
@@ -113,19 +116,40 @@ impl OrchestrationTurn {
                     
                     // Check if completion belongs to current execution
                     if !self.is_completion_for_current_execution(&msg) {
+                        // Check if this is a trace activity completion
+                        let is_trace_activity = match &msg {
+                            OrchestratorMsg::ActivityCompleted { id, .. } |
+                            OrchestratorMsg::ActivityFailed { id, .. } => {
+                                self.is_trace_activity(*id)
+                            }
+                            _ => false
+                        };
+                        
                         if self.has_continue_as_new_in_history() {
                             // Expected behavior - warn and ignore
-                            warn!(
-                                instance = %self.instance,
-                                "ignoring completion from previous execution (expected with continue_as_new)"
-                            );
+                            if is_trace_activity {
+                                debug!(
+                                    instance = %self.instance,
+                                    "ignoring trace activity completion from previous execution (expected with continue_as_new)"
+                                );
+                            } else {
+                                warn!(
+                                    instance = %self.instance,
+                                    "ignoring completion from previous execution (expected with continue_as_new)"
+                                );
+                            }
                         } else {
-                            // Unexpected - this is nondeterminism
-                            error!(
-                                instance = %self.instance,
-                                "nondeterministic: completion from different execution (investigate orchestration logic)"
-                            );
-                            // Still ack the message but don't process it
+                            if is_trace_activity {
+                                debug!(
+                                    instance = %self.instance,
+                                    "trace activity completion from different execution (benign - trace is fire-and-forget)"
+                                );
+                            } else {
+                                warn!(
+                                    instance = %self.instance,
+                                    "completion from different execution (investigate orchestration logic, may be nondeterministic)"
+                                );
+                            }
                         }
                         Some(token)
                     } else if self.is_completion_already_in_history(&msg) {
@@ -171,20 +195,7 @@ impl OrchestrationTurn {
 
     /// Get the current execution ID from the baseline history
     fn get_current_execution_id(&self) -> u64 {
-        // Look for the most recent OrchestrationStarted event to get execution ID
-        // If not found, default to 1 for backward compatibility
-        self.baseline_history
-            .iter()
-            .rev()
-            .find_map(|e| match e {
-                Event::OrchestrationStarted { .. } => {
-                    // For now, we'll extract execution ID from the history store
-                    // This is a temporary solution until we have execution ID in the event
-                    Some(1) // Default to 1 for now
-                }
-                _ => None,
-            })
-            .unwrap_or(1)
+        self.execution_id
     }
 
     /// Check if a completion message belongs to the current execution
@@ -413,6 +424,21 @@ impl OrchestrationTurn {
         // If no specific mismatch found, provide the generic message
         format!("nondeterministic: unconsumed completions: {:?}", unconsumed)
     }
+    
+    /// Check if an activity ID corresponds to a trace activity
+    fn is_trace_activity(&self, activity_id: u64) -> bool {
+        // Look in both baseline history and history delta for the activity
+        let all_history = self.baseline_history.iter().chain(self.history_delta.iter());
+        
+        for event in all_history {
+            if let Event::ActivityScheduled { id, name, .. } = event {
+                if id == &activity_id && name == crate::SYSTEM_TRACE_ACTIVITY {
+                    return true;
+                }
+            }
+        }
+        false
+    }
 }
 
 /// Convert completion kind to string for error messages
@@ -609,6 +635,7 @@ mod tests {
             "test-instance".to_string(),
             "test-orchestration".to_string(),
             1,
+            1, // execution_id
             vec![Event::OrchestrationStarted {
                 name: "test-orchestration".to_string(),
                 version: "1.0.0".to_string(),

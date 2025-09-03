@@ -1,6 +1,7 @@
 use serde_json;
 use std::path::{Path, PathBuf};
 use tokio::{fs, io::AsyncWriteExt};
+use tracing::debug;
 
 use super::{HistoryStore, WorkItem};
 use crate::Event;
@@ -68,6 +69,26 @@ impl FsHistoryStore {
     }
     fn timer_lock_path(&self, token: &str) -> PathBuf {
         self.timer_lock_dir().join(format!("{token}.lock"))
+    }
+    
+    /// Create a new execution with specific history events
+    async fn create_new_execution_with_history(
+        &self,
+        instance: &str,
+        execution_id: u64,
+        history: Vec<Event>,
+    ) -> Result<(), String> {
+        fs::create_dir_all(self.inst_root(instance))
+            .await
+            .map_err(|e| e.to_string())?;
+        let path = self.exec_path(instance, execution_id);
+        let _ = fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&path)
+            .await
+            .map_err(|e| e.to_string())?;
+        self.append_with_execution(instance, execution_id, history).await
     }
 }
 
@@ -819,8 +840,27 @@ impl HistoryStore for FsHistoryStore {
             _ => return None,
         };
         
-        // Read the history for this instance
-        let history = self.read(&instance).await;
+        // Special handling for ContinueAsNew - it represents a transition to a new execution
+        if let Some(WorkItem::ContinueAsNew { orchestration, input: _, version, .. }) = messages.first() {
+            // Get the next execution ID
+            let next_exec_id = self.latest_execution_id(&instance).await.unwrap_or(0) + 1;
+            
+            // Return an item that represents the new execution to be created
+            // The history is empty because this is a new execution
+            return Some(super::OrchestrationItem {
+                instance: instance.clone(),
+                orchestration_name: orchestration.clone(),
+                execution_id: next_exec_id,
+                version: version.as_deref().unwrap_or("1.0.0").to_string(),
+                history: vec![], // New execution starts with empty history
+                messages, // Keep all messages including ContinueAsNew
+                lock_token,
+            });
+        }
+        
+        // For all other cases, read the current execution's history
+        let execution_id = self.latest_execution_id(&instance).await.unwrap_or(1);
+        let history = self.read_with_execution(&instance, execution_id).await;
         
         // If this is a new instance (StartOrchestration), create it
         if history.is_empty() && messages.iter().any(|m| matches!(m, WorkItem::StartOrchestration { .. })) {
@@ -828,12 +868,12 @@ impl HistoryStore for FsHistoryStore {
         }
         
         // Extract orchestration metadata from history
-        let (orchestration_name, version, execution_id) = if let Some(event) = history.iter().find(|e| {
+        let (orchestration_name, version) = if let Some(event) = history.iter().find(|e| {
             matches!(e, Event::OrchestrationStarted { .. })
         }) {
             match event {
                 Event::OrchestrationStarted { name, version, .. } => {
-                    (name.clone(), version.clone(), self.latest_execution_id(&instance).await.unwrap_or(1))
+                    (name.clone(), version.clone())
                 }
                 _ => return None,
             }
@@ -842,7 +882,7 @@ impl HistoryStore for FsHistoryStore {
             if let Some(WorkItem::StartOrchestration { orchestration, version, .. }) = messages.iter().find(|m| {
                 matches!(m, WorkItem::StartOrchestration { .. })
             }) {
-                (orchestration.clone(), version.clone().unwrap_or_else(|| "1.0.0".to_string()), 1)
+                (orchestration.clone(), version.clone().unwrap_or_else(|| "1.0.0".to_string()))
             } else {
                 return None;
             }
@@ -894,12 +934,68 @@ impl HistoryStore for FsHistoryStore {
             None => return Err("Empty batch in lock file".to_string()),
         };
         
+        // Check if this was a ContinueAsNew transition
+        let is_continue_as_new = batch.first().map_or(false, |item| {
+            matches!(item, WorkItem::ContinueAsNew { .. })
+        });
+        
+        debug!(
+            "ack_orchestration_item: instance={}, is_continue_as_new={}, history_delta_len={}, orchestrator_items_len={}",
+            instance, is_continue_as_new, history_delta.len(), orchestrator_items.len()
+        );
+        
         // Perform all operations with best-effort atomicity
         let mut errors = Vec::new();
         
-        // 1. Append history delta
-        if !history_delta.is_empty() {
-            if let Err(e) = self.append(instance, history_delta).await {
+        // 1. Handle history delta - special case for ContinueAsNew
+        if is_continue_as_new {
+            // For ContinueAsNew, we need to handle the execution transition
+            // First, check if we need to close the previous execution
+            let current_exec_id = self.latest_execution_id(instance).await.unwrap_or(0);
+            
+            // First, close the previous execution with ContinuedAsNew event
+            if current_exec_id > 0 {
+                if let Some(WorkItem::ContinueAsNew { input, .. }) = batch.first() {
+                    let close_event = vec![Event::OrchestrationContinuedAsNew { 
+                        input: input.clone() 
+                    }];
+                    if let Err(e) = self.append_with_execution(instance, current_exec_id, close_event).await {
+                        errors.push(format!("Failed to close previous execution: {}", e));
+                    }
+                }
+            }
+            
+            // Create the new execution with the history delta
+            // Even if history_delta is empty, we still need to create the execution
+            let new_exec_id = current_exec_id + 1;
+            debug!(
+                "Creating new execution {} for instance {} with history_delta_len={}",
+                new_exec_id, instance, history_delta.len()
+            );
+            if !history_delta.is_empty() {
+                if let Err(e) = self.create_new_execution_with_history(instance, new_exec_id, history_delta).await {
+                    errors.push(format!("Failed to create new execution: {}", e));
+                }
+            } else {
+                // History delta is empty - this shouldn't happen for ContinueAsNew
+                // but we'll handle it by creating an execution with just OrchestrationStarted
+                if let Some(WorkItem::ContinueAsNew { orchestration, input, version, .. }) = batch.first() {
+                    if let Err(e) = self.create_new_execution(
+                        instance,
+                        orchestration,
+                        version.as_deref().unwrap_or("1.0.0"),
+                        input,
+                        None,
+                        None,
+                    ).await {
+                        errors.push(format!("Failed to create new execution: {}", e));
+                    }
+                }
+            }
+        } else if !history_delta.is_empty() {
+            // Normal append for current execution
+            let exec_id = self.latest_execution_id(instance).await.unwrap_or(1);
+            if let Err(e) = self.append_with_execution(instance, exec_id, history_delta).await {
                 errors.push(format!("Failed to append history: {}", e));
             }
         }

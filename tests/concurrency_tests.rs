@@ -243,11 +243,11 @@ async fn concurrent_orchestrations_same_activities_with(store: StdArc<dyn Histor
 
     let rt =
         runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
-    let h1 = rt
+    let _h1 = rt
         .clone()
         .start_orchestration("inst-same-acts-1", "ProcOrchestration1", "")
         .await;
-    let h2 = rt
+    let _h2 = rt
         .clone()
         .start_orchestration("inst-same-acts-2", "ProcOrchestration2", "")
         .await;
