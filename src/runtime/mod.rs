@@ -77,7 +77,7 @@ pub use router::{InstanceRouter, OrchestratorMsg};
 pub struct Runtime {
     // removed: in-proc activity channel and router
     joins: Mutex<Vec<JoinHandle<()>>>,
-    instance_joins: Mutex<Vec<JoinHandle<()>>>,
+    // instance_joins removed with spawn_instance_to_completion
     history_store: Arc<dyn HistoryStore>,
 
     // pending_starts removed
@@ -333,7 +333,6 @@ impl Runtime {
         // start request queue + worker
         let runtime = Arc::new(Self {
             joins: Mutex::new(joins),
-            instance_joins: Mutex::new(Vec::new()),
             history_store,
 
             orchestration_registry,
@@ -829,33 +828,9 @@ impl Runtime {
         }
     }
 
-    /// Await completion of all outstanding spawned orchestration instances.
-    pub async fn drain_instances(self: Arc<Self>) {
-        let mut joins = self.instance_joins.lock().await;
-        while let Some(j) = joins.pop() {
-            let _ = j.await;
-        }
-    }
+    // drain_instances removed with spawn_instance_to_completion
 
-    /// Spawn an instance and return a handle that resolves to its history
-    /// and output when complete.
-    pub fn spawn_instance_to_completion(
-        self: Arc<Self>,
-        instance: &str,
-        orchestration_name: &str,
-        initial_history: Vec<Event>,
-        completion_messages: Vec<OrchestratorMsg>,
-    ) -> JoinHandle<(Vec<Event>, Result<String, String>)> {
-        let this_for_task = self.clone();
-        let inst = instance.to_string();
-        let orch_name = orchestration_name.to_string();
-
-        tokio::spawn(async move {
-            this_for_task
-                .run_single_execution(&inst, &orch_name, initial_history, completion_messages)
-                .await
-        })
-    }
+    // spawn_instance_to_completion removed; atomic path is the only execution path
 }
 
 impl Runtime {

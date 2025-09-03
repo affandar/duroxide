@@ -2,11 +2,11 @@
 name = "rust-dtf"
 version = "0.1.0"
 edition = "2024"
-description = "Mini deterministic task framework: orchestration core for durable-style workflows"
-license = "MIT OR Apache-2.0"
-repository = "https://github.com/your-org/rust-dtf"
-keywords = ["durable", "workflow", "orchestration", "deterministic"]
-categories = ["asynchronous", "concurrency"]
+description = "Lightweight durable execution framework to write code based workflows - mostly a port of .Net's durable task framework"
+license = "MIT"
+repository = "https://github.com/affandar/rust-dtf"
+keywords = ["durable", "execution", "workflow", "orchestration", "deterministic", "replay"]
+categories = ["asynchronous", "concurrency", "workflow", "durable"]
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }
