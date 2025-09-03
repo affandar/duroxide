@@ -29,47 +29,8 @@ impl HistoryStore for InMemoryHistoryStore {
             None => Vec::new(),
         }
     }
-    async fn append(&self, instance: &str, new_events: Vec<Event>) -> Result<(), String> {
-        self.append_with_execution(
-            instance,
-            self.latest_execution_id(instance).await.unwrap_or(1),
-            new_events,
-        )
-        .await
-    }
-    async fn reset(&self) {
-        self.inner.lock().await.clear();
-    }
     async fn list_instances(&self) -> Vec<String> {
         self.inner.lock().await.keys().cloned().collect()
-    }
-    async fn dump_all_pretty(&self) -> String {
-        let g = self.inner.lock().await;
-        let mut out = String::new();
-        for (inst, events) in g.iter() {
-            out.push_str(&format!("instance={inst}\n"));
-            for e in events {
-                out.push_str(&format!("  {e:#?}\n"));
-            }
-        }
-        out
-    }
-
-    async fn create_instance(&self, instance: &str) -> Result<(), String> {
-        let mut g = self.inner.lock().await;
-        if g.contains_key(instance) {
-            return Err(format!("instance already exists: {instance}"));
-        }
-        g.insert(instance.to_string(), vec![Vec::new()]);
-        Ok(())
-    }
-
-    async fn remove_instance(&self, instance: &str) -> Result<(), String> {
-        let mut g = self.inner.lock().await;
-        if g.remove(instance).is_none() {
-            return Err(format!("instance not found: {instance}"));
-        }
-        Ok(())
     }
 
     // ===== Orchestrator Queue Methods =====
@@ -177,13 +138,7 @@ impl HistoryStore for InMemoryHistoryStore {
         Ok(())
     }
 
-    async fn abandon_worker(&self, token: &str) -> Result<(), String> {
-        if let Some(item) = self.invisible_worker.lock().await.remove(token) {
-            let mut q = self.worker_q.lock().await;
-            q.insert(0, item);
-        }
-        Ok(())
-    }
+
 
     // ===== Timer Queue Methods =====
 
@@ -219,13 +174,7 @@ impl HistoryStore for InMemoryHistoryStore {
         Ok(())
     }
 
-    async fn abandon_timer(&self, token: &str) -> Result<(), String> {
-        if let Some(item) = self.invisible_timer.lock().await.remove(token) {
-            let mut q = self.timer_q.lock().await;
-            q.insert(0, item);
-        }
-        Ok(())
-    }
+
 
     // metadata APIs removed
 
@@ -337,9 +286,7 @@ impl HistoryStore for InMemoryHistoryStore {
         parent_id: Option<u64>,
     ) -> Result<u64, String> {
         let mut g = self.inner.lock().await;
-        let execs = g
-            .get_mut(instance)
-            .ok_or_else(|| format!("instance not found: {instance}"))?;
+        let execs = g.entry(instance.to_string()).or_insert_with(Vec::new);
         execs.push(vec![Event::OrchestrationStarted {
             name: orchestration.to_string(),
             version: version.to_string(),
@@ -439,7 +386,7 @@ impl HistoryStore for InMemoryHistoryStore {
                 .iter()
                 .any(|m| matches!(m, WorkItem::StartOrchestration { .. }))
         {
-            let _ = self.create_instance(&instance).await;
+            let _ = self.provider_create_instance(&instance).await;
         }
 
         // Extract orchestration metadata from history
@@ -547,7 +494,7 @@ impl HistoryStore for InMemoryHistoryStore {
                 executions.push(history_delta);
             } else {
                 // Normal append
-                if let Err(e) = self.append(&instance, history_delta).await {
+                if let Err(e) = self.provider_append(&instance, history_delta).await {
                     errors.push(format!("Failed to append history: {}", e));
                 }
             }
@@ -601,6 +548,25 @@ impl HistoryStore for InMemoryHistoryStore {
             let mut q = self.orchestrator_q.lock().await;
             for item in items.into_iter().rev() { q.insert(0, item); }
         }
+        Ok(())
+    }
+}
+
+impl InMemoryHistoryStore {
+    async fn provider_append(&self, instance: &str, new_events: Vec<Event>) -> Result<(), String> {
+        self.append_with_execution(
+            instance,
+            self.latest_execution_id(instance).await.unwrap_or(1),
+            new_events,
+        )
+        .await
+    }
+    async fn provider_create_instance(&self, instance: &str) -> Result<(), String> {
+        let mut g = self.inner.lock().await;
+        if g.contains_key(instance) {
+            return Err(format!("instance already exists: {instance}"));
+        }
+        g.insert(instance.to_string(), vec![Vec::new()]);
         Ok(())
     }
 }

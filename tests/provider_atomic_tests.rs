@@ -9,8 +9,7 @@ async fn test_fetch_orchestration_item_new_instance() {
     let td = tempfile::tempdir().unwrap();
     let store: Arc<dyn HistoryStore> = Arc::new(FsHistoryStore::new(td.path(), true));
 
-    // Create instance and enqueue start work
-    store.create_instance("test-instance").await.unwrap();
+    // Enqueue start work (provider will create instance lazily on fetch)
     store
         .enqueue_orchestrator_work(WorkItem::StartOrchestration {
             instance: "test-instance".to_string(),
@@ -43,29 +42,31 @@ async fn test_fetch_orchestration_item_existing_instance() {
     let td = tempfile::tempdir().unwrap();
     let store: Arc<dyn HistoryStore> = Arc::new(FsHistoryStore::new(td.path(), true));
 
-    // Create instance with some history
-    store.create_instance("test-instance").await.unwrap();
-    store
-        .append(
-            "test-instance",
-            vec![
-                Event::OrchestrationStarted {
-                    name: "TestOrch".to_string(),
-                    version: "1.0.0".to_string(),
-                    input: "test-input".to_string(),
-                    parent_instance: None,
-                    parent_id: None,
-                },
-                Event::ActivityScheduled {
-                    id: 1,
-                    name: "TestActivity".to_string(),
-                    input: "activity-input".to_string(),
-                    execution_id: 1,
-                },
-            ],
-        )
-        .await
-        .unwrap();
+    // Seed instance history using provider APIs: create_new_execution then append_with_execution
+    rust_dtf::providers::HistoryStore::create_new_execution(
+        store.as_ref(),
+        "test-instance",
+        "TestOrch",
+        "1.0.0",
+        "test-input",
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    rust_dtf::providers::HistoryStore::append_with_execution(
+        store.as_ref(),
+        "test-instance",
+        1,
+        vec![Event::ActivityScheduled {
+            id: 1,
+            name: "TestActivity".to_string(),
+            input: "activity-input".to_string(),
+            execution_id: 1,
+        }],
+    )
+    .await
+    .unwrap();
 
     // Enqueue completion
     store
@@ -108,8 +109,7 @@ async fn test_ack_orchestration_item_atomic() {
     let td = tempfile::tempdir().unwrap();
     let store: Arc<dyn HistoryStore> = Arc::new(FsHistoryStore::new(td.path(), true));
 
-    // Setup
-    store.create_instance("test-instance").await.unwrap();
+    // Setup: enqueue start work; provider will create instance lazily
     store
         .enqueue_orchestrator_work(WorkItem::StartOrchestration {
             instance: "test-instance".to_string(),
@@ -190,8 +190,7 @@ async fn test_abandon_orchestration_item() {
     let td = tempfile::tempdir().unwrap();
     let store: Arc<dyn HistoryStore> = Arc::new(FsHistoryStore::new(td.path(), true));
 
-    // Setup
-    store.create_instance("test-instance").await.unwrap();
+    // Setup: enqueue start work; provider will create instance lazily
     store
         .enqueue_orchestrator_work(WorkItem::StartOrchestration {
             instance: "test-instance".to_string(),
@@ -225,8 +224,7 @@ async fn test_abandon_orchestration_item_with_delay() {
     let td = tempfile::tempdir().unwrap();
     let store: Arc<dyn HistoryStore> = Arc::new(FsHistoryStore::new(td.path(), true));
 
-    // Setup
-    store.create_instance("test-instance").await.unwrap();
+    // Setup: enqueue start work; provider will create instance lazily
     store
         .enqueue_orchestrator_work(WorkItem::StartOrchestration {
             instance: "test-instance".to_string(),
@@ -267,8 +265,7 @@ async fn test_abandon_orchestration_item_error_handling() {
 async fn test_in_memory_provider_atomic_operations() {
     let store: Arc<dyn HistoryStore> = Arc::new(InMemoryHistoryStore::default());
 
-    // Create instance and enqueue work
-    store.create_instance("test-instance").await.unwrap();
+    // Enqueue work (in-memory will lazily create instance on fetch)
     store
         .enqueue_orchestrator_work(WorkItem::StartOrchestration {
             instance: "test-instance".to_string(),

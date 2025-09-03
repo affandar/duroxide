@@ -23,5 +23,4 @@ semver = "1"
 [workspace]
 members = [
     ".",
-    "apps/hello-cli",
 ]

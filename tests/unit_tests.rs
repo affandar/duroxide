@@ -112,64 +112,7 @@ async fn deterministic_replay_activity_only() {
     rt.shutdown().await;
 }
 
-// 4) HistoryStore admin APIs (in-memory)
-#[tokio::test]
-async fn history_store_admin_apis() {
-    let tmp = tempfile::tempdir().unwrap();
-    let store = FsHistoryStore::new(tmp.path(), true);
-    store.create_instance("i1").await.unwrap();
-    store.create_instance("i2").await.unwrap();
-    store
-        .append(
-            "i1",
-            vec![Event::TimerCreated {
-                id: 1,
-                fire_at_ms: 10,
-                execution_id: 1,
-            }],
-        )
-        .await
-        .unwrap();
-    store
-        .append(
-            "i2",
-            vec![Event::ExternalSubscribed {
-                id: 1,
-                name: "Go".into(),
-            }],
-        )
-        .await
-        .unwrap();
-    let instances = store.list_instances().await;
-    assert!(instances.contains(&"i1".into()) && instances.contains(&"i2".into()));
-    let dump = store.dump_all_pretty().await;
-    assert!(dump.contains("instance=i1") && dump.contains("instance=i2"));
-    store.reset().await;
-    assert!(store.list_instances().await.is_empty());
-}
-
-#[tokio::test]
-async fn providers_create_remove_and_duplicate_checks() {
-    // In-memory provider create/remove
-    let mem = InMemoryHistoryStore::default();
-    mem.create_instance("dup").await.unwrap();
-    // Duplicate create should error
-    assert!(mem.create_instance("dup").await.is_err());
-    // Append to non-existent should fail
-    assert!(mem.append("missing", vec![]).await.is_err());
-    // Remove existing ok; remove missing should error
-    mem.remove_instance("dup").await.unwrap();
-    assert!(mem.remove_instance("dup").await.is_err());
-
-    // Filesystem provider create/remove
-    let tmp = tempfile::tempdir().unwrap();
-    let fs = rust_dtf::providers::fs::FsHistoryStore::new(tmp.path(), true);
-    fs.create_instance("i1").await.unwrap();
-    assert!(fs.create_instance("i1").await.is_err());
-    assert!(fs.append("missing", vec![]).await.is_err());
-    fs.remove_instance("i1").await.unwrap();
-    assert!(fs.remove_instance("i1").await.is_err());
-}
+// Provider admin APIs moved to provider-local tests; runtime tests should use runtime-only APIs.
 
 #[tokio::test]
 async fn runtime_duplicate_orchestration_deduped_single_execution() {
@@ -353,21 +296,14 @@ async fn providers_fs_multi_execution_persistence_and_latest_read() {
     let tmp = tempfile::tempdir().unwrap();
     let fs = FsHistoryStore::new(tmp.path(), true);
 
-    // Create instance and write execution #1 with CAN terminal
-    fs.create_instance("pfs").await.unwrap();
+    // Create execution #1 and append CAN terminal
+    fs.create_new_execution("pfs", "O", "0.0.0", "0", None, None)
+        .await
+        .unwrap();
     fs.append_with_execution(
         "pfs",
         1,
-        vec![
-            Event::OrchestrationStarted {
-                name: "O".into(),
-                version: "0.0.0".into(),
-                input: "0".into(),
-                parent_instance: None,
-                parent_id: None,
-            },
-            Event::OrchestrationContinuedAsNew { input: "1".into() },
-        ],
+        vec![Event::OrchestrationContinuedAsNew { input: "1".into() }],
     )
     .await
     .unwrap();
@@ -401,20 +337,13 @@ async fn providers_fs_multi_execution_persistence_and_latest_read() {
 async fn providers_inmem_multi_execution_persistence_and_latest_read() {
     let mem = InMemoryHistoryStore::default();
 
-    mem.create_instance("pmem").await.unwrap();
+    mem.create_new_execution("pmem", "O", "0.0.0", "0", None, None)
+        .await
+        .unwrap();
     mem.append_with_execution(
         "pmem",
         1,
-        vec![
-            Event::OrchestrationStarted {
-                name: "O".into(),
-                version: "0.0.0".into(),
-                input: "0".into(),
-                parent_instance: None,
-                parent_id: None,
-            },
-            Event::OrchestrationContinuedAsNew { input: "1".into() },
-        ],
+        vec![Event::OrchestrationContinuedAsNew { input: "1".into() }],
     )
     .await
     .unwrap();

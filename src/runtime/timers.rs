@@ -137,10 +137,7 @@ mod tests {
         #[async_trait::async_trait]
         impl HistoryStore for CaptureStore {
             async fn read(&self, instance: &str) -> Vec<Event> { self.inner.read(instance).await }
-            async fn append(&self, instance: &str, new_events: Vec<Event>) -> Result<(), String> { self.inner.append(instance, new_events).await }
-            async fn reset(&self) { self.inner.reset().await }
             async fn list_instances(&self) -> Vec<String> { self.inner.list_instances().await }
-            async fn dump_all_pretty(&self) -> String { self.inner.dump_all_pretty().await }
 
             async fn enqueue_orchestrator_work(&self, item: WorkItem) -> Result<(), String> {
                 self.captured.lock().await.push(item);
@@ -150,12 +147,10 @@ mod tests {
             async fn enqueue_worker_work(&self, item: WorkItem) -> Result<(), String> { self.inner.enqueue_worker_work(item).await }
             async fn dequeue_worker_peek_lock(&self) -> Option<(WorkItem, String)> { self.inner.dequeue_worker_peek_lock().await }
             async fn ack_worker(&self, token: &str) -> Result<(), String> { self.inner.ack_worker(token).await }
-            async fn abandon_worker(&self, token: &str) -> Result<(), String> { self.inner.abandon_worker(token).await }
 
             async fn enqueue_timer_work(&self, item: WorkItem) -> Result<(), String> { self.inner.enqueue_timer_work(item).await }
             async fn dequeue_timer_peek_lock(&self) -> Option<(WorkItem, String)> { self.inner.dequeue_timer_peek_lock().await }
             async fn ack_timer(&self, token: &str) -> Result<(), String> { self.inner.ack_timer(token).await }
-            async fn abandon_timer(&self, token: &str) -> Result<(), String> { self.inner.abandon_timer(token).await }
 
             async fn latest_execution_id(&self, instance: &str) -> Option<u64> { self.inner.latest_execution_id(instance).await }
             async fn list_executions(&self, instance: &str) -> Vec<u64> { self.inner.list_executions(instance).await }

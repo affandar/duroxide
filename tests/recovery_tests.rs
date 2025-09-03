@@ -61,8 +61,6 @@ where
     drop(handle1);
 
     let store2 = make_store_stage2();
-    // Remove the instance before attempting restart; runtime now treats existing instances as an error
-    let _ = store2.remove_instance(&instance).await;
     let rt2 = runtime::Runtime::start_with_store(
         store2.clone(),
         Arc::new(activity_registry.clone()),
@@ -75,6 +73,9 @@ where
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
         rt2_c.raise_event(&instance_for_spawn, "Resume", "go").await;
     });
+    
+    // Start the orchestration fresh - this simulates recovery where the instance
+    // doesn't exist yet in the new environment
     let _handle2 = rt2
         .clone()
         .start_orchestration(&instance, "RecoveryTest", "")
@@ -133,6 +134,9 @@ async fn recovery_across_restart_fs_provider() {
 
 #[tokio::test]
 async fn recovery_across_restart_inmem_provider() {
+    // Note: This test doesn't actually test recovery for in-memory provider
+    // since we create separate stores. It just tests the orchestration completes
+    // when started fresh in stage 2.
     let instance = String::from("inst-recover-mem-1");
     let make_store1 = || StdArc::new(InMemoryHistoryStore::default()) as StdArc<dyn HistoryStore>;
     let make_store2 = || StdArc::new(InMemoryHistoryStore::default()) as StdArc<dyn HistoryStore>;

@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use tracing::{debug, error};
+use tracing::debug;
 
 use super::orchestration_turn::{OrchestrationTurn, TurnResult};
 use crate::{

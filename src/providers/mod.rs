@@ -83,118 +83,131 @@ pub enum WorkItem {
     },
 }
 
-/// Storage abstraction for append-only orchestration history per instance.
+/// Storage abstraction for durable orchestration execution.
+/// 
+/// Providers must implement the core atomic orchestration methods and basic queue operations.
+/// Multi-execution support is required for ContinueAsNew functionality.
+/// Management APIs are optional with default no-op implementations.
 #[async_trait::async_trait]
 pub trait HistoryStore: Send + Sync {
-    /// Read full history for an instance.
+    // ===== Core Atomic Orchestration Methods (REQUIRED) =====
+    // These three methods form the heart of reliable orchestration execution.
+    
+    /// Fetch the next orchestration work item atomically.
+    /// 
+    /// This method should:
+    /// 1. Dequeue a batch of messages for a single instance from the orchestrator queue
+    /// 2. Load the instance's history (or empty history for new instances)
+    /// 3. Lock the instance until ack or abandon is called
+    /// 
+    /// Returns None if no work is available.
+    /// 
+    /// Example implementation pattern:
+    /// ```ignore
+    /// let (messages, lock_token) = dequeue_orchestrator_messages()?;
+    /// let instance = extract_instance(&messages);
+    /// let history = read_instance_history(&instance);
+    /// Some(OrchestrationItem { instance, messages, history, lock_token, ... })
+    /// ```
+    async fn fetch_orchestration_item(&self) -> Option<OrchestrationItem> {
+        None
+    }
+
+    /// Acknowledge successful orchestration processing atomically.
+    /// 
+    /// This method MUST atomically:
+    /// 1. Append history_delta to the instance's history
+    /// 2. Enqueue all worker_items to the worker queue
+    /// 3. Enqueue all timer_items to the timer queue
+    /// 4. Enqueue all orchestrator_items to the orchestrator queue
+    /// 5. Release the instance lock
+    /// 
+    /// If any operation fails, the entire operation should be rolled back if possible.
+    /// For simple providers, best-effort atomicity is acceptable.
+    async fn ack_orchestration_item(
+        &self,
+        _lock_token: &str,
+        _history_delta: Vec<Event>,
+        _worker_items: Vec<WorkItem>,
+        _timer_items: Vec<WorkItem>,
+        _orchestrator_items: Vec<WorkItem>,
+    ) -> Result<(), String> {
+        Err("ack_orchestration_item not supported by this provider".into())
+    }
+
+    /// Abandon orchestration processing (used for errors/retries).
+    /// 
+    /// This method should:
+    /// 1. Release the instance lock
+    /// 2. Make the messages available for reprocessing
+    /// 3. Optionally delay visibility by delay_ms milliseconds
+    /// 
+    /// Used when orchestration processing fails and needs to be retried.
+    async fn abandon_orchestration_item(&self, _lock_token: &str, _delay_ms: Option<u64>) -> Result<(), String> {
+        Err("abandon_orchestration_item not supported by this provider".into())
+    }
+
+    // ===== Basic History Access (REQUIRED) =====
+    
+    /// Read the full history for an instance.
+    /// Returns empty Vec if instance doesn't exist.
+    /// For multi-execution instances, returns the latest execution's history.
     async fn read(&self, instance: &str) -> Vec<Event>;
-    /// Append events for an instance; should fail if provider limits would be exceeded.
-    async fn append(&self, instance: &str, new_events: Vec<Event>) -> Result<(), String>;
-    /// Clear provider data (test utility).
-    async fn reset(&self);
-    /// Enumerate known instances.
-    async fn list_instances(&self) -> Vec<String>;
-    /// Return a pretty-printed dump of all instances (test utility).
-    async fn dump_all_pretty(&self) -> String;
 
-    /// Create a new, empty instance. Expected to be idempotent;
-    async fn create_instance(&self, _instance: &str) -> Result<(), String> {
-        Ok(())
-    }
-
-    /// Remove an existing instance and its history. Default no-op.
-    async fn remove_instance(&self, _instance: &str) -> Result<(), String> {
-        Ok(())
-    }
-
-    /// Remove multiple instances. Default implementation calls `remove_instance` for each id.
-    async fn remove_instances(&self, instances: &[String]) -> Result<(), String> {
-        for id in instances {
-            self.remove_instance(id).await?;
-        }
-        Ok(())
-    }
-
-    // ===== Orchestrator Queue Methods (enqueue only; legacy dequeue/ack removed) =====
-
-    /// Enqueue a work item to the orchestrator queue.
-    async fn enqueue_orchestrator_work(&self, _item: WorkItem) -> Result<(), String> {
-        Err("orchestrator queue not supported".into())
-    }
-
-    // ===== Worker Queue Methods (single-item operations) =====
-
-    /// Enqueue a work item to the worker queue.
+    // ===== Worker Queue Operations (REQUIRED) =====
+    // Worker queue processes activity executions.
+    
+    /// Enqueue an activity execution request.
     async fn enqueue_worker_work(&self, _item: WorkItem) -> Result<(), String> {
         Err("worker queue not supported".into())
     }
 
-    /// Dequeue a single work item from the worker queue.
+    /// Dequeue a single work item with peek-lock semantics.
+    /// Returns the work item and a lock token that must be used to ack/abandon.
     async fn dequeue_worker_peek_lock(&self) -> Option<(WorkItem, String)> {
         None
     }
 
-    /// Acknowledge a worker message, permanently removing it.
+    /// Acknowledge successful processing of a work item.
     async fn ack_worker(&self, _token: &str) -> Result<(), String> {
         Ok(())
     }
 
-    /// Abandon a worker message, making it visible again.
-    async fn abandon_worker(&self, _token: &str) -> Result<(), String> {
-        Ok(())
-    }
-
-    // ===== Timer Queue Methods (single-item operations) =====
-
-    /// Enqueue a work item to the timer queue.
-    async fn enqueue_timer_work(&self, _item: WorkItem) -> Result<(), String> {
-        Err("timer queue not supported".into())
-    }
-
-    /// Dequeue a single work item from the timer queue.
-    async fn dequeue_timer_peek_lock(&self) -> Option<(WorkItem, String)> {
-        None
-    }
-
-    /// Acknowledge a timer message, permanently removing it.
-    async fn ack_timer(&self, _token: &str) -> Result<(), String> {
-        Ok(())
-    }
-
-    /// Abandon a timer message, making it visible again.
-    async fn abandon_timer(&self, _token: &str) -> Result<(), String> {
-        Ok(())
-    }
-
-    /// Return latest execution id for an instance (default: 1 if history exists).
+    // ===== Multi-Execution Support (REQUIRED for ContinueAsNew) =====
+    // These methods enable orchestrations to continue with new input while maintaining history.
+    
+    /// Get the latest execution ID for an instance.
+    /// Returns None if instance doesn't exist, Some(id) where id >= 1 otherwise.
     async fn latest_execution_id(&self, instance: &str) -> Option<u64> {
         let h = self.read(instance).await;
         if h.is_empty() { None } else { Some(1) }
     }
-
-    /// List all execution ids (default: [1] if history exists).
-    async fn list_executions(&self, instance: &str) -> Vec<u64> {
-        let h = self.read(instance).await;
-        if h.is_empty() { Vec::new() } else { vec![1] }
-    }
-
-    /// Read history for a specific execution (default: same as `read`).
+    
+    /// Read history for a specific execution.
+    /// Used primarily for debugging and testing specific executions.
     async fn read_with_execution(&self, instance: &str, _execution_id: u64) -> Vec<Event> {
         self.read(instance).await
     }
-
-    /// Append events for a specific execution (default: same as `append`).
+    
+    /// Append events to a specific execution.
+    /// This is typically called internally by ack_orchestration_item.
     async fn append_with_execution(
         &self,
         instance: &str,
         _execution_id: u64,
         new_events: Vec<Event>,
     ) -> Result<(), String> {
-        self.append(instance, new_events).await
+        let _ = (instance, new_events);
+        Err("append_with_execution not supported by this provider".into())
     }
-
-    /// Create a new execution with OrchestrationStarted including version and optional parent linkage.
-    /// Default: not supported. Providers must implement explicit multi-execution semantics.
+    
+    /// Create a new execution for ContinueAsNew scenarios.
+    /// 
+    /// This should:
+    /// 1. Create a new execution with ID = latest + 1
+    /// 2. Write an OrchestrationStarted event with the provided parameters
+    /// 
+    /// Used when processing WorkItem::ContinueAsNew.
     async fn create_new_execution(
         &self,
         _instance: &str,
@@ -207,44 +220,60 @@ pub trait HistoryStore: Send + Sync {
         Err("create_new_execution not supported by this provider".into())
     }
 
-    /// Whether the provider supports delayed visibility for timer messages.
-    /// If true, the runtime can rely on the provider to deliver TimerFired at the scheduled time.
-    /// Default: false, which enables the in-process timer fallback service.
+    // ===== Timer Support (REQUIRED only if supports_delayed_visibility returns true) =====
+    
+    /// Whether this provider natively supports delayed message visibility.
+    /// If false (default), the runtime uses an in-process timer service.
+    /// If true, the provider must implement timer queue methods below.
     fn supports_delayed_visibility(&self) -> bool {
         false
     }
-
-    // ===== New Atomic Orchestration Methods =====
-
-    /// Fetch next orchestration item (batch of messages + history) atomically.
-    /// This locks the instance until ack_orchestration_item or abandon_orchestration_item is called.
-    /// Returns None if no work is available.
-    async fn fetch_orchestration_item(&self) -> Option<OrchestrationItem> {
+    
+    /// Enqueue a timer to fire at a specific time (only called if supports_delayed_visibility = true).
+    async fn enqueue_timer_work(&self, _item: WorkItem) -> Result<(), String> {
+        Err("timer queue not supported".into())
+    }
+    
+    /// Dequeue a timer that's ready to fire (only called if supports_delayed_visibility = true).
+    async fn dequeue_timer_peek_lock(&self) -> Option<(WorkItem, String)> {
         None
     }
-
-    /// Acknowledge orchestration item atomically.
-    /// - Appends new history events
-    /// - Enqueues work items to appropriate queues (worker, timer, orchestrator)
-    /// - Releases the lock
-    /// All operations must succeed or all must fail (best effort for fs/in_memory providers).
-    async fn ack_orchestration_item(
-        &self,
-        _lock_token: &str,
-        _history_delta: Vec<Event>,
-        _worker_items: Vec<WorkItem>,
-        _timer_items: Vec<WorkItem>,
-        _orchestrator_items: Vec<WorkItem>,
-    ) -> Result<(), String> {
-        Err("ack_orchestration_item not supported by this provider".into())
+    
+    /// Acknowledge a processed timer (only called if supports_delayed_visibility = true).
+    async fn ack_timer(&self, _token: &str) -> Result<(), String> {
+        Ok(())
     }
 
-    /// Abandon orchestration item with optional visibility delay.
-    /// Makes the instance available again after delay_ms (if provided).
-    /// Used for error scenarios or backoff strategies.
-    async fn abandon_orchestration_item(&self, _lock_token: &str, _delay_ms: Option<u64>) -> Result<(), String> {
-        Err("abandon_orchestration_item not supported by this provider".into())
+    // ===== Optional Management APIs =====
+    // These have default implementations and are primarily used for testing/debugging.
+    
+    /// Enqueue a work item to the orchestrator queue.
+    /// Note: In normal operation, orchestrator items are enqueued via ack_orchestration_item.
+    /// This method is used by raise_event and cancel_instance operations.
+    async fn enqueue_orchestrator_work(&self, _item: WorkItem) -> Result<(), String> {
+        Err("orchestrator queue not supported".into())
     }
+    
+    /// List all known instance IDs.
+    /// Default: empty list. Used primarily for testing and debugging.
+    async fn list_instances(&self) -> Vec<String> {
+        Vec::new()
+    }
+    
+    /// List all execution IDs for an instance.
+    /// Default: returns [1] if instance exists, empty otherwise.
+    async fn list_executions(&self, instance: &str) -> Vec<u64> {
+        let h = self.read(instance).await;
+        if h.is_empty() { Vec::new() } else { vec![1] }
+    }
+    
+
+    
+    // TODO: Add lock timeout and lease refresh mechanisms for worker/timer messages
+    // - Add timeout parameter to dequeue_worker_peek_lock and dequeue_timer_peek_lock
+    // - Add refresh_worker_lock(token, extend_ms) and refresh_timer_lock(token, extend_ms)
+    // - Provider should auto-abandon messages if lock expires without ack
+    // This would enable graceful handling of worker crashes and long-running activities
 }
 
 /// Filesystem-backed provider for local development.

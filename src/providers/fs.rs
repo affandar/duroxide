@@ -185,7 +185,8 @@ impl HistoryStore for FsHistoryStore {
         out
     }
 
-    /// Append events with a simple capacity guard by rewriting the file.
+    // Provider-internal append retained here even though not in trait
+    /*
     async fn append(&self, instance: &str, new_events: Vec<Event>) -> Result<(), String> {
         fs::create_dir_all(&self.root).await.ok();
         // Read current latest to enforce CAP
@@ -293,11 +294,9 @@ impl HistoryStore for FsHistoryStore {
         file.flush().await.ok();
         Ok(())
     }
+    */
 
-    /// Remove the root directory and all contents.
-    async fn reset(&self) {
-        let _ = fs::remove_dir_all(&self.root).await;
-    }
+    // reset removed from trait; keep private variant if needed
 
     /// List instances by scanning instance directories (multi-execution) and legacy `.jsonl` files.
     async fn list_instances(&self) -> Vec<String> {
@@ -317,22 +316,10 @@ impl HistoryStore for FsHistoryStore {
         out
     }
 
-    /// Produce a human-readable dump of all stored histories.
-    async fn dump_all_pretty(&self) -> String {
-        let mut out = String::new();
-        for inst in self.list_instances().await {
-            out.push_str(&format!("instance={inst}\n"));
-            if let Some(lat) = self.latest_execution_id(&inst).await {
-                for eid in 1..=lat {
-                    for ev in self.read_with_execution(&inst, eid).await {
-                        out.push_str(&format!("  exec#{eid} {ev:#?}\n"));
-                    }
-                }
-            }
-        }
-        out
-    }
 
+
+    // create_instance removed from trait; keep private variant if needed
+    /*
     async fn create_instance(&self, instance: &str) -> Result<(), String> {
         fs::create_dir_all(&self.root).await.map_err(|e| e.to_string())?;
         let inst_dir = self.inst_root(instance);
@@ -348,7 +335,10 @@ impl HistoryStore for FsHistoryStore {
             .map_err(|e| e.to_string())?;
         Ok(())
     }
+    */
 
+    // remove_instance removed from trait; keep private variant if needed
+    /*
     async fn remove_instance(&self, instance: &str) -> Result<(), String> {
         let inst_dir = self.inst_root(instance);
         if !fs::try_exists(&inst_dir).await.map_err(|e| e.to_string())? {
@@ -357,6 +347,7 @@ impl HistoryStore for FsHistoryStore {
         fs::remove_dir_all(&inst_dir).await.map_err(|e| e.to_string())?;
         Ok(())
     }
+    */
 
     // ===== Orchestrator Queue Methods =====
 
@@ -576,43 +567,7 @@ impl HistoryStore for FsHistoryStore {
         Ok(())
     }
 
-    async fn abandon_worker(&self, token: &str) -> Result<(), String> {
-        // Read locked item and re-enqueue at front, then remove lock
-        let path = self.work_lock_path(token);
-        if !path.exists() {
-            return Ok(());
-        }
-        let data = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
-        let item: WorkItem = serde_json::from_str(&data).map_err(|e| e.to_string())?;
-        // Prepend to queue
-        let qf = &self.work_queue_file;
-        let content = std::fs::read_to_string(qf).unwrap_or_default();
-        let mut items: Vec<WorkItem> = content
-            .lines()
-            .filter_map(|l| serde_json::from_str::<WorkItem>(l).ok())
-            .collect();
-        items.insert(0, item);
-        // Rewrite file atomically
-        let tmp = qf.with_extension("jsonl.tmp");
-        {
-            let mut tf = std::fs::OpenOptions::new()
-                .create(true)
-                .write(true)
-                .truncate(true)
-                .open(&tmp)
-                .map_err(|e| e.to_string())?;
-            for it in &items {
-                let line = serde_json::to_string(&it).map_err(|e| e.to_string())?;
-                use std::io::Write as _;
-                tf.write_all(line.as_bytes()).map_err(|e| e.to_string())?;
-                tf.write_all(b"\n").map_err(|e| e.to_string())?;
-            }
-        }
-        std::fs::rename(&tmp, qf).map_err(|e| e.to_string())?;
-        // Remove lock
-        std::fs::remove_file(&path).map_err(|e| e.to_string())?;
-        Ok(())
-    }
+
 
     // ===== Timer Queue Methods =====
 
@@ -699,43 +654,7 @@ impl HistoryStore for FsHistoryStore {
         Ok(())
     }
 
-    async fn abandon_timer(&self, token: &str) -> Result<(), String> {
-        // Read locked item and re-enqueue at front, then remove lock
-        let path = self.timer_lock_path(token);
-        if !path.exists() {
-            return Ok(());
-        }
-        let data = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
-        let item: WorkItem = serde_json::from_str(&data).map_err(|e| e.to_string())?;
-        // Prepend to queue
-        let qf = &self.timer_queue_file;
-        let content = std::fs::read_to_string(qf).unwrap_or_default();
-        let mut items: Vec<WorkItem> = content
-            .lines()
-            .filter_map(|l| serde_json::from_str::<WorkItem>(l).ok())
-            .collect();
-        items.insert(0, item);
-        // Rewrite file atomically
-        let tmp = qf.with_extension("jsonl.tmp");
-        {
-            let mut tf = std::fs::OpenOptions::new()
-                .create(true)
-                .write(true)
-                .truncate(true)
-                .open(&tmp)
-                .map_err(|e| e.to_string())?;
-            for it in &items {
-                let line = serde_json::to_string(&it).map_err(|e| e.to_string())?;
-                use std::io::Write as _;
-                tf.write_all(line.as_bytes()).map_err(|e| e.to_string())?;
-                tf.write_all(b"\n").map_err(|e| e.to_string())?;
-            }
-        }
-        std::fs::rename(&tmp, qf).map_err(|e| e.to_string())?;
-        // Remove lock
-        std::fs::remove_file(&path).map_err(|e| e.to_string())?;
-        Ok(())
-    }
+
 
     // metadata APIs removed
 
@@ -903,7 +822,7 @@ impl HistoryStore for FsHistoryStore {
                 .iter()
                 .any(|m| matches!(m, WorkItem::StartOrchestration { .. }))
         {
-            let _ = self.create_instance(&instance).await;
+            let _ = self.provider_create_instance(&instance).await;
         }
 
         // Extract orchestration metadata from history
@@ -1114,5 +1033,14 @@ impl HistoryStore for FsHistoryStore {
         new_content.push_str(&content);
         std::fs::write(qf, new_content).map_err(|e| e.to_string())?;
         std::fs::remove_file(&path).map_err(|e| e.to_string())
+    }
+}
+
+impl FsHistoryStore {
+    async fn provider_create_instance(&self, instance: &str) -> Result<(), String> {
+        fs::create_dir_all(self.inst_root(instance)).await.map_err(|e| e.to_string())?;
+        let path = self.exec_path(instance, 1);
+        let _ = fs::OpenOptions::new().create_new(true).write(true).open(&path).await.map_err(|e| e.to_string())?;
+        Ok(())
     }
 }

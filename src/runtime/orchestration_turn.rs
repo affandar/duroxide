@@ -439,7 +439,7 @@ impl OrchestrationTurn {
     /// This stage writes all history deltas and dispatches actions
     pub async fn persist_changes(
         &mut self,
-        history_store: Arc<dyn HistoryStore>,
+        _history_store: Arc<dyn HistoryStore>,
         runtime: &Arc<crate::runtime::Runtime>,
     ) -> Result<(), String> {
         debug!(
@@ -450,19 +450,7 @@ impl OrchestrationTurn {
             "persisting turn changes"
         );
 
-        // Persist history delta if any
-        if !self.history_delta.is_empty() {
-            history_store
-                .append(&self.instance, self.history_delta.clone())
-                .await
-                .map_err(|e| format!("failed to append history: {}", e))?;
-
-            debug!(
-                instance = %self.instance,
-                events_appended = self.history_delta.len(),
-                "history delta persisted"
-            );
-        }
+        // In atomic path, provider append happens during ack_orchestration_item. Nothing to persist here.
 
         // Apply decisions (dispatch actions) now that history is persisted
         let full_history = {

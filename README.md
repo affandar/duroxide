@@ -1,3 +1,4 @@
+![Banner](duroxide_banner.jpg)
 ## rust-dtf
 
 > Notice: This is an experimental project exploring how AI can help build and iteratively improve a moderately complex framework. It’s intended for learning and fun, not for production use.
