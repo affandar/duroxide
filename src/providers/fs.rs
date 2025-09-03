@@ -70,7 +70,7 @@ impl FsHistoryStore {
     fn timer_lock_path(&self, token: &str) -> PathBuf {
         self.timer_lock_dir().join(format!("{token}.lock"))
     }
-    
+
     /// Create a new execution with specific history events
     async fn create_new_execution_with_history(
         &self,
@@ -285,7 +285,7 @@ impl HistoryStore for FsHistoryStore {
     }
 
     // ===== Orchestrator Queue Methods =====
-    
+
     async fn enqueue_orchestrator_work(&self, item: WorkItem) -> Result<(), String> {
         // Idempotent enqueue: load current items and only append if not present
         let qf = &self.orch_queue_file;
@@ -329,7 +329,7 @@ impl HistoryStore for FsHistoryStore {
         if all_items.is_empty() {
             return None;
         }
-        
+
         // Group by instance
         let mut instance_map = std::collections::HashMap::<String, Vec<WorkItem>>::new();
         for item in all_items.iter() {
@@ -347,12 +347,13 @@ impl HistoryStore for FsHistoryStore {
             };
             instance_map.entry(instance).or_default().push(item.clone());
         }
-        
+
         // Take the first instance's items
         let (target_instance, batch_items) = instance_map.into_iter().next()?;
-        
+
         // Remove batch items from all_items
-        let remaining_items: Vec<WorkItem> = all_items.into_iter()
+        let remaining_items: Vec<WorkItem> = all_items
+            .into_iter()
             .filter(|item| {
                 let item_instance = match item {
                     WorkItem::StartOrchestration { instance, .. }
@@ -369,7 +370,7 @@ impl HistoryStore for FsHistoryStore {
                 item_instance != &target_instance
             })
             .collect();
-        
+
         // Rewrite remaining items atomically
         let tmp = qf.with_extension("jsonl.tmp");
         {
@@ -387,7 +388,7 @@ impl HistoryStore for FsHistoryStore {
             }
         }
         let _ = std::fs::rename(&tmp, qf);
-        
+
         // Create lock token and persist the batch as JSON array
         let now_ns = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -417,7 +418,7 @@ impl HistoryStore for FsHistoryStore {
             return Ok(());
         }
         let data = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
-        
+
         // Handle both old single-item format and new batch format for backward compatibility
         let items_to_restore: Vec<WorkItem> = if let Ok(batch) = serde_json::from_str::<Vec<WorkItem>>(&data) {
             // New batch format
@@ -428,7 +429,7 @@ impl HistoryStore for FsHistoryStore {
         } else {
             return Err("Invalid lock file format".to_string());
         };
-        
+
         // Prepend to queue
         let qf = &self.orch_queue_file;
         let content = std::fs::read_to_string(qf).unwrap_or_default();
@@ -436,11 +437,11 @@ impl HistoryStore for FsHistoryStore {
             .lines()
             .filter_map(|l| serde_json::from_str::<WorkItem>(l).ok())
             .collect();
-        
+
         // Prepend the batch items to existing items
         let mut all_items = items_to_restore;
         all_items.extend(existing_items);
-        
+
         // Rewrite file atomically
         let tmp = qf.with_extension("jsonl.tmp");
         {
@@ -462,9 +463,9 @@ impl HistoryStore for FsHistoryStore {
         std::fs::remove_file(&path).map_err(|e| e.to_string())?;
         Ok(())
     }
-    
+
     // ===== Worker Queue Methods =====
-    
+
     async fn enqueue_worker_work(&self, item: WorkItem) -> Result<(), String> {
         // Idempotent enqueue: load current items and only append if not present
         let qf = &self.work_queue_file;
@@ -496,7 +497,7 @@ impl HistoryStore for FsHistoryStore {
         std::fs::rename(&tmp, qf).map_err(|e| e.to_string())?;
         Ok(())
     }
-    
+
     async fn dequeue_worker_peek_lock(&self) -> Option<(WorkItem, String)> {
         // Pop first item but write it to a lock sidecar to keep invisible until ack/abandon
         let qf = &self.work_queue_file;
@@ -539,7 +540,7 @@ impl HistoryStore for FsHistoryStore {
         let _ = std::fs::write(&lock_path, line);
         Some((first, token))
     }
-    
+
     async fn ack_worker(&self, token: &str) -> Result<(), String> {
         let path = self.work_lock_path(token);
         if path.exists() {
@@ -547,7 +548,7 @@ impl HistoryStore for FsHistoryStore {
         }
         Ok(())
     }
-    
+
     async fn abandon_worker(&self, token: &str) -> Result<(), String> {
         // Read locked item and re-enqueue at front, then remove lock
         let path = self.work_lock_path(token);
@@ -585,9 +586,9 @@ impl HistoryStore for FsHistoryStore {
         std::fs::remove_file(&path).map_err(|e| e.to_string())?;
         Ok(())
     }
-    
+
     // ===== Timer Queue Methods =====
-    
+
     async fn enqueue_timer_work(&self, item: WorkItem) -> Result<(), String> {
         // Idempotent enqueue: load current items and only append if not present
         let qf = &self.timer_queue_file;
@@ -619,7 +620,7 @@ impl HistoryStore for FsHistoryStore {
         std::fs::rename(&tmp, qf).map_err(|e| e.to_string())?;
         Ok(())
     }
-    
+
     async fn dequeue_timer_peek_lock(&self) -> Option<(WorkItem, String)> {
         // Pop first item but write it to a lock sidecar to keep invisible until ack/abandon
         let qf = &self.timer_queue_file;
@@ -662,7 +663,7 @@ impl HistoryStore for FsHistoryStore {
         let _ = std::fs::write(&lock_path, line);
         Some((first, token))
     }
-    
+
     async fn ack_timer(&self, token: &str) -> Result<(), String> {
         let path = self.timer_lock_path(token);
         if path.exists() {
@@ -670,7 +671,7 @@ impl HistoryStore for FsHistoryStore {
         }
         Ok(())
     }
-    
+
     async fn abandon_timer(&self, token: &str) -> Result<(), String> {
         // Read locked item and re-enqueue at front, then remove lock
         let path = self.timer_lock_path(token);
@@ -825,7 +826,7 @@ impl HistoryStore for FsHistoryStore {
     async fn fetch_orchestration_item(&self) -> Option<super::OrchestrationItem> {
         // First dequeue a batch of orchestrator messages
         let (messages, lock_token) = self.dequeue_orchestrator_peek_lock().await?;
-        
+
         // Extract instance from the first message
         let instance = match messages.first()? {
             WorkItem::StartOrchestration { instance, .. }
@@ -835,16 +836,23 @@ impl HistoryStore for FsHistoryStore {
             | WorkItem::ExternalRaised { instance, .. }
             | WorkItem::CancelInstance { instance, .. }
             | WorkItem::ContinueAsNew { instance, .. } => instance.clone(),
-            WorkItem::SubOrchCompleted { parent_instance, .. }
-            | WorkItem::SubOrchFailed { parent_instance, .. } => parent_instance.clone(),
+            WorkItem::SubOrchCompleted { parent_instance, .. } | WorkItem::SubOrchFailed { parent_instance, .. } => {
+                parent_instance.clone()
+            }
             _ => return None,
         };
-        
+
         // Special handling for ContinueAsNew - it represents a transition to a new execution
-        if let Some(WorkItem::ContinueAsNew { orchestration, input: _, version, .. }) = messages.first() {
+        if let Some(WorkItem::ContinueAsNew {
+            orchestration,
+            input: _,
+            version,
+            ..
+        }) = messages.first()
+        {
             // Get the next execution ID
             let next_exec_id = self.latest_execution_id(&instance).await.unwrap_or(0) + 1;
-            
+
             // Return an item that represents the new execution to be created
             // The history is empty because this is a new execution
             return Some(super::OrchestrationItem {
@@ -853,41 +861,48 @@ impl HistoryStore for FsHistoryStore {
                 execution_id: next_exec_id,
                 version: version.as_deref().unwrap_or("1.0.0").to_string(),
                 history: vec![], // New execution starts with empty history
-                messages, // Keep all messages including ContinueAsNew
+                messages,        // Keep all messages including ContinueAsNew
                 lock_token,
             });
         }
-        
+
         // For all other cases, read the current execution's history
         let execution_id = self.latest_execution_id(&instance).await.unwrap_or(1);
         let history = self.read_with_execution(&instance, execution_id).await;
-        
+
         // If this is a new instance (StartOrchestration), create it
-        if history.is_empty() && messages.iter().any(|m| matches!(m, WorkItem::StartOrchestration { .. })) {
+        if history.is_empty()
+            && messages
+                .iter()
+                .any(|m| matches!(m, WorkItem::StartOrchestration { .. }))
+        {
             let _ = self.create_instance(&instance).await;
         }
-        
+
         // Extract orchestration metadata from history
-        let (orchestration_name, version) = if let Some(event) = history.iter().find(|e| {
-            matches!(e, Event::OrchestrationStarted { .. })
-        }) {
-            match event {
-                Event::OrchestrationStarted { name, version, .. } => {
-                    (name.clone(), version.clone())
+        let (orchestration_name, version) =
+            if let Some(event) = history.iter().find(|e| matches!(e, Event::OrchestrationStarted { .. })) {
+                match event {
+                    Event::OrchestrationStarted { name, version, .. } => (name.clone(), version.clone()),
+                    _ => return None,
                 }
-                _ => return None,
-            }
-        } else {
-            // New instance - extract from StartOrchestration message
-            if let Some(WorkItem::StartOrchestration { orchestration, version, .. }) = messages.iter().find(|m| {
-                matches!(m, WorkItem::StartOrchestration { .. })
-            }) {
-                (orchestration.clone(), version.clone().unwrap_or_else(|| "1.0.0".to_string()))
             } else {
-                return None;
-            }
-        };
-        
+                // New instance - extract from StartOrchestration message
+                if let Some(WorkItem::StartOrchestration {
+                    orchestration, version, ..
+                }) = messages
+                    .iter()
+                    .find(|m| matches!(m, WorkItem::StartOrchestration { .. }))
+                {
+                    (
+                        orchestration.clone(),
+                        version.clone().unwrap_or_else(|| "1.0.0".to_string()),
+                    )
+                } else {
+                    return None;
+                }
+            };
+
         Some(super::OrchestrationItem {
             instance,
             orchestration_name,
@@ -898,7 +913,7 @@ impl HistoryStore for FsHistoryStore {
             lock_token,
         })
     }
-    
+
     async fn ack_orchestration_item(
         &self,
         lock_token: &str,
@@ -912,12 +927,12 @@ impl HistoryStore for FsHistoryStore {
         if !lock_path.exists() {
             return Err("Lock token not found".to_string());
         }
-        
+
         // Read the locked batch to get the instance
         let data = std::fs::read_to_string(&lock_path).map_err(|e| e.to_string())?;
-        let batch: Vec<WorkItem> = serde_json::from_str(&data)
-            .map_err(|e| format!("Failed to parse lock file: {}", e))?;
-        
+        let batch: Vec<WorkItem> =
+            serde_json::from_str(&data).map_err(|e| format!("Failed to parse lock file: {}", e))?;
+
         let instance = match batch.first() {
             Some(item) => match item {
                 WorkItem::StartOrchestration { instance, .. }
@@ -933,61 +948,76 @@ impl HistoryStore for FsHistoryStore {
             },
             None => return Err("Empty batch in lock file".to_string()),
         };
-        
+
         // Check if this was a ContinueAsNew transition
-        let is_continue_as_new = batch.first().map_or(false, |item| {
-            matches!(item, WorkItem::ContinueAsNew { .. })
-        });
-        
+        let is_continue_as_new = batch
+            .first()
+            .map_or(false, |item| matches!(item, WorkItem::ContinueAsNew { .. }));
+
         debug!(
             "ack_orchestration_item: instance={}, is_continue_as_new={}, history_delta_len={}, orchestrator_items_len={}",
-            instance, is_continue_as_new, history_delta.len(), orchestrator_items.len()
+            instance,
+            is_continue_as_new,
+            history_delta.len(),
+            orchestrator_items.len()
         );
-        
+
         // Perform all operations with best-effort atomicity
         let mut errors = Vec::new();
-        
+
         // 1. Handle history delta - special case for ContinueAsNew
         if is_continue_as_new {
             // For ContinueAsNew, we need to handle the execution transition
             // First, check if we need to close the previous execution
             let current_exec_id = self.latest_execution_id(instance).await.unwrap_or(0);
-            
+
             // First, close the previous execution with ContinuedAsNew event
             if current_exec_id > 0 {
                 if let Some(WorkItem::ContinueAsNew { input, .. }) = batch.first() {
-                    let close_event = vec![Event::OrchestrationContinuedAsNew { 
-                        input: input.clone() 
-                    }];
+                    let close_event = vec![Event::OrchestrationContinuedAsNew { input: input.clone() }];
                     if let Err(e) = self.append_with_execution(instance, current_exec_id, close_event).await {
                         errors.push(format!("Failed to close previous execution: {}", e));
                     }
                 }
             }
-            
+
             // Create the new execution with the history delta
             // Even if history_delta is empty, we still need to create the execution
             let new_exec_id = current_exec_id + 1;
             debug!(
                 "Creating new execution {} for instance {} with history_delta_len={}",
-                new_exec_id, instance, history_delta.len()
+                new_exec_id,
+                instance,
+                history_delta.len()
             );
             if !history_delta.is_empty() {
-                if let Err(e) = self.create_new_execution_with_history(instance, new_exec_id, history_delta).await {
+                if let Err(e) = self
+                    .create_new_execution_with_history(instance, new_exec_id, history_delta)
+                    .await
+                {
                     errors.push(format!("Failed to create new execution: {}", e));
                 }
             } else {
                 // History delta is empty - this shouldn't happen for ContinueAsNew
                 // but we'll handle it by creating an execution with just OrchestrationStarted
-                if let Some(WorkItem::ContinueAsNew { orchestration, input, version, .. }) = batch.first() {
-                    if let Err(e) = self.create_new_execution(
-                        instance,
-                        orchestration,
-                        version.as_deref().unwrap_or("1.0.0"),
-                        input,
-                        None,
-                        None,
-                    ).await {
+                if let Some(WorkItem::ContinueAsNew {
+                    orchestration,
+                    input,
+                    version,
+                    ..
+                }) = batch.first()
+                {
+                    if let Err(e) = self
+                        .create_new_execution(
+                            instance,
+                            orchestration,
+                            version.as_deref().unwrap_or("1.0.0"),
+                            input,
+                            None,
+                            None,
+                        )
+                        .await
+                    {
                         errors.push(format!("Failed to create new execution: {}", e));
                     }
                 }
@@ -999,33 +1029,33 @@ impl HistoryStore for FsHistoryStore {
                 errors.push(format!("Failed to append history: {}", e));
             }
         }
-        
+
         // 2. Enqueue worker items
         for item in worker_items {
             if let Err(e) = self.enqueue_worker_work(item).await {
                 errors.push(format!("Failed to enqueue worker item: {}", e));
             }
         }
-        
+
         // 3. Enqueue timer items
         for item in timer_items {
             if let Err(e) = self.enqueue_timer_work(item).await {
                 errors.push(format!("Failed to enqueue timer item: {}", e));
             }
         }
-        
+
         // 4. Enqueue orchestrator items
         for item in orchestrator_items {
             if let Err(e) = self.enqueue_orchestrator_work(item).await {
                 errors.push(format!("Failed to enqueue orchestrator item: {}", e));
             }
         }
-        
+
         // 5. Acknowledge the batch (release the lock)
         if let Err(e) = self.ack_orchestrator(lock_token).await {
             errors.push(format!("Failed to ack orchestrator: {}", e));
         }
-        
+
         // Return error if any operation failed
         if !errors.is_empty() {
             Err(errors.join("; "))
@@ -1033,16 +1063,12 @@ impl HistoryStore for FsHistoryStore {
             Ok(())
         }
     }
-    
-    async fn abandon_orchestration_item(
-        &self,
-        lock_token: &str,
-        delay_ms: Option<u64>,
-    ) -> Result<(), String> {
+
+    async fn abandon_orchestration_item(&self, lock_token: &str, delay_ms: Option<u64>) -> Result<(), String> {
         if delay_ms.is_some() {
             tracing::warn!("visibility delay not yet implemented for fs provider");
         }
-        
+
         // Simply abandon the orchestrator batch
         self.abandon_orchestrator(lock_token).await
     }

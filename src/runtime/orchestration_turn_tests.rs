@@ -31,14 +31,12 @@ mod tests {
 
         let turn = OrchestrationTurn::new(
             "test-instance".to_string(),
-            "test-orch".to_string(),
             1,
             1, // execution_id
             baseline_history.clone(),
         );
 
         assert_eq!(turn.instance, "test-instance");
-        assert_eq!(turn.orchestration_name, "test-orch");
         assert_eq!(turn.turn_index, 1);
         assert_eq!(turn.baseline_history, baseline_history);
         assert!(turn.ack_tokens.is_empty());
@@ -49,7 +47,7 @@ mod tests {
 
     #[test]
     fn test_prep_completions() {
-        let mut turn = OrchestrationTurn::new("test-instance".to_string(), "test-orch".to_string(), 1, 1, vec![]);
+        let mut turn = OrchestrationTurn::new("test-instance".to_string(), 1, 1, vec![]);
 
         let messages = vec![
             (
@@ -107,7 +105,6 @@ mod tests {
 
         let mut turn = OrchestrationTurn::new(
             "test-instance".to_string(),
-            "test-orch".to_string(),
             1,
             1, // execution_id
             baseline_history,
@@ -133,7 +130,7 @@ mod tests {
 
     #[test]
     fn test_prep_completions_duplicate_handling() {
-        let mut turn = OrchestrationTurn::new("test-instance".to_string(), "test-orch".to_string(), 1, 1, vec![]);
+        let mut turn = OrchestrationTurn::new("test-instance".to_string(), 1, 1, vec![]);
 
         let messages = vec![
             (
@@ -186,7 +183,6 @@ mod tests {
 
         let mut turn = OrchestrationTurn::new(
             "test-instance".to_string(),
-            "test-orch".to_string(),
             1,
             1, // execution_id
             baseline_history,
@@ -218,7 +214,6 @@ mod tests {
 
         let mut turn = OrchestrationTurn::new(
             "test-instance".to_string(),
-            "test-orch".to_string(),
             1,
             1, // execution_id
             baseline_history,
@@ -250,7 +245,6 @@ mod tests {
 
         let mut turn = OrchestrationTurn::new(
             "test-instance".to_string(),
-            "test-orch".to_string(),
             1,
             1, // execution_id
             baseline_history,
@@ -310,7 +304,6 @@ mod tests {
 
         let mut turn = OrchestrationTurn::new(
             "test-instance".to_string(),
-            "test-orch".to_string(),
             1,
             1, // execution_id
             baseline_history.clone(),
@@ -340,7 +333,7 @@ mod tests {
 
     #[test]
     fn test_made_progress() {
-        let mut turn = OrchestrationTurn::new("test-instance".to_string(), "test-orch".to_string(), 1, 1, vec![]);
+        let mut turn = OrchestrationTurn::new("test-instance".to_string(), 1, 1, vec![]);
 
         // Initially no progress
         assert!(!turn.made_progress());

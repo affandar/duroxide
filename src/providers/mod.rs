@@ -116,7 +116,7 @@ pub trait HistoryStore: Send + Sync {
     }
 
     // ===== Orchestrator Queue Methods (batch operations) =====
-    
+
     /// Enqueue a work item to the orchestrator queue.
     async fn enqueue_orchestrator_work(&self, _item: WorkItem) -> Result<(), String> {
         Err("orchestrator queue not supported".into())
@@ -133,51 +133,51 @@ pub trait HistoryStore: Send + Sync {
     async fn ack_orchestrator(&self, _token: &str) -> Result<(), String> {
         Ok(())
     }
-    
+
     /// Abandon a batch of orchestrator messages, making them visible again.
     async fn abandon_orchestrator(&self, _token: &str) -> Result<(), String> {
         Ok(())
     }
-    
+
     // ===== Worker Queue Methods (single-item operations) =====
-    
+
     /// Enqueue a work item to the worker queue.
     async fn enqueue_worker_work(&self, _item: WorkItem) -> Result<(), String> {
         Err("worker queue not supported".into())
     }
-    
+
     /// Dequeue a single work item from the worker queue.
     async fn dequeue_worker_peek_lock(&self) -> Option<(WorkItem, String)> {
         None
     }
-    
+
     /// Acknowledge a worker message, permanently removing it.
     async fn ack_worker(&self, _token: &str) -> Result<(), String> {
         Ok(())
     }
-    
+
     /// Abandon a worker message, making it visible again.
     async fn abandon_worker(&self, _token: &str) -> Result<(), String> {
         Ok(())
     }
 
     // ===== Timer Queue Methods (single-item operations) =====
-    
+
     /// Enqueue a work item to the timer queue.
     async fn enqueue_timer_work(&self, _item: WorkItem) -> Result<(), String> {
         Err("timer queue not supported".into())
     }
-    
+
     /// Dequeue a single work item from the timer queue.
     async fn dequeue_timer_peek_lock(&self) -> Option<(WorkItem, String)> {
         None
     }
-    
+
     /// Acknowledge a timer message, permanently removing it.
     async fn ack_timer(&self, _token: &str) -> Result<(), String> {
         Ok(())
     }
-    
+
     /// Abandon a timer message, making it visible again.
     async fn abandon_timer(&self, _token: &str) -> Result<(), String> {
         Ok(())
@@ -232,14 +232,14 @@ pub trait HistoryStore: Send + Sync {
     }
 
     // ===== New Atomic Orchestration Methods =====
-    
+
     /// Fetch next orchestration item (batch of messages + history) atomically.
     /// This locks the instance until ack_orchestration_item or abandon_orchestration_item is called.
     /// Returns None if no work is available.
     async fn fetch_orchestration_item(&self) -> Option<OrchestrationItem> {
         None
     }
-    
+
     /// Acknowledge orchestration item atomically.
     /// - Appends new history events
     /// - Enqueues work items to appropriate queues (worker, timer, orchestrator)
@@ -255,15 +255,11 @@ pub trait HistoryStore: Send + Sync {
     ) -> Result<(), String> {
         Err("ack_orchestration_item not supported by this provider".into())
     }
-    
+
     /// Abandon orchestration item with optional visibility delay.
     /// Makes the instance available again after delay_ms (if provided).
     /// Used for error scenarios or backoff strategies.
-    async fn abandon_orchestration_item(
-        &self,
-        _lock_token: &str,
-        _delay_ms: Option<u64>,
-    ) -> Result<(), String> {
+    async fn abandon_orchestration_item(&self, _lock_token: &str, _delay_ms: Option<u64>) -> Result<(), String> {
         Err("abandon_orchestration_item not supported by this provider".into())
     }
 }

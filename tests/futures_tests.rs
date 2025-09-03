@@ -71,12 +71,8 @@ async fn select2_two_externals_history_order_wins_fs() {
         name: "A".to_string(),
         data: "va".to_string(),
     };
-    let _ = store
-        .enqueue_orchestrator_work( wi_b)
-        .await;
-    let _ = store
-        .enqueue_orchestrator_work( wi_a)
-        .await;
+    let _ = store.enqueue_orchestrator_work(wi_b).await;
+    let _ = store.enqueue_orchestrator_work(wi_a).await;
 
     let acts2 = ActivityRegistry::builder().build();
     let reg2 = OrchestrationRegistry::builder()
@@ -102,25 +98,30 @@ async fn select2_two_externals_history_order_wins_fs() {
 
     // With batch processing, both events may be in history
     // The key is that select picks the first one in history order
-    let b_index = hist.iter().position(|e| matches!(e, Event::ExternalEvent { name, .. } if name == "B"));
-    let a_index = hist.iter().position(|e| matches!(e, Event::ExternalEvent { name, .. } if name == "A"));
+    let b_index = hist
+        .iter()
+        .position(|e| matches!(e, Event::ExternalEvent { name, .. } if name == "B"));
+    let a_index = hist
+        .iter()
+        .position(|e| matches!(e, Event::ExternalEvent { name, .. } if name == "A"));
 
-    assert!(
-        b_index.is_some(),
-        "expected ExternalEvent B in history: {hist:#?}"
-    );
-    
+    assert!(b_index.is_some(), "expected ExternalEvent B in history: {hist:#?}");
+
     // If both are present (batch processing), B should come first
     if let (Some(b_idx), Some(a_idx)) = (b_index, a_index) {
         assert!(
             b_idx < a_idx,
             "expected B (idx={}) to appear before A (idx={}) in history order: {hist:#?}",
-            b_idx, a_idx
+            b_idx,
+            a_idx
         );
     }
-    
+
     // The key assertion: select picked B (the first in history order)
-    assert_eq!(output, "B:vb", "expected B to win since it's first in history order, got {output}");
+    assert_eq!(
+        output, "B:vb",
+        "expected B to win since it's first in history order, got {output}"
+    );
     rt2.shutdown().await;
 }
 
@@ -188,12 +189,8 @@ async fn select_two_externals_history_order_wins_fs() {
         name: "A".to_string(),
         data: "va".to_string(),
     };
-    let _ = store
-        .enqueue_orchestrator_work( wi_b)
-        .await;
-    let _ = store
-        .enqueue_orchestrator_work( wi_a)
-        .await;
+    let _ = store.enqueue_orchestrator_work(wi_b).await;
+    let _ = store.enqueue_orchestrator_work(wi_a).await;
 
     let acts2 = ActivityRegistry::builder().build();
     let reg2 = OrchestrationRegistry::builder()
@@ -219,25 +216,30 @@ async fn select_two_externals_history_order_wins_fs() {
 
     // With batch processing, both events may be in history
     // The key is that select picks the first one in history order
-    let b_index = hist.iter().position(|e| matches!(e, Event::ExternalEvent { name, .. } if name == "B"));
-    let a_index = hist.iter().position(|e| matches!(e, Event::ExternalEvent { name, .. } if name == "A"));
+    let b_index = hist
+        .iter()
+        .position(|e| matches!(e, Event::ExternalEvent { name, .. } if name == "B"));
+    let a_index = hist
+        .iter()
+        .position(|e| matches!(e, Event::ExternalEvent { name, .. } if name == "A"));
 
-    assert!(
-        b_index.is_some(),
-        "expected ExternalEvent B in history: {hist:#?}"
-    );
-    
+    assert!(b_index.is_some(), "expected ExternalEvent B in history: {hist:#?}");
+
     // If both are present (batch processing), B should come first
     if let (Some(b_idx), Some(a_idx)) = (b_index, a_index) {
         assert!(
             b_idx < a_idx,
             "expected B (idx={}) to appear before A (idx={}) in history order: {hist:#?}",
-            b_idx, a_idx
+            b_idx,
+            a_idx
         );
     }
-    
+
     // The key assertion: select picked B (the first in history order)
-    assert_eq!(output, "B:vb", "expected B to win since it's first in history order, got {output}");
+    assert_eq!(
+        output, "B:vb",
+        "expected B to win since it's first in history order, got {output}"
+    );
     rt2.shutdown().await;
 }
 
@@ -306,12 +308,8 @@ async fn select_three_mixed_history_winner_fs() {
         name: "A".to_string(),
         data: "va".to_string(),
     };
-    let _ = store
-        .enqueue_orchestrator_work( wi_b)
-        .await;
-    let _ = store
-        .enqueue_orchestrator_work( wi_a)
-        .await;
+    let _ = store.enqueue_orchestrator_work(wi_b).await;
+    let _ = store.enqueue_orchestrator_work(wi_a).await;
 
     let acts2 = ActivityRegistry::builder().build();
     let reg2 = OrchestrationRegistry::builder()
@@ -336,25 +334,30 @@ async fn select_three_mixed_history_winner_fs() {
 
     // With batch processing, both events may be in history
     // The key is that select picks the first one in history order
-    let b_index = hist.iter().position(|e| matches!(e, Event::ExternalEvent { name, .. } if name == "B"));
-    let a_index = hist.iter().position(|e| matches!(e, Event::ExternalEvent { name, .. } if name == "A"));
+    let b_index = hist
+        .iter()
+        .position(|e| matches!(e, Event::ExternalEvent { name, .. } if name == "B"));
+    let a_index = hist
+        .iter()
+        .position(|e| matches!(e, Event::ExternalEvent { name, .. } if name == "A"));
 
-    assert!(
-        b_index.is_some(),
-        "expected ExternalEvent B in history: {hist:#?}"
-    );
-    
+    assert!(b_index.is_some(), "expected ExternalEvent B in history: {hist:#?}");
+
     // If both are present (batch processing), B should come first
     if let (Some(b_idx), Some(a_idx)) = (b_index, a_index) {
         assert!(
             b_idx < a_idx,
             "expected B (idx={}) to appear before A (idx={}) in history order: {hist:#?}",
-            b_idx, a_idx
+            b_idx,
+            a_idx
         );
     }
-    
+
     // The key assertion: select picked B (the first in history order)
-    assert_eq!(output, "B:vb", "expected B to win since it's first in history order, got {output}");
+    assert_eq!(
+        output, "B:vb",
+        "expected B to win since it's first in history order, got {output}"
+    );
     rt2.shutdown().await;
 }
 
@@ -426,12 +429,8 @@ async fn join_returns_history_order_fs() {
         name: "A".to_string(),
         data: "va".to_string(),
     };
-    let _ = store
-        .enqueue_orchestrator_work( wi_b)
-        .await;
-    let _ = store
-        .enqueue_orchestrator_work( wi_a)
-        .await;
+    let _ = store.enqueue_orchestrator_work(wi_b).await;
+    let _ = store.enqueue_orchestrator_work(wi_a).await;
 
     let acts2 = ActivityRegistry::builder().build();
     let reg2 = OrchestrationRegistry::builder()

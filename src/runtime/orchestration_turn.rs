@@ -26,9 +26,7 @@ pub enum TurnResult {
 pub struct OrchestrationTurn {
     /// Instance identifier
     instance: String,
-    /// Orchestration name for handler resolution
-    #[allow(dead_code)]
-    orchestration_name: String,
+
     /// Current turn index
     turn_index: u64,
     /// Current execution ID
@@ -47,10 +45,9 @@ pub struct OrchestrationTurn {
 
 impl OrchestrationTurn {
     /// Create a new orchestration turn
-    pub fn new(instance: String, orchestration_name: String, turn_index: u64, execution_id: u64, baseline_history: Vec<Event>) -> Self {
+    pub fn new(instance: String, turn_index: u64, execution_id: u64, baseline_history: Vec<Event>) -> Self {
         Self {
             instance,
-            orchestration_name,
             turn_index,
             execution_id,
             completion_map: CompletionMap::new(),
@@ -113,18 +110,16 @@ impl OrchestrationTurn {
                 }
                 _ => {
                     // Smart completion filtering with helpful warnings
-                    
+
                     // Check if completion belongs to current execution
                     if !self.is_completion_for_current_execution(&msg) {
                         // Check if this is a trace activity completion
                         let is_trace_activity = match &msg {
-                            OrchestratorMsg::ActivityCompleted { id, .. } |
-                            OrchestratorMsg::ActivityFailed { id, .. } => {
-                                self.is_trace_activity(*id)
-                            }
-                            _ => false
+                            OrchestratorMsg::ActivityCompleted { id, .. }
+                            | OrchestratorMsg::ActivityFailed { id, .. } => self.is_trace_activity(*id),
+                            _ => false,
                         };
-                        
+
                         if self.has_continue_as_new_in_history() {
                             // Expected behavior - warn and ignore
                             if is_trace_activity {
@@ -215,41 +210,35 @@ impl OrchestrationTurn {
     /// Check if a completion is already in the baseline history (duplicate)
     fn is_completion_already_in_history(&self, msg: &OrchestratorMsg) -> bool {
         match msg {
-            OrchestratorMsg::ActivityCompleted { id, .. } => {
-                self.baseline_history.iter().any(|e| {
-                    matches!(e, Event::ActivityCompleted { id: hist_id, .. } if *hist_id == *id)
-                })
-            }
-            OrchestratorMsg::TimerFired { id, .. } => {
-                self.baseline_history.iter().any(|e| {
-                    matches!(e, Event::TimerFired { id: hist_id, .. } if *hist_id == *id)
-                })
-            }
-            OrchestratorMsg::SubOrchCompleted { id, .. } => {
-                self.baseline_history.iter().any(|e| {
-                    matches!(e, Event::SubOrchestrationCompleted { id: hist_id, .. } if *hist_id == *id)
-                })
-            }
-            OrchestratorMsg::SubOrchFailed { id, .. } => {
-                self.baseline_history.iter().any(|e| {
-                    matches!(e, Event::SubOrchestrationFailed { id: hist_id, .. } if *hist_id == *id)
-                })
-            }
-            OrchestratorMsg::ExternalByName { name, data, .. } => {
-                self.baseline_history.iter().any(|e| {
-                    matches!(e, Event::ExternalEvent { name: hist_name, data: hist_data, .. } 
+            OrchestratorMsg::ActivityCompleted { id, .. } => self
+                .baseline_history
+                .iter()
+                .any(|e| matches!(e, Event::ActivityCompleted { id: hist_id, .. } if *hist_id == *id)),
+            OrchestratorMsg::TimerFired { id, .. } => self
+                .baseline_history
+                .iter()
+                .any(|e| matches!(e, Event::TimerFired { id: hist_id, .. } if *hist_id == *id)),
+            OrchestratorMsg::SubOrchCompleted { id, .. } => self
+                .baseline_history
+                .iter()
+                .any(|e| matches!(e, Event::SubOrchestrationCompleted { id: hist_id, .. } if *hist_id == *id)),
+            OrchestratorMsg::SubOrchFailed { id, .. } => self
+                .baseline_history
+                .iter()
+                .any(|e| matches!(e, Event::SubOrchestrationFailed { id: hist_id, .. } if *hist_id == *id)),
+            OrchestratorMsg::ExternalByName { name, data, .. } => self.baseline_history.iter().any(|e| {
+                matches!(e, Event::ExternalEvent { name: hist_name, data: hist_data, .. }
                         if hist_name == name && hist_data == data)
-                })
-            }
+            }),
             _ => false,
         }
     }
 
     /// Check if this orchestration has used continue_as_new
     fn has_continue_as_new_in_history(&self) -> bool {
-        self.baseline_history.iter().any(|e| {
-            matches!(e, Event::OrchestrationContinuedAsNew { .. })
-        })
+        self.baseline_history
+            .iter()
+            .any(|e| matches!(e, Event::OrchestrationContinuedAsNew { .. }))
     }
 
     /// Stage 2: Execute one turn of the orchestration using the replay engine
@@ -424,12 +413,12 @@ impl OrchestrationTurn {
         // If no specific mismatch found, provide the generic message
         format!("nondeterministic: unconsumed completions: {:?}", unconsumed)
     }
-    
+
     /// Check if an activity ID corresponds to a trace activity
     fn is_trace_activity(&self, activity_id: u64) -> bool {
         // Look in both baseline history and history delta for the activity
         let all_history = self.baseline_history.iter().chain(self.history_delta.iter());
-        
+
         for event in all_history {
             if let Event::ActivityScheduled { id, name, .. } = event {
                 if id == &activity_id && name == crate::SYSTEM_TRACE_ACTIVITY {
@@ -506,15 +495,15 @@ impl OrchestrationTurn {
     pub fn history_delta(&self) -> &[Event] {
         &self.history_delta
     }
-    
+
     pub fn pending_actions(&self) -> &[crate::Action] {
         &self.pending_actions
     }
-    
+
     pub fn has_unconsumed_completions(&self) -> bool {
         self.completion_map.has_unconsumed()
     }
-    
+
     pub fn unconsumed_completions(&self) -> Vec<String> {
         // Return a list of unconsumed completion descriptions
         let mut unconsumed = Vec::new();
@@ -533,7 +522,7 @@ impl OrchestrationTurn {
         if self.ack_tokens.is_empty() {
             return;
         }
-        
+
         // Check if we should abandon due to nondeterminism
         if self.completion_map.has_unconsumed() {
             if self.ack_tokens.len() > 0 {
@@ -543,8 +532,8 @@ impl OrchestrationTurn {
                     token_count = self.ack_tokens.len(),
                     "abandoning batch due to unconsumed completions (nondeterminism)"
                 );
-                
-                // TODO : CR : this is non determinism, this orchestration must be terminated with the appropriate error instead of retrying 
+
+                // TODO : CR : this is non determinism, this orchestration must be terminated with the appropriate error instead of retrying
                 //      indefinitely
                 if let Err(e) = history_store.abandon_orchestrator(token).await {
                     error!(
@@ -633,7 +622,6 @@ mod tests {
     fn test_turn_lifecycle() {
         let mut turn = OrchestrationTurn::new(
             "test-instance".to_string(),
-            "test-orchestration".to_string(),
             1,
             1, // execution_id
             vec![Event::OrchestrationStarted {

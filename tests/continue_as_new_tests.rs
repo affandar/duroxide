@@ -419,15 +419,12 @@ async fn old_execution_completions_are_ignored() {
 
     // Inject a completion with OLD execution ID (execution_id=0, but current should be 1)
     let _ = store
-        .enqueue_orchestrator_work(
-
-            WorkItem::ActivityCompleted {
-                instance: "inst-exec-test".to_string(),
-                execution_id: 0, // Old execution ID (current is 1)
-                id: 999,         // Some activity ID
-                result: "old_execution_result".to_string(),
-            },
-        )
+        .enqueue_orchestrator_work(WorkItem::ActivityCompleted {
+            instance: "inst-exec-test".to_string(),
+            execution_id: 0, // Old execution ID (current is 1)
+            id: 999,         // Some activity ID
+            result: "old_execution_result".to_string(),
+        })
         .await;
 
     // Give time for the completion to be processed (and ignored)
@@ -478,15 +475,12 @@ async fn future_execution_completions_are_ignored() {
 
     // Inject a completion with a future execution ID (should never happen in practice)
     let _ = store
-        .enqueue_orchestrator_work(
-
-            WorkItem::ActivityCompleted {
-                instance: "inst-future".to_string(),
-                execution_id: 999, // Future execution ID
-                id: 1,
-                result: "future_completion".to_string(),
-            },
-        )
+        .enqueue_orchestrator_work(WorkItem::ActivityCompleted {
+            instance: "inst-future".to_string(),
+            execution_id: 999, // Future execution ID
+            id: 1,
+            result: "future_completion".to_string(),
+        })
         .await;
 
     // Give some time for processing
@@ -503,5 +497,3 @@ async fn future_execution_completions_are_ignored() {
 
     println!("✓ Future execution completion was properly ignored");
 }
-
-

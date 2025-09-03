@@ -87,14 +87,23 @@ pub enum Event {
     /// Orchestration failed with a final error.
     OrchestrationFailed { error: String },
     /// Activity was scheduled with a unique ID and input.
-    ActivityScheduled { id: u64, name: String, input: String, execution_id: u64 },
+    ActivityScheduled {
+        id: u64,
+        name: String,
+        input: String,
+        execution_id: u64,
+    },
     /// Activity completed successfully with a result.
     ActivityCompleted { id: u64, result: String },
     /// Activity failed with an error string.
     ActivityFailed { id: u64, error: String },
 
     /// Timer was created and will logically fire at `fire_at_ms`.
-    TimerCreated { id: u64, fire_at_ms: u64, execution_id: u64 },
+    TimerCreated {
+        id: u64,
+        fire_at_ms: u64,
+        execution_id: u64,
+    },
     /// Timer fired at logical time `fire_at_ms`.
     TimerFired { id: u64, fire_at_ms: u64 },
 

@@ -28,15 +28,13 @@ pub async fn dispatch_call_activity(
         let execution_id = rt.get_execution_id_for_instance(instance).await;
         let _ = rt
             .history_store
-            .enqueue_worker_work(
-                WorkItem::ActivityExecute {
-                    instance: instance.to_string(),
-                    execution_id,
-                    id,
-                    name,
-                    input,
-                },
-            )
+            .enqueue_worker_work(WorkItem::ActivityExecute {
+                instance: instance.to_string(),
+                execution_id,
+                id,
+                name,
+                input,
+            })
             .await;
     }
 }
@@ -54,7 +52,11 @@ pub async fn dispatch_create_timer(rt: &Arc<Runtime>, instance: &str, history: &
         .iter()
         .rev()
         .find_map(|e| match e {
-            Event::TimerCreated { id: cid, fire_at_ms, execution_id: _ } if *cid == id => Some(*fire_at_ms),
+            Event::TimerCreated {
+                id: cid,
+                fire_at_ms,
+                execution_id: _,
+            } if *cid == id => Some(*fire_at_ms),
             _ => None,
         })
         .unwrap_or(0);
@@ -63,14 +65,12 @@ pub async fn dispatch_create_timer(rt: &Arc<Runtime>, instance: &str, history: &
     let execution_id = rt.get_execution_id_for_instance(instance).await;
     let _ = rt
         .history_store
-        .enqueue_timer_work(
-            WorkItem::TimerSchedule {
-                instance: instance.to_string(),
-                execution_id,
-                id,
-                fire_at_ms,
-            },
-        )
+        .enqueue_timer_work(WorkItem::TimerSchedule {
+            instance: instance.to_string(),
+            execution_id,
+            id,
+            fire_at_ms,
+        })
         .await;
 }
 
@@ -100,7 +100,7 @@ pub async fn dispatch_start_detached(
         orchestration: name.clone(),
         input: input.clone(),
         version: version.clone(),
-        parent_instance: None,  // Detached orchestrations have no parent
+        parent_instance: None, // Detached orchestrations have no parent
         parent_id: None,
     };
     if let Err(e) = rt.history_store.enqueue_orchestrator_work(wi).await {
@@ -170,14 +170,12 @@ pub async fn dispatch_start_sub_orchestration(
             let parent_execution_id = rt.get_execution_id_for_instance(parent_instance).await;
             let _ = rt
                 .history_store
-                .enqueue_orchestrator_work(
-                    WorkItem::SubOrchFailed {
-                        parent_instance: parent_inst,
-                        parent_execution_id,
-                        parent_id: id,
-                        error: e,
-                    },
-                )
+                .enqueue_orchestrator_work(WorkItem::SubOrchFailed {
+                    parent_instance: parent_inst,
+                    parent_execution_id,
+                    parent_id: id,
+                    error: e,
+                })
                 .await;
         }
     }

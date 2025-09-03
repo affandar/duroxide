@@ -2,8 +2,8 @@
 // This file consolidates all nondeterminism-related tests to verify the robust detection system
 
 use rust_dtf::providers::HistoryStore;
-use rust_dtf::providers::fs::FsHistoryStore;
 use rust_dtf::providers::WorkItem;
+use rust_dtf::providers::fs::FsHistoryStore;
 use rust_dtf::runtime::registry::ActivityRegistry;
 use rust_dtf::runtime::{self};
 use rust_dtf::{Event, OrchestrationContext, OrchestrationRegistry, OrchestrationStatus};
@@ -76,14 +76,12 @@ async fn code_swap_triggers_nondeterminism() {
     // Poke the instance so it activates and runs a turn (nondeterminism check occurs before completions)
     // Use a timer that fires immediately to trigger a turn reliably
     let _ = store
-        .enqueue_timer_work(
-            WorkItem::TimerSchedule {
-                instance: "inst-swap".to_string(),
-                execution_id: 1,
-                id: 999,       // Use a high ID that won't conflict with orchestration timers
-                fire_at_ms: 0, // Fire immediately
-            },
-        )
+        .enqueue_timer_work(WorkItem::TimerSchedule {
+            instance: "inst-swap".to_string(),
+            execution_id: 1,
+            id: 999,       // Use a high ID that won't conflict with orchestration timers
+            fire_at_ms: 0, // Fire immediately
+        })
         .await;
 
     // Wait for terminal status using helper
@@ -149,15 +147,12 @@ async fn completion_kind_mismatch_triggers_nondeterminism() {
 
     // Inject a completion with the WRONG kind - send ActivityCompleted for a timer ID
     let _ = store
-        .enqueue_orchestrator_work(
-
-            WorkItem::ActivityCompleted {
-                instance: "inst-mismatch".to_string(),
-                execution_id: 1,
-                id: timer_id, // This is a timer ID, but we're sending ActivityCompleted!
-                result: "wrong_kind_result".to_string(),
-            },
-        )
+        .enqueue_orchestrator_work(WorkItem::ActivityCompleted {
+            instance: "inst-mismatch".to_string(),
+            execution_id: 1,
+            id: timer_id, // This is a timer ID, but we're sending ActivityCompleted!
+            result: "wrong_kind_result".to_string(),
+        })
         .await;
 
     // The orchestration should fail with nondeterminism error about kind mismatch
@@ -214,15 +209,12 @@ async fn unexpected_completion_id_triggers_nondeterminism() {
 
     // Inject a completion for an ID that was never scheduled (999)
     let _ = store
-        .enqueue_orchestrator_work(
-
-            WorkItem::ActivityCompleted {
-                instance: "inst-unexpected".to_string(),
-                execution_id: 1,
-                id: 999, // This ID was never scheduled by the orchestration
-                result: "unexpected_result".to_string(),
-            },
-        )
+        .enqueue_orchestrator_work(WorkItem::ActivityCompleted {
+            instance: "inst-unexpected".to_string(),
+            execution_id: 1,
+            id: 999, // This ID was never scheduled by the orchestration
+            result: "unexpected_result".to_string(),
+        })
         .await;
 
     // The orchestration should fail with nondeterminism error about unexpected completion
@@ -271,14 +263,12 @@ async fn unexpected_timer_completion_triggers_nondeterminism() {
 
     // Inject an unexpected timer completion (timer ID 123 was never scheduled)
     let _ = store
-        .enqueue_orchestrator_work(
-            WorkItem::TimerFired {
-                instance: "inst-timer".to_string(),
-                execution_id: 1,
-                id: 123,
-                fire_at_ms: 0,
-            },
-        )
+        .enqueue_orchestrator_work(WorkItem::TimerFired {
+            instance: "inst-timer".to_string(),
+            execution_id: 1,
+            id: 123,
+            fire_at_ms: 0,
+        })
         .await;
 
     // The orchestration should fail with nondeterminism error
@@ -304,7 +294,7 @@ async fn continue_as_new_with_unconsumed_completion_triggers_nondeterminism() {
     let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
 
     let activity_registry = ActivityRegistry::builder()
-        .register("MyActivity", |_input: String| async move { 
+        .register("MyActivity", |_input: String| async move {
             // Activity that never completes on its own
             loop {
                 tokio::time::sleep(std::time::Duration::from_secs(60)).await;
@@ -317,15 +307,15 @@ async fn continue_as_new_with_unconsumed_completion_triggers_nondeterminism() {
     // Orchestration that schedules activity then waits for signal before calling CAN
     let orch = |ctx: OrchestrationContext, input: String| async move {
         let n: u32 = input.parse().unwrap_or(0);
-        
+
         // First iteration: schedule activity
         if n == 0 {
             // Schedule an activity - this will create ActivityScheduled event
             let _activity_future = ctx.schedule_activity("MyActivity", "test_input");
-            
+
             // Wait for an external event - this blocks the orchestration
             let signal = ctx.schedule_wait("proceed_signal").await;
-            
+
             // When we get the signal, call continue_as_new
             // The activity is still pending and its completion might be in the batch
             ctx.continue_as_new("1");
@@ -339,30 +329,34 @@ async fn continue_as_new_with_unconsumed_completion_triggers_nondeterminism() {
     let reg = OrchestrationRegistry::builder()
         .register("CanNondeterminism", orch)
         .build();
-    
-    let rt = runtime::Runtime::start_with_store(
-        store.clone(), 
-        StdArc::new(activity_registry), 
-        reg
-    ).await;
+
+    let rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(activity_registry), reg).await;
 
     // Start the orchestration
-    let _h = rt.clone()
+    let _h = rt
+        .clone()
         .start_orchestration("inst-can-nondet", "CanNondeterminism", "0")
         .await
         .unwrap();
 
     // Wait for the orchestration to be waiting for the signal
-    let ok = common::wait_for_history(store.clone(), "inst-can-nondet", |hist| {
-        hist.iter().any(|e| matches!(e, Event::ExternalSubscribed { name, .. } if name == "proceed_signal"))
-    }, 2000).await;
+    let ok = common::wait_for_history(
+        store.clone(),
+        "inst-can-nondet",
+        |hist| {
+            hist.iter()
+                .any(|e| matches!(e, Event::ExternalSubscribed { name, .. } if name == "proceed_signal"))
+        },
+        2000,
+    )
+    .await;
     assert!(ok, "timeout waiting for external subscription");
 
-    // Now manually enqueue an activity completion 
+    // Now manually enqueue an activity completion
     // This simulates the activity completing while the orchestration is waiting
     let completion = WorkItem::ActivityCompleted {
         instance: "inst-can-nondet".to_string(),
-        execution_id: 1, 
+        execution_id: 1,
         id: 1,
         result: serde_json::to_string(&Ok::<String, String>("activity_completed".to_string())).unwrap(),
     };
@@ -400,13 +394,13 @@ async fn continue_as_new_with_unconsumed_completion_triggers_nondeterminism() {
 async fn execution_id_filtering_prevents_cross_execution_completions() {
     // This test verifies that activity completions from previous executions
     // are filtered out and don't cause nondeterminism.
-    
+
     // The test is embedded within the continue_as_new tests where we can
     // observe the warning logs about filtered cross-execution completions.
     // The key behavior is tested there: when an orchestration does ContinueAsNew,
     // any pending activity completions from the previous execution are filtered
     // out (with a warning) rather than causing nondeterminism.
-    
+
     // See continue_as_new_tests.rs for the actual execution ID filtering behavior.
     // This placeholder test just verifies the mechanism exists.
     assert!(true, "Execution ID filtering is tested via continue_as_new tests");
@@ -425,9 +419,13 @@ async fn execution_id_filtering_without_continue_as_new_triggers_nondeterminism(
         result
     };
 
-    let reg = OrchestrationRegistry::builder().register("ExecIdNoCanTest", orch).build();
+    let reg = OrchestrationRegistry::builder()
+        .register("ExecIdNoCanTest", orch)
+        .build();
     let activity_registry = ActivityRegistry::builder()
-        .register("TestActivity", |_input: String| async { Ok("activity result".to_string()) })
+        .register("TestActivity", |_input: String| async {
+            Ok("activity result".to_string())
+        })
         .build();
     let rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(activity_registry), reg).await;
 
@@ -486,7 +484,9 @@ async fn duplicate_external_events_are_handled_gracefully() {
         Ok(result)
     };
 
-    let reg = OrchestrationRegistry::builder().register("DuplicateExternalTest", orch).build();
+    let reg = OrchestrationRegistry::builder()
+        .register("DuplicateExternalTest", orch)
+        .build();
     let activity_registry = ActivityRegistry::builder().build();
     let rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(activity_registry), reg).await;
 

@@ -62,14 +62,12 @@ impl TimerService {
             for (instance, execution_id, id, fire_at_ms) in due.drain(..) {
                 let _ = self
                     .store
-                    .enqueue_orchestrator_work(
-                        WorkItem::TimerFired {
-                            instance,
-                            execution_id,
-                            id,
-                            fire_at_ms,
-                        },
-                    )
+                    .enqueue_orchestrator_work(WorkItem::TimerFired {
+                        instance,
+                        execution_id,
+                        id,
+                        fire_at_ms,
+                    })
                     .await;
             }
 

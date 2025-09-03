@@ -120,7 +120,11 @@ async fn timer_deduplication_fs() {
         let hist = store.read(inst).await;
         hist.iter()
             .find_map(|e| match e {
-                Event::TimerCreated { id, fire_at_ms, execution_id: _ } => Some((*id, *fire_at_ms)),
+                Event::TimerCreated {
+                    id,
+                    fire_at_ms,
+                    execution_id: _,
+                } => Some((*id, *fire_at_ms)),
                 _ => None,
             })
             .unwrap()
@@ -131,12 +135,8 @@ async fn timer_deduplication_fs() {
         id,
         fire_at_ms: fire_at,
     };
-    let _ = store
-        .enqueue_orchestrator_work(wi.clone())
-        .await;
-    let _ = store
-        .enqueue_orchestrator_work(wi.clone())
-        .await;
+    let _ = store.enqueue_orchestrator_work(wi.clone()).await;
+    let _ = store.enqueue_orchestrator_work(wi.clone()).await;
 
     assert!(
         common::wait_for_history(

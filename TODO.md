@@ -1,5 +1,6 @@
 ## Durable Task Rust Core – TODOs
 
+- Reduce ornamental user code in orchestrations and acivities
 - Continue the provider simplification
 - Rename to provider
 - Return instance history as well

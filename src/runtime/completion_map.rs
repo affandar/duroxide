@@ -236,9 +236,9 @@ impl CompletionMap {
 
             // Check if there's already a matching external event in history
             // If so, consider this completion as "consumed" to avoid nondeterminism
-            let has_existing_external = history.iter().any(|e| {
-                matches!(e, Event::ExternalEvent { name: event_name, .. } if event_name == &name)
-            });
+            let has_existing_external = history
+                .iter()
+                .any(|e| matches!(e, Event::ExternalEvent { name: event_name, .. } if event_name == &name));
 
             let arrival_order = self.next_order;
             self.next_order += 1;

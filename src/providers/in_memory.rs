@@ -73,7 +73,7 @@ impl HistoryStore for InMemoryHistoryStore {
     }
 
     // ===== Orchestrator Queue Methods =====
-    
+
     async fn enqueue_orchestrator_work(&self, item: WorkItem) -> Result<(), String> {
         let mut q = self.orchestrator_q.lock().await;
         if !q.contains(&item) {
@@ -87,7 +87,7 @@ impl HistoryStore for InMemoryHistoryStore {
         if q.is_empty() {
             return None;
         }
-        
+
         // Group items by instance
         let mut instance_map: HashMap<String, Vec<(usize, WorkItem)>> = HashMap::new();
         for (idx, item) in q.iter().enumerate() {
@@ -105,7 +105,7 @@ impl HistoryStore for InMemoryHistoryStore {
             };
             instance_map.entry(instance).or_default().push((idx, item.clone()));
         }
-        
+
         // Take the first instance
         if let Some((instance, items)) = instance_map.into_iter().next() {
             // Remove items from queue in reverse order to maintain indices
@@ -114,7 +114,7 @@ impl HistoryStore for InMemoryHistoryStore {
             for idx in indices {
                 q.remove(idx);
             }
-            
+
             let work_items: Vec<WorkItem> = items.into_iter().map(|(_, item)| item).collect();
             let token = format!(
                 "o:{}:{}:{}",
@@ -125,24 +125,24 @@ impl HistoryStore for InMemoryHistoryStore {
                     .as_nanos(),
                 work_items.len()
             );
-            
+
             // Store the batch in invisible map
             self.invisible_orchestrator
                 .lock()
                 .await
                 .insert(token.clone(), work_items.clone());
-                
+
             Some((work_items, token))
         } else {
             None
         }
     }
-    
+
     async fn ack_orchestrator(&self, token: &str) -> Result<(), String> {
         self.invisible_orchestrator.lock().await.remove(token);
         Ok(())
     }
-    
+
     async fn abandon_orchestrator(&self, token: &str) -> Result<(), String> {
         if let Some(items) = self.invisible_orchestrator.lock().await.remove(token) {
             let mut q = self.orchestrator_q.lock().await;
@@ -153,9 +153,9 @@ impl HistoryStore for InMemoryHistoryStore {
         }
         Ok(())
     }
-    
+
     // ===== Worker Queue Methods =====
-    
+
     async fn enqueue_worker_work(&self, item: WorkItem) -> Result<(), String> {
         let mut q = self.worker_q.lock().await;
         if !q.contains(&item) {
@@ -178,16 +178,16 @@ impl HistoryStore for InMemoryHistoryStore {
                 .as_nanos(),
             q.len()
         );
-        
+
         self.invisible_worker.lock().await.insert(token.clone(), item.clone());
         Some((item, token))
     }
-    
+
     async fn ack_worker(&self, token: &str) -> Result<(), String> {
         self.invisible_worker.lock().await.remove(token);
         Ok(())
     }
-    
+
     async fn abandon_worker(&self, token: &str) -> Result<(), String> {
         if let Some(item) = self.invisible_worker.lock().await.remove(token) {
             let mut q = self.worker_q.lock().await;
@@ -195,9 +195,9 @@ impl HistoryStore for InMemoryHistoryStore {
         }
         Ok(())
     }
-    
+
     // ===== Timer Queue Methods =====
-    
+
     async fn enqueue_timer_work(&self, item: WorkItem) -> Result<(), String> {
         let mut q = self.timer_q.lock().await;
         if !q.contains(&item) {
@@ -205,7 +205,7 @@ impl HistoryStore for InMemoryHistoryStore {
         }
         Ok(())
     }
-    
+
     async fn dequeue_timer_peek_lock(&self) -> Option<(WorkItem, String)> {
         let mut q = self.timer_q.lock().await;
         if q.is_empty() {
@@ -220,16 +220,16 @@ impl HistoryStore for InMemoryHistoryStore {
                 .as_nanos(),
             q.len()
         );
-        
+
         self.invisible_timer.lock().await.insert(token.clone(), item.clone());
         Some((item, token))
     }
-    
+
     async fn ack_timer(&self, token: &str) -> Result<(), String> {
         self.invisible_timer.lock().await.remove(token);
         Ok(())
     }
-    
+
     async fn abandon_timer(&self, token: &str) -> Result<(), String> {
         if let Some(item) = self.invisible_timer.lock().await.remove(token) {
             let mut q = self.timer_q.lock().await;
@@ -366,7 +366,7 @@ impl HistoryStore for InMemoryHistoryStore {
     async fn fetch_orchestration_item(&self) -> Option<super::OrchestrationItem> {
         // First dequeue a batch of orchestrator messages
         let (messages, lock_token) = self.dequeue_orchestrator_peek_lock().await?;
-        
+
         // Extract instance from the first message
         let instance = match messages.first()? {
             WorkItem::StartOrchestration { instance, .. }
@@ -376,13 +376,20 @@ impl HistoryStore for InMemoryHistoryStore {
             | WorkItem::ExternalRaised { instance, .. }
             | WorkItem::CancelInstance { instance, .. }
             | WorkItem::ContinueAsNew { instance, .. } => instance.clone(),
-            WorkItem::SubOrchCompleted { parent_instance, .. }
-            | WorkItem::SubOrchFailed { parent_instance, .. } => parent_instance.clone(),
+            WorkItem::SubOrchCompleted { parent_instance, .. } | WorkItem::SubOrchFailed { parent_instance, .. } => {
+                parent_instance.clone()
+            }
             _ => return None,
         };
-        
+
         // Special handling for ContinueAsNew - it represents a transition to a new execution
-        if let Some(WorkItem::ContinueAsNew { orchestration, input: _, version, .. }) = messages.first() {
+        if let Some(WorkItem::ContinueAsNew {
+            orchestration,
+            input: _,
+            version,
+            ..
+        }) = messages.first()
+        {
             // For in-memory, we just use execution_id = 1 for simplicity
             // The key point is that history starts fresh
             return Some(super::OrchestrationItem {
@@ -391,40 +398,50 @@ impl HistoryStore for InMemoryHistoryStore {
                 execution_id: 1, // In-memory provider doesn't track execution IDs
                 version: version.as_deref().unwrap_or("1.0.0").to_string(),
                 history: vec![], // New execution starts with empty history
-                messages, // Keep all messages including ContinueAsNew
+                messages,        // Keep all messages including ContinueAsNew
                 lock_token,
             });
         }
-        
+
         // For all other cases, read the current history
         let history = self.read(&instance).await;
-        
+
         // If this is a new instance (StartOrchestration), create it
-        if history.is_empty() && messages.iter().any(|m| matches!(m, WorkItem::StartOrchestration { .. })) {
+        if history.is_empty()
+            && messages
+                .iter()
+                .any(|m| matches!(m, WorkItem::StartOrchestration { .. }))
+        {
             let _ = self.create_instance(&instance).await;
         }
-        
+
         // Extract orchestration metadata from history
-        let (orchestration_name, version, execution_id) = if let Some(event) = history.iter().find(|e| {
-            matches!(e, Event::OrchestrationStarted { .. })
-        }) {
-            match event {
-                Event::OrchestrationStarted { name, version, .. } => {
-                    (name.clone(), version.clone(), 1) // In-memory uses execution_id = 1
+        let (orchestration_name, version, execution_id) =
+            if let Some(event) = history.iter().find(|e| matches!(e, Event::OrchestrationStarted { .. })) {
+                match event {
+                    Event::OrchestrationStarted { name, version, .. } => {
+                        (name.clone(), version.clone(), 1) // In-memory uses execution_id = 1
+                    }
+                    _ => return None,
                 }
-                _ => return None,
-            }
-        } else {
-            // New instance - extract from StartOrchestration message
-            if let Some(WorkItem::StartOrchestration { orchestration, version, .. }) = messages.iter().find(|m| {
-                matches!(m, WorkItem::StartOrchestration { .. })
-            }) {
-                (orchestration.clone(), version.clone().unwrap_or_else(|| "1.0.0".to_string()), 1)
             } else {
-                return None;
-            }
-        };
-        
+                // New instance - extract from StartOrchestration message
+                if let Some(WorkItem::StartOrchestration {
+                    orchestration, version, ..
+                }) = messages
+                    .iter()
+                    .find(|m| matches!(m, WorkItem::StartOrchestration { .. }))
+                {
+                    (
+                        orchestration.clone(),
+                        version.clone().unwrap_or_else(|| "1.0.0".to_string()),
+                        1,
+                    )
+                } else {
+                    return None;
+                }
+            };
+
         Some(super::OrchestrationItem {
             instance,
             orchestration_name,
@@ -435,7 +452,7 @@ impl HistoryStore for InMemoryHistoryStore {
             lock_token,
         })
     }
-    
+
     async fn ack_orchestration_item(
         &self,
         lock_token: &str,
@@ -447,9 +464,10 @@ impl HistoryStore for InMemoryHistoryStore {
         // Get the instance from the invisible orchestrator map
         let instance = {
             let invisible = self.invisible_orchestrator.lock().await;
-            let batch = invisible.get(lock_token)
+            let batch = invisible
+                .get(lock_token)
                 .ok_or_else(|| "Lock token not found".to_string())?;
-            
+
             match batch.first() {
                 Some(item) => match item {
                     WorkItem::StartOrchestration { instance, .. }
@@ -466,18 +484,19 @@ impl HistoryStore for InMemoryHistoryStore {
                 None => return Err("Empty batch in lock".to_string()),
             }
         };
-        
+
         // Check if this was a ContinueAsNew transition
         let is_continue_as_new = {
             let invisible = self.invisible_orchestrator.lock().await;
-            invisible.get(lock_token)
+            invisible
+                .get(lock_token)
                 .and_then(|batch| batch.first())
                 .map_or(false, |item| matches!(item, WorkItem::ContinueAsNew { .. }))
         };
-        
+
         // Perform all operations with best-effort atomicity
         let mut errors = Vec::new();
-        
+
         // 1. Append history delta
         if !history_delta.is_empty() {
             if is_continue_as_new {
@@ -490,7 +509,7 @@ impl HistoryStore for InMemoryHistoryStore {
                 } {
                     current_history.push(Event::OrchestrationContinuedAsNew { input });
                 }
-                
+
                 // Now replace with the new execution's history
                 // In-memory provider stores all executions, so we append the new one
                 let mut store = self.inner.lock().await;
@@ -506,7 +525,7 @@ impl HistoryStore for InMemoryHistoryStore {
                 }
             }
         }
-        
+
         // 2. Enqueue worker items
         {
             let mut q = self.worker_q.lock().await;
@@ -514,7 +533,7 @@ impl HistoryStore for InMemoryHistoryStore {
                 q.push(item);
             }
         }
-        
+
         // 3. Enqueue timer items
         {
             let mut q = self.timer_q.lock().await;
@@ -522,7 +541,7 @@ impl HistoryStore for InMemoryHistoryStore {
                 q.push(item);
             }
         }
-        
+
         // 4. Enqueue orchestrator items
         {
             let mut q = self.orchestrator_q.lock().await;
@@ -530,13 +549,13 @@ impl HistoryStore for InMemoryHistoryStore {
                 q.push(item);
             }
         }
-        
+
         // 5. Acknowledge the batch (release the lock)
         {
             let mut invisible = self.invisible_orchestrator.lock().await;
             invisible.remove(lock_token);
         }
-        
+
         // Return error if any operation failed
         if !errors.is_empty() {
             Err(errors.join("; "))
@@ -544,16 +563,12 @@ impl HistoryStore for InMemoryHistoryStore {
             Ok(())
         }
     }
-    
-    async fn abandon_orchestration_item(
-        &self,
-        lock_token: &str,
-        delay_ms: Option<u64>,
-    ) -> Result<(), String> {
+
+    async fn abandon_orchestration_item(&self, lock_token: &str, delay_ms: Option<u64>) -> Result<(), String> {
         if delay_ms.is_some() {
             tracing::warn!("visibility delay not yet implemented for in_memory provider");
         }
-        
+
         // Simply abandon the orchestrator batch
         self.abandon_orchestrator(lock_token).await
     }

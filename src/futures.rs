@@ -240,7 +240,11 @@ impl Future for DurableFuture {
                 if !already_created && !scheduled.replace(true) {
                     let fire_at_ms = inner.now_ms().saturating_add(*delay_ms);
                     let exec_id = inner.execution_id;
-                    inner.history.push(Event::TimerCreated { id: *id, fire_at_ms, execution_id: exec_id });
+                    inner.history.push(Event::TimerCreated {
+                        id: *id,
+                        fire_at_ms,
+                        execution_id: exec_id,
+                    });
                     inner.record_action(Action::CreateTimer {
                         id: *id,
                         delay_ms: *delay_ms,

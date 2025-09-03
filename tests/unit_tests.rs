@@ -120,7 +120,14 @@ async fn history_store_admin_apis() {
     store.create_instance("i1").await.unwrap();
     store.create_instance("i2").await.unwrap();
     store
-        .append("i1", vec![Event::TimerCreated { id: 1, fire_at_ms: 10, execution_id: 1 }])
+        .append(
+            "i1",
+            vec![Event::TimerCreated {
+                id: 1,
+                fire_at_ms: 10,
+                execution_id: 1,
+            }],
+        )
         .await
         .unwrap();
     store
@@ -292,7 +299,11 @@ async fn orchestration_status_apis() {
     tokio::time::sleep(std::time::Duration::from_millis(5)).await;
     let s1 = rt.get_orchestration_status(inst_running).await;
     // The orchestration should be running (waiting for timer)
-    assert!(matches!(s1, OrchestrationStatus::Running), "expected Running, got {:?}", s1);
+    assert!(
+        matches!(s1, OrchestrationStatus::Running),
+        "expected Running, got {:?}",
+        s1
+    );
 
     // After completion, should be Completed with output
     match rt

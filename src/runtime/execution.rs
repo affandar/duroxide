@@ -4,8 +4,8 @@ use tracing::{debug, error};
 use super::orchestration_turn::{OrchestrationTurn, TurnResult};
 use crate::{
     Event,
-    runtime::{OrchestrationHandler, Runtime, router::OrchestratorMsg},
     providers::WorkItem,
+    runtime::{OrchestrationHandler, Runtime, router::OrchestratorMsg},
 };
 
 impl Runtime {
@@ -71,7 +71,6 @@ impl Runtime {
         let current_execution_history = Self::extract_current_execution_history(&history);
         let mut turn = OrchestrationTurn::new(
             instance.to_string(),
-            orchestration_name.to_string(),
             turn_index,
             execution_id,
             current_execution_history,
@@ -152,7 +151,10 @@ impl Runtime {
                        "❌ Instance execution failed");
                 return (result.0, result.1);
             }
-            TurnResult::ContinueAsNew { input: new_input, version } => {
+            TurnResult::ContinueAsNew {
+                input: new_input,
+                version,
+            } => {
                 match (&self)
                     .handle_continue_as_new(
                         instance,
@@ -349,10 +351,7 @@ impl Runtime {
                 },
             };
 
-            let _ = self
-                .history_store
-                .enqueue_orchestrator_work(work_item)
-                .await;
+            let _ = self.history_store.enqueue_orchestrator_work(work_item).await;
         }
 
         (history.clone(), result)
@@ -427,14 +426,12 @@ impl Runtime {
         // The dispatcher will handle starting the new execution normally
         if let Err(e) = self
             .history_store
-            .enqueue_orchestrator_work(
-                crate::providers::WorkItem::ContinueAsNew {
-                    instance: instance.to_string(),
-                    orchestration: orchestration_name.to_string(),
-                    input: input.clone(),
-                    version: version.clone(),
-                },
-            )
+            .enqueue_orchestrator_work(crate::providers::WorkItem::ContinueAsNew {
+                instance: instance.to_string(),
+                orchestration: orchestration_name.to_string(),
+                input: input.clone(),
+                version: version.clone(),
+            })
             .await
         {
             error!(instance, error = %e, "failed to enqueue continue-as-new work item");
@@ -491,12 +488,10 @@ impl Runtime {
                 let child_full = format!("{}::{}", instance, child_suffix);
                 let _ = self
                     .history_store
-                    .enqueue_orchestrator_work(
-                        WorkItem::CancelInstance {
-                            instance: child_full,
-                            reason: "parent canceled".into(),
-                        },
-                    )
+                    .enqueue_orchestrator_work(WorkItem::CancelInstance {
+                        instance: child_full,
+                        reason: "parent canceled".into(),
+                    })
                     .await;
             }
         }
@@ -525,7 +520,13 @@ impl Runtime {
         initial_history: Vec<Event>,
         execution_id: u64,
         completion_messages: Vec<OrchestratorMsg>,
-    ) -> (Vec<Event>, Vec<WorkItem>, Vec<WorkItem>, Vec<WorkItem>, Result<String, String>) {
+    ) -> (
+        Vec<Event>,
+        Vec<WorkItem>,
+        Vec<WorkItem>,
+        Vec<WorkItem>,
+        Result<String, String>,
+    ) {
         debug!(instance, orchestration_name, "🚀 Starting atomic single execution");
 
         // Track all changes
@@ -570,7 +571,6 @@ impl Runtime {
         let current_execution_history = Self::extract_current_execution_history(&history);
         let mut turn = OrchestrationTurn::new(
             instance.to_string(),
-            orchestration_name.to_string(),
             0, // turn_index
             execution_id,
             current_execution_history,
@@ -616,7 +616,13 @@ impl Runtime {
                                 fire_at_ms,
                             });
                         }
-                        crate::Action::StartSubOrchestration { id, name, version, instance: sub_instance, input } => {
+                        crate::Action::StartSubOrchestration {
+                            id,
+                            name,
+                            version,
+                            instance: sub_instance,
+                            input,
+                        } => {
                             // Construct the full child instance name with parent prefix
                             let child_full = format!("{}::{}", instance, sub_instance);
                             orchestrator_items.push(WorkItem::StartOrchestration {
@@ -628,7 +634,13 @@ impl Runtime {
                                 parent_id: Some(*id),
                             });
                         }
-                        crate::Action::StartOrchestrationDetached { id: _, name, version, instance: sub_instance, input } => {
+                        crate::Action::StartOrchestrationDetached {
+                            id: _,
+                            name,
+                            version,
+                            instance: sub_instance,
+                            input,
+                        } => {
                             orchestrator_items.push(WorkItem::StartOrchestration {
                                 instance: sub_instance.clone(),
                                 orchestration: name.clone(),
@@ -641,7 +653,7 @@ impl Runtime {
                         _ => {} // Other actions don't generate work items
                     }
                 }
-                
+
                 Ok(String::new())
             }
             TurnResult::Completed(output) => {
@@ -668,7 +680,13 @@ impl Runtime {
                                 fire_at_ms,
                             });
                         }
-                        crate::Action::StartSubOrchestration { id, name, version, instance: sub_instance, input } => {
+                        crate::Action::StartSubOrchestration {
+                            id,
+                            name,
+                            version,
+                            instance: sub_instance,
+                            input,
+                        } => {
                             // Construct the full child instance name with parent prefix
                             let child_full = format!("{}::{}", instance, sub_instance);
                             orchestrator_items.push(WorkItem::StartOrchestration {
@@ -680,7 +698,13 @@ impl Runtime {
                                 parent_id: Some(*id),
                             });
                         }
-                        crate::Action::StartOrchestrationDetached { id: _, name, version, instance: sub_instance, input } => {
+                        crate::Action::StartOrchestrationDetached {
+                            id: _,
+                            name,
+                            version,
+                            instance: sub_instance,
+                            input,
+                        } => {
                             orchestrator_items.push(WorkItem::StartOrchestration {
                                 instance: sub_instance.clone(),
                                 orchestration: name.clone(),
@@ -730,7 +754,7 @@ impl Runtime {
             TurnResult::ContinueAsNew { input, version } => {
                 // For atomic execution, we don't add the ContinuedAsNew event here
                 // It will be handled by the provider when transitioning executions
-                
+
                 // Enqueue continue as new work item
                 orchestrator_items.push(WorkItem::ContinueAsNew {
                     instance: instance.to_string(),
@@ -772,10 +796,10 @@ impl Runtime {
 
         debug!(
             instance,
-            "run_single_execution_atomic complete: history_delta={}, worker={}, timer={}, orch={}", 
-            history_delta.len(), 
-            worker_items.len(), 
-            timer_items.len(), 
+            "run_single_execution_atomic complete: history_delta={}, worker={}, timer={}, orch={}",
+            history_delta.len(),
+            worker_items.len(),
+            timer_items.len(),
             orchestrator_items.len()
         );
         (history_delta, worker_items, timer_items, orchestrator_items, result)
@@ -834,7 +858,7 @@ impl Runtime {
                     .unwrap_or_default()
                     .as_millis() as u64
             });
-        
+
         current_time.saturating_add(delay_ms)
     }
 }

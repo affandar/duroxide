@@ -1,4 +1,3 @@
-
 use rust_dtf::providers::HistoryStore;
 use rust_dtf::providers::fs::FsHistoryStore;
 use rust_dtf::runtime::registry::ActivityRegistry;
@@ -16,20 +15,20 @@ async fn orchestration_completes_and_replays_deterministically_with(store: StdAr
         let f_e = ctx.schedule_wait("Go");
 
         let outputs = ctx.join(vec![f_a, f_t, f_e]).await;
-        
+
         // Extract outputs by type since join returns in history order
         let mut o_a = None;
         let mut o_e = None;
-        
+
         for output in outputs {
             match output {
                 DurableOutput::Activity(_) => o_a = Some(output),
-                DurableOutput::Timer => {}, // ignore timer
+                DurableOutput::Timer => {} // ignore timer
                 DurableOutput::External(_) => o_e = Some(output),
-                _ => {},
+                _ => {}
             }
         }
-        
+
         let o_a = o_a.expect("Activity result not found");
         let o_e = o_e.expect("External result not found");
 
@@ -99,20 +98,20 @@ async fn orchestration_completes_and_replays_deterministically_with(store: StdAr
         let f_t = ctx.schedule_timer(5);
         let f_e = ctx.schedule_wait("Go");
         let outputs = ctx.join(vec![f_a, f_t, f_e]).await;
-        
+
         // Extract outputs by type since join returns in history order
         let mut o_a = None;
         let mut o_e = None;
-        
+
         for output in outputs {
             match output {
                 DurableOutput::Activity(_) => o_a = Some(output),
-                DurableOutput::Timer => {}, // ignore timer
+                DurableOutput::Timer => {} // ignore timer
                 DurableOutput::External(_) => o_e = Some(output),
-                _ => {},
+                _ => {}
             }
         }
-        
+
         let o_a = o_a.expect("Activity result not found");
         let o_e = o_e.expect("External result not found");
         let a = match o_a {

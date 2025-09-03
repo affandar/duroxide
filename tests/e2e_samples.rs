@@ -31,9 +31,9 @@ async fn sample_hello_world_fs() {
     // Orchestrator: emit a trace, call Hello twice, return result using input
     let orchestration = |ctx: OrchestrationContext, input: String| async move {
         ctx.trace_info("hello_world started");
-        let res = ctx.schedule_activity("Hello", "Rust").into_activity().await.unwrap();
+        let res = ctx.schedule_activity("Hello", "Rust").into_activity().await?;
         ctx.trace_info(format!("hello_world result={res} "));
-        let res1 = ctx.schedule_activity("Hello", input).into_activity().await.unwrap();
+        let res1 = ctx.schedule_activity("Hello", input).into_activity().await?;
         ctx.trace_info(format!("hello_world result={res1} "));
         Ok(res1)
     };
@@ -61,6 +61,8 @@ async fn sample_hello_world_fs() {
     }
     rt.shutdown().await;
 }
+
+
 
 /// Basic control flow: branch on a flag returned by an activity.
 ///
@@ -1265,6 +1267,262 @@ async fn sample_cancellation_parent_cascades_to_children_fs() {
             hist.iter().any(|e| matches!(e, Event::OrchestrationFailed { error } if error.starts_with("canceled: parent canceled")))
         }, 5_000).await;
         assert!(ok_child, "timeout waiting for child cancel for {child}");
+    }
+
+    rt.shutdown().await;
+}
+
+/// Error handling: basic activity failure
+///
+/// Highlights:
+/// - Activity that can fail
+/// - Error propagation from activity to orchestration
+/// - Simple error handling pattern
+#[tokio::test]
+async fn sample_basic_error_handling_fs() {
+    let td = tempfile::tempdir().unwrap();
+    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
+
+    // Register an activity that can fail
+    let activity_registry = ActivityRegistry::builder()
+        .register("ValidateInput", |input: String| async move {
+            if input.is_empty() {
+                Err("Input cannot be empty".to_string())
+            } else {
+                Ok(format!("Valid: {input}"))
+            }
+        })
+        .build();
+
+    // Simple orchestration that calls the activity
+    let orchestration = |ctx: OrchestrationContext, input: String| async move {
+        ctx.trace_info("Starting validation");
+        let result = ctx.schedule_activity("ValidateInput", input).into_activity().await?;
+        ctx.trace_info(format!("Validation result: {result}"));
+        Ok(result)
+    };
+
+    let orchestration_registry = OrchestrationRegistry::builder()
+        .register("BasicErrorHandling", orchestration)
+        .build();
+
+    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+
+    // Test successful case
+    let _handle1 = rt
+        .clone()
+        .start_orchestration("inst-basic-error-1", "BasicErrorHandling", "test")
+        .await
+        .unwrap();
+
+    match rt
+        .wait_for_orchestration("inst-basic-error-1", std::time::Duration::from_secs(5))
+        .await
+        .unwrap()
+    {
+        runtime::OrchestrationStatus::Completed { output } => {
+            assert_eq!(output, "Valid: test");
+        }
+        runtime::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        _ => panic!("unexpected orchestration status"),
+    }
+
+    // Test error case
+    let _handle2 = rt
+        .clone()
+        .start_orchestration("inst-basic-error-2", "BasicErrorHandling", "")
+        .await
+        .unwrap();
+
+    match rt
+        .wait_for_orchestration("inst-basic-error-2", std::time::Duration::from_secs(5))
+        .await
+        .unwrap()
+    {
+        runtime::OrchestrationStatus::Failed { error } => {
+            assert!(error.contains("Input cannot be empty"));
+        }
+        runtime::OrchestrationStatus::Completed { output } => panic!("Expected failure but got success: {output}"),
+        _ => panic!("unexpected orchestration status"),
+    }
+
+    rt.shutdown().await;
+}
+
+/// Error handling: nested function with `?` operator
+///
+/// Highlights:
+/// - Nested function that can fail
+/// - Using `?` operator for error propagation
+/// - Clean error handling pattern
+#[tokio::test]
+async fn sample_nested_function_error_handling_fs() {
+    let td = tempfile::tempdir().unwrap();
+    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
+
+    // Register activities
+    let activity_registry = ActivityRegistry::builder()
+        .register("ProcessData", |input: String| async move {
+            if input.contains("error") {
+                Err("Processing failed".to_string())
+            } else {
+                Ok(format!("Processed: {input}"))
+            }
+        })
+        .register("FormatOutput", |input: String| async move {
+            Ok(format!("Final: {input}"))
+        })
+        .build();
+
+    // Nested function that can fail with `?`
+    async fn process_and_format(ctx: &OrchestrationContext, data: &str) -> Result<String, String> {
+        ctx.trace_info("Starting processing");
+        let processed = ctx.schedule_activity("ProcessData", data.to_string()).into_activity().await?;
+        ctx.trace_info("Starting formatting");
+        let formatted = ctx.schedule_activity("FormatOutput", processed).into_activity().await?;
+        Ok(formatted)
+    }
+
+    // Orchestration that uses nested function with `?`
+    let orchestration = |ctx: OrchestrationContext, input: String| async move {
+        ctx.trace_info("Starting orchestration");
+        let result = process_and_format(&ctx, &input).await?;
+        ctx.trace_info("Orchestration completed");
+        Ok(result)
+    };
+
+    let orchestration_registry = OrchestrationRegistry::builder()
+        .register("NestedErrorHandling", orchestration)
+        .build();
+
+    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+
+    // Test successful case
+    let _handle1 = rt
+        .clone()
+        .start_orchestration("inst-nested-error-1", "NestedErrorHandling", "test")
+        .await
+        .unwrap();
+
+    match rt
+        .wait_for_orchestration("inst-nested-error-1", std::time::Duration::from_secs(5))
+        .await
+        .unwrap()
+    {
+        runtime::OrchestrationStatus::Completed { output } => {
+            assert_eq!(output, "Final: Processed: test");
+        }
+        runtime::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        _ => panic!("unexpected orchestration status"),
+    }
+
+    // Test error case
+    let _handle2 = rt
+        .clone()
+        .start_orchestration("inst-nested-error-2", "NestedErrorHandling", "error")
+        .await
+        .unwrap();
+
+    match rt
+        .wait_for_orchestration("inst-nested-error-2", std::time::Duration::from_secs(5))
+        .await
+        .unwrap()
+    {
+        runtime::OrchestrationStatus::Failed { error } => {
+            assert!(error.contains("Processing failed"));
+        }
+        runtime::OrchestrationStatus::Completed { output } => panic!("Expected failure but got success: {output}"),
+        _ => panic!("unexpected orchestration status"),
+    }
+
+    rt.shutdown().await;
+}
+
+/// Error handling: error recovery with logging
+///
+/// Highlights:
+/// - Explicit error handling with match statements
+/// - Error recovery and logging
+/// - Graceful failure handling
+#[tokio::test]
+async fn sample_error_recovery_fs() {
+    let td = tempfile::tempdir().unwrap();
+    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
+
+    // Register activities
+    let activity_registry = ActivityRegistry::builder()
+        .register("ProcessData", |input: String| async move {
+            if input.contains("error") {
+                Err("Processing failed".to_string())
+            } else {
+                Ok(format!("Processed: {input}"))
+            }
+        })
+        .register("LogError", |error: String| async move {
+            Ok(format!("Logged: {error}"))
+        })
+        .build();
+
+    // Orchestration with explicit error recovery
+    let orchestration = |ctx: OrchestrationContext, input: String| async move {
+        ctx.trace_info("Starting orchestration");
+        
+        match ctx.schedule_activity("ProcessData", input.clone()).into_activity().await {
+            Ok(result) => {
+                ctx.trace_info("Processing succeeded");
+                Ok(result)
+            }
+            Err(e) => {
+                ctx.trace_info("Processing failed, logging error");
+                let _ = ctx.schedule_activity("LogError", e.clone()).into_activity().await;
+                Err(format!("Failed to process '{}': {}", input, e))
+            }
+        }
+    };
+
+    let orchestration_registry = OrchestrationRegistry::builder()
+        .register("ErrorRecovery", orchestration)
+        .build();
+
+    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+
+    // Test successful case
+    let _handle1 = rt
+        .clone()
+        .start_orchestration("inst-recovery-1", "ErrorRecovery", "test")
+        .await
+        .unwrap();
+
+    match rt
+        .wait_for_orchestration("inst-recovery-1", std::time::Duration::from_secs(5))
+        .await
+        .unwrap()
+    {
+        runtime::OrchestrationStatus::Completed { output } => {
+            assert_eq!(output, "Processed: test");
+        }
+        runtime::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        _ => panic!("unexpected orchestration status"),
+    }
+
+    // Test error recovery case
+    let _handle2 = rt
+        .clone()
+        .start_orchestration("inst-recovery-2", "ErrorRecovery", "error")
+        .await
+        .unwrap();
+
+    match rt
+        .wait_for_orchestration("inst-recovery-2", std::time::Duration::from_secs(5))
+        .await
+        .unwrap()
+    {
+        runtime::OrchestrationStatus::Failed { error } => {
+            assert!(error.contains("Failed to process 'error'"));
+            assert!(error.contains("Processing failed"));
+        }
+        runtime::OrchestrationStatus::Completed { output } => panic!("Expected failure but got success: {output}"),
+        _ => panic!("unexpected orchestration status"),
     }
 
     rt.shutdown().await;

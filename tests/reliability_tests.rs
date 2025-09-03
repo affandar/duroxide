@@ -1,6 +1,6 @@
 use rust_dtf::providers::HistoryStore;
-use rust_dtf::providers::fs::FsHistoryStore;
 use rust_dtf::providers::WorkItem;
+use rust_dtf::providers::fs::FsHistoryStore;
 use rust_dtf::runtime::registry::ActivityRegistry;
 use rust_dtf::runtime::{self};
 use rust_dtf::{Event, OrchestrationContext, OrchestrationRegistry};
@@ -95,7 +95,12 @@ async fn timer_duplicate_workitems_dedup_fs() {
         let mut t_id = 0u64;
         let mut t_fire = 0u64;
         for e in hist.iter() {
-            if let Event::TimerCreated { id, fire_at_ms, execution_id: _ } = e {
+            if let Event::TimerCreated {
+                id,
+                fire_at_ms,
+                execution_id: _,
+            } = e
+            {
                 t_id = *id;
                 t_fire = *fire_at_ms;
                 break;
@@ -315,7 +320,12 @@ async fn crash_after_append_before_ack_timer_fs() {
         let mut t_id = 0u64;
         let mut t_fire = 0u64;
         for e in hist.iter() {
-            if let Event::TimerCreated { id, fire_at_ms, execution_id: _ } = e {
+            if let Event::TimerCreated {
+                id,
+                fire_at_ms,
+                execution_id: _,
+            } = e
+            {
                 t_id = *id;
                 t_fire = *fire_at_ms;
                 break;
