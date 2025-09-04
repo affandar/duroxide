@@ -1,5 +1,5 @@
-use rust_dtf::Event;
-use rust_dtf::providers::HistoryStore;
+use duroxide::Event;
+use duroxide::providers::HistoryStore;
 use std::sync::Arc as StdArc;
 use std::time::{Duration, Instant};
 

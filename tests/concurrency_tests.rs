@@ -1,10 +1,10 @@
 use std::sync::Arc;
 mod common;
-use rust_dtf::providers::HistoryStore;
-use rust_dtf::providers::fs::FsHistoryStore;
-use rust_dtf::runtime::registry::ActivityRegistry;
-use rust_dtf::runtime::{self};
-use rust_dtf::{Event, OrchestrationContext, OrchestrationRegistry};
+use duroxide::providers::HistoryStore;
+use duroxide::providers::fs::FsHistoryStore;
+use duroxide::runtime::registry::ActivityRegistry;
+use duroxide::runtime::{self};
+use duroxide::{Event, OrchestrationContext, OrchestrationRegistry};
 use std::sync::Arc as StdArc;
 
 async fn concurrent_orchestrations_different_activities_with(store: StdArc<dyn HistoryStore>) {
@@ -19,10 +19,10 @@ async fn concurrent_orchestrations_different_activities_with(store: StdArc<dyn H
         let mut e = None;
         for result in &results {
             match result {
-                rust_dtf::futures::DurableOutput::Activity(Ok(activity_result)) => {
+                duroxide::futures::DurableOutput::Activity(Ok(activity_result)) => {
                     a = Some(activity_result.clone());
                 }
-                rust_dtf::futures::DurableOutput::External(external_data) => {
+                duroxide::futures::DurableOutput::External(external_data) => {
                     e = Some(external_data.clone());
                 }
                 _ => {} // Ignore timer for now
@@ -45,10 +45,10 @@ async fn concurrent_orchestrations_different_activities_with(store: StdArc<dyn H
         let mut e = None;
         for result in &results {
             match result {
-                rust_dtf::futures::DurableOutput::Activity(Ok(activity_result)) => {
+                duroxide::futures::DurableOutput::Activity(Ok(activity_result)) => {
                     a = Some(activity_result.clone());
                 }
-                rust_dtf::futures::DurableOutput::External(external_data) => {
+                duroxide::futures::DurableOutput::External(external_data) => {
                     e = Some(external_data.clone());
                 }
                 _ => {} // Ignore timer for now
@@ -186,10 +186,10 @@ async fn concurrent_orchestrations_same_activities_with(store: StdArc<dyn Histor
         let mut e = None;
         for result in &results {
             match result {
-                rust_dtf::futures::DurableOutput::Activity(Ok(activity_result)) => {
+                duroxide::futures::DurableOutput::Activity(Ok(activity_result)) => {
                     a = Some(activity_result.clone());
                 }
-                rust_dtf::futures::DurableOutput::External(external_data) => {
+                duroxide::futures::DurableOutput::External(external_data) => {
                     e = Some(external_data.clone());
                 }
                 _ => {} // Ignore timer for now
@@ -213,10 +213,10 @@ async fn concurrent_orchestrations_same_activities_with(store: StdArc<dyn Histor
         let mut e = None;
         for result in &results {
             match result {
-                rust_dtf::futures::DurableOutput::Activity(Ok(activity_result)) => {
+                duroxide::futures::DurableOutput::Activity(Ok(activity_result)) => {
                     a = Some(activity_result.clone());
                 }
-                rust_dtf::futures::DurableOutput::External(external_data) => {
+                duroxide::futures::DurableOutput::External(external_data) => {
                     e = Some(external_data.clone());
                 }
                 _ => {} // Ignore timer for now

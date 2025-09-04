@@ -1,8 +1,8 @@
-use rust_dtf::providers::HistoryStore;
-use rust_dtf::providers::fs::FsHistoryStore;
-use rust_dtf::runtime::registry::ActivityRegistry;
-use rust_dtf::runtime::{self};
-use rust_dtf::{Event, OrchestrationContext, OrchestrationRegistry};
+use duroxide::providers::HistoryStore;
+use duroxide::providers::fs::FsHistoryStore;
+use duroxide::runtime::registry::ActivityRegistry;
+use duroxide::runtime::{self};
+use duroxide::{Event, OrchestrationContext, OrchestrationRegistry};
 use std::sync::Arc as StdArc;
 mod common;
 
@@ -381,7 +381,7 @@ async fn event_drop_then_retry_after_subscribe_fs() {
 // This test verifies that completions from old executions are properly ignored
 
 // merged section imports are already present at the top of this file
-use rust_dtf::providers::WorkItem;
+use duroxide::providers::WorkItem;
 
 #[tokio::test]
 async fn old_execution_completions_are_ignored() {
@@ -433,7 +433,7 @@ async fn old_execution_completions_are_ignored() {
     // Verify the completion was ignored - check that it's not in history
     let history = store.read("inst-exec-test").await;
     let has_old_completion = history.iter().any(|e| match e {
-        rust_dtf::Event::ActivityCompleted { result, .. } => result == "old_execution_result",
+        duroxide::Event::ActivityCompleted { result, .. } => result == "old_execution_result",
         _ => false,
     });
 
@@ -489,7 +489,7 @@ async fn future_execution_completions_are_ignored() {
     // Verify the completion was ignored
     let history = store.read("inst-future").await;
     let has_future_completion = history.iter().any(|e| match e {
-        rust_dtf::Event::ActivityCompleted { result, .. } => result == "future_completion",
+        duroxide::Event::ActivityCompleted { result, .. } => result == "future_completion",
         _ => false,
     });
 

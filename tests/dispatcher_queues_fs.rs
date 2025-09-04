@@ -1,13 +1,13 @@
 use std::sync::Arc as StdArc;
 use std::time::Duration;
 
-use rust_dtf::providers::fs::FsHistoryStore;
-use rust_dtf::runtime::registry::ActivityRegistry;
-use rust_dtf::runtime::{self};
-use rust_dtf::{Event, OrchestrationContext, OrchestrationRegistry};
+use duroxide::providers::fs::FsHistoryStore;
+use duroxide::runtime::registry::ActivityRegistry;
+use duroxide::runtime::{self};
+use duroxide::{Event, OrchestrationContext, OrchestrationRegistry};
 
 async fn wait_for_history<F>(
-    store: StdArc<dyn rust_dtf::providers::HistoryStore>,
+    store: StdArc<dyn duroxide::providers::HistoryStore>,
     instance: &str,
     pred: F,
     timeout_ms: u64,
@@ -30,7 +30,7 @@ where
 async fn dispatcher_enqueues_timer_schedule_then_completes_fs() {
     let td = tempfile::tempdir().unwrap();
     let store = StdArc::new(FsHistoryStore::new(td.path(), true));
-    let store_dyn = store.clone() as StdArc<dyn rust_dtf::providers::HistoryStore>;
+    let store_dyn = store.clone() as StdArc<dyn duroxide::providers::HistoryStore>;
 
     let orch = |ctx: OrchestrationContext, _input: String| async move {
         ctx.schedule_timer(50).into_timer().await;
@@ -63,7 +63,7 @@ async fn dispatcher_enqueues_timer_schedule_then_completes_fs() {
 async fn dispatcher_enqueues_start_orchestration_to_orch_queue_fs() {
     let td = tempfile::tempdir().unwrap();
     let store = StdArc::new(FsHistoryStore::new(td.path(), true));
-    let store_dyn = store.clone() as StdArc<dyn rust_dtf::providers::HistoryStore>;
+    let store_dyn = store.clone() as StdArc<dyn duroxide::providers::HistoryStore>;
 
     let acts = ActivityRegistry::builder().build();
     let child = |_: OrchestrationContext, input: String| async move { Ok(input) };

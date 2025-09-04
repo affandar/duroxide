@@ -1,12 +1,12 @@
 use std::sync::Arc;
 mod common;
 use futures::future::{Either, select};
-use rust_dtf::providers::HistoryStore;
-use rust_dtf::providers::fs::FsHistoryStore;
-use rust_dtf::providers::in_memory::InMemoryHistoryStore;
-use rust_dtf::runtime::registry::ActivityRegistry;
-use rust_dtf::runtime::{self};
-use rust_dtf::{OrchestrationContext, OrchestrationRegistry};
+use duroxide::providers::HistoryStore;
+use duroxide::providers::fs::FsHistoryStore;
+use duroxide::providers::in_memory::InMemoryHistoryStore;
+use duroxide::runtime::registry::ActivityRegistry;
+use duroxide::runtime::{self};
+use duroxide::{OrchestrationContext, OrchestrationRegistry};
 use std::sync::Arc as StdArc;
 
 use serde::{Deserialize, Serialize};
@@ -396,11 +396,11 @@ async fn history_cap_exceeded_with(store: StdArc<dyn HistoryStore>) {
             panic!("expected failure due to history capacity, got: {output}")
         }
         Ok(_) => panic!("unexpected orchestration status"),
-        Err(rust_dtf::runtime::WaitError::Timeout) => {
+        Err(duroxide::runtime::WaitError::Timeout) => {
             // This is also acceptable - the orchestration may not be able to write a terminal event due to capacity
             // In this case, the polling JoinHandle should detect the persistence error
         }
-        Err(rust_dtf::runtime::WaitError::Other(_)) => {
+        Err(duroxide::runtime::WaitError::Other(_)) => {
             // Other errors are also acceptable for capacity exceeded scenarios
         }
     }
@@ -454,15 +454,15 @@ async fn orchestration_immediate_fail_fs() {
     assert_eq!(hist.len(), 2);
     assert!(matches!(
         hist.first().unwrap(),
-        rust_dtf::Event::OrchestrationStarted { .. }
+        duroxide::Event::OrchestrationStarted { .. }
     ));
     assert!(matches!(
         hist.last().unwrap(),
-        rust_dtf::Event::OrchestrationFailed { .. }
+        duroxide::Event::OrchestrationFailed { .. }
     ));
     // Status API should report Failed with same error
     match rt.get_orchestration_status("inst-fail-imm").await {
-        rust_dtf::OrchestrationStatus::Failed { error } => assert_eq!(error, "oops"),
+        duroxide::OrchestrationStatus::Failed { error } => assert_eq!(error, "oops"),
         other => panic!("unexpected status: {other:?}"),
     }
     rt.shutdown().await;
@@ -505,10 +505,10 @@ async fn orchestration_propagates_activity_failure_fs() {
     let hist = rt.get_execution_history("inst-fail-prop", 1).await;
     assert!(matches!(
         hist.last().unwrap(),
-        rust_dtf::Event::OrchestrationFailed { .. }
+        duroxide::Event::OrchestrationFailed { .. }
     ));
     match rt.get_orchestration_status("inst-fail-prop").await {
-        rust_dtf::OrchestrationStatus::Failed { error } => assert_eq!(error, "bad"),
+        duroxide::OrchestrationStatus::Failed { error } => assert_eq!(error, "bad"),
         other => panic!("unexpected status: {other:?}"),
     }
     rt.shutdown().await;
@@ -543,8 +543,8 @@ async fn typed_activity_decode_error_fs() {
         .await
         .unwrap();
     let output = match status {
-        rust_dtf::OrchestrationStatus::Completed { output } => output,
-        rust_dtf::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        duroxide::OrchestrationStatus::Completed { output } => output,
+        duroxide::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
         _ => panic!("unexpected orchestration status"),
     };
     assert_eq!(output, "ok");

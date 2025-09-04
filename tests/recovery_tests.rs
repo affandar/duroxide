@@ -1,10 +1,10 @@
-use rust_dtf::OrchestrationStatus;
-use rust_dtf::providers::HistoryStore;
-use rust_dtf::providers::fs::FsHistoryStore;
-use rust_dtf::providers::in_memory::InMemoryHistoryStore;
-use rust_dtf::runtime::registry::ActivityRegistry;
-use rust_dtf::runtime::{self};
-use rust_dtf::{Event, OrchestrationContext, OrchestrationRegistry};
+use duroxide::OrchestrationStatus;
+use duroxide::providers::HistoryStore;
+use duroxide::providers::fs::FsHistoryStore;
+use duroxide::providers::in_memory::InMemoryHistoryStore;
+use duroxide::runtime::registry::ActivityRegistry;
+use duroxide::runtime::{self};
+use duroxide::{Event, OrchestrationContext, OrchestrationRegistry};
 use std::sync::Arc;
 use std::sync::Arc as StdArc;
 mod common;

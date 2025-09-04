@@ -2,11 +2,11 @@
 //!
 //! Each test demonstrates a common orchestration pattern using
 //! `OrchestrationContext` and the in-process `Runtime`.
-use rust_dtf::providers::HistoryStore;
-use rust_dtf::providers::fs::FsHistoryStore;
-use rust_dtf::runtime::registry::ActivityRegistry;
-use rust_dtf::runtime::{self};
-use rust_dtf::{OrchestrationContext, OrchestrationRegistry};
+use duroxide::providers::HistoryStore;
+use duroxide::providers::fs::FsHistoryStore;
+use duroxide::runtime::registry::ActivityRegistry;
+use duroxide::runtime::{self};
+use duroxide::{OrchestrationContext, OrchestrationRegistry};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::sync::Arc as StdArc;
@@ -254,9 +254,9 @@ async fn sample_timeout_with_timer_race_fs() {
         let t = ctx.schedule_timer(100);
         let (_idx, out) = ctx.select(vec![act, t]).await;
         match out {
-            rust_dtf::DurableOutput::Timer => Err("timeout".to_string()),
-            rust_dtf::DurableOutput::Activity(Ok(s)) => Ok(s),
-            rust_dtf::DurableOutput::Activity(Err(e)) => Err(e),
+            duroxide::DurableOutput::Timer => Err("timeout".to_string()),
+            duroxide::DurableOutput::Activity(Ok(s)) => Ok(s),
+            duroxide::DurableOutput::Activity(Err(e)) => Err(e),
             other => panic!("unexpected output: {:?}", other),
         }
     };
@@ -308,9 +308,9 @@ async fn sample_select2_activity_vs_external_fs() {
         let (idx, out) = ctx.select2(act, evt).await;
         // Demonstrate using the index to branch
         match (idx, out) {
-            (0, rust_dtf::DurableOutput::Activity(Ok(s))) => Ok(format!("activity:{s}")),
-            (1, rust_dtf::DurableOutput::External(payload)) => Ok(format!("event:{payload}")),
-            (0, rust_dtf::DurableOutput::Activity(Err(e))) => Err(e),
+            (0, duroxide::DurableOutput::Activity(Ok(s))) => Ok(format!("activity:{s}")),
+            (1, duroxide::DurableOutput::External(payload)) => Ok(format!("event:{payload}")),
+            (0, duroxide::DurableOutput::Activity(Err(e))) => Err(e),
             other => panic!("unexpected: {:?}", other),
         }
     };
@@ -376,8 +376,8 @@ async fn dtf_legacy_gabbar_greetings_fs() {
         let mut vals: Vec<String> = outs
             .into_iter()
             .map(|o| match o {
-                rust_dtf::DurableOutput::Activity(Ok(s)) => s,
-                rust_dtf::DurableOutput::Activity(Err(e)) => panic!("activity failed: {e}"),
+                duroxide::DurableOutput::Activity(Ok(s)) => s,
+                duroxide::DurableOutput::Activity(Err(e)) => panic!("activity failed: {e}"),
                 other => panic!("unexpected output: {:?}", other),
             })
             .collect();
@@ -467,7 +467,7 @@ async fn sample_system_activities_fs() {
 /// Sample: start an orchestration and poll its status until completion.
 #[tokio::test]
 async fn sample_status_polling_fs() {
-    use rust_dtf::OrchestrationStatus;
+    use duroxide::OrchestrationStatus;
     let td = tempfile::tempdir().unwrap();
     let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
 
@@ -583,8 +583,8 @@ async fn sample_sub_orchestration_fanout_fs() {
         let mut nums: Vec<i64> = outs
             .into_iter()
             .map(|o| match o {
-                rust_dtf::DurableOutput::SubOrchestration(Ok(s)) => s.parse::<i64>().unwrap(),
-                rust_dtf::DurableOutput::SubOrchestration(Err(e)) => panic!("child failed: {e}"),
+                duroxide::DurableOutput::SubOrchestration(Ok(s)) => s.parse::<i64>().unwrap(),
+                duroxide::DurableOutput::SubOrchestration(Err(e)) => panic!("child failed: {e}"),
                 other => panic!("unexpected output: {:?}", other),
             })
             .collect();
@@ -685,7 +685,7 @@ async fn sample_sub_orchestration_chained_fs() {
 /// - Verify scheduled instances complete via status polling
 #[tokio::test]
 async fn sample_detached_orchestration_scheduling_fs() {
-    use rust_dtf::OrchestrationStatus;
+    use duroxide::OrchestrationStatus;
     let td = tempfile::tempdir().unwrap();
     let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
 
@@ -908,7 +908,7 @@ async fn sample_mixed_string_and_typed_typed_orch_fs() {
         let f_str = ctx.schedule_activity("Upper", "hello");
         let (_idx, out) = ctx.select(vec![f_typed, f_str]).await;
         let s = match out {
-            rust_dtf::DurableOutput::Activity(Ok(raw)) => {
+            duroxide::DurableOutput::Activity(Ok(raw)) => {
                 // raw is either typed AddRes JSON or plain string result
                 if let Ok(v) = serde_json::from_str::<AddRes>(&raw) {
                     format!("sum={}", v.sum)
@@ -916,7 +916,7 @@ async fn sample_mixed_string_and_typed_typed_orch_fs() {
                     format!("up={raw}")
                 }
             }
-            rust_dtf::DurableOutput::Activity(Err(e)) => return Err(e),
+            duroxide::DurableOutput::Activity(Err(e)) => return Err(e),
             other => panic!("unexpected output: {:?}", other),
         };
         Ok::<_, String>(s)
@@ -960,14 +960,14 @@ async fn sample_mixed_string_and_typed_string_orch_fs() {
         let f_str = ctx.schedule_activity("Upper", "race");
         let (_idx, out) = ctx.select(vec![f_typed, f_str]).await;
         let s = match out {
-            rust_dtf::DurableOutput::Activity(Ok(raw)) => {
+            duroxide::DurableOutput::Activity(Ok(raw)) => {
                 if let Ok(v) = serde_json::from_str::<AddRes>(&raw) {
                     format!("sum={}", v.sum)
                 } else {
                     format!("up={raw}")
                 }
             }
-            rust_dtf::DurableOutput::Activity(Err(e)) => return Err(e),
+            duroxide::DurableOutput::Activity(Err(e)) => return Err(e),
             other => panic!("unexpected output: {:?}", other),
         };
         Ok::<_, String>(s)
@@ -1040,7 +1040,7 @@ async fn sample_versioning_start_latest_vs_exact_fs() {
     // Pin new starts to 1.0.0 via policy, verify it runs v1
     reg.set_version_policy(
         "Versioned",
-        rust_dtf::runtime::VersionPolicy::Exact(semver::Version::parse("1.0.0").unwrap()),
+        duroxide::runtime::VersionPolicy::Exact(semver::Version::parse("1.0.0").unwrap()),
     )
     .await;
     let _h_exact = rt
@@ -1126,7 +1126,7 @@ async fn sample_versioning_sub_orchestration_explicit_vs_policy_fs() {
 /// - Carry forward state via the CAN input, or transform as needed during upgrade
 #[tokio::test]
 async fn sample_versioning_continue_as_new_upgrade_fs() {
-    use rust_dtf::OrchestrationStatus;
+    use duroxide::OrchestrationStatus;
     let td = tempfile::tempdir().unwrap();
     let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
 
@@ -1178,13 +1178,13 @@ async fn sample_versioning_continue_as_new_upgrade_fs() {
     let e1 = store.read_with_execution("inst-can-upgrade", 1).await;
     assert!(
         e1.iter()
-            .any(|e| matches!(e, rust_dtf::Event::OrchestrationContinuedAsNew { .. }))
+            .any(|e| matches!(e, duroxide::Event::OrchestrationContinuedAsNew { .. }))
     );
     // Exec2 must start with the v1-marked payload, proving v1 ran first and handed off via CAN
     let e2 = store.read_with_execution("inst-can-upgrade", 2).await;
     assert!(
         e2.iter()
-            .any(|e| matches!(e, rust_dtf::Event::OrchestrationStarted { input, .. } if input == "v1:state"))
+            .any(|e| matches!(e, duroxide::Event::OrchestrationStarted { input, .. } if input == "v1:state"))
     );
 
     rt.shutdown().await;
@@ -1199,7 +1199,7 @@ async fn sample_versioning_continue_as_new_upgrade_fs() {
 /// - The child is also canceled (downward propagation), and its history shows cancellation
 #[tokio::test]
 async fn sample_cancellation_parent_cascades_to_children_fs() {
-    use rust_dtf::Event;
+    use duroxide::Event;
     let td = tempfile::tempdir().unwrap();
     let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
 

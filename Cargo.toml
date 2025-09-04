@@ -1,10 +1,10 @@
 [package]
-name = "rust-dtf"
+name = "duroxide"
 version = "0.1.0"
 edition = "2024"
 description = "Lightweight durable execution framework to write code based workflows - mostly a port of .Net's durable task framework"
 license = "MIT"
-repository = "https://github.com/affandar/rust-dtf"
+repository = "https://github.com/affandar/duroxide"
 keywords = ["durable", "execution", "workflow", "orchestration", "deterministic", "replay"]
 categories = ["asynchronous", "concurrency", "workflow", "durable"]
 

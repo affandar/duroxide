@@ -1,8 +1,8 @@
-use rust_dtf::providers::HistoryStore;
-use rust_dtf::providers::fs::FsHistoryStore;
-use rust_dtf::runtime::registry::ActivityRegistry;
-use rust_dtf::runtime::{self};
-use rust_dtf::{Event, OrchestrationContext, OrchestrationRegistry};
+use duroxide::providers::HistoryStore;
+use duroxide::providers::fs::FsHistoryStore;
+use duroxide::runtime::registry::ActivityRegistry;
+use duroxide::runtime::{self};
+use duroxide::{Event, OrchestrationContext, OrchestrationRegistry};
 use std::sync::Arc as StdArc;
 
 mod common;
@@ -17,8 +17,8 @@ async fn select2_two_externals_history_order_wins_fs() {
         let b = ctx.schedule_wait("B");
         let (idx, out) = ctx.select2(a, b).await;
         match (idx, out) {
-            (0, rust_dtf::DurableOutput::External(v)) => Ok(format!("A:{v}")),
-            (1, rust_dtf::DurableOutput::External(v)) => Ok(format!("B:{v}")),
+            (0, duroxide::DurableOutput::External(v)) => Ok(format!("A:{v}")),
+            (1, duroxide::DurableOutput::External(v)) => Ok(format!("B:{v}")),
             _ => unreachable!("select2 should return External outputs here"),
         }
     };
@@ -61,12 +61,12 @@ async fn select2_two_externals_history_order_wins_fs() {
     );
     rt1.shutdown().await;
 
-    let wi_b = rust_dtf::providers::WorkItem::ExternalRaised {
+    let wi_b = duroxide::providers::WorkItem::ExternalRaised {
         instance: "inst-ab2".to_string(),
         name: "B".to_string(),
         data: "vb".to_string(),
     };
-    let wi_a = rust_dtf::providers::WorkItem::ExternalRaised {
+    let wi_a = duroxide::providers::WorkItem::ExternalRaised {
         instance: "inst-ab2".to_string(),
         name: "A".to_string(),
         data: "va".to_string(),
@@ -135,8 +135,8 @@ async fn select_two_externals_history_order_wins_fs() {
         let b = ctx.schedule_wait("B");
         let (idx, out) = ctx.select2(a, b).await;
         match (idx, out) {
-            (0, rust_dtf::DurableOutput::External(v)) => Ok(format!("A:{v}")),
-            (1, rust_dtf::DurableOutput::External(v)) => Ok(format!("B:{v}")),
+            (0, duroxide::DurableOutput::External(v)) => Ok(format!("A:{v}")),
+            (1, duroxide::DurableOutput::External(v)) => Ok(format!("B:{v}")),
             _ => unreachable!("select2 should return External outputs here"),
         }
     };
@@ -179,12 +179,12 @@ async fn select_two_externals_history_order_wins_fs() {
     );
     rt1.shutdown().await;
 
-    let wi_b = rust_dtf::providers::WorkItem::ExternalRaised {
+    let wi_b = duroxide::providers::WorkItem::ExternalRaised {
         instance: "inst-ab".to_string(),
         name: "B".to_string(),
         data: "vb".to_string(),
     };
-    let wi_a = rust_dtf::providers::WorkItem::ExternalRaised {
+    let wi_a = duroxide::providers::WorkItem::ExternalRaised {
         instance: "inst-ab".to_string(),
         name: "A".to_string(),
         data: "va".to_string(),
@@ -255,9 +255,9 @@ async fn select_three_mixed_history_winner_fs() {
         let b = ctx.schedule_wait("B");
         let (idx, out) = ctx.select(vec![a, t, b]).await;
         match (idx, out) {
-            (0, rust_dtf::DurableOutput::External(v)) => Ok(format!("A:{v}")),
-            (1, rust_dtf::DurableOutput::Timer) => Ok("T".to_string()),
-            (2, rust_dtf::DurableOutput::External(v)) => Ok(format!("B:{v}")),
+            (0, duroxide::DurableOutput::External(v)) => Ok(format!("A:{v}")),
+            (1, duroxide::DurableOutput::Timer) => Ok("T".to_string()),
+            (2, duroxide::DurableOutput::External(v)) => Ok(format!("B:{v}")),
             _ => unreachable!(),
         }
     };
@@ -298,12 +298,12 @@ async fn select_three_mixed_history_winner_fs() {
     );
     rt1.shutdown().await;
 
-    let wi_b = rust_dtf::providers::WorkItem::ExternalRaised {
+    let wi_b = duroxide::providers::WorkItem::ExternalRaised {
         instance: "inst-atb".to_string(),
         name: "B".to_string(),
         data: "vb".to_string(),
     };
-    let wi_a = rust_dtf::providers::WorkItem::ExternalRaised {
+    let wi_a = duroxide::providers::WorkItem::ExternalRaised {
         instance: "inst-atb".to_string(),
         name: "A".to_string(),
         data: "va".to_string(),
@@ -374,7 +374,7 @@ async fn join_returns_history_order_fs() {
         let s: String = outs
             .into_iter()
             .map(|o| match o {
-                rust_dtf::DurableOutput::External(v) => v,
+                duroxide::DurableOutput::External(v) => v,
                 _ => String::new(),
             })
             .collect::<Vec<_>>()
@@ -419,12 +419,12 @@ async fn join_returns_history_order_fs() {
     rt1.shutdown().await;
 
     // Enqueue B then A so history order is B, then A
-    let wi_b = rust_dtf::providers::WorkItem::ExternalRaised {
+    let wi_b = duroxide::providers::WorkItem::ExternalRaised {
         instance: "inst-join".to_string(),
         name: "B".to_string(),
         data: "vb".to_string(),
     };
-    let wi_a = rust_dtf::providers::WorkItem::ExternalRaised {
+    let wi_a = duroxide::providers::WorkItem::ExternalRaised {
         instance: "inst-join".to_string(),
         name: "A".to_string(),
         data: "va".to_string(),

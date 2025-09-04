@@ -9,12 +9,12 @@ async fn main() {
     std::env::set_var("RUST_DTF_USE_V2_EXECUTION", "true");
     
     // Create runtime
-    let store = Arc::new(rust_dtf::providers::in_memory::InMemoryHistoryStore::default());
-    let activity_registry = Arc::new(rust_dtf::runtime::registry::ActivityRegistry::default());
-    let orchestration_registry = rust_dtf::runtime::OrchestrationRegistry::default();
+    let store = Arc::new(duroxide::providers::in_memory::InMemoryHistoryStore::default());
+    let activity_registry = Arc::new(duroxide::runtime::registry::ActivityRegistry::default());
+    let orchestration_registry = duroxide::runtime::OrchestrationRegistry::default();
     
     println!("🧪 Creating runtime...");
-    let runtime = rust_dtf::runtime::Runtime::start_with_store(
+    let runtime = duroxide::runtime::Runtime::start_with_store(
         store,
         activity_registry,
         orchestration_registry

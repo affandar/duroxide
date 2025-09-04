@@ -1,8 +1,8 @@
-use rust_dtf::providers::HistoryStore;
-use rust_dtf::providers::fs::FsHistoryStore;
-use rust_dtf::runtime::registry::ActivityRegistry;
-use rust_dtf::runtime::{self};
-use rust_dtf::{Event, OrchestrationRegistry};
+use duroxide::providers::HistoryStore;
+use duroxide::providers::fs::FsHistoryStore;
+use duroxide::runtime::registry::ActivityRegistry;
+use duroxide::runtime::{self};
+use duroxide::{Event, OrchestrationRegistry};
 use std::sync::Arc as StdArc;
 
 #[tokio::test]
@@ -26,8 +26,8 @@ async fn unknown_orchestration_fails_gracefully_fs() {
         .await
         .unwrap();
     let error = match status {
-        rust_dtf::OrchestrationStatus::Failed { error } => error,
-        rust_dtf::OrchestrationStatus::Completed { output } => panic!("expected failure, got success: {output}"),
+        duroxide::OrchestrationStatus::Failed { error } => error,
+        duroxide::OrchestrationStatus::Completed { output } => panic!("expected failure, got success: {output}"),
         _ => panic!("unexpected orchestration status"),
     };
     assert_eq!(error, "unregistered:DoesNotExist");

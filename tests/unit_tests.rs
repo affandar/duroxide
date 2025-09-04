@@ -1,9 +1,9 @@
-use rust_dtf::providers::HistoryStore;
-use rust_dtf::providers::fs::FsHistoryStore;
-use rust_dtf::providers::in_memory::InMemoryHistoryStore;
-use rust_dtf::runtime::registry::ActivityRegistry;
-use rust_dtf::runtime::{self};
-use rust_dtf::{Action, Event, OrchestrationContext, OrchestrationRegistry, run_turn};
+use duroxide::providers::HistoryStore;
+use duroxide::providers::fs::FsHistoryStore;
+use duroxide::providers::in_memory::InMemoryHistoryStore;
+use duroxide::runtime::registry::ActivityRegistry;
+use duroxide::runtime::{self};
+use duroxide::{Action, Event, OrchestrationContext, OrchestrationRegistry, run_turn};
 use std::sync::Arc;
 
 // Helper to create runtime with registries for tests
@@ -98,7 +98,7 @@ async fn deterministic_replay_activity_only() {
         .unwrap();
 
     let output = match status {
-        rust_dtf::OrchestrationStatus::Completed { output } => output,
+        duroxide::OrchestrationStatus::Completed { output } => output,
         _ => panic!("Expected completed status"),
     };
     assert_eq!(output, "a=3");
@@ -213,7 +213,7 @@ async fn orchestration_descriptor_root_and_child() {
 
 #[tokio::test]
 async fn orchestration_status_apis() {
-    use rust_dtf::OrchestrationStatus;
+    use duroxide::OrchestrationStatus;
 
     // Registry with two orchestrations: one completes after a short timer, one fails immediately
     let activity_registry = ActivityRegistry::builder().build();

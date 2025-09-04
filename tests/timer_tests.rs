@@ -1,8 +1,8 @@
-use rust_dtf::providers::HistoryStore;
-use rust_dtf::providers::fs::FsHistoryStore;
-use rust_dtf::runtime::registry::ActivityRegistry;
-use rust_dtf::runtime::{self};
-use rust_dtf::{Event, OrchestrationContext, OrchestrationRegistry};
+use duroxide::providers::HistoryStore;
+use duroxide::providers::fs::FsHistoryStore;
+use duroxide::runtime::registry::ActivityRegistry;
+use duroxide::runtime::{self};
+use duroxide::{Event, OrchestrationContext, OrchestrationRegistry};
 use std::sync::Arc as StdArc;
 
 mod common;
@@ -31,8 +31,8 @@ async fn single_timer_fires_fs() {
         .await
         .unwrap();
     let output = match status {
-        rust_dtf::OrchestrationStatus::Completed { output } => output,
-        rust_dtf::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        duroxide::OrchestrationStatus::Completed { output } => output,
+        duroxide::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
         _ => panic!("unexpected orchestration status"),
     };
     assert_eq!(output, "done");
@@ -69,8 +69,8 @@ async fn multiple_timers_ordering_fs() {
         .await
         .unwrap();
     let output = match status {
-        rust_dtf::OrchestrationStatus::Completed { output } => output,
-        rust_dtf::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        duroxide::OrchestrationStatus::Completed { output } => output,
+        duroxide::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
         _ => panic!("unexpected orchestration status"),
     };
     assert_eq!(output, "ok");
@@ -129,7 +129,7 @@ async fn timer_deduplication_fs() {
             })
             .unwrap()
     };
-    let wi = rust_dtf::providers::WorkItem::TimerFired {
+    let wi = duroxide::providers::WorkItem::TimerFired {
         instance: inst.to_string(),
         execution_id: 1,
         id,
@@ -180,8 +180,8 @@ async fn timer_wall_clock_delay_fs() {
         .unwrap();
     let elapsed_ms = start.elapsed().as_millis() as u64;
     let output = match status {
-        rust_dtf::OrchestrationStatus::Completed { output } => output,
-        rust_dtf::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        duroxide::OrchestrationStatus::Completed { output } => output,
+        duroxide::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
         _ => panic!("unexpected orchestration status"),
     };
     assert_eq!(output, "ok");

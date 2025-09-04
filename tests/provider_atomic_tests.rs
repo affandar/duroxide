@@ -1,7 +1,7 @@
-use rust_dtf::Event;
-use rust_dtf::providers::fs::FsHistoryStore;
-use rust_dtf::providers::in_memory::InMemoryHistoryStore;
-use rust_dtf::providers::{HistoryStore, WorkItem};
+use duroxide::Event;
+use duroxide::providers::fs::FsHistoryStore;
+use duroxide::providers::in_memory::InMemoryHistoryStore;
+use duroxide::providers::{HistoryStore, WorkItem};
 use std::sync::Arc;
 
 #[tokio::test]
@@ -43,7 +43,7 @@ async fn test_fetch_orchestration_item_existing_instance() {
     let store: Arc<dyn HistoryStore> = Arc::new(FsHistoryStore::new(td.path(), true));
 
     // Seed instance history using provider APIs: create_new_execution then append_with_execution
-    rust_dtf::providers::HistoryStore::create_new_execution(
+    duroxide::providers::HistoryStore::create_new_execution(
         store.as_ref(),
         "test-instance",
         "TestOrch",
@@ -54,7 +54,7 @@ async fn test_fetch_orchestration_item_existing_instance() {
     )
     .await
     .unwrap();
-    rust_dtf::providers::HistoryStore::append_with_execution(
+    duroxide::providers::HistoryStore::append_with_execution(
         store.as_ref(),
         "test-instance",
         1,

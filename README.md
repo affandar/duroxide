@@ -1,5 +1,5 @@
 ![Banner](duroxide_banner.jpg)
-## rust-dtf
+## duroxide
 
 > Notice: This is an experimental project exploring how AI can help build and iteratively improve a moderately complex framework. It’s intended for learning and fun, not for production use.
 
@@ -50,16 +50,16 @@ Project layout
 Install (when published)
 ```toml
 [dependencies]
-rust-dtf = "0.1"
+duroxide = "0.1"
 ```
 
 Hello world (activities + runtime)
 ```rust
 use std::sync::Arc;
-use rust_dtf::{OrchestrationContext, OrchestrationRegistry};
-use rust_dtf::runtime::{self};
-use rust_dtf::runtime::registry::ActivityRegistry;
-use rust_dtf::providers::fs::FsHistoryStore;
+use duroxide::{OrchestrationContext, OrchestrationRegistry};
+use duroxide::runtime::{self};
+use duroxide::runtime::registry::ActivityRegistry;
+use duroxide::providers::fs::FsHistoryStore;
 
 # #[tokio::main]
 # async fn main() {
@@ -90,7 +90,7 @@ async fn fanout(ctx: OrchestrationContext) -> Vec<String> {
     outs
         .into_iter()
         .map(|o| match o {
-            rust_dtf::DurableOutput::Activity(Ok(s)) => s,
+            duroxide::DurableOutput::Activity(Ok(s)) => s,
             other => panic!("unexpected: {:?}", other),
         })
         .collect()
@@ -99,7 +99,7 @@ async fn fanout(ctx: OrchestrationContext) -> Vec<String> {
 
 Control flow + timers + externals
 ```rust
-use rust_dtf::DurableOutput;
+use duroxide::DurableOutput;
 async fn control(ctx: OrchestrationContext) -> String {
     let a = ctx.schedule_timer(10);
     let b = ctx.schedule_wait("Evt");
@@ -143,7 +143,7 @@ Local development
 - Run a specific test: `cargo test --test e2e_samples dtf_legacy_gabbar_greetings_fs -- --nocapture`
 
 Notes
-- Import as `rust_dtf` in Rust source.
+- Import as `duroxide` in Rust source.
 - Timers are real time (Tokio sleep). External events are via `Runtime::raise_event`.
 - Unknown-instance messages are logged and dropped. Providers persist history only (queues are in-memory runtime components).
 - Logging is replay-safe by treating it as a system activity via `ctx.trace_*` helpers; logs are emitted through tracing at completion time (not persisted as history events).

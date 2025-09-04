@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for your interest in improving rust-dtf!
+Thanks for your interest in improving duroxide!
 
 Before submitting changes, please review this checklist:
 

@@ -1,4 +1,4 @@
-## Durable Task (Rust) – Documentation Home
+## duroxide – Documentation Home
 
 This project is a minimal deterministic orchestration core inspired by Durable Task (DTF). It records an append-only history of `Event`s and replays the user’s orchestrator to make asynchronous workflows deterministic.
 

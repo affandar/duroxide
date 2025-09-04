@@ -1,9 +1,9 @@
-use rust_dtf::providers::HistoryStore;
-use rust_dtf::providers::fs::FsHistoryStore;
-use rust_dtf::providers::in_memory::InMemoryHistoryStore;
-use rust_dtf::runtime::registry::ActivityRegistry;
-use rust_dtf::runtime::{self};
-use rust_dtf::{Event, OrchestrationContext, OrchestrationRegistry, OrchestrationStatus};
+use duroxide::providers::HistoryStore;
+use duroxide::providers::fs::FsHistoryStore;
+use duroxide::providers::in_memory::InMemoryHistoryStore;
+use duroxide::runtime::registry::ActivityRegistry;
+use duroxide::runtime::{self};
+use duroxide::{Event, OrchestrationContext, OrchestrationRegistry, OrchestrationStatus};
 use std::sync::Arc as StdArc;
 
 #[tokio::test]
@@ -53,8 +53,8 @@ async fn unknown_activity_is_isolated_from_other_orchestrations_fs() {
         .await
         .unwrap();
     let out_ok = match status_ok {
-        rust_dtf::OrchestrationStatus::Completed { output } => output,
-        rust_dtf::OrchestrationStatus::Failed { error } => panic!("healthy orchestration failed: {error}"),
+        duroxide::OrchestrationStatus::Completed { output } => output,
+        duroxide::OrchestrationStatus::Failed { error } => panic!("healthy orchestration failed: {error}"),
         _ => panic!("unexpected orchestration status"),
     };
     assert_eq!(out_ok, "healthy:yo");
@@ -71,8 +71,8 @@ async fn unknown_activity_is_isolated_from_other_orchestrations_fs() {
         .await
         .unwrap();
     let error_fail = match status_fail {
-        rust_dtf::OrchestrationStatus::Failed { error } => error,
-        rust_dtf::OrchestrationStatus::Completed { output } => panic!("expected failure, got success: {output}"),
+        duroxide::OrchestrationStatus::Failed { error } => error,
+        duroxide::OrchestrationStatus::Completed { output } => panic!("expected failure, got success: {output}"),
         _ => panic!("unexpected orchestration status"),
     };
     assert_eq!(error_fail, "unregistered:Missing");
@@ -139,8 +139,8 @@ async fn unknown_activity_is_isolated_from_other_orchestrations_inmem() {
         .await
         .unwrap();
     let out_ok = match status_ok {
-        rust_dtf::OrchestrationStatus::Completed { output } => output,
-        rust_dtf::OrchestrationStatus::Failed { error } => panic!("healthy orchestration failed: {error}"),
+        duroxide::OrchestrationStatus::Completed { output } => output,
+        duroxide::OrchestrationStatus::Failed { error } => panic!("healthy orchestration failed: {error}"),
         _ => panic!("unexpected orchestration status"),
     };
     assert_eq!(out_ok, "healthy:yo");
@@ -150,8 +150,8 @@ async fn unknown_activity_is_isolated_from_other_orchestrations_inmem() {
         .await
         .unwrap();
     let error_fail = match status_fail {
-        rust_dtf::OrchestrationStatus::Failed { error } => error,
-        rust_dtf::OrchestrationStatus::Completed { output } => panic!("expected failure, got success: {output}"),
+        duroxide::OrchestrationStatus::Failed { error } => error,
+        duroxide::OrchestrationStatus::Completed { output } => panic!("expected failure, got success: {output}"),
         _ => panic!("unexpected orchestration status"),
     };
     assert_eq!(error_fail, "unregistered:Missing");
