@@ -1,14 +1,122 @@
-//! Minimal deterministic orchestration core inspired by Durable Task.
+//! # Duroxide: Deterministic Task Orchestration in Rust
 //!
-//! This crate exposes a replay-driven programming model that records
-//! append-only `Event`s and replays them to make orchestration logic
-//! deterministic. It provides:
+//! Duroxide is a framework for building reliable, long-running workflows that can survive
+//! failures and restarts. It's inspired by Microsoft's Durable Task Framework and provides
+//! a replay-driven programming model for deterministic orchestration.
 //!
-//! - Public data model: `Event`, `Action`
-//! - Orchestration driver: `run_turn`, `run_turn_with`, and `Executor`
-//! - An `OrchestrationContext` with futures to schedule activities,
-//!   timers, and external events using correlation IDs
-//! - A unified `DurableFuture` that can be composed with `join`/`select`
+//! ## Quick Start
+//!
+//! ```rust,no_run
+//! use duroxide::providers::fs::FsHistoryStore;
+//! use duroxide::runtime::registry::ActivityRegistry;
+//! use duroxide::runtime::{self};
+//! use duroxide::{OrchestrationContext, OrchestrationRegistry};
+//! use std::sync::Arc;
+//!
+//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+//! // 1. Create a storage provider
+//! let store = Arc::new(FsHistoryStore::new("./data", true));
+//!
+//! // 2. Register activities (your business logic)
+//! let activities = ActivityRegistry::builder()
+//!     .register("Greet", |name: String| async move {
+//!         Ok(format!("Hello, {}!", name))
+//!     })
+//!     .build();
+//!
+//! // 3. Define your orchestration
+//! let orchestration = |ctx: OrchestrationContext, name: String| async move {
+//!     let greeting = ctx.schedule_activity("Greet", name)
+//!         .into_activity().await?;
+//!     Ok(greeting)
+//! };
+//!
+//! // 4. Register and start the runtime
+//! let orchestrations = OrchestrationRegistry::builder()
+//!     .register("HelloWorld", orchestration)
+//!     .build();
+//!
+//! let rt = runtime::Runtime::start_with_store(
+//!     store, Arc::new(activities), orchestrations
+//! ).await;
+//!
+//! // 5. Start an orchestration instance
+//! let handle = rt.start_orchestration("inst-1", "HelloWorld", "World").await?;
+//! let result = rt.wait_for_orchestration("inst-1", std::time::Duration::from_secs(5)).await?;
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! ## Key Concepts
+//!
+//! - **Orchestrations**: Long-running workflows written as async functions
+//! - **Activities**: Stateless functions that perform actual work
+//! - **Deterministic Replay**: Orchestrations are replayed from history to ensure consistency
+//! - **Durable Futures**: Composable futures for activities, timers, and external events
+//!
+//! ## Common Patterns
+//!
+//! ### Function Chaining
+//! ```rust,no_run
+//! # use duroxide::OrchestrationContext;
+//! async fn chain_example(ctx: OrchestrationContext) -> Result<String, String> {
+//!     let step1 = ctx.schedule_activity("Step1", "input").into_activity().await?;
+//!     let step2 = ctx.schedule_activity("Step2", &step1).into_activity().await?;
+//!     Ok(step2)
+//! }
+//! ```
+//!
+//! ### Fan-Out/Fan-In
+//! ```rust,no_run
+//! # use duroxide::{OrchestrationContext, DurableOutput};
+//! async fn fanout_example(ctx: OrchestrationContext) -> Vec<String> {
+//!     let futures = vec![
+//!         ctx.schedule_activity("Process", "item1"),
+//!         ctx.schedule_activity("Process", "item2"),
+//!         ctx.schedule_activity("Process", "item3"),
+//!     ];
+//!     let results = ctx.join(futures).await;
+//!     results.into_iter().map(|r| match r {
+//!         DurableOutput::Activity(Ok(s)) => s,
+//!         _ => "error".to_string(),
+//!     }).collect()
+//! }
+//! ```
+//!
+//! ### Human-in-the-Loop
+//! ```rust,no_run
+//! # use duroxide::{OrchestrationContext, DurableOutput};
+//! async fn approval_example(ctx: OrchestrationContext) -> String {
+//!     let timer = ctx.schedule_timer(30000); // 30 second timeout
+//!     let approval = ctx.schedule_wait("ApprovalEvent");
+//!     
+//!     let (_, result) = ctx.select2(timer, approval).await;
+//!     match result {
+//!         DurableOutput::External(data) => data,
+//!         DurableOutput::Timer => "timeout".to_string(),
+//!         _ => "error".to_string(),
+//!     }
+//! }
+//! ```
+//!
+//! ## Examples
+//!
+//! See the `examples/` directory for complete, runnable examples:
+//! - `hello_world.rs` - Basic orchestration setup
+//! - `fan_out_fan_in.rs` - Parallel processing pattern
+//! - `timers_and_events.rs` - Human-in-the-loop workflows
+//!
+//! Run examples with: `cargo run --example <name>`
+//!
+//! ## Architecture
+//!
+//! This crate provides:
+//! - **Public data model**: `Event`, `Action` for history and decisions
+//! - **Orchestration driver**: `run_turn`, `run_turn_with`, and `Executor`
+//! - **OrchestrationContext**: Schedule activities, timers, and external events
+//! - **DurableFuture**: Unified futures that can be composed with `join`/`select`
+//! - **Runtime**: In-process execution engine with dispatchers and workers
+//! - **Providers**: Pluggable storage backends (filesystem, in-memory)
 use std::cell::Cell;
 use std::future::Future;
 use std::pin::Pin;

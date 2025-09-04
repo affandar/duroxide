@@ -64,7 +64,7 @@
 
 ## POSTPONED
 
-- implement Unpin typed future wrappers for `_typed` adapters (see docs/typed-futures-design.md)
+- implement Unpin typed future wrappers for `_typed` adapters
 - redo the orchestration registry change with gpt5 and compare
 - mermaid diagrams for orchestrations???
 - remove the into_activity() and similar methods

@@ -15,7 +15,10 @@ What you can build with this (inspired by .NET Durable Task/Durable Functions pa
 These scenarios mirror the officially documented Durable Task/Durable Functions application patterns and are enabled here by deterministic replay, correlation IDs, durable timers, and external event handling.
 
 Getting started samples
-- See `tests/e2e_samples.rs` for end-to-end usage patterns (hello world, control flow, loops, error handling, and system activities). It's the best starting point to learn the API by example.
+- **Start here**: See `examples/` directory for complete, runnable examples
+- **Quick start**: Run `cargo run --example hello_world` to see Duroxide in action
+- **Advanced patterns**: Check `tests/e2e_samples.rs` for comprehensive usage patterns
+- **Quick reference**: See `QUICK_START.md` for a 5-minute overview
 
 What it is
 - Deterministic orchestration core with correlated event IDs and replay safety
@@ -74,9 +77,11 @@ let orch = |ctx: OrchestrationContext, name: String| async move {
 };
 let orchestrations = OrchestrationRegistry::builder().register("HelloWorld", orch).build();
 let rt = runtime::Runtime::start_with_store(store, Arc::new(activities), orchestrations).await;
-let h = rt.clone().start_orchestration("inst-hello-1", "HelloWorld", "Rust").await.unwrap();
-let (_history, output) = h.await.unwrap();
-assert_eq!(output.unwrap(), "Hello, Rust!");
+rt.clone().start_orchestration("inst-hello-1", "HelloWorld", "Rust").await.unwrap();
+match rt.wait_for_orchestration("inst-hello-1", std::time::Duration::from_secs(5)).await.unwrap() {
+    runtime::OrchestrationStatus::Completed { output } => assert_eq!(output, "Hello, Rust!"),
+    _ => panic!("Orchestration failed"),
+}
 rt.shutdown().await;
 # }
 ```

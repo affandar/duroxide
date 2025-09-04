@@ -2,10 +2,13 @@
 name = "duroxide"
 version = "0.1.0"
 edition = "2024"
-description = "Lightweight durable execution framework to write code based workflows - mostly a port of .Net's durable task framework"
+description = "Deterministic task orchestration framework for Rust - inspired by Durable Task Framework"
 license = "MIT"
 repository = "https://github.com/affandar/duroxide"
-keywords = ["durable", "execution", "workflow", "orchestration", "deterministic", "replay"]
+homepage = "https://github.com/affandar/duroxide"
+documentation = "https://docs.rs/duroxide"
+readme = "README.md"
+keywords = ["durable", "execution", "workflow", "orchestration", "deterministic", "replay", "async", "tasks"]
 categories = ["asynchronous", "concurrency", "workflow", "durable"]
 
 [dependencies]

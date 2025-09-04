@@ -1,62 +1,90 @@
-## duroxide – Documentation Home
+# Duroxide Documentation
 
-This project is a minimal deterministic orchestration core inspired by Durable Task (DTF). It records an append-only history of `Event`s and replays the user’s orchestrator to make asynchronous workflows deterministic.
+Welcome to the Duroxide documentation! This guide will help you understand and use the Duroxide deterministic orchestration framework.
 
-### High-level principles
+## 📚 Documentation Structure
 
-- Determinism via replay: user logic (the orchestrator) is expressed as async code and is replayed against a stable history to make the same decisions every time.
-- Append-only history: all progress is captured as `Event`s; hosts/providers only append, never mutate history.
-- Single-poll-per-turn: the orchestrator is polled once per “turn,” producing `Action`s (schedule activity/timer/subscribe external) or finishing with an output.
-- Correlation IDs: all schedule/subscribe operations have stable IDs; completions are matched by ID, not by the next event in the log.
-- Host/Provider separation: the runtime and workers materialize `Action`s into `Event`s and persist them via a `HistoryStore` provider.
+### Getting Started
+- **[Quick Start Guide](../QUICK_START.md)** - Get up and running in 5 minutes
+- **[Examples](../examples/)** - Complete, runnable examples with explanations
+- **[Core Concepts](concepts.md)** - Understand the fundamental concepts
+- **[Troubleshooting](troubleshooting.md)** - Common issues and solutions
 
-### What’s in here
+### User Guide
+- **[Common Patterns](patterns.md)** - Orchestration patterns and best practices
+- **[API Reference](api.md)** - Complete API documentation
+- **[External Events](external-events.md)** - Working with external events
+- **[ContinueAsNew](continue-as-new.md)** - Long-running orchestration patterns
+- **[Sub-Orchestrations](sub-orchestrations.md)** - Composing orchestrations
 
-- Architecture and execution model: see `architecture.md`
-- API reference and usage: see `api.md`
-- External events semantics: see `external-events.md`
-- ContinueAsNew semantics: see `continue-as-new.md`
-- Active instances and gating: see `active-instances-and-gating.md`
+### Architecture & Design
+- **[Architecture Overview](architecture.md)** - System architecture and components
+- **[Execution Model](polling-and-execution-model.md)** - How orchestrations execute
+- **[Design Invariants](design-invariants.md)** - Core design principles
+- **[Consistency Guidelines](consistency-guidelines.md)** - API consistency rules
 
-### Proposals
+### Advanced Topics
+- **[Reliability & Queues](reliability-queue-and-history.md)** - Reliability guarantees
+- **[Active Instances](active-instances-and-gating.md)** - Instance lifecycle management
 
-- Typed API design: `proposals/typed-api-design.md`
-- Typed futures (Unpin) adapters: `proposals/typed-futures-design.md`
-- Reliability: transactional rounds and at-least-once plan: `proposals/reliability-transactional-rounds.md`
+### Development
+- **[Persistence Analysis](persistence-failure-analysis.md)** - Failure mode analysis
+- **[Transaction Example](transaction-example.md)** - Transaction implementation
+- **[DTF Runtime Design](dtf-runtime-design.md)** - Runtime implementation details
 
-### Quick start
+## 🎯 Learning Path
 
-- Define activities in a registry and start the in-process runtime.
-- Implement an orchestrator as an async function using `OrchestrationContext` to schedule work.
-- Drive a single instance to completion using the runtime (async) or the `Executor` (sync/test helper).
+### For New Users:
+1. Start with the **[Quick Start Guide](../QUICK_START.md)**
+2. Run the **[Hello World Example](../examples/hello_world.rs)**
+3. Read **[Core Concepts](concepts.md)** to understand how Duroxide works
+4. Explore **[Common Patterns](patterns.md)** for your use case
 
+### For Developers:
+1. Review the **[API Reference](api.md)**
+2. Study the **[Architecture](architecture.md)**
+3. Understand the **[Execution Model](polling-and-execution-model.md)**
+4. Check **[Design Invariants](design-invariants.md)** before contributing
 
-## Samples and Tests
+### For Production Use:
+1. Understand **[Reliability Guarantees](reliability-queue-and-history.md)**
+2. Learn about **[ContinueAsNew](continue-as-new.md)** for long-running workflows
+3. Review **[Active Instance Management](active-instances-and-gating.md)**
+4. Plan for **[External Events](external-events.md)** integration
 
-Start with these end-to-end tests to learn the API and patterns by example:
+## 📖 Key Concepts Summary
 
-- `tests/e2e_samples.rs` – documented “learning” samples
-  - Hello world, control flow branching, loops and accumulation
-  - Error handling and compensation
-  - Parallel fan‑out/fan‑in (history-ordered `ctx.join`)
-  - System activities (`system_now_ms`, `system_new_guid`)
-  - Sub‑orchestrations: basic, fan‑out, and chained
-  - Detached orchestration scheduling (fire‑and‑forget)
-  - Mixed typed and string I/O samples, including deterministic `ctx.select/ctx.select2` over heterogeneous futures
+- **Orchestrations**: Long-running workflows written as async Rust functions
+- **Activities**: Stateless functions that perform actual work
+- **Deterministic Replay**: Orchestrations replay from history to ensure consistency
+- **Turn-Based Execution**: Progress happens through discrete turns triggered by completions
+- **Correlation IDs**: Every operation has a unique ID for reliable matching
 
-- ContinueAsNew scenarios are included in the samples and status APIs; see docs and tests under `tests/`.
+## 🔧 Common Use Cases
 
-You can run individual samples with:
+Duroxide is ideal for:
+- **Order Processing**: Multi-step workflows with compensation
+- **Data Pipelines**: Fan-out/fan-in processing with error handling
+- **Approval Workflows**: Human-in-the-loop with timeouts
+- **Monitoring**: Long-running monitoring with periodic checks
+- **Batch Processing**: Large-scale data processing with checkpointing
 
-```bash
-cargo test --test e2e_samples -- --nocapture
-```
+## 🤝 Contributing
 
+When contributing to documentation:
+1. Update affected docs when changing behavior
+2. Add new documents to this index
+3. Follow the existing structure and style
+4. Include code examples where appropriate
+5. Test all code examples
 
-## Maintaining docs
+## 🆘 Getting Help
 
-When changing behavior or adding new areas:
-- Update affected docs and examples.
-- Add new documents under `docs/` and link them here.
+- Start with the examples - they demonstrate real patterns
+- Check the test suite for working code
+- Review architecture docs for deep understanding
+- Open an issue for bugs or clarifications
 
+---
 
+*This documentation is for Duroxide v0.1.0 - an experimental project exploring AI-assisted framework development.*
