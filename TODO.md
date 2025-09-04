@@ -4,8 +4,6 @@
 - Reduce ornamental user code in orchestrations and acivities
 - Continue the provider simplification
 - Rename to provider
-- Return instance history as well
-- Update history + complete locks + enqueue in the same call
 - fix up the tracing to not use activities
 - fault inject: "TODO : fault injection :"
 - code coverage
@@ -29,6 +27,8 @@
 
 ## DONE
 
+- Return instance history as well
+- Update history + complete locks + enqueue in the same call
 - typed parameters for activities and orchestrations
 - proper timer implementation in the provider
 - versioning strategy
