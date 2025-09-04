@@ -4,13 +4,20 @@ use std::sync::Arc;
 
 use crate::providers::{HistoryStore, WorkItem};
 
+/// Timer item with its acknowledgment token
+pub struct TimerWithToken {
+    pub item: WorkItem,
+    pub ack_token: String,
+}
+
 /// In-process fallback timer service.
 /// Maintains a min-ordered queue of TimerSchedule items and enqueues TimerFired when due.
+/// Only acknowledges timers after they have fired and been enqueued.
 pub struct TimerService {
     store: Arc<dyn HistoryStore>,
-    rx: tokio::sync::mpsc::UnboundedReceiver<WorkItem>,
-    // key -> (instance, execution_id, id), keyed by "inst|exec|id|fire_at_ms"
-    items: HashMap<String, (String, u64, u64)>,
+    rx: tokio::sync::mpsc::UnboundedReceiver<TimerWithToken>,
+    // key -> (instance, execution_id, id, ack_token), keyed by "inst|exec|id|fire_at_ms"
+    items: HashMap<String, (String, u64, u64, String)>,
     keys: HashSet<String>,
     min_heap: BinaryHeap<Reverse<(u64, String)>>,
     poller_idle_ms: u64,
@@ -22,9 +29,9 @@ impl TimerService {
         poller_idle_ms: u64,
     ) -> (
         tokio::task::JoinHandle<()>,
-        tokio::sync::mpsc::UnboundedSender<WorkItem>,
+        tokio::sync::mpsc::UnboundedSender<TimerWithToken>,
     ) {
-        let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<WorkItem>();
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<TimerWithToken>();
         let mut svc = TimerService {
             store,
             rx,
@@ -46,21 +53,22 @@ impl TimerService {
 
             // Fire due timers
             let now = now_ms();
-            let mut due: Vec<(String, u64, u64, u64)> = Vec::new();
+            let mut due: Vec<(String, u64, u64, u64, String)> = Vec::new();
             while let Some(Reverse((ts, key))) = self.min_heap.peek().cloned() {
                 if ts <= now {
                     let _ = self.min_heap.pop();
-                    if let Some((inst, exec, id)) = self.items.remove(&key) {
+                    if let Some((inst, exec, id, ack_token)) = self.items.remove(&key) {
                         self.keys.remove(&key);
-                        due.push((inst, exec, id, ts));
+                        due.push((inst, exec, id, ts, ack_token));
                     }
                 } else {
                     break;
                 }
             }
 
-            for (instance, execution_id, id, fire_at_ms) in due.drain(..) {
-                let _ = self
+            for (instance, execution_id, id, fire_at_ms, ack_token) in due.drain(..) {
+                // First enqueue the TimerFired event
+                let enqueue_result = self
                     .store
                     .enqueue_orchestrator_work(WorkItem::TimerFired {
                         instance,
@@ -69,6 +77,11 @@ impl TimerService {
                         fire_at_ms,
                     })
                     .await;
+                
+                // Only acknowledge the timer after successful enqueue
+                if enqueue_result.is_ok() {
+                    let _ = self.store.ack_timer(&ack_token).await;
+                }
             }
 
             // Wait for next event or schedule
@@ -94,18 +107,18 @@ impl TimerService {
         }
     }
 
-    fn insert_item(&mut self, item: WorkItem) {
+    fn insert_item(&mut self, timer_with_token: TimerWithToken) {
         if let WorkItem::TimerSchedule {
             instance,
             execution_id,
             id,
             fire_at_ms,
-        } = item
+        } = timer_with_token.item
         {
             let key = format!("{}|{}|{}|{}", instance, execution_id, id, fire_at_ms);
             if self.keys.insert(key.clone()) {
                 self.min_heap.push(Reverse((fire_at_ms, key.clone())));
-                self.items.insert(key, (instance, execution_id, id));
+                self.items.insert(key, (instance, execution_id, id, timer_with_token.ack_token));
             }
         }
     }
@@ -170,23 +183,32 @@ mod tests {
         let (_jh, tx) = TimerService::start(store.clone(), 5);
         // schedule three timers: immediate, +10ms, +5ms
         let now = now_ms();
-        let _ = tx.send(WorkItem::TimerSchedule {
-            instance: "i".into(),
-            execution_id: 1,
-            id: 1,
-            fire_at_ms: now,
+        let _ = tx.send(TimerWithToken {
+            item: WorkItem::TimerSchedule {
+                instance: "i".into(),
+                execution_id: 1,
+                id: 1,
+                fire_at_ms: now,
+            },
+            ack_token: "token1".to_string(),
         });
-        let _ = tx.send(WorkItem::TimerSchedule {
-            instance: "i".into(),
-            execution_id: 1,
-            id: 2,
-            fire_at_ms: now + 10,
+        let _ = tx.send(TimerWithToken {
+            item: WorkItem::TimerSchedule {
+                instance: "i".into(),
+                execution_id: 1,
+                id: 2,
+                fire_at_ms: now + 10,
+            },
+            ack_token: "token2".to_string(),
         });
-        let _ = tx.send(WorkItem::TimerSchedule {
-            instance: "i".into(),
-            execution_id: 1,
-            id: 3,
-            fire_at_ms: now + 5,
+        let _ = tx.send(TimerWithToken {
+            item: WorkItem::TimerSchedule {
+                instance: "i".into(),
+                execution_id: 1,
+                id: 3,
+                fire_at_ms: now + 5,
+            },
+            ack_token: "token3".to_string(),
         });
 
         // Poll captured TimerFired items for order

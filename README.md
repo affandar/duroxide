@@ -9,7 +9,7 @@ What you can build with this (inspired by .NET Durable Task/Durable Functions pa
 - Function chaining: model a multi-step process as sequential awaits where each step depends on prior results.
 - Fan-out/fan-in: schedule many activities in parallel and deterministically aggregate results.
 - Human interaction (external events): wait for out-of-band approvals, callbacks, or webhooks and then resume.
-- Durable timers and deadlines: sleep for minutes/hours/days without holding threads; resume exactly-once after timeouts.
+- Durable timers and deadlines: sleep for minutes/hours/days without holding threads; resume exactly-once after timeouts. **Use `ctx.schedule_timer()` for any delays, NOT activities with sleep!**
 - Saga-style compensation: on failure, run compensating actions to roll back prior steps.
 
 These scenarios mirror the officially documented Durable Task/Durable Functions application patterns and are enabled here by deterministic replay, correlation IDs, durable timers, and external event handling.

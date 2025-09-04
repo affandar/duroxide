@@ -41,8 +41,9 @@
 //! ).await;
 //!
 //! // 5. Start an orchestration instance
-//! let handle = rt.start_orchestration("inst-1", "HelloWorld", "World").await?;
-//! let result = rt.wait_for_orchestration("inst-1", std::time::Duration::from_secs(5)).await?;
+//! rt.clone().start_orchestration("inst-1", "HelloWorld", "World").await?;
+//! let result = rt.wait_for_orchestration("inst-1", std::time::Duration::from_secs(5)).await
+//!     .map_err(|e| format!("Wait error: {:?}", e))?;
 //! # Ok(())
 //! # }
 //! ```
@@ -50,9 +51,38 @@
 //! ## Key Concepts
 //!
 //! - **Orchestrations**: Long-running workflows written as async functions
-//! - **Activities**: Stateless functions that perform actual work
+//! - **Activities**: Stateless functions that perform actual work (NO sleeping/delays!)
+//! - **Timers**: Use `ctx.schedule_timer(ms)` for delays, timeouts, and scheduling
 //! - **Deterministic Replay**: Orchestrations are replayed from history to ensure consistency
 //! - **Durable Futures**: Composable futures for activities, timers, and external events
+//!
+//! ## ⚠️ Important: Timers vs Activities
+//!
+//! **For delays and timeouts, always use timers, NOT activities:**
+//!
+//! ```rust,no_run
+//! # use duroxide::OrchestrationContext;
+//! # async fn example(ctx: OrchestrationContext) -> Result<(), String> {
+//! // ✅ CORRECT: Use timers for delays
+//! ctx.schedule_timer(5000).into_timer().await; // Wait 5 seconds
+//!
+//! // ❌ WRONG: Don't put delays in activities
+//! // ctx.schedule_activity("Sleep", "5000").into_activity().await; // DON'T DO THIS
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! **Activities should be pure business logic without delays:**
+//! - Database operations
+//! - API calls  
+//! - Data transformations
+//! - File I/O
+//!
+//! **Use timers for:**
+//! - Delays and waiting periods
+//! - Timeouts and deadlines
+//! - Scheduled execution
+//! - Rate limiting
 //!
 //! ## Common Patterns
 //!
@@ -630,6 +660,20 @@ impl DurableFuture {
 
 impl OrchestrationContext {
     /// Schedule an activity and return a `DurableFuture` correlated to it.
+    /// 
+    /// **Activities should be pure business logic without delays or sleeps!**
+    /// For time-based waiting, use `schedule_timer()` instead.
+    /// 
+    /// # Good Activity Examples
+    /// - Database queries
+    /// - HTTP API calls
+    /// - File operations
+    /// - Data transformations
+    /// 
+    /// # What NOT to put in activities
+    /// - `tokio::time::sleep()` or similar delays
+    /// - Long polling or waiting
+    /// - Timeouts (use `select2` with timers instead)
     pub fn schedule_activity(&self, name: impl Into<String>, input: impl Into<String>) -> DurableFuture {
         let name: String = name.into();
         let input: String = input.into();
@@ -669,7 +713,29 @@ impl OrchestrationContext {
         self.schedule_activity(name, payload)
     }
 
-    /// Schedule a timer and return a `DurableFuture` correlated to it.
+    /// Schedule a timer for delays, timeouts, and scheduled execution.
+    /// 
+    /// **Use this for any time-based waiting, NOT activities with sleep!**
+    /// 
+    /// # Examples
+    /// ```rust,no_run
+    /// # use duroxide::OrchestrationContext;
+    /// # async fn example(ctx: OrchestrationContext) -> Result<(), String> {
+    /// // Wait 5 seconds
+    /// ctx.schedule_timer(5000).into_timer().await;
+    /// 
+    /// // Timeout pattern
+    /// let work = ctx.schedule_activity("LongTask", "input");
+    /// let timeout = ctx.schedule_timer(30000); // 30 second timeout
+    /// let (winner, _) = ctx.select2(work, timeout).await;
+    /// match winner {
+    ///     0 => println!("Work completed"),
+    ///     1 => println!("Timed out"),
+    ///     _ => unreachable!(),
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn schedule_timer(&self, delay_ms: u64) -> DurableFuture {
         let mut inner = self.inner.lock().unwrap();
         // Adopt first unclaimed TimerCreated id if any, else allocate

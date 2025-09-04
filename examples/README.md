@@ -4,8 +4,21 @@ This directory contains complete, runnable examples that demonstrate how to use 
 
 ## Quick Start Examples
 
-### 1. Hello World (`hello_world.rs`)
-**Start here!** Basic orchestration setup and execution.
+### 1. Delays and Timeouts (`delays_and_timeouts.rs`) ⚠️ IMPORTANT
+**Start here if you're confused about timers vs activities!**
+
+```bash
+cargo run --example delays_and_timeouts
+```
+
+**What you'll learn:**
+- ✅ CORRECT: Use `ctx.schedule_timer()` for delays and timeouts
+- ✅ CORRECT: Use `ctx.select2()` for timeout patterns
+- ❌ WRONG: What NOT to do (activities with sleep)
+- The key rule: Activities = pure business logic, Timers = waiting
+
+### 2. Hello World (`hello_world.rs`)
+Basic orchestration setup and execution.
 
 ```bash
 cargo run --example hello_world
@@ -17,7 +30,7 @@ cargo run --example hello_world
 - Running orchestrations with the in-process runtime
 - Basic error handling and completion waiting
 
-### 2. Fan-Out/Fan-In (`fan_out_fan_in.rs`)
+### 3. Fan-Out/Fan-In (`fan_out_fan_in.rs`)
 Parallel processing pattern for handling multiple items concurrently.
 
 ```bash
@@ -30,7 +43,7 @@ cargo run --example fan_out_fan_in
 - Typed activity inputs and outputs with Serde
 - Processing collections of data efficiently
 
-### 3. Timers and External Events (`timers_and_events.rs`)
+### 4. Timers and External Events (`timers_and_events.rs`)
 Human-in-the-loop workflows with timeouts and external approvals.
 
 ```bash

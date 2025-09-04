@@ -755,6 +755,8 @@ impl Runtime {
                                 fire_at_ms,
                             } => {
                                 // Provider supports delayed visibility: enqueue TimerFired with fire_at_ms and let provider deliver when due
+                                // For provider-backed delayed visibility, we immediately convert to TimerFired
+                                // and ack the original. The provider handles the delay.
                                 let _ = self
                                     .history_store
                                     .enqueue_orchestrator_work(WorkItem::TimerFired {
@@ -783,7 +785,8 @@ impl Runtime {
             let (svc_jh, svc_tx) =
                 crate::runtime::timers::TimerService::start(self.history_store.clone(), Self::POLLER_IDLE_SLEEP_MS);
 
-            // Intake task: keep pulling schedules and forwarding to service, then ack
+            // Intake task: keep pulling schedules and forwarding to service
+            // The timer service will handle acknowledgment after firing
             let intake_rt = self.clone();
             let intake_tx = svc_tx.clone();
             tokio::spawn(async move {
@@ -796,13 +799,18 @@ impl Runtime {
                                 id,
                                 fire_at_ms,
                             } => {
-                                let _ = intake_tx.send(WorkItem::TimerSchedule {
-                                    instance,
-                                    execution_id,
-                                    id,
-                                    fire_at_ms,
-                                });
-                                let _ = intake_rt.history_store.ack_timer(&token).await;
+                                // Send to timer service WITH the ack token
+                                let timer_with_token = crate::runtime::timers::TimerWithToken {
+                                    item: WorkItem::TimerSchedule {
+                                        instance,
+                                        execution_id,
+                                        id,
+                                        fire_at_ms,
+                                    },
+                                    ack_token: token,
+                                };
+                                let _ = intake_tx.send(timer_with_token);
+                                // Do NOT ack here - the timer service will ack after firing
                             }
                             other => {
                                 error!(?other, "unexpected WorkItem in Timer dispatcher; state corruption");

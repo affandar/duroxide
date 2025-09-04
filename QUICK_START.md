@@ -9,9 +9,22 @@ Duroxide is a framework for building **reliable, long-running workflows** that c
 ## Core Concepts (30 seconds)
 
 - **Orchestrations**: Your main workflow logic (async functions)
-- **Activities**: Stateless functions that do actual work
+- **Activities**: Stateless functions that do actual work (NO delays/sleeps!)
+- **Timers**: Use `ctx.schedule_timer(ms)` for delays, timeouts, scheduling
 - **Deterministic Replay**: If something fails, Duroxide replays your code to get back to the same state
 - **Durable Futures**: Special futures that remember their state across restarts
+
+## ⚠️ Key Rule: Timers vs Activities
+
+**For any waiting or delays, use timers, NOT activities:**
+
+```rust
+// ✅ CORRECT: Use timers for delays
+ctx.schedule_timer(5000).into_timer().await; // Wait 5 seconds
+
+// ❌ WRONG: Don't create "sleep" activities
+// ctx.schedule_activity("Sleep", "5000").into_activity().await;
+```
 
 ## Minimal Example
 
