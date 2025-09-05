@@ -144,8 +144,25 @@ impl OrchestrationTurn {
                         }
                         None
                     } else {
-                        // Process the completion normally
-                        self.completion_map.add_completion(msg)
+                        // Check if this is a trace activity completion - if so, ignore it
+                        if let OrchestratorMsg::ActivityCompleted { id, .. } | OrchestratorMsg::ActivityFailed { id, .. } = &msg {
+                            // Look for the corresponding ActivityScheduled event
+                            let is_trace_activity = self.baseline_history.iter().any(|e| {
+                                matches!(e, Event::ActivityScheduled { id: scheduled_id, name, .. } 
+                                    if *scheduled_id == *id && name == crate::SYSTEM_TRACE_ACTIVITY)
+                            });
+                            
+                            if is_trace_activity {
+                                // Ignore trace activity completions
+                                None
+                            } else {
+                                // Process the completion normally
+                                self.completion_map.add_completion(msg)
+                            }
+                        } else {
+                            // Process non-activity completions normally
+                            self.completion_map.add_completion(msg)
+                        }
                     }
                 }
             };

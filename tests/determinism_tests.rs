@@ -159,7 +159,6 @@ fn action_order_is_deterministic_in_first_turn() {
             Action::StartOrchestrationDetached { .. } => "StartOrchestrationDetached",
             Action::StartSubOrchestration { .. } => "StartSubOrchestration",
             Action::ContinueAsNew { .. } => "ContinueAsNew",
-
         })
         .collect();
     assert_eq!(
