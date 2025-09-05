@@ -260,15 +260,6 @@ impl Runtime {
                                 parent_id: None,
                             });
                         }
-                        crate::Action::SystemCall { id, op, value } => {
-                            // System calls are converted directly to events, no work item needed
-                            history_delta.push(Event::SystemCall {
-                                id: *id,
-                                op: op.clone(),
-                                value: value.clone(),
-                                execution_id,
-                            });
-                        }
                         _ => {} // Other actions don't generate work items
                     }
                 }
@@ -331,15 +322,6 @@ impl Runtime {
                                 version: version.clone(),
                                 parent_instance: None,
                                 parent_id: None,
-                            });
-                        }
-                        crate::Action::SystemCall { id, op, value } => {
-                            // System calls are converted directly to events, no work item needed
-                            history_delta.push(Event::SystemCall {
-                                id: *id,
-                                op: op.clone(),
-                                value: value.clone(),
-                                execution_id,
                             });
                         }
                         _ => {} // Other actions don't generate work items

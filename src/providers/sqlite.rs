@@ -259,7 +259,6 @@ impl SqliteHistoryStore {
                 Event::SubOrchestrationFailed { .. } => "SubOrchestrationFailed",
                 Event::OrchestrationCancelRequested { .. } => "OrchestrationCancelRequested",
                 Event::OrchestrationChained { .. } => "OrchestrationChained",
-                Event::SystemCall { .. } => "SystemCall",
             };
             
             let event_data = serde_json::to_string(event).unwrap();

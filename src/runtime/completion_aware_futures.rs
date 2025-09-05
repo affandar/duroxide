@@ -123,11 +123,6 @@ impl Future for CompletionAwareDurableFuture {
                 Kind::Timer { id, .. } => (CompletionKind::Timer, *id),
                 Kind::External { id, .. } => (CompletionKind::External, *id),
                 Kind::SubOrch { id, .. } => (CompletionKind::SubOrchestration, *id),
-                Kind::System { .. } => {
-                    // System calls complete immediately, no completion map tracking needed
-                    // Use poll_once to get the result
-                    return crate::poll_once(&mut self.inner)
-                }
             };
 
             // Check if this completion is ready in the ordered map

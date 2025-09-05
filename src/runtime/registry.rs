@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use semver::Version;
 use std::collections::HashMap;
 use std::sync::Arc;
-// Tracing imports removed - no longer needed for system activities
+use tracing::{debug, error, info, warn};
 
 #[derive(Clone, Default)]
 pub struct OrchestrationRegistry {
@@ -210,8 +210,36 @@ pub struct ActivityRegistryBuilder {
 
 impl ActivityRegistry {
     pub fn builder() -> ActivityRegistryBuilder {
-        let b = ActivityRegistryBuilder { map: HashMap::new() };
-        // No system activities needed - tracing is now host-side only
+        let mut b = ActivityRegistryBuilder { map: HashMap::new() };
+        // Pre-register system activities
+        b = b.register(crate::SYSTEM_NOW_ACTIVITY, |_: String| async move {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis();
+            Ok(now.to_string())
+        });
+        b = b.register(crate::SYSTEM_NEW_GUID_ACTIVITY, |_: String| async move {
+            // Generate a UUID v4 and remove dashes for consistency
+            let uuid = uuid::Uuid::new_v4().to_string().replace("-", "");
+            Ok(uuid)
+        });
+        b = b.register(crate::SYSTEM_TRACE_ACTIVITY, |input: String| async move {
+            let parts: Vec<&str> = input.splitn(2, ':').collect();
+            let (level, msg) = if parts.len() == 2 {
+                (parts[0], parts[1])
+            } else {
+                ("INFO", input.as_str())
+            };
+            match level {
+                "ERROR" => error!(message=%msg, "system trace"),
+                "WARN" => warn!(message=%msg, "system trace"),
+                "INFO" => info!(message=%msg, "system trace"),
+                "DEBUG" => debug!(message=%msg, "system trace"),
+                _ => info!(message=%msg, "system trace"),
+            }
+            Ok(format!("{}:{}", level, msg))
+        });
         b
     }
     pub fn get(&self, name: &str) -> Option<Arc<dyn ActivityHandler>> {

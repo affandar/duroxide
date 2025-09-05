@@ -10,8 +10,8 @@ async fn test_new_guid() {
     
     let orchestrations = OrchestrationRegistry::builder()
         .register("TestGuid", |ctx: OrchestrationContext, _input: String| async move {
-            let guid1 = ctx.new_guid().into_system().await;
-            let guid2 = ctx.new_guid().into_system().await;
+            let guid1 = ctx.new_guid().into_activity().await.unwrap();
+            let guid2 = ctx.new_guid().into_activity().await.unwrap();
             
             // GUIDs should be different
             assert_ne!(guid1, guid2);
@@ -47,16 +47,16 @@ async fn test_utcnow_ms() {
     
     let orchestrations = OrchestrationRegistry::builder()
         .register("TestTime", |ctx: OrchestrationContext, _input: String| async move {
-            let time1 = ctx.utcnow_ms().into_system().await;
+            let time1: u128 = ctx.utcnow_ms().into_activity().await.unwrap().parse().unwrap();
             
             // Add a small timer to ensure time progresses
             ctx.schedule_timer(100).into_timer().await;
             
-            let time2 = ctx.utcnow_ms().into_system().await;
+            let time2: u128 = ctx.utcnow_ms().into_activity().await.unwrap().parse().unwrap();
             
             // Times should be valid millisecond timestamps
-            let t1: u128 = time1.parse().expect("time1 should be numeric");
-            let t2: u128 = time2.parse().expect("time2 should be numeric");
+            let t1 = time1;
+            let t2 = time2;
             
             // Times should be reasonable (after year 2020)
             assert!(t1 > 1577836800000); // Jan 1, 2020
@@ -91,8 +91,8 @@ async fn test_system_calls_deterministic_replay() {
     
     let orchestrations = OrchestrationRegistry::builder()
         .register("TestDeterminism", |ctx: OrchestrationContext, _input: String| async move {
-            let guid = ctx.new_guid().into_system().await;
-            let time = ctx.utcnow_ms().into_system().await;
+            let guid = ctx.new_guid().into_activity().await.unwrap();
+            let time = ctx.utcnow_ms().into_activity().await.unwrap();
             
             // Use values in some computation
             let result = format!("guid:{},time:{}", guid, time);
@@ -147,7 +147,7 @@ async fn test_system_calls_with_select() {
         .register("TestSelect", |ctx: OrchestrationContext, _input: String| async move {
             // System calls should complete immediately, even with select
             // First test that GUID completes immediately
-            let guid = ctx.new_guid().into_system().await;
+            let guid = ctx.new_guid().into_activity().await.unwrap();
             
             // Now test racing against an activity
             let guid_future = ctx.new_guid();
@@ -158,7 +158,7 @@ async fn test_system_calls_with_select() {
             match winner_idx {
                 0 => {
                     // GUID won
-                    if let duroxide::DurableOutput::System(guid2) = output {
+                    if let duroxide::DurableOutput::Activity(Ok(guid2)) = output {
                         Ok(format!("guid_won:{},{}", guid, guid2))
                     } else {
                         Err("Unexpected output type".to_string())

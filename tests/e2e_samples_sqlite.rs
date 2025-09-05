@@ -402,9 +402,9 @@ async fn sample_system_activities_sqlite() {
     let activity_registry = ActivityRegistry::builder().build();
 
     let orchestration = |ctx: OrchestrationContext, _input: String| async move {
-        let now_str = ctx.utcnow_ms().into_system().await;
+        let now_str = ctx.utcnow_ms().into_activity().await?;
         let now: u128 = now_str.parse().unwrap();
-        let guid = ctx.new_guid().into_system().await;
+        let guid = ctx.new_guid().into_activity().await?;
         ctx.trace_info(format!("system now={now}, guid={guid}"));
         Ok(format!("n={now},g={guid}"))
     };

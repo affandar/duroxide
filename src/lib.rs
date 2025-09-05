@@ -188,7 +188,10 @@ pub mod providers;
 
 // Re-export key runtime types for convenience
 pub use runtime::{OrchestrationHandler, OrchestrationRegistry, OrchestrationRegistryBuilder, OrchestrationStatus};
-// No internal system activity names needed - tracing is now host-side only
+// Internal system activity names
+pub(crate) const SYSTEM_NOW_ACTIVITY: &str = "__system_now";
+pub(crate) const SYSTEM_NEW_GUID_ACTIVITY: &str = "__system_new_guid";
+pub(crate) const SYSTEM_TRACE_ACTIVITY: &str = "__system_trace";
 
 use crate::_typed_codec::Codec;
 use crate::logging::LogLevel;
@@ -298,13 +301,6 @@ pub enum Event {
     /// Cancellation has been requested for the orchestration (terminal will follow deterministically).
     OrchestrationCancelRequested { reason: String },
 
-    /// System call was executed and recorded (deterministic GUID, time, etc).
-    SystemCall {
-        id: u64,
-        op: String,
-        value: String,
-        execution_id: u64,
-    },
 }
 
 /// Declarative decisions produced by an orchestration turn. The host/provider
@@ -338,8 +334,6 @@ pub enum Action {
     /// Optional version string selects the target orchestration version for the new execution.
     ContinueAsNew { input: String, version: Option<String> },
 
-    /// Execute a deterministic system call (GUID, time, etc).
-    SystemCall { id: u64, op: String, value: String },
 }
 
 #[derive(Debug)]
@@ -391,7 +385,6 @@ impl CtxInner {
                 | Event::OrchestrationFailed { .. }
                 | Event::OrchestrationContinuedAsNew { .. }
                 | Event::OrchestrationCancelRequested { .. } => None,
-                Event::SystemCall { id, .. } => Some(*id),
             };
             if let Some(id) = id_opt {
                 max_id = max_id.max(id);
@@ -482,13 +475,12 @@ impl OrchestrationContext {
         self.inner.lock().unwrap().log_buffer.push((level, msg));
     }
 
-    /// Emit a structured trace entry using the deterministic system call infrastructure.
-    /// During replay, traces are skipped automatically for determinism.
+    /// Emit a structured trace entry using the system trace activity.
     /// This is fire-and-forget - the trace is recorded in history but doesn't need to be awaited.
     pub fn trace(&self, level: impl Into<String>, message: impl Into<String>) {
-        let trace_data = format!("{}:{}", level.into(), message.into());
-        let mut fut = self.schedule_system_call(&format!("trace:{}", trace_data));
-        // Fire and forget - poll once to execute and record in history
+        let payload = format!("{}:{}", level.into(), message.into());
+        let mut fut = self.schedule_activity(SYSTEM_TRACE_ACTIVITY, payload);
+        // Fire and forget - poll once to schedule the activity
         let _ = poll_once(&mut fut);
     }
 
@@ -510,73 +502,39 @@ impl OrchestrationContext {
     }
 
     /// Return current wall-clock time from a system activity in milliseconds since epoch.
-    /// DEPRECATED: Use `utcnow_ms()` for deterministic time without worker round-trips.
-    #[deprecated(note = "Use utcnow_ms() instead for deterministic time without worker round-trips")]
+    /// DEPRECATED: Use `utcnow_ms()` instead.
+    #[deprecated(note = "Use utcnow_ms() instead")]
     pub async fn system_now_ms(&self) -> u128 {
-        let time_str = self.utcnow_ms().into_system().await;
-        time_str.parse::<u128>().unwrap_or(0)
+        self.schedule_activity(SYSTEM_NOW_ACTIVITY, "")
+            .into_activity()
+            .await
+            .unwrap_or_default()
+            .parse::<u128>()
+            .unwrap_or(0)
     }
 
-    /// Return a new pseudo-GUID string from a system activity. Intended for
-    /// integration paths; for deterministic GUIDs prefer `new_guid()`.
-    /// DEPRECATED: Use `new_guid()` for deterministic GUIDs without worker round-trips.
-    #[deprecated(note = "Use new_guid() instead for deterministic GUIDs without worker round-trips")]
+    /// Return a new pseudo-GUID string from a system activity.
+    /// DEPRECATED: Use `new_guid()` instead.
+    #[deprecated(note = "Use new_guid() instead")]
     pub async fn system_new_guid(&self) -> String {
-        self.new_guid().into_system().await
+        self.schedule_activity(SYSTEM_NEW_GUID_ACTIVITY, "")
+            .into_activity()
+            .await
+            .unwrap_or_default()
     }
 
-    /// Generate a new deterministic GUID without worker round-trips.
-    /// The GUID is computed once and stored in history for deterministic replay.
+    /// Generate a new deterministic GUID.
+    /// This is syntactic sugar for scheduling the system GUID activity.
+    /// Returns a DurableFuture that must be awaited to get the GUID value.
     pub fn new_guid(&self) -> DurableFuture {
-        self.schedule_system_call("guid")
+        self.schedule_activity(SYSTEM_NEW_GUID_ACTIVITY, "")
     }
 
-    /// Get the current UTC time in milliseconds since epoch without worker round-trips.
-    /// The time is captured once and stored in history for deterministic replay.
+    /// Get the current UTC time in milliseconds since epoch.
+    /// This is syntactic sugar for scheduling the system time activity.
+    /// Returns a DurableFuture that must be awaited to get the timestamp value.
     pub fn utcnow_ms(&self) -> DurableFuture {
-        self.schedule_system_call("utcnow_ms")
-    }
-
-    /// Internal: Schedule a deterministic system call.
-    fn schedule_system_call(&self, op: &str) -> DurableFuture {
-        let mut inner = self.inner.lock().unwrap();
-        
-        // Check if this system call already exists in history for the current execution
-        let execution_id = inner.execution_id;
-        let existing_system_call = inner.history.iter().find_map(|event| {
-            if let Event::SystemCall { id, op: event_op, value, execution_id: exec_id } = event {
-                if *exec_id == execution_id && event_op == op {
-                    Some((*id, value.clone()))
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        });
-        
-        if let Some((id, value)) = existing_system_call {
-            // Found a matching system call - return it as already completed
-            drop(inner);
-            return DurableFuture(Kind::System { 
-                id, 
-                op: op.to_string(), 
-                value: Some(value),
-                scheduled: Cell::new(true),
-                ctx: self.clone() 
-            });
-        }
-        
-        // Not found in history - allocate new ID and schedule
-        let id = inner.next_id();
-        drop(inner);
-        DurableFuture(Kind::System { 
-            id, 
-            op: op.to_string(), 
-            value: None,
-            scheduled: Cell::new(false),
-            ctx: self.clone() 
-        })
+        self.schedule_activity(SYSTEM_NOW_ACTIVITY, "")
     }
 
     pub fn continue_as_new(&self, input: impl Into<String>) {
@@ -624,24 +582,6 @@ use crate::futures::KindTag;
 // DurableFuture's Future impl lives in crate::futures
 
 impl DurableFuture {
-    /// Converts this unified future into a future that resolves only for
-    /// a system call result.
-    pub fn into_system(self) -> impl Future<Output = String> {
-        struct Map(DurableFuture);
-        impl Future for Map {
-            type Output = String;
-            fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-                let this = unsafe { self.map_unchecked_mut(|s| &mut s.0) };
-                match this.poll(cx) {
-                    Poll::Ready(DurableOutput::System(v)) => Poll::Ready(v),
-                    Poll::Ready(other) => panic!("into_system used on non-system future: {other:?}"),
-                    Poll::Pending => Poll::Pending,
-                }
-            }
-        }
-        Map(self)
-    }
-
     /// Converts this unified future into a future that resolves only for
     /// an activity completion or failure.
     /// Await an activity result as a raw String (back-compat API).
