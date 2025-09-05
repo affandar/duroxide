@@ -280,3 +280,5 @@ pub trait HistoryStore: Send + Sync {
 pub mod fs;
 /// In-memory provider for tests.
 pub mod in_memory;
+/// SQLite-backed provider with full transactional support.
+pub mod sqlite;

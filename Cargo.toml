@@ -23,6 +23,14 @@ tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 tempfile = "3"
 semver = "1"
 
+# SQLite support
+sqlx = { version = "0.7", features = ["runtime-tokio-rustls", "sqlite", "macros", "migrate", "chrono"] }
+
+# Ensure SQLite is bundled
+[dependencies.libsqlite3-sys]
+version = "0.27"
+features = ["bundled"]
+
 [workspace]
 members = [
     ".",

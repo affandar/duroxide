@@ -503,10 +503,18 @@ impl Runtime {
             timer_items.len(),
             orchestrator_items.len()
         );
-        let _ = self
+        
+        if !worker_items.is_empty() {
+            debug!(instance, "Worker items to enqueue: {:?}", worker_items);
+        }
+        match self
             .history_store
             .ack_orchestration_item(lock_token, history_delta, worker_items, timer_items, orchestrator_items)
-            .await;
+            .await
+        {
+            Ok(()) => debug!(instance, "Successfully acked orchestration item"),
+            Err(e) => warn!(instance, error = %e, "Failed to ack orchestration item"),
+        }
     }
 
     // Helper methods for atomic orchestration processing

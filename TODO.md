@@ -1,5 +1,6 @@
 ## Durable Task Rust Core – TODOs
 
+- parallelize dispatcher loops
 - lock TTL for timer and worker queues and update lease
 - Reduce ornamental user code in orchestrations and acivities
 - Continue the provider simplification

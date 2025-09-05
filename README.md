@@ -27,7 +27,7 @@ What it is
   - WorkDispatcher (activities and child/detached starts, worker queue)
   - TimerDispatcher (timers, timer queue)
   - InstanceRouter (in-process delivery of completions to active instances)
-- Storage-agnostic via `HistoryStore` (in-memory and filesystem providers today)
+- Storage-agnostic via `HistoryStore` (in-memory, filesystem, and SQLite providers)
 
 How it works (brief)
 - The orchestrator runs turn-by-turn. Each turn it is polled once, may schedule actions, then the runtime waits for completions.
@@ -41,13 +41,13 @@ Key types
 - `OrchestrationContext`: schedules work (`schedule_activity`, `schedule_timer`, `schedule_wait`, `schedule_sub_orchestration`, `schedule_orchestration`) and exposes deterministic `select2/select/join`, `trace_*`, `continue_as_new`.
 - `DurableFuture`: returned by `schedule_*`; use `into_activity()`, `into_timer()`, `into_event()`, `into_sub_orchestration()` (and `_typed` variants) to await.
 - `Event`/`Action`: immutable history entries and host-side actions, including `ContinueAsNew`.
-- `HistoryStore`: persistence abstraction (`InMemoryHistoryStore`, `FsHistoryStore`).
+- `HistoryStore`: persistence abstraction (`InMemoryHistoryStore`, `FsHistoryStore`, `SqliteHistoryStore`).
 - `OrchestrationRegistry` / `ActivityRegistry`: register orchestrations/activities in-memory.
 
 Project layout
 - `src/lib.rs` — orchestration primitives and single-turn executor
 - `src/runtime/` — runtime, registries, workers, and polling engine
-- `src/providers/` — in-memory and filesystem history stores
+- `src/providers/` — in-memory, filesystem, and SQLite history stores
 - `tests/` — unit and e2e tests (see `e2e_samples.rs` to learn by example)
 
 Install (when published)

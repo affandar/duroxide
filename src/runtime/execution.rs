@@ -159,6 +159,11 @@ impl Runtime {
 
         // Extract input and parent linkage for the orchestration
         let (input, parent_link) = self.extract_orchestration_context(orchestration_name, &history);
+        if let Some((ref pinst, pid)) = parent_link {
+            tracing::debug!(target = "duroxide::runtime::execution", instance=%instance, parent_instance=%pinst, parent_id=%pid, "Detected parent link for orchestration");
+        } else {
+            tracing::debug!(target = "duroxide::runtime::execution", instance=%instance, "No parent link for orchestration");
+        }
 
         // Process completion messages in a single turn
         let messages: Vec<(OrchestratorMsg, String)> = completion_messages
@@ -329,6 +334,7 @@ impl Runtime {
 
                 // Notify parent if this is a sub-orchestration
                 if let Some((parent_instance, parent_id)) = parent_link {
+                    tracing::debug!(target = "duroxide::runtime::execution", instance=%instance, parent_instance=%parent_instance, parent_id=%parent_id, "Enqueue SubOrchCompleted to parent");
                     orchestrator_items.push(WorkItem::SubOrchCompleted {
                         parent_instance: parent_instance.clone(),
                         parent_execution_id: self.get_execution_id_for_instance(&parent_instance).await,
@@ -346,6 +352,7 @@ impl Runtime {
 
                 // Notify parent if this is a sub-orchestration
                 if let Some((parent_instance, parent_id)) = parent_link {
+                    tracing::debug!(target = "duroxide::runtime::execution", instance=%instance, parent_instance=%parent_instance, parent_id=%parent_id, "Enqueue SubOrchFailed to parent");
                     orchestrator_items.push(WorkItem::SubOrchFailed {
                         parent_instance: parent_instance.clone(),
                         parent_execution_id: self.get_execution_id_for_instance(&parent_instance).await,
