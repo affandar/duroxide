@@ -9,22 +9,17 @@ use duroxide::{OrchestrationContext, OrchestrationRegistry, DurableOutput};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Duration;
-use tempfile::NamedTempFile;
 
 mod common;
 
 /// Helper to create a SQLite store for tests
 async fn create_sqlite_store() -> Arc<dyn HistoryStore> {
-    // Create a temporary file for the database
-    let temp_file = NamedTempFile::new().expect("Failed to create temp file");
-    let db_path = temp_file.path().to_str().unwrap();
-    let db_url = format!("sqlite:{}", db_path);
-    
-    // Keep the file alive by leaking it (tests are short-lived)
-    std::mem::forget(temp_file);
+    // Use in-memory SQLite database for complete isolation
+    // Each connection gets its own database instance
+    let db_url = "sqlite::memory:";
     
     Arc::new(
-        SqliteHistoryStore::new(&db_url)
+        SqliteHistoryStore::new(db_url)
             .await
             .expect("Failed to create SQLite store")
     ) as Arc<dyn HistoryStore>

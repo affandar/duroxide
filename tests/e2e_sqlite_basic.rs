@@ -4,20 +4,14 @@ use duroxide::runtime::{self, registry::ActivityRegistry};
 use duroxide::{OrchestrationContext, OrchestrationRegistry};
 use std::sync::Arc;
 use std::time::Duration;
-use tempfile::NamedTempFile;
 
 #[tokio::test]
 async fn test_sqlite_provider_works() {
-    // Create a temporary SQLite database
-    let temp_file = NamedTempFile::new().expect("Failed to create temp file");
-    let db_path = temp_file.path().to_str().unwrap();
-    let db_url = format!("sqlite:{}", db_path);
-    
-    // Keep the file alive for the test
-    std::mem::forget(temp_file);
+    // Use in-memory SQLite database for complete isolation
+    let db_url = "sqlite::memory:";
     
     let store = Arc::new(
-        SqliteHistoryStore::new(&db_url)
+        SqliteHistoryStore::new(db_url)
             .await
             .expect("Failed to create SQLite store")
     );
