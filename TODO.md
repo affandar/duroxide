@@ -1,11 +1,26 @@
 ## Durable Task Rust Core – TODOs
 
+### High Priority - In Progress
+- [ ] Implement "Deterministic System Calls with Auto-completion" RFC (docs/rfcs/2025-09-system-calls-deterministic-autocomplete.md)
+  - Replace system activities (GUID, time) with deterministic auto-completed calls
+  - Eliminate worker round-trips for system operations
+
+### Unimplemented Features (from ignored tests)
+- [ ] Detached/fire-and-forget orchestrations
+- [ ] Advanced versioning features:
+  - Version-specific orchestration start
+  - Sub-orchestration version policies
+  - Versioned continue-as-new
+- [ ] Parent-child cancellation cascading
+
+### Other TODOs
+- host level events (tracing, guid, time) [IN PROGRESS via RFC]
 - parallelize dispatcher loops
 - lock TTL for timer and worker queues and update lease
 - Reduce ornamental user code in orchestrations and acivities
 - Continue the provider simplification
 - Rename to provider
-- fix up the tracing to not use activities
+- fix up the tracing to not use activities [DONE - tracing is now host-side only]
 - fault inject: "TODO : fault injection :"
 - code coverage
 - Cleanup the docs before making public
@@ -28,6 +43,14 @@
 
 ## DONE
 
+- SQLite provider with full transactional support and e2e test parity
+  - Full ACID transactional semantics
+  - Provider-backed timer queue with delayed visibility
+  - Handles concurrent instance execution
+  - All 25 core e2e tests passing
+- Fixed trace activities to be fire-and-forget (no longer cause nondeterminism)
+- Timer acknowledgment only after firing (reliability fix)
+- Worker queue acknowledgment only after completion enqueue (reliability fix)
 - Return instance history as well
 - Update history + complete locks + enqueue in the same call
 - typed parameters for activities and orchestrations
