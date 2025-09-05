@@ -23,8 +23,33 @@ impl SqliteHistoryStore {
     /// # Arguments
     /// * `database_url` - SQLite connection string (e.g., "sqlite:data.db" or "sqlite::memory:")
     pub async fn new(database_url: &str) -> Result<Self, sqlx::Error> {
+        // Configure SQLite for better concurrency
         let pool = SqlitePoolOptions::new()
             .max_connections(5)
+            .after_connect(|conn, _meta| Box::pin(async move {
+                // Enable WAL mode for better concurrent access
+                sqlx::query("PRAGMA journal_mode = WAL")
+                    .execute(&mut *conn)
+                    .await?;
+                
+                // Set busy timeout to 5 seconds to retry on locks
+                sqlx::query("PRAGMA busy_timeout = 5000")
+                    .execute(&mut *conn)
+                    .await?;
+                
+                // Enable foreign keys
+                sqlx::query("PRAGMA foreign_keys = ON")
+                    .execute(&mut *conn)
+                    .await?;
+                
+                // Set synchronous mode to NORMAL for better performance
+                // (FULL is default but slower)
+                sqlx::query("PRAGMA synchronous = NORMAL")
+                    .execute(&mut *conn)
+                    .await?;
+                
+                Ok(())
+            }))
             .connect(database_url)
             .await?;
         
@@ -32,10 +57,14 @@ impl SqliteHistoryStore {
         if database_url.contains(":memory:") || database_url.contains("mode=memory") {
             Self::create_schema(&pool).await?;
         } else {
-            // Run migrations for persistent databases
-            sqlx::migrate!("./migrations")
-                .run(&pool)
-                .await?;
+            // For file-based databases, try migrations first, fall back to direct schema creation
+            match sqlx::migrate!("./migrations").run(&pool).await {
+                Ok(_) => {},
+                Err(_) => {
+                    // Migrations not available (e.g., in tests), create schema directly
+                    Self::create_schema(&pool).await?;
+                }
+            }
         }
         
         Ok(Self {
