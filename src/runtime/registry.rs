@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use semver::Version;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tracing::{debug, error, info, warn};
+// Tracing imports removed - no longer needed for system activities
 
 #[derive(Clone, Default)]
 pub struct OrchestrationRegistry {
@@ -210,35 +210,8 @@ pub struct ActivityRegistryBuilder {
 
 impl ActivityRegistry {
     pub fn builder() -> ActivityRegistryBuilder {
-        let mut b = ActivityRegistryBuilder { map: HashMap::new() };
-        // Pre-register system activities before any user registration
-        b = b.register(crate::SYSTEM_TRACE_ACTIVITY, |input: String| async move {
-            let (level, msg) = match input.split_once(':') {
-                Some((l, m)) => (l.to_string(), m.to_string()),
-                None => ("INFO".to_string(), input),
-            };
-            match level.as_str() {
-                "ERROR" => error!(message=%msg, "system trace"),
-                "WARN" | "WARNING" => warn!(message=%msg, "system trace"),
-                "DEBUG" => debug!(message=%msg, "system trace"),
-                _ => info!(message=%msg, "system trace"),
-            }
-            Ok(format!("{}:{}", level, msg))
-        });
-        b = b.register(crate::SYSTEM_NOW_ACTIVITY, |_input: String| async move {
-            let now_ms = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis();
-            Ok(now_ms.to_string())
-        });
-        b = b.register(crate::SYSTEM_NEW_GUID_ACTIVITY, |_input: String| async move {
-            let nanos = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos();
-            Ok(format!("{nanos:032x}"))
-        });
+        let b = ActivityRegistryBuilder { map: HashMap::new() };
+        // No system activities needed - tracing is now host-side only
         b
     }
     pub fn get(&self, name: &str) -> Option<Arc<dyn ActivityHandler>> {

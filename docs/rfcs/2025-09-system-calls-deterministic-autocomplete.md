@@ -1,6 +1,6 @@
 # RFC: Deterministic System Calls with Auto-Completion (GUID, Time, etc.)
 
-Status: Draft
+Status: Implemented ✅
 
 Author: duroxide team
 

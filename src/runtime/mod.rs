@@ -143,6 +143,9 @@ impl Runtime {
                     )
                     .await;
                 }
+                crate::Action::SystemCall { .. } => {
+                    // System calls are handled directly in run_single_execution_atomic
+                }
             }
         }
     }

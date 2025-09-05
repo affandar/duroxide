@@ -11,6 +11,7 @@ pub enum DurableOutput {
     Timer,
     External(String),
     SubOrchestration(Result<String, String>),
+    System(String),
 }
 
 pub struct DurableFuture(pub(crate) Kind);
@@ -27,6 +28,7 @@ impl DurableFuture {
                     Kind::Timer { id, .. } => (crate::runtime::completion_map::CompletionKind::Timer, *id),
                     Kind::External { id, .. } => (crate::runtime::completion_map::CompletionKind::External, *id),
                     Kind::SubOrch { id, .. } => (crate::runtime::completion_map::CompletionKind::SubOrchestration, *id),
+                    Kind::System { .. } => return None, // System calls don't use completion map
                 };
 
                 // Check completion map for deterministic ordering
@@ -83,12 +85,13 @@ impl DurableFuture {
                         if let Some(event) = history_event {
                             // We need to add this event to the orchestration context's history
                             // The context is available in the future's Kind enum
-                            let ctx = match &self.0 {
-                                Kind::Activity { ctx, .. } => Some(ctx),
-                                Kind::Timer { ctx, .. } => Some(ctx),
-                                Kind::External { ctx, .. } => Some(ctx),
-                                Kind::SubOrch { ctx, .. } => Some(ctx),
-                            };
+                                                    let ctx = match &self.0 {
+                            Kind::Activity { ctx, .. } => Some(ctx),
+                            Kind::Timer { ctx, .. } => Some(ctx),
+                            Kind::External { ctx, .. } => Some(ctx),
+                            Kind::SubOrch { ctx, .. } => Some(ctx),
+                            Kind::System { ctx, .. } => Some(ctx),
+                        };
 
                             if let Some(context) = ctx {
                                 // Add completion event to history for consistency
@@ -160,6 +163,13 @@ pub(crate) enum Kind {
         scheduled: Cell<bool>,
         ctx: OrchestrationContext,
     },
+    System {
+        id: u64,
+        op: String,
+        value: Option<String>,
+        scheduled: Cell<bool>,
+        ctx: OrchestrationContext,
+    },
 }
 
 // Internal tag to classify DurableFuture kinds for history indexing
@@ -169,6 +179,7 @@ pub(crate) enum KindTag {
     Timer,
     External,
     SubOrch,
+    System,
 }
 
 impl Future for DurableFuture {
@@ -321,6 +332,78 @@ impl Future for DurableFuture {
                 }
                 Poll::Pending
             }
+            Kind::System {
+                id,
+                op,
+                value,
+                scheduled,
+                ctx,
+            } => {
+                // If we already have the value (from history during construction), return it
+                if let Some(val) = value {
+                    return Poll::Ready(DurableOutput::System(val.clone()));
+                }
+                
+                // Otherwise, compute the value
+                let mut inner = ctx.inner.lock().unwrap();
+                let computed_value = match op.as_str() {
+                    "guid" => {
+                        // Generate a UUID v4 
+                        let uuid = uuid::Uuid::new_v4().to_string().replace("-", "");
+                        uuid
+                    }
+                    "utcnow_ms" => {
+                        // Get current time in milliseconds since epoch
+                        let now = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_millis()
+                            .to_string();
+                        now
+                    }
+                    op if op.starts_with("trace:") => {
+                        // Extract trace data after "trace:"
+                        let trace_data = &op[6..];
+                        // Return the trace data as the value
+                        trace_data.to_string()
+                    }
+                    _ => panic!("Unknown system call operation: {}", op),
+                };
+                
+                // Record the action only if not already scheduled
+                if !scheduled.replace(true) {
+                    inner.record_action(Action::SystemCall {
+                        id: *id,
+                        op: op.clone(),
+                        value: computed_value.clone(),
+                    });
+                    
+                    // For trace operations, emit to host-side logging when first computed
+                    if op.starts_with("trace:") {
+                        let trace_data = &op[6..];
+                        let parts: Vec<&str> = trace_data.splitn(2, ':').collect();
+                        let (level, msg) = if parts.len() == 2 {
+                            (parts[0], parts[1])
+                        } else {
+                            ("INFO", trace_data)
+                        };
+                        
+                        let instance_info = format!("execution_id={}", inner.execution_id);
+                        match level {
+                            "ERROR" => tracing::error!(target = "duroxide::orchestration", %instance_info, message = %msg),
+                            "WARN" => tracing::warn!(target = "duroxide::orchestration", %instance_info, message = %msg),
+                            "INFO" => tracing::info!(target = "duroxide::orchestration", %instance_info, message = %msg),
+                            "DEBUG" => tracing::debug!(target = "duroxide::orchestration", %instance_info, message = %msg),
+                            _ => tracing::info!(target = "duroxide::orchestration", %instance_info, level = %level, message = %msg),
+                        }
+                    }
+                    
+                    // Update the value in the future
+                    *value = Some(computed_value.clone());
+                }
+                
+                Poll::Ready(DurableOutput::System(value.as_ref().unwrap().clone()))
+            }
         }
     }
 }
@@ -352,6 +435,7 @@ impl AggregateDurableFuture {
                 Kind::Timer { id, .. } => (*id, KindTag::Timer),
                 Kind::External { id, .. } => (*id, KindTag::External),
                 Kind::SubOrch { id, .. } => (*id, KindTag::SubOrch),
+                Kind::System { id, .. } => (*id, KindTag::System),
             })
             .collect();
         Self {
@@ -369,6 +453,7 @@ impl AggregateDurableFuture {
                 Kind::Timer { id, .. } => (*id, KindTag::Timer),
                 Kind::External { id, .. } => (*id, KindTag::External),
                 Kind::SubOrch { id, .. } => (*id, KindTag::SubOrch),
+                Kind::System { id, .. } => (*id, KindTag::System),
             })
             .collect();
         Self {
@@ -393,6 +478,7 @@ impl AggregateDurableFuture {
                         KindTag::Timer => crate::runtime::completion_map::CompletionKind::Timer,
                         KindTag::External => crate::runtime::completion_map::CompletionKind::External,
                         KindTag::SubOrch => crate::runtime::completion_map::CompletionKind::SubOrchestration,
+                        KindTag::System => continue, // System calls don't use completion map
                     };
 
                     // Check if this completion is available but not consumed

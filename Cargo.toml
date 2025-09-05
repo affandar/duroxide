@@ -22,6 +22,7 @@ tracing = { version = "0.1", features = ["std"] }
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 tempfile = "3"
 semver = "1"
+uuid = { version = "1", features = ["v4"] }
 
 # SQLite support
 sqlx = { version = "0.7", features = ["runtime-tokio-rustls", "sqlite", "macros", "migrate", "chrono"] }

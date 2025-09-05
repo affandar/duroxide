@@ -110,38 +110,17 @@ impl OrchestrationTurn {
 
                     // Check if completion belongs to current execution
                     if !self.is_completion_for_current_execution(&msg) {
-                        // Check if this is a trace activity completion
-                        let is_trace_activity = match &msg {
-                            OrchestratorMsg::ActivityCompleted { id, .. }
-                            | OrchestratorMsg::ActivityFailed { id, .. } => self.is_trace_activity(*id),
-                            _ => false,
-                        };
-
                         if self.has_continue_as_new_in_history() {
                             // Expected behavior - warn and ignore
-                            if is_trace_activity {
-                                debug!(
-                                    instance = %self.instance,
-                                    "ignoring trace activity completion from previous execution (expected with continue_as_new)"
-                                );
-                            } else {
-                                warn!(
-                                    instance = %self.instance,
-                                    "ignoring completion from previous execution (expected with continue_as_new)"
-                                );
-                            }
+                            warn!(
+                                instance = %self.instance,
+                                "ignoring completion from previous execution (expected with continue_as_new)"
+                            );
                         } else {
-                            if is_trace_activity {
-                                debug!(
-                                    instance = %self.instance,
-                                    "trace activity completion from different execution (benign - trace is fire-and-forget)"
-                                );
-                            } else {
-                                warn!(
-                                    instance = %self.instance,
-                                    "completion from different execution (investigate orchestration logic, may be nondeterministic)"
-                                );
-                            }
+                            warn!(
+                                instance = %self.instance,
+                                "completion from different execution (investigate orchestration logic, may be nondeterministic)"
+                            );
                         }
                         None
                     } else if self.is_completion_already_in_history(&msg) {
@@ -165,23 +144,8 @@ impl OrchestrationTurn {
                         }
                         None
                     } else {
-                        // Check if this is a trace activity completion from current execution
-                        let is_trace_activity = match &msg {
-                            OrchestratorMsg::ActivityCompleted { id, .. }
-                            | OrchestratorMsg::ActivityFailed { id, .. } => self.is_trace_activity(*id),
-                            _ => false,
-                        };
-                        
-                        if is_trace_activity {
-                            debug!(
-                                instance = %self.instance,
-                                "ignoring trace activity completion (trace is fire-and-forget)"
-                            );
-                            None
-                        } else {
-                            // Process the completion normally
-                            self.completion_map.add_completion(msg)
-                        }
+                        // Process the completion normally
+                        self.completion_map.add_completion(msg)
                     }
                 }
             };
@@ -422,20 +386,7 @@ impl OrchestrationTurn {
         format!("nondeterministic: unconsumed completions: {:?}", unconsumed)
     }
 
-    /// Check if an activity ID corresponds to a trace activity
-    fn is_trace_activity(&self, activity_id: u64) -> bool {
-        // Look in both baseline history and history delta for the activity
-        let all_history = self.baseline_history.iter().chain(self.history_delta.iter());
-
-        for event in all_history {
-            if let Event::ActivityScheduled { id, name, .. } = event {
-                if id == &activity_id && name == crate::SYSTEM_TRACE_ACTIVITY {
-                    return true;
-                }
-            }
-        }
-        false
-    }
+    // is_trace_activity method removed - tracing is now host-side only
 }
 
 /// Convert completion kind to string for error messages
