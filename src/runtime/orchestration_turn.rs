@@ -165,8 +165,23 @@ impl OrchestrationTurn {
                         }
                         None
                     } else {
-                        // Process the completion normally
-                        self.completion_map.add_completion(msg)
+                        // Check if this is a trace activity completion from current execution
+                        let is_trace_activity = match &msg {
+                            OrchestratorMsg::ActivityCompleted { id, .. }
+                            | OrchestratorMsg::ActivityFailed { id, .. } => self.is_trace_activity(*id),
+                            _ => false,
+                        };
+                        
+                        if is_trace_activity {
+                            debug!(
+                                instance = %self.instance,
+                                "ignoring trace activity completion (trace is fire-and-forget)"
+                            );
+                            None
+                        } else {
+                            // Process the completion normally
+                            self.completion_map.add_completion(msg)
+                        }
                     }
                 }
             };
