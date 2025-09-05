@@ -14,8 +14,9 @@ Duroxide is a framework for building **reliable, long-running workflows** that c
 - **Deterministic Replay**: If something fails, Duroxide replays your code to get back to the same state
 - **Durable Futures**: Special futures that remember their state across restarts
 
-## ⚠️ Key Rule: Timers vs Activities
+## ⚠️ Key Rules
 
+### 1. Timers vs Activities
 **For any waiting or delays, use timers, NOT activities:**
 
 ```rust
@@ -24,6 +25,20 @@ ctx.schedule_timer(5000).into_timer().await; // Wait 5 seconds
 
 // ❌ WRONG: Don't create "sleep" activities
 // ctx.schedule_activity("Sleep", "5000").into_activity().await;
+```
+
+### 2. DurableFuture Conversion Pattern
+**CRITICAL: You MUST call `.into_*().await`, not just `.await`!**
+
+```rust
+// ✅ CORRECT patterns:
+let result = ctx.schedule_activity("Task", "input").into_activity().await?;
+ctx.schedule_timer(5000).into_timer().await;
+let event = ctx.schedule_wait("Event").into_event().await;
+
+// ❌ WRONG - Missing conversion methods:
+// let result = ctx.schedule_activity("Task", "input").await;  // Won't compile!
+// ctx.schedule_timer(5000).await;                            // Won't compile!
 ```
 
 ## Minimal Example

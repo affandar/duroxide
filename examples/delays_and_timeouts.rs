@@ -6,11 +6,13 @@ use std::sync::Arc;
 
 /// This example demonstrates the CORRECT way to handle delays and timeouts.
 /// 
-/// ⚠️ IMPORTANT: Use timers for delays, NOT activities with sleep!
+/// ⚠️ CRITICAL MISTAKES TO AVOID:
+/// 1. Using activities for delays instead of timers
+/// 2. Calling .await directly on schedule methods (missing .into_*())
 /// 
 /// This example shows:
-/// 1. ✅ CORRECT: Using timers for delays
-/// 2. ✅ CORRECT: Using timers for timeouts  
+/// 1. ✅ CORRECT: Using timers for delays with .into_timer().await
+/// 2. ✅ CORRECT: Using timers for timeouts with select2
 /// 3. ❌ What NOT to do (commented out)
 
 #[tokio::main]
@@ -40,13 +42,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         
         // ✅ CORRECT: Use timer for delay
         ctx.trace_info("Waiting 2 seconds...");
-        ctx.schedule_timer(2000).into_timer().await;
+        ctx.schedule_timer(2000).into_timer().await;  // MUST use .into_timer().await!
+        // ❌ WRONG: ctx.schedule_timer(2000).await;  // Missing .into_timer()!
         ctx.trace_info("Timer fired! Processing data...");
         
         // Process some data after the delay
         let result = ctx.schedule_activity("ProcessData", input)
-            .into_activity()
+            .into_activity()  // MUST use .into_activity().await!
             .await?;
+        // ❌ WRONG: ctx.schedule_activity("ProcessData", input).await;  // Missing .into_activity()!
         
         ctx.trace_info("Processing complete!");
         Ok(format!("Delayed result: {}", result))
@@ -103,7 +107,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Run the delay example
     let delay_instance = format!("delay-{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis());
     rt.clone().start_orchestration(&delay_instance, "DelayExample", "test data").await?;
-    match rt.wait_for_orchestration(&delay_instance, std::time::Duration::from_secs(10)).await
+    match rt.wait_for_orchestration(&delay_instance, std::time::Duration::from_secs(15)).await
         .map_err(|e| format!("Wait error: {:?}", e))?
     {
         OrchestrationStatus::Completed { output } => {
@@ -120,7 +124,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Run the timeout example  
     let timeout_instance = format!("timeout-{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis());
     rt.clone().start_orchestration(&timeout_instance, "TimeoutExample", "test data").await?;
-    match rt.wait_for_orchestration(&timeout_instance, std::time::Duration::from_secs(10)).await
+    match rt.wait_for_orchestration(&timeout_instance, std::time::Duration::from_secs(15)).await
         .map_err(|e| format!("Wait error: {:?}", e))?
     {
         OrchestrationStatus::Completed { output } => {
@@ -135,8 +139,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     rt.shutdown().await;
     
     println!("\n📚 Key Takeaways:");
-    println!("✅ Use ctx.schedule_timer(ms) for delays and timeouts");
+    println!("✅ Use ctx.schedule_timer(ms).into_timer().await for delays");
+    println!("✅ Use ctx.schedule_activity(name, input).into_activity().await for work");
     println!("✅ Use ctx.select2(work, timeout) for timeout patterns");
+    println!("❌ Never call .await directly on schedule methods (missing .into_*()!)");
     println!("❌ Never put tokio::time::sleep() in activities");
     println!("❌ Activities should be pure business logic only");
     

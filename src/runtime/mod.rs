@@ -692,43 +692,44 @@ impl Runtime {
                             input,
                         } => {
                             // Execute activity via registry directly; enqueue completion/failure to orchestrator queue
-                            if let Some(handler) = activities.get(&name) {
+                            let enqueue_result = if let Some(handler) = activities.get(&name) {
                                 match handler.invoke(input).await {
                                     Ok(result) => {
-                                        let _ = self
-                                            .history_store
+                                        self.history_store
                                             .enqueue_orchestrator_work(WorkItem::ActivityCompleted {
                                                 instance: instance.clone(),
                                                 execution_id,
                                                 id,
                                                 result,
                                             })
-                                            .await;
+                                            .await
                                     }
                                     Err(error) => {
-                                        let _ = self
-                                            .history_store
+                                        self.history_store
                                             .enqueue_orchestrator_work(WorkItem::ActivityFailed {
                                                 instance: instance.clone(),
                                                 execution_id,
                                                 id,
                                                 error,
                                             })
-                                            .await;
+                                            .await
                                     }
                                 }
                             } else {
-                                let _ = self
-                                    .history_store
+                                self.history_store
                                     .enqueue_orchestrator_work(WorkItem::ActivityFailed {
                                         instance: instance.clone(),
                                         execution_id,
                                         id,
                                         error: format!("unregistered:{}", name),
                                     })
-                                    .await;
+                                    .await
+                            };
+                            
+                            // Only acknowledge after successful enqueue
+                            if enqueue_result.is_ok() {
+                                let _ = self.history_store.ack_worker(&token).await;
                             }
-                            let _ = self.history_store.ack_worker(&token).await;
                         }
                         other => {
                             error!(?other, "unexpected WorkItem in Worker dispatcher; state corruption");

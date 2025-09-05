@@ -84,6 +84,30 @@
 //! - Scheduled execution
 //! - Rate limiting
 //!
+//! ## ⚠️ Critical: DurableFuture Conversion Pattern
+//!
+//! **All schedule methods return `DurableFuture` - you MUST convert before awaiting:**
+//!
+//! ```rust,no_run
+//! # use duroxide::OrchestrationContext;
+//! # async fn example(ctx: OrchestrationContext) -> Result<(), String> {
+//! // ✅ CORRECT patterns:
+//! let result = ctx.schedule_activity("Task", "input").into_activity().await?;
+//! ctx.schedule_timer(5000).into_timer().await;
+//! let event = ctx.schedule_wait("Event").into_event().await;
+//! let sub_result = ctx.schedule_sub_orchestration("Sub", "input").into_sub_orchestration().await?;
+//!
+//! // ❌ WRONG - These won't compile:
+//! // let result = ctx.schedule_activity("Task", "input").await;  // Missing .into_activity()!
+//! // ctx.schedule_timer(5000).await;                            // Missing .into_timer()!
+//! // let event = ctx.schedule_wait("Event").await;              // Missing .into_event()!
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! **Why this pattern?** `DurableFuture` is a unified type that can represent any async operation.
+//! The `.into_*()` methods convert it to the specific awaitable type you need.
+//!
 //! ## Common Patterns
 //!
 //! ### Function Chaining
@@ -664,6 +688,21 @@ impl OrchestrationContext {
     /// **Activities should be pure business logic without delays or sleeps!**
     /// For time-based waiting, use `schedule_timer()` instead.
     /// 
+    /// ⚠️ **IMPORTANT**: You MUST call `.into_activity().await`, not just `.await`!
+    /// 
+    /// # Examples
+    /// ```rust,no_run
+    /// # use duroxide::OrchestrationContext;
+    /// # async fn example(ctx: OrchestrationContext) -> Result<(), String> {
+    /// // ✅ CORRECT: Schedule and await activity
+    /// let result = ctx.schedule_activity("ProcessData", "input").into_activity().await?;
+    /// 
+    /// // ❌ WRONG: This won't compile!
+    /// // let result = ctx.schedule_activity("ProcessData", "input").await;  // Missing .into_activity()!
+    /// # Ok(())
+    /// # }
+    /// ```
+    /// 
     /// # Good Activity Examples
     /// - Database queries
     /// - HTTP API calls
@@ -717,12 +756,17 @@ impl OrchestrationContext {
     /// 
     /// **Use this for any time-based waiting, NOT activities with sleep!**
     /// 
+    /// ⚠️ **IMPORTANT**: You MUST call `.into_timer().await`, not just `.await`!
+    /// 
     /// # Examples
     /// ```rust,no_run
     /// # use duroxide::OrchestrationContext;
     /// # async fn example(ctx: OrchestrationContext) -> Result<(), String> {
-    /// // Wait 5 seconds
+    /// // ✅ CORRECT: Wait 5 seconds
     /// ctx.schedule_timer(5000).into_timer().await;
+    /// 
+    /// // ❌ WRONG: This won't compile!
+    /// // ctx.schedule_timer(5000).await;  // Missing .into_timer()!
     /// 
     /// // Timeout pattern
     /// let work = ctx.schedule_activity("LongTask", "input");
