@@ -1,7 +1,9 @@
 use duroxide::Event;
 use duroxide::providers::HistoryStore;
+use duroxide::providers::sqlite::SqliteHistoryStore;
 use std::sync::Arc as StdArc;
 use std::time::{Duration, Instant};
+use tempfile::TempDir;
 
 #[allow(dead_code)]
 pub async fn wait_for_history<F>(store: StdArc<dyn HistoryStore>, instance: &str, predicate: F, timeout_ms: u64) -> bool
@@ -58,4 +60,20 @@ where
         }
         tokio::time::sleep(Duration::from_millis(5)).await;
     }
+}
+
+#[allow(dead_code)]
+pub async fn create_sqlite_store_disk() -> (StdArc<dyn HistoryStore>, TempDir) {
+    let td = tempfile::tempdir().unwrap();
+    let db_path = td.path().join("test.db");
+    std::fs::File::create(&db_path).unwrap();
+    let db_url = format!("sqlite:{}", db_path.display());
+    let store = StdArc::new(SqliteHistoryStore::new(&db_url).await.unwrap()) as StdArc<dyn HistoryStore>;
+    (store, td)
+}
+
+#[allow(dead_code)]
+pub async fn create_sqlite_store_memory() -> StdArc<dyn HistoryStore> {
+    let store = SqliteHistoryStore::new_in_memory().await.unwrap();
+    StdArc::new(store) as StdArc<dyn HistoryStore>
 }

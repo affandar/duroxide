@@ -1,9 +1,8 @@
 // Test: Various nondeterminism detection scenarios
 // This file consolidates all nondeterminism-related tests to verify the robust detection system
 
-use duroxide::providers::HistoryStore;
 use duroxide::providers::WorkItem;
-use duroxide::providers::fs::FsHistoryStore;
+// Use SQLite provider via common helper
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
 use duroxide::{Event, OrchestrationContext, OrchestrationRegistry, OrchestrationStatus};
@@ -12,8 +11,7 @@ mod common;
 
 #[tokio::test]
 async fn code_swap_triggers_nondeterminism() {
-    let td = tempfile::tempdir().unwrap();
-    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
+    let (store, _td) = common::create_sqlite_store_disk().await;
 
     // Register both A1 and B1 activities at all times
     let activity_registry = ActivityRegistry::builder()
@@ -99,8 +97,7 @@ async fn code_swap_triggers_nondeterminism() {
 
 #[tokio::test]
 async fn completion_kind_mismatch_triggers_nondeterminism() {
-    let td = tempfile::tempdir().unwrap();
-    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
+    let (store, _td) = common::create_sqlite_store_disk().await;
 
     let activity_registry = ActivityRegistry::builder()
         .register("TestActivity", |input: String| async move {
@@ -177,8 +174,7 @@ async fn completion_kind_mismatch_triggers_nondeterminism() {
 
 #[tokio::test]
 async fn unexpected_completion_id_triggers_nondeterminism() {
-    let td = tempfile::tempdir().unwrap();
-    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
+    let (store, _td) = common::create_sqlite_store_disk().await;
 
     let activity_registry = ActivityRegistry::builder()
         .register("TestActivity", |input: String| async move {
@@ -236,8 +232,7 @@ async fn unexpected_completion_id_triggers_nondeterminism() {
 
 #[tokio::test]
 async fn unexpected_timer_completion_triggers_nondeterminism() {
-    let td = tempfile::tempdir().unwrap();
-    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
+    let (store, _td) = common::create_sqlite_store_disk().await;
 
     let activity_registry = ActivityRegistry::builder().build();
 
@@ -290,8 +285,7 @@ async fn unexpected_timer_completion_triggers_nondeterminism() {
 
 #[tokio::test]
 async fn continue_as_new_with_unconsumed_completion_triggers_nondeterminism() {
-    let td = tempfile::tempdir().unwrap();
-    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
+    let (store, _td) = common::create_sqlite_store_disk().await;
 
     let activity_registry = ActivityRegistry::builder()
         .register("MyActivity", |_input: String| async move {
@@ -408,8 +402,7 @@ async fn execution_id_filtering_prevents_cross_execution_completions() {
 
 #[tokio::test]
 async fn execution_id_filtering_without_continue_as_new_triggers_nondeterminism() {
-    let td = tempfile::tempdir().unwrap();
-    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
+    let (store, _td) = common::create_sqlite_store_disk().await;
 
     // Orchestration that schedules an activity but doesn't use continue_as_new
     let orch = |ctx: OrchestrationContext, _input: String| async move {
@@ -474,8 +467,7 @@ async fn execution_id_filtering_without_continue_as_new_triggers_nondeterminism(
 
 #[tokio::test]
 async fn duplicate_external_events_are_handled_gracefully() {
-    let td = tempfile::tempdir().unwrap();
-    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
+    let (store, _td) = common::create_sqlite_store_disk().await;
 
     // Orchestration that waits for external event
     let orch = |ctx: OrchestrationContext, _input: String| async move {

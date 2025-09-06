@@ -410,7 +410,9 @@ impl Runtime {
         let mut start_or_continue: Option<WorkItem> = None;
         let mut completion_messages: Vec<OrchestratorMsg> = Vec::new();
 
+        debug!(instance, "Processing {} work items", item.messages.len());
         for work_item in &item.messages {
+            debug!(instance, "Work item: {:?}", work_item);
             match work_item {
                 WorkItem::StartOrchestration { .. } | WorkItem::ContinueAsNew { .. } => {
                     if start_or_continue.is_some() {
@@ -465,6 +467,7 @@ impl Runtime {
                     version,
                     ..
                 } => {
+                    debug!(instance, "Handling ContinueAsNew with input: {}", input);
                     self.handle_continue_as_new_atomic(
                         instance,
                         &orchestration,
@@ -631,6 +634,7 @@ impl Runtime {
 
         debug!(instance, "ContinueAsNew creating new execution with input: {}", input);
         debug!(instance, "Initial history for new execution: {:?}", history_delta);
+        debug!(instance, "First event in history_delta: {:?}", history_delta.first());
 
         // Run the new execution with just the OrchestrationStarted event
         let initial_history = history_delta.clone();
@@ -640,7 +644,7 @@ impl Runtime {
                 instance,
                 orchestration,
                 initial_history.clone(),
-                execution_id,
+                execution_id, // Use current execution ID for now
                 completion_messages,
             )
             .await;

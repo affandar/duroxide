@@ -1,5 +1,3 @@
-use duroxide::providers::HistoryStore;
-use duroxide::providers::fs::FsHistoryStore;
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
 use duroxide::{Event, OrchestrationContext, OrchestrationRegistry};
@@ -8,9 +6,8 @@ mod common;
 
 // Basic ContinueAsNew loop: rolls input across executions and finally completes.
 #[tokio::test]
-async fn continue_as_new_multiexec_fs() {
-    let td = tempfile::tempdir().unwrap();
-    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
+async fn continue_as_new_multiexec() {
+    let (store, _td) = common::create_sqlite_store_disk().await;
 
     // Orchestrator: if n < 2 then ContinueAsNew with n+1, else complete
     let counter = |ctx: OrchestrationContext, input: String| async move {
@@ -112,9 +109,8 @@ async fn continue_as_new_multiexec_fs() {
 
 // External events are dispatched to the most recent execution.
 #[tokio::test]
-async fn continue_as_new_event_routes_to_latest_fs() {
-    let td = tempfile::tempdir().unwrap();
-    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
+async fn continue_as_new_event_routes_to_latest() {
+    let (store, _td) = common::create_sqlite_store_disk().await;
 
     // Orchestrator: first execution continues immediately; second waits for "Go" then completes with payload
     let orch = |ctx: OrchestrationContext, input: String| async move {
@@ -213,9 +209,8 @@ async fn continue_as_new_event_routes_to_latest_fs() {
 
 // External events sent before the new execution's subscription are dropped; after subscribing, events are delivered.
 #[tokio::test]
-async fn continue_as_new_event_drop_then_process_fs() {
-    let td = tempfile::tempdir().unwrap();
-    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
+async fn continue_as_new_event_drop_then_process() {
+    let (store, _td) = common::create_sqlite_store_disk().await;
 
     // Orchestrator: first execution continues; second waits for Go twice (second send expected to deliver)
     let orch = |ctx: OrchestrationContext, input: String| async move {
@@ -315,9 +310,8 @@ async fn continue_as_new_event_drop_then_process_fs() {
 
 // An event raised while active but before any subscription exists is warned and dropped; re-raising after subscription succeeds.
 #[tokio::test]
-async fn event_drop_then_retry_after_subscribe_fs() {
-    let td = tempfile::tempdir().unwrap();
-    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
+async fn event_drop_then_retry_after_subscribe() {
+    let (store, _td) = common::create_sqlite_store_disk().await;
 
     let orch = |ctx: OrchestrationContext, _input: String| async move {
         ctx.trace_info("subscribe after a short delay".to_string());
@@ -385,8 +379,7 @@ use duroxide::providers::WorkItem;
 
 #[tokio::test]
 async fn old_execution_completions_are_ignored() {
-    let td = tempfile::tempdir().unwrap();
-    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
+    let (store, _td) = common::create_sqlite_store_disk().await;
 
     let activity_registry = ActivityRegistry::builder()
         .register("TestActivity", |_input: String| async move {
@@ -447,8 +440,7 @@ async fn old_execution_completions_are_ignored() {
 
 #[tokio::test]
 async fn future_execution_completions_are_ignored() {
-    let td = tempfile::tempdir().unwrap();
-    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
+    let (store, _td) = common::create_sqlite_store_disk().await;
 
     let activity_registry = ActivityRegistry::builder().build();
 

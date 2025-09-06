@@ -1,7 +1,6 @@
 use duroxide::OrchestrationStatus;
 use duroxide::providers::HistoryStore;
-use duroxide::providers::fs::FsHistoryStore;
-use duroxide::providers::in_memory::InMemoryHistoryStore;
+use duroxide::providers::sqlite::SqliteHistoryStore;
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
 use duroxide::{Event, OrchestrationContext, OrchestrationRegistry};
@@ -100,7 +99,7 @@ where
 }
 
 #[tokio::test]
-async fn recovery_across_restart_fs_provider() {
+async fn recovery_across_restart_sqlite_provider() {
     let base = std::env::current_dir().unwrap().join(".testdata");
     std::fs::create_dir_all(&base).unwrap();
     let dir = base.join(format!(
@@ -112,14 +111,24 @@ async fn recovery_across_restart_fs_provider() {
     ));
     std::fs::create_dir_all(&dir).unwrap();
 
-    let instance = String::from("inst-recover-fs-1");
+    let instance = String::from("inst-recover-sqlite-1");
 
-    let make_store1 = || StdArc::new(FsHistoryStore::new(&dir, true)) as StdArc<dyn HistoryStore>;
-    let make_store2 = || StdArc::new(FsHistoryStore::new(&dir, false)) as StdArc<dyn HistoryStore>;
+    // Use the SAME sqlite file across restarts to simulate persistence
+    let db = dir.join("recovery.db");
+    std::fs::File::create(&db).unwrap();
+    let url = format!("sqlite:{}", db.display());
+
+    let store1_arc = StdArc::new(SqliteHistoryStore::new(&url).await.unwrap()) as StdArc<dyn HistoryStore>;
+    let store2_arc = StdArc::new(SqliteHistoryStore::new(&url).await.unwrap()) as StdArc<dyn HistoryStore>;
+
+    let s1 = store1_arc.clone();
+    let s2 = store2_arc.clone();
+    let make_store1 = move || s1.clone();
+    let make_store2 = move || s2.clone();
 
     recovery_across_restart_core(make_store1, make_store2, instance.clone()).await;
 
-    let store = StdArc::new(FsHistoryStore::new(&dir, false)) as StdArc<dyn HistoryStore>;
+    let store = store2_arc; // already an Arc
     let hist = store.read(&instance).await;
     let count = |inp: &str| {
         hist.iter()
@@ -133,18 +142,20 @@ async fn recovery_across_restart_fs_provider() {
 }
 
 #[tokio::test]
-async fn recovery_across_restart_inmem_provider() {
+async fn recovery_across_restart_sqlite_memory() {
     // Note: This test doesn't actually test recovery for in-memory provider
     // since we create separate stores. It just tests the orchestration completes
     // when started fresh in stage 2.
     let instance = String::from("inst-recover-mem-1");
-    let make_store1 = || StdArc::new(InMemoryHistoryStore::default()) as StdArc<dyn HistoryStore>;
-    let make_store2 = || StdArc::new(InMemoryHistoryStore::default()) as StdArc<dyn HistoryStore>;
+    let mem1 = StdArc::new(SqliteHistoryStore::new_in_memory().await.unwrap()) as StdArc<dyn HistoryStore>;
+    let mem2 = StdArc::new(SqliteHistoryStore::new_in_memory().await.unwrap()) as StdArc<dyn HistoryStore>;
+    let make_store1 = move || mem1.clone();
+    let make_store2 = move || mem2.clone();
 
     recovery_across_restart_core(make_store1, make_store2, instance.clone()).await;
 
-    let store_before = StdArc::new(InMemoryHistoryStore::default()) as StdArc<dyn HistoryStore>;
-    let store_after = StdArc::new(InMemoryHistoryStore::default()) as StdArc<dyn HistoryStore>;
+    let store_before = StdArc::new(SqliteHistoryStore::new_in_memory().await.unwrap()) as StdArc<dyn HistoryStore>;
+    let store_after = StdArc::new(SqliteHistoryStore::new_in_memory().await.unwrap()) as StdArc<dyn HistoryStore>;
     let hist_before = store_before.read(&instance).await;
     let hist_after = store_after.read(&instance).await;
 
@@ -160,7 +171,7 @@ async fn recovery_across_restart_inmem_provider() {
 }
 
 #[tokio::test]
-async fn recovery_multiple_orchestrations_fs_provider() {
+async fn recovery_multiple_orchestrations_sqlite_provider() {
     // Prepare a dedicated directory
     let base = std::env::current_dir().unwrap().join(".testdata");
     std::fs::create_dir_all(&base).unwrap();
@@ -233,7 +244,10 @@ async fn recovery_multiple_orchestrations_fs_provider() {
         .build();
 
     // Stage 1: start instances and shut down before all complete
-    let store1 = StdArc::new(FsHistoryStore::new(&dir, true)) as StdArc<dyn HistoryStore>;
+    let db1 = dir.join("multi.db");
+    std::fs::File::create(&db1).unwrap();
+    let url1 = format!("sqlite:{}", db1.display());
+    let store1 = StdArc::new(SqliteHistoryStore::new(&url1).await.unwrap()) as StdArc<dyn HistoryStore>;
     let rt1 = runtime::Runtime::start_with_store(
         store1.clone(),
         Arc::new(activity_registry.clone()),
@@ -310,7 +324,8 @@ async fn recovery_multiple_orchestrations_fs_provider() {
     rt1.shutdown().await;
 
     // Stage 2: restart with same store; runtime should auto-resume non-terminal instances
-    let store2 = StdArc::new(FsHistoryStore::new(&dir, false)) as StdArc<dyn HistoryStore>;
+    // Reopen the same DB file for stage 2 to simulate restart
+    let store2 = StdArc::new(SqliteHistoryStore::new(&url1).await.unwrap()) as StdArc<dyn HistoryStore>;
     let store2_for_wait = store2.clone();
     let rt2 = runtime::Runtime::start_with_store(store2, Arc::new(activity_registry), orchestration_registry).await;
 

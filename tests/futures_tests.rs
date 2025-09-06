@@ -1,5 +1,4 @@
-use duroxide::providers::HistoryStore;
-use duroxide::providers::fs::FsHistoryStore;
+// Use SQLite via common helper
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
 use duroxide::{Event, OrchestrationContext, OrchestrationRegistry};
@@ -8,9 +7,8 @@ use std::sync::Arc as StdArc;
 mod common;
 
 #[tokio::test]
-async fn select2_two_externals_history_order_wins_fs() {
-    let td = tempfile::tempdir().unwrap();
-    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
+async fn select2_two_externals_history_order_wins() {
+    let (store, _td) = common::create_sqlite_store_disk().await;
 
     let orchestrator = |ctx: OrchestrationContext, _input: String| async move {
         let a = ctx.schedule_wait("A");
@@ -126,9 +124,8 @@ async fn select2_two_externals_history_order_wins_fs() {
 }
 
 #[tokio::test]
-async fn select_two_externals_history_order_wins_fs() {
-    let td = tempfile::tempdir().unwrap();
-    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
+async fn select_two_externals_history_order_wins() {
+    let (store, _td) = common::create_sqlite_store_disk().await;
 
     let orchestrator = |ctx: OrchestrationContext, _input: String| async move {
         let a = ctx.schedule_wait("A");
@@ -244,10 +241,9 @@ async fn select_two_externals_history_order_wins_fs() {
 }
 
 #[tokio::test]
-async fn select_three_mixed_history_winner_fs() {
+async fn select_three_mixed_history_winner() {
     // A (external), T (timer), B (external): enqueue B first, then A; timer much later
-    let td = tempfile::tempdir().unwrap();
-    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
+    let (store, _td) = common::create_sqlite_store_disk().await;
 
     let orchestrator = |ctx: OrchestrationContext, _input: String| async move {
         let a = ctx.schedule_wait("A");
@@ -362,9 +358,8 @@ async fn select_three_mixed_history_winner_fs() {
 }
 
 #[tokio::test]
-async fn join_returns_history_order_fs() {
-    let td = tempfile::tempdir().unwrap();
-    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
+async fn join_returns_history_order() {
+    let (store, _td) = common::create_sqlite_store_disk().await;
 
     let orchestrator = |ctx: OrchestrationContext, _input: String| async move {
         let a = ctx.schedule_wait("A");

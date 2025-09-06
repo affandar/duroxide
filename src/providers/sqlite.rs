@@ -88,31 +88,44 @@ impl SqliteHistoryStore {
     /// * `database_url` - SQLite connection string (e.g., "sqlite:data.db" or "sqlite::memory:")
     pub async fn new(database_url: &str) -> Result<Self, sqlx::Error> {
         // Configure SQLite for better concurrency
+        let is_memory = database_url.contains(":memory:") || database_url.contains("mode=memory");
         let pool = SqlitePoolOptions::new()
             .max_connections(5)
-            .after_connect(|conn, _meta| Box::pin(async move {
-                // Enable WAL mode for better concurrent access
-                sqlx::query("PRAGMA journal_mode = WAL")
-                    .execute(&mut *conn)
-                    .await?;
-                
-                // Set busy timeout to 60 seconds to retry on locks
-                sqlx::query("PRAGMA busy_timeout = 60000")
-                    .execute(&mut *conn)
-                    .await?;
-                
-                // Enable foreign keys
-                sqlx::query("PRAGMA foreign_keys = ON")
-                    .execute(&mut *conn)
-                    .await?;
-                
-                // Set synchronous mode to NORMAL for better performance
-                // (FULL is default but slower)
-                sqlx::query("PRAGMA synchronous = NORMAL")
-                    .execute(&mut *conn)
-                    .await?;
-                
-                Ok(())
+            .after_connect(move |conn, _meta| Box::pin({
+                let is_memory = is_memory;
+                async move {
+                    // Journal mode: WAL for file DBs; MEMORY for in-memory DBs
+                    if is_memory {
+                        sqlx::query("PRAGMA journal_mode = MEMORY")
+                            .execute(&mut *conn)
+                            .await?;
+                        // For in-memory DB, durability is not required
+                        sqlx::query("PRAGMA synchronous = OFF")
+                            .execute(&mut *conn)
+                            .await?;
+                    } else {
+                        // Enable WAL mode for better concurrent access
+                        sqlx::query("PRAGMA journal_mode = WAL")
+                            .execute(&mut *conn)
+                            .await?;
+                        // Set synchronous mode to NORMAL for durability/perf balance
+                        sqlx::query("PRAGMA synchronous = NORMAL")
+                            .execute(&mut *conn)
+                            .await?;
+                    }
+
+                    // Set busy timeout to 60 seconds to retry on locks
+                    sqlx::query("PRAGMA busy_timeout = 60000")
+                        .execute(&mut *conn)
+                        .await?;
+                    
+                    // Enable foreign keys
+                    sqlx::query("PRAGMA foreign_keys = ON")
+                        .execute(&mut *conn)
+                        .await?;
+                    
+                    Ok(())
+                }
             }))
             .connect(database_url)
             .await?;
@@ -146,6 +159,15 @@ impl SqliteHistoryStore {
             lock_timeout,
             history_cap: 1024,
         })
+    }
+
+    /// Convenience: create a shared in-memory SQLite store for tests
+    /// Uses a shared cache so multiple pooled connections see the same DB
+    pub async fn new_in_memory() -> Result<Self, sqlx::Error> {
+        // use shared-cache memory to allow pool > 1
+        // ref: https://www.sqlite.org/inmemorydb.html
+        let url = "sqlite::memory:?cache=shared";
+        Self::new(url).await
     }
 
     /// Debug helper: dump current queue states and small samples
@@ -648,6 +670,7 @@ impl HistoryStore for SqliteHistoryStore {
         debug!(
             instance = %instance_id,
             execution_id = %execution_id,
+            history_delta_len = %history_delta.len(),
             "Using execution ID for ack"
         );
         
@@ -684,7 +707,7 @@ impl HistoryStore for SqliteHistoryStore {
         .await
         .map_err(|e| e.to_string())?;
         
-        // Append history
+        // Always append history_delta to current execution first
         if !history_delta.is_empty() {
             debug!(
                 instance = %instance_id,
@@ -695,6 +718,44 @@ impl HistoryStore for SqliteHistoryStore {
             self.append_history_in_tx(&mut tx, &instance_id, execution_id as u64, history_delta)
                 .await
                 .map_err(|e| format!("Failed to append history: {}", e))?;
+        }
+        
+        // After appending history, check if we need to handle ContinueAsNew
+        let has_continue_as_new = orchestrator_items.iter().any(|item| matches!(item, WorkItem::ContinueAsNew { .. }));
+        
+        if has_continue_as_new {
+            // Handle ContinueAsNew transition
+            // 1) Get the input from the ContinueAsNew work item
+            let can_input = orchestrator_items.iter().find_map(|item| match item {
+                WorkItem::ContinueAsNew { input, .. } => Some(input.clone()),
+                _ => None,
+            }).unwrap_or_default();
+            
+            // 2) Append ContinuedAsNew to current execution
+            self.append_history_in_tx(
+                &mut tx,
+                &instance_id,
+                execution_id as u64,
+                vec![Event::OrchestrationContinuedAsNew { input: can_input }],
+            )
+            .await
+            .map_err(|e| format!("Failed to append CAN event: {}", e))?;
+            
+            // 3) Create next execution
+            let next_exec_id = execution_id + 1;
+            sqlx::query(
+                r#"
+                INSERT OR IGNORE INTO executions (instance_id, execution_id, status)
+                VALUES (?, ?, 'Running')
+                "#
+            )
+            .bind(&instance_id)
+            .bind(next_exec_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?;
+            
+            debug!("Created execution {} for ContinueAsNew", next_exec_id);
         }
         
         // Enqueue worker items
@@ -728,6 +789,7 @@ impl HistoryStore for SqliteHistoryStore {
         
         // Enqueue orchestrator items within the transaction
         for item in orchestrator_items {
+
             let work_item = serde_json::to_string(&item).map_err(|e| e.to_string())?;
             let instance = match &item {
                 WorkItem::StartOrchestration { instance, .. } |
@@ -999,7 +1061,7 @@ impl HistoryStore for SqliteHistoryStore {
     }
     
     async fn abandon_orchestration_item(&self, lock_token: &str, delay_ms: Option<u64>) -> Result<(), String> {
-        if let Some(delay_ms) = delay_ms {
+        let result = if let Some(delay_ms) = delay_ms {
             // Update visible_at to delay visibility
             let visible_at = Self::now_millis() + delay_ms as i64;
             sqlx::query(
@@ -1014,7 +1076,7 @@ impl HistoryStore for SqliteHistoryStore {
             .bind(lock_token)
             .execute(&self.pool)
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| e.to_string())?
         } else {
             // Clear the lock on all messages with this lock token
             sqlx::query(
@@ -1027,7 +1089,11 @@ impl HistoryStore for SqliteHistoryStore {
             .bind(lock_token)
             .execute(&self.pool)
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| e.to_string())?
+        };
+        
+        if result.rows_affected() == 0 {
+            return Err("Invalid lock token".to_string());
         }
         
         Ok(())
