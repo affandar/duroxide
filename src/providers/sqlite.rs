@@ -933,6 +933,182 @@ impl HistoryStore for SqliteHistoryStore {
         
         Ok(())
     }
+    
+    async fn abandon_orchestration_item(&self, lock_token: &str, delay_ms: Option<u64>) -> Result<(), String> {
+        if delay_ms.is_some() {
+            tracing::warn!("SQLite provider does not support delayed visibility for abandoned items");
+        }
+        
+        // Clear the lock on all messages with this lock token
+        sqlx::query(
+            r#"
+            UPDATE orchestrator_queue
+            SET lock_token = NULL, locked_until = NULL
+            WHERE lock_token = ?
+            "#
+        )
+        .bind(lock_token)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+        
+        Ok(())
+    }
+    
+    async fn latest_execution_id(&self, instance: &str) -> Option<u64> {
+        let mut conn = self.pool.acquire().await.ok()?;
+        
+        let execution_id: Option<i64> = sqlx::query_scalar(
+            "SELECT MAX(execution_id) FROM executions WHERE instance_id = ?"
+        )
+        .bind(instance)
+        .fetch_optional(&mut *conn)
+        .await
+        .ok()
+        .flatten();
+        
+        execution_id.filter(|&id| id > 0).map(|id| id as u64)
+    }
+    
+    async fn read_with_execution(&self, instance: &str, execution_id: u64) -> Vec<Event> {
+        let mut conn = match self.pool.acquire().await {
+            Ok(conn) => conn,
+            Err(_) => return Vec::new(),
+        };
+        
+        let rows = sqlx::query(
+            r#"
+            SELECT event_data 
+            FROM history 
+            WHERE instance_id = ? AND execution_id = ?
+            ORDER BY sequence_num
+            "#
+        )
+        .bind(instance)
+        .bind(execution_id as i64)
+        .fetch_all(&mut *conn)
+        .await
+        .unwrap_or_default();
+        
+        rows.into_iter()
+            .filter_map(|row| {
+                row.try_get::<String, _>("event_data")
+                    .ok()
+                    .and_then(|s| serde_json::from_str(&s).ok())
+            })
+            .collect()
+    }
+    
+    async fn append_with_execution(
+        &self,
+        instance: &str,
+        execution_id: u64,
+        new_events: Vec<Event>,
+    ) -> Result<(), String> {
+        let mut tx = self.pool.begin().await.map_err(|e| e.to_string())?;
+        
+        self.append_history_in_tx(&mut tx, instance, execution_id, new_events)
+            .await
+            .map_err(|e| e.to_string())?;
+        
+        tx.commit().await.map_err(|e| e.to_string())?;
+        Ok(())
+    }
+    
+    async fn create_new_execution(
+        &self,
+        instance: &str,
+        orchestration: &str,
+        version: &str,
+        input: &str,
+        parent_instance: Option<&str>,
+        parent_id: Option<u64>,
+    ) -> Result<u64, String> {
+        let mut tx = self.pool.begin().await.map_err(|e| e.to_string())?;
+        
+        // Get next execution ID
+        let next_exec_id: i64 = sqlx::query_scalar(
+            "SELECT COALESCE(MAX(execution_id), 0) + 1 FROM executions WHERE instance_id = ?"
+        )
+        .bind(instance)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+        
+        // Create instance record if needed
+        sqlx::query(
+            r#"
+            INSERT OR IGNORE INTO instances (instance_id, orchestration_name, orchestration_version)
+            VALUES (?, ?, ?)
+            "#
+        )
+        .bind(instance)
+        .bind(orchestration)
+        .bind(version)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+        
+        // Create execution record
+        sqlx::query(
+            r#"
+            INSERT INTO executions (instance_id, execution_id)
+            VALUES (?, ?)
+            "#
+        )
+        .bind(instance)
+        .bind(next_exec_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+        
+        // Create OrchestrationStarted event
+        let start_event = Event::OrchestrationStarted {
+            name: orchestration.to_string(),
+            version: version.to_string(),
+            input: input.to_string(),
+            parent_instance: parent_instance.map(|s| s.to_string()),
+            parent_id,
+        };
+        
+        self.append_history_in_tx(&mut tx, instance, next_exec_id as u64, vec![start_event])
+            .await
+            .map_err(|e| e.to_string())?;
+        
+        tx.commit().await.map_err(|e| e.to_string())?;
+        Ok(next_exec_id as u64)
+    }
+    
+    async fn list_instances(&self) -> Vec<String> {
+        let mut conn = match self.pool.acquire().await {
+            Ok(conn) => conn,
+            Err(_) => return Vec::new(),
+        };
+        
+        sqlx::query_scalar::<_, String>(
+            "SELECT DISTINCT instance_id FROM executions ORDER BY instance_id"
+        )
+        .fetch_all(&mut *conn)
+        .await
+        .unwrap_or_default()
+    }
+    
+    async fn list_executions(&self, instance: &str) -> Vec<u64> {
+        let mut conn = match self.pool.acquire().await {
+            Ok(conn) => conn,
+            Err(_) => return Vec::new(),
+        };
+        
+        let exec_ids: Vec<i64> = sqlx::query_scalar(
+            "SELECT execution_id FROM executions WHERE instance_id = ? ORDER BY execution_id"
+        )
+        .bind(instance)
+        .fetch_all(&mut *conn)
+        .await
+        .unwrap_or_default();
+        
+        exec_ids.into_iter().map(|id| id as u64).collect()
+    }
 }
 
 #[cfg(test)]
@@ -1134,5 +1310,196 @@ mod tests {
             vec![],
             vec![],
         ).await.is_err());
+    }
+    
+    #[tokio::test]
+    async fn test_multi_execution_support() {
+        let store = create_test_store().await;
+        let instance = "test-multi-exec";
+        
+        // No execution initially
+        assert_eq!(store.latest_execution_id(instance).await, None);
+        assert!(store.list_executions(instance).await.is_empty());
+        
+        // Create first execution
+        let exec1 = store.create_new_execution(
+            instance,
+            "MultiExecTest",
+            "1.0.0",
+            "input1",
+            None,
+            None,
+        ).await.unwrap();
+        assert_eq!(exec1, 1);
+        
+        // Verify execution exists
+        assert_eq!(store.latest_execution_id(instance).await, Some(1));
+        assert_eq!(store.list_executions(instance).await, vec![1]);
+        
+        // Read history from first execution
+        let hist1 = store.read_with_execution(instance, 1).await;
+        assert_eq!(hist1.len(), 1);
+        assert!(matches!(hist1[0], Event::OrchestrationStarted { .. }));
+        
+        // Append to first execution
+        store.append_with_execution(
+            instance,
+            1,
+            vec![Event::OrchestrationCompleted { output: "result1".to_string() }],
+        ).await.unwrap();
+        
+        // Create second execution (ContinueAsNew)
+        let exec2 = store.create_new_execution(
+            instance,
+            "MultiExecTest",
+            "1.0.0",
+            "input2",
+            None,
+            None,
+        ).await.unwrap();
+        assert_eq!(exec2, 2);
+        
+        // Verify latest execution
+        assert_eq!(store.latest_execution_id(instance).await, Some(2));
+        assert_eq!(store.list_executions(instance).await, vec![1, 2]);
+        
+        // Verify each execution has separate history
+        let hist1_final = store.read_with_execution(instance, 1).await;
+        assert_eq!(hist1_final.len(), 2);
+        
+        let hist2 = store.read_with_execution(instance, 2).await;
+        assert_eq!(hist2.len(), 1);
+        
+        // Default read should return latest execution
+        let hist_latest = store.read(instance).await;
+        assert_eq!(hist_latest.len(), 1);
+        assert!(matches!(&hist_latest[0], Event::OrchestrationStarted { input, .. } if input == "input2"));
+    }
+    
+    #[tokio::test]
+    async fn test_abandon_orchestration_item() {
+        let store = create_test_store().await;
+        
+        // Enqueue an orchestration
+        let item = WorkItem::StartOrchestration {
+            instance: "test-abandon".to_string(),
+            orchestration: "AbandonTest".to_string(),
+            version: Some("1.0.0".to_string()),
+            input: "{}".to_string(),
+            parent_instance: None,
+            parent_id: None,
+        };
+        store.enqueue_orchestrator_work(item).await.unwrap();
+        
+        // Fetch and lock it
+        let orch_item = store.fetch_orchestration_item().await.unwrap();
+        let lock_token = orch_item.lock_token.clone();
+        
+        // Verify it's locked (can't fetch again)
+        assert!(store.fetch_orchestration_item().await.is_none());
+        
+        // Abandon it
+        store.abandon_orchestration_item(&lock_token, None).await.unwrap();
+        
+        // Should be able to fetch again
+        let orch_item2 = store.fetch_orchestration_item().await.unwrap();
+        assert_eq!(orch_item2.instance, "test-abandon");
+        assert_ne!(orch_item2.lock_token, lock_token); // Different lock token
+    }
+    
+    #[tokio::test]
+    async fn test_list_instances() {
+        let store = create_test_store().await;
+        
+        // Initially empty
+        assert!(store.list_instances().await.is_empty());
+        
+        // Create a few instances
+        for i in 1..=3 {
+            store.create_new_execution(
+                &format!("instance-{}", i),
+                "ListTest",
+                "1.0.0",
+                "{}",
+                None,
+                None,
+            ).await.unwrap();
+        }
+        
+        // List instances
+        let instances = store.list_instances().await;
+        assert_eq!(instances.len(), 3);
+        assert!(instances.contains(&"instance-1".to_string()));
+        assert!(instances.contains(&"instance-2".to_string()));
+        assert!(instances.contains(&"instance-3".to_string()));
+    }
+    
+    #[tokio::test]
+    async fn test_worker_queue_operations() {
+        let store = create_test_store().await;
+        
+        // Enqueue activity work
+        let work_item = WorkItem::ActivityExecute {
+            instance: "test-worker".to_string(),
+            execution_id: 1,
+            id: 1,
+            name: "TestActivity".to_string(),
+            input: "test-input".to_string(),
+        };
+        
+        store.enqueue_worker_work(work_item.clone()).await.unwrap();
+        
+        // Dequeue it
+        let (dequeued, token) = store.dequeue_worker_peek_lock().await.unwrap();
+        assert!(matches!(dequeued, WorkItem::ActivityExecute { name, .. } if name == "TestActivity"));
+        
+        // Can't dequeue again while locked
+        assert!(store.dequeue_worker_peek_lock().await.is_none());
+        
+        // Ack it
+        store.ack_worker(&token).await.unwrap();
+        
+        // Queue should be empty
+        assert!(store.dequeue_worker_peek_lock().await.is_none());
+    }
+    
+    #[tokio::test]
+    async fn test_timer_queue_operations() {
+        let store = create_test_store().await;
+        
+        // Enqueue timer work with future timestamp
+        let future_time = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64 + 60000; // 60 seconds in the future
+        
+        let timer_item = WorkItem::TimerSchedule {
+            instance: "test-timer".to_string(),
+            execution_id: 1,
+            id: 1,
+            fire_at_ms: future_time,
+        };
+        
+        store.enqueue_timer_work(timer_item).await.unwrap();
+        
+        // Should not dequeue immediately (future fire time)
+        assert!(store.dequeue_timer_peek_lock().await.is_none());
+        
+        // Enqueue a timer that should fire immediately
+        let past_timer = WorkItem::TimerSchedule {
+            instance: "test-timer-past".to_string(),
+            execution_id: 1,
+            id: 2,
+            fire_at_ms: 0, // In the past
+        };
+        
+        store.enqueue_timer_work(past_timer).await.unwrap();
+        
+        // Should dequeue the past timer
+        let (dequeued, token) = store.dequeue_timer_peek_lock().await.unwrap();
+        assert!(matches!(dequeued, WorkItem::TimerSchedule { id: 2, .. }));
+        
+        // Ack it
+        store.ack_timer(&token).await.unwrap();
     }
 }

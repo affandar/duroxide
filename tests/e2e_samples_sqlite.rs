@@ -13,6 +13,16 @@ use tempfile::TempDir;
 
 mod common;
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct AddReq {
+    a: i32,
+    b: i32,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct AddRes {
+    sum: i32,
+}
+
 /// Helper to create a SQLite store for tests
 async fn create_sqlite_store() -> (Arc<dyn HistoryStore>, TempDir) {
     // Use file-based SQLite database with temporary file
@@ -531,16 +541,6 @@ async fn sample_continue_as_new_sqlite() {
 async fn sample_typed_activity_and_orchestration_sqlite() {
     let (store, _temp_dir) = create_sqlite_store().await;
 
-    #[derive(Serialize, Deserialize)]
-    struct AddReq {
-        a: i32,
-        b: i32,
-    }
-
-    #[derive(Serialize, Deserialize, PartialEq, Debug)]
-    struct AddRes {
-        sum: i32,
-    }
 
     let activity_registry = ActivityRegistry::builder()
         .register_typed("Add", |req: AddReq| async move {
@@ -1320,6 +1320,111 @@ async fn sample_nested_function_error_handling_sqlite() {
 }
 
 #[tokio::test]
+async fn sample_mixed_string_and_typed_typed_orch_sqlite() {
+    let (store, _temp_dir) = create_sqlite_store().await;
+
+    // String activity: returns uppercased string
+    // Typed activity: Add two numbers
+    let activity_registry = ActivityRegistry::builder()
+        .register("Upper", |input: String| async move { Ok(input.to_uppercase()) })
+        .register_typed::<AddReq, AddRes, _, _>("Add", |req| async move { Ok(AddRes { sum: req.a + req.b }) })
+        .build();
+
+    // Typed orchestrator input/output
+    let orch = |ctx: OrchestrationContext, req: AddReq| async move {
+        // Kick off a typed activity and a string activity, race them with deterministic select
+        let f_typed = ctx.schedule_activity_typed::<AddReq, AddRes>("Add", &req);
+        let f_str = ctx.schedule_activity("Upper", "hello");
+        let (_idx, out) = ctx.select(vec![f_typed, f_str]).await;
+        let s = match out {
+            duroxide::DurableOutput::Activity(Ok(raw)) => {
+                // raw is either typed AddRes JSON or plain string result
+                if let Ok(v) = serde_json::from_str::<AddRes>(&raw) {
+                    format!("sum={}", v.sum)
+                } else {
+                    format!("up={raw}")
+                }
+            }
+            duroxide::DurableOutput::Activity(Err(e)) => return Err(e),
+            other => panic!("unexpected output: {:?}", other),
+        };
+        Ok::<_, String>(s)
+    };
+    let orchestration_registry = OrchestrationRegistry::builder()
+        .register_typed::<AddReq, String, _, _>("MixedTypedOrch", orch)
+        .build();
+
+    let rt = runtime::Runtime::start_with_store(store, Arc::new(activity_registry), orchestration_registry).await;
+    rt.clone()
+        .start_orchestration_typed::<AddReq>("inst-mixed-typed", "MixedTypedOrch", AddReq { a: 1, b: 2 })
+        .await
+        .unwrap();
+
+    let s = match rt
+        .wait_for_orchestration_typed::<String>("inst-mixed-typed", std::time::Duration::from_secs(5))
+        .await
+        .unwrap()
+    {
+        Ok(result) => result,
+        Err(error) => panic!("orchestration failed: {error}"),
+    };
+    assert!(s == "sum=3" || s == "up=HELLO");
+    rt.shutdown().await;
+}
+
+/// Mixed string and typed activities with string orchestration, showcasing select on typed+string
+#[tokio::test]
+async fn sample_mixed_string_and_typed_string_orch_sqlite() {
+    let (store, _temp_dir) = create_sqlite_store().await;
+
+    let activity_registry = ActivityRegistry::builder()
+        .register("Upper", |input: String| async move { Ok(input.to_uppercase()) })
+        .register_typed::<AddReq, AddRes, _, _>("Add", |req| async move { Ok(AddRes { sum: req.a + req.b }) })
+        .build();
+
+    // String orchestrator mixes typed and string activity calls
+    let orch = |ctx: OrchestrationContext, _in: String| async move {
+        let f_typed = ctx.schedule_activity_typed::<AddReq, AddRes>("Add", &AddReq { a: 5, b: 7 });
+        let f_str = ctx.schedule_activity("Upper", "race");
+        let (_idx, out) = ctx.select(vec![f_typed, f_str]).await;
+        let s = match out {
+            duroxide::DurableOutput::Activity(Ok(raw)) => {
+                if let Ok(v) = serde_json::from_str::<AddRes>(&raw) {
+                    format!("sum={}", v.sum)
+                } else {
+                    format!("up={raw}")
+                }
+            }
+            duroxide::DurableOutput::Activity(Err(e)) => return Err(e),
+            other => panic!("unexpected output: {:?}", other),
+        };
+        Ok::<_, String>(s)
+    };
+    let orch_reg = OrchestrationRegistry::builder()
+        .register("MixedStringOrch", orch)
+        .build();
+
+    let rt = runtime::Runtime::start_with_store(store, Arc::new(activity_registry), orch_reg).await;
+    let _h = rt
+        .clone()
+        .start_orchestration("inst-mixed-string", "MixedStringOrch", "")
+        .await
+        .unwrap();
+
+    let s = match rt
+        .wait_for_orchestration("inst-mixed-string", std::time::Duration::from_secs(5))
+        .await
+        .unwrap()
+    {
+        runtime::OrchestrationStatus::Completed { output } => output,
+        runtime::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        _ => panic!("unexpected orchestration status"),
+    };
+    assert!(s == "sum=12" || s == "up=RACE");
+    rt.shutdown().await;
+}
+
+#[tokio::test]
 #[ignore] // Advanced versioning not fully implemented
 async fn sample_versioning_start_latest_vs_exact_sqlite() {
     // This would test starting orchestrations with specific versions
@@ -1345,4 +1450,87 @@ async fn sample_versioning_continue_as_new_upgrade_sqlite() {
 async fn sample_cancellation_parent_cascades_to_children_sqlite() {
     // This would test cascading cancellation from parent to child orchestrations
     // Currently the API doesn't expose cancellation tokens or parent-child cancellation
+}
+
+/// Error recovery with explicit error handling
+#[tokio::test]
+async fn sample_error_recovery_sqlite() {
+    let (store, _temp_dir) = create_sqlite_store().await;
+
+    // Register activities
+    let activity_registry = ActivityRegistry::builder()
+        .register("ProcessData", |input: String| async move {
+            if input.contains("error") {
+                Err("Processing failed".to_string())
+            } else {
+                Ok(format!("Processed: {input}"))
+            }
+        })
+        .register("LogError", |error: String| async move {
+            Ok(format!("Logged: {error}"))
+        })
+        .build();
+
+    // Orchestration with explicit error recovery
+    let orchestration = |ctx: OrchestrationContext, input: String| async move {
+        ctx.trace_info("Starting orchestration");
+        
+        match ctx.schedule_activity("ProcessData", input.clone()).into_activity().await {
+            Ok(result) => {
+                ctx.trace_info("Processing succeeded");
+                Ok(result)
+            }
+            Err(e) => {
+                ctx.trace_info("Processing failed, logging error");
+                let _ = ctx.schedule_activity("LogError", e.clone()).into_activity().await;
+                Err(format!("Failed to process '{}': {}", input, e))
+            }
+        }
+    };
+
+    let orchestration_registry = OrchestrationRegistry::builder()
+        .register("ErrorRecovery", orchestration)
+        .build();
+
+    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+
+    // Test successful case
+    let _handle1 = rt
+        .clone()
+        .start_orchestration("inst-recovery-1", "ErrorRecovery", "test")
+        .await
+        .unwrap();
+
+    match rt
+        .wait_for_orchestration("inst-recovery-1", std::time::Duration::from_secs(5))
+        .await
+        .unwrap()
+    {
+        runtime::OrchestrationStatus::Completed { output } => {
+            assert_eq!(output, "Processed: test");
+        }
+        runtime::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        _ => panic!("unexpected orchestration status"),
+    }
+
+    // Test error case
+    let _handle2 = rt
+        .clone()
+        .start_orchestration("inst-recovery-2", "ErrorRecovery", "error-case")
+        .await
+        .unwrap();
+
+    match rt
+        .wait_for_orchestration("inst-recovery-2", std::time::Duration::from_secs(5))
+        .await
+        .unwrap()
+    {
+        runtime::OrchestrationStatus::Failed { error } => {
+            assert_eq!(error, "Failed to process 'error-case': Processing failed");
+        }
+        runtime::OrchestrationStatus::Completed { output } => panic!("expected failure but got: {output}"),
+        _ => panic!("unexpected orchestration status"),
+    }
+
+    rt.shutdown().await;
 }

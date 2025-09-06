@@ -109,9 +109,7 @@ pub trait HistoryStore: Send + Sync {
     /// let history = read_instance_history(&instance);
     /// Some(OrchestrationItem { instance, messages, history, lock_token, ... })
     /// ```
-    async fn fetch_orchestration_item(&self) -> Option<OrchestrationItem> {
-        None
-    }
+    async fn fetch_orchestration_item(&self) -> Option<OrchestrationItem>;
 
     /// Acknowledge successful orchestration processing atomically.
     /// 
@@ -131,9 +129,7 @@ pub trait HistoryStore: Send + Sync {
         _worker_items: Vec<WorkItem>,
         _timer_items: Vec<WorkItem>,
         _orchestrator_items: Vec<WorkItem>,
-    ) -> Result<(), String> {
-        Err("ack_orchestration_item not supported by this provider".into())
-    }
+    ) -> Result<(), String>;
 
     /// Abandon orchestration processing (used for errors/retries).
     /// 
@@ -143,9 +139,7 @@ pub trait HistoryStore: Send + Sync {
     /// 3. Optionally delay visibility by delay_ms milliseconds
     /// 
     /// Used when orchestration processing fails and needs to be retried.
-    async fn abandon_orchestration_item(&self, _lock_token: &str, _delay_ms: Option<u64>) -> Result<(), String> {
-        Err("abandon_orchestration_item not supported by this provider".into())
-    }
+    async fn abandon_orchestration_item(&self, _lock_token: &str, _delay_ms: Option<u64>) -> Result<(), String>;
 
     // ===== Basic History Access (REQUIRED) =====
     
@@ -158,20 +152,14 @@ pub trait HistoryStore: Send + Sync {
     // Worker queue processes activity executions.
     
     /// Enqueue an activity execution request.
-    async fn enqueue_worker_work(&self, _item: WorkItem) -> Result<(), String> {
-        Err("worker queue not supported".into())
-    }
+    async fn enqueue_worker_work(&self, _item: WorkItem) -> Result<(), String>;
 
     /// Dequeue a single work item with peek-lock semantics.
     /// Returns the work item and a lock token that must be used to ack/abandon.
-    async fn dequeue_worker_peek_lock(&self) -> Option<(WorkItem, String)> {
-        None
-    }
+    async fn dequeue_worker_peek_lock(&self) -> Option<(WorkItem, String)>;
 
     /// Acknowledge successful processing of a work item.
-    async fn ack_worker(&self, _token: &str) -> Result<(), String> {
-        Ok(())
-    }
+    async fn ack_worker(&self, _token: &str) -> Result<(), String>;
 
     // ===== Multi-Execution Support (REQUIRED for ContinueAsNew) =====
     // These methods enable orchestrations to continue with new input while maintaining history.
@@ -196,10 +184,7 @@ pub trait HistoryStore: Send + Sync {
         instance: &str,
         _execution_id: u64,
         new_events: Vec<Event>,
-    ) -> Result<(), String> {
-        let _ = (instance, new_events);
-        Err("append_with_execution not supported by this provider".into())
-    }
+    ) -> Result<(), String>;
     
     /// Create a new execution for ContinueAsNew scenarios.
     /// 
@@ -216,9 +201,7 @@ pub trait HistoryStore: Send + Sync {
         _input: &str,
         _parent_instance: Option<&str>,
         _parent_id: Option<u64>,
-    ) -> Result<u64, String> {
-        Err("create_new_execution not supported by this provider".into())
-    }
+    ) -> Result<u64, String>;
 
     // ===== Timer Support (REQUIRED only if supports_delayed_visibility returns true) =====
     
@@ -230,19 +213,13 @@ pub trait HistoryStore: Send + Sync {
     }
     
     /// Enqueue a timer to fire at a specific time (only called if supports_delayed_visibility = true).
-    async fn enqueue_timer_work(&self, _item: WorkItem) -> Result<(), String> {
-        Err("timer queue not supported".into())
-    }
+    async fn enqueue_timer_work(&self, _item: WorkItem) -> Result<(), String>;
     
     /// Dequeue a timer that's ready to fire (only called if supports_delayed_visibility = true).
-    async fn dequeue_timer_peek_lock(&self) -> Option<(WorkItem, String)> {
-        None
-    }
+    async fn dequeue_timer_peek_lock(&self) -> Option<(WorkItem, String)>;
     
     /// Acknowledge a processed timer (only called if supports_delayed_visibility = true).
-    async fn ack_timer(&self, _token: &str) -> Result<(), String> {
-        Ok(())
-    }
+    async fn ack_timer(&self, _token: &str) -> Result<(), String>;
 
     // ===== Optional Management APIs =====
     // These have default implementations and are primarily used for testing/debugging.
@@ -250,24 +227,15 @@ pub trait HistoryStore: Send + Sync {
     /// Enqueue a work item to the orchestrator queue.
     /// Note: In normal operation, orchestrator items are enqueued via ack_orchestration_item.
     /// This method is used by raise_event and cancel_instance operations.
-    async fn enqueue_orchestrator_work(&self, _item: WorkItem) -> Result<(), String> {
-        Err("orchestrator queue not supported".into())
-    }
+    async fn enqueue_orchestrator_work(&self, _item: WorkItem) -> Result<(), String>;
     
     /// List all known instance IDs.
     /// Default: empty list. Used primarily for testing and debugging.
-    async fn list_instances(&self) -> Vec<String> {
-        Vec::new()
-    }
+    async fn list_instances(&self) -> Vec<String>;
     
     /// List all execution IDs for an instance.
     /// Default: returns [1] if instance exists, empty otherwise.
-    async fn list_executions(&self, instance: &str) -> Vec<u64> {
-        let h = self.read(instance).await;
-        if h.is_empty() { Vec::new() } else { vec![1] }
-    }
-    
-
+    async fn list_executions(&self, instance: &str) -> Vec<u64>;
     
     // TODO: Add lock timeout and lease refresh mechanisms for worker/timer messages
     // - Add timeout parameter to dequeue_worker_peek_lock and dequeue_timer_peek_lock
