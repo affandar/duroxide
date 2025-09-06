@@ -32,13 +32,18 @@ impl FsHistoryStore {
         let _ = std::fs::OpenOptions::new().create(true).append(true).open(&orch_q);
         let _ = std::fs::OpenOptions::new().create(true).append(true).open(&work_q);
         let _ = std::fs::OpenOptions::new().create(true).append(true).open(&timer_q);
-        Self {
+        let store = Self {
             root: path,
             orch_queue_file: orch_q,
             work_queue_file: work_q,
             timer_queue_file: timer_q,
             cap: 1024,
-        }
+        };
+        // Best-effort reclaim of any orphaned lock files from previous crashes
+        // Force reclaim on startup since no workers are running yet
+        reclaim_worker_locks_force(&store);
+        reclaim_timer_locks_force(&store);
+        store
     }
     /// Create a new store with a custom history cap (useful for tests).
     pub fn new_with_cap(root: impl AsRef<Path>, reset_on_create: bool, cap: usize) -> Self {
@@ -163,6 +168,128 @@ impl FsHistoryStore {
         let batch_json = serde_json::to_string(&batch_items).ok()?;
         let _ = std::fs::write(&lock_path, batch_json);
         Some((batch_items, token))
+    }
+}
+
+// Helper functions local to this module (not part of the HistoryStore trait)
+fn reclaim_worker_locks(store: &FsHistoryStore) {
+    reclaim_worker_locks_impl(store, false);
+}
+
+fn reclaim_worker_locks_force(store: &FsHistoryStore) {
+    reclaim_worker_locks_impl(store, true);
+}
+
+fn reclaim_worker_locks_impl(store: &FsHistoryStore, force: bool) {
+    tracing::debug!(target = "duroxide::providers::fs", "reclaim_worker_locks: force={}", force);
+    let lock_dir = store.work_lock_dir();
+    if let Ok(entries) = std::fs::read_dir(&lock_dir) {
+        let qf = &store.work_queue_file;
+        let content = std::fs::read_to_string(qf).unwrap_or_default();
+        let items: Vec<WorkItem> = content
+            .lines()
+            .filter_map(|l| serde_json::from_str::<WorkItem>(l).ok())
+            .collect();
+
+        let mut reclaimed: Vec<WorkItem> = Vec::new();
+        for entry in entries.flatten() {
+            let path = entry.path();
+            // Only reclaim stale locks (older than threshold) unless force=true
+            let stale = std::fs::metadata(&path)
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|ts| std::time::SystemTime::now().duration_since(ts).ok())
+                .map(|dur| dur.as_millis() as u64 > 1_000)
+                .unwrap_or(false);
+            if !stale && !force { continue; }
+            if let Ok(data) = std::fs::read_to_string(&path) {
+                if let Ok(item) = serde_json::from_str::<WorkItem>(&data) {
+                    if !items.contains(&item) {
+                        reclaimed.push(item);
+                    }
+                    let _ = std::fs::remove_file(&path);
+                }
+            }
+        }
+
+        if !reclaimed.is_empty() {
+            let mut new_items = reclaimed;
+            new_items.extend(items);
+            let tmp = qf.with_extension("jsonl.tmp");
+            if let Ok(mut tf) = std::fs::OpenOptions::new().create(true).write(true).truncate(true).open(&tmp) {
+                for it in &new_items {
+                    if let Ok(line) = serde_json::to_string(it) {
+                        use std::io::Write as _;
+                        let _ = tf.write_all(line.as_bytes());
+                        let _ = tf.write_all(b"\n");
+                    }
+                }
+                let _ = std::fs::rename(&tmp, qf);
+            }
+            tracing::debug!(target = "duroxide::providers::fs", "reclaimed {} worker locks", new_items.len());
+        } else {
+            tracing::debug!(target = "duroxide::providers::fs", "no worker locks reclaimed");
+        }
+    }
+}
+
+fn reclaim_timer_locks(store: &FsHistoryStore) {
+    reclaim_timer_locks_impl(store, false);
+}
+
+fn reclaim_timer_locks_force(store: &FsHistoryStore) {
+    reclaim_timer_locks_impl(store, true);
+}
+
+fn reclaim_timer_locks_impl(store: &FsHistoryStore, force: bool) {
+    tracing::debug!(target = "duroxide::providers::fs", "reclaim_timer_locks: force={}", force);
+    let lock_dir = store.timer_lock_dir();
+    if let Ok(entries) = std::fs::read_dir(&lock_dir) {
+        let qf = &store.timer_queue_file;
+        let content = std::fs::read_to_string(qf).unwrap_or_default();
+        let items: Vec<WorkItem> = content
+            .lines()
+            .filter_map(|l| serde_json::from_str::<WorkItem>(l).ok())
+            .collect();
+
+        let mut reclaimed: Vec<WorkItem> = Vec::new();
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let stale = std::fs::metadata(&path)
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|ts| std::time::SystemTime::now().duration_since(ts).ok())
+                .map(|dur| dur.as_millis() as u64 > 1_000)
+                .unwrap_or(false);
+            if !stale && !force { continue; }
+            if let Ok(data) = std::fs::read_to_string(&path) {
+                if let Ok(item) = serde_json::from_str::<WorkItem>(&data) {
+                    if !items.contains(&item) {
+                        reclaimed.push(item);
+                    }
+                    let _ = std::fs::remove_file(&path);
+                }
+            }
+        }
+
+        if !reclaimed.is_empty() {
+            let mut new_items = reclaimed;
+            new_items.extend(items);
+            let tmp = qf.with_extension("jsonl.tmp");
+            if let Ok(mut tf) = std::fs::OpenOptions::new().create(true).write(true).truncate(true).open(&tmp) {
+                for it in &new_items {
+                    if let Ok(line) = serde_json::to_string(it) {
+                        use std::io::Write as _;
+                        let _ = tf.write_all(line.as_bytes());
+                        let _ = tf.write_all(b"\n");
+                    }
+                }
+                let _ = std::fs::rename(&tmp, qf);
+            }
+            tracing::debug!(target = "duroxide::providers::fs", "reclaimed {} timer locks", new_items.len());
+        } else {
+            tracing::debug!(target = "duroxide::providers::fs", "no timer locks reclaimed");
+        }
     }
 }
 
@@ -525,6 +652,15 @@ impl HistoryStore for FsHistoryStore {
             .filter_map(|l| serde_json::from_str::<WorkItem>(l).ok())
             .collect();
         if items.is_empty() {
+            // If queue is empty, reclaim any orphaned locks from a previous crash
+            reclaim_worker_locks(self);
+            let content2 = std::fs::read_to_string(qf).unwrap_or_default();
+            items = content2
+                .lines()
+                .filter_map(|l| serde_json::from_str::<WorkItem>(l).ok())
+                .collect();
+        }
+        if items.is_empty() {
             return None;
         }
         let first = items.remove(0);
@@ -612,6 +748,14 @@ impl HistoryStore for FsHistoryStore {
             .filter_map(|l| serde_json::from_str::<WorkItem>(l).ok())
             .collect();
         if items.is_empty() {
+            reclaim_timer_locks(self);
+            let content2 = std::fs::read_to_string(qf).unwrap_or_default();
+            items = content2
+                .lines()
+                .filter_map(|l| serde_json::from_str::<WorkItem>(l).ok())
+                .collect();
+        }
+        if items.is_empty() {
             return None;
         }
         let first = items.remove(0);
@@ -645,6 +789,8 @@ impl HistoryStore for FsHistoryStore {
         let _ = std::fs::write(&lock_path, line);
         Some((first, token))
     }
+
+    // (helper methods moved to module scope above)
 
     async fn ack_timer(&self, token: &str) -> Result<(), String> {
         let path = self.timer_lock_path(token);

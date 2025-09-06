@@ -1,5 +1,5 @@
 use duroxide::*;
-use duroxide::providers::fs::FsHistoryStore;
+use duroxide::providers::sqlite::SqliteHistoryStore;
 use duroxide::runtime::registry::{ActivityRegistry, OrchestrationRegistry};
 use duroxide::runtime;
 use std::sync::Arc;
@@ -7,31 +7,36 @@ use std::sync::Arc;
 /// This example demonstrates the CORRECT way to handle delays and timeouts.
 /// 
 /// ⚠️ CRITICAL MISTAKES TO AVOID:
-/// 1. Using activities for delays instead of timers
+/// 1. Using activities for orchestration delays (use timers instead)
 /// 2. Calling .await directly on schedule methods (missing .into_*())
+/// 3. Using non-deterministic operations in orchestrations
 /// 
 /// This example shows:
-/// 1. ✅ CORRECT: Using timers for delays with .into_timer().await
+/// 1. ✅ CORRECT: Using timers for orchestration delays with .into_timer().await
 /// 2. ✅ CORRECT: Using timers for timeouts with select2
-/// 3. ❌ What NOT to do (commented out)
+/// 3. ✅ CORRECT: Activities can use tokio::time::sleep() and any async operations
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Set up the runtime with filesystem store
+    // Set up the runtime with SQLite store
     let temp_dir = tempfile::tempdir()?;
-    let store = Arc::new(FsHistoryStore::new(temp_dir.path(), true));
+    let db_path = temp_dir.path().join("delays_and_timeouts.db");
+    std::fs::File::create(&db_path)?;
+    let db_url = format!("sqlite:{}", db_path.to_str().unwrap());
+    let store = Arc::new(SqliteHistoryStore::new(&db_url).await?);
     
-    // Register activities - these should be pure business logic without delays
+    // Register activities - these can do any async operations including delays
     let activities = ActivityRegistry::builder()
         .register("ProcessData", |input: String| async move {
             println!("Processing data: {}", input);
-            // ✅ GOOD: Pure business logic, no delays
+            // ✅ Activities can be pure business logic
             Ok(format!("Processed: {}", input))
         })
         .register("SlowOperation", |input: String| async move {
             println!("Starting slow operation: {}", input);
-            // ❌ DON'T DO THIS: tokio::time::sleep(Duration::from_secs(3)).await;
-            // Instead, use timers in the orchestration!
+            // ✅ Activities can use tokio::time::sleep(), HTTP calls, database queries, etc.
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            println!("Slow operation completed");
             Ok(format!("Slow result: {}", input))
         })
         .build();
@@ -139,12 +144,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     rt.shutdown().await;
     
     println!("\n📚 Key Takeaways:");
-    println!("✅ Use ctx.schedule_timer(ms).into_timer().await for delays");
+    println!("✅ Use ctx.schedule_timer(ms).into_timer().await for orchestration delays");
     println!("✅ Use ctx.schedule_activity(name, input).into_activity().await for work");
     println!("✅ Use ctx.select2(work, timeout) for timeout patterns");
+    println!("✅ Activities can use tokio::time::sleep(), HTTP calls, database queries, etc.");
     println!("❌ Never call .await directly on schedule methods (missing .into_*()!)");
-    println!("❌ Never put tokio::time::sleep() in activities");
-    println!("❌ Activities should be pure business logic only");
+    println!("❌ Never use non-deterministic operations in orchestrations");
     
     Ok(())
 }

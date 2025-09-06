@@ -6,7 +6,7 @@
 //!
 //! Run with: `cargo run --example fan_out_fan_in`
 
-use duroxide::providers::fs::FsHistoryStore;
+use duroxide::providers::sqlite::SqliteHistoryStore;
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
 use duroxide::{OrchestrationContext, OrchestrationRegistry, DurableOutput};
@@ -31,7 +31,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::init();
 
     let temp_dir = tempfile::tempdir()?;
-    let store = Arc::new(FsHistoryStore::new(temp_dir.path(), true));
+    let db_path = temp_dir.path().join("fan_out_fan_in.db");
+    std::fs::File::create(&db_path)?;
+    let db_url = format!("sqlite:{}", db_path.to_str().unwrap());
+    let store = Arc::new(SqliteHistoryStore::new(&db_url).await?);
 
     // Register activities for user processing
     let activities = ActivityRegistry::builder()

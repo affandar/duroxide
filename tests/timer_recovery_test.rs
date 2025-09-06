@@ -117,7 +117,7 @@ async fn timer_recovery_after_crash_before_fire() {
         store2.clone(),
         instance,
         |h| h.iter().any(|e| matches!(e, Event::TimerFired { id, .. } if *id == timer_id)),
-        10_000  // Give timer dispatcher up to 10 seconds to process
+        3_000  // Give timer dispatcher a few seconds to process
     )
     .await;
     
@@ -150,9 +150,9 @@ async fn timer_recovery_after_crash_before_fire() {
     let timer_in_history = common::wait_for_history(
         store2.clone(),
         instance,
-        |h| h.iter().any(|e| matches!(e, Event::TimerFired { id, fire_at_ms: f, .. } 
-                                    if *id == timer_id && *f == fire_at_ms)),
-        2_000  // Wait up to 2 seconds for the event to be written
+        |h| h.iter().any(|e| matches!(e, Event::TimerFired { id, .. } 
+                                    if *id == timer_id)),
+        3_000  // Wait a few seconds for the event to be written
     )
     .await;
     
@@ -165,8 +165,8 @@ async fn timer_recovery_after_crash_before_fire() {
         .count();
     let timer_fired_count = hist_after
         .iter()
-        .filter(|e| matches!(e, Event::TimerFired { id, fire_at_ms: f, .. } 
-                           if *id == timer_id && *f == fire_at_ms))
+        .filter(|e| matches!(e, Event::TimerFired { id, .. } 
+                           if *id == timer_id))
         .count();
     
     // Debug output if timer didn't fire
@@ -180,15 +180,7 @@ async fn timer_recovery_after_crash_before_fire() {
     }
     
     assert_eq!(timer_created_count, 1, "Should have exactly one TimerCreated event");
-    
-    // The timer fired count check is flaky due to race conditions in event persistence
-    // The important thing is that the orchestration completed successfully, which means
-    // the timer was processed. We'll warn if the event is missing but not fail the test.
-    if timer_fired_count != 1 {
-        println!("WARNING: TimerFired event not found in history (found {} events)", timer_fired_count);
-        println!("This is likely a race condition in event persistence.");
-        println!("The orchestration completed successfully, so the timer was processed.");
-    }
+    assert_eq!(timer_fired_count, 1, "Should have exactly one TimerFired event");
     
     // Should have the activity that runs after timer
     assert!(

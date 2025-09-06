@@ -2,12 +2,12 @@
 //!
 //! This example demonstrates:
 //! - Setting up a basic orchestration with activities
-//! - Using the filesystem provider for persistence
+//! - Using the SQLite provider for persistence
 //! - Running orchestrations with the in-process runtime
 //!
 //! Run with: `cargo run --example hello_world`
 
-use duroxide::providers::fs::FsHistoryStore;
+use duroxide::providers::sqlite::SqliteHistoryStore;
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
 use duroxide::{OrchestrationContext, OrchestrationRegistry};
@@ -18,9 +18,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize tracing for better output
     tracing_subscriber::fmt::init();
 
-    // Create a temporary directory for persistence
+    // Create a temporary SQLite database for persistence
     let temp_dir = tempfile::tempdir()?;
-    let store = Arc::new(FsHistoryStore::new(temp_dir.path(), true));
+    let db_path = temp_dir.path().join("hello_world.db");
+    std::fs::File::create(&db_path)?;
+    let db_url = format!("sqlite:{}", db_path.to_str().unwrap());
+    let store = Arc::new(SqliteHistoryStore::new(&db_url).await?);
 
     // Register a simple activity that greets users
     let activities = ActivityRegistry::builder()

@@ -699,10 +699,12 @@ impl Runtime {
                             name,
                             input,
                         } => {
+                            debug!(instance = %instance, execution_id, id, name = %name, "worker: dequeued ActivityExecute");
                             // Execute activity via registry directly; enqueue completion/failure to orchestrator queue
                             let enqueue_result = if let Some(handler) = activities.get(&name) {
                                 match handler.invoke(input).await {
                                     Ok(result) => {
+                                        debug!(instance = %instance, execution_id, id, "worker: activity succeeded, enqueue completion");
                                         self.history_store
                                             .enqueue_orchestrator_work(WorkItem::ActivityCompleted {
                                                 instance: instance.clone(),
@@ -713,6 +715,7 @@ impl Runtime {
                                             .await
                                     }
                                     Err(error) => {
+                                        debug!(instance = %instance, execution_id, id, error = %error, "worker: activity failed, enqueue failure");
                                         self.history_store
                                             .enqueue_orchestrator_work(WorkItem::ActivityFailed {
                                                 instance: instance.clone(),
@@ -724,6 +727,7 @@ impl Runtime {
                                     }
                                 }
                             } else {
+                                debug!(instance = %instance, execution_id, id, name = %name, "worker: unregistered activity, enqueue failure");
                                 self.history_store
                                     .enqueue_orchestrator_work(WorkItem::ActivityFailed {
                                         instance: instance.clone(),
@@ -736,7 +740,10 @@ impl Runtime {
                             
                             // Only acknowledge after successful enqueue
                             if enqueue_result.is_ok() {
+                                debug!(instance = %instance, execution_id, id, "worker: acking worker lock");
                                 let _ = self.history_store.ack_worker(&token).await;
+                            } else {
+                                warn!(instance = %instance, execution_id, id, "worker: enqueue to orchestrator failed; not acking");
                             }
                         }
                         other => {

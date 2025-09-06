@@ -9,25 +9,33 @@ use duroxide::{OrchestrationContext, OrchestrationRegistry, DurableOutput};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Duration;
+use tempfile::TempDir;
 
 mod common;
 
 /// Helper to create a SQLite store for tests
-async fn create_sqlite_store() -> Arc<dyn HistoryStore> {
-    // Use in-memory SQLite database for complete isolation
-    // Each connection gets its own database instance
-    let db_url = "sqlite::memory:";
+async fn create_sqlite_store() -> (Arc<dyn HistoryStore>, TempDir) {
+    // Use file-based SQLite database with temporary file
+    let temp_dir = tempfile::TempDir::new().expect("Failed to create temp dir");
+    let db_path = temp_dir.path().join("test.db");
     
-    Arc::new(
-        SqliteHistoryStore::new(db_url)
+    // Create the database file
+    std::fs::File::create(&db_path).expect("Failed to create database file");
+    
+    let db_url = format!("sqlite:{}", db_path.to_str().unwrap());
+    
+    let store = Arc::new(
+        SqliteHistoryStore::new(&db_url)
             .await
             .expect("Failed to create SQLite store")
-    ) as Arc<dyn HistoryStore>
+    ) as Arc<dyn HistoryStore>;
+    
+    (store, temp_dir)
 }
 
 #[tokio::test]
 async fn sample_hello_world_sqlite() {
-    let store = create_sqlite_store().await;
+    let (store, _temp_dir) = create_sqlite_store().await;
 
     // Register a simple activity: "Hello" -> format a greeting
     let activity_registry = ActivityRegistry::builder()
@@ -67,7 +75,7 @@ async fn sample_hello_world_sqlite() {
 
 #[tokio::test]
 async fn sample_basic_control_flow_sqlite() {
-    let store = create_sqlite_store().await;
+    let (store, _temp_dir) = create_sqlite_store().await;
 
     let activity_registry = ActivityRegistry::builder()
         .register("CheckCondition", |_: String| async move { Ok("yes".to_string()) })
@@ -107,7 +115,7 @@ async fn sample_basic_control_flow_sqlite() {
 
 #[tokio::test]
 async fn sample_loop_sqlite() {
-    let store = create_sqlite_store().await;
+    let (store, _temp_dir) = create_sqlite_store().await;
 
     let activity_registry = ActivityRegistry::builder()
         .register("Append", |input: String| async move { Ok(input + "x") })
@@ -144,7 +152,7 @@ async fn sample_loop_sqlite() {
 
 #[tokio::test]
 async fn sample_error_handling_sqlite() {
-    let store = create_sqlite_store().await;
+    let (store, _temp_dir) = create_sqlite_store().await;
 
     let activity_registry = ActivityRegistry::builder()
         .register("MightFail", |input: String| async move {
@@ -191,7 +199,7 @@ async fn sample_error_handling_sqlite() {
 
 #[tokio::test]
 async fn sample_timeout_with_timer_race_sqlite() {
-    let store = create_sqlite_store().await;
+    let (store, _temp_dir) = create_sqlite_store().await;
 
     let activity_registry = ActivityRegistry::builder()
         .register("LongRunning", |_: String| async move {
@@ -239,7 +247,7 @@ async fn sample_timeout_with_timer_race_sqlite() {
 
 #[tokio::test]
 async fn sample_sub_orchestration_basic_sqlite() {
-    let store = create_sqlite_store().await;
+    let (store, _temp_dir) = create_sqlite_store().await;
 
     let activity_registry = ActivityRegistry::builder()
         .register("ToUpper", |input: String| async move { Ok(input.to_uppercase()) })
@@ -283,7 +291,7 @@ async fn sample_sub_orchestration_basic_sqlite() {
 
 #[tokio::test]
 async fn sample_fan_out_fan_in_sqlite() {
-    let store = create_sqlite_store().await;
+    let (store, _temp_dir) = create_sqlite_store().await;
 
     let activity_registry = ActivityRegistry::builder()
         .register("ProcessItem", |input: String| async move {
@@ -336,7 +344,7 @@ async fn sample_fan_out_fan_in_sqlite() {
 
 #[tokio::test]
 async fn sample_select2_activity_vs_external_sqlite() {
-    let store = create_sqlite_store().await;
+    let (store, _temp_dir) = create_sqlite_store().await;
 
     let activity_registry = ActivityRegistry::builder()
         .register("Sleep", |_input: String| async move {
@@ -392,7 +400,7 @@ async fn sample_select2_activity_vs_external_sqlite() {
 
 #[tokio::test]
 async fn sample_system_activities_sqlite() {
-    let store = create_sqlite_store().await;
+    let (store, _temp_dir) = create_sqlite_store().await;
 
     let activity_registry = ActivityRegistry::builder().build();
 
@@ -438,7 +446,7 @@ async fn sample_system_activities_sqlite() {
 
 #[tokio::test]
 async fn sample_external_event_sqlite() {
-    let store = create_sqlite_store().await;
+    let (store, _temp_dir) = create_sqlite_store().await;
 
     let activity_registry = ActivityRegistry::builder().build();
 
@@ -481,7 +489,7 @@ async fn sample_external_event_sqlite() {
 
 #[tokio::test]
 async fn sample_continue_as_new_sqlite() {
-    let store = create_sqlite_store().await;
+    let (store, _temp_dir) = create_sqlite_store().await;
 
     let activity_registry = ActivityRegistry::builder().build();
 
@@ -521,7 +529,7 @@ async fn sample_continue_as_new_sqlite() {
 
 #[tokio::test]
 async fn sample_typed_activity_and_orchestration_sqlite() {
-    let store = create_sqlite_store().await;
+    let (store, _temp_dir) = create_sqlite_store().await;
 
     #[derive(Serialize, Deserialize)]
     struct AddReq {
@@ -571,7 +579,7 @@ async fn sample_typed_activity_and_orchestration_sqlite() {
 
 #[tokio::test]
 async fn sample_timer_patterns_sqlite() {
-    let store = create_sqlite_store().await;
+    let (store, _temp_dir) = create_sqlite_store().await;
 
     let activity_registry = ActivityRegistry::builder()
         .register("FastOp", |_: String| async move {
@@ -621,7 +629,7 @@ async fn sample_timer_patterns_sqlite() {
 
 #[tokio::test]
 async fn sample_error_recovery_patterns_sqlite() {
-    let store = create_sqlite_store().await;
+    let (store, _temp_dir) = create_sqlite_store().await;
 
     let activity_registry = ActivityRegistry::builder()
         .register("UnreliableService", |attempt: String| async move {
@@ -682,7 +690,7 @@ async fn sample_error_recovery_patterns_sqlite() {
 
 #[tokio::test]
 async fn sample_saga_pattern_sqlite() {
-    let store = create_sqlite_store().await;
+    let (store, _temp_dir) = create_sqlite_store().await;
 
     let activity_registry = ActivityRegistry::builder()
         .register("BookFlight", |_: String| async move { Ok("flight-123".to_string()) })
@@ -749,7 +757,7 @@ async fn sample_saga_pattern_sqlite() {
 
 #[tokio::test]
 async fn sample_human_interaction_pattern_sqlite() {
-    let store = create_sqlite_store().await;
+    let (store, _temp_dir) = create_sqlite_store().await;
 
     let activity_registry = ActivityRegistry::builder()
         .register("SendApprovalRequest", |doc: String| async move {
@@ -818,7 +826,7 @@ async fn sample_human_interaction_pattern_sqlite() {
 
 #[tokio::test]
 async fn sample_versioning_sqlite() {
-    let store = create_sqlite_store().await;
+    let (store, _temp_dir) = create_sqlite_store().await;
 
     let activity_registry = ActivityRegistry::builder().build();
 
@@ -871,7 +879,7 @@ async fn sample_versioning_sqlite() {
 
 #[tokio::test]
 async fn sample_performance_test_sqlite() {
-    let store = create_sqlite_store().await;
+    let (store, _temp_dir) = create_sqlite_store().await;
 
     let activity_registry = ActivityRegistry::builder()
         .register("QuickOp", |input: String| async move {
@@ -924,7 +932,7 @@ async fn sample_performance_test_sqlite() {
 
 #[tokio::test]
 async fn sample_cancellation_sqlite() {
-    let store = create_sqlite_store().await;
+    let (store, _temp_dir) = create_sqlite_store().await;
 
     let activity_registry = ActivityRegistry::builder()
         .register("LongWork", |_: String| async move {
@@ -960,7 +968,7 @@ async fn sample_cancellation_sqlite() {
 
 #[tokio::test]
 async fn sample_status_polling_sqlite() {
-    let store = create_sqlite_store().await;
+    let (store, _temp_dir) = create_sqlite_store().await;
 
     let activity_registry = ActivityRegistry::builder()
         .register("Slow", |_: String| async move {
@@ -1009,7 +1017,7 @@ async fn sample_status_polling_sqlite() {
 
 #[tokio::test]
 async fn sample_sub_orchestration_fanout_sqlite() {
-    let store = create_sqlite_store().await;
+    let (store, _temp_dir) = create_sqlite_store().await;
 
     let activity_registry = ActivityRegistry::builder()
         .register("Square", |input: String| async move {
@@ -1063,7 +1071,7 @@ async fn sample_sub_orchestration_fanout_sqlite() {
 
 #[tokio::test]
 async fn sample_sub_orchestration_chained_sqlite() {
-    let store = create_sqlite_store().await;
+    let (store, _temp_dir) = create_sqlite_store().await;
 
     let activity_registry = ActivityRegistry::builder().build();
 
@@ -1106,7 +1114,7 @@ async fn sample_sub_orchestration_chained_sqlite() {
 #[tokio::test]
 #[ignore] // Detached orchestrations not fully implemented in current API
 async fn sample_detached_orchestration_scheduling_sqlite() {
-    let store = create_sqlite_store().await;
+    let (store, _temp_dir) = create_sqlite_store().await;
 
     let activity_registry = ActivityRegistry::builder().build();
 
@@ -1148,7 +1156,7 @@ async fn sample_typed_event_sqlite() {
         approver: String,
     }
 
-    let store = create_sqlite_store().await;
+    let (store, _temp_dir) = create_sqlite_store().await;
 
     let activity_registry = ActivityRegistry::builder().build();
 
@@ -1193,7 +1201,7 @@ async fn sample_typed_event_sqlite() {
 
 #[tokio::test]
 async fn sample_basic_error_handling_sqlite() {
-    let store = create_sqlite_store().await;
+    let (store, _temp_dir) = create_sqlite_store().await;
 
     let activity_registry = ActivityRegistry::builder()
         .register("MayFail", |input: String| async move {
@@ -1243,7 +1251,7 @@ async fn sample_basic_error_handling_sqlite() {
 
 #[tokio::test]
 async fn sample_nested_function_error_handling_sqlite() {
-    let store = create_sqlite_store().await;
+    let (store, _temp_dir) = create_sqlite_store().await;
 
     let activity_registry = ActivityRegistry::builder()
         .register("ParseInt", |input: String| async move {

@@ -12,10 +12,10 @@ cargo run --example delays_and_timeouts
 ```
 
 **What you'll learn:**
-- ✅ CORRECT: Use `ctx.schedule_timer()` for delays and timeouts
+- ✅ CORRECT: Use `ctx.schedule_timer()` for orchestration delays and timeouts
 - ✅ CORRECT: Use `ctx.select2()` for timeout patterns
-- ❌ WRONG: What NOT to do (activities with sleep)
-- The key rule: Activities = pure business logic, Timers = waiting
+- ✅ CORRECT: Activities can use any async operations (sleep, HTTP, DB, etc.)
+- The key rule: Orchestrations = deterministic, Activities = any async work
 
 ### 2. Hello World (`hello_world.rs`)
 Basic orchestration setup and execution.
@@ -26,7 +26,7 @@ cargo run --example hello_world
 
 **What you'll learn:**
 - Setting up a basic orchestration with activities
-- Using the filesystem provider for persistence
+- Using the SQLite provider for persistence
 - Running orchestrations with the in-process runtime
 - Basic error handling and completion waiting
 

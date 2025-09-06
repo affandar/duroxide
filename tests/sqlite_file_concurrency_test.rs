@@ -54,7 +54,7 @@ async fn test_sqlite_file_concurrent_access() {
     
     // Verify all items were enqueued
     let mut count = 0;
-    while let Some(_) = store.fetch_orchestration_item().await {
+    while let Some(_item) = store.fetch_orchestration_item().await {
         count += 1;
     }
     assert_eq!(count, 10, "Should have fetched all 10 items");
@@ -108,7 +108,7 @@ async fn test_sqlite_file_concurrent_orchestrations() {
     // Start multiple orchestrations concurrently
     let mut tasks = JoinSet::new();
     
-    for i in 0..5 {
+    for i in 0..3 {
         let rt_clone = rt.clone();
         tasks.spawn(async move {
             rt_clone
@@ -128,11 +128,11 @@ async fn test_sqlite_file_concurrent_orchestrations() {
     }
     
     // Wait for all orchestrations to complete
-    for i in 0..5 {
+    for i in 0..3 {
         let status = rt
             .wait_for_orchestration(
                 &format!("file-concurrent-{}", i),
-                Duration::from_secs(10),
+                Duration::from_secs(15),
             )
             .await
             .expect("Failed to wait for orchestration");

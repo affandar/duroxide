@@ -17,14 +17,14 @@ Duroxide is a framework for building **reliable, long-running workflows** that c
 ## ⚠️ Key Rules
 
 ### 1. Timers vs Activities
-**For any waiting or delays, use timers, NOT activities:**
+**For orchestration delays, use timers. Activities can use any async operations:**
 
 ```rust
-// ✅ CORRECT: Use timers for delays
+// ✅ CORRECT: Use timers for orchestration delays
 ctx.schedule_timer(5000).into_timer().await; // Wait 5 seconds
 
-// ❌ WRONG: Don't create "sleep" activities
-// ctx.schedule_activity("Sleep", "5000").into_activity().await;
+// ✅ ALSO CORRECT: Activities can use sleep, HTTP calls, database queries, etc.
+// Activities are just regular async functions and can do anything
 ```
 
 ### 2. DurableFuture Conversion Pattern

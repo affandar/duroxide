@@ -32,8 +32,8 @@ impl SqliteHistoryStore {
                     .execute(&mut *conn)
                     .await?;
                 
-                // Set busy timeout to 5 seconds to retry on locks
-                sqlx::query("PRAGMA busy_timeout = 5000")
+                // Set busy timeout to 60 seconds to retry on locks
+                sqlx::query("PRAGMA busy_timeout = 60000")
                     .execute(&mut *conn)
                     .await?;
                 
@@ -59,19 +59,90 @@ impl SqliteHistoryStore {
         } else {
             // For file-based databases, try migrations first, fall back to direct schema creation
             match sqlx::migrate!("./migrations").run(&pool).await {
-                Ok(_) => {},
-                Err(_) => {
+                Ok(_) => {
+                    tracing::debug!("Successfully ran migrations");
+                },
+                Err(e) => {
+                    tracing::debug!("Migration failed: {}, falling back to create_schema", e);
                     // Migrations not available (e.g., in tests), create schema directly
                     Self::create_schema(&pool).await?;
                 }
             }
         }
         
+        // Allow overriding worker/timer lock lease via env for tests
+        let lock_timeout = std::env::var("DUROXIDE_SQLITE_LOCK_TIMEOUT_MS")
+            .ok()
+            .and_then(|s| s.parse::<u64>().ok())
+            .map(Duration::from_millis)
+            .unwrap_or(Duration::from_secs(30));
+
         Ok(Self {
             pool,
-            lock_timeout: Duration::from_secs(30),
+            lock_timeout,
             history_cap: 1024,
         })
+    }
+
+    /// Debug helper: dump current queue states and small samples
+    /// Force a WAL checkpoint to ensure all changes are written to main database file
+    pub async fn checkpoint(&self) -> Result<(), sqlx::Error> {
+        sqlx::query("PRAGMA wal_checkpoint(FULL)")
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+    
+    pub async fn debug_dump(&self) -> String {
+        let mut out = String::new();
+        let mut conn = match self.pool.acquire().await {
+            Ok(c) => c,
+            Err(e) => return format!("<debug_dump: acquire error: {}>", e),
+        };
+
+        // Orchestrator queue count and sample
+        if let Ok((cnt,)) = sqlx::query_as::<_, (i64,)>("SELECT COUNT(*) FROM orchestrator_queue")
+            .fetch_one(&mut *conn)
+            .await
+        { out.push_str(&format!("orchestrator_queue.count = {}\n", cnt)); }
+        if let Ok(rows) = sqlx::query(
+            r#"SELECT id, instance_id, lock_token, locked_until, work_item FROM orchestrator_queue ORDER BY id LIMIT 10"#
+        ).fetch_all(&mut *conn).await {
+            out.push_str("orchestrator_queue.sample:\n");
+            for r in rows { let id: i64 = r.try_get("id").unwrap_or_default(); let inst: String = r.try_get("instance_id").unwrap_or_default(); let lock: Option<String> = r.try_get("lock_token").ok(); let until: Option<i64> = r.try_get("locked_until").ok(); let item: String = r.try_get("work_item").unwrap_or_default(); out.push_str(&format!("  id={}, inst={}, lock={:?}, until={:?}, item={}\n", id, inst, lock, until, item)); }
+        }
+
+        // Worker queue count and sample
+        if let Ok((cnt,)) = sqlx::query_as::<_, (i64,)>("SELECT COUNT(*) FROM worker_queue")
+            .fetch_one(&mut *conn)
+            .await
+        { out.push_str(&format!("worker_queue.count = {}\n", cnt)); }
+        if let Ok(rows) = sqlx::query(
+            r#"SELECT id, lock_token, locked_until, work_item FROM worker_queue ORDER BY id LIMIT 10"#
+        ).fetch_all(&mut *conn).await {
+            out.push_str("worker_queue.sample:\n");
+            for r in rows { 
+                let id: i64 = r.try_get("id").unwrap_or_default(); 
+                let lock: Option<String> = r.try_get("lock_token").unwrap_or(None); 
+                let until: Option<i64> = r.try_get("locked_until").unwrap_or(None); 
+                let item: String = r.try_get("work_item").unwrap_or_default(); 
+                out.push_str(&format!("  id={}, lock={:?}, until={:?}, item={}\n", id, lock, until, item)); 
+            }
+        }
+
+        // Timer queue count and sample
+        if let Ok((cnt,)) = sqlx::query_as::<_, (i64,)>("SELECT COUNT(*) FROM timer_queue")
+            .fetch_one(&mut *conn)
+            .await
+        { out.push_str(&format!("timer_queue.count = {}\n", cnt)); }
+        if let Ok(rows) = sqlx::query(
+            r#"SELECT id, fire_at, lock_token, locked_until, work_item FROM timer_queue ORDER BY id LIMIT 10"#
+        ).fetch_all(&mut *conn).await {
+            out.push_str("timer_queue.sample:\n");
+            for r in rows { let id: i64 = r.try_get("id").unwrap_or_default(); let fire_at: Option<i64> = r.try_get("fire_at").ok(); let lock: Option<String> = r.try_get("lock_token").ok(); let until: Option<i64> = r.try_get("locked_until").ok(); let item: String = r.try_get("work_item").unwrap_or_default(); out.push_str(&format!("  id={}, fire_at={:?}, lock={:?}, until={:?}, item={}\n", id, fire_at, lock, until, item)); }
+        }
+
+        out
     }
     
     /// Create schema directly (for in-memory databases)
@@ -330,7 +401,7 @@ impl HistoryStore for SqliteHistoryStore {
             r#"
             SELECT id, instance_id
             FROM orchestrator_queue
-            WHERE (lock_token IS NULL OR locked_until < strftime('%s', 'now'))
+            WHERE (lock_token IS NULL OR locked_until <= strftime('%s', 'now'))
             ORDER BY id
             LIMIT 1
             "#
@@ -356,7 +427,7 @@ impl HistoryStore for SqliteHistoryStore {
             UPDATE orchestrator_queue
             SET lock_token = ?1, locked_until = ?2
             WHERE instance_id = ?3
-              AND (lock_token IS NULL OR locked_until < strftime('%s', 'now'))
+              AND (lock_token IS NULL OR locked_until <= strftime('%s', 'now'))
             "#
         )
         .bind(&lock_token)
@@ -652,7 +723,7 @@ impl HistoryStore for SqliteHistoryStore {
         let next = sqlx::query(
             r#"
             SELECT id, work_item FROM timer_queue
-            WHERE (lock_token IS NULL OR locked_until < strftime('%s','now'))
+            WHERE (lock_token IS NULL OR locked_until <= (strftime('%s','now') * 1000))
               AND fire_at <= strftime('%s','now')
             ORDER BY fire_at, id
             LIMIT 1
@@ -804,20 +875,29 @@ impl HistoryStore for SqliteHistoryStore {
         let lock_token = Self::generate_lock_token();
         let locked_until = Self::timestamp_after(self.lock_timeout);
         
+        tracing::debug!("Worker dequeue: looking for available items, locked_until will be {}", locked_until);
+        
         // First find and lock the next item
         let next_item = sqlx::query(
             r#"
             SELECT id, work_item FROM worker_queue
-            WHERE lock_token IS NULL OR locked_until < strftime('%s', 'now')
+            WHERE lock_token IS NULL OR locked_until <= strftime('%s', 'now')
             ORDER BY id
             LIMIT 1
             "#
         )
         .fetch_optional(&mut *tx)
         .await
-        .ok()??;
+        .ok()?;
         
-        debug!("Worker dequeue found item");
+        if next_item.is_none() {
+            tracing::debug!("Worker dequeue: no available items found");
+            return None;
+        }
+        
+        let next_item = next_item?;
+        
+        tracing::debug!("Worker dequeue found item");
         
         let id: i64 = next_item.try_get("id").ok()?;
         let work_item_str: String = next_item.try_get("work_item").ok()?;
@@ -1001,7 +1081,7 @@ mod tests {
     async fn test_lock_expiration() {
         // Create store with very short lock timeout
         let mut store = create_test_store().await;
-        store.lock_timeout = Duration::from_millis(100);
+        store.lock_timeout = Duration::from_millis(2000);
         
         // Enqueue work
         let item = WorkItem::StartOrchestration {
@@ -1023,7 +1103,7 @@ mod tests {
         assert!(store.fetch_orchestration_item().await.is_none());
         
         // Wait for lock to expire
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        tokio::time::sleep(Duration::from_millis(2100)).await;
         
         // Should be available again
         let redelivered = store.fetch_orchestration_item().await;
