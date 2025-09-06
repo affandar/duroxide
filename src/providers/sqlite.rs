@@ -64,21 +64,18 @@ impl SqliteHistoryStore {
         }
         
         // Calculate visible_at based on delay
-        let visible_at_sql = if let Some(delay_ms) = delay_ms {
-            // Add delay to current time (in seconds)
-            let delay_secs = (delay_ms / 1000) as i64;
-            format!("strftime('%s', 'now') + {}", delay_secs)
+        let visible_at = if let Some(delay_ms) = delay_ms {
+            Self::now_millis() + delay_ms as i64
         } else {
-            // Default to current time
-            "strftime('%s', 'now')".to_string()
+            Self::now_millis()
         };
         
-        sqlx::query(&format!(
-            "INSERT INTO orchestrator_queue (instance_id, work_item, visible_at) VALUES (?, ?, {})",
-            visible_at_sql
-        ))
+        sqlx::query(
+            "INSERT INTO orchestrator_queue (instance_id, work_item, visible_at) VALUES (?, ?, ?)"
+        )
         .bind(instance)
         .bind(work_item)
+        .bind(visible_at)
         .execute(&self.pool)
         .await
         .map_err(|e| e.to_string())?;
@@ -336,10 +333,17 @@ impl SqliteHistoryStore {
         format!("lock_{}_{}", now, std::process::id())
     }
     
-    /// Get current timestamp for SQLite
+    /// Get current timestamp in milliseconds
+    fn now_millis() -> i64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64
+    }
+    
+    /// Get future timestamp in milliseconds
     fn timestamp_after(duration: Duration) -> i64 {
-        let future = SystemTime::now() + duration;
-        future.duration_since(UNIX_EPOCH).unwrap().as_secs() as i64
+        Self::now_millis() + duration.as_millis() as i64
     }
     
     /// Read history within a transaction
@@ -464,16 +468,18 @@ impl HistoryStore for SqliteHistoryStore {
         }
         
         // Find the next available message and use its instance to process a batch
+        let now_ms = Self::now_millis();
         let row = sqlx::query(
             r#"
             SELECT id, instance_id
             FROM orchestrator_queue
-            WHERE (lock_token IS NULL OR locked_until <= strftime('%s', 'now'))
-              AND visible_at <= strftime('%s', 'now')
+            WHERE (lock_token IS NULL OR locked_until <= ?1)
+              AND visible_at <= ?1
             ORDER BY id
             LIMIT 1
             "#
         )
+        .bind(now_ms)
         .fetch_optional(&mut *tx)
         .await
         .ok()?;
@@ -495,13 +501,14 @@ impl HistoryStore for SqliteHistoryStore {
             UPDATE orchestrator_queue
             SET lock_token = ?1, locked_until = ?2
             WHERE instance_id = ?3
-              AND (lock_token IS NULL OR locked_until <= strftime('%s', 'now'))
-              AND visible_at <= strftime('%s', 'now')
+              AND (lock_token IS NULL OR locked_until <= ?4)
+              AND visible_at <= ?4
             "#
         )
         .bind(&lock_token)
         .bind(locked_until)
         .bind(&instance_id)
+        .bind(now_ms)
         .execute(&mut *tx)
         .await
         .ok()?;
@@ -709,10 +716,10 @@ impl HistoryStore for SqliteHistoryStore {
         for item in timer_items {
             if let WorkItem::TimerSchedule { fire_at_ms, .. } = &item {
                 let work_item = serde_json::to_string(&item).map_err(|e| e.to_string())?;
-                let fire_at = (*fire_at_ms / 1000) as i64;
+                // Store fire_at_ms directly without division
                 sqlx::query("INSERT INTO timer_queue (work_item, fire_at) VALUES (?, ?)")
                     .bind(work_item)
-                    .bind(fire_at)
+                    .bind(*fire_at_ms as i64)
                     .execute(&mut *tx)
                     .await
                     .map_err(|e| e.to_string())?;
@@ -765,11 +772,13 @@ impl HistoryStore for SqliteHistoryStore {
             }
             
             // Insert with current timestamp as visible_at (immediate visibility)
+            let now_ms = Self::now_millis();
             sqlx::query(
-                "INSERT INTO orchestrator_queue (instance_id, work_item, visible_at) VALUES (?, ?, strftime('%s', 'now'))"
+                "INSERT INTO orchestrator_queue (instance_id, work_item, visible_at) VALUES (?, ?, ?)"
             )
             .bind(instance)
             .bind(work_item)
+            .bind(now_ms)
             .execute(&mut *tx)
             .await
             .map_err(|e| e.to_string())?;
@@ -796,12 +805,11 @@ impl HistoryStore for SqliteHistoryStore {
     async fn enqueue_timer_work(&self, item: WorkItem) -> Result<(), String> {
         if let WorkItem::TimerSchedule { .. } = &item {
             let work_item = serde_json::to_string(&item).map_err(|e| e.to_string())?;
-            // Extract fire_at_ms from item to store as seconds
+            // Extract fire_at_ms from item to store as milliseconds
             if let WorkItem::TimerSchedule { fire_at_ms, .. } = item {
-                let fire_at = (fire_at_ms / 1000) as i64;
                 sqlx::query("INSERT INTO timer_queue (work_item, fire_at) VALUES (?, ?)")
                     .bind(work_item)
-                    .bind(fire_at)
+                    .bind(fire_at_ms as i64)
                     .execute(&self.pool)
                     .await
                     .map_err(|e| e.to_string())?;
@@ -821,15 +829,17 @@ impl HistoryStore for SqliteHistoryStore {
         let locked_until = Self::timestamp_after(self.lock_timeout);
 
         // Find due timer
+        let now_ms = Self::now_millis();
         let next = sqlx::query(
             r#"
             SELECT id, work_item FROM timer_queue
-            WHERE (lock_token IS NULL OR locked_until <= (strftime('%s','now') * 1000))
-              AND fire_at <= strftime('%s','now')
+            WHERE (lock_token IS NULL OR locked_until <= ?1)
+              AND fire_at <= ?1
             ORDER BY fire_at, id
             LIMIT 1
             "#
         )
+        .bind(now_ms)
         .fetch_optional(&mut *tx)
         .await
         .ok()??;
@@ -930,14 +940,16 @@ impl HistoryStore for SqliteHistoryStore {
         tracing::debug!("Worker dequeue: looking for available items, locked_until will be {}", locked_until);
         
         // First find and lock the next item
+        let now_ms = Self::now_millis();
         let next_item = sqlx::query(
             r#"
             SELECT id, work_item FROM worker_queue
-            WHERE lock_token IS NULL OR locked_until <= strftime('%s', 'now')
+            WHERE lock_token IS NULL OR locked_until <= ?1
             ORDER BY id
             LIMIT 1
             "#
         )
+        .bind(now_ms)
         .fetch_optional(&mut *tx)
         .await
         .ok()?;
@@ -989,16 +1001,16 @@ impl HistoryStore for SqliteHistoryStore {
     async fn abandon_orchestration_item(&self, lock_token: &str, delay_ms: Option<u64>) -> Result<(), String> {
         if let Some(delay_ms) = delay_ms {
             // Update visible_at to delay visibility
-            let delay_secs = (delay_ms / 1000) as i64;
+            let visible_at = Self::now_millis() + delay_ms as i64;
             sqlx::query(
                 r#"
                 UPDATE orchestrator_queue
                 SET lock_token = NULL, locked_until = NULL, 
-                    visible_at = strftime('%s', 'now') + ?
+                    visible_at = ?
                 WHERE lock_token = ?
                 "#
             )
-            .bind(delay_secs)
+            .bind(visible_at)
             .bind(lock_token)
             .execute(&self.pool)
             .await

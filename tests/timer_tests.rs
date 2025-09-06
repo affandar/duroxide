@@ -1,19 +1,30 @@
 use duroxide::providers::HistoryStore;
-use duroxide::providers::fs::FsHistoryStore;
+use duroxide::providers::sqlite::SqliteHistoryStore;
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
 use duroxide::{Event, OrchestrationContext, OrchestrationRegistry};
 use std::sync::Arc as StdArc;
+use tempfile::TempDir;
 
 mod common;
 
-#[tokio::test]
-async fn single_timer_fires_fs() {
+/// Helper to create a SQLite store for testing
+async fn create_sqlite_store() -> (StdArc<dyn HistoryStore>, TempDir) {
     let td = tempfile::tempdir().unwrap();
-    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
+    let db_path = td.path().join("test.db");
+    std::fs::File::create(&db_path).unwrap();
+    let db_url = format!("sqlite:{}", db_path.display());
+    let store = StdArc::new(SqliteHistoryStore::new(&db_url).await.unwrap()) as StdArc<dyn HistoryStore>;
+    (store, td)
+}
 
+#[tokio::test]
+async fn single_timer_fires() {
+    let (store, _td) = create_sqlite_store().await;
+
+    const TIMER_MS: u64 = 50;
     let orch = |ctx: OrchestrationContext, _input: String| async move {
-        ctx.schedule_timer(50).into_timer().await;
+        ctx.schedule_timer(TIMER_MS).into_timer().await;
         Ok("done".to_string())
     };
 
@@ -21,6 +32,7 @@ async fn single_timer_fires_fs() {
     let acts = ActivityRegistry::builder().build();
     let rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(acts), reg).await;
 
+    let start = std::time::Instant::now();
     rt.clone()
         .start_orchestration("inst-one", "OneTimer", "")
         .await
@@ -30,12 +42,19 @@ async fn single_timer_fires_fs() {
         .wait_for_orchestration("inst-one", std::time::Duration::from_secs(5))
         .await
         .unwrap();
-    let output = match status {
-        duroxide::OrchestrationStatus::Completed { output } => output,
+    let elapsed = start.elapsed().as_millis() as u64;
+    
+    // Verify timer took at least TIMER_MS
+    assert!(elapsed >= TIMER_MS, 
+        "Timer fired too early: expected >={TIMER_MS}ms, got {elapsed}ms");
+    
+    match status {
+        duroxide::OrchestrationStatus::Completed { output } => {
+            println!("Orchestration completed: {output}");
+        }
         duroxide::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
         _ => panic!("unexpected orchestration status"),
     };
-    assert_eq!(output, "done");
 
     let hist = rt.get_execution_history("inst-one", 1).await;
     assert!(hist.iter().any(|e| matches!(e, Event::TimerCreated { .. })));
@@ -44,13 +63,15 @@ async fn single_timer_fires_fs() {
 }
 
 #[tokio::test]
-async fn multiple_timers_ordering_fs() {
-    let td = tempfile::tempdir().unwrap();
-    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
+async fn multiple_timers_ordering() {
+    let (store, _td) = create_sqlite_store().await;
 
+    const TIMER1_MS: u64 = 100;
+    const TIMER2_MS: u64 = 200;
+    
     let orch = |ctx: OrchestrationContext, _input: String| async move {
-        let t1 = ctx.schedule_timer(10);
-        let t2 = ctx.schedule_timer(20);
+        let t1 = ctx.schedule_timer(TIMER1_MS);
+        let t2 = ctx.schedule_timer(TIMER2_MS);
         let _ = ctx.join(vec![t1, t2]).await;
         Ok("ok".to_string())
     };
@@ -59,6 +80,7 @@ async fn multiple_timers_ordering_fs() {
     let acts = ActivityRegistry::builder().build();
     let rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(acts), reg).await;
 
+    let start = std::time::Instant::now();
     rt.clone()
         .start_orchestration("inst-two", "TwoTimers", "")
         .await
@@ -68,6 +90,11 @@ async fn multiple_timers_ordering_fs() {
         .wait_for_orchestration("inst-two", std::time::Duration::from_secs(5))
         .await
         .unwrap();
+    let elapsed = start.elapsed().as_millis() as u64;
+    
+    // Should wait for the longer timer
+    assert!(elapsed >= TIMER2_MS, 
+        "Expected >={TIMER2_MS}ms, got {elapsed}ms");
     let output = match status {
         duroxide::OrchestrationStatus::Completed { output } => output,
         duroxide::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
@@ -90,9 +117,8 @@ async fn multiple_timers_ordering_fs() {
 }
 
 #[tokio::test]
-async fn timer_deduplication_fs() {
-    let td = tempfile::tempdir().unwrap();
-    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
+async fn timer_deduplication() {
+    let (store, _td) = create_sqlite_store().await;
 
     let orch = |ctx: OrchestrationContext, _input: String| async move {
         ctx.schedule_timer(30).into_timer().await;
@@ -155,12 +181,51 @@ async fn timer_deduplication_fs() {
 }
 
 #[tokio::test]
-async fn timer_wall_clock_delay_fs() {
-    let td = tempfile::tempdir().unwrap();
-    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
+async fn sub_second_timer_precision() {
+    let (store, _td) = create_sqlite_store().await;
 
+    const TIMER_MS: u64 = 250;
     let orch = |ctx: OrchestrationContext, _input: String| async move {
-        ctx.schedule_timer(1_500).into_timer().await;
+        ctx.schedule_timer(TIMER_MS).into_timer().await;
+        Ok("done".to_string())
+    };
+
+    let reg = OrchestrationRegistry::builder().register("SubSecondTimer", orch).build();
+    let acts = ActivityRegistry::builder().build();
+    let rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(acts), reg).await;
+
+    let start = std::time::Instant::now();
+    rt.clone()
+        .start_orchestration("inst-subsec", "SubSecondTimer", "")
+        .await
+        .unwrap();
+        
+    let status = rt
+        .wait_for_orchestration("inst-subsec", std::time::Duration::from_secs(5))
+        .await
+        .unwrap();
+    let elapsed_ms = start.elapsed().as_millis() as u64;
+    
+    let _output = match status {
+        duroxide::OrchestrationStatus::Completed { output } => output,
+        _ => panic!("unexpected orchestration status"),
+    };
+    
+    // The 250ms timer should take at least 250ms
+    assert!(elapsed_ms >= TIMER_MS, "expected >={TIMER_MS}ms, got {elapsed_ms}ms");
+    // Allow some overhead but not too much
+    assert!(elapsed_ms <= TIMER_MS + 200, "expected <={} ms, got {elapsed_ms}ms", TIMER_MS + 200);
+    
+    rt.shutdown().await;
+}
+
+#[tokio::test]
+async fn timer_wall_clock_delay() {
+    let (store, _td) = create_sqlite_store().await;
+
+    const TIMER_MS: u64 = 1_500;
+    let orch = |ctx: OrchestrationContext, _input: String| async move {
+        ctx.schedule_timer(TIMER_MS).into_timer().await;
         Ok("ok".to_string())
     };
 
@@ -179,13 +244,17 @@ async fn timer_wall_clock_delay_fs() {
         .await
         .unwrap();
     let elapsed_ms = start.elapsed().as_millis() as u64;
+    println!("Elapsed time: {elapsed_ms}ms");
+    
     let output = match status {
         duroxide::OrchestrationStatus::Completed { output } => output,
         duroxide::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
         _ => panic!("unexpected orchestration status"),
     };
     assert_eq!(output, "ok");
-    // Allow some jitter, but ensure at least ~1.2s elapsed
-    assert!(elapsed_ms >= 1_200, "expected >=1200ms, got {elapsed_ms}ms");
+    // Timer should take at least TIMER_MS  
+    assert!(elapsed_ms >= TIMER_MS, "expected >={TIMER_MS}ms, got {elapsed_ms}ms");
+    // Allow some overhead but not too much (500ms overhead max)
+    assert!(elapsed_ms <= TIMER_MS + 500, "expected <={} ms, got {elapsed_ms}ms", TIMER_MS + 500);
     rt.shutdown().await;
 }

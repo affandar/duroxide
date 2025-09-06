@@ -1,11 +1,22 @@
 use duroxide::providers::HistoryStore;
-use duroxide::providers::fs::FsHistoryStore;
+use duroxide::providers::sqlite::SqliteHistoryStore;
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
 use duroxide::{Event, OrchestrationContext, OrchestrationRegistry};
 use std::sync::Arc as StdArc;
+use tempfile::TempDir;
 
 mod common;
+
+/// Helper to create a SQLite store for testing
+async fn create_sqlite_store(name: &str) -> (StdArc<dyn HistoryStore>, TempDir, String) {
+    let td = tempfile::tempdir().unwrap();
+    let db_path = td.path().join(format!("{}.db", name));
+    std::fs::File::create(&db_path).unwrap();
+    let db_url = format!("sqlite:{}", db_path.display());
+    let store = StdArc::new(SqliteHistoryStore::new(&db_url).await.unwrap()) as StdArc<dyn HistoryStore>;
+    (store, td, db_url)
+}
 
 /// Test that verifies timer recovery after crash between dequeue and fire
 /// 
@@ -17,22 +28,15 @@ mod common;
 /// 5. Timer should be redelivered and fire correctly
 #[tokio::test]
 async fn timer_recovery_after_crash_before_fire() {
-    // Use filesystem store for persistence across "crash"
-    let base = std::env::current_dir().unwrap().join(".testdata");
-    std::fs::create_dir_all(&base).unwrap();
-    let dir = base.join(format!(
-        "timer_recovery_{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
+    let (store1, _td, db_url) = create_sqlite_store("timer_recovery").await;
 
+    const TIMER_MS: u64 = 500;
+    
     // Simple orchestration that schedules a timer and then completes
     let orch = |ctx: OrchestrationContext, _input: String| async move {
         // Schedule a timer with enough delay that we can "crash" before it fires
-        ctx.schedule_timer(500).into_timer().await;
+        ctx.schedule_timer(TIMER_MS).into_timer().await;
+        
         // Do something after timer to prove it fired
         let result = ctx.schedule_activity("PostTimer", "done").into_activity().await?;
         Ok(result)
@@ -49,7 +53,6 @@ async fn timer_recovery_after_crash_before_fire() {
         .build();
 
     // Phase 1: Start orchestration and wait for timer to be scheduled
-    let store1 = StdArc::new(FsHistoryStore::new(&dir, true)) as StdArc<dyn HistoryStore>;
     let rt1 = runtime::Runtime::start_with_store(
         store1.clone(),
         StdArc::new(activity_registry.clone()),
@@ -101,7 +104,7 @@ async fn timer_recovery_after_crash_before_fire() {
 
     // Phase 2: "Restart" system with new runtime but same store
     println!("Restarting system...");
-    let store2 = StdArc::new(FsHistoryStore::new(&dir, false)) as StdArc<dyn HistoryStore>;
+    let store2 = StdArc::new(SqliteHistoryStore::new(&db_url).await.unwrap()) as StdArc<dyn HistoryStore>;
     let rt2 = runtime::Runtime::start_with_store(
         store2.clone(),
         StdArc::new(activity_registry),
@@ -198,23 +201,18 @@ async fn timer_recovery_after_crash_before_fire() {
 /// Test multiple timers with crash/recovery
 #[tokio::test] 
 async fn multiple_timers_recovery_after_crash() {
-    let base = std::env::current_dir().unwrap().join(".testdata");
-    std::fs::create_dir_all(&base).unwrap();
-    let dir = base.join(format!(
-        "multi_timer_recovery_{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
+    let (store1, _td, db_url) = create_sqlite_store("multi_timer_recovery").await;
 
+    const TIMER1_MS: u64 = 300;
+    const TIMER2_MS: u64 = 600;
+    const TIMER3_MS: u64 = 900;
+    
     // Orchestration with multiple timers of different delays
     let orch = |ctx: OrchestrationContext, _input: String| async move {
         // Schedule three timers with different delays
-        let t1 = ctx.schedule_timer(300); // Short
-        let t2 = ctx.schedule_timer(600); // Medium  
-        let t3 = ctx.schedule_timer(900); // Long
+        let t1 = ctx.schedule_timer(TIMER1_MS);
+        let t2 = ctx.schedule_timer(TIMER2_MS);
+        let t3 = ctx.schedule_timer(TIMER3_MS);
         
         // Wait for all timers
         ctx.join(vec![t1, t2, t3]).await;
@@ -229,7 +227,6 @@ async fn multiple_timers_recovery_after_crash() {
     let activity_registry = ActivityRegistry::builder().build();
 
     // Phase 1: Start and wait for all timers to be created
-    let store1 = StdArc::new(FsHistoryStore::new(&dir, true)) as StdArc<dyn HistoryStore>;
     let rt1 = runtime::Runtime::start_with_store(
         store1.clone(),
         StdArc::new(activity_registry.clone()),
@@ -273,7 +270,7 @@ async fn multiple_timers_recovery_after_crash() {
 
     // Phase 2: Restart and verify all timers fire
     println!("Restarting...");
-    let store2 = StdArc::new(FsHistoryStore::new(&dir, false)) as StdArc<dyn HistoryStore>;
+    let store2 = StdArc::new(SqliteHistoryStore::new(&db_url).await.unwrap()) as StdArc<dyn HistoryStore>;
     let rt2 = runtime::Runtime::start_with_store(
         store2.clone(),
         StdArc::new(activity_registry),
