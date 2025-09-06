@@ -227,7 +227,10 @@ pub trait HistoryStore: Send + Sync {
     /// Enqueue a work item to the orchestrator queue.
     /// Note: In normal operation, orchestrator items are enqueued via ack_orchestration_item.
     /// This method is used by raise_event and cancel_instance operations.
-    async fn enqueue_orchestrator_work(&self, _item: WorkItem) -> Result<(), String>;
+    /// 
+    /// `delay_ms`: Optional delay in milliseconds before the item becomes visible for processing.
+    /// None means immediate visibility. Providers that don't support delayed visibility will ignore the delay.
+    async fn enqueue_orchestrator_work(&self, _item: WorkItem, _delay_ms: Option<u64>) -> Result<(), String>;
     
     /// List all known instance IDs.
     /// Default: empty list. Used primarily for testing and debugging.

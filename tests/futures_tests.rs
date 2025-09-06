@@ -71,8 +71,8 @@ async fn select2_two_externals_history_order_wins_fs() {
         name: "A".to_string(),
         data: "va".to_string(),
     };
-    let _ = store.enqueue_orchestrator_work(wi_b).await;
-    let _ = store.enqueue_orchestrator_work(wi_a).await;
+    let _ = store.enqueue_orchestrator_work(wi_b, None).await;
+    let _ = store.enqueue_orchestrator_work(wi_a, None).await;
 
     let acts2 = ActivityRegistry::builder().build();
     let reg2 = OrchestrationRegistry::builder()
@@ -189,8 +189,8 @@ async fn select_two_externals_history_order_wins_fs() {
         name: "A".to_string(),
         data: "va".to_string(),
     };
-    let _ = store.enqueue_orchestrator_work(wi_b).await;
-    let _ = store.enqueue_orchestrator_work(wi_a).await;
+    let _ = store.enqueue_orchestrator_work(wi_b, None).await;
+    let _ = store.enqueue_orchestrator_work(wi_a, None).await;
 
     let acts2 = ActivityRegistry::builder().build();
     let reg2 = OrchestrationRegistry::builder()
@@ -308,8 +308,8 @@ async fn select_three_mixed_history_winner_fs() {
         name: "A".to_string(),
         data: "va".to_string(),
     };
-    let _ = store.enqueue_orchestrator_work(wi_b).await;
-    let _ = store.enqueue_orchestrator_work(wi_a).await;
+    let _ = store.enqueue_orchestrator_work(wi_b, None).await;
+    let _ = store.enqueue_orchestrator_work(wi_a, None).await;
 
     let acts2 = ActivityRegistry::builder().build();
     let reg2 = OrchestrationRegistry::builder()
@@ -429,8 +429,8 @@ async fn join_returns_history_order_fs() {
         name: "A".to_string(),
         data: "va".to_string(),
     };
-    let _ = store.enqueue_orchestrator_work(wi_b).await;
-    let _ = store.enqueue_orchestrator_work(wi_a).await;
+    let _ = store.enqueue_orchestrator_work(wi_b, None).await;
+    let _ = store.enqueue_orchestrator_work(wi_a, None).await;
 
     let acts2 = ActivityRegistry::builder().build();
     let reg2 = OrchestrationRegistry::builder()

@@ -135,8 +135,8 @@ async fn timer_deduplication_fs() {
         id,
         fire_at_ms: fire_at,
     };
-    let _ = store.enqueue_orchestrator_work(wi.clone()).await;
-    let _ = store.enqueue_orchestrator_work(wi.clone()).await;
+    let _ = store.enqueue_orchestrator_work(wi.clone(), None).await;
+    let _ = store.enqueue_orchestrator_work(wi.clone(), None).await;
 
     assert!(
         common::wait_for_history(

@@ -18,6 +18,73 @@ pub struct SqliteHistoryStore {
 }
 
 impl SqliteHistoryStore {
+    /// Internal method to enqueue orchestrator work with optional visibility delay
+    async fn enqueue_orchestrator_work_with_delay(&self, item: WorkItem, delay_ms: Option<u64>) -> Result<(), String> {
+        let work_item = serde_json::to_string(&item).map_err(|e| e.to_string())?;
+        let instance = match &item {
+            WorkItem::StartOrchestration { instance, .. } |
+            WorkItem::ActivityCompleted { instance, .. } |
+            WorkItem::ActivityFailed { instance, .. } |
+            WorkItem::TimerFired { instance, .. } |
+            WorkItem::ExternalRaised { instance, .. } |
+            WorkItem::CancelInstance { instance, .. } |
+            WorkItem::ContinueAsNew { instance, .. } => instance,
+            WorkItem::SubOrchCompleted { parent_instance, .. } |
+            WorkItem::SubOrchFailed { parent_instance, .. } => parent_instance,
+            _ => return Err("Invalid work item type".to_string()),
+        };
+        tracing::debug!(target: "duroxide::providers::sqlite", ?item, instance=%instance, delay_ms=?delay_ms, "enqueue_orchestrator_work_with_delay");
+        
+        // Check if this is a StartOrchestration - if so, create instance
+        if let WorkItem::StartOrchestration { orchestration, version, .. } = &item {
+            let version = version.as_deref().unwrap_or("1.0.0");
+            sqlx::query(
+                r#"
+                INSERT OR IGNORE INTO instances (instance_id, orchestration_name, orchestration_version)
+                VALUES (?, ?, ?)
+                "#
+            )
+            .bind(instance)
+            .bind(orchestration)
+            .bind(version)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+            
+            sqlx::query(
+                r#"
+                INSERT OR IGNORE INTO executions (instance_id, execution_id)
+                VALUES (?, 1)
+                "#
+            )
+            .bind(instance)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+        }
+        
+        // Calculate visible_at based on delay
+        let visible_at_sql = if let Some(delay_ms) = delay_ms {
+            // Add delay to current time (in seconds)
+            let delay_secs = (delay_ms / 1000) as i64;
+            format!("strftime('%s', 'now') + {}", delay_secs)
+        } else {
+            // Default to current time
+            "strftime('%s', 'now')".to_string()
+        };
+        
+        sqlx::query(&format!(
+            "INSERT INTO orchestrator_queue (instance_id, work_item, visible_at) VALUES (?, ?, {})",
+            visible_at_sql
+        ))
+        .bind(instance)
+        .bind(work_item)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+        
+        Ok(())
+    }
     /// Create a new SQLite history store
     /// 
     /// # Arguments
@@ -402,6 +469,7 @@ impl HistoryStore for SqliteHistoryStore {
             SELECT id, instance_id
             FROM orchestrator_queue
             WHERE (lock_token IS NULL OR locked_until <= strftime('%s', 'now'))
+              AND visible_at <= strftime('%s', 'now')
             ORDER BY id
             LIMIT 1
             "#
@@ -421,13 +489,14 @@ impl HistoryStore for SqliteHistoryStore {
         let lock_token = Self::generate_lock_token();
         let locked_until = Self::timestamp_after(self.lock_timeout);
         
-        // Lock all messages for this instance
+        // Lock all messages for this instance that are visible
         sqlx::query(
             r#"
             UPDATE orchestrator_queue
             SET lock_token = ?1, locked_until = ?2
             WHERE instance_id = ?3
               AND (lock_token IS NULL OR locked_until <= strftime('%s', 'now'))
+              AND visible_at <= strftime('%s', 'now')
             "#
         )
         .bind(&lock_token)
@@ -650,7 +719,7 @@ impl HistoryStore for SqliteHistoryStore {
             }
         }
         
-        // Enqueue orchestrator items
+        // Enqueue orchestrator items within the transaction
         for item in orchestrator_items {
             let work_item = serde_json::to_string(&item).map_err(|e| e.to_string())?;
             let instance = match &item {
@@ -667,13 +736,45 @@ impl HistoryStore for SqliteHistoryStore {
             };
             tracing::debug!(target = "duroxide::providers::sqlite", instance=%instance, ?item, "enqueue orchestrator item in ack");
             
-            sqlx::query("INSERT INTO orchestrator_queue (instance_id, work_item) VALUES (?, ?)")
+            // Check if this is a StartOrchestration - if so, create instance
+            if let WorkItem::StartOrchestration { orchestration, version, .. } = &item {
+                let version = version.as_deref().unwrap_or("1.0.0");
+                sqlx::query(
+                    r#"
+                    INSERT OR IGNORE INTO instances (instance_id, orchestration_name, orchestration_version)
+                    VALUES (?, ?, ?)
+                    "#
+                )
                 .bind(instance)
-                .bind(work_item)
+                .bind(orchestration)
+                .bind(version)
                 .execute(&mut *tx)
                 .await
                 .map_err(|e| e.to_string())?;
+                
+                sqlx::query(
+                    r#"
+                    INSERT OR IGNORE INTO executions (instance_id, execution_id)
+                    VALUES (?, 1)
+                    "#
+                )
+                .bind(instance)
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| e.to_string())?;
+            }
+            
+            // Insert with current timestamp as visible_at (immediate visibility)
+            sqlx::query(
+                "INSERT INTO orchestrator_queue (instance_id, work_item, visible_at) VALUES (?, ?, strftime('%s', 'now'))"
+            )
+            .bind(instance)
+            .bind(work_item)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?;
         }
+        
         // After enqueue, print queue size
         if let Ok((total_count,)) = sqlx::query_as::<_, (i64,)>("SELECT COUNT(*) FROM orchestrator_queue")
             .fetch_one(&mut *tx)
@@ -803,57 +904,8 @@ impl HistoryStore for SqliteHistoryStore {
             .collect()
     }
     
-    async fn enqueue_orchestrator_work(&self, item: WorkItem) -> Result<(), String> {
-        let work_item = serde_json::to_string(&item).map_err(|e| e.to_string())?;
-        let instance = match &item {
-            WorkItem::StartOrchestration { instance, .. } |
-            WorkItem::ActivityCompleted { instance, .. } |
-            WorkItem::ActivityFailed { instance, .. } |
-            WorkItem::TimerFired { instance, .. } |
-            WorkItem::ExternalRaised { instance, .. } |
-            WorkItem::CancelInstance { instance, .. } |
-            WorkItem::ContinueAsNew { instance, .. } => instance,
-            WorkItem::SubOrchCompleted { parent_instance, .. } |
-            WorkItem::SubOrchFailed { parent_instance, .. } => parent_instance,
-            _ => return Err("Invalid work item type".to_string()),
-        };
-        tracing::debug!(target: "duroxide::providers::sqlite", ?item, instance=%instance, "enqueue_orchestrator_work");
-        // Check if this is a StartOrchestration - if so, create instance
-        if let WorkItem::StartOrchestration { orchestration, version, .. } = &item {
-            let version = version.as_deref().unwrap_or("1.0.0");
-            sqlx::query(
-                r#"
-                INSERT OR IGNORE INTO instances (instance_id, orchestration_name, orchestration_version)
-                VALUES (?, ?, ?)
-                "#
-            )
-            .bind(instance)
-            .bind(orchestration)
-            .bind(version)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| e.to_string())?;
-            
-            sqlx::query(
-                r#"
-                INSERT OR IGNORE INTO executions (instance_id, execution_id)
-                VALUES (?, 1)
-                "#
-            )
-            .bind(instance)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| e.to_string())?;
-        }
-        
-        sqlx::query("INSERT INTO orchestrator_queue (instance_id, work_item) VALUES (?, ?)")
-            .bind(instance)
-            .bind(work_item)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| e.to_string())?;
-        
-        Ok(())
+    async fn enqueue_orchestrator_work(&self, item: WorkItem, delay_ms: Option<u64>) -> Result<(), String> {
+        self.enqueue_orchestrator_work_with_delay(item, delay_ms).await
     }
     
     async fn enqueue_worker_work(&self, item: WorkItem) -> Result<(), String> {
@@ -935,22 +987,36 @@ impl HistoryStore for SqliteHistoryStore {
     }
     
     async fn abandon_orchestration_item(&self, lock_token: &str, delay_ms: Option<u64>) -> Result<(), String> {
-        if delay_ms.is_some() {
-            tracing::warn!("SQLite provider does not support delayed visibility for abandoned items");
+        if let Some(delay_ms) = delay_ms {
+            // Update visible_at to delay visibility
+            let delay_secs = (delay_ms / 1000) as i64;
+            sqlx::query(
+                r#"
+                UPDATE orchestrator_queue
+                SET lock_token = NULL, locked_until = NULL, 
+                    visible_at = strftime('%s', 'now') + ?
+                WHERE lock_token = ?
+                "#
+            )
+            .bind(delay_secs)
+            .bind(lock_token)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+        } else {
+            // Clear the lock on all messages with this lock token
+            sqlx::query(
+                r#"
+                UPDATE orchestrator_queue
+                SET lock_token = NULL, locked_until = NULL
+                WHERE lock_token = ?
+                "#
+            )
+            .bind(lock_token)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
         }
-        
-        // Clear the lock on all messages with this lock token
-        sqlx::query(
-            r#"
-            UPDATE orchestrator_queue
-            SET lock_token = NULL, locked_until = NULL
-            WHERE lock_token = ?
-            "#
-        )
-        .bind(lock_token)
-        .execute(&self.pool)
-        .await
-        .map_err(|e| e.to_string())?;
         
         Ok(())
     }
@@ -1135,7 +1201,7 @@ mod tests {
             parent_id: None,
         };
         
-        store.enqueue_orchestrator_work(item.clone()).await.unwrap();
+        store.enqueue_orchestrator_work(item.clone(), None).await.unwrap();
         
         // Fetch it
         let orch_item = store.fetch_orchestration_item().await.unwrap();
@@ -1182,7 +1248,7 @@ mod tests {
             parent_id: None,
         };
         
-        store.enqueue_orchestrator_work(start).await.unwrap();
+        store.enqueue_orchestrator_work(start, None).await.unwrap();
         
         let orch_item = store.fetch_orchestration_item().await.unwrap();
         
@@ -1269,7 +1335,7 @@ mod tests {
             parent_id: None,
         };
         
-        store.enqueue_orchestrator_work(item).await.unwrap();
+        store.enqueue_orchestrator_work(item, None).await.unwrap();
         
         // Fetch but don't ack
         let orch_item = store.fetch_orchestration_item().await.unwrap();
@@ -1389,7 +1455,7 @@ mod tests {
             parent_instance: None,
             parent_id: None,
         };
-        store.enqueue_orchestrator_work(item).await.unwrap();
+        store.enqueue_orchestrator_work(item, None).await.unwrap();
         
         // Fetch and lock it
         let orch_item = store.fetch_orchestration_item().await.unwrap();
@@ -1461,6 +1527,123 @@ mod tests {
         
         // Queue should be empty
         assert!(store.dequeue_worker_peek_lock().await.is_none());
+    }
+    
+    #[tokio::test]
+    async fn test_delayed_visibility() {
+        let store = create_test_store().await;
+        
+        // Test 1: Enqueue item with delayed visibility
+        let delayed_item = WorkItem::StartOrchestration {
+            instance: "test-delayed".to_string(),
+            orchestration: "DelayedTest".to_string(),
+            version: Some("1.0.0".to_string()),
+            input: "{}".to_string(),
+            parent_instance: None,
+            parent_id: None,
+        };
+        
+        // Enqueue with 2 second delay
+        store.enqueue_orchestrator_work_with_delay(delayed_item.clone(), Some(2000)).await.unwrap();
+        
+        // Should not be visible immediately
+        assert!(store.fetch_orchestration_item().await.is_none());
+        
+        // Wait for delay to pass
+        tokio::time::sleep(std::time::Duration::from_millis(2100)).await;
+        
+        // Should be visible now
+        let item = store.fetch_orchestration_item().await.unwrap();
+        assert_eq!(item.instance, "test-delayed");
+        
+        // Ack it
+        store.ack_orchestration_item(
+            &item.lock_token,
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+        ).await.unwrap();
+        
+        // Test 2: Timer with delayed visibility via enqueue_orchestrator_work_delayed
+        // First create an instance so the TimerFired has a valid context
+        let start_item = WorkItem::StartOrchestration {
+            instance: "test-timer-delayed".to_string(),
+            orchestration: "TimerDelayedTest".to_string(),
+            version: Some("1.0.0".to_string()),
+            input: "{}".to_string(),
+            parent_instance: None,
+            parent_id: None,
+        };
+        
+        store.enqueue_orchestrator_work(start_item, None).await.unwrap();
+        let orch_item = store.fetch_orchestration_item().await.unwrap();
+        store.ack_orchestration_item(
+            &orch_item.lock_token,
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+        ).await.unwrap();
+        
+        let timer_fired = WorkItem::TimerFired {
+            instance: "test-timer-delayed".to_string(),
+            execution_id: 1,
+            id: 1,
+            fire_at_ms: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis() as u64 + 2000,
+        };
+        
+        // Enqueue with 2 second delay
+        store.enqueue_orchestrator_work(timer_fired.clone(), Some(2000)).await.unwrap();
+        
+        // TimerFired should not be visible immediately
+        assert!(store.fetch_orchestration_item().await.is_none());
+        
+        // Wait for timer to be visible
+        tokio::time::sleep(std::time::Duration::from_millis(2100)).await;
+        
+        // TimerFired should be visible now
+        let timer_item = store.fetch_orchestration_item().await.unwrap();
+        assert_eq!(timer_item.instance, "test-timer-delayed");
+        assert_eq!(timer_item.messages.len(), 1);
+        assert!(matches!(timer_item.messages[0], WorkItem::TimerFired { .. }));
+    }
+    
+    #[tokio::test]
+    async fn test_abandon_with_delay() {
+        let store = create_test_store().await;
+        
+        // Enqueue item
+        let item = WorkItem::StartOrchestration {
+            instance: "test-abandon-delay".to_string(),
+            orchestration: "AbandonDelayTest".to_string(),
+            version: Some("1.0.0".to_string()),
+            input: "{}".to_string(),
+            parent_instance: None,
+            parent_id: None,
+        };
+        
+        store.enqueue_orchestrator_work(item, None).await.unwrap();
+        
+        // Fetch and lock it
+        let orch_item = store.fetch_orchestration_item().await.unwrap();
+        let lock_token = orch_item.lock_token.clone();
+        
+        // Abandon with 2 second delay
+        store.abandon_orchestration_item(&lock_token, Some(2000)).await.unwrap();
+        
+        // Should not be visible immediately
+        assert!(store.fetch_orchestration_item().await.is_none());
+        
+        // Wait for delay
+        tokio::time::sleep(std::time::Duration::from_millis(2100)).await;
+        
+        // Should be visible again
+        let item2 = store.fetch_orchestration_item().await.unwrap();
+        assert_eq!(item2.instance, "test-abandon-delay");
     }
     
     #[tokio::test]

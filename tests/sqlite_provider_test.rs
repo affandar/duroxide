@@ -22,7 +22,7 @@ async fn test_sqlite_provider_basic() {
         parent_id: None,
     };
     
-    store.enqueue_orchestrator_work(start_work.clone())
+    store.enqueue_orchestrator_work(start_work.clone(), None)
         .await
         .expect("Failed to enqueue work");
     
@@ -120,7 +120,7 @@ async fn test_sqlite_provider_transactional() {
         parent_id: None,
     };
     
-    store.enqueue_orchestrator_work(start_work)
+    store.enqueue_orchestrator_work(start_work, None)
         .await
         .expect("Failed to enqueue");
     
@@ -221,7 +221,7 @@ async fn test_sqlite_provider_timer_queue() {
         input: "{}".to_string(),
         parent_instance: None,
         parent_id: None,
-    })
+    }, None)
     .await
     .expect("Failed to enqueue");
     

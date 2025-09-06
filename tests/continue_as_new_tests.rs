@@ -424,7 +424,7 @@ async fn old_execution_completions_are_ignored() {
             execution_id: 0, // Old execution ID (current is 1)
             id: 999,         // Some activity ID
             result: "old_execution_result".to_string(),
-        })
+        }, None)
         .await;
 
     // Give time for the completion to be processed (and ignored)
@@ -480,7 +480,7 @@ async fn future_execution_completions_are_ignored() {
             execution_id: 999, // Future execution ID
             id: 1,
             result: "future_completion".to_string(),
-        })
+        }, None)
         .await;
 
     // Give some time for processing

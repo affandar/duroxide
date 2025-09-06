@@ -41,7 +41,7 @@ async fn test_sqlite_file_concurrent_access() {
                 parent_id: None,
             };
             
-            store_clone.enqueue_orchestrator_work(work_item)
+            store_clone.enqueue_orchestrator_work(work_item, None)
                 .await
                 .expect("Failed to enqueue work");
         });

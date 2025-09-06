@@ -35,7 +35,8 @@ impl HistoryStore for InMemoryHistoryStore {
 
     // ===== Orchestrator Queue Methods =====
 
-    async fn enqueue_orchestrator_work(&self, item: WorkItem) -> Result<(), String> {
+    async fn enqueue_orchestrator_work(&self, item: WorkItem, _delay_ms: Option<u64>) -> Result<(), String> {
+        // In-memory provider doesn't support delayed visibility, so we ignore delay_ms
         let mut q = self.orchestrator_q.lock().await;
         if !q.contains(&item) {
             q.push(item);

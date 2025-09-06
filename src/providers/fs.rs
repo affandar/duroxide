@@ -478,7 +478,8 @@ impl HistoryStore for FsHistoryStore {
 
     // ===== Orchestrator Queue Methods =====
 
-    async fn enqueue_orchestrator_work(&self, item: WorkItem) -> Result<(), String> {
+    async fn enqueue_orchestrator_work(&self, item: WorkItem, _delay_ms: Option<u64>) -> Result<(), String> {
+        // FS provider doesn't support delayed visibility, so we ignore delay_ms
         // Idempotent enqueue: load current items and only append if not present
         let qf = &self.orch_queue_file;
         let content = std::fs::read_to_string(qf).unwrap_or_default();
@@ -1138,7 +1139,7 @@ impl HistoryStore for FsHistoryStore {
 
         // 4. Enqueue orchestrator items
         for item in orchestrator_items {
-            if let Err(e) = self.enqueue_orchestrator_work(item).await {
+            if let Err(e) = self.enqueue_orchestrator_work(item, None).await {
                 errors.push(format!("Failed to enqueue orchestrator item: {}", e));
             }
         }

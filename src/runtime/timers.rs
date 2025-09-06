@@ -75,7 +75,7 @@ impl TimerService {
                         execution_id,
                         id,
                         fire_at_ms,
-                    })
+                    }, None)
                     .await;
                 
                 // Only acknowledge the timer after successful enqueue
@@ -152,7 +152,7 @@ mod tests {
             async fn read(&self, instance: &str) -> Vec<Event> { self.inner.read(instance).await }
             async fn list_instances(&self) -> Vec<String> { self.inner.list_instances().await }
 
-            async fn enqueue_orchestrator_work(&self, item: WorkItem) -> Result<(), String> {
+            async fn enqueue_orchestrator_work(&self, item: WorkItem, _delay_ms: Option<u64>) -> Result<(), String> {
                 self.captured.lock().await.push(item);
                 Ok(())
             }

@@ -152,7 +152,7 @@ async fn completion_kind_mismatch_triggers_nondeterminism() {
             execution_id: 1,
             id: timer_id, // This is a timer ID, but we're sending ActivityCompleted!
             result: "wrong_kind_result".to_string(),
-        })
+        }, None)
         .await;
 
     // The orchestration should fail with nondeterminism error about kind mismatch
@@ -214,7 +214,7 @@ async fn unexpected_completion_id_triggers_nondeterminism() {
             execution_id: 1,
             id: 999, // This ID was never scheduled by the orchestration
             result: "unexpected_result".to_string(),
-        })
+        }, None)
         .await;
 
     // The orchestration should fail with nondeterminism error about unexpected completion
@@ -268,7 +268,7 @@ async fn unexpected_timer_completion_triggers_nondeterminism() {
             execution_id: 1,
             id: 123,
             fire_at_ms: 0,
-        })
+        }, None)
         .await;
 
     // The orchestration should fail with nondeterminism error
@@ -360,7 +360,7 @@ async fn continue_as_new_with_unconsumed_completion_triggers_nondeterminism() {
         id: 1,
         result: serde_json::to_string(&Ok::<String, String>("activity_completed".to_string())).unwrap(),
     };
-    store.enqueue_orchestrator_work(completion).await.unwrap();
+    store.enqueue_orchestrator_work(completion, None).await.unwrap();
 
     // Give it a moment to ensure the completion is in the queue
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -444,7 +444,7 @@ async fn execution_id_filtering_without_continue_as_new_triggers_nondeterminism(
             id: 1,
             result: "different execution result".to_string(),
             execution_id: 999, // Different execution ID
-        })
+        }, None)
         .await
         .unwrap();
 

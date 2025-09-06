@@ -199,7 +199,7 @@ impl Runtime {
             parent_id,
         };
 
-        if let Err(e) = self.history_store.enqueue_orchestrator_work(start_work_item).await {
+        if let Err(e) = self.history_store.enqueue_orchestrator_work(start_work_item, None).await {
             return Err(format!("failed to enqueue StartOrchestration work item: {}", e));
         }
 
@@ -711,7 +711,7 @@ impl Runtime {
                                                 execution_id,
                                                 id,
                                                 result,
-                                            })
+                                            }, None)
                                             .await
                                     }
                                     Err(error) => {
@@ -722,7 +722,7 @@ impl Runtime {
                                                 execution_id,
                                                 id,
                                                 error,
-                                            })
+                                            }, None)
                                             .await
                                     }
                                 }
@@ -734,7 +734,7 @@ impl Runtime {
                                         execution_id,
                                         id,
                                         error: format!("unregistered:{}", name),
-                                    })
+                                    }, None)
                                     .await
                             };
                             
@@ -760,6 +760,8 @@ impl Runtime {
 
     fn start_timer_dispatcher(self: Arc<Self>) -> JoinHandle<()> {
         if self.history_store.supports_delayed_visibility() {
+            // For providers with delayed visibility support, we still use the timer queue
+            // but leverage delayed visibility when enqueuing TimerFired
             return tokio::spawn(async move {
                 loop {
                     if let Some((item, token)) = self.history_store.dequeue_timer_peek_lock().await {
@@ -770,18 +772,24 @@ impl Runtime {
                                 id,
                                 fire_at_ms,
                             } => {
-                                // Provider supports delayed visibility: enqueue TimerFired with fire_at_ms and let provider deliver when due
-                                // For provider-backed delayed visibility, we immediately convert to TimerFired
-                                // and ack the original. The provider handles the delay.
-                                let _ = self
-                                    .history_store
-                                    .enqueue_orchestrator_work(WorkItem::TimerFired {
-                                        instance,
-                                        execution_id,
-                                        id,
-                                        fire_at_ms,
-                                    })
-                                    .await;
+                                // Calculate delay from now
+                                let current_time_ms = std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap()
+                                    .as_millis() as u64;
+                                let delay_ms = fire_at_ms.saturating_sub(current_time_ms);
+                                
+                                // Enqueue TimerFired with visibility delay
+                                let timer_fired = WorkItem::TimerFired {
+                                    instance,
+                                    execution_id,
+                                    id,
+                                    fire_at_ms,
+                                };
+                                
+                                // Use the provider's delayed visibility support
+                                let _ = self.history_store.enqueue_orchestrator_work(timer_fired, Some(delay_ms)).await;
+                                
                                 let _ = self.history_store.ack_timer(&token).await;
                             }
                             other => {
@@ -877,7 +885,7 @@ impl Runtime {
                 instance: instance.to_string(),
                 name: name_str.clone(),
                 data: data_str.clone(),
-            })
+            }, None)
             .await
         {
             warn!(instance, name=%name_str, error=%e, "raise_event: failed to enqueue ExternalRaised");
@@ -894,7 +902,7 @@ impl Runtime {
             .enqueue_orchestrator_work(WorkItem::CancelInstance {
                 instance: instance.to_string(),
                 reason: reason_s,
-            })
+            }, None)
             .await;
     }
 
