@@ -1,15 +1,11 @@
-use duroxide::providers::HistoryStore;
-use duroxide::providers::fs::FsHistoryStore;
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
 use duroxide::{Event, OrchestrationContext, OrchestrationRegistry};
-use std::sync::Arc as StdArc;
 mod common;
 
 #[tokio::test]
-async fn cancel_parent_down_propagates_to_child_fs() {
-    let td = tempfile::tempdir().unwrap();
-    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
+async fn cancel_parent_down_propagates_to_child() {
+    let (store, _td) = common::create_sqlite_store_disk().await;
 
     // Child waits for an external event indefinitely (until canceled)
     let child = |ctx: OrchestrationContext, _input: String| async move {
@@ -106,9 +102,8 @@ async fn cancel_parent_down_propagates_to_child_fs() {
 }
 
 #[tokio::test]
-async fn cancel_after_completion_is_noop_fs() {
-    let td = tempfile::tempdir().unwrap();
-    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
+async fn cancel_after_completion_is_noop() {
+    let (store, _td) = common::create_sqlite_store_disk().await;
 
     let orch = |_ctx: OrchestrationContext, _input: String| async move { Ok("ok".to_string()) };
 
@@ -156,9 +151,8 @@ async fn cancel_after_completion_is_noop_fs() {
 }
 
 #[tokio::test]
-async fn cancel_child_directly_signals_parent_fs() {
-    let td = tempfile::tempdir().unwrap();
-    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
+async fn cancel_child_directly_signals_parent() {
+    let (store, _td) = common::create_sqlite_store_disk().await;
 
     let child = |_ctx: OrchestrationContext, _input: String| async move {
         // Just wait forever until canceled
@@ -220,9 +214,8 @@ async fn cancel_child_directly_signals_parent_fs() {
 }
 
 #[tokio::test]
-async fn cancel_continue_as_new_second_exec_fs() {
-    let td = tempfile::tempdir().unwrap();
-    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
+async fn cancel_continue_as_new_second_exec() {
+    let (store, _td) = common::create_sqlite_store_disk().await;
 
     let orch = |ctx: OrchestrationContext, input: String| async move {
         match input.as_str() {
@@ -297,9 +290,8 @@ async fn cancel_continue_as_new_second_exec_fs() {
 }
 
 #[tokio::test]
-async fn orchestration_completes_before_activity_finishes_fs() {
-    let td = tempfile::tempdir().unwrap();
-    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
+async fn orchestration_completes_before_activity_finishes() {
+    let (store, _td) = common::create_sqlite_store_disk().await;
 
     // Activity will be dispatched but orchestration completes without awaiting it (fire-and-forget)
     let orch = |ctx: OrchestrationContext, _input: String| async move {
@@ -349,9 +341,8 @@ async fn orchestration_completes_before_activity_finishes_fs() {
 }
 
 #[tokio::test]
-async fn orchestration_fails_before_activity_finishes_fs() {
-    let td = tempfile::tempdir().unwrap();
-    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
+async fn orchestration_fails_before_activity_finishes() {
+    let (store, _td) = common::create_sqlite_store_disk().await;
 
     // Activity dispatched; orchestration fails immediately
     let orch = |ctx: OrchestrationContext, _input: String| async move {

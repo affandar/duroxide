@@ -1,5 +1,4 @@
 use duroxide::*;
-use duroxide::providers::{HistoryStore, fs::FsHistoryStore};
 use duroxide::runtime::registry::{ActivityRegistry, OrchestrationRegistry};
 use duroxide::runtime;
 use std::sync::Arc;
@@ -15,19 +14,9 @@ mod common;
 /// 4. System restarts
 /// 5. Activity should be redelivered and executed again (at-least-once semantics)
 #[tokio::test]
-#[ignore] // TODO: FS provider lacks atomicity between history writes and work item enqueuing
 async fn activity_reliability_after_crash_before_completion_enqueue() {
-    // Use filesystem store for persistence across "crash"
-    let base = std::env::current_dir().unwrap().join(".testdata");
-    std::fs::create_dir_all(&base).unwrap();
-    let dir = base.join(format!(
-        "activity_reliability_{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
+    // Use SQLite store for persistence across "crash"
+    let (store, _temp_dir) = common::create_sqlite_store_disk().await;
 
     // Simple orchestration that schedules an activity and waits for completion
     let orch = |ctx: OrchestrationContext, input: String| async move {
@@ -55,7 +44,7 @@ async fn activity_reliability_after_crash_before_completion_enqueue() {
         .build();
 
     // Phase 1: Start orchestration and let it schedule the activity
-    let store1 = Arc::new(FsHistoryStore::new(&dir, true));
+    let store1 = store.clone();
     let rt1 = runtime::Runtime::start_with_store(
         store1.clone(),
         Arc::new(activity_registry.clone()),
@@ -102,7 +91,7 @@ async fn activity_reliability_after_crash_before_completion_enqueue() {
 
     // Phase 2: "Restart" system with new runtime but same store
     println!("Restarting system...");
-    let store2 = Arc::new(FsHistoryStore::new(&dir, false));
+    let store2 = store.clone();
     let rt2 = runtime::Runtime::start_with_store(
         store2.clone(),
         Arc::new(activity_registry),
@@ -170,18 +159,9 @@ async fn activity_reliability_after_crash_before_completion_enqueue() {
 /// 1. Implementing history-driven reconciliation in the runtime
 /// 2. Using a transactional provider like SQLite
 #[tokio::test]
-#[ignore] // TODO: FS provider lacks atomicity between history writes and work item enqueuing
 async fn multiple_activities_reliability_after_crash() {
-    let base = std::env::current_dir().unwrap().join(".testdata");
-    std::fs::create_dir_all(&base).unwrap();
-    let dir = base.join(format!(
-        "multi_activity_reliability_{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
+    // Use SQLite store for persistence across "crash" - SQLite provides atomicity
+    let (store, _temp_dir) = common::create_sqlite_store_disk().await;
 
     // Orchestration with multiple activities
     let orch = |ctx: OrchestrationContext, _input: String| async move {
@@ -219,7 +199,7 @@ async fn multiple_activities_reliability_after_crash() {
         .build();
 
     // Phase 1: Start and wait for all activities to be scheduled
-    let store1 = Arc::new(FsHistoryStore::new(&dir, true));
+    let store1 = store.clone();
     let rt1 = runtime::Runtime::start_with_store(
         store1.clone(),
         Arc::new(activity_registry.clone()),
@@ -263,7 +243,7 @@ async fn multiple_activities_reliability_after_crash() {
 
     // Phase 2: Restart and verify all activities complete
     println!("Restarting...");
-    let store2 = Arc::new(FsHistoryStore::new(&dir, false));
+    let store2 = store.clone();
     let rt2 = runtime::Runtime::start_with_store(
         store2.clone(),
         Arc::new(activity_registry),

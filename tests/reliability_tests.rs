@@ -1,6 +1,4 @@
-use duroxide::providers::HistoryStore;
 use duroxide::providers::WorkItem;
-use duroxide::providers::fs::FsHistoryStore;
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
 use duroxide::{Event, OrchestrationContext, OrchestrationRegistry};
@@ -8,9 +6,8 @@ use std::sync::Arc as StdArc;
 mod common;
 
 #[tokio::test]
-async fn external_duplicate_workitems_dedup_fs() {
-    let td = tempfile::tempdir().unwrap();
-    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
+async fn external_duplicate_workitems_dedup() {
+    let (store, _td) = common::create_sqlite_store_disk().await;
 
     let orch = |ctx: OrchestrationContext, _input: String| async move {
         let v = ctx.schedule_wait("Evt").into_event().await;
@@ -64,9 +61,8 @@ async fn external_duplicate_workitems_dedup_fs() {
 }
 
 #[tokio::test]
-async fn timer_duplicate_workitems_dedup_fs() {
-    let td = tempfile::tempdir().unwrap();
-    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
+async fn timer_duplicate_workitems_dedup() {
+    let (store, _td) = common::create_sqlite_store_disk().await;
 
     let orch = |ctx: OrchestrationContext, _input: String| async move {
         ctx.schedule_timer(100).into_timer().await;
@@ -141,9 +137,8 @@ async fn timer_duplicate_workitems_dedup_fs() {
 }
 
 #[tokio::test]
-async fn activity_duplicate_completion_workitems_dedup_fs() {
-    let td = tempfile::tempdir().unwrap();
-    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
+async fn activity_duplicate_completion_workitems_dedup() {
+    let (store, _td) = common::create_sqlite_store_disk().await;
 
     // Activity sleeps to give us time to inject duplicates
     let activity_registry = ActivityRegistry::builder()
@@ -237,9 +232,8 @@ async fn activity_duplicate_completion_workitems_dedup_fs() {
 // We approximate by injecting duplicates around the same window; idempotence + peek-lock should ensure correctness.
 
 #[tokio::test]
-async fn crash_after_dequeue_before_append_completion_fs() {
-    let td = tempfile::tempdir().unwrap();
-    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
+async fn crash_after_dequeue_before_append_completion() {
+    let (store, _td) = common::create_sqlite_store_disk().await;
 
     let orch = |ctx: OrchestrationContext, _input: String| async move {
         // Wait for external then complete with payload
@@ -289,9 +283,8 @@ async fn crash_after_dequeue_before_append_completion_fs() {
 }
 
 #[tokio::test]
-async fn crash_after_append_before_ack_timer_fs() {
-    let td = tempfile::tempdir().unwrap();
-    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
+async fn crash_after_append_before_ack_timer() {
+    let (store, _td) = common::create_sqlite_store_disk().await;
 
     let orch = |ctx: OrchestrationContext, _input: String| async move {
         ctx.schedule_timer(50).into_timer().await;

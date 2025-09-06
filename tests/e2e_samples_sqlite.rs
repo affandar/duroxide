@@ -1112,7 +1112,6 @@ async fn sample_sub_orchestration_chained_sqlite() {
 }
 
 #[tokio::test]
-#[ignore] // Detached orchestrations not fully implemented in current API
 async fn sample_detached_orchestration_scheduling_sqlite() {
     let (store, _temp_dir) = create_sqlite_store().await;
 
@@ -1425,31 +1424,250 @@ async fn sample_mixed_string_and_typed_string_orch_sqlite() {
 }
 
 #[tokio::test]
-#[ignore] // Advanced versioning not fully implemented
 async fn sample_versioning_start_latest_vs_exact_sqlite() {
-    // This would test starting orchestrations with specific versions
-    // Currently the API doesn't expose version selection directly
+    let (store, _temp_dir) = create_sqlite_store().await;
+
+    // Two versions: return a string indicating which version executed
+    let v1 = |_: OrchestrationContext, _in: String| async move { Ok("v1".to_string()) };
+    let v2 = |_: OrchestrationContext, _in: String| async move { Ok("v2".to_string()) };
+
+    let reg = OrchestrationRegistry::builder()
+        // Default registration is 1.0.0
+        .register("Versioned", v1)
+        // Add a later version 2.0.0
+        .register_versioned("Versioned", "2.0.0", v2)
+        .build();
+    let acts = ActivityRegistry::builder().build();
+    let rt = runtime::Runtime::start_with_store(store, Arc::new(acts), reg.clone()).await;
+
+    // With default policy (Latest), a new start should run v2
+    let _h_latest = rt
+        .clone()
+        .start_orchestration("inst-vers-latest", "Versioned", "")
+        .await
+        .unwrap();
+
+    match rt
+        .wait_for_orchestration("inst-vers-latest", std::time::Duration::from_secs(5))
+        .await
+        .unwrap()
+    {
+        runtime::OrchestrationStatus::Completed { output } => assert_eq!(output, "v2"),
+        runtime::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        _ => panic!("unexpected orchestration status"),
+    }
+
+    // Pin new starts to 1.0.0 via policy, verify it runs v1
+    reg.set_version_policy(
+        "Versioned",
+        duroxide::runtime::VersionPolicy::Exact(semver::Version::parse("1.0.0").unwrap()),
+    )
+    .await;
+    let _h_exact = rt
+        .clone()
+        .start_orchestration("inst-vers-exact", "Versioned", "")
+        .await
+        .unwrap();
+
+    match rt
+        .wait_for_orchestration("inst-vers-exact", std::time::Duration::from_secs(5))
+        .await
+        .unwrap()
+    {
+        runtime::OrchestrationStatus::Completed { output } => assert_eq!(output, "v1"),
+        runtime::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        _ => panic!("unexpected orchestration status"),
+    }
+
+    rt.shutdown().await;
 }
 
 #[tokio::test]
-#[ignore] // Advanced versioning not fully implemented
 async fn sample_versioning_sub_orchestration_explicit_vs_policy_sqlite() {
-    // This would test sub-orchestration version policies
-    // Currently the API doesn't expose version policies
+    let (store, _temp_dir) = create_sqlite_store().await;
+
+    let child_v1 = |_: OrchestrationContext, _in: String| async move { Ok("c1".to_string()) };
+    let child_v2 = |_: OrchestrationContext, _in: String| async move { Ok("c2".to_string()) };
+    let parent = |ctx: OrchestrationContext, _in: String| async move {
+        // Explicit versioned call -> expect c1
+        let a = ctx
+            .schedule_sub_orchestration_versioned("Child", Some("1.0.0".to_string()), "exp")
+            .into_sub_orchestration()
+            .await
+            .unwrap();
+        // Policy-based call (Latest) -> expect c2
+        let b = ctx
+            .schedule_sub_orchestration("Child", "pol")
+            .into_sub_orchestration()
+            .await
+            .unwrap();
+        Ok(format!("{a}-{b}"))
+    };
+
+    let reg = OrchestrationRegistry::builder()
+        .register("ParentVers", parent)
+        .register("Child", child_v1)
+        .register_versioned("Child", "2.0.0", child_v2)
+        .build();
+    let acts = ActivityRegistry::builder().build();
+    let rt = runtime::Runtime::start_with_store(store, Arc::new(acts), reg).await;
+
+    let _h = rt
+        .clone()
+        .start_orchestration("inst-sub-vers", "ParentVers", "")
+        .await
+        .unwrap();
+
+    match rt
+        .wait_for_orchestration("inst-sub-vers", std::time::Duration::from_secs(5))
+        .await
+        .unwrap()
+    {
+        runtime::OrchestrationStatus::Completed { output } => assert_eq!(output, "c1-c2"),
+        runtime::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        _ => panic!("unexpected orchestration status"),
+    }
+
+    rt.shutdown().await;
 }
 
 #[tokio::test]
-#[ignore] // Advanced versioning not fully implemented
 async fn sample_versioning_continue_as_new_upgrade_sqlite() {
-    // This would test continue-as-new with version upgrades
-    // Currently the API doesn't expose versioned continue-as-new
+    use duroxide::OrchestrationStatus;
+    let (store, _temp_dir) = create_sqlite_store().await;
+
+    // v1: simulate deciding to upgrade at a maintenance boundary (e.g., at the end of a cycle)
+    // In a real infinite loop, you'd do some work (timer/activity), then CAN to v2.
+    let v1 = |ctx: OrchestrationContext, input: String| async move {
+        ctx.trace_info("v1: upgrading via ContinueAsNew (default policy)".to_string());
+        // Roll to a fresh execution, marking the payload so we can attribute it to v1 deterministically
+        ctx.continue_as_new(format!("v1:{input}"));
+        Ok(String::new())
+    };
+    // v2: represents the upgraded logic. Here we just simulate one step and complete for the sample.
+    let v2 = |ctx: OrchestrationContext, input: String| async move {
+        ctx.trace_info(format!("v2: resumed with input={input}"));
+        Ok(format!("upgraded:{input}"))
+    };
+
+    let reg = OrchestrationRegistry::builder()
+        .register("LongRunner", v1) // implicit 1.0.0
+        .register_versioned("LongRunner", "2.0.0", v2)
+        .build();
+    let acts = ActivityRegistry::builder().build();
+    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(acts), reg).await;
+
+    // Start on v1; the first handle will resolve at the CAN boundary
+    // Pin initial start to v1 explicitly to demonstrate upgrade via CAN; default policy remains Latest (v2)
+    rt.clone()
+        .start_orchestration_versioned("inst-can-upgrade", "LongRunner", "1.0.0", "state")
+        .await
+        .unwrap();
+
+    // Poll for the new execution (v2) to complete
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        match rt.get_orchestration_status("inst-can-upgrade").await {
+            OrchestrationStatus::Completed { output } => {
+                assert_eq!(output, "upgraded:v1:state");
+                break;
+            }
+            OrchestrationStatus::Failed { error } => panic!("unexpected failure: {error}"),
+            _ if std::time::Instant::now() < deadline => tokio::time::sleep(std::time::Duration::from_millis(10)).await,
+            _ => panic!("timeout waiting for upgraded completion"),
+        }
+    }
+
+    // Verify two executions exist, exec1 continued-as-new, exec2 completed with v2 output
+    let execs = store.list_executions("inst-can-upgrade").await;
+    assert_eq!(execs, vec![1, 2]);
+    let e1 = store.read_with_execution("inst-can-upgrade", 1).await;
+    assert!(
+        e1.iter()
+            .any(|e| matches!(e, duroxide::Event::OrchestrationContinuedAsNew { .. }))
+    );
+    // Exec2 must start with the v1-marked payload, proving v1 ran first and handed off via CAN
+    let e2 = store.read_with_execution("inst-can-upgrade", 2).await;
+    assert!(
+        e2.iter()
+            .any(|e| matches!(e, duroxide::Event::OrchestrationStarted { input, .. } if input == "v1:state"))
+    );
+
+    rt.shutdown().await;
 }
 
 #[tokio::test]
-#[ignore] // Parent-child cancellation not fully implemented
 async fn sample_cancellation_parent_cascades_to_children_sqlite() {
-    // This would test cascading cancellation from parent to child orchestrations
-    // Currently the API doesn't expose cancellation tokens or parent-child cancellation
+    use duroxide::Event;
+    let (store, _temp_dir) = create_sqlite_store().await;
+
+    // Child: waits forever (until canceled). This demonstrates cooperative cancellation via runtime.
+    let child = |ctx: OrchestrationContext, _input: String| async move {
+        let _ = ctx.schedule_wait("Go").into_event().await;
+        Ok("done".to_string())
+    };
+
+    // Parent: starts child and awaits its completion.
+    let parent = |ctx: OrchestrationContext, _input: String| async move {
+        let _ = ctx
+            .schedule_sub_orchestration("ChildSample", "seed")
+            .into_sub_orchestration()
+            .await?;
+        Ok::<_, String>("parent_done".to_string())
+    };
+
+    let orchestration_registry = OrchestrationRegistry::builder()
+        .register("ChildSample", child)
+        .register("ParentSample", parent)
+        .build();
+    let activity_registry = ActivityRegistry::builder().build();
+    let rt =
+        runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+
+    // Start the parent orchestration
+    let _h = rt
+        .clone()
+        .start_orchestration("inst-sample-cancel", "ParentSample", "")
+        .await
+        .unwrap();
+
+    // Allow scheduling turn to run and child to start
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    // Cancel the parent; the runtime will append OrchestrationCancelRequested and then OrchestrationFailed
+    rt.cancel_instance("inst-sample-cancel", "user_request").await;
+
+    // Wait for the parent to fail deterministically with a canceled error
+    let ok = common::wait_for_history(
+        store.clone(),
+        "inst-sample-cancel",
+        |hist| {
+            hist.iter().rev().any(
+                |e| matches!(e, Event::OrchestrationFailed { error } if error.starts_with("canceled: user_request")),
+            )
+        },
+        5_000,
+    )
+    .await;
+    assert!(ok, "timeout waiting for parent cancel failure");
+
+    // Find child instance (prefix is parent::sub::<id>) and check it was canceled too
+    let children: Vec<String> = store
+        .list_instances()
+        .await
+        .into_iter()
+        .filter(|i| i.starts_with("inst-sample-cancel::"))
+        .collect();
+    assert!(!children.is_empty());
+    for child in children {
+        let ok_child = common::wait_for_history(store.clone(), &child, |hist| {
+            hist.iter().any(|e| matches!(e, Event::OrchestrationCancelRequested { .. })) &&
+            hist.iter().any(|e| matches!(e, Event::OrchestrationFailed { error } if error.starts_with("canceled: parent canceled")))
+        }, 5_000).await;
+        assert!(ok_child, "timeout waiting for child cancel for {child}");
+    }
+
+    rt.shutdown().await;
 }
 
 /// Error recovery with explicit error handling
