@@ -1,4 +1,4 @@
-use duroxide::providers::in_memory::InMemoryHistoryStore;
+use duroxide::providers::sqlite::SqliteHistoryStore;
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
 use duroxide::{Event, OrchestrationContext, OrchestrationRegistry};
@@ -15,7 +15,7 @@ async fn runtime_start_versioned_string_uses_explicit_version() {
         .build();
     let acts = ActivityRegistry::builder().build();
     let rt =
-        runtime::Runtime::start_with_store(StdArc::new(InMemoryHistoryStore::default()), StdArc::new(acts), reg).await;
+        runtime::Runtime::start_with_store(StdArc::new(SqliteHistoryStore::new_in_memory().await.unwrap()), StdArc::new(acts), reg).await;
     let _h = rt
         .clone()
         .start_orchestration_versioned("i1", "S", "1.0.0", "")
@@ -47,7 +47,7 @@ async fn runtime_start_versioned_typed_uses_explicit_version() {
         .build();
     let acts = ActivityRegistry::builder().build();
     let rt =
-        runtime::Runtime::start_with_store(StdArc::new(InMemoryHistoryStore::default()), StdArc::new(acts), reg).await;
+        runtime::Runtime::start_with_store(StdArc::new(SqliteHistoryStore::new_in_memory().await.unwrap()), StdArc::new(acts), reg).await;
     rt.clone()
         .start_orchestration_versioned_typed::<i32>("i2", "T", "1.0.0", 0)
         .await
@@ -92,7 +92,7 @@ async fn sub_orchestration_versioned_explicit_and_policy() {
         .build();
     let acts = ActivityRegistry::builder().build();
     let rt = runtime::Runtime::start_with_store(
-        StdArc::new(duroxide::providers::in_memory::InMemoryHistoryStore::default()),
+        StdArc::new(SqliteHistoryStore::new_in_memory().await.unwrap()),
         StdArc::new(acts),
         reg,
     )
@@ -136,7 +136,7 @@ async fn detached_versioned_uses_policy_latest() {
         .register_versioned("Leaf", "2.0.0", leaf_v2)
         .build();
     let acts = ActivityRegistry::builder().build();
-    let store = StdArc::new(duroxide::providers::in_memory::InMemoryHistoryStore::default());
+    let store = StdArc::new(SqliteHistoryStore::new_in_memory().await.unwrap());
     let rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(acts), reg).await;
     let _h = rt.clone().start_orchestration("i4", "Parent", "").await.unwrap();
 
@@ -177,7 +177,7 @@ async fn continue_as_new_versioned_typed_explicit() {
         .register_versioned("Up", "2.0.0", v2)
         .build();
     let rt = runtime::Runtime::start_with_store(
-        StdArc::new(duroxide::providers::in_memory::InMemoryHistoryStore::default()),
+        StdArc::new(SqliteHistoryStore::new_in_memory().await.unwrap()),
         StdArc::new(ActivityRegistry::builder().build()),
         reg,
     )
@@ -210,7 +210,7 @@ async fn start_uses_latest_version() {
 
     let activities = ActivityRegistry::builder().build();
     let rt = runtime::Runtime::start_with_store(
-        StdArc::new(duroxide::providers::in_memory::InMemoryHistoryStore::default()),
+        StdArc::new(SqliteHistoryStore::new_in_memory().await.unwrap()),
         StdArc::new(activities),
         reg,
     )
@@ -256,7 +256,7 @@ async fn policy_exact_pins_start() {
 
     let activities = ActivityRegistry::builder().build();
     let rt = runtime::Runtime::start_with_store(
-        StdArc::new(duroxide::providers::in_memory::InMemoryHistoryStore::default()),
+        StdArc::new(SqliteHistoryStore::new_in_memory().await.unwrap()),
         StdArc::new(activities),
         reg,
     )
@@ -303,7 +303,7 @@ async fn sub_orchestration_uses_latest_by_default_and_pinned_when_set() {
 
     let activities = ActivityRegistry::builder().build();
     let rt = runtime::Runtime::start_with_store(
-        StdArc::new(duroxide::providers::in_memory::InMemoryHistoryStore::default()),
+        StdArc::new(SqliteHistoryStore::new_in_memory().await.unwrap()),
         StdArc::new(activities),
         reg.clone(),
     )
@@ -372,7 +372,7 @@ async fn parent_calls_child_upgrade_child_and_verify_latest_used() {
         .register_versioned("Child", "1.1.0", child_v11)
         .build();
     let activities = ActivityRegistry::builder().build();
-    let store = StdArc::new(duroxide::providers::in_memory::InMemoryHistoryStore::default());
+    let store = StdArc::new(SqliteHistoryStore::new_in_memory().await.unwrap());
     let rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(activities), reg).await;
 
     // Start new parent after both child versions registered => latest child (1.1.0) should be used
@@ -422,7 +422,7 @@ async fn continue_as_new_upgrades_version_deterministically() {
         )
         .build();
     let activities = ActivityRegistry::builder().build();
-    let store = StdArc::new(duroxide::providers::in_memory::InMemoryHistoryStore::default());
+    let store = StdArc::new(SqliteHistoryStore::new_in_memory().await.unwrap());
     let rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(activities), reg).await;
 
     let _h = rt

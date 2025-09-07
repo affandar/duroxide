@@ -1,6 +1,6 @@
 use duroxide::{
     runtime::{self, registry::ActivityRegistry, OrchestrationStatus},
-    providers::{in_memory::InMemoryHistoryStore, HistoryStore},
+    providers::HistoryStore,
     OrchestrationContext, OrchestrationRegistry,
 };
 use std::sync::Arc;
@@ -19,7 +19,7 @@ async fn test_trace_deterministic_in_history() {
         Ok(result)
     };
     
-    let history_store = Arc::new(InMemoryHistoryStore::default()) as Arc<dyn HistoryStore>;
+    let history_store = Arc::new(duroxide::providers::sqlite::SqliteHistoryStore::new_in_memory().await.unwrap());
     let orchestration_registry = OrchestrationRegistry::builder()
         .register("test_orch", orch)
         .build();
@@ -99,7 +99,7 @@ async fn test_trace_fire_and_forget() {
         Ok(format!("{} done", results.len()))
     };
     
-    let history_store = Arc::new(InMemoryHistoryStore::default()) as Arc<dyn HistoryStore>;
+    let history_store = Arc::new(duroxide::providers::sqlite::SqliteHistoryStore::new_in_memory().await.unwrap());
     let orchestration_registry = OrchestrationRegistry::builder()
         .register("test_orch", orch)
         .build();

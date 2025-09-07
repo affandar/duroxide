@@ -1,7 +1,6 @@
 use std::sync::Arc;
-mod common;
 use duroxide::providers::HistoryStore;
-use duroxide::providers::fs::FsHistoryStore;
+mod common;
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
 use duroxide::{Event, OrchestrationContext, OrchestrationRegistry};
@@ -169,8 +168,7 @@ async fn concurrent_orchestrations_different_activities_with(store: StdArc<dyn H
 
 #[tokio::test]
 async fn concurrent_orchestrations_different_activities_fs() {
-    let td = tempfile::tempdir().unwrap();
-    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
+    let (store, _temp_dir) = common::create_sqlite_store_disk().await;
     concurrent_orchestrations_different_activities_with(store).await;
 }
 
@@ -325,7 +323,6 @@ async fn concurrent_orchestrations_same_activities_with(store: StdArc<dyn Histor
 
 #[tokio::test]
 async fn concurrent_orchestrations_same_activities_fs() {
-    let td = tempfile::tempdir().unwrap();
-    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
+    let (store, _temp_dir) = common::create_sqlite_store_disk().await;
     concurrent_orchestrations_same_activities_with(store).await;
 }

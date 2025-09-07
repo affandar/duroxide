@@ -247,9 +247,5 @@ pub trait HistoryStore: Send + Sync {
     // This would enable graceful handling of worker crashes and long-running activities
 }
 
-/// Filesystem-backed provider for local development.
-pub mod fs;
-/// In-memory provider for tests.
-pub mod in_memory;
 /// SQLite-backed provider with full transactional support.
 pub mod sqlite;

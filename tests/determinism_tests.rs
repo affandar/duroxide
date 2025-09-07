@@ -1,5 +1,4 @@
 use duroxide::providers::HistoryStore;
-use duroxide::providers::fs::FsHistoryStore;
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
 use duroxide::{Action, DurableOutput, Event, OrchestrationContext, OrchestrationRegistry, run_turn};
@@ -133,8 +132,7 @@ async fn orchestration_completes_and_replays_deterministically_with(store: StdAr
 
 #[tokio::test]
 async fn orchestration_completes_and_replays_deterministically_fs() {
-    let td = tempfile::tempdir().unwrap();
-    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
+    let (store, _temp_dir) = common::create_sqlite_store_disk().await;
     orchestration_completes_and_replays_deterministically_with(store).await;
 }
 
@@ -218,7 +216,6 @@ async fn sequential_activity_chain_completes_with(store: StdArc<dyn HistoryStore
 
 #[tokio::test]
 async fn sequential_activity_chain_completes_fs() {
-    let td = tempfile::tempdir().unwrap();
-    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
+    let (store, _temp_dir) = common::create_sqlite_store_disk().await;
     sequential_activity_chain_completes_with(store).await;
 }

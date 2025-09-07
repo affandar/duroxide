@@ -1,6 +1,5 @@
 use duroxide::providers::HistoryStore;
-use duroxide::providers::fs::FsHistoryStore;
-use duroxide::providers::in_memory::InMemoryHistoryStore;
+use duroxide::providers::sqlite::SqliteHistoryStore;
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
 use duroxide::{Action, Event, OrchestrationContext, OrchestrationRegistry, run_turn};
@@ -293,8 +292,8 @@ async fn orchestration_status_apis() {
 // Providers: filesystem multi-execution persistence and latest read() contract
 #[tokio::test]
 async fn providers_fs_multi_execution_persistence_and_latest_read() {
-    let tmp = tempfile::tempdir().unwrap();
-    let fs = FsHistoryStore::new(tmp.path(), true);
+    let _tmp = tempfile::tempdir().unwrap();
+    let fs = SqliteHistoryStore::new_in_memory().await.unwrap();
 
     // Create execution #1 and append CAN terminal
     fs.create_new_execution("pfs", "O", "0.0.0", "0", None, None)
@@ -335,7 +334,7 @@ async fn providers_fs_multi_execution_persistence_and_latest_read() {
 // Providers: in-memory multi-execution persistence and latest read() contract
 #[tokio::test]
 async fn providers_inmem_multi_execution_persistence_and_latest_read() {
-    let mem = InMemoryHistoryStore::default();
+    let mem = SqliteHistoryStore::new_in_memory().await.unwrap();
 
     mem.create_new_execution("pmem", "O", "0.0.0", "0", None, None)
         .await

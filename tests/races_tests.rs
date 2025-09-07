@@ -1,8 +1,7 @@
 use futures::future::{Either, select};
 use std::sync::Arc;
-mod common;
 use duroxide::providers::HistoryStore;
-use duroxide::providers::fs::FsHistoryStore;
+mod common;
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
 use duroxide::{Event, OrchestrationContext, OrchestrationRegistry};
@@ -60,8 +59,7 @@ async fn wait_external_completes_with(store: StdArc<dyn HistoryStore>) {
 
 #[tokio::test]
 async fn wait_external_completes_fs() {
-    let td = tempfile::tempdir().unwrap();
-    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
+    let (store, _temp_dir) = common::create_sqlite_store_disk().await;
     wait_external_completes_with(store).await;
 }
 
@@ -126,8 +124,7 @@ async fn race_external_vs_timer_ordering_with(store: StdArc<dyn HistoryStore>) {
 
 #[tokio::test]
 async fn race_external_vs_timer_ordering_fs() {
-    let td = tempfile::tempdir().unwrap();
-    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
+    let (store, _temp_dir) = common::create_sqlite_store_disk().await;
     race_external_vs_timer_ordering_with(store).await;
 }
 
@@ -191,7 +188,6 @@ async fn race_event_vs_timer_event_wins_with(store: StdArc<dyn HistoryStore>) {
 #[tokio::test]
 async fn race_event_vs_timer_event_wins_fs() {
     eprintln!("START: race_event_vs_timer_event_wins_fs");
-    let td = tempfile::tempdir().unwrap();
-    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
+    let (store, _temp_dir) = common::create_sqlite_store_disk().await;
     race_event_vs_timer_event_wins_with(store).await;
 }

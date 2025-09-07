@@ -136,7 +136,7 @@ fn now_ms() -> u64 {
 mod tests {
     use super::*;
     use crate::Event;
-    use crate::providers::in_memory::InMemoryHistoryStore;
+    use crate::providers::sqlite::SqliteHistoryStore;
     use tokio::sync::Mutex as TokioMutex;
 
     #[tokio::test]
@@ -144,7 +144,7 @@ mod tests {
         // Capture enqueued orchestrator items instead of draining via dequeue/ack
         #[derive(Clone)]
         struct CaptureStore {
-            inner: Arc<InMemoryHistoryStore>,
+            inner: Arc<SqliteHistoryStore>,
             captured: Arc<TokioMutex<Vec<WorkItem>>>,
         }
         #[async_trait::async_trait]
@@ -177,7 +177,7 @@ mod tests {
             async fn abandon_orchestration_item(&self, lock_token: &str, delay_ms: Option<u64>) -> Result<(), String> { self.inner.abandon_orchestration_item(lock_token, delay_ms).await }
         }
 
-        let base = Arc::new(InMemoryHistoryStore::default());
+        let base = Arc::new(SqliteHistoryStore::new_in_memory().await.unwrap());
         let captured: Arc<TokioMutex<Vec<WorkItem>>> = Arc::new(TokioMutex::new(Vec::new()));
         let store: Arc<dyn HistoryStore> = Arc::new(CaptureStore { inner: base, captured: captured.clone() });
         let (_jh, tx) = TimerService::start(store.clone(), 5);

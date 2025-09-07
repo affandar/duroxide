@@ -7,7 +7,7 @@
 //! ## Quick Start
 //!
 //! ```rust,no_run
-//! use duroxide::providers::fs::FsHistoryStore;
+//! use duroxide::providers::sqlite::SqliteHistoryStore;
 //! use duroxide::runtime::registry::ActivityRegistry;
 //! use duroxide::runtime::{self};
 //! use duroxide::{OrchestrationContext, OrchestrationRegistry};
@@ -15,7 +15,7 @@
 //!
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! // 1. Create a storage provider
-//! let store = Arc::new(FsHistoryStore::new("./data", true));
+//! let store = Arc::new(SqliteHistoryStore::new("sqlite:./data.db").await.unwrap());
 //!
 //! // 2. Register activities (your business logic)
 //! let activities = ActivityRegistry::builder()

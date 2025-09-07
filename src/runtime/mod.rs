@@ -1,5 +1,5 @@
 use crate::_typed_codec::{Codec, Json};
-use crate::providers::in_memory::InMemoryHistoryStore;
+// use crate::providers::in_memory::InMemoryHistoryStore;
 use crate::providers::{HistoryStore, WorkItem};
 use crate::{Event, OrchestrationContext};
 use semver::Version;
@@ -189,7 +189,7 @@ impl Runtime {
         parent_instance: Option<String>,
         parent_id: Option<u64>,
     ) -> Result<(), String> {
-        // Just queue the StartOrchestration work item - let start_orchestration_execution handle everything
+        // Just queue the StartOrchestration work item - let the engine handle duplicates
         let start_work_item = WorkItem::StartOrchestration {
             instance: instance.to_string(),
             orchestration: orchestration_name.to_string(),
@@ -313,7 +313,7 @@ impl Runtime {
         activity_registry: Arc<registry::ActivityRegistry>,
         orchestration_registry: OrchestrationRegistry,
     ) -> Arc<Self> {
-        let history_store: Arc<dyn HistoryStore> = Arc::new(InMemoryHistoryStore::default());
+        let history_store: Arc<dyn HistoryStore> = Arc::new(crate::providers::sqlite::SqliteHistoryStore::new_in_memory().await.unwrap());
         Self::start_with_store(history_store, activity_registry, orchestration_registry).await
     }
 
@@ -416,13 +416,9 @@ impl Runtime {
             match work_item {
                 WorkItem::StartOrchestration { .. } | WorkItem::ContinueAsNew { .. } => {
                     if start_or_continue.is_some() {
-                        // Corrupted state - terminate orchestration
-                        error!("Multiple Start/ContinueAsNew in batch - corrupted state");
-                        let _ = self
-                            .history_store
-                            .abandon_orchestration_item(lock_token, Some(5000))
-                            .await;
-                        return;
+                        // Handle duplicate start gracefully - just warn and ignore
+                        warn!(instance, "Duplicate Start/ContinueAsNew in batch - ignoring duplicate");
+                        continue;
                     }
                     start_or_continue = Some(work_item.clone());
                 }

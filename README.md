@@ -27,7 +27,7 @@ What it is
   - WorkDispatcher (activities and child/detached starts, worker queue)
   - TimerDispatcher (timers, timer queue)
   - InstanceRouter (in-process delivery of completions to active instances)
-- Storage-agnostic via `HistoryStore` (in-memory, filesystem, and SQLite providers)
+- Storage-agnostic via `HistoryStore` (SQLite provider with in-memory and file-based modes)
 
 How it works (brief)
 - The orchestrator runs turn-by-turn. Each turn it is polled once, may schedule actions, then the runtime waits for completions.
@@ -41,13 +41,13 @@ Key types
 - `OrchestrationContext`: schedules work (`schedule_activity`, `schedule_timer`, `schedule_wait`, `schedule_sub_orchestration`, `schedule_orchestration`) and exposes deterministic `select2/select/join`, `trace_*`, `continue_as_new`.
 - `DurableFuture`: returned by `schedule_*`; use `into_activity()`, `into_timer()`, `into_event()`, `into_sub_orchestration()` (and `_typed` variants) to await.
 - `Event`/`Action`: immutable history entries and host-side actions, including `ContinueAsNew`.
-- `HistoryStore`: persistence abstraction (`InMemoryHistoryStore`, `FsHistoryStore`, `SqliteHistoryStore`).
+- `HistoryStore`: persistence abstraction (`SqliteHistoryStore` with in-memory and file-based modes).
 - `OrchestrationRegistry` / `ActivityRegistry`: register orchestrations/activities in-memory.
 
 Project layout
 - `src/lib.rs` — orchestration primitives and single-turn executor
 - `src/runtime/` — runtime, registries, workers, and polling engine
-- `src/providers/` — in-memory, filesystem, and SQLite history stores
+- `src/providers/` — SQLite history store with transactional support
 - `tests/` — unit and e2e tests (see `e2e_samples.rs` to learn by example)
 
 Install (when published)
@@ -62,11 +62,11 @@ use std::sync::Arc;
 use duroxide::{OrchestrationContext, OrchestrationRegistry};
 use duroxide::runtime::{self};
 use duroxide::runtime::registry::ActivityRegistry;
-use duroxide::providers::fs::FsHistoryStore;
+use duroxide::providers::sqlite::SqliteHistoryStore;
 
 # #[tokio::main]
 # async fn main() {
-let store = std::sync::Arc::new(FsHistoryStore::new("./data", true));
+let store = std::sync::Arc::new(SqliteHistoryStore::new("sqlite:./data.db").await.unwrap());
 let activities = ActivityRegistry::builder()
     .register("Hello", |name: String| async move { Ok(format!("Hello, {name}!")) })
     .build();
@@ -135,17 +135,17 @@ async fn comp_sample(ctx: OrchestrationContext) -> String {
 
 ContinueAsNew and multi-execution
 - Use `ctx.continue_as_new(new_input)` to end the current execution and immediately start a fresh execution with the provided input.
-- Providers keep all executions’ histories (e.g., filesystem stores `instance/{execution_id}.jsonl`).
+- Providers keep all executions' histories in the SQLite database with full ACID transactional support.
 - The initial `start_orchestration` handle resolves with an empty success when `ContinueAsNew` occurs; the latest execution can be observed via status APIs.
 
 Status and control-plane
 - `Runtime::get_orchestration_status(instance)` -> Running | Completed { output } | Failed { error } | NotFound
-- Filesystem provider exposes execution-aware methods (`list_executions`, `read_with_execution`, etc.) for diagnostics.
+- SQLite provider exposes execution-aware methods (`list_executions`, `read_with_execution`, etc.) for diagnostics.
 
 Local development
 - Build: `cargo build`
 - Test everything: `cargo test --all -- --nocapture`
-- Run a specific test: `cargo test --test e2e_samples dtf_legacy_gabbar_greetings_fs -- --nocapture`
+- Run a specific test: `cargo test --test e2e_samples sample_dtf_legacy_gabbar_greetings -- --nocapture`
 
 Notes
 - Import as `duroxide` in Rust source.

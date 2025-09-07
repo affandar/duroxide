@@ -1,6 +1,4 @@
-use duroxide::providers::HistoryStore;
-use duroxide::providers::fs::FsHistoryStore;
-use duroxide::providers::in_memory::InMemoryHistoryStore;
+mod common;
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
 use duroxide::{Event, OrchestrationContext, OrchestrationRegistry, OrchestrationStatus};
@@ -8,8 +6,7 @@ use std::sync::Arc as StdArc;
 
 #[tokio::test]
 async fn unknown_activity_is_isolated_from_other_orchestrations_fs() {
-    let td = tempfile::tempdir().unwrap();
-    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
+    let (store, _temp_dir) = common::create_sqlite_store_disk().await;
 
     // Register only a known-good activity; intentionally omit the one we'll call ("Missing")
     let activity_registry = ActivityRegistry::builder()
@@ -102,7 +99,7 @@ async fn unknown_activity_is_isolated_from_other_orchestrations_fs() {
 
 #[tokio::test]
 async fn unknown_activity_is_isolated_from_other_orchestrations_inmem() {
-    let store = StdArc::new(InMemoryHistoryStore::default()) as StdArc<dyn HistoryStore>;
+    let (store, _temp_dir) = common::create_sqlite_store_disk().await;
 
     let activity_registry = ActivityRegistry::builder()
         .register("Echo", |input: String| async move { Ok(input) })

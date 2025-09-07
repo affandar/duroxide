@@ -1,9 +1,7 @@
 use std::sync::Arc;
-mod common;
 use futures::future::{Either, select};
 use duroxide::providers::HistoryStore;
-use duroxide::providers::fs::FsHistoryStore;
-use duroxide::providers::in_memory::InMemoryHistoryStore;
+mod common;
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
 use duroxide::{OrchestrationContext, OrchestrationRegistry};
@@ -85,14 +83,13 @@ async fn error_handling_compensation_on_ship_failure_with(store: StdArc<dyn Hist
 
 #[tokio::test]
 async fn error_handling_compensation_on_ship_failure_inmem() {
-    let store = StdArc::new(InMemoryHistoryStore::default()) as StdArc<dyn HistoryStore>;
+    let (store, _temp_dir) = common::create_sqlite_store_disk().await;
     error_handling_compensation_on_ship_failure_with(store).await;
 }
 
 #[tokio::test]
 async fn error_handling_compensation_on_ship_failure_fs() {
-    let td = tempfile::tempdir().unwrap();
-    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
+    let (store, _temp_dir) = common::create_sqlite_store_disk().await;
     error_handling_compensation_on_ship_failure_with(store).await;
 }
 
@@ -136,14 +133,13 @@ async fn error_handling_success_path_with(store: StdArc<dyn HistoryStore>) {
 
 #[tokio::test]
 async fn error_handling_success_path_inmem() {
-    let store = StdArc::new(InMemoryHistoryStore::default()) as StdArc<dyn HistoryStore>;
+    let (store, _temp_dir) = common::create_sqlite_store_disk().await;
     error_handling_success_path_with(store).await;
 }
 
 #[tokio::test]
 async fn error_handling_success_path_fs() {
-    let td = tempfile::tempdir().unwrap();
-    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
+    let (store, _temp_dir) = common::create_sqlite_store_disk().await;
     error_handling_success_path_with(store).await;
 }
 
@@ -190,14 +186,13 @@ async fn error_handling_early_debit_failure_with(store: StdArc<dyn HistoryStore>
 
 #[tokio::test]
 async fn error_handling_early_debit_failure_inmem() {
-    let store = StdArc::new(InMemoryHistoryStore::default()) as StdArc<dyn HistoryStore>;
+    let (store, _temp_dir) = common::create_sqlite_store_disk().await;
     error_handling_early_debit_failure_with(store).await;
 }
 
 #[tokio::test]
 async fn error_handling_early_debit_failure_fs() {
-    let td = tempfile::tempdir().unwrap();
-    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
+    let (store, _temp_dir) = common::create_sqlite_store_disk().await;
     error_handling_early_debit_failure_with(store).await;
 }
 
@@ -239,16 +234,14 @@ async fn unknown_activity_fails_with(store: StdArc<dyn HistoryStore>) {
 
 #[tokio::test]
 async fn unknown_activity_fails_fs() {
-    let td = tempfile::tempdir().unwrap();
-    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
+    let (store, _temp_dir) = common::create_sqlite_store_disk().await;
     unknown_activity_fails_with(store).await;
 }
 
 // 6) Event after orchestration completion is ignored (no history change)
 #[tokio::test]
 async fn event_after_completion_is_ignored_fs() {
-    let td = tempfile::tempdir().unwrap();
-    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
+    let (store, _temp_dir) = common::create_sqlite_store_disk().await;
     let activity_registry = ActivityRegistry::builder().build();
 
     let instance = "inst-post-complete-1";
@@ -306,8 +299,7 @@ async fn event_after_completion_is_ignored_fs() {
 #[tokio::test]
 async fn event_before_subscription_after_start_is_ignored() {
     // Use FS store for consistency
-    let td = tempfile::tempdir().unwrap();
-    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
+    let (store, _temp_dir) = common::create_sqlite_store_disk().await;
     let activity_registry = ActivityRegistry::builder().build();
     let orchestration = |ctx: OrchestrationContext, _input: String| async move {
         // Delay before subscribing to simulate missing subscription window
@@ -409,21 +401,19 @@ async fn history_cap_exceeded_with(store: StdArc<dyn HistoryStore>) {
 
 #[tokio::test]
 async fn history_cap_exceeded_inmem() {
-    let store = StdArc::new(InMemoryHistoryStore::default()) as StdArc<dyn HistoryStore>;
+    let (store, _temp_dir) = common::create_sqlite_store_disk().await;
     history_cap_exceeded_with(store).await;
 }
 
 #[tokio::test]
 async fn history_cap_exceeded_fs() {
-    let td = tempfile::tempdir().unwrap();
-    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
+    let (store, _temp_dir) = common::create_sqlite_store_disk().await;
     history_cap_exceeded_with(store).await;
 }
 
 #[tokio::test]
 async fn orchestration_immediate_fail_fs() {
-    let td = tempfile::tempdir().unwrap();
-    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
+    let (store, _temp_dir) = common::create_sqlite_store_disk().await;
     let activity_registry = ActivityRegistry::builder().build();
 
     let orchestration_registry = OrchestrationRegistry::builder()
@@ -470,8 +460,7 @@ async fn orchestration_immediate_fail_fs() {
 
 #[tokio::test]
 async fn orchestration_propagates_activity_failure_fs() {
-    let td = tempfile::tempdir().unwrap();
-    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
+    let (store, _temp_dir) = common::create_sqlite_store_disk().await;
     let activity_registry = ActivityRegistry::builder()
         .register("Fail", |_in: String| async move { Err("bad".to_string()) })
         .build();
@@ -516,8 +505,7 @@ async fn orchestration_propagates_activity_failure_fs() {
 
 #[tokio::test]
 async fn typed_activity_decode_error_fs() {
-    let td = tempfile::tempdir().unwrap();
-    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
+    let (store, _temp_dir) = common::create_sqlite_store_disk().await;
     // activity expects AOnly, returns stringified 'a'
     let activity_registry = ActivityRegistry::builder()
         .register_typed::<AOnly, String, _, _>("FmtA", |req| async move { Ok(format!("a={}", req.a)) })
@@ -553,8 +541,7 @@ async fn typed_activity_decode_error_fs() {
 
 #[tokio::test]
 async fn typed_event_decode_error_fs() {
-    let td = tempfile::tempdir().unwrap();
-    let store = StdArc::new(FsHistoryStore::new(td.path(), true)) as StdArc<dyn HistoryStore>;
+    let (store, _temp_dir) = common::create_sqlite_store_disk().await;
     let activity_registry = ActivityRegistry::builder().build();
     let orch = |ctx: OrchestrationContext, _in: String| async move {
         // attempt to decode event into AOnly

@@ -1,7 +1,7 @@
 use std::sync::Arc as StdArc;
 use std::time::Duration;
 
-use duroxide::providers::fs::FsHistoryStore;
+mod common;
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
 use duroxide::{Event, OrchestrationContext, OrchestrationRegistry};
@@ -27,9 +27,8 @@ where
 }
 
 #[tokio::test]
-async fn dispatcher_enqueues_timer_schedule_then_completes_fs() {
-    let td = tempfile::tempdir().unwrap();
-    let store = StdArc::new(FsHistoryStore::new(td.path(), true));
+async fn dispatcher_enqueues_timer_schedule_then_completes() {
+    let (store, _temp_dir) = common::create_sqlite_store_disk().await;
     let store_dyn = store.clone() as StdArc<dyn duroxide::providers::HistoryStore>;
 
     let orch = |ctx: OrchestrationContext, _input: String| async move {
@@ -60,9 +59,8 @@ async fn dispatcher_enqueues_timer_schedule_then_completes_fs() {
 }
 
 #[tokio::test]
-async fn dispatcher_enqueues_start_orchestration_to_orch_queue_fs() {
-    let td = tempfile::tempdir().unwrap();
-    let store = StdArc::new(FsHistoryStore::new(td.path(), true));
+async fn dispatcher_enqueues_start_orchestration_to_orch_queue() {
+    let (store, _temp_dir) = common::create_sqlite_store_disk().await;
     let store_dyn = store.clone() as StdArc<dyn duroxide::providers::HistoryStore>;
 
     let acts = ActivityRegistry::builder().build();

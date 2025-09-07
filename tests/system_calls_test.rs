@@ -1,11 +1,10 @@
 use duroxide::{OrchestrationContext, OrchestrationRegistry};
 use duroxide::runtime::{self, registry::ActivityRegistry};
-use duroxide::providers::in_memory::InMemoryHistoryStore;
 use std::sync::Arc;
 
 #[tokio::test]
 async fn test_new_guid() {
-    let store = Arc::new(InMemoryHistoryStore::default());
+    let store = Arc::new(duroxide::providers::sqlite::SqliteHistoryStore::new_in_memory().await.unwrap());
     let activities = Arc::new(ActivityRegistry::builder().build());
     
     let orchestrations = OrchestrationRegistry::builder()
@@ -42,7 +41,7 @@ async fn test_new_guid() {
 
 #[tokio::test]
 async fn test_utcnow_ms() {
-    let store = Arc::new(InMemoryHistoryStore::default());
+    let store = Arc::new(duroxide::providers::sqlite::SqliteHistoryStore::new_in_memory().await.unwrap());
     let activities = Arc::new(ActivityRegistry::builder().build());
     
     let orchestrations = OrchestrationRegistry::builder()
@@ -86,7 +85,7 @@ async fn test_utcnow_ms() {
 
 #[tokio::test]
 async fn test_system_calls_deterministic_replay() {
-    let store = Arc::new(InMemoryHistoryStore::default());
+    let store = Arc::new(duroxide::providers::sqlite::SqliteHistoryStore::new_in_memory().await.unwrap());
     let activities = Arc::new(ActivityRegistry::builder().build());
     
     let orchestrations = OrchestrationRegistry::builder()
@@ -136,7 +135,7 @@ async fn test_system_calls_deterministic_replay() {
 
 #[tokio::test]
 async fn test_system_calls_with_select() {
-    let store = Arc::new(InMemoryHistoryStore::default());
+    let store = Arc::new(duroxide::providers::sqlite::SqliteHistoryStore::new_in_memory().await.unwrap());
     let activities = Arc::new(ActivityRegistry::builder()
         .register("QuickTask", |_: String| async move {
             Ok("task_done".to_string())
