@@ -1,5 +1,6 @@
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
+use duroxide::DuroxideClient;
 use duroxide::{Event, OrchestrationContext, OrchestrationRegistry};
 mod common;
 
@@ -33,19 +34,16 @@ async fn cancel_parent_down_propagates_to_child() {
         orchestration_registry,
     )
     .await;
+    let client = DuroxideClient::new(store.clone());
 
     // Start parent
-    let _h = rt
-        .clone()
-        .start_orchestration("inst-cancel-1", "Parent", "")
-        .await
-        .unwrap();
+    client.start_orchestration("inst-cancel-1", "Parent", "").await.unwrap();
 
     // Give it a moment to schedule the child
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
     // Cancel parent with reason
-    rt.cancel_instance("inst-cancel-1", "by_test").await;
+    let _ = client.cancel_instance("inst-cancel-1", "by_test").await;
 
     // Wait for parent terminal failure due to cancel
     let deadline = std::time::Instant::now() + std::time::Duration::from_millis(5000);
@@ -115,12 +113,9 @@ async fn cancel_after_completion_is_noop() {
         orchestration_registry,
     )
     .await;
+    let client = DuroxideClient::new(store.clone());
 
-    let _h = rt
-        .clone()
-        .start_orchestration("inst-cancel-noop", "Quick", "")
-        .await
-        .unwrap();
+    client.start_orchestration("inst-cancel-noop", "Quick", "").await.unwrap();
 
     match rt
         .wait_for_orchestration("inst-cancel-noop", std::time::Duration::from_secs(5))
@@ -133,7 +128,7 @@ async fn cancel_after_completion_is_noop() {
     }
 
     // Cancel after completion should have no effect
-    rt.cancel_instance("inst-cancel-noop", "late").await;
+    let _ = client.cancel_instance("inst-cancel-noop", "late").await;
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
     let hist = store.read("inst-cancel-noop").await;
@@ -181,16 +176,13 @@ async fn cancel_child_directly_signals_parent() {
         orchestration_registry,
     )
     .await;
+    let client = DuroxideClient::new(store.clone());
 
-    let _h = rt
-        .clone()
-        .start_orchestration("inst-chdirect", "ParentD", "")
-        .await
-        .unwrap();
+    client.start_orchestration("inst-chdirect", "ParentD", "").await.unwrap();
     // Wait a bit for child schedule, then cancel child directly
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     let child_inst = "inst-chdirect::sub::1";
-    rt.cancel_instance(child_inst, "by_test_child").await;
+    let _ = client.cancel_instance(child_inst, "by_test_child").await;
 
     let s = match rt
         .wait_for_orchestration("inst-chdirect", std::time::Duration::from_secs(5))
@@ -240,17 +232,14 @@ async fn cancel_continue_as_new_second_exec() {
         orchestration_registry,
     )
     .await;
+    let client = DuroxideClient::new(store.clone());
 
-    let _h = rt
-        .clone()
-        .start_orchestration("inst-can-can", "CanCancel", "start")
-        .await
-        .unwrap();
+    client.start_orchestration("inst-can-can", "CanCancel", "start").await.unwrap();
 
     // Cancel the second execution while the handle is waiting
     // (the handle will wait for final completion including cancellation)
     tokio::time::sleep(std::time::Duration::from_millis(100)).await; // Let first execution complete
-    rt.cancel_instance("inst-can-can", "by_test_can").await;
+    let _ = client.cancel_instance("inst-can-can", "by_test_can").await;
 
     // With polling approach, wait for final result (cancellation)
     match rt
@@ -312,12 +301,9 @@ async fn orchestration_completes_before_activity_finishes() {
         orchestration_registry,
     )
     .await;
+    let client = DuroxideClient::new(store.clone());
 
-    let _h = rt
-        .clone()
-        .start_orchestration("inst-orch-done-first", "QuickDone", "")
-        .await
-        .unwrap();
+    client.start_orchestration("inst-orch-done-first", "QuickDone", "").await.unwrap();
 
     match rt
         .wait_for_orchestration("inst-orch-done-first", std::time::Duration::from_secs(5))
@@ -363,12 +349,9 @@ async fn orchestration_fails_before_activity_finishes() {
         orchestration_registry,
     )
     .await;
+    let client = DuroxideClient::new(store.clone());
 
-    let _h = rt
-        .clone()
-        .start_orchestration("inst-orch-fail-first", "QuickFail", "")
-        .await
-        .unwrap();
+    client.start_orchestration("inst-orch-fail-first", "QuickFail", "").await.unwrap();
 
     match rt
         .wait_for_orchestration("inst-orch-fail-first", std::time::Duration::from_secs(5))

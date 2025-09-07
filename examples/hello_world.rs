@@ -10,7 +10,7 @@
 use duroxide::providers::sqlite::SqliteHistoryStore;
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
-use duroxide::{OrchestrationContext, OrchestrationRegistry};
+use duroxide::{OrchestrationContext, OrchestrationRegistry, DuroxideClient};
 use std::sync::Arc;
 
 #[tokio::main]
@@ -53,17 +53,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Start the runtime
     let rt = runtime::Runtime::start_with_store(
-        store,
+        store.clone(),
         Arc::new(activities),
         orchestrations,
     ).await;
 
+    // Create a client bound to the same provider
+    let client = DuroxideClient::new(store);
+
     // Start an orchestration instance
     let instance_id = "hello-instance-1";
-    let _handle = rt
-        .clone()
-        .start_orchestration(instance_id, "HelloWorld", "Rust Developer")
-        .await?;
+    client.start_orchestration(instance_id, "HelloWorld", "Rust Developer").await?;
 
     // Wait for completion
     match rt

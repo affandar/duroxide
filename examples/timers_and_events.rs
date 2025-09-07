@@ -11,7 +11,7 @@
 use duroxide::providers::sqlite::SqliteHistoryStore;
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
-use duroxide::{OrchestrationContext, OrchestrationRegistry, DurableOutput};
+use duroxide::{OrchestrationContext, OrchestrationRegistry, DurableOutput, DuroxideClient};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Duration;
@@ -143,7 +143,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .build();
 
     let rt = runtime::Runtime::start_with_store(
-        store,
+        store.clone(),
         Arc::new(activities),
         orchestrations,
     ).await;
@@ -157,10 +157,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let request_json = serde_json::to_string(&request)?;
 
     let instance_id = "approval-instance-1";
-    let _handle = rt
-        .clone()
-        .start_orchestration(instance_id, "ApprovalWorkflow", request_json)
-        .await?;
+    let client = DuroxideClient::new(store);
+    client.start_orchestration(instance_id, "ApprovalWorkflow", request_json).await?;
 
     // Simulate an approval event after 2 seconds
     let rt_clone = rt.clone();
@@ -177,6 +175,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let approval_json = serde_json::to_string(&approval).unwrap();
         
         println!("🎯 Simulating approval event...");
+        // Use client for control-plane in real apps; keep runtime for execution only.
+        // For brevity we reuse runtime here to enqueue the event.
         rt_clone.raise_event(&instance_id_clone, "ApprovalEvent", approval_json).await;
     });
 

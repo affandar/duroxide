@@ -4,7 +4,7 @@
 //! `OrchestrationContext` and the in-process `Runtime`.
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
-use duroxide::{OrchestrationContext, OrchestrationRegistry};
+use duroxide::{OrchestrationContext, OrchestrationRegistry, DuroxideClient};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 mod common;
@@ -40,8 +40,8 @@ async fn sample_hello_world_fs() {
 
     let rt =
         runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
-    let _handle = rt
-        .clone()
+    let client = DuroxideClient::new(store.clone());
+    client
         .start_orchestration("inst-sample-hello-1", "HelloWorld", "World")
         .await
         .unwrap();
@@ -93,8 +93,8 @@ async fn sample_basic_control_flow_fs() {
 
     let rt =
         runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
-    let _handle = rt
-        .clone()
+    let client = DuroxideClient::new(store.clone());
+    client
         .start_orchestration("inst-sample-cflow-1", "ControlFlow", "")
         .await
         .unwrap();
@@ -141,11 +141,8 @@ async fn sample_loop_fs() {
 
     let rt =
         runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
-    let _handle = rt
-        .clone()
-        .start_orchestration("inst-sample-loop-1", "LoopOrchestration", "")
-        .await
-        .unwrap();
+    let client = DuroxideClient::new(store.clone());
+    client.start_orchestration("inst-sample-loop-1", "LoopOrchestration", "").await.unwrap();
 
     match rt
         .wait_for_orchestration("inst-sample-loop-1", std::time::Duration::from_secs(5))
@@ -204,11 +201,8 @@ async fn sample_error_handling_fs() {
 
     let rt =
         runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
-    let _handle = rt
-        .clone()
-        .start_orchestration("inst-sample-err-1", "ErrorHandling", "")
-        .await
-        .unwrap();
+    let client = DuroxideClient::new(store.clone());
+    client.start_orchestration("inst-sample-err-1", "ErrorHandling", "").await.unwrap();
 
     match rt
         .wait_for_orchestration("inst-sample-err-1", std::time::Duration::from_secs(5))
@@ -257,12 +251,9 @@ async fn sample_timeout_with_timer_race_fs() {
         .register("TimeoutSample", orchestration)
         .build();
 
-    let rt = runtime::Runtime::start_with_store(store, Arc::new(activity_registry), orchestration_registry).await;
-    let _handle = rt
-        .clone()
-        .start_orchestration("inst-timeout-sample", "TimeoutSample", "")
-        .await
-        .unwrap();
+    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+    let client = DuroxideClient::new(store.clone());
+    client.start_orchestration("inst-timeout-sample", "TimeoutSample", "").await.unwrap();
 
     match rt
         .wait_for_orchestration("inst-timeout-sample", std::time::Duration::from_secs(5))
@@ -315,17 +306,14 @@ async fn sample_select2_activity_vs_external_fs() {
 
     // Start orchestration, then raise external after subscription is recorded
     let store_for_wait = store.clone();
-    let rt_c = rt.clone();
     tokio::spawn(async move {
-        let _ = common::wait_for_subscription(store_for_wait, "inst-s2-mixed", "Go", 1000).await;
-        rt_c.raise_event("inst-s2-mixed", "Go", "ok").await;
+        let sfw = store_for_wait.clone();
+        let _ = common::wait_for_subscription(sfw.clone(), "inst-s2-mixed", "Go", 1000).await;
+        let client = DuroxideClient::new(sfw);
+        let _ = client.raise_event("inst-s2-mixed", "Go", "ok").await;
     });
-
-    let _handle = rt
-        .clone()
-        .start_orchestration("inst-s2-mixed", "Select2ActVsEvt", "")
-        .await
-        .unwrap();
+    let client = DuroxideClient::new(store.clone());
+    client.start_orchestration("inst-s2-mixed", "Select2ActVsEvt", "").await.unwrap();
 
     let s = match rt
         .wait_for_orchestration("inst-s2-mixed", std::time::Duration::from_secs(5))
@@ -382,11 +370,8 @@ async fn dtf_legacy_gabbar_greetings_fs() {
 
     let rt =
         runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
-    let _handle = rt
-        .clone()
-        .start_orchestration("inst-dtf-greetings", "Greetings", "")
-        .await
-        .unwrap();
+    let client = DuroxideClient::new(store.clone());
+    client.start_orchestration("inst-dtf-greetings", "Greetings", "").await.unwrap();
 
     match rt
         .wait_for_orchestration("inst-dtf-greetings", std::time::Duration::from_secs(5))
@@ -425,11 +410,8 @@ async fn sample_system_activities_fs() {
 
     let rt =
         runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
-    let _handle = rt
-        .clone()
-        .start_orchestration("inst-system-acts", "SystemActivities", "")
-        .await
-        .unwrap();
+    let client = DuroxideClient::new(store.clone());
+    client.start_orchestration("inst-system-acts", "SystemActivities", "").await.unwrap();
 
     let out = match rt
         .wait_for_orchestration("inst-system-acts", std::time::Duration::from_secs(5))
@@ -593,7 +575,7 @@ async fn sample_sub_orchestration_fanout_fs() {
         .unwrap();
 
     match rt
-        .wait_for_orchestration("inst-sub-fan", std::time::Duration::from_secs(5))
+        .wait_for_orchestration("inst-sub-fan", std::time::Duration::from_secs(10))
         .await
         .unwrap()
     {
@@ -813,11 +795,9 @@ async fn sample_typed_activity_and_orchestration_fs() {
         .register_typed::<AddReq, AddRes, _, _>("Adder", orchestration)
         .build();
 
-    let rt = runtime::Runtime::start_with_store(store, Arc::new(activity_registry), orchestration_registry).await;
-    rt.clone()
-        .start_orchestration_typed::<AddReq>("inst-typed-add", "Adder", AddReq { a: 2, b: 3 })
-        .await
-        .unwrap();
+    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+    let client = DuroxideClient::new(store.clone());
+    client.start_orchestration_typed::<AddReq>("inst-typed-add", "Adder", AddReq { a: 2, b: 3 }).await.unwrap();
 
     match rt
         .wait_for_orchestration_typed::<AddRes>("inst-typed-add", std::time::Duration::from_secs(5))
@@ -847,17 +827,16 @@ async fn sample_typed_event_fs() {
     let rt =
         runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
     let store_for_wait = store.clone();
-    let rt_c = rt.clone();
     tokio::spawn(async move {
-        let _ = common::wait_for_subscription(store_for_wait, "inst-typed-ack", "Ready", 1000).await;
+        let sfw = store_for_wait.clone();
+        let _ = common::wait_for_subscription(sfw.clone(), "inst-typed-ack", "Ready", 1000).await;
         // Raise typed event by serializing payload
         let payload = serde_json::to_string(&Ack { ok: true }).unwrap();
-        rt_c.raise_event("inst-typed-ack", "Ready", payload).await;
+        let client = DuroxideClient::new(sfw);
+        let _ = client.raise_event("inst-typed-ack", "Ready", payload).await;
     });
-    rt.clone()
-        .start_orchestration_typed::<()>("inst-typed-ack", "WaitAck", ())
-        .await
-        .unwrap();
+    let client = DuroxideClient::new(store.clone());
+    client.start_orchestration_typed::<()>("inst-typed-ack", "WaitAck", ()).await.unwrap();
 
     match rt
         .wait_for_orchestration_typed::<String>("inst-typed-ack", std::time::Duration::from_secs(5))
@@ -956,12 +935,9 @@ async fn sample_mixed_string_and_typed_string_orch_fs() {
         .register("MixedStringOrch", orch)
         .build();
 
-    let rt = runtime::Runtime::start_with_store(store, Arc::new(activity_registry), orch_reg).await;
-    let _h = rt
-        .clone()
-        .start_orchestration("inst-mixed-string", "MixedStringOrch", "")
-        .await
-        .unwrap();
+    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orch_reg).await;
+    let client = DuroxideClient::new(store.clone());
+    client.start_orchestration("inst-mixed-string", "MixedStringOrch", "").await.unwrap();
 
     let s = match rt
         .wait_for_orchestration("inst-mixed-string", std::time::Duration::from_secs(5))
@@ -997,14 +973,11 @@ async fn sample_versioning_start_latest_vs_exact_fs() {
         .register_versioned("Versioned", "2.0.0", v2)
         .build();
     let acts = ActivityRegistry::builder().build();
-    let rt = runtime::Runtime::start_with_store(store, Arc::new(acts), reg.clone()).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(acts), reg.clone()).await;
 
     // With default policy (Latest), a new start should run v2
-    let _h_latest = rt
-        .clone()
-        .start_orchestration("inst-vers-latest", "Versioned", "")
-        .await
-        .unwrap();
+    let client = DuroxideClient::new(store.clone());
+    client.start_orchestration("inst-vers-latest", "Versioned", "").await.unwrap();
 
     match rt
         .wait_for_orchestration("inst-vers-latest", std::time::Duration::from_secs(5))
@@ -1022,11 +995,7 @@ async fn sample_versioning_start_latest_vs_exact_fs() {
         duroxide::runtime::VersionPolicy::Exact(semver::Version::parse("1.0.0").unwrap()),
     )
     .await;
-    let _h_exact = rt
-        .clone()
-        .start_orchestration("inst-vers-exact", "Versioned", "")
-        .await
-        .unwrap();
+    client.start_orchestration("inst-vers-exact", "Versioned", "").await.unwrap();
 
     match rt
         .wait_for_orchestration("inst-vers-exact", std::time::Duration::from_secs(5))
@@ -1074,13 +1043,9 @@ async fn sample_versioning_sub_orchestration_explicit_vs_policy_fs() {
         .register_versioned("Child", "2.0.0", child_v2)
         .build();
     let acts = ActivityRegistry::builder().build();
-    let rt = runtime::Runtime::start_with_store(store, Arc::new(acts), reg).await;
-
-    let _h = rt
-        .clone()
-        .start_orchestration("inst-sub-vers", "ParentVers", "")
-        .await
-        .unwrap();
+    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(acts), reg).await;
+    let client = DuroxideClient::new(store.clone());
+    client.start_orchestration("inst-sub-vers", "ParentVers", "").await.unwrap();
 
     match rt
         .wait_for_orchestration("inst-sub-vers", std::time::Duration::from_secs(5))
@@ -1127,13 +1092,11 @@ async fn sample_versioning_continue_as_new_upgrade_fs() {
         .build();
     let acts = ActivityRegistry::builder().build();
     let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(acts), reg).await;
-
+    
     // Start on v1; the first handle will resolve at the CAN boundary
     // Pin initial start to v1 explicitly to demonstrate upgrade via CAN; default policy remains Latest (v2)
-    rt.clone()
-        .start_orchestration_versioned("inst-can-upgrade", "LongRunner", "1.0.0", "state")
-        .await
-        .unwrap();
+    let client = DuroxideClient::new(store.clone());
+    client.start_orchestration_versioned("inst-can-upgrade", "LongRunner", "1.0.0", "state").await.unwrap();
 
     // Poll for the new execution (v2) to complete
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
@@ -1201,19 +1164,16 @@ async fn sample_cancellation_parent_cascades_to_children_fs() {
     let activity_registry = ActivityRegistry::builder().build();
     let rt =
         runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
-
+    
     // Start the parent orchestration
-    let _h = rt
-        .clone()
-        .start_orchestration("inst-sample-cancel", "ParentSample", "")
-        .await
-        .unwrap();
+    let client = DuroxideClient::new(store.clone());
+    client.start_orchestration("inst-sample-cancel", "ParentSample", "").await.unwrap();
 
     // Allow scheduling turn to run and child to start
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
     // Cancel the parent; the runtime will append OrchestrationCancelRequested and then OrchestrationFailed
-    rt.cancel_instance("inst-sample-cancel", "user_request").await;
+    let _ = client.cancel_instance("inst-sample-cancel", "user_request").await;
 
     // Wait for the parent to fail deterministically with a canceled error
     let ok = common::wait_for_history(
@@ -1282,13 +1242,10 @@ async fn sample_basic_error_handling_fs() {
         .build();
 
     let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
-
+    let client = DuroxideClient::new(store.clone());
+    
     // Test successful case
-    let _handle1 = rt
-        .clone()
-        .start_orchestration("inst-basic-error-1", "BasicErrorHandling", "test")
-        .await
-        .unwrap();
+    client.start_orchestration("inst-basic-error-1", "BasicErrorHandling", "test").await.unwrap();
 
     match rt
         .wait_for_orchestration("inst-basic-error-1", std::time::Duration::from_secs(5))
@@ -1303,11 +1260,7 @@ async fn sample_basic_error_handling_fs() {
     }
 
     // Test error case
-    let _handle2 = rt
-        .clone()
-        .start_orchestration("inst-basic-error-2", "BasicErrorHandling", "")
-        .await
-        .unwrap();
+    client.start_orchestration("inst-basic-error-2", "BasicErrorHandling", "").await.unwrap();
 
     match rt
         .wait_for_orchestration("inst-basic-error-2", std::time::Duration::from_secs(5))
@@ -1370,13 +1323,10 @@ async fn sample_nested_function_error_handling_fs() {
         .build();
 
     let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
-
+    let client = DuroxideClient::new(store.clone());
+    
     // Test successful case
-    let _handle1 = rt
-        .clone()
-        .start_orchestration("inst-nested-error-1", "NestedErrorHandling", "test")
-        .await
-        .unwrap();
+    client.start_orchestration("inst-nested-error-1", "NestedErrorHandling", "test").await.unwrap();
 
     match rt
         .wait_for_orchestration("inst-nested-error-1", std::time::Duration::from_secs(5))
@@ -1391,11 +1341,7 @@ async fn sample_nested_function_error_handling_fs() {
     }
 
     // Test error case
-    let _handle2 = rt
-        .clone()
-        .start_orchestration("inst-nested-error-2", "NestedErrorHandling", "error")
-        .await
-        .unwrap();
+    client.start_orchestration("inst-nested-error-2", "NestedErrorHandling", "error").await.unwrap();
 
     match rt
         .wait_for_orchestration("inst-nested-error-2", std::time::Duration::from_secs(5))

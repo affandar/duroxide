@@ -1,6 +1,7 @@
 use duroxide::Event;
 use duroxide::providers::HistoryStore;
 use duroxide::providers::sqlite::SqliteHistoryStore;
+use duroxide::DuroxideClient;
 use std::sync::Arc as StdArc;
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
@@ -76,4 +77,9 @@ pub async fn create_sqlite_store_disk() -> (StdArc<dyn HistoryStore>, TempDir) {
 pub async fn create_sqlite_store_memory() -> StdArc<dyn HistoryStore> {
     let store = SqliteHistoryStore::new_in_memory().await.unwrap();
     StdArc::new(store) as StdArc<dyn HistoryStore>
+}
+
+#[allow(dead_code)]
+pub fn create_client(store: StdArc<dyn HistoryStore>) -> DuroxideClient {
+    DuroxideClient::new(store)
 }

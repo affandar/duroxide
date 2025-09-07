@@ -2,7 +2,7 @@ use duroxide::providers::HistoryStore;
 use duroxide::providers::sqlite::SqliteHistoryStore;
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
-use duroxide::{Event, OrchestrationContext, OrchestrationRegistry};
+use duroxide::{Event, OrchestrationContext, OrchestrationRegistry, DuroxideClient};
 use std::sync::Arc as StdArc;
 use tempfile::TempDir;
 
@@ -31,9 +31,10 @@ async fn single_timer_fires() {
     let reg = OrchestrationRegistry::builder().register("OneTimer", orch).build();
     let acts = ActivityRegistry::builder().build();
     let rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(acts), reg).await;
+    let client = DuroxideClient::new(store.clone());
 
     let start = std::time::Instant::now();
-    rt.clone()
+    client
         .start_orchestration("inst-one", "OneTimer", "")
         .await
         .unwrap();
@@ -79,9 +80,10 @@ async fn multiple_timers_ordering() {
     let reg = OrchestrationRegistry::builder().register("TwoTimers", orch).build();
     let acts = ActivityRegistry::builder().build();
     let rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(acts), reg).await;
+    let client = DuroxideClient::new(store.clone());
 
     let start = std::time::Instant::now();
-    rt.clone()
+    client
         .start_orchestration("inst-two", "TwoTimers", "")
         .await
         .unwrap();
@@ -128,9 +130,10 @@ async fn timer_deduplication() {
     let reg = OrchestrationRegistry::builder().register("DedupTimer", orch).build();
     let acts = ActivityRegistry::builder().build();
     let rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(acts), reg).await;
+    let client = DuroxideClient::new(store.clone());
 
     let inst = "inst-dedup";
-    let _h = rt.clone().start_orchestration(inst, "DedupTimer", "").await.unwrap();
+    let _ = client.start_orchestration(inst, "DedupTimer", "").await.unwrap();
     assert!(
         common::wait_for_history(
             store.clone(),
@@ -193,9 +196,10 @@ async fn sub_second_timer_precision() {
     let reg = OrchestrationRegistry::builder().register("SubSecondTimer", orch).build();
     let acts = ActivityRegistry::builder().build();
     let rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(acts), reg).await;
+    let client = DuroxideClient::new(store.clone());
 
     let start = std::time::Instant::now();
-    rt.clone()
+    client
         .start_orchestration("inst-subsec", "SubSecondTimer", "")
         .await
         .unwrap();
@@ -232,9 +236,10 @@ async fn timer_wall_clock_delay() {
     let reg = OrchestrationRegistry::builder().register("DelayTimer", orch).build();
     let acts = ActivityRegistry::builder().build();
     let rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(acts), reg).await;
+    let client = DuroxideClient::new(store.clone());
 
     let start = std::time::Instant::now();
-    rt.clone()
+    client
         .start_orchestration("inst-delay", "DelayTimer", "")
         .await
         .unwrap();

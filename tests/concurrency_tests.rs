@@ -3,7 +3,7 @@ use duroxide::providers::HistoryStore;
 mod common;
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
-use duroxide::{Event, OrchestrationContext, OrchestrationRegistry};
+use duroxide::{Event, OrchestrationContext, OrchestrationRegistry, DuroxideClient};
 use std::sync::Arc as StdArc;
 
 async fn concurrent_orchestrations_different_activities_with(store: StdArc<dyn HistoryStore>) {
@@ -77,26 +77,23 @@ async fn concurrent_orchestrations_different_activities_with(store: StdArc<dyn H
 
     let rt =
         runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
-    let _h1 = rt
-        .clone()
-        .start_orchestration("inst-multi-1", "AddOrchestration", "")
-        .await;
-    let _h2 = rt
-        .clone()
-        .start_orchestration("inst-multi-2", "UpperOrchestration", "")
-        .await;
+    let client = DuroxideClient::new(store.clone());
+    let _ = client.start_orchestration("inst-multi-1", "AddOrchestration", "").await;
+    let _ = client.start_orchestration("inst-multi-2", "UpperOrchestration", "").await;
 
     let store_for_wait1 = store.clone();
-    let rt_c = rt.clone();
     tokio::spawn(async move {
-        let _ = common::wait_for_subscription(store_for_wait1, "inst-multi-1", "Go", 1000).await;
-        rt_c.raise_event("inst-multi-1", "Go", "E1").await;
+        let sfw = store_for_wait1.clone();
+        let _ = common::wait_for_subscription(sfw.clone(), "inst-multi-1", "Go", 1000).await;
+        let client = DuroxideClient::new(sfw);
+        let _ = client.raise_event("inst-multi-1", "Go", "E1").await;
     });
     let store_for_wait2 = store.clone();
-    let rt_c2 = rt.clone();
     tokio::spawn(async move {
-        let _ = common::wait_for_subscription(store_for_wait2, "inst-multi-2", "Go", 1000).await;
-        rt_c2.raise_event("inst-multi-2", "Go", "E2").await;
+        let sfw = store_for_wait2.clone();
+        let _ = common::wait_for_subscription(sfw.clone(), "inst-multi-2", "Go", 1000).await;
+        let client = DuroxideClient::new(sfw);
+        let _ = client.raise_event("inst-multi-2", "Go", "E2").await;
     });
 
     let out1 = match rt
@@ -241,26 +238,23 @@ async fn concurrent_orchestrations_same_activities_with(store: StdArc<dyn Histor
 
     let rt =
         runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
-    let _h1 = rt
-        .clone()
-        .start_orchestration("inst-same-acts-1", "ProcOrchestration1", "")
-        .await;
-    let _h2 = rt
-        .clone()
-        .start_orchestration("inst-same-acts-2", "ProcOrchestration2", "")
-        .await;
+    let client = DuroxideClient::new(store.clone());
+    let _ = client.start_orchestration("inst-same-acts-1", "ProcOrchestration1", "").await;
+    let _ = client.start_orchestration("inst-same-acts-2", "ProcOrchestration2", "").await;
 
     let store_for_wait3 = store.clone();
-    let rt_c = rt.clone();
     tokio::spawn(async move {
-        let _ = common::wait_for_subscription(store_for_wait3, "inst-same-acts-1", "Go", 1000).await;
-        rt_c.raise_event("inst-same-acts-1", "Go", "P1").await;
+        let sfw = store_for_wait3.clone();
+        let _ = common::wait_for_subscription(sfw.clone(), "inst-same-acts-1", "Go", 1000).await;
+        let client = DuroxideClient::new(sfw);
+        let _ = client.raise_event("inst-same-acts-1", "Go", "P1").await;
     });
     let store_for_wait4 = store.clone();
-    let rt_c2 = rt.clone();
     tokio::spawn(async move {
-        let _ = common::wait_for_subscription(store_for_wait4, "inst-same-acts-2", "Go", 1000).await;
-        rt_c2.raise_event("inst-same-acts-2", "Go", "P2").await;
+        let sfw = store_for_wait4.clone();
+        let _ = common::wait_for_subscription(sfw.clone(), "inst-same-acts-2", "Go", 1000).await;
+        let client = DuroxideClient::new(sfw);
+        let _ = client.raise_event("inst-same-acts-2", "Go", "P2").await;
     });
 
     match rt

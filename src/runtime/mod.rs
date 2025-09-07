@@ -1,4 +1,5 @@
-use crate::_typed_codec::{Codec, Json};
+use crate::_typed_codec::Codec;
+use crate::client::DuroxideClient;
 // use crate::providers::in_memory::InMemoryHistoryStore;
 use crate::providers::{HistoryStore, WorkItem};
 use crate::{Event, OrchestrationContext};
@@ -8,7 +9,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, warn};
 
 pub mod dispatch;
 pub mod registry;
@@ -241,6 +242,7 @@ impl Runtime {
     /// in the background and drive it to completion.
     /// Start a typed orchestration; input/output are serialized internally.
     /// Use wait_for_orchestration_typed to wait for completion.
+    #[deprecated(note = "Use DuroxideClient::start_orchestration_typed instead; this will be removed.")]
     pub async fn start_orchestration_typed<In>(
         self: Arc<Self>,
         instance: &str,
@@ -250,14 +252,13 @@ impl Runtime {
     where
         In: Serialize,
     {
-        let payload = Json::encode(&input).map_err(|e| format!("encode: {e}"))?;
-        self.clone()
-            .start_internal_wait(instance, orchestration_name, payload, None, None, None)
-            .await
+        let client = DuroxideClient::new(self.history_store.clone());
+        client.start_orchestration_typed(instance, orchestration_name, input).await
     }
 
     /// Start a typed orchestration with an explicit version (semver string).
     /// Use wait_for_orchestration_typed to wait for completion.
+    #[deprecated(note = "Use DuroxideClient::start_orchestration_versioned_typed instead; this will be removed.")]
     pub async fn start_orchestration_versioned_typed<In>(
         self: Arc<Self>,
         instance: &str,
@@ -268,30 +269,35 @@ impl Runtime {
     where
         In: Serialize,
     {
-        let v = semver::Version::parse(version.as_ref()).map_err(|e| e.to_string())?;
-        let payload = Json::encode(&input).map_err(|e| format!("encode: {e}"))?;
-        self.clone()
-            .start_internal_wait(instance, orchestration_name, payload, Some(v), None, None)
+        let client = DuroxideClient::new(self.history_store.clone());
+        client
+            .start_orchestration_versioned_typed(
+                instance,
+                orchestration_name,
+                version.as_ref().to_string(),
+                input,
+            )
             .await
     }
 
     /// Start an orchestration using raw String input/output (back-compat API).
     /// Use wait_for_orchestration to wait for completion.
     // CONTROL API: enqueue StartOrchestration via provider
+    #[deprecated(note = "Use DuroxideClient::start_orchestration instead; this will be removed.")]
     pub async fn start_orchestration(
         self: Arc<Self>,
         instance: &str,
         orchestration_name: &str,
         input: impl Into<String>,
     ) -> Result<(), String> {
-        self.clone()
-            .start_internal_wait(instance, orchestration_name, input.into(), None, None, None)
-            .await
+        let client = DuroxideClient::new(self.history_store.clone());
+        client.start_orchestration(instance, orchestration_name, input.into()).await
     }
 
     /// Start an orchestration with an explicit version (string I/O).
     /// Use wait_for_orchestration to wait for completion.
     // CONTROL API: enqueue StartOrchestration with explicit version
+    #[deprecated(note = "Use DuroxideClient::start_orchestration_versioned instead; this will be removed.")]
     pub async fn start_orchestration_versioned(
         self: Arc<Self>,
         instance: &str,
@@ -299,10 +305,13 @@ impl Runtime {
         version: impl AsRef<str>,
         input: impl Into<String>,
     ) -> Result<(), String> {
-        let v = semver::Version::parse(version.as_ref()).map_err(|e| e.to_string())?;
-        self.clone()
-            .start_internal_wait(instance, orchestration_name, input.into(), Some(v), None, None)
-            .await
+        let client = DuroxideClient::new(self.history_store.clone());
+        client.start_orchestration_versioned(
+            instance,
+            orchestration_name,
+            version.as_ref().to_string(),
+            input.into(),
+        ).await
     }
 
     /// Internal: start an orchestration and record parent linkage.
@@ -686,6 +695,22 @@ impl Runtime {
         execution_id: u64,
         _lock_token: &str,
     ) -> (Vec<Event>, Vec<WorkItem>, Vec<WorkItem>, Vec<WorkItem>) {
+        // If the instance has no history yet, it hasn't been started. Completion-only
+        // messages (e.g., external events) may arrive due to races. Drop them safely.
+        if existing_history.is_empty() {
+            let kinds: Vec<&'static str> = completion_messages
+                .iter()
+                .map(|m| crate::runtime::router::kind_of(m))
+                .collect();
+            warn!(
+                instance,
+                count = completion_messages.len(),
+                kinds = ?kinds,
+                "dropping completion-only batch for unstarted instance"
+            );
+            return (vec![], vec![], vec![], vec![]);
+        }
+
         // Extract orchestration name from history
         let orchestration_name = existing_history
             .iter()
@@ -894,44 +919,20 @@ impl Runtime {
 impl Runtime {
     /// Raise an external event by name into a running instance.
     // CONTROL API: best-effort enqueue ExternalRaised via provider
+    #[deprecated(note = "Use DuroxideClient::raise_event instead; this will be removed.")]
     pub async fn raise_event(&self, instance: &str, name: impl Into<String>, data: impl Into<String>) {
-        let name_str = name.into();
-        let data_str = data.into();
-        // Best-effort: only enqueue if a subscription for this name exists in the latest execution
-        let hist = self.history_store.read(instance).await;
-        let has_subscription = hist
-            .iter()
-            .any(|e| matches!(e, Event::ExternalSubscribed { name, .. } if name == &name_str));
-        if !has_subscription {
-            warn!(instance, event_name=%name_str, "raise_event: dropping external event with no active subscription");
-            return;
+        let client = DuroxideClient::new(self.history_store.clone());
+        if let Err(e) = client.raise_event(instance, name, data).await {
+            warn!(instance, error = %e, "raise_event: failed to enqueue ExternalRaised");
         }
-        if let Err(e) = self
-            .history_store
-            .enqueue_orchestrator_work(WorkItem::ExternalRaised {
-                instance: instance.to_string(),
-                name: name_str.clone(),
-                data: data_str.clone(),
-            }, None)
-            .await
-        {
-            warn!(instance, name=%name_str, error=%e, "raise_event: failed to enqueue ExternalRaised");
-        }
-        info!(instance, name=%name_str, data=%data_str, "raise_event: enqueued external");
     }
 
     /// Request cancellation of a running orchestration instance.
     // CONTROL API: enqueue CancelInstance via provider
+    #[deprecated(note = "Use DuroxideClient::cancel_instance instead; this will be removed.")]
     pub async fn cancel_instance(&self, instance: &str, reason: impl Into<String>) {
-        let reason_s = reason.into();
-        // Only enqueue if instance is active, else best-effort: provider queue will deliver when it becomes active
-        let _ = self
-            .history_store
-            .enqueue_orchestrator_work(WorkItem::CancelInstance {
-                instance: instance.to_string(),
-                reason: reason_s,
-            }, None)
-            .await;
+        let client = DuroxideClient::new(self.history_store.clone());
+        let _ = client.cancel_instance(instance, reason).await;
     }
 
     /// Wait until the orchestration reaches a terminal state (Completed/Failed) or the timeout elapses.

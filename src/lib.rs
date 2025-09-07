@@ -181,6 +181,7 @@ use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
 
 pub mod futures;
 pub mod runtime;
+pub mod client;
 // Re-export descriptor type for public API ergonomics
 pub use runtime::OrchestrationDescriptor;
 pub mod logging;
@@ -188,6 +189,7 @@ pub mod providers;
 
 // Re-export key runtime types for convenience
 pub use runtime::{OrchestrationHandler, OrchestrationRegistry, OrchestrationRegistryBuilder, OrchestrationStatus};
+pub use client::DuroxideClient;
 // Internal system activity names
 pub(crate) const SYSTEM_NOW_ACTIVITY: &str = "__system_now";
 pub(crate) const SYSTEM_NEW_GUID_ACTIVITY: &str = "__system_new_guid";
