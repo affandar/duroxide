@@ -10,7 +10,7 @@
 //! use duroxide::providers::sqlite::SqliteHistoryStore;
 //! use duroxide::runtime::registry::ActivityRegistry;
 //! use duroxide::runtime::{self};
-//! use duroxide::{OrchestrationContext, OrchestrationRegistry};
+//! use duroxide::{OrchestrationContext, OrchestrationRegistry, DuroxideClient};
 //! use std::sync::Arc;
 //!
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
@@ -37,12 +37,13 @@
 //!     .build();
 //!
 //! let rt = runtime::DuroxideRuntime::start_with_store(
-//!     store, Arc::new(activities), orchestrations
+//!     store.clone(), Arc::new(activities), orchestrations
 //! ).await;
 //!
-//! // 5. Start an orchestration instance
-//! rt.clone().start_orchestration("inst-1", "HelloWorld", "World").await?;
-//! let result = rt.wait_for_orchestration("inst-1", std::time::Duration::from_secs(5)).await
+//! // 5. Create a client and start an orchestration instance
+//! let client = DuroxideClient::new(store.clone());
+//! client.start_orchestration("inst-1", "HelloWorld", "World").await?;
+//! let result = client.wait_for_orchestration("inst-1", std::time::Duration::from_secs(5)).await
 //!     .map_err(|e| format!("Wait error: {:?}", e))?;
 //! # Ok(())
 //! # }

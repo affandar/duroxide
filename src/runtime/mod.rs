@@ -1,10 +1,7 @@
-use crate::_typed_codec::Codec;
-use crate::client::DuroxideClient;
 // use crate::providers::in_memory::InMemoryHistoryStore;
 use crate::providers::{HistoryStore, WorkItem};
 use crate::{Event, OrchestrationContext};
 use semver::Version;
-use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -236,82 +233,6 @@ impl DuroxideRuntime {
 
         // Fall back to querying the store
         self.history_store.latest_execution_id(instance).await.unwrap_or(1)
-    }
-
-    /// Enqueue a new orchestration instance start. The runtime will pick this up
-    /// in the background and drive it to completion.
-    /// Start a typed orchestration; input/output are serialized internally.
-    /// Use wait_for_orchestration_typed to wait for completion.
-    // removed: start_orchestration_typed (use DuroxideClient)
-    pub async fn start_orchestration_typed<In>(
-        self: Arc<Self>,
-        instance: &str,
-        orchestration_name: &str,
-        input: In,
-    ) -> Result<(), String>
-    where
-        In: Serialize,
-    {
-        let client = DuroxideClient::new(self.history_store.clone());
-        client.start_orchestration_typed(instance, orchestration_name, input).await
-    }
-
-    /// Start a typed orchestration with an explicit version (semver string).
-    /// Use wait_for_orchestration_typed to wait for completion.
-    // removed: start_orchestration_versioned_typed (use DuroxideClient)
-    pub async fn start_orchestration_versioned_typed<In>(
-        self: Arc<Self>,
-        instance: &str,
-        orchestration_name: &str,
-        version: impl AsRef<str>,
-        input: In,
-    ) -> Result<(), String>
-    where
-        In: Serialize,
-    {
-        let client = DuroxideClient::new(self.history_store.clone());
-        client
-            .start_orchestration_versioned_typed(
-                instance,
-                orchestration_name,
-                version.as_ref().to_string(),
-                input,
-            )
-            .await
-    }
-
-    /// Start an orchestration using raw String input/output (back-compat API).
-    /// Use wait_for_orchestration to wait for completion.
-    // CONTROL API: enqueue StartOrchestration via provider
-    // removed: start_orchestration (use DuroxideClient)
-    pub async fn start_orchestration(
-        self: Arc<Self>,
-        instance: &str,
-        orchestration_name: &str,
-        input: impl Into<String>,
-    ) -> Result<(), String> {
-        let client = DuroxideClient::new(self.history_store.clone());
-        client.start_orchestration(instance, orchestration_name, input.into()).await
-    }
-
-    /// Start an orchestration with an explicit version (string I/O).
-    /// Use wait_for_orchestration to wait for completion.
-    // CONTROL API: enqueue StartOrchestration with explicit version
-    // removed: start_orchestration_versioned (use DuroxideClient)
-    pub async fn start_orchestration_versioned(
-        self: Arc<Self>,
-        instance: &str,
-        orchestration_name: &str,
-        version: impl AsRef<str>,
-        input: impl Into<String>,
-    ) -> Result<(), String> {
-        let client = DuroxideClient::new(self.history_store.clone());
-        client.start_orchestration_versioned(
-            instance,
-            orchestration_name,
-            version.as_ref().to_string(),
-            input.into(),
-        ).await
     }
 
     /// Internal: start an orchestration and record parent linkage.
@@ -937,89 +858,4 @@ impl DuroxideRuntime {
     // drain_instances removed with spawn_instance_to_completion
 
     // spawn_instance_to_completion removed; atomic path is the only execution path
-}
-
-impl DuroxideRuntime {
-    /// Raise an external event by name into a running instance.
-    // CONTROL API: best-effort enqueue ExternalRaised via provider
-    // removed: raise_event (use DuroxideClient)
-    pub async fn raise_event(&self, instance: &str, name: impl Into<String>, data: impl Into<String>) {
-        let client = DuroxideClient::new(self.history_store.clone());
-        if let Err(e) = client.raise_event(instance, name, data).await {
-            warn!(instance, error = %e, "raise_event: failed to enqueue ExternalRaised");
-        }
-    }
-
-    /// Request cancellation of a running orchestration instance.
-    // CONTROL API: enqueue CancelInstance via provider
-    // removed: cancel_instance (use DuroxideClient)
-    pub async fn cancel_instance(&self, instance: &str, reason: impl Into<String>) {
-        let client = DuroxideClient::new(self.history_store.clone());
-        let _ = client.cancel_instance(instance, reason).await;
-    }
-
-    /// Wait until the orchestration reaches a terminal state (Completed/Failed) or the timeout elapses.
-    // CONTROL API: read-only polling via provider.read -> status derivation
-    // removed: wait_for_orchestration (use DuroxideClient)
-    pub async fn wait_for_orchestration(
-        &self,
-        instance: &str,
-        timeout: std::time::Duration,
-    ) -> Result<OrchestrationStatus, WaitError> {
-        let client = DuroxideClient::new(self.history_store.clone());
-        client.wait_for_orchestration(instance, timeout).await
-    }
-
-    /// Typed variant: returns Ok(Ok<T>) on Completed with decoded output, Ok(Err(String)) on Failed.
-    // removed: wait_for_orchestration_typed (use DuroxideClient)
-    pub async fn wait_for_orchestration_typed<Out: serde::de::DeserializeOwned>(
-        &self,
-        instance: &str,
-        timeout: std::time::Duration,
-    ) -> Result<Result<Out, String>, WaitError> {
-        match self.wait_for_orchestration(instance, timeout).await? {
-            OrchestrationStatus::Completed { output } => match crate::_typed_codec::Json::decode::<Out>(&output) {
-                Ok(v) => Ok(Ok(v)),
-                Err(e) => Err(WaitError::Other(format!("decode failed: {e}"))),
-            },
-            OrchestrationStatus::Failed { error } => Ok(Err(error)),
-            _ => unreachable!("wait_for_orchestration returns only terminal or timeout"),
-        }
-    }
-
-    /// Blocking wrapper around wait_for_orchestration.
-    // removed: wait_for_orchestration_blocking (use DuroxideClient)
-    pub fn wait_for_orchestration_blocking(
-        &self,
-        instance: &str,
-        timeout: std::time::Duration,
-    ) -> Result<OrchestrationStatus, WaitError> {
-        if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            tokio::task::block_in_place(|| handle.block_on(self.wait_for_orchestration(instance, timeout)))
-        } else {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .map_err(|e| WaitError::Other(e.to_string()))?;
-            rt.block_on(self.wait_for_orchestration(instance, timeout))
-        }
-    }
-
-    /// Blocking wrapper for typed wait.
-    // removed: wait_for_orchestration_typed_blocking (use DuroxideClient)
-    pub fn wait_for_orchestration_typed_blocking<Out: serde::de::DeserializeOwned>(
-        &self,
-        instance: &str,
-        timeout: std::time::Duration,
-    ) -> Result<Result<Out, String>, WaitError> {
-        if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            tokio::task::block_in_place(|| handle.block_on(self.wait_for_orchestration_typed::<Out>(instance, timeout)))
-        } else {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .map_err(|e| WaitError::Other(e.to_string()))?;
-            rt.block_on(self.wait_for_orchestration_typed::<Out>(instance, timeout))
-        }
-    }
 }

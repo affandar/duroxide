@@ -738,12 +738,11 @@ async fn sample_continue_as_new_fs() {
 
     let rt =
         runtime::DuroxideRuntime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
-    let _h = rt
-        .clone()
+    let client = DuroxideClient::new(store.clone());
+    let _h = client
         .start_orchestration("inst-sample-can", "CanSample", "0")
         .await
         .unwrap();
-    let client = DuroxideClient::new(store.clone());
 
     match client
         .wait_for_orchestration("inst-sample-can", std::time::Duration::from_secs(5))
