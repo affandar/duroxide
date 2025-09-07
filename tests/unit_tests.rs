@@ -218,7 +218,7 @@ async fn orchestration_status_apis() {
     let activity_registry = ActivityRegistry::builder().build();
     let orchestration_registry = OrchestrationRegistry::builder()
         .register("ShortTimer", |ctx, _| async move {
-            ctx.schedule_timer(10).into_timer().await;
+            ctx.schedule_timer(100).into_timer().await;
             Ok("ok".to_string())
         })
         .register("AlwaysFails", |_ctx, _| async move { Err("boom".to_string()) })
@@ -238,7 +238,7 @@ async fn orchestration_status_apis() {
         .await
         .unwrap();
     // Wait a bit for the orchestrator dispatcher to process the queued work item
-    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     let s1 = rt.get_orchestration_status(inst_running).await;
     // The orchestration should be running (waiting for timer)
     assert!(
