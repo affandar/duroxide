@@ -56,26 +56,26 @@ async fn orchestration_completes_and_replays_deterministically_with(store: StdAr
         .build();
 
     let rt =
-        runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+        runtime::DuroxideRuntime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
     let store_for_wait = store.clone();
-    let rt_clone = rt.clone();
+    let client_evt = duroxide::DuroxideClient::new(store.clone());
     tokio::spawn(async move {
         let _ = crate::common::wait_for_subscription(store_for_wait, "inst-orch-1", "Go", 1000).await;
-        rt_clone.raise_event("inst-orch-1", "Go", "ok").await;
+        let _ = client_evt.raise_event("inst-orch-1", "Go", "ok").await;
     });
-    let _handle = rt
-        .clone()
+    let client = duroxide::DuroxideClient::new(store.clone());
+    let _handle = client
         .start_orchestration("inst-orch-1", "DeterministicOrchestration", "")
         .await
         .unwrap();
 
-    let output = match rt
+    let output = match client
         .wait_for_orchestration("inst-orch-1", std::time::Duration::from_secs(5))
         .await
         .unwrap()
     {
-        runtime::OrchestrationStatus::Completed { output } => output,
-        runtime::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        duroxide::OrchestrationStatus::Completed { output } => output,
+        duroxide::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
         _ => panic!("unexpected orchestration status"),
     };
 
@@ -186,20 +186,20 @@ async fn sequential_activity_chain_completes_with(store: StdArc<dyn HistoryStore
         .register("SequentialOrchestration", orchestrator)
         .build();
 
-    let rt = runtime::Runtime::start_with_store(store, Arc::new(activity_registry), orchestration_registry).await;
-    let _handle = rt
-        .clone()
+    let rt = runtime::DuroxideRuntime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+    let client = duroxide::DuroxideClient::new(store.clone());
+    let _handle = client
         .start_orchestration("inst-seq-1", "SequentialOrchestration", "")
         .await
         .unwrap();
 
-    match rt
+    match client
         .wait_for_orchestration("inst-seq-1", std::time::Duration::from_secs(5))
         .await
         .unwrap()
     {
-        runtime::OrchestrationStatus::Completed { output } => assert_eq!(output, "c=2bc"),
-        runtime::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        duroxide::OrchestrationStatus::Completed { output } => assert_eq!(output, "c=2bc"),
+        duroxide::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
         _ => panic!("unexpected orchestration status"),
     }
 

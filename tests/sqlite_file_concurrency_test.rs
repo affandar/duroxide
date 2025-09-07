@@ -98,7 +98,7 @@ async fn test_sqlite_file_concurrent_orchestrations() {
         .register("IncrementOrch", orchestration)
         .build();
     
-    let rt = runtime::Runtime::start_with_store(
+    let rt = runtime::DuroxideRuntime::start_with_store(
         store.clone(),
         Arc::new(activity_registry),
         orchestration_registry,
@@ -109,9 +109,10 @@ async fn test_sqlite_file_concurrent_orchestrations() {
     let mut tasks = JoinSet::new();
     
     for i in 0..3 {
-        let rt_clone = rt.clone();
+        let store_clone = store.clone();
         tasks.spawn(async move {
-            rt_clone
+            let client = duroxide::DuroxideClient::new(store_clone);
+            client
                 .start_orchestration(
                     &format!("file-concurrent-{}", i),
                     "IncrementOrch",
@@ -128,8 +129,9 @@ async fn test_sqlite_file_concurrent_orchestrations() {
     }
     
     // Wait for all orchestrations to complete
+    let client = duroxide::DuroxideClient::new(store.clone());
     for i in 0..3 {
-        let status = rt
+        let status = client
             .wait_for_orchestration(
                 &format!("file-concurrent-{}", i),
                 Duration::from_secs(15),

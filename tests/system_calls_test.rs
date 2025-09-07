@@ -23,9 +23,11 @@ async fn test_new_guid() {
         })
         .build();
         
-    let rt = runtime::Runtime::start_with_store(store, activities, orchestrations).await;
-    rt.clone().start_orchestration("test-guid", "TestGuid", "").await.unwrap();
-    let status = rt.wait_for_orchestration("test-guid", tokio::time::Duration::from_secs(5)).await.unwrap();
+    let rt = runtime::DuroxideRuntime::start_with_store(store.clone(), activities, orchestrations).await;
+    let client = duroxide::DuroxideClient::new(store.clone());
+    client.start_orchestration("test-guid", "TestGuid", "").await.unwrap();
+    let client = duroxide::DuroxideClient::new(store.clone());
+    let status = client.wait_for_orchestration("test-guid", tokio::time::Duration::from_secs(5)).await.unwrap();
     
     if let duroxide::runtime::OrchestrationStatus::Completed { output } = status {
         // Result should contain two different GUIDs
@@ -68,9 +70,11 @@ async fn test_utcnow_ms() {
         })
         .build();
         
-    let rt = runtime::Runtime::start_with_store(store, activities, orchestrations).await;
-    rt.clone().start_orchestration("test-time", "TestTime", "").await.unwrap();
-    let status = rt.wait_for_orchestration("test-time", tokio::time::Duration::from_secs(5)).await.unwrap();
+    let rt = runtime::DuroxideRuntime::start_with_store(store.clone(), activities, orchestrations).await;
+    let client = duroxide::DuroxideClient::new(store.clone());
+    client.start_orchestration("test-time", "TestTime", "").await.unwrap();
+    let client = duroxide::DuroxideClient::new(store.clone());
+    let status = client.wait_for_orchestration("test-time", tokio::time::Duration::from_secs(5)).await.unwrap();
     
     if let duroxide::runtime::OrchestrationStatus::Completed { output } = status {
         // Result should contain two timestamps
@@ -100,12 +104,14 @@ async fn test_system_calls_deterministic_replay() {
         })
         .build();
         
-    let rt = runtime::Runtime::start_with_store(store.clone(), activities.clone(), orchestrations.clone()).await;
+    let rt = runtime::DuroxideRuntime::start_with_store(store.clone(), activities.clone(), orchestrations.clone()).await;
     
     // Run orchestration first time
     let instance = "test-determinism";
-    rt.clone().start_orchestration(instance, "TestDeterminism", "").await.unwrap();
-    let status1 = rt.wait_for_orchestration(instance, tokio::time::Duration::from_secs(5)).await.unwrap();
+    let client = duroxide::DuroxideClient::new(store.clone());
+    client.start_orchestration(instance, "TestDeterminism", "").await.unwrap();
+    let client = duroxide::DuroxideClient::new(store.clone());
+    let status1 = client.wait_for_orchestration(instance, tokio::time::Duration::from_secs(5)).await.unwrap();
     
     let output1 = if let duroxide::runtime::OrchestrationStatus::Completed { output } = status1 {
         output
@@ -116,10 +122,11 @@ async fn test_system_calls_deterministic_replay() {
     rt.shutdown().await;
     
     // Start new runtime with same store (simulating restart)
-    let rt2 = runtime::Runtime::start_with_store(store, activities, orchestrations).await;
+    let rt2 = runtime::DuroxideRuntime::start_with_store(store.clone(), activities, orchestrations).await;
     
     // The orchestration should complete with the same result due to deterministic replay
-    let status2 = rt2.wait_for_orchestration(instance, tokio::time::Duration::from_secs(5)).await.unwrap();
+    let client2 = duroxide::DuroxideClient::new(store.clone());
+    let status2 = client2.wait_for_orchestration(instance, tokio::time::Duration::from_secs(5)).await.unwrap();
     
     let output2 = if let duroxide::runtime::OrchestrationStatus::Completed { output } = status2 {
         output
@@ -176,9 +183,10 @@ async fn test_system_calls_with_select() {
         })
         .build();
         
-    let rt = runtime::Runtime::start_with_store(store, activities, orchestrations).await;
-    rt.clone().start_orchestration("test-select", "TestSelect", "").await.unwrap();
-    let status = rt.wait_for_orchestration("test-select", tokio::time::Duration::from_secs(5)).await.unwrap();
+    let rt = runtime::DuroxideRuntime::start_with_store(store.clone(), activities, orchestrations).await;
+    let client = duroxide::DuroxideClient::new(store.clone());
+    client.start_orchestration("test-select", "TestSelect", "").await.unwrap();
+    let status = client.wait_for_orchestration("test-select", tokio::time::Duration::from_secs(5)).await.unwrap();
     
     if let duroxide::runtime::OrchestrationStatus::Completed { output } = status {
         println!("Output: {}", output);

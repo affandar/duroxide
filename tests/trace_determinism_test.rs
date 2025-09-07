@@ -23,17 +23,18 @@ async fn test_trace_deterministic_in_history() {
     let orchestration_registry = OrchestrationRegistry::builder()
         .register("test_orch", orch)
         .build();
-    let rt = runtime::Runtime::start_with_store(
+    let rt = runtime::DuroxideRuntime::start_with_store(
         history_store.clone(), 
         Arc::new(activities), 
         orchestration_registry
     ).await;
+    let client = duroxide::DuroxideClient::new(history_store.clone());
     
     // Start orchestration
-    rt.clone().start_orchestration("instance-2", "test_orch", "").await.unwrap();
+    client.start_orchestration("instance-2", "test_orch", "").await.unwrap();
     
     // Wait for completion
-    let status = rt.wait_for_orchestration("instance-2", std::time::Duration::from_millis(1000)).await.unwrap();
+    let status = client.wait_for_orchestration("instance-2", std::time::Duration::from_millis(1000)).await.unwrap();
     assert!(matches!(status, OrchestrationStatus::Completed { .. }));
     
     // Check history contains trace system calls
@@ -51,7 +52,7 @@ async fn test_trace_deterministic_in_history() {
     // This will force a replay of the history
     rt.shutdown().await;
     
-    let rt2 = runtime::Runtime::start_with_store(
+    let rt2 = runtime::DuroxideRuntime::start_with_store(
         history_store.clone(), 
         Arc::new(ActivityRegistry::builder()
             .register("GetValue", |_: String| async move { Ok("test".to_string()) })
@@ -103,17 +104,18 @@ async fn test_trace_fire_and_forget() {
     let orchestration_registry = OrchestrationRegistry::builder()
         .register("test_orch", orch)
         .build();
-    let rt = runtime::Runtime::start_with_store(
+    let rt = runtime::DuroxideRuntime::start_with_store(
         history_store.clone(), 
         Arc::new(activities), 
         orchestration_registry
     ).await;
+    let client = duroxide::DuroxideClient::new(history_store.clone());
     
     // Start orchestration
-    rt.clone().start_orchestration("instance-3", "test_orch", "").await.unwrap();
+    client.start_orchestration("instance-3", "test_orch", "").await.unwrap();
     
     // Wait for completion
-    let status = rt.wait_for_orchestration("instance-3", std::time::Duration::from_millis(1000)).await.unwrap();
+    let status = client.wait_for_orchestration("instance-3", std::time::Duration::from_millis(1000)).await.unwrap();
     
     match status {
         OrchestrationStatus::Completed { output } => assert_eq!(output, "2 done"),

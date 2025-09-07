@@ -75,7 +75,7 @@ pub use router::{InstanceRouter, OrchestratorMsg};
 
 /// In-process runtime that executes activities and timers and persists
 /// history via a `HistoryStore`.
-pub struct Runtime {
+pub struct DuroxideRuntime {
     // removed: in-proc activity channel and router
     joins: Mutex<Vec<JoinHandle<()>>>,
     // instance_joins removed with spawn_instance_to_completion
@@ -100,7 +100,7 @@ pub struct OrchestrationDescriptor {
     pub parent_id: Option<u64>,
 }
 
-impl Runtime {
+impl DuroxideRuntime {
     // ===== Phase-0 Notes (no behavior change) =====
     // CONTROL vs EXECUTION surface inventory
     // - CONTROL (client-facing, to be moved/wrapped later):
@@ -242,7 +242,7 @@ impl Runtime {
     /// in the background and drive it to completion.
     /// Start a typed orchestration; input/output are serialized internally.
     /// Use wait_for_orchestration_typed to wait for completion.
-    #[deprecated(note = "Use DuroxideClient::start_orchestration_typed instead; this will be removed.")]
+    // removed: start_orchestration_typed (use DuroxideClient)
     pub async fn start_orchestration_typed<In>(
         self: Arc<Self>,
         instance: &str,
@@ -258,7 +258,7 @@ impl Runtime {
 
     /// Start a typed orchestration with an explicit version (semver string).
     /// Use wait_for_orchestration_typed to wait for completion.
-    #[deprecated(note = "Use DuroxideClient::start_orchestration_versioned_typed instead; this will be removed.")]
+    // removed: start_orchestration_versioned_typed (use DuroxideClient)
     pub async fn start_orchestration_versioned_typed<In>(
         self: Arc<Self>,
         instance: &str,
@@ -283,7 +283,7 @@ impl Runtime {
     /// Start an orchestration using raw String input/output (back-compat API).
     /// Use wait_for_orchestration to wait for completion.
     // CONTROL API: enqueue StartOrchestration via provider
-    #[deprecated(note = "Use DuroxideClient::start_orchestration instead; this will be removed.")]
+    // removed: start_orchestration (use DuroxideClient)
     pub async fn start_orchestration(
         self: Arc<Self>,
         instance: &str,
@@ -297,7 +297,7 @@ impl Runtime {
     /// Start an orchestration with an explicit version (string I/O).
     /// Use wait_for_orchestration to wait for completion.
     // CONTROL API: enqueue StartOrchestration with explicit version
-    #[deprecated(note = "Use DuroxideClient::start_orchestration_versioned instead; this will be removed.")]
+    // removed: start_orchestration_versioned (use DuroxideClient)
     pub async fn start_orchestration_versioned(
         self: Arc<Self>,
         instance: &str,
@@ -698,17 +698,40 @@ impl Runtime {
         // If the instance has no history yet, it hasn't been started. Completion-only
         // messages (e.g., external events) may arrive due to races. Drop them safely.
         if existing_history.is_empty() {
-            let kinds: Vec<&'static str> = completion_messages
-                .iter()
-                .map(|m| crate::runtime::router::kind_of(m))
-                .collect();
-            warn!(
-                instance,
-                count = completion_messages.len(),
-                kinds = ?kinds,
-                "dropping completion-only batch for unstarted instance"
-            );
-            return (vec![], vec![], vec![], vec![]);
+            // Double-check latest persisted history to avoid racing with a just-started instance.
+            let latest = self.history_store.read(instance).await;
+            if latest.is_empty() {
+                let kinds: Vec<&'static str> = completion_messages
+                    .iter()
+                    .map(|m| crate::runtime::router::kind_of(m))
+                    .collect();
+                warn!(
+                    instance,
+                    count = completion_messages.len(),
+                    kinds = ?kinds,
+                    "dropping completion-only batch for unstarted instance"
+                );
+                return (vec![], vec![], vec![], vec![]);
+            } else {
+                debug!(instance, "completion-only batch: detected newly-started instance after re-read");
+                // Use the latest history instead of the empty snapshot
+                let initial_history = latest;
+                let (history_delta, worker_items, timer_items, orchestrator_items, _result) = self
+                    .clone()
+                    .run_single_execution_atomic(
+                        instance,
+                        &initial_history
+                            .iter()
+                            .rev()
+                            .find_map(|e| match e { Event::OrchestrationStarted { name, .. } => Some(name.clone()), _ => None })
+                            .unwrap_or_else(|| "Unknown".to_string()),
+                        initial_history.clone(),
+                        execution_id,
+                        completion_messages,
+                    )
+                    .await;
+                return (history_delta, worker_items, timer_items, orchestrator_items);
+            }
         }
 
         // Extract orchestration name from history
@@ -916,10 +939,10 @@ impl Runtime {
     // spawn_instance_to_completion removed; atomic path is the only execution path
 }
 
-impl Runtime {
+impl DuroxideRuntime {
     /// Raise an external event by name into a running instance.
     // CONTROL API: best-effort enqueue ExternalRaised via provider
-    #[deprecated(note = "Use DuroxideClient::raise_event instead; this will be removed.")]
+    // removed: raise_event (use DuroxideClient)
     pub async fn raise_event(&self, instance: &str, name: impl Into<String>, data: impl Into<String>) {
         let client = DuroxideClient::new(self.history_store.clone());
         if let Err(e) = client.raise_event(instance, name, data).await {
@@ -929,7 +952,7 @@ impl Runtime {
 
     /// Request cancellation of a running orchestration instance.
     // CONTROL API: enqueue CancelInstance via provider
-    #[deprecated(note = "Use DuroxideClient::cancel_instance instead; this will be removed.")]
+    // removed: cancel_instance (use DuroxideClient)
     pub async fn cancel_instance(&self, instance: &str, reason: impl Into<String>) {
         let client = DuroxideClient::new(self.history_store.clone());
         let _ = client.cancel_instance(instance, reason).await;
@@ -937,34 +960,18 @@ impl Runtime {
 
     /// Wait until the orchestration reaches a terminal state (Completed/Failed) or the timeout elapses.
     // CONTROL API: read-only polling via provider.read -> status derivation
+    // removed: wait_for_orchestration (use DuroxideClient)
     pub async fn wait_for_orchestration(
         &self,
         instance: &str,
         timeout: std::time::Duration,
     ) -> Result<OrchestrationStatus, WaitError> {
-        let deadline = std::time::Instant::now() + timeout;
-        // quick path
-        match self.get_orchestration_status(instance).await {
-            OrchestrationStatus::Completed { output } => return Ok(OrchestrationStatus::Completed { output }),
-            OrchestrationStatus::Failed { error } => return Ok(OrchestrationStatus::Failed { error }),
-            _ => {}
-        }
-        // poll with backoff
-        let mut delay_ms: u64 = 5;
-        while std::time::Instant::now() < deadline {
-            match self.get_orchestration_status(instance).await {
-                OrchestrationStatus::Completed { output } => return Ok(OrchestrationStatus::Completed { output }),
-                OrchestrationStatus::Failed { error } => return Ok(OrchestrationStatus::Failed { error }),
-                _ => {
-                    tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
-                    delay_ms = (delay_ms.saturating_mul(2)).min(100);
-                }
-            }
-        }
-        Err(WaitError::Timeout)
+        let client = DuroxideClient::new(self.history_store.clone());
+        client.wait_for_orchestration(instance, timeout).await
     }
 
     /// Typed variant: returns Ok(Ok<T>) on Completed with decoded output, Ok(Err(String)) on Failed.
+    // removed: wait_for_orchestration_typed (use DuroxideClient)
     pub async fn wait_for_orchestration_typed<Out: serde::de::DeserializeOwned>(
         &self,
         instance: &str,
@@ -981,6 +988,7 @@ impl Runtime {
     }
 
     /// Blocking wrapper around wait_for_orchestration.
+    // removed: wait_for_orchestration_blocking (use DuroxideClient)
     pub fn wait_for_orchestration_blocking(
         &self,
         instance: &str,
@@ -998,6 +1006,7 @@ impl Runtime {
     }
 
     /// Blocking wrapper for typed wait.
+    // removed: wait_for_orchestration_typed_blocking (use DuroxideClient)
     pub fn wait_for_orchestration_typed_blocking<Out: serde::de::DeserializeOwned>(
         &self,
         instance: &str,

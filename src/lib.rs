@@ -36,7 +36,7 @@
 //!     .register("HelloWorld", orchestration)
 //!     .build();
 //!
-//! let rt = runtime::Runtime::start_with_store(
+//! let rt = runtime::DuroxideRuntime::start_with_store(
 //!     store, Arc::new(activities), orchestrations
 //! ).await;
 //!
@@ -169,7 +169,7 @@
 //! - **Orchestration driver**: `run_turn`, `run_turn_with`, and `Executor`
 //! - **OrchestrationContext**: Schedule activities, timers, and external events
 //! - **DurableFuture**: Unified futures that can be composed with `join`/`select`
-//! - **Runtime**: In-process execution engine with dispatchers and workers
+//! - **DuroxideRuntime**: In-process execution engine with dispatchers and workers
 //! - **Providers**: Pluggable storage backends (filesystem, in-memory)
 use std::cell::Cell;
 use std::future::Future;

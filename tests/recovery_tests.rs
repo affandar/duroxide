@@ -39,7 +39,7 @@ where
         .register("RecoveryTest", orchestrator)
         .build();
 
-    let rt1 = runtime::Runtime::start_with_store(
+    let rt1 = runtime::DuroxideRuntime::start_with_store(
         store1.clone(),
         Arc::new(activity_registry.clone()),
         orchestration_registry.clone(),
@@ -61,7 +61,7 @@ where
     // no handle to drop when using client
 
     let store2 = make_store_stage2();
-    let rt2 = runtime::Runtime::start_with_store(
+    let rt2 = runtime::DuroxideRuntime::start_with_store(
         store2.clone(),
         Arc::new(activity_registry.clone()),
         orchestration_registry.clone(),
@@ -83,7 +83,8 @@ where
         .await
         .unwrap();
 
-    match rt2
+    let client2_wait = DuroxideClient::new(store2.clone());
+    match client2_wait
         .wait_for_orchestration(&instance, std::time::Duration::from_secs(5))
         .await
         .unwrap()
@@ -250,7 +251,7 @@ async fn recovery_multiple_orchestrations_sqlite_provider() {
     std::fs::File::create(&db1).unwrap();
     let url1 = format!("sqlite:{}", db1.display());
     let store1 = StdArc::new(SqliteHistoryStore::new(&url1).await.unwrap()) as StdArc<dyn HistoryStore>;
-    let rt1 = runtime::Runtime::start_with_store(
+    let rt1 = runtime::DuroxideRuntime::start_with_store(
         store1.clone(),
         Arc::new(activity_registry.clone()),
         orchestration_registry.clone(),
@@ -330,19 +331,21 @@ async fn recovery_multiple_orchestrations_sqlite_provider() {
     // Reopen the same DB file for stage 2 to simulate restart
     let store2 = StdArc::new(SqliteHistoryStore::new(&url1).await.unwrap()) as StdArc<dyn HistoryStore>;
     let store2_for_wait = store2.clone();
-    let rt2 = runtime::Runtime::start_with_store(store2.clone(), Arc::new(activity_registry), orchestration_registry).await;
+    let store2_for_client = store2.clone();
+    let rt2 = runtime::DuroxideRuntime::start_with_store(store2.clone(), Arc::new(activity_registry), orchestration_registry).await;
 
     // Raise external event for the WaitEvent orchestration after restart
     tokio::spawn(async move {
         // Gate raising the event on the subscription being persisted
         let _ = wait_for_subscription(store2_for_wait, "inst-wait", "Go", 2_000).await;
-        let client = DuroxideClient::new(store2.clone());
+        let client = DuroxideClient::new(store2_for_client.clone());
         let _ = client.raise_event("inst-wait", "Go", "ok").await;
     });
 
     // Use wait helper for each instance
+    let client2 = DuroxideClient::new(store2.clone());
     for (inst, name, input) in &cases {
-        match rt2
+        match client2
             .wait_for_orchestration(inst, std::time::Duration::from_secs(6))
             .await
             .unwrap()

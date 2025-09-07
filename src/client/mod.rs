@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use crate::providers::{HistoryStore, WorkItem};
+use crate::{Event, OrchestrationStatus};
 use crate::_typed_codec::{Json, Codec};
 use serde::Serialize;
 
@@ -106,5 +107,76 @@ impl DuroxideClient {
             reason: reason.into(),
         };
         self.store.enqueue_orchestrator_work(item, None).await
+    }
+
+    /// Get the current status of an orchestration by inspecting its history.
+    pub async fn get_orchestration_status(&self, instance: &str) -> OrchestrationStatus {
+        let hist = self.store.read(instance).await;
+        // Find terminal events first
+        for e in hist.iter().rev() {
+            match e {
+                Event::OrchestrationCompleted { output } => {
+                    return OrchestrationStatus::Completed { output: output.clone() }
+                }
+                Event::OrchestrationFailed { error } => {
+                    return OrchestrationStatus::Failed { error: error.clone() }
+                }
+                _ => {}
+            }
+        }
+        // If we ever saw a start, it's running
+        if hist.iter().any(|e| matches!(e, Event::OrchestrationStarted { .. })) {
+            OrchestrationStatus::Running
+        } else {
+            OrchestrationStatus::NotFound
+        }
+    }
+
+    /// Wait until terminal state or timeout using provider reads.
+    pub async fn wait_for_orchestration(
+        &self,
+        instance: &str,
+        timeout: std::time::Duration,
+    ) -> Result<OrchestrationStatus, crate::runtime::WaitError> {
+        let deadline = std::time::Instant::now() + timeout;
+        // quick path
+        match self.get_orchestration_status(instance).await {
+            OrchestrationStatus::Completed { output } =>
+                return Ok(OrchestrationStatus::Completed { output }),
+            OrchestrationStatus::Failed { error } =>
+                return Ok(OrchestrationStatus::Failed { error }),
+            _ => {}
+        }
+        // poll with backoff
+        let mut delay_ms: u64 = 5;
+        while std::time::Instant::now() < deadline {
+            match self.get_orchestration_status(instance).await {
+                OrchestrationStatus::Completed { output } =>
+                    return Ok(OrchestrationStatus::Completed { output }),
+                OrchestrationStatus::Failed { error } =>
+                    return Ok(OrchestrationStatus::Failed { error }),
+                _ => {
+                    tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+                    delay_ms = (delay_ms.saturating_mul(2)).min(100);
+                }
+            }
+        }
+        Err(crate::runtime::WaitError::Timeout)
+    }
+
+    /// Typed wait helper: decodes output on Completed, returns Err(String) on Failed.
+    pub async fn wait_for_orchestration_typed<Out: serde::de::DeserializeOwned>(
+        &self,
+        instance: &str,
+        timeout: std::time::Duration,
+    ) -> Result<Result<Out, String>, crate::runtime::WaitError> {
+        match self.wait_for_orchestration(instance, timeout).await? {
+            OrchestrationStatus::Completed { output } => match Json::decode::<Out>(&output) {
+                Ok(v) => Ok(Ok(v)),
+                Err(e) => Err(crate::runtime::WaitError::Other(format!("decode failed: {e}"))),
+            },
+            OrchestrationStatus::Failed { error } => Ok(Err(error)),
+            _ => unreachable!("wait_for_orchestration returns only terminal or timeout"),
+        }
     }
 }

@@ -142,7 +142,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .register("ApprovalWorkflow", orchestration)
         .build();
 
-    let rt = runtime::Runtime::start_with_store(
+    let rt = runtime::DuroxideRuntime::start_with_store(
         store.clone(),
         Arc::new(activities),
         orchestrations,
@@ -157,11 +157,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let request_json = serde_json::to_string(&request)?;
 
     let instance_id = "approval-instance-1";
-    let client = DuroxideClient::new(store);
+    let client = DuroxideClient::new(store.clone());
     client.start_orchestration(instance_id, "ApprovalWorkflow", request_json).await?;
 
     // Simulate an approval event after 2 seconds
-    let rt_clone = rt.clone();
+    let client_clone = DuroxideClient::new(store.clone());
     let instance_id_clone = instance_id.to_string();
     tokio::spawn(async move {
         tokio::time::sleep(Duration::from_secs(2)).await;
@@ -175,21 +175,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let approval_json = serde_json::to_string(&approval).unwrap();
         
         println!("🎯 Simulating approval event...");
-        // Use client for control-plane in real apps; keep runtime for execution only.
-        // For brevity we reuse runtime here to enqueue the event.
-        rt_clone.raise_event(&instance_id_clone, "ApprovalEvent", approval_json).await;
+        client_clone.raise_event(&instance_id_clone, "ApprovalEvent", approval_json).await.expect("raise event");
     });
 
-    match rt
+    match client
         .wait_for_orchestration(instance_id, Duration::from_secs(10))
         .await
         .map_err(|e| format!("Wait error: {:?}", e))?
     {
-        runtime::OrchestrationStatus::Completed { output } => {
+        duroxide::OrchestrationStatus::Completed { output } => {
             println!("✅ Approval workflow completed!");
             println!("Result: {}", output);
         }
-        runtime::OrchestrationStatus::Failed { error } => {
+        duroxide::OrchestrationStatus::Failed { error } => {
             println!("❌ Workflow failed: {}", error);
         }
         _ => {

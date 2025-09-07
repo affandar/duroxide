@@ -102,20 +102,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .register("TimeoutExample", timeout_orchestration)
         .build();
 
-    let rt = runtime::Runtime::start_with_store(
+    let rt = runtime::DuroxideRuntime::start_with_store(
         store.clone(),
         Arc::new(activities),
         orchestrations,
     ).await;
 
-    let client = DuroxideClient::new(store);
+    let client = DuroxideClient::new(store.clone());
 
     println!("🚀 Running delay example...");
     
     // Run the delay example
     let delay_instance = format!("delay-{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis());
     client.start_orchestration(&delay_instance, "DelayExample", "test data").await?;
-    match rt.wait_for_orchestration(&delay_instance, std::time::Duration::from_secs(15)).await
+    match client.wait_for_orchestration(&delay_instance, std::time::Duration::from_secs(15)).await
         .map_err(|e| format!("Wait error: {:?}", e))?
     {
         OrchestrationStatus::Completed { output } => {
@@ -132,7 +132,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Run the timeout example  
     let timeout_instance = format!("timeout-{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis());
     client.start_orchestration(&timeout_instance, "TimeoutExample", "test data").await?;
-    match rt.wait_for_orchestration(&timeout_instance, std::time::Duration::from_secs(15)).await
+    match client.wait_for_orchestration(&timeout_instance, std::time::Duration::from_secs(15)).await
         .map_err(|e| format!("Wait error: {:?}", e))?
     {
         OrchestrationStatus::Completed { output } => {

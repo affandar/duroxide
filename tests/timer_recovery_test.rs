@@ -53,7 +53,7 @@ async fn timer_recovery_after_crash_before_fire() {
         .build();
 
     // Phase 1: Start orchestration and wait for timer to be scheduled
-    let rt1 = runtime::Runtime::start_with_store(
+    let rt1 = runtime::DuroxideRuntime::start_with_store(
         store1.clone(),
         StdArc::new(activity_registry.clone()),
         orchestration_registry.clone(),
@@ -61,11 +61,8 @@ async fn timer_recovery_after_crash_before_fire() {
     .await;
 
     let instance = "inst-timer-recovery";
-    let _ = rt1
-        .clone()
-        .start_orchestration(instance, "TimerRecoveryTest", "")
-        .await
-        .unwrap();
+    let client1 = duroxide::DuroxideClient::new(store1.clone());
+    let _ = client1.start_orchestration(instance, "TimerRecoveryTest", "").await.unwrap();
 
     // Wait for timer to be created
     assert!(
@@ -105,7 +102,7 @@ async fn timer_recovery_after_crash_before_fire() {
     // Phase 2: "Restart" system with new runtime but same store
     println!("Restarting system...");
     let store2 = StdArc::new(SqliteHistoryStore::new(&db_url).await.unwrap()) as StdArc<dyn HistoryStore>;
-    let rt2 = runtime::Runtime::start_with_store(
+    let rt2 = runtime::DuroxideRuntime::start_with_store(
         store2.clone(),
         StdArc::new(activity_registry),
         orchestration_registry,
@@ -130,16 +127,17 @@ async fn timer_recovery_after_crash_before_fire() {
     }
     
     // Now wait for orchestration to complete
-    match rt2
+    let client2 = duroxide::DuroxideClient::new(store2.clone());
+    match client2
         .wait_for_orchestration(instance, std::time::Duration::from_secs(10))
         .await
         .unwrap()
     {
-        runtime::OrchestrationStatus::Completed { output } => {
+        duroxide::OrchestrationStatus::Completed { output } => {
             assert_eq!(output, "Timer fired, then: done");
             println!("✅ Orchestration completed successfully after restart");
         }
-        runtime::OrchestrationStatus::Failed { error } => {
+        duroxide::OrchestrationStatus::Failed { error } => {
             panic!("Orchestration failed after restart: {}", error);
         }
         status => {
@@ -227,7 +225,7 @@ async fn multiple_timers_recovery_after_crash() {
     let activity_registry = ActivityRegistry::builder().build();
 
     // Phase 1: Start and wait for all timers to be created
-    let rt1 = runtime::Runtime::start_with_store(
+    let rt1 = runtime::DuroxideRuntime::start_with_store(
         store1.clone(),
         StdArc::new(activity_registry.clone()),
         orchestration_registry.clone(),
@@ -235,11 +233,8 @@ async fn multiple_timers_recovery_after_crash() {
     .await;
 
     let instance = "inst-multi-timer-recovery";
-    let _ = rt1
-        .clone()
-        .start_orchestration(instance, "MultiTimerTest", "")
-        .await
-        .unwrap();
+    let client1 = duroxide::DuroxideClient::new(store1.clone());
+    let _ = client1.start_orchestration(instance, "MultiTimerTest", "").await.unwrap();
 
     // Wait for all 3 timers to be created
     assert!(
@@ -271,7 +266,7 @@ async fn multiple_timers_recovery_after_crash() {
     // Phase 2: Restart and verify all timers fire
     println!("Restarting...");
     let store2 = StdArc::new(SqliteHistoryStore::new(&db_url).await.unwrap()) as StdArc<dyn HistoryStore>;
-    let rt2 = runtime::Runtime::start_with_store(
+    let rt2 = runtime::DuroxideRuntime::start_with_store(
         store2.clone(),
         StdArc::new(activity_registry),
         orchestration_registry,
@@ -279,16 +274,17 @@ async fn multiple_timers_recovery_after_crash() {
     .await;
 
     // Wait for completion
-    match rt2
+    let client2 = duroxide::DuroxideClient::new(store2.clone());
+    match client2
         .wait_for_orchestration(instance, std::time::Duration::from_secs(5))
         .await
         .unwrap()
     {
-        runtime::OrchestrationStatus::Completed { output } => {
+        duroxide::OrchestrationStatus::Completed { output } => {
             assert_eq!(output, "All timers fired");
             println!("✅ All timers fired after recovery");
         }
-        runtime::OrchestrationStatus::Failed { error } => {
+        duroxide::OrchestrationStatus::Failed { error } => {
             panic!("Orchestration failed: {}", error);
         }
         status => {

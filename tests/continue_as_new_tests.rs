@@ -24,27 +24,27 @@ async fn continue_as_new_multiexec() {
 
     let orchestration_registry = OrchestrationRegistry::builder().register("Counter", counter).build();
     let activity_registry = ActivityRegistry::builder().build();
-    let rt = runtime::Runtime::start_with_store(
+    let rt = runtime::DuroxideRuntime::start_with_store(
         store.clone(),
         std::sync::Arc::new(activity_registry),
         orchestration_registry,
     )
     .await;
+    let client = duroxide::DuroxideClient::new(store.clone());
 
     // The initial start handle will resolve when the first execution continues-as-new.
-    let _h = rt
-        .clone()
+    let _h = client
         .start_orchestration("inst-can-1", "Counter", "0")
         .await
         .unwrap();
 
-    match rt
+    match client
         .wait_for_orchestration("inst-can-1", std::time::Duration::from_secs(5))
         .await
         .unwrap()
     {
-        runtime::OrchestrationStatus::Completed { output } => assert_eq!(output, "done:2"),
-        runtime::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        duroxide::OrchestrationStatus::Completed { output } => assert_eq!(output, "done:2"),
+        duroxide::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
         _ => panic!("unexpected orchestration status"),
     }
 
@@ -131,34 +131,34 @@ async fn continue_as_new_event_routes_to_latest() {
 
     let orchestration_registry = OrchestrationRegistry::builder().register("EvtCAN", orch).build();
     let activity_registry = ActivityRegistry::builder().build();
-    let rt = runtime::Runtime::start_with_store(
+    let rt = runtime::DuroxideRuntime::start_with_store(
         store.clone(),
         std::sync::Arc::new(activity_registry),
         orchestration_registry,
     )
     .await;
+    let client = duroxide::DuroxideClient::new(store.clone());
 
     // Raise event after the second execution subscribes
     let store_for_wait = store.clone();
-    let rt_c = rt.clone();
+    let client_c = duroxide::DuroxideClient::new(store.clone());
     tokio::spawn(async move {
         let _ = common::wait_for_subscription(store_for_wait, "inst-can-evt", "Go", 2_000).await;
-        rt_c.raise_event("inst-can-evt", "Go", "ok").await;
+        let _ = client_c.raise_event("inst-can-evt", "Go", "ok").await;
     });
 
-    let _h = rt
-        .clone()
+    let _h = client
         .start_orchestration("inst-can-evt", "EvtCAN", "start")
         .await
         .unwrap();
 
-    match rt
+    match client
         .wait_for_orchestration("inst-can-evt", std::time::Duration::from_secs(5))
         .await
         .unwrap()
     {
-        runtime::OrchestrationStatus::Completed { output } => assert_eq!(output, "ok"),
-        runtime::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        duroxide::OrchestrationStatus::Completed { output } => assert_eq!(output, "ok"),
+        duroxide::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
         _ => panic!("unexpected orchestration status"),
     }
 
@@ -233,43 +233,43 @@ async fn continue_as_new_event_drop_then_process() {
         .register("EvtDropThenProcess", orch)
         .build();
     let activity_registry = ActivityRegistry::builder().build();
-    let rt = runtime::Runtime::start_with_store(
+    let rt = runtime::DuroxideRuntime::start_with_store(
         store.clone(),
         std::sync::Arc::new(activity_registry),
         orchestration_registry,
     )
     .await;
+    let client = duroxide::DuroxideClient::new(store.clone());
 
     // Start orchestrator
-    let rt_c1 = rt.clone();
+    let client_c1 = duroxide::DuroxideClient::new(store.clone());
     tokio::spawn(async move {
         // Intentionally send too early to new execution (before subscription)
         // We wait a bit to ensure CAN happens but before subscription is recorded.
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        rt_c1.raise_event("inst-can-evt-drop", "Go", "early").await;
+        let _ = client_c1.raise_event("inst-can-evt-drop", "Go", "early").await;
     });
 
     // After subscription exists, send again
     let store_for_wait = store.clone();
-    let rt_c2 = rt.clone();
+    let client_c2 = duroxide::DuroxideClient::new(store.clone());
     tokio::spawn(async move {
         let _ = common::wait_for_subscription(store_for_wait, "inst-can-evt-drop", "Go", 2_000).await;
-        rt_c2.raise_event("inst-can-evt-drop", "Go", "late").await;
+        let _ = client_c2.raise_event("inst-can-evt-drop", "Go", "late").await;
     });
 
-    let _h = rt
-        .clone()
+    let _h = client
         .start_orchestration("inst-can-evt-drop", "EvtDropThenProcess", "start")
         .await
         .unwrap();
 
-    match rt
+    match client
         .wait_for_orchestration("inst-can-evt-drop", std::time::Duration::from_secs(5))
         .await
         .unwrap()
     {
-        runtime::OrchestrationStatus::Completed { output } => assert_eq!(output, "late"),
-        runtime::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        duroxide::OrchestrationStatus::Completed { output } => assert_eq!(output, "late"),
+        duroxide::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
         _ => panic!("unexpected orchestration status"),
     }
 
@@ -323,7 +323,7 @@ async fn event_drop_then_retry_after_subscribe() {
 
     let orchestration_registry = OrchestrationRegistry::builder().register("EvtDropRetry", orch).build();
     let activity_registry = ActivityRegistry::builder().build();
-    let rt = runtime::Runtime::start_with_store(
+    let rt = runtime::DuroxideRuntime::start_with_store(
         store.clone(),
         std::sync::Arc::new(activity_registry),
         orchestration_registry,
@@ -331,33 +331,33 @@ async fn event_drop_then_retry_after_subscribe() {
     .await;
 
     // Send early event before subscription is recorded (instance will be active due to timer)
-    let rt_c1 = rt.clone();
+    let client_c1 = duroxide::DuroxideClient::new(store.clone());
     tokio::spawn(async move {
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-        rt_c1.raise_event("inst-drop-retry", "Data", "early").await;
+        let _ = client_c1.raise_event("inst-drop-retry", "Data", "early").await;
     });
 
     // Send after subscription
     let store_for_wait = store.clone();
-    let rt_c2 = rt.clone();
+    let client_c2 = duroxide::DuroxideClient::new(store.clone());
     tokio::spawn(async move {
         let _ = common::wait_for_subscription(store_for_wait, "inst-drop-retry", "Data", 5_000).await;
-        rt_c2.raise_event("inst-drop-retry", "Data", "ok").await;
+        let _ = client_c2.raise_event("inst-drop-retry", "Data", "ok").await;
     });
 
-    let _h = rt
-        .clone()
+    let client = duroxide::DuroxideClient::new(store.clone());
+    let _h = client
         .start_orchestration("inst-drop-retry", "EvtDropRetry", "x")
         .await
         .unwrap();
 
-    match rt
+    match client
         .wait_for_orchestration("inst-drop-retry", std::time::Duration::from_secs(5))
         .await
         .unwrap()
     {
-        runtime::OrchestrationStatus::Completed { output } => assert_eq!(output, "ok"),
-        runtime::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        duroxide::OrchestrationStatus::Completed { output } => assert_eq!(output, "ok"),
+        duroxide::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
         _ => panic!("unexpected orchestration status"),
     }
 
@@ -398,11 +398,11 @@ async fn old_execution_completions_are_ignored() {
     let reg = OrchestrationRegistry::builder()
         .register("ExecutionIdTest", orch)
         .build();
-    let rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(activity_registry), reg).await;
+    let _rt = runtime::DuroxideRuntime::start_with_store(store.clone(), StdArc::new(activity_registry), reg).await;
+    let client = duroxide::DuroxideClient::new(store.clone());
 
     // Start the orchestration
-    let _handle = rt
-        .clone()
+    let _handle = client
         .start_orchestration("inst-exec-test", "ExecutionIdTest", "")
         .await
         .unwrap();
@@ -453,11 +453,11 @@ async fn future_execution_completions_are_ignored() {
     let reg = OrchestrationRegistry::builder()
         .register("FutureExecTest", orch)
         .build();
-    let rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(activity_registry), reg).await;
+    let _rt = runtime::DuroxideRuntime::start_with_store(store.clone(), StdArc::new(activity_registry), reg).await;
+    let client = duroxide::DuroxideClient::new(store.clone());
 
     // Start the orchestration
-    let _handle = rt
-        .clone()
+    let _handle = client
         .start_orchestration("inst-future", "FutureExecTest", "")
         .await
         .unwrap();

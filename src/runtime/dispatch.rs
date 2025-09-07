@@ -4,10 +4,10 @@ use tracing::{debug, warn};
 use crate::Event;
 use crate::providers::WorkItem;
 
-use super::Runtime;
+use super::DuroxideRuntime;
 
 pub async fn dispatch_call_activity(
-    rt: &Arc<Runtime>,
+    rt: &Arc<DuroxideRuntime>,
     instance: &str,
     history: &[Event],
     id: u64,
@@ -39,7 +39,7 @@ pub async fn dispatch_call_activity(
     }
 }
 
-pub async fn dispatch_create_timer(rt: &Arc<Runtime>, instance: &str, history: &[Event], id: u64, delay_ms: u64) {
+pub async fn dispatch_create_timer(rt: &Arc<DuroxideRuntime>, instance: &str, history: &[Event], id: u64, delay_ms: u64) {
     let already_fired = history
         .iter()
         .rev()
@@ -74,12 +74,12 @@ pub async fn dispatch_create_timer(rt: &Arc<Runtime>, instance: &str, history: &
         .await;
 }
 
-pub async fn dispatch_wait_external(_rt: &Arc<Runtime>, instance: &str, _history: &[Event], id: u64, name: String) {
+pub async fn dispatch_wait_external(_rt: &Arc<DuroxideRuntime>, instance: &str, _history: &[Event], id: u64, name: String) {
     debug!(instance, id, name=%name, "subscribe external");
 }
 
 pub async fn dispatch_start_detached(
-    rt: &Arc<Runtime>,
+    rt: &Arc<DuroxideRuntime>,
     instance: &str,
     id: u64,
     name: String,
@@ -111,7 +111,7 @@ pub async fn dispatch_start_detached(
 }
 
 pub async fn dispatch_start_sub_orchestration(
-    rt: &Arc<Runtime>,
+    rt: &Arc<DuroxideRuntime>,
     parent_instance: &str,
     history: &[Event],
     id: u64,

@@ -28,7 +28,7 @@ async fn cancel_parent_down_propagates_to_child() {
         .register("Parent", parent)
         .build();
     let activity_registry = ActivityRegistry::builder().build();
-    let rt = runtime::Runtime::start_with_store(
+    let rt = runtime::DuroxideRuntime::start_with_store(
         store.clone(),
         std::sync::Arc::new(activity_registry),
         orchestration_registry,
@@ -107,7 +107,7 @@ async fn cancel_after_completion_is_noop() {
 
     let orchestration_registry = OrchestrationRegistry::builder().register("Quick", orch).build();
     let activity_registry = ActivityRegistry::builder().build();
-    let rt = runtime::Runtime::start_with_store(
+    let rt = runtime::DuroxideRuntime::start_with_store(
         store.clone(),
         std::sync::Arc::new(activity_registry),
         orchestration_registry,
@@ -117,7 +117,7 @@ async fn cancel_after_completion_is_noop() {
 
     client.start_orchestration("inst-cancel-noop", "Quick", "").await.unwrap();
 
-    match rt
+    match client
         .wait_for_orchestration("inst-cancel-noop", std::time::Duration::from_secs(5))
         .await
         .unwrap()
@@ -170,7 +170,7 @@ async fn cancel_child_directly_signals_parent() {
         .register("ParentD", parent)
         .build();
     let activity_registry = ActivityRegistry::builder().build();
-    let rt = runtime::Runtime::start_with_store(
+    let rt = runtime::DuroxideRuntime::start_with_store(
         store.clone(),
         std::sync::Arc::new(activity_registry),
         orchestration_registry,
@@ -184,7 +184,7 @@ async fn cancel_child_directly_signals_parent() {
     let child_inst = "inst-chdirect::sub::1";
     let _ = client.cancel_instance(child_inst, "by_test_child").await;
 
-    let s = match rt
+    let s = match client
         .wait_for_orchestration("inst-chdirect", std::time::Duration::from_secs(5))
         .await
         .unwrap()
@@ -226,7 +226,7 @@ async fn cancel_continue_as_new_second_exec() {
 
     let orchestration_registry = OrchestrationRegistry::builder().register("CanCancel", orch).build();
     let activity_registry = ActivityRegistry::builder().build();
-    let rt = runtime::Runtime::start_with_store(
+    let rt = runtime::DuroxideRuntime::start_with_store(
         store.clone(),
         std::sync::Arc::new(activity_registry),
         orchestration_registry,
@@ -242,7 +242,7 @@ async fn cancel_continue_as_new_second_exec() {
     let _ = client.cancel_instance("inst-can-can", "by_test_can").await;
 
     // With polling approach, wait for final result (cancellation)
-    match rt
+    match client
         .wait_for_orchestration("inst-can-can", std::time::Duration::from_secs(5))
         .await
         .unwrap()
@@ -295,7 +295,7 @@ async fn orchestration_completes_before_activity_finishes() {
     });
     let activity_registry = ab.build();
     let orchestration_registry = OrchestrationRegistry::builder().register("QuickDone", orch).build();
-    let rt = runtime::Runtime::start_with_store(
+    let rt = runtime::DuroxideRuntime::start_with_store(
         store.clone(),
         std::sync::Arc::new(activity_registry),
         orchestration_registry,
@@ -305,7 +305,7 @@ async fn orchestration_completes_before_activity_finishes() {
 
     client.start_orchestration("inst-orch-done-first", "QuickDone", "").await.unwrap();
 
-    match rt
+    match client
         .wait_for_orchestration("inst-orch-done-first", std::time::Duration::from_secs(5))
         .await
         .unwrap()
@@ -343,7 +343,7 @@ async fn orchestration_fails_before_activity_finishes() {
     });
     let activity_registry = ab.build();
     let orchestration_registry = OrchestrationRegistry::builder().register("QuickFail", orch).build();
-    let rt = runtime::Runtime::start_with_store(
+    let rt = runtime::DuroxideRuntime::start_with_store(
         store.clone(),
         std::sync::Arc::new(activity_registry),
         orchestration_registry,
@@ -353,7 +353,7 @@ async fn orchestration_fails_before_activity_finishes() {
 
     client.start_orchestration("inst-orch-fail-first", "QuickFail", "").await.unwrap();
 
-    match rt
+    match client
         .wait_for_orchestration("inst-orch-fail-first", std::time::Duration::from_secs(5))
         .await
         .unwrap()

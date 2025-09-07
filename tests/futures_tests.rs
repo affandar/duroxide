@@ -25,10 +25,10 @@ async fn select2_two_externals_history_order_wins() {
     let reg = OrchestrationRegistry::builder()
         .register("ABSelect2", orchestrator)
         .build();
-    let rt1 = runtime::Runtime::start_with_store(store.clone(), StdArc::new(acts), reg).await;
+    let rt1 = runtime::DuroxideRuntime::start_with_store(store.clone(), StdArc::new(acts), reg).await;
+    let client = duroxide::DuroxideClient::new(store.clone());
 
-    let _h = rt1
-        .clone()
+    let _h = client
         .start_orchestration("inst-ab2", "ABSelect2", "")
         .await
         .unwrap();
@@ -76,7 +76,7 @@ async fn select2_two_externals_history_order_wins() {
     let reg2 = OrchestrationRegistry::builder()
         .register("ABSelect2", move |ctx, s| orchestrator(ctx, s))
         .build();
-    let rt2 = runtime::Runtime::start_with_store(store.clone(), StdArc::new(acts2), reg2).await;
+    let rt2 = runtime::DuroxideRuntime::start_with_store(store.clone(), StdArc::new(acts2), reg2).await;
 
     assert!(
         common::wait_for_history(
@@ -142,10 +142,10 @@ async fn select_two_externals_history_order_wins() {
     let reg = OrchestrationRegistry::builder()
         .register("ABSelect", orchestrator)
         .build();
-    let rt1 = runtime::Runtime::start_with_store(store.clone(), StdArc::new(acts), reg).await;
+    let rt1 = runtime::DuroxideRuntime::start_with_store(store.clone(), StdArc::new(acts), reg).await;
+    let client = duroxide::DuroxideClient::new(store.clone());
 
-    let _h = rt1
-        .clone()
+    let _h = client
         .start_orchestration("inst-ab", "ABSelect", "")
         .await
         .unwrap();
@@ -193,7 +193,7 @@ async fn select_two_externals_history_order_wins() {
     let reg2 = OrchestrationRegistry::builder()
         .register("ABSelect", move |ctx, s| orchestrator(ctx, s))
         .build();
-    let rt2 = runtime::Runtime::start_with_store(store.clone(), StdArc::new(acts2), reg2).await;
+    let rt2 = runtime::DuroxideRuntime::start_with_store(store.clone(), StdArc::new(acts2), reg2).await;
 
     assert!(
         common::wait_for_history(
@@ -262,10 +262,10 @@ async fn select_three_mixed_history_winner() {
     let reg = OrchestrationRegistry::builder()
         .register("ATBSelect", orchestrator)
         .build();
-    let rt1 = runtime::Runtime::start_with_store(store.clone(), StdArc::new(acts), reg).await;
+    let rt1 = runtime::DuroxideRuntime::start_with_store(store.clone(), StdArc::new(acts), reg).await;
+    let client = duroxide::DuroxideClient::new(store.clone());
 
-    let _h = rt1
-        .clone()
+    let _h = client
         .start_orchestration("inst-atb", "ATBSelect", "")
         .await
         .unwrap();
@@ -311,7 +311,7 @@ async fn select_three_mixed_history_winner() {
     let reg2 = OrchestrationRegistry::builder()
         .register("ATBSelect", move |ctx, s| orchestrator(ctx, s))
         .build();
-    let rt2 = runtime::Runtime::start_with_store(store.clone(), StdArc::new(acts2), reg2).await;
+    let rt2 = runtime::DuroxideRuntime::start_with_store(store.clone(), StdArc::new(acts2), reg2).await;
 
     assert!(
         common::wait_for_history(
@@ -381,10 +381,10 @@ async fn join_returns_history_order() {
     let reg = OrchestrationRegistry::builder()
         .register("JoinAB", orchestrator)
         .build();
-    let rt1 = runtime::Runtime::start_with_store(store.clone(), StdArc::new(acts), reg).await;
+    let rt1 = runtime::DuroxideRuntime::start_with_store(store.clone(), StdArc::new(acts), reg).await;
+    let client = duroxide::DuroxideClient::new(store.clone());
 
-    let _h = rt1
-        .clone()
+    let _h = client
         .start_orchestration("inst-join", "JoinAB", "")
         .await
         .unwrap();
@@ -431,7 +431,7 @@ async fn join_returns_history_order() {
     let reg2 = OrchestrationRegistry::builder()
         .register("JoinAB", move |ctx, s| orchestrator(ctx, s))
         .build();
-    let rt2 = runtime::Runtime::start_with_store(store.clone(), StdArc::new(acts2), reg2).await;
+    let rt2 = runtime::DuroxideRuntime::start_with_store(store.clone(), StdArc::new(acts2), reg2).await;
 
     assert!(
         common::wait_for_history(

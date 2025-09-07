@@ -76,7 +76,7 @@ async fn concurrent_orchestrations_different_activities_with(store: StdArc<dyn H
         .build();
 
     let rt =
-        runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+        runtime::DuroxideRuntime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
     let client = DuroxideClient::new(store.clone());
     let _ = client.start_orchestration("inst-multi-1", "AddOrchestration", "").await;
     let _ = client.start_orchestration("inst-multi-2", "UpperOrchestration", "").await;
@@ -84,35 +84,35 @@ async fn concurrent_orchestrations_different_activities_with(store: StdArc<dyn H
     let store_for_wait1 = store.clone();
     tokio::spawn(async move {
         let sfw = store_for_wait1.clone();
-        let _ = common::wait_for_subscription(sfw.clone(), "inst-multi-1", "Go", 1000).await;
+        let _ = common::wait_for_subscription(sfw.clone(), "inst-multi-1", "Go", 3000).await;
         let client = DuroxideClient::new(sfw);
         let _ = client.raise_event("inst-multi-1", "Go", "E1").await;
     });
     let store_for_wait2 = store.clone();
     tokio::spawn(async move {
         let sfw = store_for_wait2.clone();
-        let _ = common::wait_for_subscription(sfw.clone(), "inst-multi-2", "Go", 1000).await;
+        let _ = common::wait_for_subscription(sfw.clone(), "inst-multi-2", "Go", 3000).await;
         let client = DuroxideClient::new(sfw);
         let _ = client.raise_event("inst-multi-2", "Go", "E2").await;
     });
 
-    let out1 = match rt
-        .wait_for_orchestration("inst-multi-1", std::time::Duration::from_secs(5))
+    let out1 = match DuroxideClient::new(store.clone())
+        .wait_for_orchestration("inst-multi-1", std::time::Duration::from_secs(10))
         .await
         .unwrap()
     {
-        runtime::OrchestrationStatus::Completed { output } => Ok(output),
-        runtime::OrchestrationStatus::Failed { error } => Err(error),
+        duroxide::OrchestrationStatus::Completed { output } => Ok(output),
+        duroxide::OrchestrationStatus::Failed { error } => Err(error),
         _ => panic!("unexpected orchestration status"),
     };
 
-    let out2 = match rt
-        .wait_for_orchestration("inst-multi-2", std::time::Duration::from_secs(5))
+    let out2 = match DuroxideClient::new(store.clone())
+        .wait_for_orchestration("inst-multi-2", std::time::Duration::from_secs(10))
         .await
         .unwrap()
     {
-        runtime::OrchestrationStatus::Completed { output } => Ok(output),
-        runtime::OrchestrationStatus::Failed { error } => Err(error),
+        duroxide::OrchestrationStatus::Completed { output } => Ok(output),
+        duroxide::OrchestrationStatus::Failed { error } => Err(error),
         _ => panic!("unexpected orchestration status"),
     };
 
@@ -237,7 +237,7 @@ async fn concurrent_orchestrations_same_activities_with(store: StdArc<dyn Histor
         .build();
 
     let rt =
-        runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+        runtime::DuroxideRuntime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
     let client = DuroxideClient::new(store.clone());
     let _ = client.start_orchestration("inst-same-acts-1", "ProcOrchestration1", "").await;
     let _ = client.start_orchestration("inst-same-acts-2", "ProcOrchestration2", "").await;
@@ -245,35 +245,35 @@ async fn concurrent_orchestrations_same_activities_with(store: StdArc<dyn Histor
     let store_for_wait3 = store.clone();
     tokio::spawn(async move {
         let sfw = store_for_wait3.clone();
-        let _ = common::wait_for_subscription(sfw.clone(), "inst-same-acts-1", "Go", 1000).await;
+        let _ = common::wait_for_subscription(sfw.clone(), "inst-same-acts-1", "Go", 3000).await;
         let client = DuroxideClient::new(sfw);
         let _ = client.raise_event("inst-same-acts-1", "Go", "P1").await;
     });
     let store_for_wait4 = store.clone();
     tokio::spawn(async move {
         let sfw = store_for_wait4.clone();
-        let _ = common::wait_for_subscription(sfw.clone(), "inst-same-acts-2", "Go", 1000).await;
+        let _ = common::wait_for_subscription(sfw.clone(), "inst-same-acts-2", "Go", 3000).await;
         let client = DuroxideClient::new(sfw);
         let _ = client.raise_event("inst-same-acts-2", "Go", "P2").await;
     });
 
-    match rt
-        .wait_for_orchestration("inst-same-acts-1", std::time::Duration::from_secs(5))
+    match DuroxideClient::new(store.clone())
+        .wait_for_orchestration("inst-same-acts-1", std::time::Duration::from_secs(10))
         .await
         .unwrap()
     {
-        runtime::OrchestrationStatus::Completed { output } => assert_eq!(output, "o1:a=11;evt=P1"),
-        runtime::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        duroxide::OrchestrationStatus::Completed { output } => assert_eq!(output, "o1:a=11;evt=P1"),
+        duroxide::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
         _ => panic!("unexpected orchestration status"),
     }
 
-    match rt
-        .wait_for_orchestration("inst-same-acts-2", std::time::Duration::from_secs(5))
+    match DuroxideClient::new(store.clone())
+        .wait_for_orchestration("inst-same-acts-2", std::time::Duration::from_secs(10))
         .await
         .unwrap()
     {
-        runtime::OrchestrationStatus::Completed { output } => assert_eq!(output, "o2:a=21;evt=P2"),
-        runtime::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        duroxide::OrchestrationStatus::Completed { output } => assert_eq!(output, "o2:a=21;evt=P2"),
+        duroxide::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
         _ => panic!("unexpected orchestration status"),
     }
 

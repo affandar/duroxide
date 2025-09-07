@@ -7,10 +7,10 @@ use std::sync::Arc;
 
 // Helper to create runtime with registries for tests
 #[allow(dead_code)]
-async fn create_test_runtime(activity_registry: ActivityRegistry) -> Arc<runtime::Runtime> {
+async fn create_test_runtime(activity_registry: ActivityRegistry) -> Arc<runtime::DuroxideRuntime> {
     // Create a minimal orchestration registry for basic tests
     let orchestration_registry = OrchestrationRegistry::builder().build();
-    runtime::Runtime::start(Arc::new(activity_registry), orchestration_registry).await
+    runtime::DuroxideRuntime::start(Arc::new(activity_registry), orchestration_registry).await
 }
 
 // 1) Single-turn emission: ensure exactly one action per scheduled future and matching schedule event recorded.
@@ -85,13 +85,13 @@ async fn deterministic_replay_activity_only() {
         })
         .build();
 
-    let rt = runtime::Runtime::start(Arc::new(activity_registry), orchestration_registry).await;
-    rt.clone()
-        .start_orchestration("inst-unit-1", "TestOrchestration", "")
-        .await
-        .unwrap();
+    let store = SqliteHistoryStore::new_in_memory().await.unwrap();
+    let store = Arc::new(store) as Arc<dyn HistoryStore>;
+    let rt = runtime::DuroxideRuntime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+    let client = duroxide::DuroxideClient::new(store.clone());
+    client.start_orchestration("inst-unit-1", "TestOrchestration", "").await.unwrap();
 
-    let status = rt
+    let status = client
         .wait_for_orchestration("inst-unit-1", std::time::Duration::from_secs(5))
         .await
         .unwrap();
@@ -126,21 +126,24 @@ async fn runtime_duplicate_orchestration_deduped_single_execution() {
         })
         .build();
 
-    let rt = runtime::Runtime::start(Arc::new(activity_registry), orchestration_registry).await;
+    let store = SqliteHistoryStore::new_in_memory().await.unwrap();
+    let store = Arc::new(store) as Arc<dyn HistoryStore>;
+    let rt = runtime::DuroxideRuntime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
     let inst = "dup-orch";
 
+    let client = duroxide::DuroxideClient::new(store.clone());
     // Fire two start requests for the same instance
-    let _h1 = rt.clone().start_orchestration(inst, "TestOrch", "").await.unwrap();
-    let _h2 = rt.clone().start_orchestration(inst, "TestOrch", "").await.unwrap();
+    let _h1 = client.start_orchestration(inst, "TestOrch", "").await.unwrap();
+    let _h2 = client.start_orchestration(inst, "TestOrch", "").await.unwrap();
 
     // Both should resolve to the same single execution/result
-    match rt
+    match client
         .wait_for_orchestration(inst, std::time::Duration::from_secs(5))
         .await
         .unwrap()
     {
-        runtime::OrchestrationStatus::Completed { output } => assert_eq!(output, "ok"),
-        runtime::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        duroxide::OrchestrationStatus::Completed { output } => assert_eq!(output, "ok"),
+        duroxide::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
         _ => panic!("unexpected orchestration status"),
     }
 
@@ -185,14 +188,13 @@ async fn orchestration_descriptor_root_and_child() {
         .register("ParentDsc", parent)
         .register("ChildDsc", child)
         .build();
-    let rt = runtime::Runtime::start(Arc::new(activity_registry), reg).await;
-    let _h = rt
-        .clone()
-        .start_orchestration("inst-desc", "ParentDsc", "seed")
-        .await
-        .unwrap();
+    let store = SqliteHistoryStore::new_in_memory().await.unwrap();
+    let store = Arc::new(store) as Arc<dyn HistoryStore>;
+    let rt = runtime::DuroxideRuntime::start_with_store(store.clone(), Arc::new(activity_registry), reg).await;
+    let client = duroxide::DuroxideClient::new(store.clone());
+    let _h = client.start_orchestration("inst-desc", "ParentDsc", "seed").await.unwrap();
     // wait for completion
-    let _ = rt
+    let _ = client
         .wait_for_orchestration("inst-desc", std::time::Duration::from_secs(2))
         .await;
     // Root descriptor
@@ -224,22 +226,24 @@ async fn orchestration_status_apis() {
         .register("AlwaysFails", |_ctx, _| async move { Err("boom".to_string()) })
         .build();
 
-    let rt = runtime::Runtime::start(Arc::new(activity_registry), orchestration_registry).await;
+    let store = SqliteHistoryStore::new_in_memory().await.unwrap();
+    let store = Arc::new(store) as Arc<dyn HistoryStore>;
+    let rt = runtime::DuroxideRuntime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+    let client = duroxide::DuroxideClient::new(store.clone());
 
     // NotFound for unknown instance
-    let s = rt.get_orchestration_status("no-such").await;
+    let s = client.get_orchestration_status("no-such").await;
     assert!(matches!(s, OrchestrationStatus::NotFound));
 
     // Start a running orchestration; should be Running after dispatcher processes it
     let inst_running = "inst-status-running";
-    let _handle_running = rt
-        .clone()
+    let _handle_running = client
         .start_orchestration(inst_running, "ShortTimer", "")
         .await
         .unwrap();
     // Wait a bit for the orchestrator dispatcher to process the queued work item
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    let s1 = rt.get_orchestration_status(inst_running).await;
+    let s1 = client.get_orchestration_status(inst_running).await;
     // The orchestration should be running (waiting for timer)
     assert!(
         matches!(s1, OrchestrationStatus::Running),
@@ -248,16 +252,16 @@ async fn orchestration_status_apis() {
     );
 
     // After completion, should be Completed with output
-    match rt
+    match client
         .wait_for_orchestration(inst_running, std::time::Duration::from_secs(5))
         .await
         .unwrap()
     {
-        runtime::OrchestrationStatus::Completed { output } => assert_eq!(output, "ok"),
-        runtime::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        duroxide::OrchestrationStatus::Completed { output } => assert_eq!(output, "ok"),
+        duroxide::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
         _ => panic!("unexpected orchestration status"),
     }
-    let s2 = rt.get_orchestration_status(inst_running).await;
+    let s2 = client.get_orchestration_status(inst_running).await;
     assert!(matches!(s2, OrchestrationStatus::Completed { .. }));
     if let OrchestrationStatus::Completed { output } = s2 {
         assert_eq!(output, "ok");
@@ -265,22 +269,21 @@ async fn orchestration_status_apis() {
 
     // Failed orchestration
     let inst_fail = "inst-status-fail";
-    let _handle_fail = rt
-        .clone()
+    let _handle_fail = client
         .start_orchestration(inst_fail, "AlwaysFails", "")
         .await
         .unwrap();
 
-    match rt
+    match client
         .wait_for_orchestration(inst_fail, std::time::Duration::from_secs(5))
         .await
         .unwrap()
     {
-        runtime::OrchestrationStatus::Failed { error: _ } => {} // Expected failure
-        runtime::OrchestrationStatus::Completed { output } => panic!("expected failure, got: {output}"),
+        duroxide::OrchestrationStatus::Failed { error: _ } => {} // Expected failure
+        duroxide::OrchestrationStatus::Completed { output } => panic!("expected failure, got: {output}"),
         _ => panic!("unexpected orchestration status"),
     }
-    let s3 = rt.get_orchestration_status(inst_fail).await;
+    let s3 = client.get_orchestration_status(inst_fail).await;
     assert!(matches!(s3, OrchestrationStatus::Failed { .. }));
     if let OrchestrationStatus::Failed { error } = s3 {
         assert_eq!(error, "boom");

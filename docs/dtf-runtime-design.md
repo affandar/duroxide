@@ -299,7 +299,7 @@ graph TB
 
 **Key State:**
 ```rust
-pub struct Runtime {
+pub struct DuroxideRuntime {
     router: Arc<InstanceRouter>,
     history_store: Arc<dyn HistoryStore>,
     orchestration_registry: OrchestrationRegistry,
@@ -685,7 +685,7 @@ pub fn detect_await_mismatch(last: &[(&'static str, u64)], claims: &ClaimedIdsSn
 **Handles `ContinueAsNew` scenarios safely:**
 
 ```rust
-impl Runtime {
+impl DuroxideRuntime {
     async fn validate_completion_execution_id(&self, instance: &str, completion_execution_id: u64) -> bool {
         let current_execution_ids = self.current_execution_ids.lock().await;
         if let Some(&current_id) = current_execution_ids.get(instance) {

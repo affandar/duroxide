@@ -60,22 +60,19 @@ async fn error_handling_compensation_on_ship_failure_with(store: StdArc<dyn Hist
         .build();
 
     let rt =
-        runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
-    let _handle = rt
-        .clone()
-        .start_orchestration("inst-err-ship-1", "ErrorHandlingCompensation", "")
-        .await
-        .unwrap();
+        runtime::DuroxideRuntime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+    let client = duroxide::DuroxideClient::new(store.clone());
+    client.start_orchestration("inst-err-ship-1", "ErrorHandlingCompensation", "").await.unwrap();
 
-    match rt
+    match client
         .wait_for_orchestration("inst-err-ship-1", std::time::Duration::from_secs(5))
         .await
         .unwrap()
     {
-        runtime::OrchestrationStatus::Completed { output } => {
+        duroxide::OrchestrationStatus::Completed { output } => {
             assert!(output.starts_with("rolled_back:credited:"));
         }
-        runtime::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        duroxide::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
         _ => panic!("unexpected orchestration status"),
     }
     rt.shutdown().await;
@@ -112,20 +109,17 @@ async fn error_handling_success_path_with(store: StdArc<dyn HistoryStore>) {
         .build();
 
     let rt =
-        runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
-    let _handle = rt
-        .clone()
-        .start_orchestration("inst-err-ok-1", "ErrorHandlingSuccess", "")
-        .await
-        .unwrap();
+        runtime::DuroxideRuntime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+    let client = duroxide::DuroxideClient::new(store.clone());
+    client.start_orchestration("inst-err-ok-1", "ErrorHandlingSuccess", "").await.unwrap();
 
-    match rt
+    match client
         .wait_for_orchestration("inst-err-ok-1", std::time::Duration::from_secs(5))
         .await
         .unwrap()
     {
-        runtime::OrchestrationStatus::Completed { output } => assert_eq!(output, "ok"),
-        runtime::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        duroxide::OrchestrationStatus::Completed { output } => assert_eq!(output, "ok"),
+        duroxide::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
         _ => panic!("unexpected orchestration status"),
     }
     rt.shutdown().await;
@@ -163,22 +157,19 @@ async fn error_handling_early_debit_failure_with(store: StdArc<dyn HistoryStore>
         .build();
 
     let rt =
-        runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
-    let _handle = rt
-        .clone()
-        .start_orchestration("inst-err-debit-1", "DebitFailureTest", "")
-        .await
-        .unwrap();
+        runtime::DuroxideRuntime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+    let client = duroxide::DuroxideClient::new(store.clone());
+    client.start_orchestration("inst-err-debit-1", "DebitFailureTest", "").await.unwrap();
 
-    match rt
+    match client
         .wait_for_orchestration("inst-err-debit-1", std::time::Duration::from_secs(5))
         .await
         .unwrap()
     {
-        runtime::OrchestrationStatus::Completed { output } => {
+        duroxide::OrchestrationStatus::Completed { output } => {
             assert!(output.starts_with("debit_failed:"));
         }
-        runtime::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        duroxide::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
         _ => panic!("unexpected orchestration status"),
     }
     rt.shutdown().await;
@@ -211,22 +202,19 @@ async fn unknown_activity_fails_with(store: StdArc<dyn HistoryStore>) {
         .build();
 
     let rt =
-        runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
-    let _handle = rt
-        .clone()
-        .start_orchestration("inst-unknown-act-1", "MissingActivityTest", "")
-        .await
-        .unwrap();
+        runtime::DuroxideRuntime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+    let client = duroxide::DuroxideClient::new(store.clone());
+    client.start_orchestration("inst-unknown-act-1", "MissingActivityTest", "").await.unwrap();
 
-    match rt
+    match client
         .wait_for_orchestration("inst-unknown-act-1", std::time::Duration::from_secs(5))
         .await
         .unwrap()
     {
-        runtime::OrchestrationStatus::Completed { output } => {
+        duroxide::OrchestrationStatus::Completed { output } => {
             assert!(output.starts_with("err=unregistered:Missing"));
         }
-        runtime::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        duroxide::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
         _ => panic!("unexpected orchestration status"),
     }
     rt.shutdown().await;
@@ -256,26 +244,23 @@ async fn event_after_completion_is_ignored_fs() {
         .build();
 
     let rt =
-        runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+        runtime::DuroxideRuntime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
     let store_for_wait = store.clone();
-    let rt_c = rt.clone();
+    let client_c = duroxide::DuroxideClient::new(store.clone());
+    let client = duroxide::DuroxideClient::new(store.clone());
     tokio::spawn(async move {
         let _ = common::wait_for_subscription(store_for_wait, instance, "Once", 1000).await;
-        rt_c.raise_event(instance, "Once", "go").await;
+        let _ = client_c.raise_event(instance, "Once", "go").await;
     });
-    let _handle = rt
-        .clone()
-        .start_orchestration(instance, "PostCompleteTest", "")
-        .await
-        .unwrap();
+    client.start_orchestration(instance, "PostCompleteTest", "").await.unwrap();
 
-    match rt
+    match client
         .wait_for_orchestration(instance, std::time::Duration::from_secs(5))
         .await
         .unwrap()
     {
-        runtime::OrchestrationStatus::Completed { output } => assert_eq!(output, "done"),
-        runtime::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        duroxide::OrchestrationStatus::Completed { output } => assert_eq!(output, "done"),
+        duroxide::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
         _ => panic!("unexpected orchestration status"),
     }
     // Allow runtime to append OrchestrationCompleted terminal event
@@ -283,7 +268,7 @@ async fn event_after_completion_is_ignored_fs() {
     let before = store.read(instance).await.len();
 
     // Raise another event after completion
-    rt.raise_event(instance, "Once", "late").await;
+    let _ = client.raise_event(instance, "Once", "late").await;
     // Give router a moment
     tokio::time::sleep(std::time::Duration::from_millis(5)).await;
     let hist_after = store.read(instance).await;
@@ -318,34 +303,31 @@ async fn event_before_subscription_after_start_is_ignored() {
         .build();
 
     let rt =
-        runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+        runtime::DuroxideRuntime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+    let client = duroxide::DuroxideClient::new(store.clone());
     // Orchestration: delay, then subscribe
     let instance = "inst-pre-sub-drop-1";
-    let rt_c1 = rt.clone();
+    let client_c1 = duroxide::DuroxideClient::new(store.clone());
     tokio::spawn(async move {
         // Raise early before subscription exists (timer delays subscription)
         tokio::time::sleep(std::time::Duration::from_millis(1)).await;
-        rt_c1.raise_event(instance, "Evt", "early").await;
+        let _ = client_c1.raise_event(instance, "Evt", "early").await;
     });
     let store_for_wait2 = store.clone();
-    let rt_c2 = rt.clone();
+    let client_c2 = duroxide::DuroxideClient::new(store.clone());
     tokio::spawn(async move {
         let _ = common::wait_for_subscription(store_for_wait2, instance, "Evt", 1000).await;
-        rt_c2.raise_event(instance, "Evt", "late").await;
+        let _ = client_c2.raise_event(instance, "Evt", "late").await;
     });
-    let _handle = rt
-        .clone()
-        .start_orchestration(instance, "PreSubscriptionTest", "")
-        .await
-        .unwrap();
+    client.start_orchestration(instance, "PreSubscriptionTest", "").await.unwrap();
 
-    match rt
+    match client
         .wait_for_orchestration(instance, std::time::Duration::from_secs(5))
         .await
         .unwrap()
     {
-        runtime::OrchestrationStatus::Completed { output } => assert_eq!(output, "late"),
-        runtime::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        duroxide::OrchestrationStatus::Completed { output } => assert_eq!(output, "late"),
+        duroxide::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
         _ => panic!("unexpected orchestration status"),
     }
     rt.shutdown().await;
@@ -371,20 +353,17 @@ async fn history_cap_exceeded_with(store: StdArc<dyn HistoryStore>) {
         .build();
 
     let rt =
-        runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
-    let _handle = rt
-        .clone()
-        .start_orchestration("inst-cap-exceed", "HistoryCapTest", "")
-        .await
-        .unwrap();
+        runtime::DuroxideRuntime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+    let client = duroxide::DuroxideClient::new(store.clone());
+    client.start_orchestration("inst-cap-exceed", "HistoryCapTest", "").await.unwrap();
 
     // Expect runtime to report Err result via waiter on append failure
-    match rt
+    match client
         .wait_for_orchestration("inst-cap-exceed", std::time::Duration::from_secs(10))
         .await
     {
-        Ok(runtime::OrchestrationStatus::Failed { error: _ }) => {} // Expected failure due to history capacity
-        Ok(runtime::OrchestrationStatus::Completed { output }) => {
+        Ok(duroxide::OrchestrationStatus::Failed { error: _ }) => {} // Expected failure due to history capacity
+        Ok(duroxide::OrchestrationStatus::Completed { output }) => {
             panic!("expected failure due to history capacity, got: {output}")
         }
         Ok(_) => panic!("unexpected orchestration status"),
@@ -421,20 +400,17 @@ async fn orchestration_immediate_fail_fs() {
         .build();
 
     let rt =
-        runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
-    let _handle = rt
-        .clone()
-        .start_orchestration("inst-fail-imm", "AlwaysErr", "")
-        .await
-        .unwrap();
+        runtime::DuroxideRuntime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+    let client = duroxide::DuroxideClient::new(store.clone());
+    client.start_orchestration("inst-fail-imm", "AlwaysErr", "").await.unwrap();
 
-    match rt
+    match client
         .wait_for_orchestration("inst-fail-imm", std::time::Duration::from_secs(5))
         .await
         .unwrap()
     {
-        runtime::OrchestrationStatus::Failed { error: _ } => {} // Expected failure
-        runtime::OrchestrationStatus::Completed { output } => panic!("expected failure, got: {output}"),
+        duroxide::OrchestrationStatus::Failed { error: _ } => {} // Expected failure
+        duroxide::OrchestrationStatus::Completed { output } => panic!("expected failure, got: {output}"),
         _ => panic!("unexpected orchestration status"),
     }
 
@@ -451,7 +427,7 @@ async fn orchestration_immediate_fail_fs() {
         duroxide::Event::OrchestrationFailed { .. }
     ));
     // Status API should report Failed with same error
-    match rt.get_orchestration_status("inst-fail-imm").await {
+    match client.get_orchestration_status("inst-fail-imm").await {
         duroxide::OrchestrationStatus::Failed { error } => assert_eq!(error, "oops"),
         other => panic!("unexpected status: {other:?}"),
     }
@@ -473,20 +449,17 @@ async fn orchestration_propagates_activity_failure_fs() {
         .build();
 
     let rt =
-        runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
-    let _handle = rt
-        .clone()
-        .start_orchestration("inst-fail-prop", "PropagateFail", "")
-        .await
-        .unwrap();
+        runtime::DuroxideRuntime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+    let client = duroxide::DuroxideClient::new(store.clone());
+    client.start_orchestration("inst-fail-prop", "PropagateFail", "").await.unwrap();
 
-    match rt
+    match client
         .wait_for_orchestration("inst-fail-prop", std::time::Duration::from_secs(5))
         .await
         .unwrap()
     {
-        runtime::OrchestrationStatus::Failed { error } => assert_eq!(error, "bad"),
-        runtime::OrchestrationStatus::Completed { output } => panic!("expected failure, got: {output}"),
+        duroxide::OrchestrationStatus::Failed { error } => assert_eq!(error, "bad"),
+        duroxide::OrchestrationStatus::Completed { output } => panic!("expected failure, got: {output}"),
         _ => panic!("unexpected orchestration status"),
     }
 
@@ -496,7 +469,7 @@ async fn orchestration_propagates_activity_failure_fs() {
         hist.last().unwrap(),
         duroxide::Event::OrchestrationFailed { .. }
     ));
-    match rt.get_orchestration_status("inst-fail-prop").await {
+    match client.get_orchestration_status("inst-fail-prop").await {
         duroxide::OrchestrationStatus::Failed { error } => assert_eq!(error, "bad"),
         other => panic!("unexpected status: {other:?}"),
     }
@@ -520,13 +493,11 @@ async fn typed_activity_decode_error_fs() {
     let orchestration_registry = OrchestrationRegistry::builder()
         .register("BadInputToTypedActivity", orch)
         .build();
-    let rt = runtime::Runtime::start_with_store(store, Arc::new(activity_registry), orchestration_registry).await;
-    rt.clone()
-        .start_orchestration("inst-typed-bad", "BadInputToTypedActivity", "")
-        .await
-        .unwrap();
+    let rt = runtime::DuroxideRuntime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+    let client = duroxide::DuroxideClient::new(store.clone());
+    client.start_orchestration("inst-typed-bad", "BadInputToTypedActivity", "").await.unwrap();
 
-    let status = rt
+    let status = client
         .wait_for_orchestration("inst-typed-bad", std::time::Duration::from_secs(5))
         .await
         .unwrap();
@@ -561,20 +532,20 @@ async fn typed_event_decode_error_fs() {
         .register_typed::<String, String, _, _>("TypedEvt", orch)
         .build();
     let rt =
-        runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
-    let rt_c = rt.clone();
+        runtime::DuroxideRuntime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+    let client = duroxide::DuroxideClient::new(store.clone());
     let store_for_wait = store.clone();
     tokio::spawn(async move {
         let _ = crate::common::wait_for_subscription(store_for_wait, "inst-typed-evt", "Evt", 1000).await;
         // invalid payload for AOnly
-        rt_c.raise_event("inst-typed-evt", "Evt", "not-json").await;
+        let _ = client.raise_event("inst-typed-evt", "Evt", "not-json").await;
     });
-    rt.clone()
+    duroxide::DuroxideClient::new(store.clone())
         .start_orchestration_typed::<String>("inst-typed-evt", "TypedEvt", "".to_string())
         .await
         .unwrap();
 
-    let status = rt
+    let status = duroxide::DuroxideClient::new(store.clone())
         .wait_for_orchestration_typed::<String>("inst-typed-evt", std::time::Duration::from_secs(5))
         .await
         .unwrap();

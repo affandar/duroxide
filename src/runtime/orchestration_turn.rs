@@ -423,7 +423,7 @@ impl OrchestrationTurn {
     pub async fn persist_changes(
         &mut self,
         _history_store: Arc<dyn HistoryStore>,
-        runtime: &Arc<crate::runtime::Runtime>,
+        runtime: &Arc<crate::runtime::DuroxideRuntime>,
     ) -> Result<(), String> {
         debug!(
             instance = %self.instance,

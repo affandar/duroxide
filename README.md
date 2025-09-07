@@ -76,7 +76,7 @@ let orch = |ctx: OrchestrationContext, name: String| async move {
     Ok::<_, String>(res)
 };
 let orchestrations = OrchestrationRegistry::builder().register("HelloWorld", orch).build();
-let rt = runtime::Runtime::start_with_store(store, Arc::new(activities), orchestrations).await;
+let rt = runtime::DuroxideRuntime::start_with_store(store, Arc::new(activities), orchestrations).await;
 rt.clone().start_orchestration("inst-hello-1", "HelloWorld", "Rust").await.unwrap();
 match rt.wait_for_orchestration("inst-hello-1", std::time::Duration::from_secs(5)).await.unwrap() {
     runtime::OrchestrationStatus::Completed { output } => assert_eq!(output, "Hello, Rust!"),

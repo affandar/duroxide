@@ -30,7 +30,7 @@ async fn single_timer_fires() {
 
     let reg = OrchestrationRegistry::builder().register("OneTimer", orch).build();
     let acts = ActivityRegistry::builder().build();
-    let rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(acts), reg).await;
+    let rt = runtime::DuroxideRuntime::start_with_store(store.clone(), StdArc::new(acts), reg).await;
     let client = DuroxideClient::new(store.clone());
 
     let start = std::time::Instant::now();
@@ -39,7 +39,7 @@ async fn single_timer_fires() {
         .await
         .unwrap();
 
-    let status = rt
+    let status = client
         .wait_for_orchestration("inst-one", std::time::Duration::from_secs(5))
         .await
         .unwrap();
@@ -79,7 +79,7 @@ async fn multiple_timers_ordering() {
 
     let reg = OrchestrationRegistry::builder().register("TwoTimers", orch).build();
     let acts = ActivityRegistry::builder().build();
-    let rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(acts), reg).await;
+    let rt = runtime::DuroxideRuntime::start_with_store(store.clone(), StdArc::new(acts), reg).await;
     let client = DuroxideClient::new(store.clone());
 
     let start = std::time::Instant::now();
@@ -88,7 +88,7 @@ async fn multiple_timers_ordering() {
         .await
         .unwrap();
 
-    let status = rt
+    let status = client
         .wait_for_orchestration("inst-two", std::time::Duration::from_secs(5))
         .await
         .unwrap();
@@ -129,7 +129,7 @@ async fn timer_deduplication() {
 
     let reg = OrchestrationRegistry::builder().register("DedupTimer", orch).build();
     let acts = ActivityRegistry::builder().build();
-    let rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(acts), reg).await;
+    let rt = runtime::DuroxideRuntime::start_with_store(store.clone(), StdArc::new(acts), reg).await;
     let client = DuroxideClient::new(store.clone());
 
     let inst = "inst-dedup";
@@ -195,7 +195,7 @@ async fn sub_second_timer_precision() {
 
     let reg = OrchestrationRegistry::builder().register("SubSecondTimer", orch).build();
     let acts = ActivityRegistry::builder().build();
-    let rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(acts), reg).await;
+    let rt = runtime::DuroxideRuntime::start_with_store(store.clone(), StdArc::new(acts), reg).await;
     let client = DuroxideClient::new(store.clone());
 
     let start = std::time::Instant::now();
@@ -204,7 +204,7 @@ async fn sub_second_timer_precision() {
         .await
         .unwrap();
         
-    let status = rt
+    let status = client
         .wait_for_orchestration("inst-subsec", std::time::Duration::from_secs(5))
         .await
         .unwrap();
@@ -235,7 +235,7 @@ async fn timer_wall_clock_delay() {
 
     let reg = OrchestrationRegistry::builder().register("DelayTimer", orch).build();
     let acts = ActivityRegistry::builder().build();
-    let rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(acts), reg).await;
+    let rt = runtime::DuroxideRuntime::start_with_store(store.clone(), StdArc::new(acts), reg).await;
     let client = DuroxideClient::new(store.clone());
 
     let start = std::time::Instant::now();
@@ -244,7 +244,7 @@ async fn timer_wall_clock_delay() {
         .await
         .unwrap();
 
-    let status = rt
+    let status = client
         .wait_for_orchestration("inst-delay", std::time::Duration::from_secs(10))
         .await
         .unwrap();

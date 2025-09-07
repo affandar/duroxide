@@ -32,20 +32,15 @@ async fn unknown_activity_is_isolated_from_other_orchestrations_fs() {
         .build();
 
     let rt =
-        runtime::Runtime::start_with_store(store.clone(), StdArc::new(activity_registry), orchestration_registry).await;
+        runtime::DuroxideRuntime::start_with_store(store.clone(), StdArc::new(activity_registry), orchestration_registry).await;
+    let client = duroxide::DuroxideClient::new(store.clone());
 
     // Start both orchestrations concurrently
-    rt.clone()
-        .start_orchestration("inst-missing-1", "UsesMissing", "")
-        .await
-        .unwrap();
-    rt.clone()
-        .start_orchestration("inst-healthy-1", "Healthy", "yo")
-        .await
-        .unwrap();
+    client.start_orchestration("inst-missing-1", "UsesMissing", "").await.unwrap();
+    client.start_orchestration("inst-healthy-1", "Healthy", "yo").await.unwrap();
 
     // Wait for both and assert expected outcomes
-    let status_ok = rt
+    let status_ok = client
         .wait_for_orchestration("inst-healthy-1", std::time::Duration::from_secs(5))
         .await
         .unwrap();
@@ -63,7 +58,7 @@ async fn unknown_activity_is_isolated_from_other_orchestrations_fs() {
     );
     assert!(matches!(hist_ok.last().unwrap(), Event::OrchestrationCompleted { .. }));
 
-    let status_fail = rt
+    let status_fail = client
         .wait_for_orchestration("inst-missing-1", std::time::Duration::from_secs(5))
         .await
         .unwrap();
@@ -85,11 +80,11 @@ async fn unknown_activity_is_isolated_from_other_orchestrations_fs() {
     );
 
     // Status API should reflect isolation as well
-    match rt.get_orchestration_status("inst-healthy-1").await {
+    match client.get_orchestration_status("inst-healthy-1").await {
         OrchestrationStatus::Completed { output } => assert_eq!(output, "healthy:yo"),
         other => panic!("unexpected status for healthy: {other:?}"),
     }
-    match rt.get_orchestration_status("inst-missing-1").await {
+    match client.get_orchestration_status("inst-missing-1").await {
         OrchestrationStatus::Failed { error } => assert_eq!(error, "unregistered:Missing"),
         other => panic!("unexpected status for missing: {other:?}"),
     }
@@ -120,18 +115,13 @@ async fn unknown_activity_is_isolated_from_other_orchestrations_inmem() {
         .build();
 
     let rt =
-        runtime::Runtime::start_with_store(store.clone(), StdArc::new(activity_registry), orchestration_registry).await;
+        runtime::DuroxideRuntime::start_with_store(store.clone(), StdArc::new(activity_registry), orchestration_registry).await;
+    let client = duroxide::DuroxideClient::new(store.clone());
 
-    rt.clone()
-        .start_orchestration("inst-missing-im", "UsesMissing", "")
-        .await
-        .unwrap();
-    rt.clone()
-        .start_orchestration("inst-healthy-im", "Healthy", "yo")
-        .await
-        .unwrap();
+    client.start_orchestration("inst-missing-im", "UsesMissing", "").await.unwrap();
+    client.start_orchestration("inst-healthy-im", "Healthy", "yo").await.unwrap();
 
-    let status_ok = rt
+    let status_ok = client
         .wait_for_orchestration("inst-healthy-im", std::time::Duration::from_secs(5))
         .await
         .unwrap();
@@ -142,7 +132,7 @@ async fn unknown_activity_is_isolated_from_other_orchestrations_inmem() {
     };
     assert_eq!(out_ok, "healthy:yo");
 
-    let status_fail = rt
+    let status_fail = client
         .wait_for_orchestration("inst-missing-im", std::time::Duration::from_secs(5))
         .await
         .unwrap();
@@ -153,11 +143,11 @@ async fn unknown_activity_is_isolated_from_other_orchestrations_inmem() {
     };
     assert_eq!(error_fail, "unregistered:Missing");
 
-    match rt.get_orchestration_status("inst-healthy-im").await {
+    match client.get_orchestration_status("inst-healthy-im").await {
         OrchestrationStatus::Completed { output } => assert_eq!(output, "healthy:yo"),
         other => panic!("unexpected status for healthy: {other:?}"),
     }
-    match rt.get_orchestration_status("inst-missing-im").await {
+    match client.get_orchestration_status("inst-missing-im").await {
         OrchestrationStatus::Failed { error } => assert_eq!(error, "unregistered:Missing"),
         other => panic!("unexpected status for missing: {other:?}"),
     }

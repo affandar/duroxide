@@ -127,7 +127,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .register("FanOutFanIn", orchestration)
         .build();
 
-    let rt = runtime::Runtime::start_with_store(
+    let rt = runtime::DuroxideRuntime::start_with_store(
         store.clone(),
         Arc::new(activities),
         orchestrations,
@@ -145,16 +145,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = DuroxideClient::new(store);
     client.start_orchestration(instance_id, "FanOutFanIn", users_json).await?;
 
-    match rt
+    match client
         .wait_for_orchestration(instance_id, std::time::Duration::from_secs(10))
         .await
         .map_err(|e| format!("Wait error: {:?}", e))?
     {
-        runtime::OrchestrationStatus::Completed { output } => {
+        duroxide::OrchestrationStatus::Completed { output } => {
             println!("✅ Fan-out/fan-in orchestration completed!");
             println!("Result: {}", output);
         }
-        runtime::OrchestrationStatus::Failed { error } => {
+        duroxide::OrchestrationStatus::Failed { error } => {
             println!("❌ Orchestration failed: {}", error);
         }
         _ => {
