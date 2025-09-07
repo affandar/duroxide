@@ -49,9 +49,6 @@ impl OrchestrationRegistry {
         }
     }
 
-    pub fn get(&self, name: &str) -> Option<Arc<dyn OrchestrationHandler>> {
-        self.inner.get(name)?.iter().next_back().map(|(_v, h)| h.clone())
-    }
 
     pub fn resolve_exact(&self, name: &str, v: &Version) -> Option<Arc<dyn OrchestrationHandler>> {
         self.inner.get(name)?.get(v).cloned()

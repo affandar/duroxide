@@ -67,7 +67,8 @@ async fn test_sqlite_file_concurrent_orchestrations() {
     let db_path = temp_dir.path().join("orchestrations.db");
     
     // Create an empty file to ensure it exists
-    std::fs::File::create(&db_path).expect("Failed to create database file");
+    std::fs::File::create(&db_path).expect("Failed to create database file")
+    ;
     
     let db_url = format!("sqlite:{}", db_path.to_str().unwrap());
     

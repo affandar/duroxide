@@ -51,7 +51,7 @@ async fn unknown_activity_is_isolated_from_other_orchestrations_fs() {
     };
     assert_eq!(out_ok, "healthy:yo");
 
-    let hist_ok = rt.get_execution_history("inst-healthy-1", 1).await;
+    let hist_ok = client.get_execution_history("inst-healthy-1", 1).await;
     assert!(
         !hist_ok.iter().any(|e| matches!(e, Event::ActivityFailed { .. })),
         "healthy orchestration should not see failures"
@@ -69,7 +69,7 @@ async fn unknown_activity_is_isolated_from_other_orchestrations_fs() {
     };
     assert_eq!(error_fail, "unregistered:Missing");
 
-    let hist_fail = rt.get_execution_history("inst-missing-1", 1).await;
+    let hist_fail = client.get_execution_history("inst-missing-1", 1).await;
     assert!(
         hist_fail
             .iter()

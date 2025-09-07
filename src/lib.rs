@@ -185,7 +185,6 @@ pub mod runtime;
 pub mod client;
 // Re-export descriptor type for public API ergonomics
 pub use runtime::OrchestrationDescriptor;
-pub mod logging;
 pub mod providers;
 
 // Re-export key runtime types for convenience
@@ -197,7 +196,7 @@ pub(crate) const SYSTEM_NEW_GUID_ACTIVITY: &str = "__system_new_guid";
 pub(crate) const SYSTEM_TRACE_ACTIVITY: &str = "__system_trace";
 
 use crate::_typed_codec::Codec;
-use crate::logging::LogLevel;
+// LogLevel is now defined locally in this file
 use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -306,6 +305,14 @@ pub enum Event {
 
 }
 
+/// Log levels for orchestration context logging.
+#[derive(Debug, Clone)]
+pub enum LogLevel {
+    Info,
+    Warn,
+    Error,
+}
+
 /// Declarative decisions produced by an orchestration turn. The host/provider
 /// is responsible for materializing these into corresponding `Event`s.
 #[derive(Debug, Clone)]
@@ -356,14 +363,6 @@ struct CtxInner {
     // Per-turn buffered logs (messages to flush once per progress turn)
     log_buffer: Vec<(LogLevel, String)>,
 
-    // Reserved for future use: per-turn claimed ids to coordinate multiple futures
-    // (prevent re-scheduling the same id). Currently unused.
-    #[allow(dead_code)]
-    claimed_activity_ids: std::collections::HashSet<u64>,
-    #[allow(dead_code)]
-    claimed_timer_ids: std::collections::HashSet<u64>,
-    #[allow(dead_code)]
-    claimed_external_ids: std::collections::HashSet<u64>,
 }
 
 impl CtxInner {
@@ -402,9 +401,6 @@ impl CtxInner {
             turn_index: 0,
             logging_enabled_this_poll: false,
             log_buffer: Vec::new(),
-            claimed_activity_ids: Default::default(),
-            claimed_timer_ids: Default::default(),
-            claimed_external_ids: Default::default(),
         }
     }
 
@@ -504,27 +500,6 @@ impl OrchestrationContext {
         self.trace("DEBUG", message.into())
     }
 
-    /// Return current wall-clock time from a system activity in milliseconds since epoch.
-    /// DEPRECATED: Use `utcnow_ms()` instead.
-    #[deprecated(note = "Use utcnow_ms() instead")]
-    pub async fn system_now_ms(&self) -> u128 {
-        self.schedule_activity(SYSTEM_NOW_ACTIVITY, "")
-            .into_activity()
-            .await
-            .unwrap_or_default()
-            .parse::<u128>()
-            .unwrap_or(0)
-    }
-
-    /// Return a new pseudo-GUID string from a system activity.
-    /// DEPRECATED: Use `new_guid()` instead.
-    #[deprecated(note = "Use new_guid() instead")]
-    pub async fn system_new_guid(&self) -> String {
-        self.schedule_activity(SYSTEM_NEW_GUID_ACTIVITY, "")
-            .into_activity()
-            .await
-            .unwrap_or_default()
-    }
 
     /// Generate a new deterministic GUID.
     /// This is syntactic sugar for scheduling the system GUID activity.
@@ -751,11 +726,10 @@ impl OrchestrationContext {
                     name: n,
                     input: inp,
                     execution_id: _,
-                } if n == &name && inp == &input && !inner.claimed_activity_ids.contains(id) => Some(*id),
+                } if n == &name && inp == &input => Some(*id),
                 _ => None,
             })
             .unwrap_or_else(|| inner.next_id());
-        inner.claimed_activity_ids.insert(adopted_id);
         drop(inner);
         DurableFuture(Kind::Activity {
             id: adopted_id,
@@ -806,16 +780,15 @@ impl OrchestrationContext {
     /// ```
     pub fn schedule_timer(&self, delay_ms: u64) -> DurableFuture {
         let mut inner = self.inner.lock().unwrap();
-        // Adopt first unclaimed TimerCreated id if any, else allocate
+        // Adopt first TimerCreated id if any, else allocate
         let adopted_id = inner
             .history
             .iter()
             .find_map(|e| match e {
-                Event::TimerCreated { id, .. } if !inner.claimed_timer_ids.contains(id) => Some(*id),
+                Event::TimerCreated { id, .. } => Some(*id),
                 _ => None,
             })
             .unwrap_or_else(|| inner.next_id());
-        inner.claimed_timer_ids.insert(adopted_id);
         drop(inner);
         DurableFuture(Kind::Timer {
             id: adopted_id,
@@ -829,18 +802,17 @@ impl OrchestrationContext {
     pub fn schedule_wait(&self, name: impl Into<String>) -> DurableFuture {
         let name: String = name.into();
         let mut inner = self.inner.lock().unwrap();
-        // Adopt existing subscription id for this name if present and unclaimed, else allocate
+        // Adopt existing subscription id for this name if present, else allocate
         let adopted_id = inner
             .history
             .iter()
             .find_map(|e| match e {
-                Event::ExternalSubscribed { id, name: n } if n == &name && !inner.claimed_external_ids.contains(id) => {
+                Event::ExternalSubscribed { id, name: n } if n == &name => {
                     Some(*id)
                 }
                 _ => None,
             })
             .unwrap_or_else(|| inner.next_id());
-        inner.claimed_external_ids.insert(adopted_id);
         drop(inner);
         DurableFuture(Kind::External {
             id: adopted_id,
@@ -1212,9 +1184,30 @@ impl OrchestrationContext {
     pub(crate) fn claimed_ids_snapshot(&self) -> ClaimedIdsSnapshot {
         let inner = self.inner.lock().unwrap();
         ClaimedIdsSnapshot {
-            activities: inner.claimed_activity_ids.clone(),
-            timers: inner.claimed_timer_ids.clone(),
-            externals: inner.claimed_external_ids.clone(),
+            activities: inner
+                .history
+                .iter()
+                .filter_map(|e| match e {
+                    Event::ActivityScheduled { id, .. } => Some(*id),
+                    _ => None,
+                })
+                .collect(),
+            timers: inner
+                .history
+                .iter()
+                .filter_map(|e| match e {
+                    Event::TimerCreated { id, .. } => Some(*id),
+                    _ => None,
+                })
+                .collect(),
+            externals: inner
+                .history
+                .iter()
+                .filter_map(|e| match e {
+                    Event::ExternalSubscribed { id, .. } => Some(*id),
+                    _ => None,
+                })
+                .collect(),
             sub_orchestrations: inner
                 .history
                 .iter()

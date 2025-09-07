@@ -83,7 +83,7 @@ async fn orchestration_completes_and_replays_deterministically_with(store: StdAr
     assert!(output.contains("b=2!"));
 
     // Check history for expected events
-    let final_history = rt.get_execution_history("inst-orch-1", 1).await;
+    let final_history = client.get_execution_history("inst-orch-1", 1).await;
     // Includes OrchestrationStarted + 4 schedule/complete pairs + terminal OrchestrationCompleted
     assert_eq!(
         final_history.len(),
@@ -204,7 +204,7 @@ async fn sequential_activity_chain_completes_with(store: StdArc<dyn HistoryStore
     }
 
     // Check history for expected events
-    let final_history = rt.get_execution_history("inst-seq-1", 1).await;
+    let final_history = client.get_execution_history("inst-seq-1", 1).await;
     // Includes OrchestrationStarted + 3 schedule/complete pairs + terminal OrchestrationCompleted
     assert_eq!(
         final_history.len(),

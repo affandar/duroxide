@@ -21,11 +21,12 @@ async fn wait_external_completes_with(store: StdArc<dyn HistoryStore>) {
     let rt =
         runtime::DuroxideRuntime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
     let store_for_wait = store.clone();
-    let client = duroxide::DuroxideClient::new(store.clone());
+    let client_for_event = duroxide::DuroxideClient::new(store.clone());
     tokio::spawn(async move {
         let _ = common::wait_for_subscription(store_for_wait, "inst-wait-1", "Only", 1000).await;
-        let _ = client.raise_event("inst-wait-1", "Only", "payload").await;
+        let _ = client_for_event.raise_event("inst-wait-1", "Only", "payload").await;
     });
+    let client = duroxide::DuroxideClient::new(store.clone());
     duroxide::DuroxideClient::new(store.clone())
         .start_orchestration("inst-wait-1", "WaitExternal", "")
         .await
@@ -42,7 +43,7 @@ async fn wait_external_completes_with(store: StdArc<dyn HistoryStore>) {
     }
 
     // Check history for expected events
-    let final_history = rt.get_execution_history("inst-wait-1", 1).await;
+    let final_history = client.get_execution_history("inst-wait-1", 1).await;
     // First event is OrchestrationStarted; then subscription, event, and terminal completion
     assert!(matches!(final_history[0], Event::OrchestrationStarted { .. }));
     assert!(matches!(final_history[1], Event::ExternalSubscribed { .. }));
@@ -79,13 +80,14 @@ async fn race_external_vs_timer_ordering_with(store: StdArc<dyn HistoryStore>) {
     let rt =
         runtime::DuroxideRuntime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
     let store_for_wait = store.clone();
-    let client = duroxide::DuroxideClient::new(store.clone());
+    let client_for_event = duroxide::DuroxideClient::new(store.clone());
     tokio::spawn(async move {
         let _ = common::wait_for_subscription(store_for_wait, "inst-race-order-1", "Race", 1000).await;
         // Post-subscription delay to allow timer(10ms) to win deterministically
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-        let _ = client.raise_event("inst-race-order-1", "Race", "ok").await;
+        let _ = client_for_event.raise_event("inst-race-order-1", "Race", "ok").await;
     });
+    let client = duroxide::DuroxideClient::new(store.clone());
     duroxide::DuroxideClient::new(store.clone())
         .start_orchestration("inst-race-order-1", "RaceOrchestration", "")
         .await
@@ -102,7 +104,7 @@ async fn race_external_vs_timer_ordering_with(store: StdArc<dyn HistoryStore>) {
     }
 
     // Check history for expected events
-    let final_history = rt.get_execution_history("inst-race-order-1", 1).await;
+    let final_history = client.get_execution_history("inst-race-order-1", 1).await;
     let idx_t = final_history
         .iter()
         .position(|e| matches!(e, Event::TimerFired { .. }))
@@ -146,11 +148,12 @@ async fn race_event_vs_timer_event_wins_with(store: StdArc<dyn HistoryStore>) {
     let rt =
         runtime::DuroxideRuntime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
     let store_for_wait = store.clone();
-    let client = duroxide::DuroxideClient::new(store.clone());
+    let client_for_event = duroxide::DuroxideClient::new(store.clone());
     tokio::spawn(async move {
         let _ = common::wait_for_subscription(store_for_wait, "inst-race-order-2", "Race", 1000).await;
-        let _ = client.raise_event("inst-race-order-2", "Race", "ok").await;
+        let _ = client_for_event.raise_event("inst-race-order-2", "Race", "ok").await;
     });
+    let client = duroxide::DuroxideClient::new(store.clone());
     duroxide::DuroxideClient::new(store.clone())
         .start_orchestration("inst-race-order-2", "RaceEventVsTimer", "")
         .await
@@ -170,7 +173,7 @@ async fn race_event_vs_timer_event_wins_with(store: StdArc<dyn HistoryStore>) {
     assert_eq!(output, "ok");
 
     // Check history for expected events
-    let final_history = rt.get_execution_history("inst-race-order-2", 1).await;
+    let final_history = client.get_execution_history("inst-race-order-2", 1).await;
     let idx_e = final_history
         .iter()
         .position(|e| matches!(e, Event::ExternalEvent { .. }))

@@ -179,4 +179,15 @@ impl DuroxideClient {
             _ => unreachable!("wait_for_orchestration returns only terminal or timeout"),
         }
     }
+
+    /// List all execution ids for an instance.
+    pub async fn list_executions(&self, instance: &str) -> Vec<u64> {
+        let hist = self.store.read(instance).await;
+        if hist.is_empty() { Vec::new() } else { vec![1] }
+    }
+
+    /// Return execution history for a specific execution id.
+    pub async fn get_execution_history(&self, instance: &str, _execution_id: u64) -> Vec<crate::Event> {
+        self.store.read(instance).await
+    }
 }

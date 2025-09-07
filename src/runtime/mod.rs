@@ -11,7 +11,6 @@ use tracing::{debug, error, warn};
 pub mod dispatch;
 pub mod registry;
 pub mod router;
-pub mod status;
 mod timers;
 use async_trait::async_trait;
 

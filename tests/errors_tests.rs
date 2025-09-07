@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use futures::future::{Either, select};
 use duroxide::providers::HistoryStore;
 mod common;
 use duroxide::runtime::registry::ActivityRegistry;
@@ -290,11 +289,12 @@ async fn event_before_subscription_after_start_is_ignored() {
         // Delay before subscribing to simulate missing subscription window
         ctx.schedule_timer(10).into_timer().await;
         // Subscribe, then wait for event with timeout
-        let ev = ctx.schedule_wait("Evt").into_event();
-        let to = ctx.schedule_timer(1000).into_timer();
-        match select(ev, to).await {
-            Either::Left((data, _)) => Ok(data),
-            Either::Right((_, _)) => panic!("timeout waiting for Evt after subscription"),
+        let ev = ctx.schedule_wait("Evt");
+        let to = ctx.schedule_timer(1000);
+        match ctx.select2(ev, to).await {
+            (0, duroxide::DurableOutput::External(data)) => Ok(data),
+            (1, duroxide::DurableOutput::Timer) => panic!("timeout waiting for Evt after subscription"),
+            _ => unreachable!(),
         }
     };
 
@@ -315,11 +315,11 @@ async fn event_before_subscription_after_start_is_ignored() {
     });
     let store_for_wait2 = store.clone();
     let client_c2 = duroxide::DuroxideClient::new(store.clone());
+    client.start_orchestration(instance, "PreSubscriptionTest", "").await.unwrap();
     tokio::spawn(async move {
         let _ = common::wait_for_subscription(store_for_wait2, instance, "Evt", 1000).await;
         let _ = client_c2.raise_event(instance, "Evt", "late").await;
     });
-    client.start_orchestration(instance, "PreSubscriptionTest", "").await.unwrap();
 
     match client
         .wait_for_orchestration(instance, std::time::Duration::from_secs(5))
@@ -415,7 +415,7 @@ async fn orchestration_immediate_fail_fs() {
     }
 
     // Check history for failure event
-    let hist = rt.get_execution_history("inst-fail-imm", 1).await;
+    let hist = client.get_execution_history("inst-fail-imm", 1).await;
     // Expect OrchestrationStarted + OrchestrationFailed
     assert_eq!(hist.len(), 2);
     assert!(matches!(
@@ -464,7 +464,7 @@ async fn orchestration_propagates_activity_failure_fs() {
     }
 
     // Check history for failure event
-    let hist = rt.get_execution_history("inst-fail-prop", 1).await;
+    let hist = client.get_execution_history("inst-fail-prop", 1).await;
     assert!(matches!(
         hist.last().unwrap(),
         duroxide::Event::OrchestrationFailed { .. }

@@ -57,7 +57,7 @@ async fn single_timer_fires() {
         _ => panic!("unexpected orchestration status"),
     };
 
-    let hist = rt.get_execution_history("inst-one", 1).await;
+    let hist = client.get_execution_history("inst-one", 1).await;
     assert!(hist.iter().any(|e| matches!(e, Event::TimerCreated { .. })));
     assert!(hist.iter().any(|e| matches!(e, Event::TimerFired { .. })));
     rt.shutdown().await;
@@ -104,7 +104,7 @@ async fn multiple_timers_ordering() {
     };
     assert_eq!(output, "ok");
 
-    let hist = rt.get_execution_history("inst-two", 1).await;
+    let hist = client.get_execution_history("inst-two", 1).await;
     // Verify two fired with increasing fire_at_ms
     let fired: Vec<(u64, u64)> = hist
         .iter()

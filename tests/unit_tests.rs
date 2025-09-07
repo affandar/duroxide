@@ -102,7 +102,7 @@ async fn deterministic_replay_activity_only() {
     };
     assert_eq!(output, "a=3");
 
-    let final_history = rt.get_execution_history("inst-unit-1", 1).await;
+    let final_history = client.get_execution_history("inst-unit-1", 1).await;
 
     // Replay must produce same output and no new actions
     let (_h2, acts2, _logs2, out2) = run_turn(final_history.clone(), orchestrator);
@@ -148,7 +148,7 @@ async fn runtime_duplicate_orchestration_deduped_single_execution() {
     }
 
     // Check history
-    let hist1 = rt.get_execution_history(inst, 1).await;
+    let hist1 = client.get_execution_history(inst, 1).await;
 
     // Ensure there is only one terminal event in history
     let term_count = hist1
