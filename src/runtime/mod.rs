@@ -100,6 +100,26 @@ pub struct OrchestrationDescriptor {
 }
 
 impl Runtime {
+    // ===== Phase-0 Notes (no behavior change) =====
+    // CONTROL vs EXECUTION surface inventory
+    // - CONTROL (client-facing, to be moved/wrapped later):
+    //   start_orchestration_typed, start_orchestration_versioned_typed,
+    //   start_orchestration, start_orchestration_versioned,
+    //   start_orchestration_with_parent (internal),
+    //   raise_event, cancel_instance,
+    //   wait_for_orchestration, wait_for_orchestration_typed,
+    //   wait_for_orchestration_blocking, wait_for_orchestration_typed_blocking,
+    //   get_orchestration_descriptor (read-only)
+    // - EXECUTION (engine-only):
+    //   start/start_with_store, start_orchestration_dispatcher,
+    //   process_orchestration_item, handle_*_atomic helpers,
+    //   start_work_dispatcher, start_timer_dispatcher, shutdown
+    // Provider boundary (used methods):
+    //   fetch_orchestration_item, ack_orchestration_item, abandon_orchestration_item,
+    //   enqueue_orchestrator_work, enqueue_worker_work, enqueue_timer_work,
+    //   dequeue_worker_peek_lock, ack_worker, dequeue_timer_peek_lock, ack_timer,
+    //   read, latest_execution_id, supports_delayed_visibility
+    // This block is documentation-only to stabilize the baseline for Phase 1.
     /// Internal: apply pure decisions by appending necessary history and dispatching work.
     async fn apply_decisions(self: &Arc<Self>, instance: &str, history: &Vec<Event>, decisions: Vec<crate::Action>) {
         debug!("apply_decisions: {instance} {decisions:#?}");
@@ -257,6 +277,7 @@ impl Runtime {
 
     /// Start an orchestration using raw String input/output (back-compat API).
     /// Use wait_for_orchestration to wait for completion.
+    // CONTROL API: enqueue StartOrchestration via provider
     pub async fn start_orchestration(
         self: Arc<Self>,
         instance: &str,
@@ -270,6 +291,7 @@ impl Runtime {
 
     /// Start an orchestration with an explicit version (string I/O).
     /// Use wait_for_orchestration to wait for completion.
+    // CONTROL API: enqueue StartOrchestration with explicit version
     pub async fn start_orchestration_versioned(
         self: Arc<Self>,
         instance: &str,
@@ -357,6 +379,7 @@ impl Runtime {
     }
 
     fn start_orchestration_dispatcher(self: Arc<Self>) -> JoinHandle<()> {
+        // EXECUTION: consumes provider orchestrator items, drives atomic turns
         tokio::spawn(async move {
             loop {
                 if let Some(item) = self.history_store.fetch_orchestration_item().await {
@@ -370,6 +393,7 @@ impl Runtime {
     }
 
     async fn process_orchestration_item(self: &Arc<Self>, item: crate::providers::OrchestrationItem) {
+        // EXECUTION: builds deltas and commits via ack_orchestration_item
         let instance = &item.instance;
         let lock_token = &item.lock_token;
 
@@ -688,6 +712,7 @@ impl Runtime {
     }
 
     fn start_work_dispatcher(self: Arc<Self>, activities: Arc<registry::ActivityRegistry>) -> JoinHandle<()> {
+        // EXECUTION: consumes worker queue, executes activities, enqueues completions
         tokio::spawn(async move {
             loop {
                 if let Some((item, token)) = self.history_store.dequeue_worker_peek_lock().await {
@@ -759,6 +784,7 @@ impl Runtime {
     }
 
     fn start_timer_dispatcher(self: Arc<Self>) -> JoinHandle<()> {
+        // EXECUTION: consumes timer queue; uses provider delayed visibility or in-proc timer
         if self.history_store.supports_delayed_visibility() {
             // For providers with delayed visibility support, we still use the timer queue
             // but leverage delayed visibility when enqueuing TimerFired
@@ -867,6 +893,7 @@ impl Runtime {
 
 impl Runtime {
     /// Raise an external event by name into a running instance.
+    // CONTROL API: best-effort enqueue ExternalRaised via provider
     pub async fn raise_event(&self, instance: &str, name: impl Into<String>, data: impl Into<String>) {
         let name_str = name.into();
         let data_str = data.into();
@@ -894,6 +921,7 @@ impl Runtime {
     }
 
     /// Request cancellation of a running orchestration instance.
+    // CONTROL API: enqueue CancelInstance via provider
     pub async fn cancel_instance(&self, instance: &str, reason: impl Into<String>) {
         let reason_s = reason.into();
         // Only enqueue if instance is active, else best-effort: provider queue will deliver when it becomes active
@@ -907,6 +935,7 @@ impl Runtime {
     }
 
     /// Wait until the orchestration reaches a terminal state (Completed/Failed) or the timeout elapses.
+    // CONTROL API: read-only polling via provider.read -> status derivation
     pub async fn wait_for_orchestration(
         &self,
         instance: &str,
