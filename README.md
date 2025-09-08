@@ -27,7 +27,7 @@ What it is
   - WorkDispatcher (activities and child/detached starts, worker queue)
   - TimerDispatcher (timers, timer queue)
   - InstanceRouter (in-process delivery of completions to active instances)
-- Storage-agnostic via `HistoryStore` (SQLite provider with in-memory and file-based modes)
+- Storage-agnostic via `Provider` (SQLite provider with in-memory and file-based modes)
 
 How it works (brief)
 - The orchestrator runs turn-by-turn. Each turn it is polled once, may schedule actions, then the runtime waits for completions.
@@ -41,7 +41,7 @@ Key types
 - `OrchestrationContext`: schedules work (`schedule_activity`, `schedule_timer`, `schedule_wait`, `schedule_sub_orchestration`, `schedule_orchestration`) and exposes deterministic `select2/select/join`, `trace_*`, `continue_as_new`.
 - `DurableFuture`: returned by `schedule_*`; use `into_activity()`, `into_timer()`, `into_event()`, `into_sub_orchestration()` (and `_typed` variants) to await.
 - `Event`/`Action`: immutable history entries and host-side actions, including `ContinueAsNew`.
-- `HistoryStore`: persistence abstraction (`SqliteHistoryStore` with in-memory and file-based modes).
+- `Provider`: persistence + queues abstraction (`SqliteProvider` with in-memory and file-based modes).
 - `OrchestrationRegistry` / `ActivityRegistry`: register orchestrations/activities in-memory.
 
 Project layout
@@ -62,11 +62,11 @@ use std::sync::Arc;
 use duroxide::{OrchestrationContext, OrchestrationRegistry};
 use duroxide::runtime::{self};
 use duroxide::runtime::registry::ActivityRegistry;
-use duroxide::providers::sqlite::SqliteHistoryStore;
+use duroxide::providers::sqlite::SqliteProvider;
 
 # #[tokio::main]
 # async fn main() {
-let store = std::sync::Arc::new(SqliteHistoryStore::new("sqlite:./data.db").await.unwrap());
+let store = std::sync::Arc::new(SqliteProvider::new("sqlite:./data.db").await.unwrap());
 let activities = ActivityRegistry::builder()
     .register("Hello", |name: String| async move { Ok(format!("Hello, {name}!")) })
     .build();
@@ -76,7 +76,7 @@ let orch = |ctx: OrchestrationContext, name: String| async move {
     Ok::<_, String>(res)
 };
 let orchestrations = OrchestrationRegistry::builder().register("HelloWorld", orch).build();
-let rt = runtime::DuroxideRuntime::start_with_store(store, Arc::new(activities), orchestrations).await;
+let rt = runtime::Runtime::start_with_store(store, Arc::new(activities), orchestrations).await;
 rt.clone().start_orchestration("inst-hello-1", "HelloWorld", "Rust").await.unwrap();
 match rt.wait_for_orchestration("inst-hello-1", std::time::Duration::from_secs(5)).await.unwrap() {
     runtime::OrchestrationStatus::Completed { output } => assert_eq!(output, "Hello, Rust!"),

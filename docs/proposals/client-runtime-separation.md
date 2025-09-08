@@ -2,19 +2,19 @@
 
 ## Overview
 
-This document outlines a complete architectural separation between the **Client** (control plane API) and **Runtime** (execution engine), with communication only through the shared `HistoryStore` provider.
+This document outlines a complete architectural separation between the **Client** (control plane API) and **Runtime** (execution engine), with communication only through the shared `Provider`.
 
 ## Architecture Principles
 
 ### Clean Separation
 - **`Client`**: User-facing API for orchestration control and management
-- **`DuroxideRuntime`**: Backend execution engine for loading and running orchestrations
-- **`HistoryStore`**: Only communication channel between client and runtime
+- **`Runtime`**: Backend execution engine for loading and running orchestrations
+- **`Provider`**: Only communication channel between client and runtime
 
 ### Communication Model
 ```
 ┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
-│   Client │    │   HistoryStore   │    │ DuroxideRuntime │
+│   Client │    │     Provider     │    │     Runtime     │
 │   (Control API) │◄──►│   (Message Bus)  │◄──►│ (Execution)     │
 └─────────────────┘    └──────────────────┘    └─────────────────┘
 ```
@@ -27,16 +27,16 @@ This document outlines a complete architectural separation between the **Client*
 // In src/client/mod.rs
 use std::sync::Arc;
 use chrono::{DateTime, Utc};
-use crate::providers::HistoryStore;
+use crate::providers::Provider;
 
 /// Client API for orchestration control and management
 pub struct Client {
-    history_store: Arc<dyn HistoryStore>,
+    history_store: Arc<dyn Provider>,
 }
 
 impl Client {
     /// Create a new client with a provider
-    pub fn new(history_store: Arc<dyn HistoryStore>) -> Self {
+    pub fn new(history_store: Arc<dyn Provider>) -> Self {
         Self { history_store }
     }
 }
@@ -86,8 +86,9 @@ impl Client {
 
     /// Cancel a running orchestration
     pub async fn cancel_orchestration(&self, instance_id: &str) -> Result<(), ClientError> {
-        let work_item = WorkItem::CancelOrchestration {
+        let work_item = WorkItem::CancelInstance {
             instance: instance_id.to_string(),
+            reason: "client-request".to_string(),
         };
 
         self.history_store
@@ -103,7 +104,7 @@ impl Client {
         event_name: &str,
         event_data: &str,
     ) -> Result<(), ClientError> {
-        let work_item = WorkItem::ExternalEvent {
+        let work_item = WorkItem::ExternalRaised {
             instance: instance_id.to_string(),
             name: event_name.to_string(),
             data: event_data.to_string(),
@@ -322,14 +323,14 @@ use std::sync::Arc;
 use crate::providers::HistoryStore;
 
 /// Backend execution engine for orchestrations
-pub struct DuroxideRuntime {
+pub struct Runtime {
     history_store: Arc<dyn HistoryStore>,
     orchestration_registry: OrchestrationRegistry,
     activity_registry: ActivityRegistry,
     dispatchers: Vec<tokio::task::JoinHandle<()>>,
 }
 
-impl DuroxideRuntime {
+impl Runtime {
     /// Create a new runtime with a provider
     pub fn new(history_store: Arc<dyn HistoryStore>) -> Self {
         Self {
@@ -345,7 +346,7 @@ impl DuroxideRuntime {
 ### Runtime Execution APIs (Internal)
 
 ```rust
-impl DuroxideRuntime {
+impl Runtime {
     /// Register an orchestration function
     pub fn register_orchestration<F, Fut>(&mut self, name: &str, func: F) -> &mut Self
     where
@@ -603,13 +604,13 @@ pub enum RuntimeError {
 ```rust
 // In examples/client_usage.rs
 use duroxide::{Client, StartOptions};
-use duroxide::providers::sqlite::SqliteHistoryStore;
+use duroxide::providers::sqlite::SqliteProvider;
 use std::sync::Arc;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create provider
-    let store = Arc::new(SqliteHistoryStore::new("sqlite:./client_demo.db").await?);
+    let store = Arc::new(SqliteProvider::new("sqlite:./client_demo.db").await?);
     
     // Create client
     let client = Client::new(store);
@@ -660,17 +661,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ```rust
 // In examples/runtime_usage.rs
-use duroxide::{DuroxideRuntime, OrchestrationContext};
-use duroxide::providers::sqlite::SqliteHistoryStore;
+use duroxide::{Runtime, OrchestrationContext};
+use duroxide::providers::sqlite::SqliteProvider;
 use std::sync::Arc;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create provider (same as client)
-    let store = Arc::new(SqliteHistoryStore::new("sqlite:./client_demo.db").await?);
+    let store = Arc::new(SqliteProvider::new("sqlite:./client_demo.db").await?);
     
     // Create runtime
-    let mut runtime = DuroxideRuntime::new(store);
+    let mut runtime = Runtime::new(store);
     
     // Register orchestrations
     runtime.register_orchestration("ProcessOrder", |ctx, input| async move {
@@ -729,17 +730,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ```rust
 // In examples/combined_usage.rs
-use duroxide::{Client, DuroxideRuntime, OrchestrationContext};
-use duroxide::providers::sqlite::SqliteHistoryStore;
+use duroxide::{Client, Runtime, OrchestrationContext};
+use duroxide::providers::sqlite::SqliteProvider;
 use std::sync::Arc;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Shared provider
-    let store = Arc::new(SqliteHistoryStore::new("sqlite:./combined_demo.db").await?);
+    let store = Arc::new(SqliteProvider::new("sqlite:./combined_demo.db").await?);
     
     // Create and start runtime
-    let mut runtime = DuroxideRuntime::new(store.clone());
+    let mut runtime = Runtime::new(store.clone());
     runtime.register_orchestration("HelloWorld", |ctx, input| async move {
         println!("Hello from orchestration: {}", input);
         let result = ctx.schedule_activity("SayHello", &input).await?;
@@ -770,9 +771,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ### Phase 1: Core Separation (Week 1)
 1. **Create `src/client/mod.rs`** with `Client`
-2. **Refactor `src/runtime/mod.rs`** to `DuroxideRuntime` (execution only)
+2. **Refactor `src/runtime/mod.rs`** to `Runtime` (execution only)
 3. **Move control APIs** from Runtime to Client
-4. **Update `src/lib.rs`** to export both `Client` and `DuroxideRuntime`
+4. **Update `src/lib.rs`** to export both `Client` and `Runtime`
 
 ### Phase 2: Client APIs (Week 2)
 1. **Implement orchestration control** (start, cancel, raise_event)
@@ -802,18 +803,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ### 2. **Operational Flexibility**
 ```rust
 // Development: Both in same process
-let store = Arc::new(SqliteHistoryStore::new("sqlite:./dev.db").await?);
+let store = Arc::new(SqliteProvider::new("sqlite:./dev.db").await?);
 let client = Client::new(store.clone());
-let runtime = DuroxideRuntime::new(store);
+let runtime = Runtime::new(store);
 
 // Production: Separate processes/services
 // Service A: Client API
-let client_store = Arc::new(SqliteHistoryStore::new("sqlite://prod.db").await?);
+let client_store = Arc::new(SqliteProvider::new("sqlite://prod.db").await?);
 let client = Client::new(client_store);
 
 // Service B: Runtime Engine  
-let runtime_store = Arc::new(SqliteHistoryStore::new("sqlite://prod.db").await?);
-let runtime = DuroxideRuntime::new(runtime_store);
+let runtime_store = Arc::new(SqliteProvider::new("sqlite://prod.db").await?);
+let runtime = Runtime::new(runtime_store);
 ```
 
 ### 3. **Security & Safety**

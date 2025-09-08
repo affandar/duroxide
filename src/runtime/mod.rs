@@ -1,4 +1,4 @@
-// use crate::providers::in_memory::InMemoryHistoryStore;
+//
 use crate::providers::{Provider, WorkItem};
 use crate::{Event, OrchestrationContext};
 use semver::Version;
@@ -97,26 +97,7 @@ pub struct OrchestrationDescriptor {
 }
 
 impl Runtime {
-    // ===== Phase-0 Notes (no behavior change) =====
-    // CONTROL vs EXECUTION surface inventory
-    // - CONTROL (client-facing, to be moved/wrapped later):
-    //   start_orchestration_typed, start_orchestration_versioned_typed,
-    //   start_orchestration, start_orchestration_versioned,
-    //   start_orchestration_with_parent (internal),
-    //   raise_event, cancel_instance,
-    //   wait_for_orchestration, wait_for_orchestration_typed,
-    //   wait_for_orchestration_blocking, wait_for_orchestration_typed_blocking,
-    //   get_orchestration_descriptor (read-only)
-    // - EXECUTION (engine-only):
-    //   start/start_with_store, start_orchestration_dispatcher,
-    //   process_orchestration_item, handle_*_atomic helpers,
-    //   start_work_dispatcher, start_timer_dispatcher, shutdown
-    // Provider boundary (used methods):
-    //   fetch_orchestration_item, ack_orchestration_item, abandon_orchestration_item,
-    //   enqueue_orchestrator_work, enqueue_worker_work, enqueue_timer_work,
-    //   dequeue_worker_peek_lock, ack_worker, dequeue_timer_peek_lock, ack_timer,
-    //   read, latest_execution_id, supports_delayed_visibility
-    // This block is documentation-only to stabilize the baseline for Phase 1.
+    // Execution engine: consumes provider queues and persists history atomically.
     /// Internal: apply pure decisions by appending necessary history and dispatching work.
     async fn apply_decisions(self: &Arc<Self>, instance: &str, history: &Vec<Event>, decisions: Vec<crate::Action>) {
         debug!("apply_decisions: {instance} {decisions:#?}");
@@ -256,10 +237,8 @@ impl Runtime {
             .await
     }
 
-    // Status helpers implemented in status.rs
-
-    // Status helpers moved to status.rs
-    /// Start a new runtime using the in-memory history store.
+    
+    /// Start a new runtime using the in-memory SQLite provider.
     pub async fn start(
         activity_registry: Arc<registry::ActivityRegistry>,
         orchestration_registry: OrchestrationRegistry,

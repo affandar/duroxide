@@ -6,7 +6,7 @@ use tracing::debug;
 use super::{Provider, WorkItem, OrchestrationItem};
 use crate::Event;
 
-/// SQLite-backed history store with full transactional support
+/// SQLite-backed provider with full transactional support
 /// 
 /// This provider offers true ACID guarantees across all operations,
 /// eliminating the race conditions present in the filesystem provider.
@@ -82,7 +82,7 @@ impl SqliteProvider {
         
         Ok(())
     }
-    /// Create a new SQLite history store
+    /// Create a new SQLite provider
     /// 
     /// # Arguments
     /// * `database_url` - SQLite connection string (e.g., "sqlite:data.db" or "sqlite::memory:")

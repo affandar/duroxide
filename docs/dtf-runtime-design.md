@@ -299,9 +299,9 @@ graph TB
 
 **Key State:**
 ```rust
-pub struct DuroxideRuntime {
+pub struct Runtime {
     router: Arc<InstanceRouter>,
-    history_store: Arc<dyn HistoryStore>,
+    history_store: Arc<dyn Provider>,
     orchestration_registry: OrchestrationRegistry,
     active_instances: Mutex<HashSet<String>>,
     current_execution_ids: Mutex<HashMap<String, u64>>,
@@ -589,7 +589,7 @@ pub enum Event {
 ### History Store Interface
 ```rust
 #[async_trait]
-pub trait HistoryStore: Send + Sync {
+pub trait Provider: Send + Sync {
     // Basic history operations
     async fn read(&self, instance: &str) -> Vec<Event>;
     async fn append(&self, instance: &str, new_events: Vec<Event>) -> Result<(), String>;

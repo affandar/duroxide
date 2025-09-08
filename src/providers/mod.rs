@@ -83,8 +83,8 @@ pub enum WorkItem {
     },
 }
 
-/// Storage abstraction for durable orchestration execution.
-/// 
+/// Provider abstraction for durable orchestration execution (persistence + queues).
+///
 /// Providers must implement the core atomic orchestration methods and basic queue operations.
 /// Multi-execution support is required for ContinueAsNew functionality.
 /// Management APIs are optional with default no-op implementations.

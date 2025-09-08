@@ -11,7 +11,7 @@ This document outlines the design for a separate `ManagementClient` API for read
 - **`ManagementClient`**: Read-only observability, monitoring, analytics, debugging
 
 ### Shared Provider
-Both `Runtime` and `ManagementClient` use the same `HistoryStore` provider instance, ensuring:
+Both `Runtime` and `ManagementClient` use the same `Provider` instance, ensuring:
 - Consistent data access
 - No data synchronization issues  
 - Efficient resource usage
@@ -25,17 +25,17 @@ Both `Runtime` and `ManagementClient` use the same `HistoryStore` provider insta
 // In src/management/mod.rs
 use std::sync::Arc;
 use chrono::{DateTime, Utc};
-use crate::providers::HistoryStore;
+use crate::providers::Provider;
 use crate::runtime::OrchestrationStatus;
 
 /// Read-only management and observability client
 pub struct ManagementClient {
-    history_store: Arc<dyn HistoryStore>,
+    history_store: Arc<dyn Provider>,
 }
 
 impl ManagementClient {
     /// Create a new management client with the same provider as a Runtime
-    pub fn new(history_store: Arc<dyn HistoryStore>) -> Self {
+    pub fn new(history_store: Arc<dyn Provider>) -> Self {
         Self { history_store }
     }
 
@@ -521,13 +521,13 @@ pub enum ManagementError {
 // In examples/management_demo.rs
 
 use duroxide::{Runtime, ManagementClient};
-use duroxide::providers::sqlite::SqliteHistoryStore;
+use duroxide::providers::sqlite::SqliteProvider;
 use std::sync::Arc;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create shared provider
-    let store = Arc::new(SqliteHistoryStore::new("sqlite:./management_demo.db").await?);
+    let store = Arc::new(SqliteProvider::new("sqlite:./management_demo.db").await?);
     
     // Create runtime and management client sharing the same provider
     let runtime = Runtime::new(store.clone()).await?;

@@ -2,14 +2,14 @@
 // This shows how the proposed APIs would be used in practice
 
 use duroxide::runtime::{Runtime, InstanceFilter, InstanceSummary, OrchestrationStatus};
-use duroxide::providers::sqlite::SqliteHistoryStore;
+use duroxide::providers::sqlite::SqliteProvider;
 use std::sync::Arc;
 use chrono::{DateTime, Utc};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Setup runtime with SQLite provider
-    let store = Arc::new(SqliteHistoryStore::new("sqlite:./management_demo.db").await?);
+    let store = Arc::new(SqliteProvider::new("sqlite:./management_demo.db").await?);
     let activities = duroxide::runtime::registry::ActivityRegistry::builder().build();
     let orchestrations = duroxide::OrchestrationRegistry::builder().build();
     

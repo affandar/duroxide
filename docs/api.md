@@ -66,51 +66,23 @@ where F: Future<Output = O>;
 ### Runtime
 
 ```rust
-pub struct DuroxideRuntime;
-impl DuroxideRuntime {
+pub struct Runtime;
+impl Runtime {
   pub async fn start(activity_registry: Arc<ActivityRegistry>, orchestration_registry: OrchestrationRegistry) -> Arc<Self>
-  pub async fn start_with_store(history: Arc<dyn HistoryStore>, activity_registry: Arc<ActivityRegistry>, orchestration_registry: OrchestrationRegistry) -> Arc<Self>
-  pub async fn start_orchestration(&self: Arc<Self>, instance: &str, orchestration_name: &str, input: impl Into<String>) -> Result<(), String>
-  pub async fn start_orchestration_typed<In: Serialize>(&self: Arc<Self>, instance: &str, orchestration_name: &str, input: &In) -> Result<(), String>
-  pub async fn wait_for_orchestration(&self, instance: &str, timeout: Duration) -> Result<OrchestrationStatus, WaitError>
+  pub async fn start_with_store(provider: Arc<dyn Provider>, activity_registry: Arc<ActivityRegistry>, orchestration_registry: OrchestrationRegistry) -> Arc<Self>
   pub async fn shutdown(&self)
-  pub async fn get_orchestration_status(&self, instance: &str) -> OrchestrationStatus
-  pub async fn get_orchestration_status_latest(&self, instance: &str) -> OrchestrationStatus
-  pub async fn get_orchestration_status_with_execution(&self, instance: &str, execution_id: u64) -> OrchestrationStatus
-  pub async fn list_executions(&self, instance: &str) -> Vec<u64>
-  pub async fn get_execution_history(&self, instance: &str, execution_id: u64) -> Vec<Event>
-  pub async fn raise_event(&self, instance: &str, name: impl Into<String>, data: impl Into<String>)
 }
 ```
 
 ### Providers
 
-`HistoryStore` abstracts storage and the multi-queue work API.
+`Provider` abstracts storage and the multi-queue work API.
 ```rust
 #[async_trait]
-pub trait HistoryStore {
+pub trait Provider {
   async fn read(&self, instance: &str) -> Vec<Event>;
-  async fn append(&self, instance: &str, new_events: Vec<Event>) -> Result<(), String>;
-  async fn reset(&self);
-  async fn list_instances(&self) -> Vec<String>;
-  async fn dump_all_pretty(&self) -> String;
-  // instance lifecycle
-  async fn create_instance(&self, instance: &str) -> Result<(), String>;
-  async fn remove_instance(&self, instance: &str) -> Result<(), String>;
-  // multi-queue work API (peek-lock)
-  async fn enqueue_work(&self, kind: QueueKind, item: WorkItem) -> Result<(), String>;
-  async fn dequeue_peek_lock(&self, kind: QueueKind) -> Option<(WorkItem, String)>;
-  async fn ack(&self, kind: QueueKind, token: &str) -> Result<(), String>;
-  async fn abandon(&self, kind: QueueKind, token: &str) -> Result<(), String>;
-  // multi-execution (ContinueAsNew)
-  async fn latest_execution_id(&self, instance: &str) -> Option<u64>;
-  async fn list_executions(&self, instance: &str) -> Vec<u64>;
-  async fn read_with_execution(&self, instance: &str, execution_id: u64) -> Vec<Event>;
-  async fn append_with_execution(&self, instance: &str, execution_id: u64, new_events: Vec<Event>) -> Result<(), String>;
-  async fn create_new_execution(&self, instance: &str, orchestration: &str, version: &str, input: &str, parent_instance: Option<&str>, parent_id: Option<u64>) -> Result<u64, String>;
+  // multi-queue work API (peek-lock) and atomic orchestration commit live in the real trait in code
 }
-
-pub enum QueueKind { Orchestrator, Worker, Timer }
 ```
 
 ### Introspection
@@ -126,7 +98,7 @@ pub struct OrchestrationDescriptor {
   pub parent_id: Option<u64>,
 }
 
-impl DuroxideRuntime {
+impl Runtime {
   /// Returns the descriptor for an instance, or None if no history exists.
   pub async fn get_orchestration_descriptor(&self, instance: &str) -> Option<OrchestrationDescriptor>;
 }
