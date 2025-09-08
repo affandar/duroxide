@@ -112,7 +112,6 @@ impl Future for CompletionAwareDurableFuture {
     type Output = DurableOutput;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        // CR TODO : this is a bit of a hack, we should be able to get the completion map from the context.
         //  I guess this is to avoid breaking the existing API but its ok to break.
 
         // First try the completion map approach

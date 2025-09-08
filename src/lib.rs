@@ -7,15 +7,15 @@
 //! ## Quick Start
 //!
 //! ```rust,no_run
-//! use duroxide::providers::sqlite::SqliteHistoryStore;
+//! use duroxide::providers::sqlite::SqliteProvider;
 //! use duroxide::runtime::registry::ActivityRegistry;
 //! use duroxide::runtime::{self};
-//! use duroxide::{OrchestrationContext, OrchestrationRegistry};
+//! use duroxide::{OrchestrationContext, OrchestrationRegistry, Client};
 //! use std::sync::Arc;
 //!
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! // 1. Create a storage provider
-//! let store = Arc::new(SqliteHistoryStore::new("sqlite:./data.db").await.unwrap());
+//! let store = Arc::new(SqliteProvider::new("sqlite:./data.db").await.unwrap());
 //!
 //! // 2. Register activities (your business logic)
 //! let activities = ActivityRegistry::builder()
@@ -37,12 +37,13 @@
 //!     .build();
 //!
 //! let rt = runtime::Runtime::start_with_store(
-//!     store, Arc::new(activities), orchestrations
+//!     store.clone(), Arc::new(activities), orchestrations
 //! ).await;
 //!
-//! // 5. Start an orchestration instance
-//! rt.clone().start_orchestration("inst-1", "HelloWorld", "World").await?;
-//! let result = rt.wait_for_orchestration("inst-1", std::time::Duration::from_secs(5)).await
+//! // 5. Create a client and start an orchestration instance
+//! let client = Client::new(store.clone());
+//! client.start_orchestration("inst-1", "HelloWorld", "World").await?;
+//! let result = client.wait_for_orchestration("inst-1", std::time::Duration::from_secs(5)).await
 //!     .map_err(|e| format!("Wait error: {:?}", e))?;
 //! # Ok(())
 //! # }
@@ -181,20 +182,21 @@ use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
 
 pub mod futures;
 pub mod runtime;
+pub mod client;
 // Re-export descriptor type for public API ergonomics
 pub use runtime::OrchestrationDescriptor;
-pub mod logging;
 pub mod providers;
 
 // Re-export key runtime types for convenience
 pub use runtime::{OrchestrationHandler, OrchestrationRegistry, OrchestrationRegistryBuilder, OrchestrationStatus};
+pub use client::Client;
 // Internal system activity names
 pub(crate) const SYSTEM_NOW_ACTIVITY: &str = "__system_now";
 pub(crate) const SYSTEM_NEW_GUID_ACTIVITY: &str = "__system_new_guid";
 pub(crate) const SYSTEM_TRACE_ACTIVITY: &str = "__system_trace";
 
 use crate::_typed_codec::Codec;
-use crate::logging::LogLevel;
+// LogLevel is now defined locally in this file
 use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -303,6 +305,14 @@ pub enum Event {
 
 }
 
+/// Log levels for orchestration context logging.
+#[derive(Debug, Clone)]
+pub enum LogLevel {
+    Info,
+    Warn,
+    Error,
+}
+
 /// Declarative decisions produced by an orchestration turn. The host/provider
 /// is responsible for materializing these into corresponding `Event`s.
 #[derive(Debug, Clone)]
@@ -353,13 +363,12 @@ struct CtxInner {
     // Per-turn buffered logs (messages to flush once per progress turn)
     log_buffer: Vec<(LogLevel, String)>,
 
-    // Reserved for future use: per-turn claimed ids to coordinate multiple futures
-    // (prevent re-scheduling the same id). Currently unused.
-    #[allow(dead_code)]
+    // Per-turn claimed correlation IDs to prevent reusing IDs across multiple
+    // futures scheduled within the same poll turn. This preserves deterministic
+    // replay semantics when multiple timers/external waits/activities are
+    // scheduled sequentially in one turn.
     claimed_activity_ids: std::collections::HashSet<u64>,
-    #[allow(dead_code)]
     claimed_timer_ids: std::collections::HashSet<u64>,
-    #[allow(dead_code)]
     claimed_external_ids: std::collections::HashSet<u64>,
 }
 
@@ -501,27 +510,6 @@ impl OrchestrationContext {
         self.trace("DEBUG", message.into())
     }
 
-    /// Return current wall-clock time from a system activity in milliseconds since epoch.
-    /// DEPRECATED: Use `utcnow_ms()` instead.
-    #[deprecated(note = "Use utcnow_ms() instead")]
-    pub async fn system_now_ms(&self) -> u128 {
-        self.schedule_activity(SYSTEM_NOW_ACTIVITY, "")
-            .into_activity()
-            .await
-            .unwrap_or_default()
-            .parse::<u128>()
-            .unwrap_or(0)
-    }
-
-    /// Return a new pseudo-GUID string from a system activity.
-    /// DEPRECATED: Use `new_guid()` instead.
-    #[deprecated(note = "Use new_guid() instead")]
-    pub async fn system_new_guid(&self) -> String {
-        self.schedule_activity(SYSTEM_NEW_GUID_ACTIVITY, "")
-            .into_activity()
-            .await
-            .unwrap_or_default()
-    }
 
     /// Generate a new deterministic GUID.
     /// This is syntactic sugar for scheduling the system GUID activity.
@@ -831,9 +819,8 @@ impl OrchestrationContext {
             .history
             .iter()
             .find_map(|e| match e {
-                Event::ExternalSubscribed { id, name: n } if n == &name && !inner.claimed_external_ids.contains(id) => {
-                    Some(*id)
-                }
+                Event::ExternalSubscribed { id, name: n }
+                    if n == &name && !inner.claimed_external_ids.contains(id) => Some(*id),
                 _ => None,
             })
             .unwrap_or_else(|| inner.next_id());
@@ -1209,9 +1196,30 @@ impl OrchestrationContext {
     pub(crate) fn claimed_ids_snapshot(&self) -> ClaimedIdsSnapshot {
         let inner = self.inner.lock().unwrap();
         ClaimedIdsSnapshot {
-            activities: inner.claimed_activity_ids.clone(),
-            timers: inner.claimed_timer_ids.clone(),
-            externals: inner.claimed_external_ids.clone(),
+            activities: inner
+                .history
+                .iter()
+                .filter_map(|e| match e {
+                    Event::ActivityScheduled { id, .. } => Some(*id),
+                    _ => None,
+                })
+                .collect(),
+            timers: inner
+                .history
+                .iter()
+                .filter_map(|e| match e {
+                    Event::TimerCreated { id, .. } => Some(*id),
+                    _ => None,
+                })
+                .collect(),
+            externals: inner
+                .history
+                .iter()
+                .filter_map(|e| match e {
+                    Event::ExternalSubscribed { id, .. } => Some(*id),
+                    _ => None,
+                })
+                .collect(),
             sub_orchestrations: inner
                 .history
                 .iter()

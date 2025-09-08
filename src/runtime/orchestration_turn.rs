@@ -1,5 +1,5 @@
 use super::completion_map::{CompletionKind, CompletionMap};
-use crate::providers::HistoryStore;
+use crate::providers::Provider;
 use crate::{
     Event,
     runtime::{OrchestrationHandler, router::OrchestratorMsg},
@@ -422,7 +422,7 @@ impl OrchestrationTurn {
     /// This stage writes all history deltas and dispatches actions
     pub async fn persist_changes(
         &mut self,
-        _history_store: Arc<dyn HistoryStore>,
+        _history_store: Arc<dyn Provider>,
         runtime: &Arc<crate::runtime::Runtime>,
     ) -> Result<(), String> {
         debug!(

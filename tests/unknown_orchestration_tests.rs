@@ -14,12 +14,14 @@ async fn unknown_orchestration_fails_gracefully() {
     let rt =
         runtime::Runtime::start_with_store(store.clone(), StdArc::new(activity_registry), orchestration_registry).await;
 
-    rt.clone()
+    let client = duroxide::Client::new(store.clone());
+    client
         .start_orchestration("inst-unknown-1", "DoesNotExist", "")
         .await
         .unwrap();
 
-    let status = rt
+    let client = duroxide::Client::new(store.clone());
+    let status = client
         .wait_for_orchestration("inst-unknown-1", std::time::Duration::from_secs(5))
         .await
         .unwrap();
@@ -30,7 +32,7 @@ async fn unknown_orchestration_fails_gracefully() {
     };
     assert_eq!(error, "unregistered:DoesNotExist");
 
-    let hist = rt.get_execution_history("inst-unknown-1", 1).await;
+    let hist = client.get_execution_history("inst-unknown-1", 1).await;
     assert!(
         hist.iter()
             .any(|e| matches!(e, Event::OrchestrationFailed { error } if error == "unregistered:DoesNotExist"))

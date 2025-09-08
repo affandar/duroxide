@@ -53,11 +53,8 @@ async fn activity_reliability_after_crash_before_completion_enqueue() {
     .await;
 
     let instance = "inst-activity-reliability";
-    let _ = rt1
-        .clone()
-        .start_orchestration(instance, "ActivityReliabilityTest", "test-data")
-        .await
-        .unwrap();
+    let client1 = duroxide::Client::new(store1.clone());
+    let _ = client1.start_orchestration(instance, "ActivityReliabilityTest", "test-data").await.unwrap();
 
     // Wait for activity to be scheduled
     assert!(
@@ -102,7 +99,8 @@ async fn activity_reliability_after_crash_before_completion_enqueue() {
     // The runtime should automatically resume the orchestration and reprocess pending activities
     
     // Wait for orchestration to complete
-    match rt2
+    let client2 = duroxide::Client::new(store2.clone());
+    match client2
         .wait_for_orchestration(instance, std::time::Duration::from_secs(10))
         .await
         .unwrap()
@@ -208,11 +206,8 @@ async fn multiple_activities_reliability_after_crash() {
     .await;
 
     let instance = "inst-multi-activity-reliability";
-    let _ = rt1
-        .clone()
-        .start_orchestration(instance, "MultiActivityTest", "")
-        .await
-        .unwrap();
+    let client1 = duroxide::Client::new(store1.clone());
+    let _ = client1.start_orchestration(instance, "MultiActivityTest", "").await.unwrap();
 
     // Wait for all 3 activities to be scheduled
     assert!(
@@ -252,7 +247,8 @@ async fn multiple_activities_reliability_after_crash() {
     .await;
 
     // Wait for completion
-    match rt2
+    let client2 = duroxide::Client::new(store2.clone());
+    match client2
         .wait_for_orchestration(instance, std::time::Duration::from_secs(20))
         .await
         .unwrap()

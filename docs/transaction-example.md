@@ -20,7 +20,7 @@ If this fails after history is persisted, the orchestration hangs forever.
 ```rust
 // orchestration_turn.rs - Current implementation
 impl OrchestrationTurn {
-    pub async fn persist_changes(&mut self, store: Arc<dyn HistoryStore>, runtime: &Runtime) -> Result<(), String> {
+    pub async fn persist_changes(&mut self, store: Arc<dyn Provider>, runtime: &Runtime) -> Result<(), String> {
         // Step 1: Append history (can succeed)
         store.append(&self.instance, self.history_delta.clone())
             .await
@@ -43,7 +43,7 @@ impl OrchestrationTurn {
 ```rust
 // orchestration_turn.rs - Fixed with transactions
 impl OrchestrationTurn {
-    pub async fn persist_changes(&mut self, store: Arc<dyn TransactionalHistoryStore>, runtime: &Runtime) -> Result<(), String> {
+    pub async fn persist_changes(&mut self, store: Arc<dyn TransactionalProvider>, runtime: &Runtime) -> Result<(), String> {
         // Build transaction with ALL operations
         let ops = vec![
             // History changes
@@ -164,7 +164,7 @@ use std::path::PathBuf;
 use tokio::fs::{File, rename};
 use tokio::io::AsyncWriteExt;
 
-impl TransactionalHistoryStore for FsHistoryStore {
+impl TransactionalProvider for FsProvider {
     async fn atomic_batch(&self, ops: Vec<TransactionOp>) -> Result<BatchResult, String> {
         let txn_id = uuid::Uuid::new_v4().to_string();
         let staging_dir = self.root.join(".transactions").join(&txn_id);

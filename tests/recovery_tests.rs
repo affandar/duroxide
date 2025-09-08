@@ -1,9 +1,9 @@
 use duroxide::OrchestrationStatus;
-use duroxide::providers::HistoryStore;
-use duroxide::providers::sqlite::SqliteHistoryStore;
+use duroxide::providers::Provider;
+use duroxide::providers::sqlite::SqliteProvider;
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
-use duroxide::{Event, OrchestrationContext, OrchestrationRegistry};
+use duroxide::{Event, OrchestrationContext, OrchestrationRegistry, Client};
 use std::sync::Arc;
 use std::sync::Arc as StdArc;
 mod common;
@@ -11,8 +11,8 @@ use common::*;
 
 async fn recovery_across_restart_core<F1, F2>(make_store_stage1: F1, make_store_stage2: F2, instance: String)
 where
-    F1: Fn() -> StdArc<dyn HistoryStore>,
-    F2: Fn() -> StdArc<dyn HistoryStore>,
+    F1: Fn() -> StdArc<dyn Provider>,
+    F2: Fn() -> StdArc<dyn Provider>,
 {
     let orchestrator = |ctx: OrchestrationContext, _input: String| async move {
         let s1 = ctx.schedule_activity("Step", "1").into_activity().await.unwrap();
@@ -45,7 +45,8 @@ where
         orchestration_registry.clone(),
     )
     .await;
-    let handle1 = rt1.clone().start_orchestration(&instance, "RecoveryTest", "").await;
+    let client1 = Client::new(store1.clone());
+    let _ = client1.start_orchestration(&instance, "RecoveryTest", "").await;
 
     // Wait until the subscription for the Resume event has been written to history.
     // This guarantees that steps 1 and 2 have executed and were persisted.
@@ -57,7 +58,7 @@ where
     assert_eq!(count_scheduled(&pre_crash_hist, "3"), 0);
 
     rt1.shutdown().await;
-    drop(handle1);
+    // no handle to drop when using client
 
     let store2 = make_store_stage2();
     let rt2 = runtime::Runtime::start_with_store(
@@ -66,22 +67,24 @@ where
         orchestration_registry.clone(),
     )
     .await;
-    let rt2_c = rt2.clone();
     let instance_for_spawn = instance.clone();
+    let store2_for_client = store2.clone();
     tokio::spawn(async move {
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-        rt2_c.raise_event(&instance_for_spawn, "Resume", "go").await;
+        let client = Client::new(store2_for_client.clone());
+        let _ = client.raise_event(&instance_for_spawn, "Resume", "go").await;
     });
     
     // Start the orchestration fresh - this simulates recovery where the instance
     // doesn't exist yet in the new environment
-    let _handle2 = rt2
-        .clone()
+    let client2 = Client::new(store2.clone());
+    client2
         .start_orchestration(&instance, "RecoveryTest", "")
         .await
         .unwrap();
 
-    match rt2
+    let client2_wait = Client::new(store2.clone());
+    match client2_wait
         .wait_for_orchestration(&instance, std::time::Duration::from_secs(5))
         .await
         .unwrap()
@@ -118,8 +121,8 @@ async fn recovery_across_restart_sqlite_provider() {
     std::fs::File::create(&db).unwrap();
     let url = format!("sqlite:{}", db.display());
 
-    let store1_arc = StdArc::new(SqliteHistoryStore::new(&url).await.unwrap()) as StdArc<dyn HistoryStore>;
-    let store2_arc = StdArc::new(SqliteHistoryStore::new(&url).await.unwrap()) as StdArc<dyn HistoryStore>;
+    let store1_arc = StdArc::new(SqliteProvider::new(&url).await.unwrap()) as StdArc<dyn Provider>;
+    let store2_arc = StdArc::new(SqliteProvider::new(&url).await.unwrap()) as StdArc<dyn Provider>;
 
     let s1 = store1_arc.clone();
     let s2 = store2_arc.clone();
@@ -147,15 +150,15 @@ async fn recovery_across_restart_sqlite_memory() {
     // since we create separate stores. It just tests the orchestration completes
     // when started fresh in stage 2.
     let instance = String::from("inst-recover-mem-1");
-    let mem1 = StdArc::new(SqliteHistoryStore::new_in_memory().await.unwrap()) as StdArc<dyn HistoryStore>;
-    let mem2 = StdArc::new(SqliteHistoryStore::new_in_memory().await.unwrap()) as StdArc<dyn HistoryStore>;
+    let mem1 = StdArc::new(SqliteProvider::new_in_memory().await.unwrap()) as StdArc<dyn Provider>;
+    let mem2 = StdArc::new(SqliteProvider::new_in_memory().await.unwrap()) as StdArc<dyn Provider>;
     let make_store1 = move || mem1.clone();
     let make_store2 = move || mem2.clone();
 
     recovery_across_restart_core(make_store1, make_store2, instance.clone()).await;
 
-    let store_before = StdArc::new(SqliteHistoryStore::new_in_memory().await.unwrap()) as StdArc<dyn HistoryStore>;
-    let store_after = StdArc::new(SqliteHistoryStore::new_in_memory().await.unwrap()) as StdArc<dyn HistoryStore>;
+    let store_before = StdArc::new(SqliteProvider::new_in_memory().await.unwrap()) as StdArc<dyn Provider>;
+    let store_after = StdArc::new(SqliteProvider::new_in_memory().await.unwrap()) as StdArc<dyn Provider>;
     let hist_before = store_before.read(&instance).await;
     let hist_after = store_after.read(&instance).await;
 
@@ -247,7 +250,7 @@ async fn recovery_multiple_orchestrations_sqlite_provider() {
     let db1 = dir.join("multi.db");
     std::fs::File::create(&db1).unwrap();
     let url1 = format!("sqlite:{}", db1.display());
-    let store1 = StdArc::new(SqliteHistoryStore::new(&url1).await.unwrap()) as StdArc<dyn HistoryStore>;
+    let store1 = StdArc::new(SqliteProvider::new(&url1).await.unwrap()) as StdArc<dyn Provider>;
     let rt1 = runtime::Runtime::start_with_store(
         store1.clone(),
         Arc::new(activity_registry.clone()),
@@ -263,8 +266,9 @@ async fn recovery_multiple_orchestrations_sqlite_provider() {
         ("inst-2timers", "TwoTimers", "z"),
     ];
 
+    let client1 = Client::new(store1.clone());
     for (inst, name, input) in &cases {
-        let _ = rt1.clone().start_orchestration(inst, name, *input).await.unwrap();
+        let _ = client1.start_orchestration(inst, name, *input).await.unwrap();
     }
     // Wait for each orchestration to reach its expected pre-shutdown checkpoint
     // EchoWait: timer created but not yet fired
@@ -325,21 +329,23 @@ async fn recovery_multiple_orchestrations_sqlite_provider() {
 
     // Stage 2: restart with same store; runtime should auto-resume non-terminal instances
     // Reopen the same DB file for stage 2 to simulate restart
-    let store2 = StdArc::new(SqliteHistoryStore::new(&url1).await.unwrap()) as StdArc<dyn HistoryStore>;
+    let store2 = StdArc::new(SqliteProvider::new(&url1).await.unwrap()) as StdArc<dyn Provider>;
     let store2_for_wait = store2.clone();
-    let rt2 = runtime::Runtime::start_with_store(store2, Arc::new(activity_registry), orchestration_registry).await;
+    let store2_for_client = store2.clone();
+    let rt2 = runtime::Runtime::start_with_store(store2.clone(), Arc::new(activity_registry), orchestration_registry).await;
 
     // Raise external event for the WaitEvent orchestration after restart
-    let rt2_c = rt2.clone();
     tokio::spawn(async move {
         // Gate raising the event on the subscription being persisted
         let _ = wait_for_subscription(store2_for_wait, "inst-wait", "Go", 2_000).await;
-        rt2_c.raise_event("inst-wait", "Go", "ok").await;
+        let client = Client::new(store2_for_client.clone());
+        let _ = client.raise_event("inst-wait", "Go", "ok").await;
     });
 
     // Use wait helper for each instance
+    let client2 = Client::new(store2.clone());
     for (inst, name, input) in &cases {
-        match rt2
+        match client2
             .wait_for_orchestration(inst, std::time::Duration::from_secs(6))
             .await
             .unwrap()

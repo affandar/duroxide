@@ -6,10 +6,10 @@
 //!
 //! Run with: `cargo run --example fan_out_fan_in`
 
-use duroxide::providers::sqlite::SqliteHistoryStore;
+use duroxide::providers::sqlite::SqliteProvider;
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
-use duroxide::{OrchestrationContext, OrchestrationRegistry, DurableOutput};
+use duroxide::{OrchestrationContext, OrchestrationRegistry, DurableOutput, Client};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -34,7 +34,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let db_path = temp_dir.path().join("fan_out_fan_in.db");
     std::fs::File::create(&db_path)?;
     let db_url = format!("sqlite:{}", db_path.to_str().unwrap());
-    let store = Arc::new(SqliteHistoryStore::new(&db_url).await?);
+    let store = Arc::new(SqliteProvider::new(&db_url).await?);
 
     // Register activities for user processing
     let activities = ActivityRegistry::builder()
@@ -128,7 +128,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .build();
 
     let rt = runtime::Runtime::start_with_store(
-        store,
+        store.clone(),
         Arc::new(activities),
         orchestrations,
     ).await;
@@ -142,21 +142,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let users_json = serde_json::to_string(&users)?;
 
     let instance_id = "fan-out-instance-1";
-    let _handle = rt
-        .clone()
-        .start_orchestration(instance_id, "FanOutFanIn", users_json)
-        .await?;
+    let client = Client::new(store);
+    client.start_orchestration(instance_id, "FanOutFanIn", users_json).await?;
 
-    match rt
+    match client
         .wait_for_orchestration(instance_id, std::time::Duration::from_secs(10))
         .await
         .map_err(|e| format!("Wait error: {:?}", e))?
     {
-        runtime::OrchestrationStatus::Completed { output } => {
+        duroxide::OrchestrationStatus::Completed { output } => {
             println!("✅ Fan-out/fan-in orchestration completed!");
             println!("Result: {}", output);
         }
-        runtime::OrchestrationStatus::Failed { error } => {
+        duroxide::OrchestrationStatus::Failed { error } => {
             println!("❌ Orchestration failed: {}", error);
         }
         _ => {

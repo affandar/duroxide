@@ -6,7 +6,7 @@ The SQLite provider has been successfully implemented with full transactional su
 
 ## Executive Summary
 
-SQLite is an excellent choice for a transactional HistoryStore provider because:
+SQLite is an excellent choice for a transactional Provider because:
 - **ACID compliance** with full transactional support
 - **Single-file deployment** with zero configuration
 - **Excellent performance** for local/embedded scenarios
@@ -103,16 +103,16 @@ CREATE TABLE timer_queue (
 use sqlx::{SqlitePool, Transaction, Sqlite};
 use serde_json;
 use std::time::{SystemTime, Duration};
-use crate::providers::{HistoryStore, WorkItem, OrchestrationItem};
+use crate::providers::{Provider, WorkItem, OrchestrationItem};
 use crate::Event;
 
-pub struct SqliteHistoryStore {
+pub struct SqliteProvider {
     pool: SqlitePool,
     lock_timeout: Duration,
     history_cap: usize,
 }
 
-impl SqliteHistoryStore {
+impl SqliteProvider {
     pub async fn new(database_url: &str) -> Result<Self, sqlx::Error> {
         let pool = SqlitePool::connect(database_url).await?;
         
@@ -151,7 +151,7 @@ impl SqliteHistoryStore {
 
 ```rust
 #[async_trait::async_trait]
-impl HistoryStore for SqliteHistoryStore {
+impl Provider for SqliteProvider {
     async fn fetch_orchestration_item(&self) -> Option<OrchestrationItem> {
         let mut tx = self.pool.begin().await.ok()?;
         
@@ -331,18 +331,18 @@ VALUES (?, datetime('now', '+5 minutes'));
 ### 1. **Side-by-Side Testing**
 ```rust
 // Feature flag for provider selection
-let provider: Arc<dyn HistoryStore> = match config.provider {
-    Provider::Filesystem => Arc::new(FsHistoryStore::new(path)),
-    Provider::Sqlite => Arc::new(SqliteHistoryStore::new(url).await?),
-    Provider::InMemory => Arc::new(InMemoryHistoryStore::default()),
+let provider: Arc<dyn Provider> = match config.provider {
+    ProviderKind::Filesystem => Arc::new(FsProvider::new(path)),
+    ProviderKind::Sqlite => Arc::new(SqliteProvider::new(url).await?),
+    ProviderKind::InMemory => Arc::new(InMemoryProvider::default()),
 };
 ```
 
 ### 2. **Data Migration Tool**
 ```rust
 pub async fn migrate_fs_to_sqlite(fs_path: &Path, sqlite_url: &str) -> Result<()> {
-    let fs_store = FsHistoryStore::new(fs_path, false);
-    let sqlite_store = SqliteHistoryStore::new(sqlite_url).await?;
+    let fs_store = FsProvider::new(fs_path, false);
+    let sqlite_store = SqliteProvider::new(sqlite_url).await?;
     
     for instance in fs_store.list_instances().await {
         let history = fs_store.read(&instance).await;

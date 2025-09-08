@@ -168,7 +168,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .build();
 
     // Run
-    let rt = runtime::Runtime::start_with_store(
+    let rt = runtime::DuroxideRuntime::start_with_store(
         store, Arc::new(activities), orchestrations
     ).await;
 

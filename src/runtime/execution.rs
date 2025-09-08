@@ -16,7 +16,6 @@ impl Runtime {
     /// - Inner loop: Process batches of completions in deterministic turns
     /// - Four-stage turn lifecycle: prep -> execute -> persist -> ack
     /// - Deterministic completion processing with robust error handling
-
     // Non-atomic run_single_execution removed; atomic path only
 
     /// Set up version pinning from history
@@ -44,7 +43,7 @@ impl Runtime {
         let handler_opt = if let Some(v) = pinned_version.clone() {
             self.orchestration_registry.resolve_exact(orchestration_name, &v)
         } else {
-            self.orchestration_registry.get(orchestration_name)
+            self.orchestration_registry.resolve_for_start(orchestration_name).await.map(|(_v, h)| h)
         };
 
         handler_opt.ok_or_else(|| {
@@ -58,7 +57,6 @@ impl Runtime {
 
     /// Handle unregistered orchestration by failing gracefully
     // handle_unregistered_orchestration removed with non-atomic path
-
     /// Extract orchestration input and parent linkage from history
     fn extract_orchestration_context(
         &self,

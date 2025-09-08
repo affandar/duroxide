@@ -5,7 +5,7 @@ use duroxide::providers::WorkItem;
 // Use SQLite provider via common helper
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
-use duroxide::{Event, OrchestrationContext, OrchestrationRegistry, OrchestrationStatus};
+use duroxide::{Event, OrchestrationContext, OrchestrationRegistry, OrchestrationStatus, Client};
 use std::sync::Arc as StdArc;
 mod common;
 
@@ -41,12 +41,8 @@ async fn code_swap_triggers_nondeterminism() {
     // Register A, start orchestration
     let reg_a = OrchestrationRegistry::builder().register("SwapTest", orch_a).build();
     let rt_a = runtime::Runtime::start_with_store(store.clone(), StdArc::new(activity_registry.clone()), reg_a).await;
-
-    let _h = rt_a
-        .clone()
-        .start_orchestration("inst-swap", "SwapTest", "")
-        .await
-        .unwrap();
+    let client = Client::new(store.clone());
+    let _h = client.start_orchestration("inst-swap", "SwapTest", "").await.unwrap();
 
     // Wait for ActivityScheduled("A1") to appear in history and capture it
     let evt = common::wait_for_history_event(
@@ -69,7 +65,7 @@ async fn code_swap_triggers_nondeterminism() {
     // Simulate code swap: drop old runtime, create new one with registry B
     drop(rt_a);
     let reg_b = OrchestrationRegistry::builder().register("SwapTest", orch_b).build();
-    let rt_b = runtime::Runtime::start_with_store(store.clone(), StdArc::new(activity_registry), reg_b).await;
+    let _rt_b = runtime::Runtime::start_with_store(store.clone(), StdArc::new(activity_registry), reg_b).await;
 
     // Poke the instance so it activates and runs a turn (nondeterminism check occurs before completions)
     // Use a timer that fires immediately to trigger a turn reliably
@@ -83,7 +79,8 @@ async fn code_swap_triggers_nondeterminism() {
         .await;
 
     // Wait for terminal status using helper
-    match rt_b
+    let client = Client::new(store.clone());
+    match client
         .wait_for_orchestration("inst-swap", std::time::Duration::from_secs(5))
         .await
         .unwrap()
@@ -116,11 +113,11 @@ async fn completion_kind_mismatch_triggers_nondeterminism() {
     let reg = OrchestrationRegistry::builder()
         .register("KindMismatchTest", orch)
         .build();
-    let rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(activity_registry), reg).await;
+    let _rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(activity_registry), reg).await;
+    let client = Client::new(store.clone());
 
     // Start the orchestration
-    let _h = rt
-        .clone()
+    let _h = client
         .start_orchestration("inst-mismatch", "KindMismatchTest", "")
         .await
         .unwrap();
@@ -153,7 +150,7 @@ async fn completion_kind_mismatch_triggers_nondeterminism() {
         .await;
 
     // The orchestration should fail with nondeterminism error about kind mismatch
-    match rt
+    match client
         .wait_for_orchestration("inst-mismatch", std::time::Duration::from_secs(5))
         .await
         .unwrap()
@@ -191,11 +188,11 @@ async fn unexpected_completion_id_triggers_nondeterminism() {
     let reg = OrchestrationRegistry::builder()
         .register("UnexpectedIdTest", orch)
         .build();
-    let rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(activity_registry), reg).await;
+    let _rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(activity_registry), reg).await;
+    let client = Client::new(store.clone());
 
     // Start the orchestration
-    let _h = rt
-        .clone()
+    let _h = client
         .start_orchestration("inst-unexpected", "UnexpectedIdTest", "")
         .await
         .unwrap();
@@ -214,7 +211,7 @@ async fn unexpected_completion_id_triggers_nondeterminism() {
         .await;
 
     // The orchestration should fail with nondeterminism error about unexpected completion
-    match rt
+    match client
         .wait_for_orchestration("inst-unexpected", std::time::Duration::from_secs(5))
         .await
         .unwrap()
@@ -244,11 +241,11 @@ async fn unexpected_timer_completion_triggers_nondeterminism() {
     };
 
     let reg = OrchestrationRegistry::builder().register("TimerTest", orch).build();
-    let rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(activity_registry), reg).await;
+    let _rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(activity_registry), reg).await;
+    let client = Client::new(store.clone());
 
     // Start the orchestration
-    let _h = rt
-        .clone()
+    let _h = client
         .start_orchestration("inst-timer", "TimerTest", "")
         .await
         .unwrap();
@@ -267,7 +264,7 @@ async fn unexpected_timer_completion_triggers_nondeterminism() {
         .await;
 
     // The orchestration should fail with nondeterminism error
-    match rt
+    match client
         .wait_for_orchestration("inst-timer", std::time::Duration::from_secs(5))
         .await
         .unwrap()
@@ -325,10 +322,10 @@ async fn continue_as_new_with_unconsumed_completion_triggers_nondeterminism() {
         .build();
 
     let rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(activity_registry), reg).await;
+    let client = Client::new(store.clone());
 
     // Start the orchestration
-    let _h = rt
-        .clone()
+    let _h = client
         .start_orchestration("inst-can-nondet", "CanNondeterminism", "0")
         .await
         .unwrap();
@@ -360,10 +357,10 @@ async fn continue_as_new_with_unconsumed_completion_triggers_nondeterminism() {
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
     // Now send the signal that will trigger continue_as_new
-    rt.raise_event("inst-can-nondet", "proceed_signal", "go").await;
+    let _ = client.raise_event("inst-can-nondet", "proceed_signal", "go").await;
 
     // Wait for the orchestration to complete or fail
-    match rt
+    match client
         .wait_for_orchestration("inst-can-nondet", std::time::Duration::from_secs(5))
         .await
         .unwrap()
@@ -421,10 +418,10 @@ async fn execution_id_filtering_without_continue_as_new_triggers_nondeterminism(
         })
         .build();
     let rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(activity_registry), reg).await;
+    let client = Client::new(store.clone());
 
     // Start orchestration
-    let _handle = rt
-        .clone()
+    let _handle = client
         .start_orchestration("inst-exec-id-no-can", "ExecIdNoCanTest", "")
         .await
         .unwrap();
@@ -442,7 +439,7 @@ async fn execution_id_filtering_without_continue_as_new_triggers_nondeterminism(
         .unwrap();
 
     // Wait for orchestration to complete
-    match rt
+    match client
         .wait_for_orchestration("inst-exec-id-no-can", std::time::Duration::from_secs(5))
         .await
         .unwrap()
@@ -481,23 +478,23 @@ async fn duplicate_external_events_are_handled_gracefully() {
         .build();
     let activity_registry = ActivityRegistry::builder().build();
     let rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(activity_registry), reg).await;
+    let client = duroxide::Client::new(store.clone());
 
     // Start orchestration
-    let _handle = rt
-        .clone()
+    let _handle = client
         .start_orchestration("inst-duplicate-external", "DuplicateExternalTest", "")
         .await
         .unwrap();
 
     // Wait for subscription to be established
-    let _ = common::wait_for_subscription(store, "inst-duplicate-external", "test_signal", 2_000).await;
+    let _ = common::wait_for_subscription(store.clone(), "inst-duplicate-external", "test_signal", 2_000).await;
 
     // Send the same external event twice
-    rt.raise_event("inst-duplicate-external", "test_signal", "first").await;
-    rt.raise_event("inst-duplicate-external", "test_signal", "first").await; // Duplicate
+    let _ = client.raise_event("inst-duplicate-external", "test_signal", "first").await;
+    let _ = client.raise_event("inst-duplicate-external", "test_signal", "first").await; // Duplicate
 
     // Wait for orchestration to complete
-    match rt
+    match client
         .wait_for_orchestration("inst-duplicate-external", std::time::Duration::from_secs(3))
         .await
         .unwrap()

@@ -142,7 +142,6 @@ impl CompletionMap {
         };
 
         self.by_id.insert(key, completion_data);
-        // CR TODO : how is this ordered? push_back just puts it in the back of the list.
         self.ordered.push_back(CompletionEntry {
             kind,
             correlation_id,

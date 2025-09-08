@@ -1,20 +1,20 @@
-use duroxide::providers::HistoryStore;
-use duroxide::providers::sqlite::SqliteHistoryStore;
+use duroxide::providers::Provider;
+use duroxide::providers::sqlite::SqliteProvider;
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
-use duroxide::{Event, OrchestrationContext, OrchestrationRegistry};
+use duroxide::{Event, OrchestrationContext, OrchestrationRegistry, Client};
 use std::sync::Arc as StdArc;
 use tempfile::TempDir;
 
 mod common;
 
 /// Helper to create a SQLite store for testing
-async fn create_sqlite_store() -> (StdArc<dyn HistoryStore>, TempDir) {
+async fn create_sqlite_store() -> (StdArc<dyn Provider>, TempDir) {
     let td = tempfile::tempdir().unwrap();
     let db_path = td.path().join("test.db");
     std::fs::File::create(&db_path).unwrap();
     let db_url = format!("sqlite:{}", db_path.display());
-    let store = StdArc::new(SqliteHistoryStore::new(&db_url).await.unwrap()) as StdArc<dyn HistoryStore>;
+    let store = StdArc::new(SqliteProvider::new(&db_url).await.unwrap()) as StdArc<dyn Provider>;
     (store, td)
 }
 
@@ -31,14 +31,15 @@ async fn single_timer_fires() {
     let reg = OrchestrationRegistry::builder().register("OneTimer", orch).build();
     let acts = ActivityRegistry::builder().build();
     let rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(acts), reg).await;
+    let client = Client::new(store.clone());
 
     let start = std::time::Instant::now();
-    rt.clone()
+    client
         .start_orchestration("inst-one", "OneTimer", "")
         .await
         .unwrap();
 
-    let status = rt
+    let status = client
         .wait_for_orchestration("inst-one", std::time::Duration::from_secs(5))
         .await
         .unwrap();
@@ -56,7 +57,7 @@ async fn single_timer_fires() {
         _ => panic!("unexpected orchestration status"),
     };
 
-    let hist = rt.get_execution_history("inst-one", 1).await;
+    let hist = client.get_execution_history("inst-one", 1).await;
     assert!(hist.iter().any(|e| matches!(e, Event::TimerCreated { .. })));
     assert!(hist.iter().any(|e| matches!(e, Event::TimerFired { .. })));
     rt.shutdown().await;
@@ -79,14 +80,15 @@ async fn multiple_timers_ordering() {
     let reg = OrchestrationRegistry::builder().register("TwoTimers", orch).build();
     let acts = ActivityRegistry::builder().build();
     let rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(acts), reg).await;
+    let client = Client::new(store.clone());
 
     let start = std::time::Instant::now();
-    rt.clone()
+    client
         .start_orchestration("inst-two", "TwoTimers", "")
         .await
         .unwrap();
 
-    let status = rt
+    let status = client
         .wait_for_orchestration("inst-two", std::time::Duration::from_secs(5))
         .await
         .unwrap();
@@ -102,7 +104,7 @@ async fn multiple_timers_ordering() {
     };
     assert_eq!(output, "ok");
 
-    let hist = rt.get_execution_history("inst-two", 1).await;
+    let hist = client.get_execution_history("inst-two", 1).await;
     // Verify two fired with increasing fire_at_ms
     let fired: Vec<(u64, u64)> = hist
         .iter()
@@ -128,9 +130,10 @@ async fn timer_deduplication() {
     let reg = OrchestrationRegistry::builder().register("DedupTimer", orch).build();
     let acts = ActivityRegistry::builder().build();
     let rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(acts), reg).await;
+    let client = Client::new(store.clone());
 
     let inst = "inst-dedup";
-    let _h = rt.clone().start_orchestration(inst, "DedupTimer", "").await.unwrap();
+    let _ = client.start_orchestration(inst, "DedupTimer", "").await.unwrap();
     assert!(
         common::wait_for_history(
             store.clone(),
@@ -193,14 +196,15 @@ async fn sub_second_timer_precision() {
     let reg = OrchestrationRegistry::builder().register("SubSecondTimer", orch).build();
     let acts = ActivityRegistry::builder().build();
     let rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(acts), reg).await;
+    let client = Client::new(store.clone());
 
     let start = std::time::Instant::now();
-    rt.clone()
+    client
         .start_orchestration("inst-subsec", "SubSecondTimer", "")
         .await
         .unwrap();
         
-    let status = rt
+    let status = client
         .wait_for_orchestration("inst-subsec", std::time::Duration::from_secs(5))
         .await
         .unwrap();
@@ -232,14 +236,15 @@ async fn timer_wall_clock_delay() {
     let reg = OrchestrationRegistry::builder().register("DelayTimer", orch).build();
     let acts = ActivityRegistry::builder().build();
     let rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(acts), reg).await;
+    let client = Client::new(store.clone());
 
     let start = std::time::Instant::now();
-    rt.clone()
+    client
         .start_orchestration("inst-delay", "DelayTimer", "")
         .await
         .unwrap();
 
-    let status = rt
+    let status = client
         .wait_for_orchestration("inst-delay", std::time::Duration::from_secs(10))
         .await
         .unwrap();

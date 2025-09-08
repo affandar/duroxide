@@ -1,11 +1,11 @@
-use duroxide::providers::{HistoryStore, WorkItem};
-use duroxide::providers::sqlite::SqliteHistoryStore;
+use duroxide::providers::{Provider, WorkItem};
+use duroxide::providers::sqlite::SqliteProvider;
 use duroxide::Event;
 
 #[tokio::test]
 async fn test_sqlite_provider_basic() {
     // Create in-memory SQLite store
-    let store = SqliteHistoryStore::new("sqlite::memory:")
+    let store = SqliteProvider::new("sqlite::memory:")
         .await
         .expect("Failed to create SQLite store");
     
@@ -104,7 +104,7 @@ async fn test_sqlite_provider_basic() {
 
 #[tokio::test]
 async fn test_sqlite_provider_transactional() {
-    let store = SqliteHistoryStore::new("sqlite::memory:")
+    let store = SqliteProvider::new("sqlite::memory:")
         .await
         .expect("Failed to create SQLite store");
     
@@ -207,7 +207,7 @@ async fn test_sqlite_provider_transactional() {
 
 #[tokio::test]
 async fn test_sqlite_provider_timer_queue() {
-    let store = SqliteHistoryStore::new("sqlite::memory:")
+    let store = SqliteProvider::new("sqlite::memory:")
         .await
         .expect("Failed to create SQLite store");
     

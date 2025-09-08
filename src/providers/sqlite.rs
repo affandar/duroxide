@@ -3,21 +3,21 @@ use sqlx::{Transaction, Sqlite, Row};
 use std::time::{SystemTime, Duration, UNIX_EPOCH};
 use tracing::debug;
 
-use super::{HistoryStore, WorkItem, OrchestrationItem};
+use super::{Provider, WorkItem, OrchestrationItem};
 use crate::Event;
 
-/// SQLite-backed history store with full transactional support
+/// SQLite-backed provider with full transactional support
 /// 
 /// This provider offers true ACID guarantees across all operations,
 /// eliminating the race conditions present in the filesystem provider.
-pub struct SqliteHistoryStore {
+pub struct SqliteProvider {
     pool: SqlitePool,
     lock_timeout: Duration,
     #[allow(dead_code)]
     history_cap: usize,
 }
 
-impl SqliteHistoryStore {
+impl SqliteProvider {
     /// Internal method to enqueue orchestrator work with optional visibility delay
     async fn enqueue_orchestrator_work_with_delay(&self, item: WorkItem, delay_ms: Option<u64>) -> Result<(), String> {
         let work_item = serde_json::to_string(&item).map_err(|e| e.to_string())?;
@@ -82,7 +82,7 @@ impl SqliteHistoryStore {
         
         Ok(())
     }
-    /// Create a new SQLite history store
+    /// Create a new SQLite provider
     /// 
     /// # Arguments
     /// * `database_url` - SQLite connection string (e.g., "sqlite:data.db" or "sqlite::memory:")
@@ -474,10 +474,14 @@ impl SqliteHistoryStore {
         
         Ok(())
     }
+
+    pub fn get_pool(&self) -> &sqlx::SqlitePool {
+        &self.pool
+    }
 }
 
 #[async_trait::async_trait]
-impl HistoryStore for SqliteHistoryStore {
+impl Provider for SqliteProvider {
     fn supports_delayed_visibility(&self) -> bool { true }
     async fn fetch_orchestration_item(&self) -> Option<OrchestrationItem> {
         let mut tx = self.pool.begin().await.ok()?;
@@ -1259,8 +1263,8 @@ impl HistoryStore for SqliteHistoryStore {
 mod tests {
     use super::*;
     
-    async fn create_test_store() -> SqliteHistoryStore {
-        SqliteHistoryStore::new("sqlite::memory:")
+    async fn create_test_store() -> SqliteProvider {
+        SqliteProvider::new("sqlite::memory:")
             .await
             .expect("Failed to create test store")
     }
