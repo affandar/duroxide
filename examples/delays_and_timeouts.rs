@@ -1,7 +1,8 @@
 use duroxide::*;
-use duroxide::providers::sqlite::SqliteHistoryStore;
+use duroxide::providers::sqlite::SqliteProvider;
 use duroxide::runtime::registry::{ActivityRegistry, OrchestrationRegistry};
 use duroxide::runtime;
+use duroxide::Client;
 use std::sync::Arc;
 
 /// This example demonstrates the CORRECT way to handle delays and timeouts.
@@ -23,7 +24,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let db_path = temp_dir.path().join("delays_and_timeouts.db");
     std::fs::File::create(&db_path)?;
     let db_url = format!("sqlite:{}", db_path.to_str().unwrap());
-    let store = Arc::new(SqliteHistoryStore::new(&db_url).await?);
+    let store = Arc::new(SqliteProvider::new(&db_url).await?);
     
     // Register activities - these can do any async operations including delays
     let activities = ActivityRegistry::builder()
@@ -102,17 +103,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .build();
 
     let rt = runtime::Runtime::start_with_store(
-        store,
+        store.clone(),
         Arc::new(activities),
         orchestrations,
     ).await;
+
+    let client = Client::new(store.clone());
 
     println!("🚀 Running delay example...");
     
     // Run the delay example
     let delay_instance = format!("delay-{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis());
-    rt.clone().start_orchestration(&delay_instance, "DelayExample", "test data").await?;
-    match rt.wait_for_orchestration(&delay_instance, std::time::Duration::from_secs(15)).await
+    client.start_orchestration(&delay_instance, "DelayExample", "test data").await?;
+    match client.wait_for_orchestration(&delay_instance, std::time::Duration::from_secs(15)).await
         .map_err(|e| format!("Wait error: {:?}", e))?
     {
         OrchestrationStatus::Completed { output } => {
@@ -128,8 +131,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     // Run the timeout example  
     let timeout_instance = format!("timeout-{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis());
-    rt.clone().start_orchestration(&timeout_instance, "TimeoutExample", "test data").await?;
-    match rt.wait_for_orchestration(&timeout_instance, std::time::Duration::from_secs(15)).await
+    client.start_orchestration(&timeout_instance, "TimeoutExample", "test data").await?;
+    match client.wait_for_orchestration(&timeout_instance, std::time::Duration::from_secs(15)).await
         .map_err(|e| format!("Wait error: {:?}", e))?
     {
         OrchestrationStatus::Completed { output } => {

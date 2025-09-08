@@ -83,13 +83,13 @@ pub enum WorkItem {
     },
 }
 
-/// Storage abstraction for durable orchestration execution.
-/// 
+/// Provider abstraction for durable orchestration execution (persistence + queues).
+///
 /// Providers must implement the core atomic orchestration methods and basic queue operations.
 /// Multi-execution support is required for ContinueAsNew functionality.
 /// Management APIs are optional with default no-op implementations.
 #[async_trait::async_trait]
-pub trait HistoryStore: Send + Sync {
+pub trait Provider: Send + Sync {
     // ===== Core Atomic Orchestration Methods (REQUIRED) =====
     // These three methods form the heart of reliable orchestration execution.
     
@@ -240,7 +240,6 @@ pub trait HistoryStore: Send + Sync {
     /// Default: returns [1] if instance exists, empty otherwise.
     async fn list_executions(&self, instance: &str) -> Vec<u64>;
     
-    // TODO: Add lock timeout and lease refresh mechanisms for worker/timer messages
     // - Add timeout parameter to dequeue_worker_peek_lock and dequeue_timer_peek_lock
     // - Add refresh_worker_lock(token, extend_ms) and refresh_timer_lock(token, extend_ms)
     // - Provider should auto-abandon messages if lock expires without ack

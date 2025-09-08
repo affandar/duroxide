@@ -17,9 +17,10 @@ async fn external_duplicate_workitems_dedup() {
     let activity_registry = ActivityRegistry::builder().build();
     let rt =
         runtime::Runtime::start_with_store(store.clone(), StdArc::new(activity_registry), orchestration_registry).await;
+    let client = duroxide::Client::new(store.clone());
 
     let inst = "inst-ext-dup";
-    let _h = rt.clone().start_orchestration(inst, "WaitEvt", "").await.unwrap();
+    let _h = client.start_orchestration(inst, "WaitEvt", "").await.unwrap();
     assert!(common::wait_for_subscription(store.clone(), inst, "Evt", 2_000).await);
 
     // enqueue duplicate externals
@@ -72,9 +73,10 @@ async fn timer_duplicate_workitems_dedup() {
     let activity_registry = ActivityRegistry::builder().build();
     let rt =
         runtime::Runtime::start_with_store(store.clone(), StdArc::new(activity_registry), orchestration_registry).await;
+    let client = duroxide::Client::new(store.clone());
 
     let inst = "inst-timer-dup";
-    let _h = rt.clone().start_orchestration(inst, "OneTimer", "").await.unwrap();
+    let _h = client.start_orchestration(inst, "OneTimer", "").await.unwrap();
 
     // wait for TimerCreated and get id
     assert!(
@@ -158,9 +160,10 @@ async fn activity_duplicate_completion_workitems_dedup() {
     let orchestration_registry = OrchestrationRegistry::builder().register("OneSlowAct", orch).build();
     let rt =
         runtime::Runtime::start_with_store(store.clone(), StdArc::new(activity_registry), orchestration_registry).await;
+    let client = duroxide::Client::new(store.clone());
 
     let inst = "inst-act-dup";
-    let _h = rt.clone().start_orchestration(inst, "OneSlowAct", "").await.unwrap();
+    let _h = client.start_orchestration(inst, "OneSlowAct", "").await.unwrap();
 
     // wait for ActivityScheduled to get id
     assert!(
@@ -244,10 +247,11 @@ async fn crash_after_dequeue_before_append_completion() {
     let activity_registry = ActivityRegistry::builder().build();
     let rt =
         runtime::Runtime::start_with_store(store.clone(), StdArc::new(activity_registry), orchestration_registry).await;
+    let client = duroxide::Client::new(store.clone());
 
     // Start orchestration and wait for subscription
     let inst = "inst-crash-before-append";
-    let _h = rt.clone().start_orchestration(inst, "WaitEvt", "").await.unwrap();
+    let _h = client.start_orchestration(inst, "WaitEvt", "").await.unwrap();
     assert!(common::wait_for_subscription(store.clone(), inst, "Evt", 2_000).await);
 
     // Enqueue the external work item
@@ -294,9 +298,10 @@ async fn crash_after_append_before_ack_timer() {
     let activity_registry = ActivityRegistry::builder().build();
     let rt =
         runtime::Runtime::start_with_store(store.clone(), StdArc::new(activity_registry), orchestration_registry).await;
+    let client = duroxide::Client::new(store.clone());
 
     let inst = "inst-crash-after-append";
-    let _h = rt.clone().start_orchestration(inst, "OneTimer", "").await.unwrap();
+    let _h = client.start_orchestration(inst, "OneTimer", "").await.unwrap();
 
     assert!(
         common::wait_for_history(

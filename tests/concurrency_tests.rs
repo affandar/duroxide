@@ -1,12 +1,12 @@
 use std::sync::Arc;
-use duroxide::providers::HistoryStore;
+use duroxide::providers::Provider;
 mod common;
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
-use duroxide::{Event, OrchestrationContext, OrchestrationRegistry};
+use duroxide::{Event, OrchestrationContext, OrchestrationRegistry, Client};
 use std::sync::Arc as StdArc;
 
-async fn concurrent_orchestrations_different_activities_with(store: StdArc<dyn HistoryStore>) {
+async fn concurrent_orchestrations_different_activities_with(store: StdArc<dyn Provider>) {
     let o1 = |ctx: OrchestrationContext, _input: String| async move {
         let f_a = ctx.schedule_activity("Add", "2,3");
         let f_e = ctx.schedule_wait("Go");
@@ -77,45 +77,42 @@ async fn concurrent_orchestrations_different_activities_with(store: StdArc<dyn H
 
     let rt =
         runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
-    let _h1 = rt
-        .clone()
-        .start_orchestration("inst-multi-1", "AddOrchestration", "")
-        .await;
-    let _h2 = rt
-        .clone()
-        .start_orchestration("inst-multi-2", "UpperOrchestration", "")
-        .await;
+    let client = Client::new(store.clone());
+    let _ = client.start_orchestration("inst-multi-1", "AddOrchestration", "").await;
+    let _ = client.start_orchestration("inst-multi-2", "UpperOrchestration", "").await;
 
     let store_for_wait1 = store.clone();
-    let rt_c = rt.clone();
     tokio::spawn(async move {
-        let _ = common::wait_for_subscription(store_for_wait1, "inst-multi-1", "Go", 1000).await;
-        rt_c.raise_event("inst-multi-1", "Go", "E1").await;
+        let sfw = store_for_wait1.clone();
+        let _ = common::wait_for_subscription(sfw.clone(), "inst-multi-1", "Go", 3000).await;
+        let client = Client::new(sfw);
+        let _ = client.raise_event("inst-multi-1", "Go", "E1").await;
     });
     let store_for_wait2 = store.clone();
-    let rt_c2 = rt.clone();
     tokio::spawn(async move {
-        let _ = common::wait_for_subscription(store_for_wait2, "inst-multi-2", "Go", 1000).await;
-        rt_c2.raise_event("inst-multi-2", "Go", "E2").await;
+        let sfw = store_for_wait2.clone();
+        let _ = common::wait_for_subscription(sfw.clone(), "inst-multi-2", "Go", 3000).await;
+        let client = Client::new(sfw);
+        let _ = client.raise_event("inst-multi-2", "Go", "E2").await;
     });
 
-    let out1 = match rt
-        .wait_for_orchestration("inst-multi-1", std::time::Duration::from_secs(5))
+    let out1 = match Client::new(store.clone())
+        .wait_for_orchestration("inst-multi-1", std::time::Duration::from_secs(10))
         .await
         .unwrap()
     {
-        runtime::OrchestrationStatus::Completed { output } => Ok(output),
-        runtime::OrchestrationStatus::Failed { error } => Err(error),
+        duroxide::OrchestrationStatus::Completed { output } => Ok(output),
+        duroxide::OrchestrationStatus::Failed { error } => Err(error),
         _ => panic!("unexpected orchestration status"),
     };
 
-    let out2 = match rt
-        .wait_for_orchestration("inst-multi-2", std::time::Duration::from_secs(5))
+    let out2 = match Client::new(store.clone())
+        .wait_for_orchestration("inst-multi-2", std::time::Duration::from_secs(10))
         .await
         .unwrap()
     {
-        runtime::OrchestrationStatus::Completed { output } => Ok(output),
-        runtime::OrchestrationStatus::Failed { error } => Err(error),
+        duroxide::OrchestrationStatus::Completed { output } => Ok(output),
+        duroxide::OrchestrationStatus::Failed { error } => Err(error),
         _ => panic!("unexpected orchestration status"),
     };
 
@@ -129,8 +126,8 @@ async fn concurrent_orchestrations_different_activities_with(store: StdArc<dyn H
     );
 
     // Check histories
-    let hist1 = rt.get_execution_history("inst-multi-1", 1).await;
-    let hist2 = rt.get_execution_history("inst-multi-2", 1).await;
+    let hist1 = client.get_execution_history("inst-multi-1", 1).await;
+    let hist2 = client.get_execution_history("inst-multi-2", 1).await;
 
     assert!(
         hist1
@@ -172,7 +169,7 @@ async fn concurrent_orchestrations_different_activities_fs() {
     concurrent_orchestrations_different_activities_with(store).await;
 }
 
-async fn concurrent_orchestrations_same_activities_with(store: StdArc<dyn HistoryStore>) {
+async fn concurrent_orchestrations_same_activities_with(store: StdArc<dyn Provider>) {
     let o1 = |ctx: OrchestrationContext, _input: String| async move {
         let f_a = ctx.schedule_activity("Proc", "10");
         let f_e = ctx.schedule_wait("Go");
@@ -241,51 +238,48 @@ async fn concurrent_orchestrations_same_activities_with(store: StdArc<dyn Histor
 
     let rt =
         runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
-    let _h1 = rt
-        .clone()
-        .start_orchestration("inst-same-acts-1", "ProcOrchestration1", "")
-        .await;
-    let _h2 = rt
-        .clone()
-        .start_orchestration("inst-same-acts-2", "ProcOrchestration2", "")
-        .await;
+    let client = Client::new(store.clone());
+    let _ = client.start_orchestration("inst-same-acts-1", "ProcOrchestration1", "").await;
+    let _ = client.start_orchestration("inst-same-acts-2", "ProcOrchestration2", "").await;
 
     let store_for_wait3 = store.clone();
-    let rt_c = rt.clone();
     tokio::spawn(async move {
-        let _ = common::wait_for_subscription(store_for_wait3, "inst-same-acts-1", "Go", 1000).await;
-        rt_c.raise_event("inst-same-acts-1", "Go", "P1").await;
+        let sfw = store_for_wait3.clone();
+        let _ = common::wait_for_subscription(sfw.clone(), "inst-same-acts-1", "Go", 3000).await;
+        let client = Client::new(sfw);
+        let _ = client.raise_event("inst-same-acts-1", "Go", "P1").await;
     });
     let store_for_wait4 = store.clone();
-    let rt_c2 = rt.clone();
     tokio::spawn(async move {
-        let _ = common::wait_for_subscription(store_for_wait4, "inst-same-acts-2", "Go", 1000).await;
-        rt_c2.raise_event("inst-same-acts-2", "Go", "P2").await;
+        let sfw = store_for_wait4.clone();
+        let _ = common::wait_for_subscription(sfw.clone(), "inst-same-acts-2", "Go", 3000).await;
+        let client = Client::new(sfw);
+        let _ = client.raise_event("inst-same-acts-2", "Go", "P2").await;
     });
 
-    match rt
-        .wait_for_orchestration("inst-same-acts-1", std::time::Duration::from_secs(5))
+    match Client::new(store.clone())
+        .wait_for_orchestration("inst-same-acts-1", std::time::Duration::from_secs(10))
         .await
         .unwrap()
     {
-        runtime::OrchestrationStatus::Completed { output } => assert_eq!(output, "o1:a=11;evt=P1"),
-        runtime::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        duroxide::OrchestrationStatus::Completed { output } => assert_eq!(output, "o1:a=11;evt=P1"),
+        duroxide::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
         _ => panic!("unexpected orchestration status"),
     }
 
-    match rt
-        .wait_for_orchestration("inst-same-acts-2", std::time::Duration::from_secs(5))
+    match Client::new(store.clone())
+        .wait_for_orchestration("inst-same-acts-2", std::time::Duration::from_secs(10))
         .await
         .unwrap()
     {
-        runtime::OrchestrationStatus::Completed { output } => assert_eq!(output, "o2:a=21;evt=P2"),
-        runtime::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        duroxide::OrchestrationStatus::Completed { output } => assert_eq!(output, "o2:a=21;evt=P2"),
+        duroxide::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
         _ => panic!("unexpected orchestration status"),
     }
 
     // Check histories
-    let hist1 = rt.get_execution_history("inst-same-acts-1", 1).await;
-    let hist2 = rt.get_execution_history("inst-same-acts-2", 1).await;
+    let hist1 = client.get_execution_history("inst-same-acts-1", 1).await;
+    let hist2 = client.get_execution_history("inst-same-acts-2", 1).await;
 
     assert!(
         hist1

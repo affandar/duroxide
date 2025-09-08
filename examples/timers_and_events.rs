@@ -8,10 +8,10 @@
 //!
 //! Run with: `cargo run --example timers_and_events`
 
-use duroxide::providers::sqlite::SqliteHistoryStore;
+use duroxide::providers::sqlite::SqliteProvider;
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
-use duroxide::{OrchestrationContext, OrchestrationRegistry, DurableOutput};
+use duroxide::{OrchestrationContext, OrchestrationRegistry, DurableOutput, Client};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Duration;
@@ -39,7 +39,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let db_path = temp_dir.path().join("timers_and_events.db");
     std::fs::File::create(&db_path)?;
     let db_url = format!("sqlite:{}", db_path.to_str().unwrap());
-    let store = Arc::new(SqliteHistoryStore::new(&db_url).await?);
+    let store = Arc::new(SqliteProvider::new(&db_url).await?);
 
     // Register activities for the approval workflow
     let activities = ActivityRegistry::builder()
@@ -143,7 +143,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .build();
 
     let rt = runtime::Runtime::start_with_store(
-        store,
+        store.clone(),
         Arc::new(activities),
         orchestrations,
     ).await;
@@ -157,13 +157,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let request_json = serde_json::to_string(&request)?;
 
     let instance_id = "approval-instance-1";
-    let _handle = rt
-        .clone()
-        .start_orchestration(instance_id, "ApprovalWorkflow", request_json)
-        .await?;
+    let client = Client::new(store.clone());
+    client.start_orchestration(instance_id, "ApprovalWorkflow", request_json).await?;
 
     // Simulate an approval event after 2 seconds
-    let rt_clone = rt.clone();
+    let client_clone = Client::new(store.clone());
     let instance_id_clone = instance_id.to_string();
     tokio::spawn(async move {
         tokio::time::sleep(Duration::from_secs(2)).await;
@@ -177,19 +175,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let approval_json = serde_json::to_string(&approval).unwrap();
         
         println!("🎯 Simulating approval event...");
-        rt_clone.raise_event(&instance_id_clone, "ApprovalEvent", approval_json).await;
+        client_clone.raise_event(&instance_id_clone, "ApprovalEvent", approval_json).await.expect("raise event");
     });
 
-    match rt
+    match client
         .wait_for_orchestration(instance_id, Duration::from_secs(10))
         .await
         .map_err(|e| format!("Wait error: {:?}", e))?
     {
-        runtime::OrchestrationStatus::Completed { output } => {
+        duroxide::OrchestrationStatus::Completed { output } => {
             println!("✅ Approval workflow completed!");
             println!("Result: {}", output);
         }
-        runtime::OrchestrationStatus::Failed { error } => {
+        duroxide::OrchestrationStatus::Failed { error } => {
             println!("❌ Workflow failed: {}", error);
         }
         _ => {

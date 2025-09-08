@@ -1,7 +1,7 @@
-use duroxide::providers::sqlite::SqliteHistoryStore;
+use duroxide::providers::sqlite::SqliteProvider;
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
-use duroxide::{Event, OrchestrationContext, OrchestrationRegistry};
+use duroxide::{Event, OrchestrationContext, OrchestrationRegistry, Client};
 use std::sync::Arc as StdArc;
 
 #[tokio::test]
@@ -14,15 +14,12 @@ async fn runtime_start_versioned_string_uses_explicit_version() {
         .set_policy("S", duroxide::runtime::VersionPolicy::Latest)
         .build();
     let acts = ActivityRegistry::builder().build();
-    let rt =
-        runtime::Runtime::start_with_store(StdArc::new(SqliteHistoryStore::new_in_memory().await.unwrap()), StdArc::new(acts), reg).await;
-    let _h = rt
-        .clone()
-        .start_orchestration_versioned("i1", "S", "1.0.0", "")
-        .await
-        .unwrap();
+    let store = StdArc::new(SqliteProvider::new_in_memory().await.unwrap());
+    let rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(acts), reg).await;
+    let client = Client::new(store.clone());
+    client.start_orchestration_versioned("i1", "S", "1.0.0", "").await.unwrap();
 
-    match rt
+    match client
         .wait_for_orchestration("i1", std::time::Duration::from_secs(5))
         .await
         .unwrap()
@@ -46,14 +43,12 @@ async fn runtime_start_versioned_typed_uses_explicit_version() {
         })
         .build();
     let acts = ActivityRegistry::builder().build();
-    let rt =
-        runtime::Runtime::start_with_store(StdArc::new(SqliteHistoryStore::new_in_memory().await.unwrap()), StdArc::new(acts), reg).await;
-    rt.clone()
-        .start_orchestration_versioned_typed::<i32>("i2", "T", "1.0.0", 0)
-        .await
-        .unwrap();
+    let store = StdArc::new(SqliteProvider::new_in_memory().await.unwrap());
+    let rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(acts), reg).await;
+    let client = Client::new(store.clone());
+    client.start_orchestration_versioned_typed::<i32>("i2", "T", "1.0.0", 0).await.unwrap();
 
-    match rt
+    match client
         .wait_for_orchestration_typed::<i32>("i2", std::time::Duration::from_secs(5))
         .await
         .unwrap()
@@ -91,14 +86,11 @@ async fn sub_orchestration_versioned_explicit_and_policy() {
         .register_versioned("C", "2.0.0", child_v2)
         .build();
     let acts = ActivityRegistry::builder().build();
-    let rt = runtime::Runtime::start_with_store(
-        StdArc::new(SqliteHistoryStore::new_in_memory().await.unwrap()),
-        StdArc::new(acts),
-        reg,
-    )
-    .await;
-    let _h1 = rt.clone().start_orchestration("i3-1", "P1", "").await.unwrap();
-    match rt
+    let store = StdArc::new(SqliteProvider::new_in_memory().await.unwrap());
+    let rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(acts), reg).await;
+    let client = Client::new(store.clone());
+    let _h1 = client.start_orchestration("i3-1", "P1", "").await.unwrap();
+    match client
         .wait_for_orchestration("i3-1", std::time::Duration::from_secs(5))
         .await
         .unwrap()
@@ -108,8 +100,8 @@ async fn sub_orchestration_versioned_explicit_and_policy() {
         _ => panic!("unexpected orchestration status"),
     }
 
-    let _h2 = rt.clone().start_orchestration("i3-2", "P2", "").await.unwrap();
-    match rt
+    let _h2 = client.start_orchestration("i3-2", "P2", "").await.unwrap();
+    match client
         .wait_for_orchestration("i3-2", std::time::Duration::from_secs(5))
         .await
         .unwrap()
@@ -136,11 +128,12 @@ async fn detached_versioned_uses_policy_latest() {
         .register_versioned("Leaf", "2.0.0", leaf_v2)
         .build();
     let acts = ActivityRegistry::builder().build();
-    let store = StdArc::new(SqliteHistoryStore::new_in_memory().await.unwrap());
+    let store = StdArc::new(SqliteProvider::new_in_memory().await.unwrap());
     let rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(acts), reg).await;
-    let _h = rt.clone().start_orchestration("i4", "Parent", "").await.unwrap();
+    let client = Client::new(store.clone());
+    client.start_orchestration("i4", "Parent", "").await.unwrap();
 
-    match rt
+    match client
         .wait_for_orchestration("i4", std::time::Duration::from_secs(5))
         .await
         .unwrap()
@@ -150,9 +143,9 @@ async fn detached_versioned_uses_policy_latest() {
         _ => panic!("unexpected orchestration status"),
     }
     // Start the detached child directly to observe its versioned output
-    rt.clone().start_orchestration("i4::child-1", "Leaf", "").await.unwrap();
+    client.start_orchestration("i4::child-1", "Leaf", "").await.unwrap();
 
-    let child_status = rt
+    let child_status = client
         .wait_for_orchestration("i4::child-1", std::time::Duration::from_secs(5))
         .await
         .unwrap();
@@ -176,15 +169,12 @@ async fn continue_as_new_versioned_typed_explicit() {
         .register("Up", v1)
         .register_versioned("Up", "2.0.0", v2)
         .build();
-    let rt = runtime::Runtime::start_with_store(
-        StdArc::new(SqliteHistoryStore::new_in_memory().await.unwrap()),
-        StdArc::new(ActivityRegistry::builder().build()),
-        reg,
-    )
-    .await;
-    let _h = rt.clone().start_orchestration("i5", "Up", "").await.unwrap();
+    let store = StdArc::new(SqliteProvider::new_in_memory().await.unwrap());
+    let rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(ActivityRegistry::builder().build()), reg).await;
+    let client = Client::new(store.clone());
+    let _h = client.start_orchestration("i5", "Up", "").await.unwrap();
     // Use wait helper instead of polling
-    match rt
+    match client
         .wait_for_orchestration("i5", std::time::Duration::from_secs(3))
         .await
         .unwrap()
@@ -209,20 +199,13 @@ async fn start_uses_latest_version() {
         .build();
 
     let activities = ActivityRegistry::builder().build();
-    let rt = runtime::Runtime::start_with_store(
-        StdArc::new(SqliteHistoryStore::new_in_memory().await.unwrap()),
-        StdArc::new(activities),
-        reg,
-    )
-    .await;
+    let store = StdArc::new(SqliteProvider::new_in_memory().await.unwrap());
+    let rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(activities), reg).await;
+    let client = Client::new(store.clone());
 
-    let _h = rt
-        .clone()
-        .start_orchestration("inst-vlatest", "OrderFlow", "X")
-        .await
-        .unwrap();
+    client.start_orchestration("inst-vlatest", "OrderFlow", "X").await.unwrap();
 
-    match rt
+    match client
         .wait_for_orchestration("inst-vlatest", std::time::Duration::from_secs(5))
         .await
         .unwrap()
@@ -233,7 +216,7 @@ async fn start_uses_latest_version() {
     }
 
     // Check history for completion event
-    let hist = rt.get_execution_history("inst-vlatest", 1).await;
+    let hist = client.get_execution_history("inst-vlatest", 1).await;
     assert!(matches!(hist.last().unwrap(), Event::OrchestrationCompleted { .. }));
     rt.shutdown().await;
 }
@@ -255,20 +238,13 @@ async fn policy_exact_pins_start() {
     .await;
 
     let activities = ActivityRegistry::builder().build();
-    let rt = runtime::Runtime::start_with_store(
-        StdArc::new(SqliteHistoryStore::new_in_memory().await.unwrap()),
-        StdArc::new(activities),
-        reg,
-    )
-    .await;
+    let store = StdArc::new(SqliteProvider::new_in_memory().await.unwrap());
+    let rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(activities), reg).await;
+    let client = Client::new(store.clone());
 
-    let _h = rt
-        .clone()
-        .start_orchestration("inst-vpin", "OrderFlow", "Y")
-        .await
-        .unwrap();
+    let _h = client.start_orchestration("inst-vpin", "OrderFlow", "Y").await.unwrap();
 
-    match rt
+    match client
         .wait_for_orchestration("inst-vpin", std::time::Duration::from_secs(5))
         .await
         .unwrap()
@@ -302,21 +278,14 @@ async fn sub_orchestration_uses_latest_by_default_and_pinned_when_set() {
         .build();
 
     let activities = ActivityRegistry::builder().build();
-    let rt = runtime::Runtime::start_with_store(
-        StdArc::new(SqliteHistoryStore::new_in_memory().await.unwrap()),
-        StdArc::new(activities),
-        reg.clone(),
-    )
-    .await;
+    let store = StdArc::new(SqliteProvider::new_in_memory().await.unwrap());
+    let rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(activities), reg.clone()).await;
+    let client = Client::new(store.clone());
 
     // Default latest for child = 1.1.0
-    let _h1 = rt
-        .clone()
-        .start_orchestration("inst-child-latest", "ParentFlow", "Z")
-        .await
-        .unwrap();
+    let _h1 = client.start_orchestration("inst-child-latest", "ParentFlow", "Z").await.unwrap();
 
-    match rt
+    match client
         .wait_for_orchestration("inst-child-latest", std::time::Duration::from_secs(5))
         .await
         .unwrap()
@@ -332,13 +301,9 @@ async fn sub_orchestration_uses_latest_by_default_and_pinned_when_set() {
         duroxide::runtime::VersionPolicy::Exact(Version::parse("1.0.0").unwrap()),
     )
     .await;
-    let _h2 = rt
-        .clone()
-        .start_orchestration("inst-child-pinned", "ParentFlow", "Q")
-        .await
-        .unwrap();
+    let _h2 = client.start_orchestration("inst-child-pinned", "ParentFlow", "Q").await.unwrap();
 
-    match rt
+    match client
         .wait_for_orchestration("inst-child-pinned", std::time::Duration::from_secs(5))
         .await
         .unwrap()
@@ -372,17 +337,14 @@ async fn parent_calls_child_upgrade_child_and_verify_latest_used() {
         .register_versioned("Child", "1.1.0", child_v11)
         .build();
     let activities = ActivityRegistry::builder().build();
-    let store = StdArc::new(SqliteHistoryStore::new_in_memory().await.unwrap());
+    let store = StdArc::new(SqliteProvider::new_in_memory().await.unwrap());
     let rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(activities), reg).await;
+    let client = Client::new(store.clone());
 
     // Start new parent after both child versions registered => latest child (1.1.0) should be used
-    let _h = rt
-        .clone()
-        .start_orchestration("inst-parent-child-upgrade", "Parent", "inp")
-        .await
-        .unwrap();
+    let _h = client.start_orchestration("inst-parent-child-upgrade", "Parent", "inp").await.unwrap();
 
-    match rt
+    match client
         .wait_for_orchestration("inst-parent-child-upgrade", std::time::Duration::from_secs(5))
         .await
         .unwrap()
@@ -393,7 +355,7 @@ async fn parent_calls_child_upgrade_child_and_verify_latest_used() {
     }
 
     // Check history for completion event
-    let hist = rt.get_execution_history("inst-parent-child-upgrade", 1).await;
+    let hist = client.get_execution_history("inst-parent-child-upgrade", 1).await;
     assert!(matches!(hist.last().unwrap(), Event::OrchestrationCompleted { .. }));
     // History should include SubOrchestrationCompleted
     assert!(
@@ -422,17 +384,14 @@ async fn continue_as_new_upgrades_version_deterministically() {
         )
         .build();
     let activities = ActivityRegistry::builder().build();
-    let store = StdArc::new(SqliteHistoryStore::new_in_memory().await.unwrap());
+    let store = StdArc::new(SqliteProvider::new_in_memory().await.unwrap());
     let rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(activities), reg).await;
+    let client = duroxide::Client::new(store.clone());
 
-    let _h = rt
-        .clone()
-        .start_orchestration("inst-can-upgrade", "Upgrader", "seed")
-        .await
-        .unwrap();
+    let _h = client.start_orchestration("inst-can-upgrade", "Upgrader", "seed").await.unwrap();
 
     // With polling approach, wait for final completion
-    match rt
+    match client
         .wait_for_orchestration("inst-can-upgrade", std::time::Duration::from_secs(5))
         .await
         .unwrap()
@@ -443,11 +402,11 @@ async fn continue_as_new_upgrades_version_deterministically() {
     }
 
     // History contains the final execution's events
-    let hist = rt.get_execution_history("inst-can-upgrade", 1).await;
+    let hist = client.get_execution_history("inst-can-upgrade", 1).await;
     assert!(!hist.is_empty(), "Expected non-empty history");
 
     // Verify terminal status is also correct
-    match rt
+    match client
         .wait_for_orchestration("inst-can-upgrade", std::time::Duration::from_secs(1))
         .await
         .unwrap()

@@ -4,7 +4,7 @@ Goal: Let users generate a Markdown document with Mermaid diagrams that depict a
 
 ### Scope and MVP
 
-- Read orchestration histories from a `HistoryStore` (FS and in-memory supported).
+- Read orchestration histories from a `Provider` (FS and in-memory supported).
 - Compute an easy-to-understand snapshot per instance.
 - Emit a `docs/orchestrations.md` file with:
   - A summary table (instance, name, status).
@@ -93,11 +93,11 @@ Summary section at top of Markdown (example):
 
 ### API surface (library helpers)
 
-- Snapshot builder (works with `Runtime` or directly with `HistoryStore`):
+- Snapshot builder (works with `Runtime` or directly with a `Provider`):
 
 ```rust
 pub async fn snapshot_all(rt: &Runtime) -> Vec<InstanceSnapshot>;
-pub async fn snapshot_all_from_store(store: Arc<dyn HistoryStore>) -> Vec<InstanceSnapshot>;
+pub async fn snapshot_all_from_store(store: Arc<dyn Provider>) -> Vec<InstanceSnapshot>;
 ```
 
 - Rendering helpers:
