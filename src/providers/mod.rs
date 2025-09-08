@@ -89,7 +89,7 @@ pub enum WorkItem {
 /// Multi-execution support is required for ContinueAsNew functionality.
 /// Management APIs are optional with default no-op implementations.
 #[async_trait::async_trait]
-pub trait HistoryStore: Send + Sync {
+pub trait HistoryStore: Send + Sync + 'static {
     // ===== Core Atomic Orchestration Methods (REQUIRED) =====
     // These three methods form the heart of reliable orchestration execution.
     
@@ -244,6 +244,8 @@ pub trait HistoryStore: Send + Sync {
     // - Add refresh_worker_lock(token, extend_ms) and refresh_timer_lock(token, extend_ms)
     // - Provider should auto-abandon messages if lock expires without ack
     // This would enable graceful handling of worker crashes and long-running activities
+
+    fn as_any(&self) -> &dyn std::any::Any;
 }
 
 /// SQLite-backed provider with full transactional support.

@@ -474,6 +474,10 @@ impl SqliteHistoryStore {
         
         Ok(())
     }
+
+    pub fn get_pool(&self) -> &sqlx::SqlitePool {
+        &self.pool
+    }
 }
 
 #[async_trait::async_trait]
@@ -1252,6 +1256,10 @@ impl HistoryStore for SqliteHistoryStore {
         .unwrap_or_default();
         
         exec_ids.into_iter().map(|id| id as u64).collect()
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
     }
 }
 

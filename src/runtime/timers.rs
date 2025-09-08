@@ -175,6 +175,8 @@ mod tests {
             async fn fetch_orchestration_item(&self) -> Option<crate::providers::OrchestrationItem> { self.inner.fetch_orchestration_item().await }
             async fn ack_orchestration_item(&self, lock_token: &str, history_delta: Vec<Event>, worker_items: Vec<WorkItem>, timer_items: Vec<WorkItem>, orchestrator_items: Vec<WorkItem>) -> Result<(), String> { self.inner.ack_orchestration_item(lock_token, history_delta, worker_items, timer_items, orchestrator_items).await }
             async fn abandon_orchestration_item(&self, lock_token: &str, delay_ms: Option<u64>) -> Result<(), String> { self.inner.abandon_orchestration_item(lock_token, delay_ms).await }
+
+            fn as_any(&self) -> &dyn std::any::Any { self }
         }
 
         let base = Arc::new(SqliteHistoryStore::new_in_memory().await.unwrap());

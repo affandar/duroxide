@@ -363,6 +363,13 @@ struct CtxInner {
     // Per-turn buffered logs (messages to flush once per progress turn)
     log_buffer: Vec<(LogLevel, String)>,
 
+    // Per-turn claimed correlation IDs to prevent reusing IDs across multiple
+    // futures scheduled within the same poll turn. This preserves deterministic
+    // replay semantics when multiple timers/external waits/activities are
+    // scheduled sequentially in one turn.
+    claimed_activity_ids: std::collections::HashSet<u64>,
+    claimed_timer_ids: std::collections::HashSet<u64>,
+    claimed_external_ids: std::collections::HashSet<u64>,
 }
 
 impl CtxInner {
@@ -401,6 +408,9 @@ impl CtxInner {
             turn_index: 0,
             logging_enabled_this_poll: false,
             log_buffer: Vec::new(),
+            claimed_activity_ids: Default::default(),
+            claimed_timer_ids: Default::default(),
+            claimed_external_ids: Default::default(),
         }
     }
 
@@ -726,10 +736,11 @@ impl OrchestrationContext {
                     name: n,
                     input: inp,
                     execution_id: _,
-                } if n == &name && inp == &input => Some(*id),
+                } if n == &name && inp == &input && !inner.claimed_activity_ids.contains(id) => Some(*id),
                 _ => None,
             })
             .unwrap_or_else(|| inner.next_id());
+        inner.claimed_activity_ids.insert(adopted_id);
         drop(inner);
         DurableFuture(Kind::Activity {
             id: adopted_id,
@@ -780,15 +791,16 @@ impl OrchestrationContext {
     /// ```
     pub fn schedule_timer(&self, delay_ms: u64) -> DurableFuture {
         let mut inner = self.inner.lock().unwrap();
-        // Adopt first TimerCreated id if any, else allocate
+        // Adopt first unclaimed TimerCreated id if any, else allocate
         let adopted_id = inner
             .history
             .iter()
             .find_map(|e| match e {
-                Event::TimerCreated { id, .. } => Some(*id),
+                Event::TimerCreated { id, .. } if !inner.claimed_timer_ids.contains(id) => Some(*id),
                 _ => None,
             })
             .unwrap_or_else(|| inner.next_id());
+        inner.claimed_timer_ids.insert(adopted_id);
         drop(inner);
         DurableFuture(Kind::Timer {
             id: adopted_id,
@@ -802,17 +814,17 @@ impl OrchestrationContext {
     pub fn schedule_wait(&self, name: impl Into<String>) -> DurableFuture {
         let name: String = name.into();
         let mut inner = self.inner.lock().unwrap();
-        // Adopt existing subscription id for this name if present, else allocate
+        // Adopt existing subscription id for this name if present and unclaimed, else allocate
         let adopted_id = inner
             .history
             .iter()
             .find_map(|e| match e {
-                Event::ExternalSubscribed { id, name: n } if n == &name => {
-                    Some(*id)
-                }
+                Event::ExternalSubscribed { id, name: n }
+                    if n == &name && !inner.claimed_external_ids.contains(id) => Some(*id),
                 _ => None,
             })
             .unwrap_or_else(|| inner.next_id());
+        inner.claimed_external_ids.insert(adopted_id);
         drop(inner);
         DurableFuture(Kind::External {
             id: adopted_id,

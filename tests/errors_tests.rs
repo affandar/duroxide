@@ -5,8 +5,12 @@ use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
 use duroxide::{OrchestrationContext, OrchestrationRegistry};
 use std::sync::Arc as StdArc;
+use std::any::Any;
 
 use serde::{Deserialize, Serialize};
+use tracing::info;
+
+use sqlx::Row;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 struct AOnly {
@@ -286,14 +290,22 @@ async fn event_before_subscription_after_start_is_ignored() {
     let (store, _temp_dir) = common::create_sqlite_store_disk().await;
     let activity_registry = ActivityRegistry::builder().build();
     let orchestration = |ctx: OrchestrationContext, _input: String| async move {
+        info!("Orchestration started");
         // Delay before subscribing to simulate missing subscription window
         ctx.schedule_timer(10).into_timer().await;
+        info!("Subscribing to event");
         // Subscribe, then wait for event with timeout
         let ev = ctx.schedule_wait("Evt");
         let to = ctx.schedule_timer(1000);
         match ctx.select2(ev, to).await {
-            (0, duroxide::DurableOutput::External(data)) => Ok(data),
-            (1, duroxide::DurableOutput::Timer) => panic!("timeout waiting for Evt after subscription"),
+            (0, duroxide::DurableOutput::External(data)) => {
+                info!("Event received: {}", data);
+                Ok(data)
+            },
+            (1, duroxide::DurableOutput::Timer) => {
+                info!("Timeout waiting for event");
+                panic!("timeout waiting for Evt after subscription")
+            },
             _ => unreachable!(),
         }
     };
@@ -309,6 +321,7 @@ async fn event_before_subscription_after_start_is_ignored() {
     let instance = "inst-pre-sub-drop-1";
     let client_c1 = duroxide::DuroxideClient::new(store.clone());
     tokio::spawn(async move {
+        info!("Raising early event");
         // Raise early before subscription exists (timer delays subscription)
         tokio::time::sleep(std::time::Duration::from_millis(1)).await;
         let _ = client_c1.raise_event(instance, "Evt", "early").await;
@@ -317,7 +330,7 @@ async fn event_before_subscription_after_start_is_ignored() {
     let client_c2 = duroxide::DuroxideClient::new(store.clone());
     client.start_orchestration(instance, "PreSubscriptionTest", "").await.unwrap();
     tokio::spawn(async move {
-        let _ = common::wait_for_subscription(store_for_wait2, instance, "Evt", 1000).await;
+        let _ = common::wait_for_subscription(store_for_wait2.clone(), instance, "Evt", 1000).await;
         let _ = client_c2.raise_event(instance, "Evt", "late").await;
     });
 
