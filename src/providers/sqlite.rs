@@ -1257,10 +1257,6 @@ impl HistoryStore for SqliteHistoryStore {
         
         exec_ids.into_iter().map(|id| id as u64).collect()
     }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 }
 
 #[cfg(test)]

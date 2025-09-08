@@ -244,8 +244,6 @@ pub trait HistoryStore: Send + Sync + 'static {
     // - Add refresh_worker_lock(token, extend_ms) and refresh_timer_lock(token, extend_ms)
     // - Provider should auto-abandon messages if lock expires without ack
     // This would enable graceful handling of worker crashes and long-running activities
-
-    fn as_any(&self) -> &dyn std::any::Any;
 }
 
 /// SQLite-backed provider with full transactional support.
