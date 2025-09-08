@@ -5,10 +5,10 @@ use super::orchestration_turn::{OrchestrationTurn, TurnResult};
 use crate::{
     Event,
     providers::WorkItem,
-    runtime::{OrchestrationHandler, DuroxideRuntime, router::OrchestratorMsg},
+    runtime::{OrchestrationHandler, Runtime, router::OrchestratorMsg},
 };
 
-impl DuroxideRuntime {
+impl Runtime {
     /// Execute an orchestration instance to completion
     ///
     /// Architecture:

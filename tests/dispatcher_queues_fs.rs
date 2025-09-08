@@ -7,7 +7,7 @@ use duroxide::runtime::{self};
 use duroxide::{Event, OrchestrationContext, OrchestrationRegistry};
 
 async fn wait_for_history<F>(
-    store: StdArc<dyn duroxide::providers::HistoryStore>,
+    store: StdArc<dyn duroxide::providers::Provider>,
     instance: &str,
     pred: F,
     timeout_ms: u64,
@@ -29,7 +29,7 @@ where
 #[tokio::test]
 async fn dispatcher_enqueues_timer_schedule_then_completes() {
     let (store, _temp_dir) = common::create_sqlite_store_disk().await;
-    let store_dyn = store.clone() as StdArc<dyn duroxide::providers::HistoryStore>;
+    let store_dyn = store.clone() as StdArc<dyn duroxide::providers::Provider>;
 
     let orch = |ctx: OrchestrationContext, _input: String| async move {
         ctx.schedule_timer(50).into_timer().await;
@@ -37,8 +37,8 @@ async fn dispatcher_enqueues_timer_schedule_then_completes() {
     };
     let reg = OrchestrationRegistry::builder().register("OneTimer", orch).build();
     let acts = ActivityRegistry::builder().build();
-    let rt = runtime::DuroxideRuntime::start_with_store(store_dyn.clone(), StdArc::new(acts), reg).await;
-    let client = duroxide::DuroxideClient::new(store_dyn.clone());
+    let rt = runtime::Runtime::start_with_store(store_dyn.clone(), StdArc::new(acts), reg).await;
+    let client = duroxide::Client::new(store_dyn.clone());
 
     let inst = "inst-disp-timer";
     let _h = client.start_orchestration(inst, "OneTimer", "").await.unwrap();
@@ -62,7 +62,7 @@ async fn dispatcher_enqueues_timer_schedule_then_completes() {
 #[tokio::test]
 async fn dispatcher_enqueues_start_orchestration_to_orch_queue() {
     let (store, _temp_dir) = common::create_sqlite_store_disk().await;
-    let store_dyn = store.clone() as StdArc<dyn duroxide::providers::HistoryStore>;
+    let store_dyn = store.clone() as StdArc<dyn duroxide::providers::Provider>;
 
     let acts = ActivityRegistry::builder().build();
     let child = |_: OrchestrationContext, input: String| async move { Ok(input) };
@@ -74,8 +74,8 @@ async fn dispatcher_enqueues_start_orchestration_to_orch_queue() {
         .register("Child", child)
         .register("Parent", parent)
         .build();
-    let rt = runtime::DuroxideRuntime::start_with_store(store_dyn.clone(), StdArc::new(acts), reg).await;
-    let client = duroxide::DuroxideClient::new(store_dyn.clone());
+    let rt = runtime::Runtime::start_with_store(store_dyn.clone(), StdArc::new(acts), reg).await;
+    let client = duroxide::Client::new(store_dyn.clone());
 
     let _h = client.start_orchestration("inst-parent", "Parent", "").await.unwrap();
 

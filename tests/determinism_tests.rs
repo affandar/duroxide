@@ -1,4 +1,4 @@
-use duroxide::providers::HistoryStore;
+use duroxide::providers::Provider;
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
 use duroxide::{Action, DurableOutput, Event, OrchestrationContext, OrchestrationRegistry, run_turn};
@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::sync::Arc as StdArc;
 mod common;
 
-async fn orchestration_completes_and_replays_deterministically_with(store: StdArc<dyn HistoryStore>) {
+async fn orchestration_completes_and_replays_deterministically_with(store: StdArc<dyn Provider>) {
     let orchestration = |ctx: OrchestrationContext, _input: String| async move {
         let start: u64 = 0; // deterministic logical start for test
         let f_a = ctx.schedule_activity("A", "1");
@@ -56,14 +56,14 @@ async fn orchestration_completes_and_replays_deterministically_with(store: StdAr
         .build();
 
     let rt =
-        runtime::DuroxideRuntime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+        runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
     let store_for_wait = store.clone();
-    let client_evt = duroxide::DuroxideClient::new(store.clone());
+    let client_evt = duroxide::Client::new(store.clone());
     tokio::spawn(async move {
         let _ = crate::common::wait_for_subscription(store_for_wait, "inst-orch-1", "Go", 1000).await;
         let _ = client_evt.raise_event("inst-orch-1", "Go", "ok").await;
     });
-    let client = duroxide::DuroxideClient::new(store.clone());
+    let client = duroxide::Client::new(store.clone());
     let _handle = client
         .start_orchestration("inst-orch-1", "DeterministicOrchestration", "")
         .await
@@ -166,7 +166,7 @@ fn action_order_is_deterministic_in_first_turn() {
     );
 }
 
-async fn sequential_activity_chain_completes_with(store: StdArc<dyn HistoryStore>) {
+async fn sequential_activity_chain_completes_with(store: StdArc<dyn Provider>) {
     let orchestrator = |ctx: OrchestrationContext, _input: String| async move {
         let a = ctx.schedule_activity("A", "1").into_activity().await.unwrap();
         let b = ctx.schedule_activity("B", a).into_activity().await.unwrap();
@@ -186,8 +186,8 @@ async fn sequential_activity_chain_completes_with(store: StdArc<dyn HistoryStore
         .register("SequentialOrchestration", orchestrator)
         .build();
 
-    let rt = runtime::DuroxideRuntime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
-    let client = duroxide::DuroxideClient::new(store.clone());
+    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+    let client = duroxide::Client::new(store.clone());
     let _handle = client
         .start_orchestration("inst-seq-1", "SequentialOrchestration", "")
         .await

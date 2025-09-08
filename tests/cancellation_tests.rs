@@ -1,6 +1,6 @@
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
-use duroxide::DuroxideClient;
+use duroxide::Client;
 use duroxide::{Event, OrchestrationContext, OrchestrationRegistry};
 mod common;
 
@@ -28,13 +28,13 @@ async fn cancel_parent_down_propagates_to_child() {
         .register("Parent", parent)
         .build();
     let activity_registry = ActivityRegistry::builder().build();
-    let rt = runtime::DuroxideRuntime::start_with_store(
+    let rt = runtime::Runtime::start_with_store(
         store.clone(),
         std::sync::Arc::new(activity_registry),
         orchestration_registry,
     )
     .await;
-    let client = DuroxideClient::new(store.clone());
+    let client = Client::new(store.clone());
 
     // Start parent
     client.start_orchestration("inst-cancel-1", "Parent", "").await.unwrap();
@@ -107,13 +107,13 @@ async fn cancel_after_completion_is_noop() {
 
     let orchestration_registry = OrchestrationRegistry::builder().register("Quick", orch).build();
     let activity_registry = ActivityRegistry::builder().build();
-    let rt = runtime::DuroxideRuntime::start_with_store(
+    let rt = runtime::Runtime::start_with_store(
         store.clone(),
         std::sync::Arc::new(activity_registry),
         orchestration_registry,
     )
     .await;
-    let client = DuroxideClient::new(store.clone());
+    let client = Client::new(store.clone());
 
     client.start_orchestration("inst-cancel-noop", "Quick", "").await.unwrap();
 
@@ -170,13 +170,13 @@ async fn cancel_child_directly_signals_parent() {
         .register("ParentD", parent)
         .build();
     let activity_registry = ActivityRegistry::builder().build();
-    let rt = runtime::DuroxideRuntime::start_with_store(
+    let rt = runtime::Runtime::start_with_store(
         store.clone(),
         std::sync::Arc::new(activity_registry),
         orchestration_registry,
     )
     .await;
-    let client = DuroxideClient::new(store.clone());
+    let client = Client::new(store.clone());
 
     client.start_orchestration("inst-chdirect", "ParentD", "").await.unwrap();
     // Wait a bit for child schedule, then cancel child directly
@@ -226,13 +226,13 @@ async fn cancel_continue_as_new_second_exec() {
 
     let orchestration_registry = OrchestrationRegistry::builder().register("CanCancel", orch).build();
     let activity_registry = ActivityRegistry::builder().build();
-    let rt = runtime::DuroxideRuntime::start_with_store(
+    let rt = runtime::Runtime::start_with_store(
         store.clone(),
         std::sync::Arc::new(activity_registry),
         orchestration_registry,
     )
     .await;
-    let client = DuroxideClient::new(store.clone());
+    let client = Client::new(store.clone());
 
     client.start_orchestration("inst-can-can", "CanCancel", "start").await.unwrap();
 
@@ -295,13 +295,13 @@ async fn orchestration_completes_before_activity_finishes() {
     });
     let activity_registry = ab.build();
     let orchestration_registry = OrchestrationRegistry::builder().register("QuickDone", orch).build();
-    let rt = runtime::DuroxideRuntime::start_with_store(
+    let rt = runtime::Runtime::start_with_store(
         store.clone(),
         std::sync::Arc::new(activity_registry),
         orchestration_registry,
     )
     .await;
-    let client = DuroxideClient::new(store.clone());
+    let client = Client::new(store.clone());
 
     client.start_orchestration("inst-orch-done-first", "QuickDone", "").await.unwrap();
 
@@ -343,13 +343,13 @@ async fn orchestration_fails_before_activity_finishes() {
     });
     let activity_registry = ab.build();
     let orchestration_registry = OrchestrationRegistry::builder().register("QuickFail", orch).build();
-    let rt = runtime::DuroxideRuntime::start_with_store(
+    let rt = runtime::Runtime::start_with_store(
         store.clone(),
         std::sync::Arc::new(activity_registry),
         orchestration_registry,
     )
     .await;
-    let client = DuroxideClient::new(store.clone());
+    let client = Client::new(store.clone());
 
     client.start_orchestration("inst-orch-fail-first", "QuickFail", "").await.unwrap();
 

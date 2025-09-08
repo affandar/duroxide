@@ -1,20 +1,20 @@
-use duroxide::providers::HistoryStore;
-use duroxide::providers::sqlite::SqliteHistoryStore;
+use duroxide::providers::Provider;
+use duroxide::providers::sqlite::SqliteProvider;
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
-use duroxide::{Event, OrchestrationContext, OrchestrationRegistry, DuroxideClient};
+use duroxide::{Event, OrchestrationContext, OrchestrationRegistry, Client};
 use std::sync::Arc as StdArc;
 use tempfile::TempDir;
 
 mod common;
 
 /// Helper to create a SQLite store for testing
-async fn create_sqlite_store() -> (StdArc<dyn HistoryStore>, TempDir) {
+async fn create_sqlite_store() -> (StdArc<dyn Provider>, TempDir) {
     let td = tempfile::tempdir().unwrap();
     let db_path = td.path().join("test.db");
     std::fs::File::create(&db_path).unwrap();
     let db_url = format!("sqlite:{}", db_path.display());
-    let store = StdArc::new(SqliteHistoryStore::new(&db_url).await.unwrap()) as StdArc<dyn HistoryStore>;
+    let store = StdArc::new(SqliteProvider::new(&db_url).await.unwrap()) as StdArc<dyn Provider>;
     (store, td)
 }
 
@@ -30,8 +30,8 @@ async fn single_timer_fires() {
 
     let reg = OrchestrationRegistry::builder().register("OneTimer", orch).build();
     let acts = ActivityRegistry::builder().build();
-    let rt = runtime::DuroxideRuntime::start_with_store(store.clone(), StdArc::new(acts), reg).await;
-    let client = DuroxideClient::new(store.clone());
+    let rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(acts), reg).await;
+    let client = Client::new(store.clone());
 
     let start = std::time::Instant::now();
     client
@@ -79,8 +79,8 @@ async fn multiple_timers_ordering() {
 
     let reg = OrchestrationRegistry::builder().register("TwoTimers", orch).build();
     let acts = ActivityRegistry::builder().build();
-    let rt = runtime::DuroxideRuntime::start_with_store(store.clone(), StdArc::new(acts), reg).await;
-    let client = DuroxideClient::new(store.clone());
+    let rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(acts), reg).await;
+    let client = Client::new(store.clone());
 
     let start = std::time::Instant::now();
     client
@@ -129,8 +129,8 @@ async fn timer_deduplication() {
 
     let reg = OrchestrationRegistry::builder().register("DedupTimer", orch).build();
     let acts = ActivityRegistry::builder().build();
-    let rt = runtime::DuroxideRuntime::start_with_store(store.clone(), StdArc::new(acts), reg).await;
-    let client = DuroxideClient::new(store.clone());
+    let rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(acts), reg).await;
+    let client = Client::new(store.clone());
 
     let inst = "inst-dedup";
     let _ = client.start_orchestration(inst, "DedupTimer", "").await.unwrap();
@@ -195,8 +195,8 @@ async fn sub_second_timer_precision() {
 
     let reg = OrchestrationRegistry::builder().register("SubSecondTimer", orch).build();
     let acts = ActivityRegistry::builder().build();
-    let rt = runtime::DuroxideRuntime::start_with_store(store.clone(), StdArc::new(acts), reg).await;
-    let client = DuroxideClient::new(store.clone());
+    let rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(acts), reg).await;
+    let client = Client::new(store.clone());
 
     let start = std::time::Instant::now();
     client
@@ -235,8 +235,8 @@ async fn timer_wall_clock_delay() {
 
     let reg = OrchestrationRegistry::builder().register("DelayTimer", orch).build();
     let acts = ActivityRegistry::builder().build();
-    let rt = runtime::DuroxideRuntime::start_with_store(store.clone(), StdArc::new(acts), reg).await;
-    let client = DuroxideClient::new(store.clone());
+    let rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(acts), reg).await;
+    let client = Client::new(store.clone());
 
     let start = std::time::Instant::now();
     client

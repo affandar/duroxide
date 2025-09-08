@@ -7,14 +7,14 @@ This document outlines a complete architectural separation between the **Client*
 ## Architecture Principles
 
 ### Clean Separation
-- **`DuroxideClient`**: User-facing API for orchestration control and management
+- **`Client`**: User-facing API for orchestration control and management
 - **`DuroxideRuntime`**: Backend execution engine for loading and running orchestrations
 - **`HistoryStore`**: Only communication channel between client and runtime
 
 ### Communication Model
 ```
 ┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
-│   DuroxideClient │    │   HistoryStore   │    │ DuroxideRuntime │
+│   Client │    │   HistoryStore   │    │ DuroxideRuntime │
 │   (Control API) │◄──►│   (Message Bus)  │◄──►│ (Execution)     │
 └─────────────────┘    └──────────────────┘    └─────────────────┘
 ```
@@ -30,11 +30,11 @@ use chrono::{DateTime, Utc};
 use crate::providers::HistoryStore;
 
 /// Client API for orchestration control and management
-pub struct DuroxideClient {
+pub struct Client {
     history_store: Arc<dyn HistoryStore>,
 }
 
-impl DuroxideClient {
+impl Client {
     /// Create a new client with a provider
     pub fn new(history_store: Arc<dyn HistoryStore>) -> Self {
         Self { history_store }
@@ -45,7 +45,7 @@ impl DuroxideClient {
 ### Orchestration Control APIs
 
 ```rust
-impl DuroxideClient {
+impl Client {
     /// Start a new orchestration instance
     pub async fn start_orchestration(
         &self,
@@ -143,7 +143,7 @@ impl DuroxideClient {
 ### Management & Observability APIs
 
 ```rust
-impl DuroxideClient {
+impl Client {
     /// Get orchestration status (read-only)
     pub async fn get_orchestration_status(&self, instance_id: &str) -> Result<OrchestrationStatus, ClientError> {
         let history = self.history_store.read(instance_id).await;
@@ -602,7 +602,7 @@ pub enum RuntimeError {
 
 ```rust
 // In examples/client_usage.rs
-use duroxide::{DuroxideClient, StartOptions};
+use duroxide::{Client, StartOptions};
 use duroxide::providers::sqlite::SqliteHistoryStore;
 use std::sync::Arc;
 
@@ -612,7 +612,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let store = Arc::new(SqliteHistoryStore::new("sqlite:./client_demo.db").await?);
     
     // Create client
-    let client = DuroxideClient::new(store);
+    let client = Client::new(store);
     
     // Start orchestrations
     client.start_orchestration("order-1", "ProcessOrder", r#"{"order_id": 123}"#, None).await?;
@@ -729,7 +729,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ```rust
 // In examples/combined_usage.rs
-use duroxide::{DuroxideClient, DuroxideRuntime, OrchestrationContext};
+use duroxide::{Client, DuroxideRuntime, OrchestrationContext};
 use duroxide::providers::sqlite::SqliteHistoryStore;
 use std::sync::Arc;
 
@@ -751,7 +751,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     runtime.start().await?;
     
     // Create client (shares same provider)
-    let client = DuroxideClient::new(store);
+    let client = Client::new(store);
     
     // Use client to control orchestrations
     client.start_orchestration("hello-1", "HelloWorld", "World", None).await?;
@@ -769,10 +769,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ## Implementation Plan
 
 ### Phase 1: Core Separation (Week 1)
-1. **Create `src/client/mod.rs`** with `DuroxideClient`
+1. **Create `src/client/mod.rs`** with `Client`
 2. **Refactor `src/runtime/mod.rs`** to `DuroxideRuntime` (execution only)
 3. **Move control APIs** from Runtime to Client
-4. **Update `src/lib.rs`** to export both `DuroxideClient` and `DuroxideRuntime`
+4. **Update `src/lib.rs`** to export both `Client` and `DuroxideRuntime`
 
 ### Phase 2: Client APIs (Week 2)
 1. **Implement orchestration control** (start, cancel, raise_event)
@@ -803,13 +803,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```rust
 // Development: Both in same process
 let store = Arc::new(SqliteHistoryStore::new("sqlite:./dev.db").await?);
-let client = DuroxideClient::new(store.clone());
+let client = Client::new(store.clone());
 let runtime = DuroxideRuntime::new(store);
 
 // Production: Separate processes/services
 // Service A: Client API
 let client_store = Arc::new(SqliteHistoryStore::new("sqlite://prod.db").await?);
-let client = DuroxideClient::new(client_store);
+let client = Client::new(client_store);
 
 // Service B: Runtime Engine  
 let runtime_store = Arc::new(SqliteHistoryStore::new("sqlite://prod.db").await?);

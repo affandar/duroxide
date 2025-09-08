@@ -7,10 +7,10 @@
 //!
 //! Run with: `cargo run --example hello_world`
 
-use duroxide::providers::sqlite::SqliteHistoryStore;
+use duroxide::providers::sqlite::SqliteProvider;
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
-use duroxide::{OrchestrationContext, OrchestrationRegistry, DuroxideClient};
+use duroxide::{OrchestrationContext, OrchestrationRegistry, Client};
 use std::sync::Arc;
 
 #[tokio::main]
@@ -23,7 +23,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let db_path = temp_dir.path().join("hello_world.db");
     std::fs::File::create(&db_path)?;
     let db_url = format!("sqlite:{}", db_path.to_str().unwrap());
-    let store = Arc::new(SqliteHistoryStore::new(&db_url).await?);
+    let store = Arc::new(SqliteProvider::new(&db_url).await?);
 
     // Register a simple activity that greets users
     let activities = ActivityRegistry::builder()
@@ -52,14 +52,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .build();
 
     // Start the runtime
-    let rt = runtime::DuroxideRuntime::start_with_store(
+    let rt = runtime::Runtime::start_with_store(
         store.clone(),
         Arc::new(activities),
         orchestrations,
     ).await;
 
     // Create a client bound to the same provider
-    let client = DuroxideClient::new(store);
+    let client = Client::new(store);
 
     // Start an orchestration instance
     let instance_id = "hello-instance-1";

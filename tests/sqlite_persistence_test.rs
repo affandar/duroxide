@@ -1,5 +1,5 @@
-use duroxide::providers::{HistoryStore, WorkItem};
-use duroxide::providers::sqlite::SqliteHistoryStore;
+use duroxide::providers::{Provider, WorkItem};
+use duroxide::providers::sqlite::SqliteProvider;
 use std::sync::Arc;
 
 #[tokio::test]
@@ -14,10 +14,10 @@ async fn test_sqlite_basic_persistence() {
     
     // Phase 1: Create store and add data
     {
-        let store = SqliteHistoryStore::new(&db_url)
+        let store = SqliteProvider::new(&db_url)
             .await
             .expect("Failed to create SQLite store");
-        let store: Arc<dyn HistoryStore> = Arc::new(store);
+        let store: Arc<dyn Provider> = Arc::new(store);
         
         // Enqueue worker items
         store.enqueue_worker_work(WorkItem::ActivityExecute {
@@ -43,10 +43,10 @@ async fn test_sqlite_basic_persistence() {
     {
         println!("Phase 2: Recreating store...");
         
-        let store = SqliteHistoryStore::new(&db_url)
+        let store = SqliteProvider::new(&db_url)
             .await
             .expect("Failed to recreate SQLite store");
-        let store: Arc<dyn HistoryStore> = Arc::new(store);
+        let store: Arc<dyn Provider> = Arc::new(store);
         
         // Dequeue and verify worker items
         let mut items_found = 0;
@@ -70,10 +70,10 @@ async fn test_sqlite_basic_persistence() {
     
     // Phase 3: Verify queue is now empty
     {
-        let store = SqliteHistoryStore::new(&db_url)
+        let store = SqliteProvider::new(&db_url)
             .await
             .expect("Failed to recreate SQLite store");
-        let store: Arc<dyn HistoryStore> = Arc::new(store);
+        let store: Arc<dyn Provider> = Arc::new(store);
         
         let result = store.dequeue_worker_peek_lock().await;
         assert!(result.is_none(), "Queue should be empty after acking all items");
@@ -96,11 +96,11 @@ async fn test_sqlite_lock_expiry() {
     
     // Phase 1: Create store, dequeue item (creating lock), then drop store
     {
-        let store_raw = SqliteHistoryStore::new(&db_url)
+        let store_raw = SqliteProvider::new(&db_url)
             .await
             .expect("Failed to create SQLite store");
         let store_arc = Arc::new(store_raw);
-        let store: Arc<dyn HistoryStore> = store_arc.clone();
+        let store: Arc<dyn Provider> = store_arc.clone();
         
         // Enqueue a work item
         store.enqueue_worker_work(WorkItem::ActivityExecute {
@@ -133,10 +133,10 @@ async fn test_sqlite_lock_expiry() {
     
     // Phase 2: Immediately recreate store, item should still be locked
     {
-        let store = SqliteHistoryStore::new(&db_url)
+        let store = SqliteProvider::new(&db_url)
             .await
             .expect("Failed to recreate SQLite store");
-        let store: Arc<dyn HistoryStore> = Arc::new(store);
+        let store: Arc<dyn Provider> = Arc::new(store);
         
         let result = store.dequeue_worker_peek_lock().await;
         assert!(result.is_none(), "Item should still be locked");
@@ -148,11 +148,11 @@ async fn test_sqlite_lock_expiry() {
         println!("Phase 3: Waiting for lock to expire (3s)...");
         tokio::time::sleep(tokio::time::Duration::from_millis(3100)).await;
         
-        let store_raw = SqliteHistoryStore::new(&db_url)
+        let store_raw = SqliteProvider::new(&db_url)
             .await
             .expect("Failed to recreate SQLite store");
         let store_arc = Arc::new(store_raw);
-        let store: Arc<dyn HistoryStore> = store_arc.clone();
+        let store: Arc<dyn Provider> = store_arc.clone();
         
         // Debug dump after waiting
         let dump = store_arc.debug_dump().await;
@@ -230,7 +230,7 @@ async fn test_sqlite_database_file_creation() {
     
     // Create store
     {
-        let _store = SqliteHistoryStore::new(&db_url)
+        let _store = SqliteProvider::new(&db_url)
             .await
             .expect("Failed to create SQLite store");
         
@@ -249,7 +249,7 @@ async fn test_sqlite_database_file_creation() {
     let initial_size = std::fs::metadata(&db_path).unwrap().len();
     
     {
-        let store = SqliteHistoryStore::new(&db_url)
+        let store = SqliteProvider::new(&db_url)
             .await
             .expect("Failed to recreate SQLite store");
         

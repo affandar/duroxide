@@ -1,5 +1,5 @@
-use duroxide::providers::HistoryStore;
-use duroxide::providers::sqlite::SqliteHistoryStore;
+use duroxide::providers::Provider;
+use duroxide::providers::sqlite::SqliteProvider;
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
 use duroxide::{Event, OrchestrationContext, OrchestrationRegistry};
@@ -9,12 +9,12 @@ use tempfile::TempDir;
 mod common;
 
 /// Helper to create a SQLite store for testing
-async fn create_sqlite_store(name: &str) -> (StdArc<dyn HistoryStore>, TempDir, String) {
+async fn create_sqlite_store(name: &str) -> (StdArc<dyn Provider>, TempDir, String) {
     let td = tempfile::tempdir().unwrap();
     let db_path = td.path().join(format!("{}.db", name));
     std::fs::File::create(&db_path).unwrap();
     let db_url = format!("sqlite:{}", db_path.display());
-    let store = StdArc::new(SqliteHistoryStore::new(&db_url).await.unwrap()) as StdArc<dyn HistoryStore>;
+    let store = StdArc::new(SqliteProvider::new(&db_url).await.unwrap()) as StdArc<dyn Provider>;
     (store, td, db_url)
 }
 
@@ -53,7 +53,7 @@ async fn timer_recovery_after_crash_before_fire() {
         .build();
 
     // Phase 1: Start orchestration and wait for timer to be scheduled
-    let rt1 = runtime::DuroxideRuntime::start_with_store(
+    let rt1 = runtime::Runtime::start_with_store(
         store1.clone(),
         StdArc::new(activity_registry.clone()),
         orchestration_registry.clone(),
@@ -61,7 +61,7 @@ async fn timer_recovery_after_crash_before_fire() {
     .await;
 
     let instance = "inst-timer-recovery";
-    let client1 = duroxide::DuroxideClient::new(store1.clone());
+    let client1 = duroxide::Client::new(store1.clone());
     let _ = client1.start_orchestration(instance, "TimerRecoveryTest", "").await.unwrap();
 
     // Wait for timer to be created
@@ -101,8 +101,8 @@ async fn timer_recovery_after_crash_before_fire() {
 
     // Phase 2: "Restart" system with new runtime but same store
     println!("Restarting system...");
-    let store2 = StdArc::new(SqliteHistoryStore::new(&db_url).await.unwrap()) as StdArc<dyn HistoryStore>;
-    let rt2 = runtime::DuroxideRuntime::start_with_store(
+    let store2 = StdArc::new(SqliteProvider::new(&db_url).await.unwrap()) as StdArc<dyn Provider>;
+    let rt2 = runtime::Runtime::start_with_store(
         store2.clone(),
         StdArc::new(activity_registry),
         orchestration_registry,
@@ -127,7 +127,7 @@ async fn timer_recovery_after_crash_before_fire() {
     }
     
     // Now wait for orchestration to complete
-    let client2 = duroxide::DuroxideClient::new(store2.clone());
+    let client2 = duroxide::Client::new(store2.clone());
     match client2
         .wait_for_orchestration(instance, std::time::Duration::from_secs(10))
         .await
@@ -225,7 +225,7 @@ async fn multiple_timers_recovery_after_crash() {
     let activity_registry = ActivityRegistry::builder().build();
 
     // Phase 1: Start and wait for all timers to be created
-    let rt1 = runtime::DuroxideRuntime::start_with_store(
+    let rt1 = runtime::Runtime::start_with_store(
         store1.clone(),
         StdArc::new(activity_registry.clone()),
         orchestration_registry.clone(),
@@ -233,7 +233,7 @@ async fn multiple_timers_recovery_after_crash() {
     .await;
 
     let instance = "inst-multi-timer-recovery";
-    let client1 = duroxide::DuroxideClient::new(store1.clone());
+    let client1 = duroxide::Client::new(store1.clone());
     let _ = client1.start_orchestration(instance, "MultiTimerTest", "").await.unwrap();
 
     // Wait for all 3 timers to be created
@@ -265,8 +265,8 @@ async fn multiple_timers_recovery_after_crash() {
 
     // Phase 2: Restart and verify all timers fire
     println!("Restarting...");
-    let store2 = StdArc::new(SqliteHistoryStore::new(&db_url).await.unwrap()) as StdArc<dyn HistoryStore>;
-    let rt2 = runtime::DuroxideRuntime::start_with_store(
+    let store2 = StdArc::new(SqliteProvider::new(&db_url).await.unwrap()) as StdArc<dyn Provider>;
+    let rt2 = runtime::Runtime::start_with_store(
         store2.clone(),
         StdArc::new(activity_registry),
         orchestration_registry,
@@ -274,7 +274,7 @@ async fn multiple_timers_recovery_after_crash() {
     .await;
 
     // Wait for completion
-    let client2 = duroxide::DuroxideClient::new(store2.clone());
+    let client2 = duroxide::Client::new(store2.clone());
     match client2
         .wait_for_orchestration(instance, std::time::Duration::from_secs(5))
         .await

@@ -1,6 +1,6 @@
 use duroxide::Event;
-use duroxide::providers::sqlite::SqliteHistoryStore;
-use duroxide::providers::{HistoryStore, WorkItem};
+use duroxide::providers::sqlite::SqliteProvider;
+use duroxide::providers::{Provider, WorkItem};
 use std::sync::Arc;
 
 #[tokio::test]
@@ -9,7 +9,7 @@ async fn test_fetch_orchestration_item_new_instance() {
     let db_path = td.path().join("test.db");
     std::fs::File::create(&db_path).unwrap();
     let db_url = format!("sqlite:{}", db_path.display());
-    let store: Arc<dyn HistoryStore> = Arc::new(SqliteHistoryStore::new(&db_url).await.unwrap());
+    let store: Arc<dyn Provider> = Arc::new(SqliteProvider::new(&db_url).await.unwrap());
 
     // Enqueue start work (provider will create instance lazily on fetch)
     store
@@ -45,10 +45,10 @@ async fn test_fetch_orchestration_item_existing_instance() {
     let db_path = td.path().join("test.db");
     std::fs::File::create(&db_path).unwrap();
     let db_url = format!("sqlite:{}", db_path.display());
-    let store: Arc<dyn HistoryStore> = Arc::new(SqliteHistoryStore::new(&db_url).await.unwrap());
+    let store: Arc<dyn Provider> = Arc::new(SqliteProvider::new(&db_url).await.unwrap());
 
     // Seed instance history using provider APIs: create_new_execution then append_with_execution
-    duroxide::providers::HistoryStore::create_new_execution(
+    duroxide::providers::Provider::create_new_execution(
         store.as_ref(),
         "test-instance",
         "TestOrch",
@@ -59,7 +59,7 @@ async fn test_fetch_orchestration_item_existing_instance() {
     )
     .await
     .unwrap();
-    duroxide::providers::HistoryStore::append_with_execution(
+    duroxide::providers::Provider::append_with_execution(
         store.as_ref(),
         "test-instance",
         1,
@@ -105,7 +105,7 @@ async fn test_fetch_orchestration_item_no_work() {
     let db_path = td.path().join("test.db");
     std::fs::File::create(&db_path).unwrap();
     let db_url = format!("sqlite:{}", db_path.display());
-    let store: Arc<dyn HistoryStore> = Arc::new(SqliteHistoryStore::new(&db_url).await.unwrap());
+    let store: Arc<dyn Provider> = Arc::new(SqliteProvider::new(&db_url).await.unwrap());
 
     // No work items
     let item = store.fetch_orchestration_item().await;
@@ -118,7 +118,7 @@ async fn test_ack_orchestration_item_atomic() {
     let db_path = td.path().join("test.db");
     std::fs::File::create(&db_path).unwrap();
     let db_url = format!("sqlite:{}", db_path.display());
-    let store: Arc<dyn HistoryStore> = Arc::new(SqliteHistoryStore::new(&db_url).await.unwrap());
+    let store: Arc<dyn Provider> = Arc::new(SqliteProvider::new(&db_url).await.unwrap());
 
     // Setup: enqueue start work; provider will create instance lazily
     store
@@ -188,7 +188,7 @@ async fn test_ack_orchestration_item_error_handling() {
     let db_path = td.path().join("test.db");
     std::fs::File::create(&db_path).unwrap();
     let db_url = format!("sqlite:{}", db_path.display());
-    let store: Arc<dyn HistoryStore> = Arc::new(SqliteHistoryStore::new(&db_url).await.unwrap());
+    let store: Arc<dyn Provider> = Arc::new(SqliteProvider::new(&db_url).await.unwrap());
 
     // Try to ack with invalid token
     let result = store
@@ -205,7 +205,7 @@ async fn test_abandon_orchestration_item() {
     let db_path = td.path().join("test.db");
     std::fs::File::create(&db_path).unwrap();
     let db_url = format!("sqlite:{}", db_path.display());
-    let store: Arc<dyn HistoryStore> = Arc::new(SqliteHistoryStore::new(&db_url).await.unwrap());
+    let store: Arc<dyn Provider> = Arc::new(SqliteProvider::new(&db_url).await.unwrap());
 
     // Setup: enqueue start work; provider will create instance lazily
     store
@@ -242,7 +242,7 @@ async fn test_abandon_orchestration_item_with_delay() {
     let db_path = td.path().join("test.db");
     std::fs::File::create(&db_path).unwrap();
     let db_url = format!("sqlite:{}", db_path.display());
-    let store: Arc<dyn HistoryStore> = Arc::new(SqliteHistoryStore::new(&db_url).await.unwrap());
+    let store: Arc<dyn Provider> = Arc::new(SqliteProvider::new(&db_url).await.unwrap());
 
     // Setup: enqueue start work; provider will create instance lazily
     store
@@ -277,7 +277,7 @@ async fn test_abandon_orchestration_item_error_handling() {
     let db_path = td.path().join("test.db");
     std::fs::File::create(&db_path).unwrap();
     let db_url = format!("sqlite:{}", db_path.display());
-    let store: Arc<dyn HistoryStore> = Arc::new(SqliteHistoryStore::new(&db_url).await.unwrap());
+    let store: Arc<dyn Provider> = Arc::new(SqliteProvider::new(&db_url).await.unwrap());
 
     // Try to abandon with invalid token
     let result = store.abandon_orchestration_item("invalid-token", None).await;
@@ -288,7 +288,7 @@ async fn test_abandon_orchestration_item_error_handling() {
 
 #[tokio::test]
 async fn test_in_memory_provider_atomic_operations() {
-    let store: Arc<dyn HistoryStore> = Arc::new(SqliteHistoryStore::new_in_memory().await.unwrap());
+    let store: Arc<dyn Provider> = Arc::new(SqliteProvider::new_in_memory().await.unwrap());
 
     // Enqueue work (in-memory will lazily create instance on fetch)
     store

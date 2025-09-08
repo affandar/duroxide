@@ -89,7 +89,7 @@ pub enum WorkItem {
 /// Multi-execution support is required for ContinueAsNew functionality.
 /// Management APIs are optional with default no-op implementations.
 #[async_trait::async_trait]
-pub trait HistoryStore: Send + Sync + 'static {
+pub trait Provider: Send + Sync {
     // ===== Core Atomic Orchestration Methods (REQUIRED) =====
     // These three methods form the heart of reliable orchestration execution.
     

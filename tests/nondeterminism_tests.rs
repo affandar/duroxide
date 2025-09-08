@@ -5,7 +5,7 @@ use duroxide::providers::WorkItem;
 // Use SQLite provider via common helper
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
-use duroxide::{Event, OrchestrationContext, OrchestrationRegistry, OrchestrationStatus, DuroxideClient};
+use duroxide::{Event, OrchestrationContext, OrchestrationRegistry, OrchestrationStatus, Client};
 use std::sync::Arc as StdArc;
 mod common;
 
@@ -40,8 +40,8 @@ async fn code_swap_triggers_nondeterminism() {
 
     // Register A, start orchestration
     let reg_a = OrchestrationRegistry::builder().register("SwapTest", orch_a).build();
-    let rt_a = runtime::DuroxideRuntime::start_with_store(store.clone(), StdArc::new(activity_registry.clone()), reg_a).await;
-    let client = DuroxideClient::new(store.clone());
+    let rt_a = runtime::Runtime::start_with_store(store.clone(), StdArc::new(activity_registry.clone()), reg_a).await;
+    let client = Client::new(store.clone());
     let _h = client.start_orchestration("inst-swap", "SwapTest", "").await.unwrap();
 
     // Wait for ActivityScheduled("A1") to appear in history and capture it
@@ -65,7 +65,7 @@ async fn code_swap_triggers_nondeterminism() {
     // Simulate code swap: drop old runtime, create new one with registry B
     drop(rt_a);
     let reg_b = OrchestrationRegistry::builder().register("SwapTest", orch_b).build();
-    let _rt_b = runtime::DuroxideRuntime::start_with_store(store.clone(), StdArc::new(activity_registry), reg_b).await;
+    let _rt_b = runtime::Runtime::start_with_store(store.clone(), StdArc::new(activity_registry), reg_b).await;
 
     // Poke the instance so it activates and runs a turn (nondeterminism check occurs before completions)
     // Use a timer that fires immediately to trigger a turn reliably
@@ -79,7 +79,7 @@ async fn code_swap_triggers_nondeterminism() {
         .await;
 
     // Wait for terminal status using helper
-    let client = DuroxideClient::new(store.clone());
+    let client = Client::new(store.clone());
     match client
         .wait_for_orchestration("inst-swap", std::time::Duration::from_secs(5))
         .await
@@ -113,8 +113,8 @@ async fn completion_kind_mismatch_triggers_nondeterminism() {
     let reg = OrchestrationRegistry::builder()
         .register("KindMismatchTest", orch)
         .build();
-    let _rt = runtime::DuroxideRuntime::start_with_store(store.clone(), StdArc::new(activity_registry), reg).await;
-    let client = DuroxideClient::new(store.clone());
+    let _rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(activity_registry), reg).await;
+    let client = Client::new(store.clone());
 
     // Start the orchestration
     let _h = client
@@ -188,8 +188,8 @@ async fn unexpected_completion_id_triggers_nondeterminism() {
     let reg = OrchestrationRegistry::builder()
         .register("UnexpectedIdTest", orch)
         .build();
-    let _rt = runtime::DuroxideRuntime::start_with_store(store.clone(), StdArc::new(activity_registry), reg).await;
-    let client = DuroxideClient::new(store.clone());
+    let _rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(activity_registry), reg).await;
+    let client = Client::new(store.clone());
 
     // Start the orchestration
     let _h = client
@@ -241,8 +241,8 @@ async fn unexpected_timer_completion_triggers_nondeterminism() {
     };
 
     let reg = OrchestrationRegistry::builder().register("TimerTest", orch).build();
-    let _rt = runtime::DuroxideRuntime::start_with_store(store.clone(), StdArc::new(activity_registry), reg).await;
-    let client = DuroxideClient::new(store.clone());
+    let _rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(activity_registry), reg).await;
+    let client = Client::new(store.clone());
 
     // Start the orchestration
     let _h = client
@@ -321,8 +321,8 @@ async fn continue_as_new_with_unconsumed_completion_triggers_nondeterminism() {
         .register("CanNondeterminism", orch)
         .build();
 
-    let rt = runtime::DuroxideRuntime::start_with_store(store.clone(), StdArc::new(activity_registry), reg).await;
-    let client = DuroxideClient::new(store.clone());
+    let rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(activity_registry), reg).await;
+    let client = Client::new(store.clone());
 
     // Start the orchestration
     let _h = client
@@ -417,8 +417,8 @@ async fn execution_id_filtering_without_continue_as_new_triggers_nondeterminism(
             Ok("activity result".to_string())
         })
         .build();
-    let rt = runtime::DuroxideRuntime::start_with_store(store.clone(), StdArc::new(activity_registry), reg).await;
-    let client = DuroxideClient::new(store.clone());
+    let rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(activity_registry), reg).await;
+    let client = Client::new(store.clone());
 
     // Start orchestration
     let _handle = client
@@ -477,8 +477,8 @@ async fn duplicate_external_events_are_handled_gracefully() {
         .register("DuplicateExternalTest", orch)
         .build();
     let activity_registry = ActivityRegistry::builder().build();
-    let rt = runtime::DuroxideRuntime::start_with_store(store.clone(), StdArc::new(activity_registry), reg).await;
-    let client = DuroxideClient::new(store.clone());
+    let rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(activity_registry), reg).await;
+    let client = duroxide::Client::new(store.clone());
 
     // Start orchestration
     let _handle = client

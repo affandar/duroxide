@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::providers::{HistoryStore, WorkItem};
+use crate::providers::{Provider, WorkItem};
 use crate::{Event, OrchestrationStatus};
 use crate::_typed_codec::{Json, Codec};
 use serde::Serialize;
@@ -8,14 +8,14 @@ use serde::Serialize;
 /// Thin client for control-plane operations.
 ///
 /// This client is intentionally limited to enqueue-only APIs that communicate
-/// with the runtime exclusively through the shared HistoryStore provider.
-pub struct DuroxideClient {
-    store: Arc<dyn HistoryStore>,
+/// with the runtime exclusively through the shared Provider.
+pub struct Client {
+    store: Arc<dyn Provider>,
 }
 
-impl DuroxideClient {
-    /// Create a client bound to a HistoryStore instance.
-    pub fn new(store: Arc<dyn HistoryStore>) -> Self {
+impl Client {
+    /// Create a client bound to a Provider instance.
+    pub fn new(store: Arc<dyn Provider>) -> Self {
         Self { store }
     }
 

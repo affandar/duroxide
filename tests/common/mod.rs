@@ -1,13 +1,13 @@
 use duroxide::Event;
-use duroxide::providers::HistoryStore;
-use duroxide::providers::sqlite::SqliteHistoryStore;
-use duroxide::DuroxideClient;
+use duroxide::providers::Provider;
+use duroxide::providers::sqlite::SqliteProvider;
+use duroxide::Client;
 use std::sync::Arc as StdArc;
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
 
 #[allow(dead_code)]
-pub async fn wait_for_history<F>(store: StdArc<dyn HistoryStore>, instance: &str, predicate: F, timeout_ms: u64) -> bool
+pub async fn wait_for_history<F>(store: StdArc<dyn Provider>, instance: &str, predicate: F, timeout_ms: u64) -> bool
 where
     F: Fn(&Vec<Event>) -> bool,
 {
@@ -23,7 +23,7 @@ where
 
 #[allow(dead_code)]
 pub async fn wait_for_subscription(
-    store: StdArc<dyn HistoryStore>,
+    store: StdArc<dyn Provider>,
     instance: &str,
     name: &str,
     timeout_ms: u64,
@@ -41,7 +41,7 @@ pub async fn wait_for_subscription(
 }
 
 pub async fn wait_for_history_event<T, F>(
-    store: StdArc<dyn HistoryStore>,
+    store: StdArc<dyn Provider>,
     instance: &str,
     selector: F,
     timeout_ms: u64,
@@ -64,22 +64,22 @@ where
 }
 
 #[allow(dead_code)]
-pub async fn create_sqlite_store_disk() -> (StdArc<dyn HistoryStore>, TempDir) {
+pub async fn create_sqlite_store_disk() -> (StdArc<dyn Provider>, TempDir) {
     let td = tempfile::tempdir().unwrap();
     let db_path = td.path().join("test.db");
     std::fs::File::create(&db_path).unwrap();
     let db_url = format!("sqlite:{}", db_path.display());
-    let store = StdArc::new(SqliteHistoryStore::new(&db_url).await.unwrap()) as StdArc<dyn HistoryStore>;
+    let store = StdArc::new(SqliteProvider::new(&db_url).await.unwrap()) as StdArc<dyn Provider>;
     (store, td)
 }
 
 #[allow(dead_code)]
-pub async fn create_sqlite_store_memory() -> StdArc<dyn HistoryStore> {
-    let store = SqliteHistoryStore::new_in_memory().await.unwrap();
-    StdArc::new(store) as StdArc<dyn HistoryStore>
+pub async fn create_sqlite_store_memory() -> StdArc<dyn Provider> {
+    let store = SqliteProvider::new_in_memory().await.unwrap();
+    StdArc::new(store) as StdArc<dyn Provider>
 }
 
 #[allow(dead_code)]
-pub fn create_client(store: StdArc<dyn HistoryStore>) -> DuroxideClient {
-    DuroxideClient::new(store)
+pub fn create_client(store: StdArc<dyn Provider>) -> Client {
+    Client::new(store)
 }

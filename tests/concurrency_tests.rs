@@ -1,12 +1,12 @@
 use std::sync::Arc;
-use duroxide::providers::HistoryStore;
+use duroxide::providers::Provider;
 mod common;
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
-use duroxide::{Event, OrchestrationContext, OrchestrationRegistry, DuroxideClient};
+use duroxide::{Event, OrchestrationContext, OrchestrationRegistry, Client};
 use std::sync::Arc as StdArc;
 
-async fn concurrent_orchestrations_different_activities_with(store: StdArc<dyn HistoryStore>) {
+async fn concurrent_orchestrations_different_activities_with(store: StdArc<dyn Provider>) {
     let o1 = |ctx: OrchestrationContext, _input: String| async move {
         let f_a = ctx.schedule_activity("Add", "2,3");
         let f_e = ctx.schedule_wait("Go");
@@ -76,8 +76,8 @@ async fn concurrent_orchestrations_different_activities_with(store: StdArc<dyn H
         .build();
 
     let rt =
-        runtime::DuroxideRuntime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
-    let client = DuroxideClient::new(store.clone());
+        runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+    let client = Client::new(store.clone());
     let _ = client.start_orchestration("inst-multi-1", "AddOrchestration", "").await;
     let _ = client.start_orchestration("inst-multi-2", "UpperOrchestration", "").await;
 
@@ -85,18 +85,18 @@ async fn concurrent_orchestrations_different_activities_with(store: StdArc<dyn H
     tokio::spawn(async move {
         let sfw = store_for_wait1.clone();
         let _ = common::wait_for_subscription(sfw.clone(), "inst-multi-1", "Go", 3000).await;
-        let client = DuroxideClient::new(sfw);
+        let client = Client::new(sfw);
         let _ = client.raise_event("inst-multi-1", "Go", "E1").await;
     });
     let store_for_wait2 = store.clone();
     tokio::spawn(async move {
         let sfw = store_for_wait2.clone();
         let _ = common::wait_for_subscription(sfw.clone(), "inst-multi-2", "Go", 3000).await;
-        let client = DuroxideClient::new(sfw);
+        let client = Client::new(sfw);
         let _ = client.raise_event("inst-multi-2", "Go", "E2").await;
     });
 
-    let out1 = match DuroxideClient::new(store.clone())
+    let out1 = match Client::new(store.clone())
         .wait_for_orchestration("inst-multi-1", std::time::Duration::from_secs(10))
         .await
         .unwrap()
@@ -106,7 +106,7 @@ async fn concurrent_orchestrations_different_activities_with(store: StdArc<dyn H
         _ => panic!("unexpected orchestration status"),
     };
 
-    let out2 = match DuroxideClient::new(store.clone())
+    let out2 = match Client::new(store.clone())
         .wait_for_orchestration("inst-multi-2", std::time::Duration::from_secs(10))
         .await
         .unwrap()
@@ -169,7 +169,7 @@ async fn concurrent_orchestrations_different_activities_fs() {
     concurrent_orchestrations_different_activities_with(store).await;
 }
 
-async fn concurrent_orchestrations_same_activities_with(store: StdArc<dyn HistoryStore>) {
+async fn concurrent_orchestrations_same_activities_with(store: StdArc<dyn Provider>) {
     let o1 = |ctx: OrchestrationContext, _input: String| async move {
         let f_a = ctx.schedule_activity("Proc", "10");
         let f_e = ctx.schedule_wait("Go");
@@ -237,8 +237,8 @@ async fn concurrent_orchestrations_same_activities_with(store: StdArc<dyn Histor
         .build();
 
     let rt =
-        runtime::DuroxideRuntime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
-    let client = DuroxideClient::new(store.clone());
+        runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+    let client = Client::new(store.clone());
     let _ = client.start_orchestration("inst-same-acts-1", "ProcOrchestration1", "").await;
     let _ = client.start_orchestration("inst-same-acts-2", "ProcOrchestration2", "").await;
 
@@ -246,18 +246,18 @@ async fn concurrent_orchestrations_same_activities_with(store: StdArc<dyn Histor
     tokio::spawn(async move {
         let sfw = store_for_wait3.clone();
         let _ = common::wait_for_subscription(sfw.clone(), "inst-same-acts-1", "Go", 3000).await;
-        let client = DuroxideClient::new(sfw);
+        let client = Client::new(sfw);
         let _ = client.raise_event("inst-same-acts-1", "Go", "P1").await;
     });
     let store_for_wait4 = store.clone();
     tokio::spawn(async move {
         let sfw = store_for_wait4.clone();
         let _ = common::wait_for_subscription(sfw.clone(), "inst-same-acts-2", "Go", 3000).await;
-        let client = DuroxideClient::new(sfw);
+        let client = Client::new(sfw);
         let _ = client.raise_event("inst-same-acts-2", "Go", "P2").await;
     });
 
-    match DuroxideClient::new(store.clone())
+    match Client::new(store.clone())
         .wait_for_orchestration("inst-same-acts-1", std::time::Duration::from_secs(10))
         .await
         .unwrap()
@@ -267,7 +267,7 @@ async fn concurrent_orchestrations_same_activities_with(store: StdArc<dyn Histor
         _ => panic!("unexpected orchestration status"),
     }
 
-    match DuroxideClient::new(store.clone())
+    match Client::new(store.clone())
         .wait_for_orchestration("inst-same-acts-2", std::time::Duration::from_secs(10))
         .await
         .unwrap()

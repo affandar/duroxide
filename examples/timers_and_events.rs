@@ -8,10 +8,10 @@
 //!
 //! Run with: `cargo run --example timers_and_events`
 
-use duroxide::providers::sqlite::SqliteHistoryStore;
+use duroxide::providers::sqlite::SqliteProvider;
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
-use duroxide::{OrchestrationContext, OrchestrationRegistry, DurableOutput, DuroxideClient};
+use duroxide::{OrchestrationContext, OrchestrationRegistry, DurableOutput, Client};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Duration;
@@ -39,7 +39,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let db_path = temp_dir.path().join("timers_and_events.db");
     std::fs::File::create(&db_path)?;
     let db_url = format!("sqlite:{}", db_path.to_str().unwrap());
-    let store = Arc::new(SqliteHistoryStore::new(&db_url).await?);
+    let store = Arc::new(SqliteProvider::new(&db_url).await?);
 
     // Register activities for the approval workflow
     let activities = ActivityRegistry::builder()
@@ -142,7 +142,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .register("ApprovalWorkflow", orchestration)
         .build();
 
-    let rt = runtime::DuroxideRuntime::start_with_store(
+    let rt = runtime::Runtime::start_with_store(
         store.clone(),
         Arc::new(activities),
         orchestrations,
@@ -157,11 +157,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let request_json = serde_json::to_string(&request)?;
 
     let instance_id = "approval-instance-1";
-    let client = DuroxideClient::new(store.clone());
+    let client = Client::new(store.clone());
     client.start_orchestration(instance_id, "ApprovalWorkflow", request_json).await?;
 
     // Simulate an approval event after 2 seconds
-    let client_clone = DuroxideClient::new(store.clone());
+    let client_clone = Client::new(store.clone());
     let instance_id_clone = instance_id.to_string();
     tokio::spawn(async move {
         tokio::time::sleep(Duration::from_secs(2)).await;

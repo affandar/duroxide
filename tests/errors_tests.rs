@@ -1,16 +1,14 @@
 use std::sync::Arc;
-use duroxide::providers::HistoryStore;
+use duroxide::providers::Provider;
 mod common;
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
 use duroxide::{OrchestrationContext, OrchestrationRegistry};
 use std::sync::Arc as StdArc;
-use std::any::Any;
 
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
-use sqlx::Row;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 struct AOnly {
@@ -21,7 +19,7 @@ fn parse_activity_result(s: &Result<String, String>) -> Result<String, String> {
     s.clone()
 }
 
-async fn error_handling_compensation_on_ship_failure_with(store: StdArc<dyn HistoryStore>) {
+async fn error_handling_compensation_on_ship_failure_with(store: StdArc<dyn Provider>) {
     let activity_registry = ActivityRegistry::builder()
         .register("Debit", |input: String| async move {
             if input == "fail" {
@@ -63,8 +61,8 @@ async fn error_handling_compensation_on_ship_failure_with(store: StdArc<dyn Hist
         .build();
 
     let rt =
-        runtime::DuroxideRuntime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
-    let client = duroxide::DuroxideClient::new(store.clone());
+        runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+    let client = duroxide::Client::new(store.clone());
     client.start_orchestration("inst-err-ship-1", "ErrorHandlingCompensation", "").await.unwrap();
 
     match client
@@ -93,7 +91,7 @@ async fn error_handling_compensation_on_ship_failure_fs() {
     error_handling_compensation_on_ship_failure_with(store).await;
 }
 
-async fn error_handling_success_path_with(store: StdArc<dyn HistoryStore>) {
+async fn error_handling_success_path_with(store: StdArc<dyn Provider>) {
     let activity_registry = ActivityRegistry::builder()
         .register("Debit", |input: String| async move { Ok(format!("debited:{input}")) })
         .register("Ship", |_input: String| async move { Ok("shipped".to_string()) })
@@ -112,8 +110,8 @@ async fn error_handling_success_path_with(store: StdArc<dyn HistoryStore>) {
         .build();
 
     let rt =
-        runtime::DuroxideRuntime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
-    let client = duroxide::DuroxideClient::new(store.clone());
+        runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+    let client = duroxide::Client::new(store.clone());
     client.start_orchestration("inst-err-ok-1", "ErrorHandlingSuccess", "").await.unwrap();
 
     match client
@@ -140,7 +138,7 @@ async fn error_handling_success_path_fs() {
     error_handling_success_path_with(store).await;
 }
 
-async fn error_handling_early_debit_failure_with(store: StdArc<dyn HistoryStore>) {
+async fn error_handling_early_debit_failure_with(store: StdArc<dyn Provider>) {
     let activity_registry = ActivityRegistry::builder()
         .register("Debit", |input: String| async move { Err(format!("bad:{input}")) })
         .register("Ship", |_input: String| async move { Ok("shipped".to_string()) })
@@ -160,8 +158,8 @@ async fn error_handling_early_debit_failure_with(store: StdArc<dyn HistoryStore>
         .build();
 
     let rt =
-        runtime::DuroxideRuntime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
-    let client = duroxide::DuroxideClient::new(store.clone());
+        runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+    let client = duroxide::Client::new(store.clone());
     client.start_orchestration("inst-err-debit-1", "DebitFailureTest", "").await.unwrap();
 
     match client
@@ -191,7 +189,7 @@ async fn error_handling_early_debit_failure_fs() {
 }
 
 // 5) Unknown activity handler: should fail with unregistered error
-async fn unknown_activity_fails_with(store: StdArc<dyn HistoryStore>) {
+async fn unknown_activity_fails_with(store: StdArc<dyn Provider>) {
     let activity_registry = ActivityRegistry::builder().build();
     let orchestration = |ctx: OrchestrationContext, _input: String| async move {
         match ctx.schedule_activity("Missing", "foo").into_activity().await {
@@ -205,8 +203,8 @@ async fn unknown_activity_fails_with(store: StdArc<dyn HistoryStore>) {
         .build();
 
     let rt =
-        runtime::DuroxideRuntime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
-    let client = duroxide::DuroxideClient::new(store.clone());
+        runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+    let client = duroxide::Client::new(store.clone());
     client.start_orchestration("inst-unknown-act-1", "MissingActivityTest", "").await.unwrap();
 
     match client
@@ -247,10 +245,10 @@ async fn event_after_completion_is_ignored_fs() {
         .build();
 
     let rt =
-        runtime::DuroxideRuntime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+        runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
     let store_for_wait = store.clone();
-    let client_c = duroxide::DuroxideClient::new(store.clone());
-    let client = duroxide::DuroxideClient::new(store.clone());
+    let client_c = duroxide::Client::new(store.clone());
+    let client = duroxide::Client::new(store.clone());
     tokio::spawn(async move {
         let _ = common::wait_for_subscription(store_for_wait, instance, "Once", 1000).await;
         let _ = client_c.raise_event(instance, "Once", "go").await;
@@ -315,11 +313,11 @@ async fn event_before_subscription_after_start_is_ignored() {
         .build();
 
     let rt =
-        runtime::DuroxideRuntime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
-    let client = duroxide::DuroxideClient::new(store.clone());
+        runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+    let client = duroxide::Client::new(store.clone());
     // Orchestration: delay, then subscribe
     let instance = "inst-pre-sub-drop-1";
-    let client_c1 = duroxide::DuroxideClient::new(store.clone());
+    let client_c1 = duroxide::Client::new(store.clone());
     tokio::spawn(async move {
         info!("Raising early event");
         // Raise early before subscription exists (timer delays subscription)
@@ -327,7 +325,7 @@ async fn event_before_subscription_after_start_is_ignored() {
         let _ = client_c1.raise_event(instance, "Evt", "early").await;
     });
     let store_for_wait2 = store.clone();
-    let client_c2 = duroxide::DuroxideClient::new(store.clone());
+    let client_c2 = duroxide::Client::new(store.clone());
     client.start_orchestration(instance, "PreSubscriptionTest", "").await.unwrap();
     tokio::spawn(async move {
         let _ = common::wait_for_subscription(store_for_wait2.clone(), instance, "Evt", 1000).await;
@@ -347,7 +345,7 @@ async fn event_before_subscription_after_start_is_ignored() {
 }
 
 // 8) History cap exceeded triggers a hard error (no truncation) for both providers
-async fn history_cap_exceeded_with(store: StdArc<dyn HistoryStore>) {
+async fn history_cap_exceeded_with(store: StdArc<dyn Provider>) {
     let activity_registry = ActivityRegistry::builder()
         .register("Noop", |_in: String| async move { Ok(String::new()) })
         .build();
@@ -366,8 +364,8 @@ async fn history_cap_exceeded_with(store: StdArc<dyn HistoryStore>) {
         .build();
 
     let rt =
-        runtime::DuroxideRuntime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
-    let client = duroxide::DuroxideClient::new(store.clone());
+        runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+    let client = duroxide::Client::new(store.clone());
     client.start_orchestration("inst-cap-exceed", "HistoryCapTest", "").await.unwrap();
 
     // Expect runtime to report Err result via waiter on append failure
@@ -413,8 +411,8 @@ async fn orchestration_immediate_fail_fs() {
         .build();
 
     let rt =
-        runtime::DuroxideRuntime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
-    let client = duroxide::DuroxideClient::new(store.clone());
+        runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+    let client = duroxide::Client::new(store.clone());
     client.start_orchestration("inst-fail-imm", "AlwaysErr", "").await.unwrap();
 
     match client
@@ -462,8 +460,8 @@ async fn orchestration_propagates_activity_failure_fs() {
         .build();
 
     let rt =
-        runtime::DuroxideRuntime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
-    let client = duroxide::DuroxideClient::new(store.clone());
+        runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+    let client = duroxide::Client::new(store.clone());
     client.start_orchestration("inst-fail-prop", "PropagateFail", "").await.unwrap();
 
     match client
@@ -506,8 +504,8 @@ async fn typed_activity_decode_error_fs() {
     let orchestration_registry = OrchestrationRegistry::builder()
         .register("BadInputToTypedActivity", orch)
         .build();
-    let rt = runtime::DuroxideRuntime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
-    let client = duroxide::DuroxideClient::new(store.clone());
+    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+    let client = duroxide::Client::new(store.clone());
     client.start_orchestration("inst-typed-bad", "BadInputToTypedActivity", "").await.unwrap();
 
     let status = client
@@ -545,20 +543,20 @@ async fn typed_event_decode_error_fs() {
         .register_typed::<String, String, _, _>("TypedEvt", orch)
         .build();
     let rt =
-        runtime::DuroxideRuntime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
-    let client = duroxide::DuroxideClient::new(store.clone());
+        runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+    let client = duroxide::Client::new(store.clone());
     let store_for_wait = store.clone();
     tokio::spawn(async move {
         let _ = crate::common::wait_for_subscription(store_for_wait, "inst-typed-evt", "Evt", 1000).await;
         // invalid payload for AOnly
         let _ = client.raise_event("inst-typed-evt", "Evt", "not-json").await;
     });
-    duroxide::DuroxideClient::new(store.clone())
+    duroxide::Client::new(store.clone())
         .start_orchestration_typed::<String>("inst-typed-evt", "TypedEvt", "".to_string())
         .await
         .unwrap();
 
-    let status = duroxide::DuroxideClient::new(store.clone())
+    let status = duroxide::Client::new(store.clone())
         .wait_for_orchestration_typed::<String>("inst-typed-evt", std::time::Duration::from_secs(5))
         .await
         .unwrap();

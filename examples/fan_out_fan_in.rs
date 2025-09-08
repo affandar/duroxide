@@ -6,10 +6,10 @@
 //!
 //! Run with: `cargo run --example fan_out_fan_in`
 
-use duroxide::providers::sqlite::SqliteHistoryStore;
+use duroxide::providers::sqlite::SqliteProvider;
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
-use duroxide::{OrchestrationContext, OrchestrationRegistry, DurableOutput, DuroxideClient};
+use duroxide::{OrchestrationContext, OrchestrationRegistry, DurableOutput, Client};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -34,7 +34,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let db_path = temp_dir.path().join("fan_out_fan_in.db");
     std::fs::File::create(&db_path)?;
     let db_url = format!("sqlite:{}", db_path.to_str().unwrap());
-    let store = Arc::new(SqliteHistoryStore::new(&db_url).await?);
+    let store = Arc::new(SqliteProvider::new(&db_url).await?);
 
     // Register activities for user processing
     let activities = ActivityRegistry::builder()
@@ -127,7 +127,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .register("FanOutFanIn", orchestration)
         .build();
 
-    let rt = runtime::DuroxideRuntime::start_with_store(
+    let rt = runtime::Runtime::start_with_store(
         store.clone(),
         Arc::new(activities),
         orchestrations,
@@ -142,7 +142,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let users_json = serde_json::to_string(&users)?;
 
     let instance_id = "fan-out-instance-1";
-    let client = DuroxideClient::new(store);
+    let client = Client::new(store);
     client.start_orchestration(instance_id, "FanOutFanIn", users_json).await?;
 
     match client

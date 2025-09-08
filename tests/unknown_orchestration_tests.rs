@@ -12,15 +12,15 @@ async fn unknown_orchestration_fails_gracefully() {
     let orchestration_registry = OrchestrationRegistry::builder().build();
     let activity_registry = ActivityRegistry::builder().build();
     let rt =
-        runtime::DuroxideRuntime::start_with_store(store.clone(), StdArc::new(activity_registry), orchestration_registry).await;
+        runtime::Runtime::start_with_store(store.clone(), StdArc::new(activity_registry), orchestration_registry).await;
 
-    let client = duroxide::DuroxideClient::new(store.clone());
+    let client = duroxide::Client::new(store.clone());
     client
         .start_orchestration("inst-unknown-1", "DoesNotExist", "")
         .await
         .unwrap();
 
-    let client = duroxide::DuroxideClient::new(store.clone());
+    let client = duroxide::Client::new(store.clone());
     let status = client
         .wait_for_orchestration("inst-unknown-1", std::time::Duration::from_secs(5))
         .await

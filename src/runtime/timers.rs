@@ -2,7 +2,7 @@ use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::sync::Arc;
 
-use crate::providers::{HistoryStore, WorkItem};
+use crate::providers::{Provider, WorkItem};
 
 /// Timer item with its acknowledgment token
 pub struct TimerWithToken {
@@ -14,7 +14,7 @@ pub struct TimerWithToken {
 /// Maintains a min-ordered queue of TimerSchedule items and enqueues TimerFired when due.
 /// Only acknowledges timers after they have fired and been enqueued.
 pub struct TimerService {
-    store: Arc<dyn HistoryStore>,
+    store: Arc<dyn Provider>,
     rx: tokio::sync::mpsc::UnboundedReceiver<TimerWithToken>,
     // key -> (instance, execution_id, id, ack_token), keyed by "inst|exec|id|fire_at_ms"
     items: HashMap<String, (String, u64, u64, String)>,
@@ -25,7 +25,7 @@ pub struct TimerService {
 
 impl TimerService {
     pub fn start(
-        store: Arc<dyn HistoryStore>,
+        store: Arc<dyn Provider>,
         poller_idle_ms: u64,
     ) -> (
         tokio::task::JoinHandle<()>,
@@ -136,7 +136,7 @@ fn now_ms() -> u64 {
 mod tests {
     use super::*;
     use crate::Event;
-    use crate::providers::sqlite::SqliteHistoryStore;
+    use crate::providers::sqlite::SqliteProvider;
     use tokio::sync::Mutex as TokioMutex;
 
     #[tokio::test]
@@ -144,11 +144,11 @@ mod tests {
         // Capture enqueued orchestrator items instead of draining via dequeue/ack
         #[derive(Clone)]
         struct CaptureStore {
-            inner: Arc<SqliteHistoryStore>,
+            inner: Arc<SqliteProvider>,
             captured: Arc<TokioMutex<Vec<WorkItem>>>,
         }
         #[async_trait::async_trait]
-        impl HistoryStore for CaptureStore {
+        impl Provider for CaptureStore {
             async fn read(&self, instance: &str) -> Vec<Event> { self.inner.read(instance).await }
             async fn list_instances(&self) -> Vec<String> { self.inner.list_instances().await }
 
@@ -177,9 +177,9 @@ mod tests {
             async fn abandon_orchestration_item(&self, lock_token: &str, delay_ms: Option<u64>) -> Result<(), String> { self.inner.abandon_orchestration_item(lock_token, delay_ms).await }
         }
 
-        let base = Arc::new(SqliteHistoryStore::new_in_memory().await.unwrap());
+        let base = Arc::new(SqliteProvider::new_in_memory().await.unwrap());
         let captured: Arc<TokioMutex<Vec<WorkItem>>> = Arc::new(TokioMutex::new(Vec::new()));
-        let store: Arc<dyn HistoryStore> = Arc::new(CaptureStore { inner: base, captured: captured.clone() });
+        let store: Arc<dyn Provider> = Arc::new(CaptureStore { inner: base, captured: captured.clone() });
         let (_jh, tx) = TimerService::start(store.clone(), 5);
         // schedule three timers: immediate, +10ms, +5ms
         let now = now_ms();

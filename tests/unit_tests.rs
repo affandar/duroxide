@@ -1,5 +1,5 @@
-use duroxide::providers::HistoryStore;
-use duroxide::providers::sqlite::SqliteHistoryStore;
+use duroxide::providers::Provider;
+use duroxide::providers::sqlite::SqliteProvider;
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
 use duroxide::{Action, Event, OrchestrationContext, OrchestrationRegistry, run_turn};
@@ -7,10 +7,10 @@ use std::sync::Arc;
 
 // Helper to create runtime with registries for tests
 #[allow(dead_code)]
-async fn create_test_runtime(activity_registry: ActivityRegistry) -> Arc<runtime::DuroxideRuntime> {
+async fn create_test_runtime(activity_registry: ActivityRegistry) -> Arc<runtime::Runtime> {
     // Create a minimal orchestration registry for basic tests
     let orchestration_registry = OrchestrationRegistry::builder().build();
-    runtime::DuroxideRuntime::start(Arc::new(activity_registry), orchestration_registry).await
+    runtime::Runtime::start(Arc::new(activity_registry), orchestration_registry).await
 }
 
 // 1) Single-turn emission: ensure exactly one action per scheduled future and matching schedule event recorded.
@@ -85,10 +85,10 @@ async fn deterministic_replay_activity_only() {
         })
         .build();
 
-    let store = SqliteHistoryStore::new_in_memory().await.unwrap();
-    let store = Arc::new(store) as Arc<dyn HistoryStore>;
-    let rt = runtime::DuroxideRuntime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
-    let client = duroxide::DuroxideClient::new(store.clone());
+    let store = SqliteProvider::new_in_memory().await.unwrap();
+    let store = Arc::new(store) as Arc<dyn Provider>;
+    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+    let client = duroxide::Client::new(store.clone());
     client.start_orchestration("inst-unit-1", "TestOrchestration", "").await.unwrap();
 
     let status = client
@@ -126,12 +126,12 @@ async fn runtime_duplicate_orchestration_deduped_single_execution() {
         })
         .build();
 
-    let store = SqliteHistoryStore::new_in_memory().await.unwrap();
-    let store = Arc::new(store) as Arc<dyn HistoryStore>;
-    let rt = runtime::DuroxideRuntime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+    let store = SqliteProvider::new_in_memory().await.unwrap();
+    let store = Arc::new(store) as Arc<dyn Provider>;
+    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
     let inst = "dup-orch";
 
-    let client = duroxide::DuroxideClient::new(store.clone());
+    let client = duroxide::Client::new(store.clone());
     // Fire two start requests for the same instance
     let _h1 = client.start_orchestration(inst, "TestOrch", "").await.unwrap();
     let _h2 = client.start_orchestration(inst, "TestOrch", "").await.unwrap();
@@ -188,10 +188,10 @@ async fn orchestration_descriptor_root_and_child() {
         .register("ParentDsc", parent)
         .register("ChildDsc", child)
         .build();
-    let store = SqliteHistoryStore::new_in_memory().await.unwrap();
-    let store = Arc::new(store) as Arc<dyn HistoryStore>;
-    let rt = runtime::DuroxideRuntime::start_with_store(store.clone(), Arc::new(activity_registry), reg).await;
-    let client = duroxide::DuroxideClient::new(store.clone());
+    let store = SqliteProvider::new_in_memory().await.unwrap();
+    let store = Arc::new(store) as Arc<dyn Provider>;
+    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), reg).await;
+    let client = duroxide::Client::new(store.clone());
     let _h = client.start_orchestration("inst-desc", "ParentDsc", "seed").await.unwrap();
     // wait for completion
     let _ = client
@@ -226,10 +226,10 @@ async fn orchestration_status_apis() {
         .register("AlwaysFails", |_ctx, _| async move { Err("boom".to_string()) })
         .build();
 
-    let store = SqliteHistoryStore::new_in_memory().await.unwrap();
-    let store = Arc::new(store) as Arc<dyn HistoryStore>;
-    let rt = runtime::DuroxideRuntime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
-    let client = duroxide::DuroxideClient::new(store.clone());
+    let store = SqliteProvider::new_in_memory().await.unwrap();
+    let store = Arc::new(store) as Arc<dyn Provider>;
+    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+    let client = duroxide::Client::new(store.clone());
 
     // NotFound for unknown instance
     let s = client.get_orchestration_status("no-such").await;
@@ -296,7 +296,7 @@ async fn orchestration_status_apis() {
 #[tokio::test]
 async fn providers_fs_multi_execution_persistence_and_latest_read() {
     let _tmp = tempfile::tempdir().unwrap();
-    let fs = SqliteHistoryStore::new_in_memory().await.unwrap();
+    let fs = SqliteProvider::new_in_memory().await.unwrap();
 
     // Create execution #1 and append CAN terminal
     fs.create_new_execution("pfs", "O", "0.0.0", "0", None, None)
@@ -337,7 +337,7 @@ async fn providers_fs_multi_execution_persistence_and_latest_read() {
 // Providers: in-memory multi-execution persistence and latest read() contract
 #[tokio::test]
 async fn providers_inmem_multi_execution_persistence_and_latest_read() {
-    let mem = SqliteHistoryStore::new_in_memory().await.unwrap();
+    let mem = SqliteProvider::new_in_memory().await.unwrap();
 
     mem.create_new_execution("pmem", "O", "0.0.0", "0", None, None)
         .await

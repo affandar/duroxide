@@ -7,15 +7,15 @@
 //! ## Quick Start
 //!
 //! ```rust,no_run
-//! use duroxide::providers::sqlite::SqliteHistoryStore;
+//! use duroxide::providers::sqlite::SqliteProvider;
 //! use duroxide::runtime::registry::ActivityRegistry;
 //! use duroxide::runtime::{self};
-//! use duroxide::{OrchestrationContext, OrchestrationRegistry, DuroxideClient};
+//! use duroxide::{OrchestrationContext, OrchestrationRegistry, Client};
 //! use std::sync::Arc;
 //!
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! // 1. Create a storage provider
-//! let store = Arc::new(SqliteHistoryStore::new("sqlite:./data.db").await.unwrap());
+//! let store = Arc::new(SqliteProvider::new("sqlite:./data.db").await.unwrap());
 //!
 //! // 2. Register activities (your business logic)
 //! let activities = ActivityRegistry::builder()
@@ -36,12 +36,12 @@
 //!     .register("HelloWorld", orchestration)
 //!     .build();
 //!
-//! let rt = runtime::DuroxideRuntime::start_with_store(
+//! let rt = runtime::Runtime::start_with_store(
 //!     store.clone(), Arc::new(activities), orchestrations
 //! ).await;
 //!
 //! // 5. Create a client and start an orchestration instance
-//! let client = DuroxideClient::new(store.clone());
+//! let client = Client::new(store.clone());
 //! client.start_orchestration("inst-1", "HelloWorld", "World").await?;
 //! let result = client.wait_for_orchestration("inst-1", std::time::Duration::from_secs(5)).await
 //!     .map_err(|e| format!("Wait error: {:?}", e))?;
@@ -170,7 +170,7 @@
 //! - **Orchestration driver**: `run_turn`, `run_turn_with`, and `Executor`
 //! - **OrchestrationContext**: Schedule activities, timers, and external events
 //! - **DurableFuture**: Unified futures that can be composed with `join`/`select`
-//! - **DuroxideRuntime**: In-process execution engine with dispatchers and workers
+//! - **Runtime**: In-process execution engine with dispatchers and workers
 //! - **Providers**: Pluggable storage backends (filesystem, in-memory)
 use std::cell::Cell;
 use std::future::Future;
@@ -189,7 +189,7 @@ pub mod providers;
 
 // Re-export key runtime types for convenience
 pub use runtime::{OrchestrationHandler, OrchestrationRegistry, OrchestrationRegistryBuilder, OrchestrationStatus};
-pub use client::DuroxideClient;
+pub use client::Client;
 // Internal system activity names
 pub(crate) const SYSTEM_NOW_ACTIVITY: &str = "__system_now";
 pub(crate) const SYSTEM_NEW_GUID_ACTIVITY: &str = "__system_new_guid";

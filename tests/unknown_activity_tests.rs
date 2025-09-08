@@ -32,8 +32,8 @@ async fn unknown_activity_is_isolated_from_other_orchestrations_fs() {
         .build();
 
     let rt =
-        runtime::DuroxideRuntime::start_with_store(store.clone(), StdArc::new(activity_registry), orchestration_registry).await;
-    let client = duroxide::DuroxideClient::new(store.clone());
+        runtime::Runtime::start_with_store(store.clone(), StdArc::new(activity_registry), orchestration_registry).await;
+    let client = duroxide::Client::new(store.clone());
 
     // Start both orchestrations concurrently
     client.start_orchestration("inst-missing-1", "UsesMissing", "").await.unwrap();
@@ -115,8 +115,8 @@ async fn unknown_activity_is_isolated_from_other_orchestrations_inmem() {
         .build();
 
     let rt =
-        runtime::DuroxideRuntime::start_with_store(store.clone(), StdArc::new(activity_registry), orchestration_registry).await;
-    let client = duroxide::DuroxideClient::new(store.clone());
+        runtime::Runtime::start_with_store(store.clone(), StdArc::new(activity_registry), orchestration_registry).await;
+    let client = duroxide::Client::new(store.clone());
 
     client.start_orchestration("inst-missing-im", "UsesMissing", "").await.unwrap();
     client.start_orchestration("inst-healthy-im", "Healthy", "yo").await.unwrap();

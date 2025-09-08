@@ -1,8 +1,8 @@
 use duroxide::*;
-use duroxide::providers::sqlite::SqliteHistoryStore;
+use duroxide::providers::sqlite::SqliteProvider;
 use duroxide::runtime::registry::{ActivityRegistry, OrchestrationRegistry};
 use duroxide::runtime;
-use duroxide::DuroxideClient;
+use duroxide::Client;
 use std::sync::Arc;
 
 /// This example demonstrates the CORRECT way to handle delays and timeouts.
@@ -24,7 +24,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let db_path = temp_dir.path().join("delays_and_timeouts.db");
     std::fs::File::create(&db_path)?;
     let db_url = format!("sqlite:{}", db_path.to_str().unwrap());
-    let store = Arc::new(SqliteHistoryStore::new(&db_url).await?);
+    let store = Arc::new(SqliteProvider::new(&db_url).await?);
     
     // Register activities - these can do any async operations including delays
     let activities = ActivityRegistry::builder()
@@ -102,13 +102,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .register("TimeoutExample", timeout_orchestration)
         .build();
 
-    let rt = runtime::DuroxideRuntime::start_with_store(
+    let rt = runtime::Runtime::start_with_store(
         store.clone(),
         Arc::new(activities),
         orchestrations,
     ).await;
 
-    let client = DuroxideClient::new(store.clone());
+    let client = Client::new(store.clone());
 
     println!("🚀 Running delay example...");
     

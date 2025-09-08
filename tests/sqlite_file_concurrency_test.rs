@@ -1,5 +1,5 @@
-use duroxide::providers::sqlite::SqliteHistoryStore;
-use duroxide::providers::{HistoryStore, WorkItem};
+use duroxide::providers::sqlite::SqliteProvider;
+use duroxide::providers::{Provider, WorkItem};
 use duroxide::runtime::{self, registry::ActivityRegistry};
 use duroxide::{OrchestrationContext, OrchestrationRegistry};
 use std::sync::Arc;
@@ -20,10 +20,10 @@ async fn test_sqlite_file_concurrent_access() {
     
     // Create the store
     let store = Arc::new(
-        SqliteHistoryStore::new(&db_url)
+        SqliteProvider::new(&db_url)
             .await
             .expect("Failed to create SQLite store")
-    ) as Arc<dyn HistoryStore>;
+    ) as Arc<dyn Provider>;
     
     // Test concurrent writes
     let mut tasks = JoinSet::new();
@@ -74,10 +74,10 @@ async fn test_sqlite_file_concurrent_orchestrations() {
     
     // Create the store
     let store = Arc::new(
-        SqliteHistoryStore::new(&db_url)
+        SqliteProvider::new(&db_url)
             .await
             .expect("Failed to create SQLite store")
-    ) as Arc<dyn HistoryStore>;
+    ) as Arc<dyn Provider>;
     
     let activity_registry = ActivityRegistry::builder()
         .register("increment", |input: String| async move {
@@ -99,7 +99,7 @@ async fn test_sqlite_file_concurrent_orchestrations() {
         .register("IncrementOrch", orchestration)
         .build();
     
-    let rt = runtime::DuroxideRuntime::start_with_store(
+    let rt = runtime::Runtime::start_with_store(
         store.clone(),
         Arc::new(activity_registry),
         orchestration_registry,
@@ -112,7 +112,7 @@ async fn test_sqlite_file_concurrent_orchestrations() {
     for i in 0..3 {
         let store_clone = store.clone();
         tasks.spawn(async move {
-            let client = duroxide::DuroxideClient::new(store_clone);
+            let client = duroxide::Client::new(store_clone);
             client
                 .start_orchestration(
                     &format!("file-concurrent-{}", i),
@@ -130,7 +130,7 @@ async fn test_sqlite_file_concurrent_orchestrations() {
     }
     
     // Wait for all orchestrations to complete
-    let client = duroxide::DuroxideClient::new(store.clone());
+    let client = duroxide::Client::new(store.clone());
     for i in 0..3 {
         let status = client
             .wait_for_orchestration(
@@ -170,10 +170,10 @@ async fn test_sqlite_file_wal_mode() {
     
     // Create the store
     let _store = Arc::new(
-        SqliteHistoryStore::new(&db_url)
+        SqliteProvider::new(&db_url)
             .await
             .expect("Failed to create SQLite store")
-    ) as Arc<dyn HistoryStore>;
+    ) as Arc<dyn Provider>;
     
     // Verify WAL files are created
     tokio::time::sleep(Duration::from_millis(100)).await;

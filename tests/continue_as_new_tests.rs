@@ -24,13 +24,13 @@ async fn continue_as_new_multiexec() {
 
     let orchestration_registry = OrchestrationRegistry::builder().register("Counter", counter).build();
     let activity_registry = ActivityRegistry::builder().build();
-    let rt = runtime::DuroxideRuntime::start_with_store(
+    let rt = runtime::Runtime::start_with_store(
         store.clone(),
         std::sync::Arc::new(activity_registry),
         orchestration_registry,
     )
     .await;
-    let client = duroxide::DuroxideClient::new(store.clone());
+    let client = duroxide::Client::new(store.clone());
 
     // The initial start handle will resolve when the first execution continues-as-new.
     let _h = client
@@ -131,17 +131,17 @@ async fn continue_as_new_event_routes_to_latest() {
 
     let orchestration_registry = OrchestrationRegistry::builder().register("EvtCAN", orch).build();
     let activity_registry = ActivityRegistry::builder().build();
-    let rt = runtime::DuroxideRuntime::start_with_store(
+    let rt = runtime::Runtime::start_with_store(
         store.clone(),
         std::sync::Arc::new(activity_registry),
         orchestration_registry,
     )
     .await;
-    let client = duroxide::DuroxideClient::new(store.clone());
+    let client = duroxide::Client::new(store.clone());
 
     // Raise event after the second execution subscribes
     let store_for_wait = store.clone();
-    let client_c = duroxide::DuroxideClient::new(store.clone());
+    let client_c = duroxide::Client::new(store.clone());
     tokio::spawn(async move {
         let _ = common::wait_for_subscription(store_for_wait, "inst-can-evt", "Go", 2_000).await;
         let _ = client_c.raise_event("inst-can-evt", "Go", "ok").await;
@@ -233,16 +233,16 @@ async fn continue_as_new_event_drop_then_process() {
         .register("EvtDropThenProcess", orch)
         .build();
     let activity_registry = ActivityRegistry::builder().build();
-    let rt = runtime::DuroxideRuntime::start_with_store(
+    let rt = runtime::Runtime::start_with_store(
         store.clone(),
         std::sync::Arc::new(activity_registry),
         orchestration_registry,
     )
     .await;
-    let client = duroxide::DuroxideClient::new(store.clone());
+    let client = duroxide::Client::new(store.clone());
 
     // Start orchestrator
-    let client_c1 = duroxide::DuroxideClient::new(store.clone());
+    let client_c1 = duroxide::Client::new(store.clone());
     tokio::spawn(async move {
         // Intentionally send too early to new execution (before subscription)
         // We wait a bit to ensure CAN happens but before subscription is recorded.
@@ -252,7 +252,7 @@ async fn continue_as_new_event_drop_then_process() {
 
     // After subscription exists, send again
     let store_for_wait = store.clone();
-    let client_c2 = duroxide::DuroxideClient::new(store.clone());
+    let client_c2 = duroxide::Client::new(store.clone());
     tokio::spawn(async move {
         let _ = common::wait_for_subscription(store_for_wait, "inst-can-evt-drop", "Go", 2_000).await;
         let _ = client_c2.raise_event("inst-can-evt-drop", "Go", "late").await;
@@ -323,7 +323,7 @@ async fn event_drop_then_retry_after_subscribe() {
 
     let orchestration_registry = OrchestrationRegistry::builder().register("EvtDropRetry", orch).build();
     let activity_registry = ActivityRegistry::builder().build();
-    let rt = runtime::DuroxideRuntime::start_with_store(
+    let rt = runtime::Runtime::start_with_store(
         store.clone(),
         std::sync::Arc::new(activity_registry),
         orchestration_registry,
@@ -331,7 +331,7 @@ async fn event_drop_then_retry_after_subscribe() {
     .await;
 
     // Send early event before subscription is recorded (instance will be active due to timer)
-    let client_c1 = duroxide::DuroxideClient::new(store.clone());
+    let client_c1 = duroxide::Client::new(store.clone());
     tokio::spawn(async move {
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         let _ = client_c1.raise_event("inst-drop-retry", "Data", "early").await;
@@ -339,13 +339,13 @@ async fn event_drop_then_retry_after_subscribe() {
 
     // Send after subscription
     let store_for_wait = store.clone();
-    let client_c2 = duroxide::DuroxideClient::new(store.clone());
+    let client_c2 = duroxide::Client::new(store.clone());
     tokio::spawn(async move {
         let _ = common::wait_for_subscription(store_for_wait, "inst-drop-retry", "Data", 5_000).await;
         let _ = client_c2.raise_event("inst-drop-retry", "Data", "ok").await;
     });
 
-    let client = duroxide::DuroxideClient::new(store.clone());
+    let client = duroxide::Client::new(store.clone());
     let _h = client
         .start_orchestration("inst-drop-retry", "EvtDropRetry", "x")
         .await
@@ -398,8 +398,8 @@ async fn old_execution_completions_are_ignored() {
     let reg = OrchestrationRegistry::builder()
         .register("ExecutionIdTest", orch)
         .build();
-    let _rt = runtime::DuroxideRuntime::start_with_store(store.clone(), StdArc::new(activity_registry), reg).await;
-    let client = duroxide::DuroxideClient::new(store.clone());
+    let _rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(activity_registry), reg).await;
+    let client = duroxide::Client::new(store.clone());
 
     // Start the orchestration
     let _handle = client
@@ -453,8 +453,8 @@ async fn future_execution_completions_are_ignored() {
     let reg = OrchestrationRegistry::builder()
         .register("FutureExecTest", orch)
         .build();
-    let _rt = runtime::DuroxideRuntime::start_with_store(store.clone(), StdArc::new(activity_registry), reg).await;
-    let client = duroxide::DuroxideClient::new(store.clone());
+    let _rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(activity_registry), reg).await;
+    let client = duroxide::Client::new(store.clone());
 
     // Start the orchestration
     let _handle = client

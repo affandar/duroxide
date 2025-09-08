@@ -1,13 +1,13 @@
 use futures::future::{Either, select};
 use std::sync::Arc;
-use duroxide::providers::HistoryStore;
+use duroxide::providers::Provider;
 mod common;
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
 use duroxide::{Event, OrchestrationContext, OrchestrationRegistry};
 use std::sync::Arc as StdArc;
 
-async fn wait_external_completes_with(store: StdArc<dyn HistoryStore>) {
+async fn wait_external_completes_with(store: StdArc<dyn Provider>) {
     let orchestrator = |ctx: OrchestrationContext, _input: String| async move {
         let data = ctx.schedule_wait("Only").into_event().await;
         Ok(format!("only={data}"))
@@ -19,20 +19,20 @@ async fn wait_external_completes_with(store: StdArc<dyn HistoryStore>) {
         .build();
 
     let rt =
-        runtime::DuroxideRuntime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+        runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
     let store_for_wait = store.clone();
-    let client_for_event = duroxide::DuroxideClient::new(store.clone());
+    let client_for_event = duroxide::Client::new(store.clone());
     tokio::spawn(async move {
         let _ = common::wait_for_subscription(store_for_wait, "inst-wait-1", "Only", 1000).await;
         let _ = client_for_event.raise_event("inst-wait-1", "Only", "payload").await;
     });
-    let client = duroxide::DuroxideClient::new(store.clone());
-    duroxide::DuroxideClient::new(store.clone())
+    let client = duroxide::Client::new(store.clone());
+    duroxide::Client::new(store.clone())
         .start_orchestration("inst-wait-1", "WaitExternal", "")
         .await
         .unwrap();
 
-    match duroxide::DuroxideClient::new(store.clone())
+    match duroxide::Client::new(store.clone())
         .wait_for_orchestration("inst-wait-1", std::time::Duration::from_secs(5))
         .await
         .unwrap()
@@ -63,7 +63,7 @@ async fn wait_external_completes_fs() {
     wait_external_completes_with(store).await;
 }
 
-async fn race_external_vs_timer_ordering_with(store: StdArc<dyn HistoryStore>) {
+async fn race_external_vs_timer_ordering_with(store: StdArc<dyn Provider>) {
     let orchestrator = |ctx: OrchestrationContext, _input: String| async move {
         let race = select(ctx.schedule_timer(10), ctx.schedule_wait("Race"));
         match race.await {
@@ -78,22 +78,22 @@ async fn race_external_vs_timer_ordering_with(store: StdArc<dyn HistoryStore>) {
         .build();
 
     let rt =
-        runtime::DuroxideRuntime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+        runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
     let store_for_wait = store.clone();
-    let client_for_event = duroxide::DuroxideClient::new(store.clone());
+    let client_for_event = duroxide::Client::new(store.clone());
     tokio::spawn(async move {
         let _ = common::wait_for_subscription(store_for_wait, "inst-race-order-1", "Race", 1000).await;
         // Post-subscription delay to allow timer(10ms) to win deterministically
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         let _ = client_for_event.raise_event("inst-race-order-1", "Race", "ok").await;
     });
-    let client = duroxide::DuroxideClient::new(store.clone());
-    duroxide::DuroxideClient::new(store.clone())
+    let client = duroxide::Client::new(store.clone());
+    duroxide::Client::new(store.clone())
         .start_orchestration("inst-race-order-1", "RaceOrchestration", "")
         .await
         .unwrap();
 
-    match duroxide::DuroxideClient::new(store.clone())
+    match duroxide::Client::new(store.clone())
         .wait_for_orchestration("inst-race-order-1", std::time::Duration::from_secs(5))
         .await
         .unwrap()
@@ -128,7 +128,7 @@ async fn race_external_vs_timer_ordering_fs() {
     race_external_vs_timer_ordering_with(store).await;
 }
 
-async fn race_event_vs_timer_event_wins_with(store: StdArc<dyn HistoryStore>) {
+async fn race_event_vs_timer_event_wins_with(store: StdArc<dyn Provider>) {
     let orchestrator = |ctx: OrchestrationContext, _input: String| async move {
         // Subscribe first to ensure we can receive the event deterministically
         let ev = ctx.schedule_wait("Race").into_event();
@@ -146,20 +146,20 @@ async fn race_event_vs_timer_event_wins_with(store: StdArc<dyn HistoryStore>) {
         .build();
 
     let rt =
-        runtime::DuroxideRuntime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+        runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
     let store_for_wait = store.clone();
-    let client_for_event = duroxide::DuroxideClient::new(store.clone());
+    let client_for_event = duroxide::Client::new(store.clone());
     tokio::spawn(async move {
         let _ = common::wait_for_subscription(store_for_wait, "inst-race-order-2", "Race", 1000).await;
         let _ = client_for_event.raise_event("inst-race-order-2", "Race", "ok").await;
     });
-    let client = duroxide::DuroxideClient::new(store.clone());
-    duroxide::DuroxideClient::new(store.clone())
+    let client = duroxide::Client::new(store.clone());
+    duroxide::Client::new(store.clone())
         .start_orchestration("inst-race-order-2", "RaceEventVsTimer", "")
         .await
         .unwrap();
 
-    let output = match duroxide::DuroxideClient::new(store.clone())
+    let output = match duroxide::Client::new(store.clone())
         .wait_for_orchestration("inst-race-order-2", std::time::Duration::from_secs(5))
         .await
         .unwrap()

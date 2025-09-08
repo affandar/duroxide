@@ -1,5 +1,5 @@
 // use crate::providers::in_memory::InMemoryHistoryStore;
-use crate::providers::{HistoryStore, WorkItem};
+use crate::providers::{Provider, WorkItem};
 use crate::{Event, OrchestrationContext};
 use semver::Version;
 use std::collections::HashMap;
@@ -70,12 +70,12 @@ pub use crate::runtime::registry::{OrchestrationRegistry, OrchestrationRegistryB
 pub use router::{InstanceRouter, OrchestratorMsg};
 
 /// In-process runtime that executes activities and timers and persists
-/// history via a `HistoryStore`.
-pub struct DuroxideRuntime {
+/// history via a `Provider`.
+pub struct Runtime {
     // removed: in-proc activity channel and router
     joins: Mutex<Vec<JoinHandle<()>>>,
     // instance_joins removed with spawn_instance_to_completion
-    history_store: Arc<dyn HistoryStore>,
+    history_store: Arc<dyn Provider>,
 
     // pending_starts removed
     // result_waiters removed - using polling approach instead
@@ -96,7 +96,7 @@ pub struct OrchestrationDescriptor {
     pub parent_id: Option<u64>,
 }
 
-impl DuroxideRuntime {
+impl Runtime {
     // ===== Phase-0 Notes (no behavior change) =====
     // CONTROL vs EXECUTION surface inventory
     // - CONTROL (client-facing, to be moved/wrapped later):
@@ -264,13 +264,13 @@ impl DuroxideRuntime {
         activity_registry: Arc<registry::ActivityRegistry>,
         orchestration_registry: OrchestrationRegistry,
     ) -> Arc<Self> {
-        let history_store: Arc<dyn HistoryStore> = Arc::new(crate::providers::sqlite::SqliteHistoryStore::new_in_memory().await.unwrap());
+        let history_store: Arc<dyn Provider> = Arc::new(crate::providers::sqlite::SqliteProvider::new_in_memory().await.unwrap());
         Self::start_with_store(history_store, activity_registry, orchestration_registry).await
     }
 
-    /// Start a new runtime with a custom `HistoryStore` implementation.
+    /// Start a new runtime with a custom `Provider` implementation.
     pub async fn start_with_store(
-        history_store: Arc<dyn HistoryStore>,
+        history_store: Arc<dyn Provider>,
         activity_registry: Arc<registry::ActivityRegistry>,
         orchestration_registry: OrchestrationRegistry,
     ) -> Arc<Self> {
