@@ -1,5 +1,4 @@
 use crate::{Action, DurableOutput, Event, OrchestrationContext};
-use std::cell::Cell;
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
@@ -23,40 +22,9 @@ pub struct ReplayOutput<O> {
 /// A DurableFuture variant for replay that holds its own completion state
 #[derive(Clone)]
 pub(crate) struct ReplayDurableFuture {
-    #[allow(dead_code)]
-    pub(crate) kind: ReplayFutureKind,
     pub(crate) ready: Arc<Mutex<bool>>,
     pub(crate) completion: Arc<Mutex<Option<DurableOutput>>>,
     pub(crate) should_emit_decision: Arc<Mutex<bool>>,
-}
-
-#[derive(Clone)]
-#[allow(dead_code)]
-pub(crate) enum ReplayFutureKind {
-    Activity {
-        id: u64,
-        name: String,
-        input: String,
-        scheduled: Cell<bool>,
-    },
-    Timer {
-        id: u64,
-        delay_ms: u64,
-        scheduled: Cell<bool>,
-    },
-    External {
-        id: u64,
-        name: String,
-        scheduled: Cell<bool>,
-    },
-    SubOrch {
-        id: u64,
-        name: String,
-        version: Option<String>,
-        instance: String,
-        input: String,
-        scheduled: Cell<bool>,
-    },
 }
 
 impl Future for ReplayDurableFuture {
@@ -997,5 +965,121 @@ mod tests {
         // The orchestration function should only be called once!
         assert_eq!(ORCH_CALL_COUNT.load(Ordering::SeqCst), 1, 
             "Orchestration function should only be called once, not recreated in phase 2");
+    }
+
+    #[tokio::test]
+    async fn replay_e2e_like_hello_world() {
+        // HelloWorld orchestration: two activities, return second result
+        let history = vec![
+            Event::OrchestrationStarted { name: "HelloWorld".into(), version: "1.0".into(), input: "World".into(), parent_instance: None, parent_id: None },
+            Event::ActivityScheduled { id: 1, name: "Hello".into(), input: "Rust".into(), execution_id: 1 },
+            Event::ActivityCompleted { id: 1, result: "Hello, Rust!".into() },
+            Event::ActivityScheduled { id: 2, name: "Hello".into(), input: "World".into(), execution_id: 1 },
+            Event::ActivityCompleted { id: 2, result: "Hello, World!".into() },
+        ];
+
+        let result = replay_orchestration(
+            |ctx: ReplayOrchestrationContext| async move {
+                let _ = ctx.schedule_activity("Hello", "Rust").into_activity().await?;
+                let res1 = ctx.schedule_activity("Hello", "World").into_activity().await?;
+                Ok::<String, String>(res1)
+            },
+            history,
+            vec![],
+        );
+
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        assert_eq!(output.output, Some(Ok("Hello, World!".to_string())));
+        assert!(output.non_determinism_error.is_none());
+    }
+
+    #[tokio::test]
+    async fn replay_e2e_like_control_flow_yes_branch() {
+        // ControlFlow orchestration: GetFlag -> yes => SayYes
+        let history = vec![
+            Event::OrchestrationStarted { name: "ControlFlow".into(), version: "1.0".into(), input: "".into(), parent_instance: None, parent_id: None },
+            Event::ActivityScheduled { id: 1, name: "GetFlag".into(), input: "".into(), execution_id: 1 },
+            Event::ActivityCompleted { id: 1, result: "yes".into() },
+            Event::ActivityScheduled { id: 2, name: "SayYes".into(), input: "".into(), execution_id: 1 },
+            Event::ActivityCompleted { id: 2, result: "picked_yes".into() },
+        ];
+
+        let result = replay_orchestration(
+            |ctx: ReplayOrchestrationContext| async move {
+                let flag = ctx.schedule_activity("GetFlag", "").into_activity().await?;
+                if flag == "yes" {
+                    Ok::<String, String>(ctx.schedule_activity("SayYes", "").into_activity().await?)
+                } else {
+                    Ok::<String, String>(ctx.schedule_activity("SayNo", "").into_activity().await?)
+                }
+            },
+            history,
+            vec![],
+        );
+
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        assert_eq!(output.output, Some(Ok("picked_yes".to_string())));
+        assert!(output.non_determinism_error.is_none());
+    }
+
+    #[tokio::test]
+    async fn replay_e2e_like_loop_three_iterations() {
+        // Loop orchestration: Append 3 times accumulating value
+        let history = vec![
+            Event::OrchestrationStarted { name: "LoopOrchestration".into(), version: "1.0".into(), input: "".into(), parent_instance: None, parent_id: None },
+            Event::ActivityScheduled { id: 1, name: "Append".into(), input: "start".into(), execution_id: 1 },
+            Event::ActivityCompleted { id: 1, result: "startx".into() },
+            Event::ActivityScheduled { id: 2, name: "Append".into(), input: "startx".into(), execution_id: 1 },
+            Event::ActivityCompleted { id: 2, result: "startxx".into() },
+            Event::ActivityScheduled { id: 3, name: "Append".into(), input: "startxx".into(), execution_id: 1 },
+            Event::ActivityCompleted { id: 3, result: "startxxx".into() },
+        ];
+
+        let result = replay_orchestration(
+            |ctx: ReplayOrchestrationContext| async move {
+                let mut acc = String::from("start");
+                for _ in 0..3 {
+                    acc = ctx.schedule_activity("Append", acc).into_activity().await?;
+                }
+                Ok::<String, String>(acc)
+            },
+            history,
+            vec![],
+        );
+
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        assert_eq!(output.output, Some(Ok("startxxx".to_string())));
+        assert!(output.non_determinism_error.is_none());
+    }
+
+    #[tokio::test]
+    async fn replay_e2e_like_error_handling() {
+        // ErrorHandling orchestration: Fragile(bad) => Err, then Recover => recovered
+        let history = vec![
+            Event::OrchestrationStarted { name: "ErrorHandling".into(), version: "1.0".into(), input: "".into(), parent_instance: None, parent_id: None },
+            Event::ActivityScheduled { id: 1, name: "Fragile".into(), input: "bad".into(), execution_id: 1 },
+            Event::ActivityFailed { id: 1, error: "boom".into() },
+            Event::ActivityScheduled { id: 2, name: "Recover".into(), input: "".into(), execution_id: 1 },
+            Event::ActivityCompleted { id: 2, result: "recovered".into() },
+        ];
+
+        let result = replay_orchestration(
+            |ctx: ReplayOrchestrationContext| async move {
+                match ctx.schedule_activity("Fragile", "bad").into_activity().await {
+                    Ok(v) => Ok::<String, String>(v),
+                    Err(_e) => Ok::<String, String>(ctx.schedule_activity("Recover", "").into_activity().await?),
+                }
+            },
+            history,
+            vec![],
+        );
+
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        assert_eq!(output.output, Some(Ok("recovered".to_string())));
+        assert!(output.non_determinism_error.is_none());
     }
 }

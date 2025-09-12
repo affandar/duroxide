@@ -2,7 +2,7 @@ use crate::OrchestrationContext;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use super::replay::{ReplayDurableFuture, ReplayFutureKind};
+use super::replay::ReplayDurableFuture;
 
 /// Extension trait for OrchestrationContext to add replay-aware scheduling methods
 #[allow(dead_code)]
@@ -53,12 +53,6 @@ impl ReplaySchedulingExt for OrchestrationContext {
 
             // Create ReplayDurableFuture
             let replay_future = ReplayDurableFuture {
-                kind: ReplayFutureKind::Activity {
-                    id: *id,
-                    name: name_str,
-                    input: input_str,
-                    scheduled: std::cell::Cell::new(true),
-                },
                 ready: Arc::new(Mutex::new(false)),
                 completion: Arc::new(Mutex::new(None)),
                 should_emit_decision: Arc::new(Mutex::new(true)), // Will be set to false later if in history
@@ -85,11 +79,6 @@ impl ReplaySchedulingExt for OrchestrationContext {
 
             // Create ReplayDurableFuture
             let replay_future = ReplayDurableFuture {
-                kind: ReplayFutureKind::Timer {
-                    id: *id,
-                    delay_ms,
-                    scheduled: std::cell::Cell::new(true),
-                },
                 ready: Arc::new(Mutex::new(false)),
                 completion: Arc::new(Mutex::new(None)),
                 should_emit_decision: Arc::new(Mutex::new(true)),
@@ -117,11 +106,6 @@ impl ReplaySchedulingExt for OrchestrationContext {
 
             // Create ReplayDurableFuture
             let replay_future = ReplayDurableFuture {
-                kind: ReplayFutureKind::External {
-                    id: *id,
-                    name: name_str,
-                    scheduled: std::cell::Cell::new(true),
-                },
                 ready: Arc::new(Mutex::new(false)),
                 completion: Arc::new(Mutex::new(None)),
                 should_emit_decision: Arc::new(Mutex::new(true)),
@@ -147,21 +131,11 @@ impl ReplaySchedulingExt for OrchestrationContext {
         let input_str = input.into();
         let future = self.schedule_sub_orchestration(name_str.clone(), input_str.clone());
 
-        if let crate::futures::Kind::SubOrch {
-            id, instance, version, ..
-        } = &future.0
+        if let crate::futures::Kind::SubOrch { id, .. } = &future.0
         {
 
             // Create ReplayDurableFuture
             let replay_future = ReplayDurableFuture {
-                kind: ReplayFutureKind::SubOrch {
-                    id: *id,
-                    name: name_str,
-                    version: version.clone(),
-                    instance: instance.clone(),
-                    input: input_str,
-                    scheduled: std::cell::Cell::new(true),
-                },
                 ready: Arc::new(Mutex::new(false)),
                 completion: Arc::new(Mutex::new(None)),
                 should_emit_decision: Arc::new(Mutex::new(true)),
