@@ -18,6 +18,9 @@ pub mod completion_aware_futures;
 pub mod completion_map;
 pub mod execution;
 pub mod orchestration_turn;
+pub mod replay;
+mod replay_context_wrapper;
+mod replay_methods;
 
 /// High-level orchestration status derived from history.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -197,7 +200,11 @@ impl Runtime {
             parent_id,
         };
 
-        if let Err(e) = self.history_store.enqueue_orchestrator_work(start_work_item, None).await {
+        if let Err(e) = self
+            .history_store
+            .enqueue_orchestrator_work(start_work_item, None)
+            .await
+        {
             return Err(format!("failed to enqueue StartOrchestration work item: {}", e));
         }
 
@@ -237,13 +244,13 @@ impl Runtime {
             .await
     }
 
-    
     /// Start a new runtime using the in-memory SQLite provider.
     pub async fn start(
         activity_registry: Arc<registry::ActivityRegistry>,
         orchestration_registry: OrchestrationRegistry,
     ) -> Arc<Self> {
-        let history_store: Arc<dyn Provider> = Arc::new(crate::providers::sqlite::SqliteProvider::new_in_memory().await.unwrap());
+        let history_store: Arc<dyn Provider> =
+            Arc::new(crate::providers::sqlite::SqliteProvider::new_in_memory().await.unwrap());
         Self::start_with_store(history_store, activity_registry, orchestration_registry).await
     }
 
@@ -434,7 +441,7 @@ impl Runtime {
             timer_items.len(),
             orchestrator_items.len()
         );
-        
+
         if !worker_items.is_empty() {
             debug!(instance, "Worker items to enqueue: {:?}", worker_items);
         }
@@ -612,7 +619,10 @@ impl Runtime {
                 );
                 return (vec![], vec![], vec![], vec![]);
             } else {
-                debug!(instance, "completion-only batch: detected newly-started instance after re-read");
+                debug!(
+                    instance,
+                    "completion-only batch: detected newly-started instance after re-read"
+                );
                 // Use the latest history instead of the empty snapshot
                 let initial_history = latest;
                 let (history_delta, worker_items, timer_items, orchestrator_items, _result) = self
@@ -622,7 +632,10 @@ impl Runtime {
                         &initial_history
                             .iter()
                             .rev()
-                            .find_map(|e| match e { Event::OrchestrationStarted { name, .. } => Some(name.clone()), _ => None })
+                            .find_map(|e| match e {
+                                Event::OrchestrationStarted { name, .. } => Some(name.clone()),
+                                _ => None,
+                            })
                             .unwrap_or_else(|| "Unknown".to_string()),
                         initial_history.clone(),
                         execution_id,
@@ -678,38 +691,47 @@ impl Runtime {
                                     Ok(result) => {
                                         debug!(instance = %instance, execution_id, id, "worker: activity succeeded, enqueue completion");
                                         self.history_store
-                                            .enqueue_orchestrator_work(WorkItem::ActivityCompleted {
-                                                instance: instance.clone(),
-                                                execution_id,
-                                                id,
-                                                result,
-                                            }, None)
+                                            .enqueue_orchestrator_work(
+                                                WorkItem::ActivityCompleted {
+                                                    instance: instance.clone(),
+                                                    execution_id,
+                                                    id,
+                                                    result,
+                                                },
+                                                None,
+                                            )
                                             .await
                                     }
                                     Err(error) => {
                                         debug!(instance = %instance, execution_id, id, error = %error, "worker: activity failed, enqueue failure");
                                         self.history_store
-                                            .enqueue_orchestrator_work(WorkItem::ActivityFailed {
-                                                instance: instance.clone(),
-                                                execution_id,
-                                                id,
-                                                error,
-                                            }, None)
+                                            .enqueue_orchestrator_work(
+                                                WorkItem::ActivityFailed {
+                                                    instance: instance.clone(),
+                                                    execution_id,
+                                                    id,
+                                                    error,
+                                                },
+                                                None,
+                                            )
                                             .await
                                     }
                                 }
                             } else {
                                 debug!(instance = %instance, execution_id, id, name = %name, "worker: unregistered activity, enqueue failure");
                                 self.history_store
-                                    .enqueue_orchestrator_work(WorkItem::ActivityFailed {
-                                        instance: instance.clone(),
-                                        execution_id,
-                                        id,
-                                        error: format!("unregistered:{}", name),
-                                    }, None)
+                                    .enqueue_orchestrator_work(
+                                        WorkItem::ActivityFailed {
+                                            instance: instance.clone(),
+                                            execution_id,
+                                            id,
+                                            error: format!("unregistered:{}", name),
+                                        },
+                                        None,
+                                    )
                                     .await
                             };
-                            
+
                             // Only acknowledge after successful enqueue
                             if enqueue_result.is_ok() {
                                 debug!(instance = %instance, execution_id, id, "worker: acking worker lock");
@@ -751,7 +773,7 @@ impl Runtime {
                                     .unwrap()
                                     .as_millis() as u64;
                                 let delay_ms = fire_at_ms.saturating_sub(current_time_ms);
-                                
+
                                 // Enqueue TimerFired with visibility delay
                                 let timer_fired = WorkItem::TimerFired {
                                     instance,
@@ -759,10 +781,13 @@ impl Runtime {
                                     id,
                                     fire_at_ms,
                                 };
-                                
+
                                 // Use the provider's delayed visibility support
-                                let _ = self.history_store.enqueue_orchestrator_work(timer_fired, Some(delay_ms)).await;
-                                
+                                let _ = self
+                                    .history_store
+                                    .enqueue_orchestrator_work(timer_fired, Some(delay_ms))
+                                    .await;
+
                                 let _ = self.history_store.ack_timer(&token).await;
                             }
                             other => {

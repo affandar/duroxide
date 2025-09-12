@@ -43,7 +43,10 @@ impl Runtime {
         let handler_opt = if let Some(v) = pinned_version.clone() {
             self.orchestration_registry.resolve_exact(orchestration_name, &v)
         } else {
-            self.orchestration_registry.resolve_for_start(orchestration_name).await.map(|(_v, h)| h)
+            self.orchestration_registry
+                .resolve_for_start(orchestration_name)
+                .await
+                .map(|(_v, h)| h)
         };
 
         handler_opt.ok_or_else(|| {

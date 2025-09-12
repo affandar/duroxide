@@ -180,16 +180,16 @@ use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
 
 // Public orchestration primitives and executor
 
+pub mod client;
 pub mod futures;
 pub mod runtime;
-pub mod client;
 // Re-export descriptor type for public API ergonomics
 pub use runtime::OrchestrationDescriptor;
 pub mod providers;
 
 // Re-export key runtime types for convenience
-pub use runtime::{OrchestrationHandler, OrchestrationRegistry, OrchestrationRegistryBuilder, OrchestrationStatus};
 pub use client::Client;
+pub use runtime::{OrchestrationHandler, OrchestrationRegistry, OrchestrationRegistryBuilder, OrchestrationStatus};
 // Internal system activity names
 pub(crate) const SYSTEM_NOW_ACTIVITY: &str = "__system_now";
 pub(crate) const SYSTEM_NEW_GUID_ACTIVITY: &str = "__system_new_guid";
@@ -302,7 +302,6 @@ pub enum Event {
 
     /// Cancellation has been requested for the orchestration (terminal will follow deterministically).
     OrchestrationCancelRequested { reason: String },
-
 }
 
 /// Log levels for orchestration context logging.
@@ -343,7 +342,6 @@ pub enum Action {
     /// Continue the current orchestration as a new execution with new input (terminal for current execution).
     /// Optional version string selects the target orchestration version for the new execution.
     ContinueAsNew { input: String, version: Option<String> },
-
 }
 
 #[derive(Debug)]
@@ -456,7 +454,7 @@ impl OrchestrationContext {
     /// Returns a deterministic GUID string, incremented per instance.
     // Removed: use system_new_guid().await for GUIDs
 
-    fn take_actions(&self) -> Vec<Action> {
+    pub(crate) fn take_actions(&self) -> Vec<Action> {
         std::mem::take(&mut self.inner.lock().unwrap().actions)
     }
 
@@ -509,7 +507,6 @@ impl OrchestrationContext {
     pub fn trace_debug(&self, message: impl Into<String>) {
         self.trace("DEBUG", message.into())
     }
-
 
     /// Generate a new deterministic GUID.
     /// This is syntactic sugar for scheduling the system GUID activity.
@@ -693,31 +690,31 @@ impl DurableFuture {
 
 impl OrchestrationContext {
     /// Schedule an activity and return a `DurableFuture` correlated to it.
-    /// 
+    ///
     /// **Activities should be pure business logic without delays or sleeps!**
     /// For time-based waiting, use `schedule_timer()` instead.
-    /// 
+    ///
     /// ⚠️ **IMPORTANT**: You MUST call `.into_activity().await`, not just `.await`!
-    /// 
+    ///
     /// # Examples
     /// ```rust,no_run
     /// # use duroxide::OrchestrationContext;
     /// # async fn example(ctx: OrchestrationContext) -> Result<(), String> {
     /// // ✅ CORRECT: Schedule and await activity
     /// let result = ctx.schedule_activity("ProcessData", "input").into_activity().await?;
-    /// 
+    ///
     /// // ❌ WRONG: This won't compile!
     /// // let result = ctx.schedule_activity("ProcessData", "input").await;  // Missing .into_activity()!
     /// # Ok(())
     /// # }
     /// ```
-    /// 
+    ///
     /// # Good Activity Examples
     /// - Database queries
     /// - HTTP API calls
     /// - File operations
     /// - Data transformations
-    /// 
+    ///
     /// # What NOT to put in activities
     /// - `tokio::time::sleep()` or similar delays
     /// - Long polling or waiting
@@ -762,21 +759,21 @@ impl OrchestrationContext {
     }
 
     /// Schedule a timer for delays, timeouts, and scheduled execution.
-    /// 
+    ///
     /// **Use this for any time-based waiting, NOT activities with sleep!**
-    /// 
+    ///
     /// ⚠️ **IMPORTANT**: You MUST call `.into_timer().await`, not just `.await`!
-    /// 
+    ///
     /// # Examples
     /// ```rust,no_run
     /// # use duroxide::OrchestrationContext;
     /// # async fn example(ctx: OrchestrationContext) -> Result<(), String> {
     /// // ✅ CORRECT: Wait 5 seconds
     /// ctx.schedule_timer(5000).into_timer().await;
-    /// 
+    ///
     /// // ❌ WRONG: This won't compile!
     /// // ctx.schedule_timer(5000).await;  // Missing .into_timer()!
-    /// 
+    ///
     /// // Timeout pattern
     /// let work = ctx.schedule_activity("LongTask", "input");
     /// let timeout = ctx.schedule_timer(30000); // 30 second timeout
@@ -819,8 +816,9 @@ impl OrchestrationContext {
             .history
             .iter()
             .find_map(|e| match e {
-                Event::ExternalSubscribed { id, name: n }
-                    if n == &name && !inner.claimed_external_ids.contains(id) => Some(*id),
+                Event::ExternalSubscribed { id, name: n } if n == &name && !inner.claimed_external_ids.contains(id) => {
+                    Some(*id)
+                }
                 _ => None,
             })
             .unwrap_or_else(|| inner.next_id());

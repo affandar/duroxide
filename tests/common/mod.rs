@@ -1,7 +1,7 @@
+use duroxide::Client;
 use duroxide::Event;
 use duroxide::providers::Provider;
 use duroxide::providers::sqlite::SqliteProvider;
-use duroxide::Client;
 use std::sync::Arc as StdArc;
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
@@ -22,12 +22,7 @@ where
 }
 
 #[allow(dead_code)]
-pub async fn wait_for_subscription(
-    store: StdArc<dyn Provider>,
-    instance: &str,
-    name: &str,
-    timeout_ms: u64,
-) -> bool {
+pub async fn wait_for_subscription(store: StdArc<dyn Provider>, instance: &str, name: &str, timeout_ms: u64) -> bool {
     wait_for_history(
         store,
         instance,

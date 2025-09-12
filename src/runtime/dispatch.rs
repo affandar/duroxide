@@ -169,12 +169,15 @@ pub async fn dispatch_start_sub_orchestration(
             let parent_execution_id = rt.get_execution_id_for_instance(parent_instance).await;
             let _ = rt
                 .history_store
-                .enqueue_orchestrator_work(WorkItem::SubOrchFailed {
-                    parent_instance: parent_inst,
-                    parent_execution_id,
-                    parent_id: id,
-                    error: e,
-                }, None)
+                .enqueue_orchestrator_work(
+                    WorkItem::SubOrchFailed {
+                        parent_instance: parent_inst,
+                        parent_execution_id,
+                        parent_id: id,
+                        error: e,
+                    },
+                    None,
+                )
                 .await;
         }
     }

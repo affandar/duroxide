@@ -13,14 +13,17 @@ async fn test_fetch_orchestration_item_new_instance() {
 
     // Enqueue start work (provider will create instance lazily on fetch)
     store
-        .enqueue_orchestrator_work(WorkItem::StartOrchestration {
-            instance: "test-instance".to_string(),
-            orchestration: "TestOrch".to_string(),
-            input: "test-input".to_string(),
-            version: Some("1.0.0".to_string()),
-            parent_instance: None,
-            parent_id: None,
-        }, None)
+        .enqueue_orchestrator_work(
+            WorkItem::StartOrchestration {
+                instance: "test-instance".to_string(),
+                orchestration: "TestOrch".to_string(),
+                input: "test-input".to_string(),
+                version: Some("1.0.0".to_string()),
+                parent_instance: None,
+                parent_id: None,
+            },
+            None,
+        )
         .await
         .unwrap();
 
@@ -75,12 +78,15 @@ async fn test_fetch_orchestration_item_existing_instance() {
 
     // Enqueue completion
     store
-        .enqueue_orchestrator_work(WorkItem::ActivityCompleted {
-            instance: "test-instance".to_string(),
-            execution_id: 1,
-            id: 1,
-            result: "activity-result".to_string(),
-        }, None)
+        .enqueue_orchestrator_work(
+            WorkItem::ActivityCompleted {
+                instance: "test-instance".to_string(),
+                execution_id: 1,
+                id: 1,
+                result: "activity-result".to_string(),
+            },
+            None,
+        )
         .await
         .unwrap();
 
@@ -122,14 +128,17 @@ async fn test_ack_orchestration_item_atomic() {
 
     // Setup: enqueue start work; provider will create instance lazily
     store
-        .enqueue_orchestrator_work(WorkItem::StartOrchestration {
-            instance: "test-instance".to_string(),
-            orchestration: "TestOrch".to_string(),
-            input: "test-input".to_string(),
-            version: Some("1.0.0".to_string()),
-            parent_instance: None,
-            parent_id: None,
-        }, None)
+        .enqueue_orchestrator_work(
+            WorkItem::StartOrchestration {
+                instance: "test-instance".to_string(),
+                orchestration: "TestOrch".to_string(),
+                input: "test-input".to_string(),
+                version: Some("1.0.0".to_string()),
+                parent_instance: None,
+                parent_id: None,
+            },
+            None,
+        )
         .await
         .unwrap();
 
@@ -209,14 +218,17 @@ async fn test_abandon_orchestration_item() {
 
     // Setup: enqueue start work; provider will create instance lazily
     store
-        .enqueue_orchestrator_work(WorkItem::StartOrchestration {
-            instance: "test-instance".to_string(),
-            orchestration: "TestOrch".to_string(),
-            input: "test-input".to_string(),
-            version: Some("1.0.0".to_string()),
-            parent_instance: None,
-            parent_id: None,
-        }, None)
+        .enqueue_orchestrator_work(
+            WorkItem::StartOrchestration {
+                instance: "test-instance".to_string(),
+                orchestration: "TestOrch".to_string(),
+                input: "test-input".to_string(),
+                version: Some("1.0.0".to_string()),
+                parent_instance: None,
+                parent_id: None,
+            },
+            None,
+        )
         .await
         .unwrap();
 
@@ -246,14 +258,17 @@ async fn test_abandon_orchestration_item_with_delay() {
 
     // Setup: enqueue start work; provider will create instance lazily
     store
-        .enqueue_orchestrator_work(WorkItem::StartOrchestration {
-            instance: "test-instance".to_string(),
-            orchestration: "TestOrch".to_string(),
-            input: "test-input".to_string(),
-            version: Some("1.0.0".to_string()),
-            parent_instance: None,
-            parent_id: None,
-        }, None)
+        .enqueue_orchestrator_work(
+            WorkItem::StartOrchestration {
+                instance: "test-instance".to_string(),
+                orchestration: "TestOrch".to_string(),
+                input: "test-input".to_string(),
+                version: Some("1.0.0".to_string()),
+                parent_instance: None,
+                parent_id: None,
+            },
+            None,
+        )
         .await
         .unwrap();
 
@@ -292,14 +307,17 @@ async fn test_in_memory_provider_atomic_operations() {
 
     // Enqueue work (in-memory will lazily create instance on fetch)
     store
-        .enqueue_orchestrator_work(WorkItem::StartOrchestration {
-            instance: "test-instance".to_string(),
-            orchestration: "TestOrch".to_string(),
-            input: "test-input".to_string(),
-            version: Some("1.0.0".to_string()),
-            parent_instance: None,
-            parent_id: None,
-        }, None)
+        .enqueue_orchestrator_work(
+            WorkItem::StartOrchestration {
+                instance: "test-instance".to_string(),
+                orchestration: "TestOrch".to_string(),
+                input: "test-input".to_string(),
+                version: Some("1.0.0".to_string()),
+                parent_instance: None,
+                parent_id: None,
+            },
+            None,
+        )
         .await
         .unwrap();
 
@@ -330,12 +348,15 @@ async fn test_in_memory_provider_atomic_operations() {
 
     // Test abandon
     store
-        .enqueue_orchestrator_work(WorkItem::ActivityCompleted {
-            instance: "test-instance".to_string(),
-            execution_id: 1,
-            id: 1,
-            result: "result".to_string(),
-        }, None)
+        .enqueue_orchestrator_work(
+            WorkItem::ActivityCompleted {
+                instance: "test-instance".to_string(),
+                execution_id: 1,
+                id: 1,
+                result: "result".to_string(),
+            },
+            None,
+        )
         .await
         .unwrap();
 

@@ -1,6 +1,6 @@
+use duroxide::providers::Provider;
 use futures::future::{Either, select};
 use std::sync::Arc;
-use duroxide::providers::Provider;
 mod common;
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};

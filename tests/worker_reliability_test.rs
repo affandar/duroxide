@@ -1,12 +1,12 @@
-use duroxide::*;
-use duroxide::runtime::registry::{ActivityRegistry, OrchestrationRegistry};
 use duroxide::runtime;
+use duroxide::runtime::registry::{ActivityRegistry, OrchestrationRegistry};
+use duroxide::*;
 use std::sync::Arc;
 
 mod common;
 
 /// Test that verifies activity completion reliability after crash between dequeue and enqueue
-/// 
+///
 /// Scenario:
 /// 1. Orchestration schedules an activity
 /// 2. Activity is dequeued from worker queue and executed
@@ -21,12 +21,10 @@ async fn activity_reliability_after_crash_before_completion_enqueue() {
     // Simple orchestration that schedules an activity and waits for completion
     let orch = |ctx: OrchestrationContext, input: String| async move {
         ctx.trace_info("Starting activity reliability test orchestration");
-        
+
         // Schedule an activity
-        let result = ctx.schedule_activity("TestActivity", input)
-            .into_activity()
-            .await?;
-        
+        let result = ctx.schedule_activity("TestActivity", input).into_activity().await?;
+
         ctx.trace_info("Activity completed successfully");
         Ok(format!("Activity result: {}", result))
     };
@@ -54,7 +52,10 @@ async fn activity_reliability_after_crash_before_completion_enqueue() {
 
     let instance = "inst-activity-reliability";
     let client1 = duroxide::Client::new(store1.clone());
-    let _ = client1.start_orchestration(instance, "ActivityReliabilityTest", "test-data").await.unwrap();
+    let _ = client1
+        .start_orchestration(instance, "ActivityReliabilityTest", "test-data")
+        .await
+        .unwrap();
 
     // Wait for activity to be scheduled
     assert!(
@@ -74,10 +75,18 @@ async fn activity_reliability_after_crash_before_completion_enqueue() {
         !hist_before.iter().any(|e| matches!(e, Event::ActivityCompleted { .. })),
         "Activity should not have completed yet"
     );
-    
+
     // Verify activity was scheduled but not completed
-    assert!(hist_before.iter().any(|e| matches!(e, Event::ActivityScheduled { name, .. } if name == "TestActivity")));
-    assert!(!hist_before.iter().any(|e| matches!(e, Event::ActivityCompleted { result, .. } if result == "Processed: test-data")));
+    assert!(
+        hist_before
+            .iter()
+            .any(|e| matches!(e, Event::ActivityScheduled { name, .. } if name == "TestActivity"))
+    );
+    assert!(
+        !hist_before
+            .iter()
+            .any(|e| matches!(e, Event::ActivityCompleted { result, .. } if result == "Processed: test-data"))
+    );
 
     // Simulate crash by shutting down runtime
     println!("Simulating crash - shutting down runtime before activity completes...");
@@ -89,15 +98,11 @@ async fn activity_reliability_after_crash_before_completion_enqueue() {
     // Phase 2: "Restart" system with new runtime but same store
     println!("Restarting system...");
     let store2 = store.clone();
-    let rt2 = runtime::Runtime::start_with_store(
-        store2.clone(),
-        Arc::new(activity_registry),
-        orchestration_registry,
-    )
-    .await;
+    let rt2 =
+        runtime::Runtime::start_with_store(store2.clone(), Arc::new(activity_registry), orchestration_registry).await;
 
     // The runtime should automatically resume the orchestration and reprocess pending activities
-    
+
     // Wait for orchestration to complete
     let client2 = duroxide::Client::new(store2.clone());
     match client2
@@ -119,40 +124,50 @@ async fn activity_reliability_after_crash_before_completion_enqueue() {
 
     // Verify the activity actually completed
     let hist_after = store2.read(instance).await;
-    
+
     // Debug: print all events (can be removed in production)
     println!("History after restart:");
     for (i, event) in hist_after.iter().enumerate() {
         println!("  {}: {:?}", i, event);
     }
-    
+
     // Should have exactly one ActivityScheduled and one ActivityCompleted for our TestActivity
     let test_activity_scheduled_count = hist_after
         .iter()
-        .filter(|e| matches!(e, Event::ActivityScheduled { name, .. } 
-                           if name == "TestActivity"))
+        .filter(|e| {
+            matches!(e, Event::ActivityScheduled { name, .. } 
+                           if name == "TestActivity")
+        })
         .count();
     let test_activity_completed_count = hist_after
         .iter()
-        .filter(|e| matches!(e, Event::ActivityCompleted { result, .. } 
-                           if result == "Processed: test-data"))
+        .filter(|e| {
+            matches!(e, Event::ActivityCompleted { result, .. } 
+                           if result == "Processed: test-data")
+        })
         .count();
-    
-    assert_eq!(test_activity_scheduled_count, 1, "Should have exactly one TestActivity scheduled event");
-    assert_eq!(test_activity_completed_count, 1, "Should have exactly one TestActivity completed event");
+
+    assert_eq!(
+        test_activity_scheduled_count, 1,
+        "Should have exactly one TestActivity scheduled event"
+    );
+    assert_eq!(
+        test_activity_completed_count, 1,
+        "Should have exactly one TestActivity completed event"
+    );
 
     println!("✅ Activity reliability test passed - activity completed correctly after restart");
     rt2.shutdown().await;
 }
 
 /// Test multiple activities with crash/recovery
-/// 
+///
 /// NOTE: This test is currently ignored because the FS provider has a race condition:
 /// - Activities can be scheduled and written to history
 /// - System crashes before work items are enqueued to worker queue
 /// - On restart, history shows scheduled activities but no work items exist
 /// - Runtime lacks history-driven reconciliation to detect and fix this inconsistency
-/// 
+///
 /// This would be fixed by either:
 /// 1. Implementing history-driven reconciliation in the runtime
 /// 2. Using a transactional provider like SQLite
@@ -164,15 +179,15 @@ async fn multiple_activities_reliability_after_crash() {
     // Orchestration with multiple activities
     let orch = |ctx: OrchestrationContext, _input: String| async move {
         ctx.trace_info("Starting multi-activity reliability test");
-        
+
         // Schedule three activities in parallel
         let a1 = ctx.schedule_activity("TestActivity", "task1");
-        let a2 = ctx.schedule_activity("TestActivity", "task2"); 
+        let a2 = ctx.schedule_activity("TestActivity", "task2");
         let a3 = ctx.schedule_activity("TestActivity", "task3");
-        
+
         // Wait for all activities
         let results = ctx.join(vec![a1, a2, a3]).await;
-        
+
         let mut outputs = Vec::new();
         for result in results {
             match result {
@@ -181,7 +196,7 @@ async fn multiple_activities_reliability_after_crash() {
                 _ => return Err("Unexpected output type".to_string()),
             }
         }
-        
+
         Ok(format!("All activities completed: {:?}", outputs))
     };
 
@@ -207,14 +222,21 @@ async fn multiple_activities_reliability_after_crash() {
 
     let instance = "inst-multi-activity-reliability";
     let client1 = duroxide::Client::new(store1.clone());
-    let _ = client1.start_orchestration(instance, "MultiActivityTest", "").await.unwrap();
+    let _ = client1
+        .start_orchestration(instance, "MultiActivityTest", "")
+        .await
+        .unwrap();
 
     // Wait for all 3 activities to be scheduled
     assert!(
         common::wait_for_history(
             store1.clone(),
             instance,
-            |h| h.iter().filter(|e| matches!(e, Event::ActivityScheduled { .. })).count() >= 3,
+            |h| h
+                .iter()
+                .filter(|e| matches!(e, Event::ActivityScheduled { .. }))
+                .count()
+                >= 3,
             2_000
         )
         .await,
@@ -239,12 +261,8 @@ async fn multiple_activities_reliability_after_crash() {
     // Phase 2: Restart and verify all activities complete
     println!("Restarting...");
     let store2 = store.clone();
-    let rt2 = runtime::Runtime::start_with_store(
-        store2.clone(),
-        Arc::new(activity_registry),
-        orchestration_registry,
-    )
-    .await;
+    let rt2 =
+        runtime::Runtime::start_with_store(store2.clone(), Arc::new(activity_registry), orchestration_registry).await;
 
     // Wait for completion
     let client2 = duroxide::Client::new(store2.clone());
@@ -269,11 +287,16 @@ async fn multiple_activities_reliability_after_crash() {
     let hist_after = store2.read(instance).await;
     let test_activity_completed_count = hist_after
         .iter()
-        .filter(|e| matches!(e, Event::ActivityCompleted { result, .. } 
-                           if result.starts_with("Processed: task")))
+        .filter(|e| {
+            matches!(e, Event::ActivityCompleted { result, .. } 
+                           if result.starts_with("Processed: task"))
+        })
         .count();
-    
-    assert_eq!(test_activity_completed_count, 3, "All 3 TestActivity activities should have completed");
+
+    assert_eq!(
+        test_activity_completed_count, 3,
+        "All 3 TestActivity activities should have completed"
+    );
 
     rt2.shutdown().await;
 }

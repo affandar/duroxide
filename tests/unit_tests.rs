@@ -87,9 +87,13 @@ async fn deterministic_replay_activity_only() {
 
     let store = SqliteProvider::new_in_memory().await.unwrap();
     let store = Arc::new(store) as Arc<dyn Provider>;
-    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+    let rt =
+        runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
     let client = duroxide::Client::new(store.clone());
-    client.start_orchestration("inst-unit-1", "TestOrchestration", "").await.unwrap();
+    client
+        .start_orchestration("inst-unit-1", "TestOrchestration", "")
+        .await
+        .unwrap();
 
     let status = client
         .wait_for_orchestration("inst-unit-1", std::time::Duration::from_secs(5))
@@ -128,7 +132,8 @@ async fn runtime_duplicate_orchestration_deduped_single_execution() {
 
     let store = SqliteProvider::new_in_memory().await.unwrap();
     let store = Arc::new(store) as Arc<dyn Provider>;
-    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+    let rt =
+        runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
     let inst = "dup-orch";
 
     let client = duroxide::Client::new(store.clone());
@@ -192,7 +197,10 @@ async fn orchestration_descriptor_root_and_child() {
     let store = Arc::new(store) as Arc<dyn Provider>;
     let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), reg).await;
     let client = duroxide::Client::new(store.clone());
-    let _h = client.start_orchestration("inst-desc", "ParentDsc", "seed").await.unwrap();
+    let _h = client
+        .start_orchestration("inst-desc", "ParentDsc", "seed")
+        .await
+        .unwrap();
     // wait for completion
     let _ = client
         .wait_for_orchestration("inst-desc", std::time::Duration::from_secs(2))
@@ -228,7 +236,8 @@ async fn orchestration_status_apis() {
 
     let store = SqliteProvider::new_in_memory().await.unwrap();
     let store = Arc::new(store) as Arc<dyn Provider>;
-    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+    let rt =
+        runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
     let client = duroxide::Client::new(store.clone());
 
     // NotFound for unknown instance
@@ -269,10 +278,7 @@ async fn orchestration_status_apis() {
 
     // Failed orchestration
     let inst_fail = "inst-status-fail";
-    let _handle_fail = client
-        .start_orchestration(inst_fail, "AlwaysFails", "")
-        .await
-        .unwrap();
+    let _handle_fail = client.start_orchestration(inst_fail, "AlwaysFails", "").await.unwrap();
 
     match client
         .wait_for_orchestration(inst_fail, std::time::Duration::from_secs(5))
@@ -302,13 +308,9 @@ async fn providers_fs_multi_execution_persistence_and_latest_read() {
     fs.create_new_execution("pfs", "O", "0.0.0", "0", None, None)
         .await
         .unwrap();
-    fs.append_with_execution(
-        "pfs",
-        1,
-        vec![Event::OrchestrationContinuedAsNew { input: "1".into() }],
-    )
-    .await
-    .unwrap();
+    fs.append_with_execution("pfs", 1, vec![Event::OrchestrationContinuedAsNew { input: "1".into() }])
+        .await
+        .unwrap();
     let e1_before = fs.read_with_execution("pfs", 1).await;
 
     // Create execution #2 via reset_for_continue_as_new; complete it

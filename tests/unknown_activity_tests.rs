@@ -36,8 +36,14 @@ async fn unknown_activity_is_isolated_from_other_orchestrations_fs() {
     let client = duroxide::Client::new(store.clone());
 
     // Start both orchestrations concurrently
-    client.start_orchestration("inst-missing-1", "UsesMissing", "").await.unwrap();
-    client.start_orchestration("inst-healthy-1", "Healthy", "yo").await.unwrap();
+    client
+        .start_orchestration("inst-missing-1", "UsesMissing", "")
+        .await
+        .unwrap();
+    client
+        .start_orchestration("inst-healthy-1", "Healthy", "yo")
+        .await
+        .unwrap();
 
     // Wait for both and assert expected outcomes
     let status_ok = client
@@ -118,8 +124,14 @@ async fn unknown_activity_is_isolated_from_other_orchestrations_inmem() {
         runtime::Runtime::start_with_store(store.clone(), StdArc::new(activity_registry), orchestration_registry).await;
     let client = duroxide::Client::new(store.clone());
 
-    client.start_orchestration("inst-missing-im", "UsesMissing", "").await.unwrap();
-    client.start_orchestration("inst-healthy-im", "Healthy", "yo").await.unwrap();
+    client
+        .start_orchestration("inst-missing-im", "UsesMissing", "")
+        .await
+        .unwrap();
+    client
+        .start_orchestration("inst-healthy-im", "Healthy", "yo")
+        .await
+        .unwrap();
 
     let status_ok = client
         .wait_for_orchestration("inst-healthy-im", std::time::Duration::from_secs(5))

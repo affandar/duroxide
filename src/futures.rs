@@ -5,7 +5,7 @@ use std::task::{Context, Poll};
 
 use crate::{Action, Event, OrchestrationContext};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum DurableOutput {
     Activity(Result<String, String>),
     Timer,
@@ -83,12 +83,12 @@ impl DurableFuture {
                         if let Some(event) = history_event {
                             // We need to add this event to the orchestration context's history
                             // The context is available in the future's Kind enum
-                                                    let ctx = match &self.0 {
-                            Kind::Activity { ctx, .. } => Some(ctx),
-                            Kind::Timer { ctx, .. } => Some(ctx),
-                            Kind::External { ctx, .. } => Some(ctx),
-                            Kind::SubOrch { ctx, .. } => Some(ctx),
-                        };
+                            let ctx = match &self.0 {
+                                Kind::Activity { ctx, .. } => Some(ctx),
+                                Kind::Timer { ctx, .. } => Some(ctx),
+                                Kind::External { ctx, .. } => Some(ctx),
+                                Kind::SubOrch { ctx, .. } => Some(ctx),
+                            };
 
                             if let Some(context) = ctx {
                                 // Add completion event to history for consistency

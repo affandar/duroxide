@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
+use crate::_typed_codec::{Codec, Json};
 use crate::providers::{Provider, WorkItem};
 use crate::{Event, OrchestrationStatus};
-use crate::_typed_codec::{Json, Codec};
 use serde::Serialize;
 
 /// Thin client for control-plane operations.
@@ -78,7 +78,8 @@ impl Client {
         input: In,
     ) -> Result<(), String> {
         let payload = Json::encode(&input).map_err(|e| format!("encode: {e}"))?;
-        self.start_orchestration_versioned(instance, orchestration, version, payload).await
+        self.start_orchestration_versioned(instance, orchestration, version, payload)
+            .await
     }
 
     /// Raise an external event into a running orchestration instance.
@@ -97,11 +98,7 @@ impl Client {
     }
 
     /// Request cancellation of an orchestration instance.
-    pub async fn cancel_instance(
-        &self,
-        instance: &str,
-        reason: impl Into<String>,
-    ) -> Result<(), String> {
+    pub async fn cancel_instance(&self, instance: &str, reason: impl Into<String>) -> Result<(), String> {
         let item = WorkItem::CancelInstance {
             instance: instance.to_string(),
             reason: reason.into(),
@@ -116,11 +113,9 @@ impl Client {
         for e in hist.iter().rev() {
             match e {
                 Event::OrchestrationCompleted { output } => {
-                    return OrchestrationStatus::Completed { output: output.clone() }
+                    return OrchestrationStatus::Completed { output: output.clone() };
                 }
-                Event::OrchestrationFailed { error } => {
-                    return OrchestrationStatus::Failed { error: error.clone() }
-                }
+                Event::OrchestrationFailed { error } => return OrchestrationStatus::Failed { error: error.clone() },
                 _ => {}
             }
         }
@@ -141,20 +136,16 @@ impl Client {
         let deadline = std::time::Instant::now() + timeout;
         // quick path
         match self.get_orchestration_status(instance).await {
-            OrchestrationStatus::Completed { output } =>
-                return Ok(OrchestrationStatus::Completed { output }),
-            OrchestrationStatus::Failed { error } =>
-                return Ok(OrchestrationStatus::Failed { error }),
+            OrchestrationStatus::Completed { output } => return Ok(OrchestrationStatus::Completed { output }),
+            OrchestrationStatus::Failed { error } => return Ok(OrchestrationStatus::Failed { error }),
             _ => {}
         }
         // poll with backoff
         let mut delay_ms: u64 = 5;
         while std::time::Instant::now() < deadline {
             match self.get_orchestration_status(instance).await {
-                OrchestrationStatus::Completed { output } =>
-                    return Ok(OrchestrationStatus::Completed { output }),
-                OrchestrationStatus::Failed { error } =>
-                    return Ok(OrchestrationStatus::Failed { error }),
+                OrchestrationStatus::Completed { output } => return Ok(OrchestrationStatus::Completed { output }),
+                OrchestrationStatus::Failed { error } => return Ok(OrchestrationStatus::Failed { error }),
                 _ => {
                     tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
                     delay_ms = (delay_ms.saturating_mul(2)).min(100);

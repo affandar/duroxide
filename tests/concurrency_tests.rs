@@ -1,9 +1,9 @@
-use std::sync::Arc;
 use duroxide::providers::Provider;
+use std::sync::Arc;
 mod common;
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
-use duroxide::{Event, OrchestrationContext, OrchestrationRegistry, Client};
+use duroxide::{Client, Event, OrchestrationContext, OrchestrationRegistry};
 use std::sync::Arc as StdArc;
 
 async fn concurrent_orchestrations_different_activities_with(store: StdArc<dyn Provider>) {
@@ -79,7 +79,9 @@ async fn concurrent_orchestrations_different_activities_with(store: StdArc<dyn P
         runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
     let client = Client::new(store.clone());
     let _ = client.start_orchestration("inst-multi-1", "AddOrchestration", "").await;
-    let _ = client.start_orchestration("inst-multi-2", "UpperOrchestration", "").await;
+    let _ = client
+        .start_orchestration("inst-multi-2", "UpperOrchestration", "")
+        .await;
 
     let store_for_wait1 = store.clone();
     tokio::spawn(async move {
@@ -239,8 +241,12 @@ async fn concurrent_orchestrations_same_activities_with(store: StdArc<dyn Provid
     let rt =
         runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
     let client = Client::new(store.clone());
-    let _ = client.start_orchestration("inst-same-acts-1", "ProcOrchestration1", "").await;
-    let _ = client.start_orchestration("inst-same-acts-2", "ProcOrchestration2", "").await;
+    let _ = client
+        .start_orchestration("inst-same-acts-1", "ProcOrchestration1", "")
+        .await;
+    let _ = client
+        .start_orchestration("inst-same-acts-2", "ProcOrchestration2", "")
+        .await;
 
     let store_for_wait3 = store.clone();
     tokio::spawn(async move {
