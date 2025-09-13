@@ -362,7 +362,7 @@ where
                             _ => true,
                         };
 
-                    if should_emit && !is_duplicate_decision(&action, decisions) {
+                    if should_emit {
                         decisions.push(action);
                     }
                 }
@@ -447,17 +447,6 @@ where
     Ok((orchestration_output, non_determinism_error, pending_future))
 }
 
-// Helper to check if decision already exists
-#[allow(dead_code)]
-fn is_duplicate_decision(action: &Action, existing: &[Action]) -> bool {
-    existing.iter().any(|a| match (a, action) {
-        (Action::CallActivity { id: id1, .. }, Action::CallActivity { id: id2, .. }) => id1 == id2,
-        (Action::CreateTimer { id: id1, .. }, Action::CreateTimer { id: id2, .. }) => id1 == id2,
-        (Action::WaitExternal { id: id1, .. }, Action::WaitExternal { id: id2, .. }) => id1 == id2,
-        (Action::StartSubOrchestration { id: id1, .. }, Action::StartSubOrchestration { id: id2, .. }) => id1 == id2,
-        _ => false,
-    })
-}
 
 // Create a no-op waker for polling
 #[allow(dead_code)]
