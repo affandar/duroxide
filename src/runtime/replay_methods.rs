@@ -4,6 +4,9 @@ use std::sync::{Arc, Mutex};
 
 use super::replay::ReplayDurableFuture;
 
+/// TODO : CR : IMPORTANT: When merging into mainline code, all of this file should just go away and merge with existing code 
+/// in OrchestrationContext and other files that use it.
+/// 
 /// Extension trait for OrchestrationContext to add replay-aware scheduling methods
 #[allow(dead_code)]
 pub trait ReplaySchedulingExt {
@@ -37,117 +40,102 @@ pub trait ReplaySchedulingExt {
 impl ReplaySchedulingExt for OrchestrationContext {
     fn schedule_activity_replay(
         &self,
-        name: impl Into<String>,
-        input: impl Into<String>,
+        _name: impl Into<String>,
+        _input: impl Into<String>,
         open_futures: &Arc<Mutex<HashMap<u64, ReplayDurableFuture>>>,
     ) -> ReplayDurableFuture {
-        let name_str = name.into();
-        let input_str = input.into();
 
-        // Call the original method
-        let future = self.schedule_activity(name_str.clone(), input_str.clone());
+        // Generate monotonically increasing ID instead of claiming from history
+        let mut inner = self.inner.lock().unwrap();
+        let id = inner.next_id();
+        drop(inner);
 
-        // Extract the ID from the future - we need to peek at its internals
-        // The DurableFuture contains a Kind enum with the ID
-        if let crate::futures::Kind::Activity { id, .. } = &future.0 {
+        // Create ReplayDurableFuture
+        let replay_future = ReplayDurableFuture {
+            ready: Arc::new(Mutex::new(false)),
+            completion: Arc::new(Mutex::new(None)),
+            should_emit_decision: Arc::new(Mutex::new(true)), // Will be set to false later if in history
+        };
 
-            // Create ReplayDurableFuture
-            let replay_future = ReplayDurableFuture {
-                ready: Arc::new(Mutex::new(false)),
-                completion: Arc::new(Mutex::new(None)),
-                should_emit_decision: Arc::new(Mutex::new(true)), // Will be set to false later if in history
-            };
+        // Insert into the HashMap
+        let mut futures = open_futures.lock().unwrap();
+        futures.insert(id, replay_future.clone());
 
-            // Insert into the HashMap
-            let mut futures = open_futures.lock().unwrap();
-            futures.insert(*id, replay_future.clone());
-
-            replay_future
-        } else {
-            panic!("Unexpected future kind returned from schedule_activity");
-        }
+        replay_future
     }
 
     fn schedule_timer_replay(
         &self,
-        delay_ms: u64,
+        _delay_ms: u64,
         open_futures: &Arc<Mutex<HashMap<u64, ReplayDurableFuture>>>,
     ) -> ReplayDurableFuture {
-        let future = self.schedule_timer(delay_ms);
+        // Generate monotonically increasing ID instead of claiming from history
+        let mut inner = self.inner.lock().unwrap();
+        let id = inner.next_id();
+        drop(inner);
 
-        if let crate::futures::Kind::Timer { id, .. } = &future.0 {
+        // Create ReplayDurableFuture
+        let replay_future = ReplayDurableFuture {
+            ready: Arc::new(Mutex::new(false)),
+            completion: Arc::new(Mutex::new(None)),
+            should_emit_decision: Arc::new(Mutex::new(true)),
+        };
 
-            // Create ReplayDurableFuture
-            let replay_future = ReplayDurableFuture {
-                ready: Arc::new(Mutex::new(false)),
-                completion: Arc::new(Mutex::new(None)),
-                should_emit_decision: Arc::new(Mutex::new(true)),
-            };
+        // Insert into the HashMap
+        let mut futures = open_futures.lock().unwrap();
+        futures.insert(id, replay_future.clone());
 
-            // Insert into the HashMap
-            let mut futures = open_futures.lock().unwrap();
-            futures.insert(*id, replay_future.clone());
-
-            replay_future
-        } else {
-            panic!("Unexpected future kind returned from schedule_timer");
-        }
+        replay_future
     }
 
     fn schedule_wait_replay(
         &self,
-        name: impl Into<String>,
+        _name: impl Into<String>,
         open_futures: &Arc<Mutex<HashMap<u64, ReplayDurableFuture>>>,
     ) -> ReplayDurableFuture {
-        let name_str = name.into();
-        let future = self.schedule_wait(name_str.clone());
+        
+        // Generate monotonically increasing ID instead of claiming from history
+        let mut inner = self.inner.lock().unwrap();
+        let id = inner.next_id();
+        drop(inner);
 
-        if let crate::futures::Kind::External { id, .. } = &future.0 {
+        // Create ReplayDurableFuture
+        let replay_future = ReplayDurableFuture {
+            ready: Arc::new(Mutex::new(false)),
+            completion: Arc::new(Mutex::new(None)),
+            should_emit_decision: Arc::new(Mutex::new(true)),
+        };
 
-            // Create ReplayDurableFuture
-            let replay_future = ReplayDurableFuture {
-                ready: Arc::new(Mutex::new(false)),
-                completion: Arc::new(Mutex::new(None)),
-                should_emit_decision: Arc::new(Mutex::new(true)),
-            };
+        // Insert into the HashMap
+        let mut futures = open_futures.lock().unwrap();
+        futures.insert(id, replay_future.clone());
 
-            // Insert into the HashMap
-            let mut futures = open_futures.lock().unwrap();
-            futures.insert(*id, replay_future.clone());
-
-            replay_future
-        } else {
-            panic!("Unexpected future kind returned from schedule_wait");
-        }
+        replay_future
     }
 
     fn schedule_sub_orchestration_replay(
         &self,
-        name: impl Into<String>,
-        input: impl Into<String>,
+        _name: impl Into<String>,
+        _input: impl Into<String>,
         open_futures: &Arc<Mutex<HashMap<u64, ReplayDurableFuture>>>,
     ) -> ReplayDurableFuture {
-        let name_str = name.into();
-        let input_str = input.into();
-        let future = self.schedule_sub_orchestration(name_str.clone(), input_str.clone());
+        
+        // Generate monotonically increasing ID instead of claiming from history
+        let mut inner = self.inner.lock().unwrap();
+        let id = inner.next_id();
+        drop(inner);
 
-        if let crate::futures::Kind::SubOrch { id, .. } = &future.0
-        {
+        // Create ReplayDurableFuture
+        let replay_future = ReplayDurableFuture {
+            ready: Arc::new(Mutex::new(false)),
+            completion: Arc::new(Mutex::new(None)),
+            should_emit_decision: Arc::new(Mutex::new(true)),
+        };
 
-            // Create ReplayDurableFuture
-            let replay_future = ReplayDurableFuture {
-                ready: Arc::new(Mutex::new(false)),
-                completion: Arc::new(Mutex::new(None)),
-                should_emit_decision: Arc::new(Mutex::new(true)),
-            };
+        // Insert into the HashMap
+        let mut futures = open_futures.lock().unwrap();
+        futures.insert(id, replay_future.clone());
 
-            // Insert into the HashMap
-            let mut futures = open_futures.lock().unwrap();
-            futures.insert(*id, replay_future.clone());
-
-            replay_future
-        } else {
-            panic!("Unexpected future kind returned from schedule_sub_orchestration");
-        }
+        replay_future
     }
 }
