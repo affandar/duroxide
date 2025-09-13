@@ -13,6 +13,7 @@ pub mod registry;
 pub mod router;
 mod timers;
 use async_trait::async_trait;
+mod event_ids;
 
 pub mod completion_aware_futures;
 pub mod completion_map;
@@ -431,6 +432,19 @@ impl Runtime {
             // Empty effective batch - just ack
             (vec![], vec![], vec![], vec![])
         };
+
+        // Assign runtime event_ids deterministically for this delta (runtime-only wrapper)
+        // Note: These IDs are computed but not persisted in this iteration
+        if !history_delta.is_empty() {
+            let wrapped_delta = self::event_ids::assign_event_ids_for_delta(&item.history, &history_delta);
+            debug!(
+                instance,
+                first_event_id = wrapped_delta.first().map(|w| w.event_id).unwrap_or(0),
+                last_event_id = wrapped_delta.last().map(|w| w.event_id).unwrap_or(0),
+                count = wrapped_delta.len(),
+                "assigned runtime event_ids for delta (not persisted)"
+            );
+        }
 
         // Atomically commit all changes
         debug!(
