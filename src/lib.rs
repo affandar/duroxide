@@ -372,36 +372,15 @@ struct CtxInner {
 
 impl CtxInner {
     fn new(history: Vec<Event>, execution_id: u64) -> Self {
-        // Compute next correlation id based on max id found in history
-        let mut max_id = 0u64;
-        for ev in &history {
-            let id_opt = match ev {
-                Event::ActivityScheduled { id, .. }
-                | Event::ActivityCompleted { id, .. }
-                | Event::ActivityFailed { id, .. }
-                | Event::TimerCreated { id, .. }
-                | Event::TimerFired { id, .. }
-                | Event::ExternalSubscribed { id, .. }
-                | Event::ExternalEvent { id, .. }
-                | Event::OrchestrationChained { id, .. }
-                | Event::SubOrchestrationScheduled { id, .. }
-                | Event::SubOrchestrationCompleted { id, .. }
-                | Event::SubOrchestrationFailed { id, .. } => Some(*id),
-                Event::OrchestrationStarted { .. }
-                | Event::OrchestrationCompleted { .. }
-                | Event::OrchestrationFailed { .. }
-                | Event::OrchestrationContinuedAsNew { .. }
-                | Event::OrchestrationCancelRequested { .. } => None,
-            };
-            if let Some(id) = id_opt {
-                max_id = max_id.max(id);
-            }
-        }
+        // In the new monotonic system, correlation IDs should start from 1
+        // regardless of history length, since OrchestrationStarted doesn't use correlation IDs
+        let next_id = 1u64;
+        
         Self {
             history,
             actions: Vec::new(),
             // guid_counter removed
-            next_correlation_id: max_id.saturating_add(1),
+            next_correlation_id: next_id,
             execution_id,
             turn_index: 0,
             logging_enabled_this_poll: false,

@@ -488,25 +488,37 @@ mod tests {
     #[tokio::test]
     async fn test_replay_simple_activity() {
         // History with activity scheduled and completed
-        let history = wrap_events(vec![
-            Event::OrchestrationStarted {
-                name: "test".to_string(),
-                version: "1.0".to_string(),
-                input: "{}".to_string(),
-                parent_instance: None,
-                parent_id: None,
+        let history = vec![
+            ReplayHistoryEvent {
+                event_id: 1,
+                scheduled_event_id: None,
+                event: Event::OrchestrationStarted {
+                    name: "test".to_string(),
+                    version: "1.0".to_string(),
+                    input: "{}".to_string(),
+                    parent_instance: None,
+                    parent_id: None,
+                },
             },
-            Event::ActivityScheduled {
-                id: 1,
-                name: "my_activity".to_string(),
-                input: "{}".to_string(),
-                execution_id: 1,
+            ReplayHistoryEvent {
+                event_id: 2,
+                scheduled_event_id: None,
+                event: Event::ActivityScheduled {
+                    id: 1,
+                    name: "my_activity".to_string(),
+                    input: "{}".to_string(),
+                    execution_id: 1,
+                },
             },
-            Event::ActivityCompleted {
-                id: 1,
-                result: "done".to_string(),
+            ReplayHistoryEvent {
+                event_id: 3,
+                scheduled_event_id: Some(2), // Points to the ActivityScheduled event
+                event: Event::ActivityCompleted {
+                    id: 1,
+                    result: "done".to_string(),
+                },
             },
-        ]);
+        ];
 
         let delta_history = vec![];
 
