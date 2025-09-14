@@ -19,6 +19,26 @@ pub struct ReplayOutput<O> {
     pub non_determinism_error: Option<String>,
 }
 
+// Turn-based API
+pub struct ReplayTurnHandle<Fut>
+where
+    Fut: Future + Send + 'static,
+{
+    pub(crate) orchestration_future: Pin<Box<Fut>>,
+    pub(crate) orchestration_context: ReplayOrchestrationContext,
+    pub(crate) open_futures: Arc<Mutex<HashMap<u64, ReplayDurableFuture>>>,
+}
+
+pub struct ReplayTurnResult<O, Fut>
+where
+    Fut: Future + Send + 'static,
+{
+    pub decisions: Vec<Action>,
+    pub output: Option<O>,
+    pub non_determinism_error: Option<String>,
+    pub next_handle: Option<ReplayTurnHandle<Fut>>,
+}
+
 /// A DurableFuture variant for replay that holds its own completion state
 #[derive(Clone)]
 pub(crate) struct ReplayDurableFuture {
@@ -111,54 +131,90 @@ pub(crate) fn replay_orchestration<F, Fut, O>(
 ) -> Result<ReplayOutput<O>, String>
 where
     F: Fn(ReplayOrchestrationContext) -> Fut,
-    Fut: Future<Output = O>,
+    Fut: Future<Output = O> + Send + 'static,
+    O: Send + 'static,
 {
-    // Validate we have at least OrchestrationStarted
-    if history.is_empty() {
+    // Preserve legacy error behavior
+    if history.is_empty() && delta_history.is_empty() {
         return Err("History must not be empty".to_string());
     }
+    // Phase 1: baseline history (may be empty); on first turn we need the orch fn
+    let turn1 = replay_turn(Some(&orchestration_fn), history, None)?;
 
-    let has_start = history
-        .iter()
-        .any(|he| matches!(he.event, Event::OrchestrationStarted { .. }));
-    if !has_start {
-        return Err("History must contain OrchestrationStarted event".to_string());
+    let mut decisions = turn1.decisions;
+    let mut output = turn1.output;
+    let mut non_det = turn1.non_determinism_error;
+    let handle = turn1.next_handle;
+
+    // Phase 2: delta history with the returned handle
+    if output.is_none() && non_det.is_none() && !delta_history.is_empty() && handle.is_some() {
+        let turn2 = replay_turn::<F, Fut, O>(None, delta_history, handle)?;
+        decisions.extend(turn2.decisions);
+        output = output.or(turn2.output);
+        non_det = non_det.or(turn2.non_determinism_error);
     }
 
-    let open_futures = Arc::new(Mutex::new(HashMap::<u64, ReplayDurableFuture>::new()));
+    Ok(ReplayOutput { decisions, output, non_determinism_error: non_det })
+}
+
+// Single turn entrypoint: first turn uses None handle and must include OrchestrationStarted in events
+#[allow(dead_code)]
+pub(crate) fn replay_turn<F, Fut, O>(
+    orchestration_fn: Option<&F>,
+    events_this_turn: Vec<ReplayHistoryEvent>,
+    handle: Option<ReplayTurnHandle<Fut>>,
+) -> Result<ReplayTurnResult<O, Fut>, String>
+where
+    F: Fn(ReplayOrchestrationContext) -> Fut,
+    Fut: Future<Output = O> + Send + 'static,
+    O: Send + 'static,
+{
+    // Prepare or reuse future/context
+    let (orchestration_future, orchestration_context, open_futures) = match handle {
+        Some(h) => (h.orchestration_future, h.orchestration_context, h.open_futures),
+        None => {
+            let has_start = events_this_turn
+                .iter()
+                .any(|he| matches!(he.event, Event::OrchestrationStarted { .. }));
+            if !has_start {
+                return Err("First turn must contain OrchestrationStarted".to_string());
+            }
+            let open_futures = Arc::new(Mutex::new(HashMap::<u64, ReplayDurableFuture>::new()));
+            let inner_ctx = OrchestrationContext::new(
+                events_this_turn.iter().map(|he| he.event.clone()).collect(),
+                1,
+            );
+            let ctx = ReplayOrchestrationContext::new(inner_ctx, open_futures.clone());
+            let orch_fn = orchestration_fn.ok_or("orchestration_fn is required on first turn")?;
+            let fut: Pin<Box<Fut>> = Box::pin(orch_fn(ctx.clone()));
+            (fut, ctx, open_futures)
+        }
+    };
+
+    // Reuse the core single-pass processor on this turn's events
     let mut decisions = Vec::new();
-
-    // Create the orchestration future once
-    let plain_events: Vec<Event> = history.iter().map(|he| he.event.clone()).collect();
-    let inner_ctx = OrchestrationContext::new(plain_events, 1);
-    let ctx = ReplayOrchestrationContext::new(inner_ctx, open_futures.clone());
-    let orchestration_future: Pin<Box<Fut>> = Box::pin(orchestration_fn(ctx.clone()));
-
-    // Phase 1: Process existing history
-    let (mut orchestration_output, mut non_determinism_error, pending_future) = replay_core_with_future(
-        &history,
+    let (output, non_determinism_error, pending) = replay_core_with_future(
+        &events_this_turn,
         open_futures.clone(),
         &mut decisions,
-        Some((orchestration_future, ctx)),
+        Some((orchestration_future, orchestration_context.clone())),
     )?;
 
-    // Phase 2: Process delta history if orchestration hasn't completed yet and no error
-    if orchestration_output.is_none()
-        && non_determinism_error.is_none()
-        && !delta_history.is_empty()
-        && pending_future.is_some()
-    {
-        // Only process the delta events with the existing future
-        let (output, error, _) =
-            replay_core_with_future(&delta_history, open_futures.clone(), &mut decisions, pending_future)?;
-        orchestration_output = output;
-        non_determinism_error = error;
-    }
+    let next_handle = if let Some((f, _ctx)) = pending {
+        Some(ReplayTurnHandle {
+            orchestration_future: f,
+            orchestration_context,
+            open_futures,
+        })
+    } else {
+        None
+    };
 
-    Ok(ReplayOutput {
+    Ok(ReplayTurnResult {
         decisions,
-        output: orchestration_output,
+        output,
         non_determinism_error,
+        next_handle,
     })
 }
 
@@ -192,9 +248,9 @@ where
     let mut orchestration_output = None;
     let mut non_determinism_error: Option<String> = None;
     // Single pass over all events
-    let mut iter: usize = 0;
+    let mut _iter: usize = 0;
     for wrapped_event in events {
-        iter += 1;
+        _iter += 1;
         let event = &wrapped_event.event;
         match event {
             // OrchestrationStarted: nothing special here; unified polling happens after event
@@ -447,13 +503,8 @@ fn create_noop_waker() -> Waker {
 
 #[cfg(test)]
 mod tests {
-    use super::super::event_ids::assign_event_ids_for_delta;
     use super::*;
-
-    /// Helper to convert plain events to wrapped events with monotonic IDs
-    fn wrap_events(events: Vec<Event>) -> Vec<ReplayHistoryEvent> {
-        assign_event_ids_for_delta(&[], &events)
-    }
+    use crate::runtime::event_ids::assign_event_ids_for_delta;
 
     #[tokio::test]
     async fn test_replay_simple_activity() {
@@ -512,7 +563,7 @@ mod tests {
     #[tokio::test]
     async fn test_replay_missing_activity_completion() {
         // History with activity scheduled but not completed
-        let history = wrap_events(vec![
+        let history = vec![
             Event::OrchestrationStarted {
                 name: "test".to_string(),
                 version: "1.0".to_string(),
@@ -526,7 +577,7 @@ mod tests {
                 input: "{}".to_string(),
                 execution_id: 1,
             },
-        ]);
+        ].into_iter().enumerate().map(|(i,e)| ReplayHistoryEvent { event_id: (i as u64)+1, scheduled_event_id: None, event: e }).collect();
 
         let delta_history = vec![];
 
@@ -563,7 +614,11 @@ mod tests {
                 execution_id: 1,
             },
         ];
-        let history = wrap_events(base_events.clone());
+        let history: Vec<ReplayHistoryEvent> = base_events
+            .iter()
+            .enumerate()
+            .map(|(i, e)| ReplayHistoryEvent { event_id: (i as u64) + 1, scheduled_event_id: None, event: e.clone() })
+            .collect();
 
         // Completion comes in delta
         let delta_history = assign_event_ids_for_delta(
@@ -595,7 +650,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_replay_timer() {
-        let history = wrap_events(vec![
+        let history = vec![
             Event::OrchestrationStarted {
                 name: "test".to_string(),
                 version: "1.0".to_string(),
@@ -612,7 +667,7 @@ mod tests {
                 id: 1,
                 fire_at_ms: 1000,
             },
-        ]);
+        ].into_iter().enumerate().map(|(i,e)| ReplayHistoryEvent { event_id: (i as u64)+1, scheduled_event_id: None, event: e }).collect();
 
         let delta_history = vec![];
 
@@ -650,7 +705,7 @@ mod tests {
     #[tokio::test]
     async fn test_scheduled_events_dont_emit_decisions() {
         // History with activity already scheduled but not completed
-        let history = wrap_events(vec![
+        let history = vec![
             Event::OrchestrationStarted {
                 name: "test".to_string(),
                 version: "1.0".to_string(),
@@ -664,7 +719,15 @@ mod tests {
                 input: "{}".to_string(),
                 execution_id: 1,
             },
-        ]);
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(i, e)| ReplayHistoryEvent {
+            event_id: (i as u64) + 1,
+            scheduled_event_id: None,
+            event: e,
+        })
+        .collect();
 
         let delta_history = vec![];
 
@@ -708,7 +771,15 @@ mod tests {
                 execution_id: 1,
             },
         ];
-        let history = wrap_events(base_events.clone());
+        let history: Vec<ReplayHistoryEvent> = base_events
+            .iter()
+            .enumerate()
+            .map(|(i, e)| ReplayHistoryEvent {
+                event_id: (i as u64) + 1,
+                scheduled_event_id: None,
+                event: e.clone(),
+            })
+            .collect();
 
         let delta_history = assign_event_ids_for_delta(
             &base_events,
@@ -747,7 +818,7 @@ mod tests {
     #[tokio::test]
     async fn test_nondeterminism_detection() {
         // History shows activity was scheduled
-        let history = wrap_events(vec![
+        let history = vec![
             Event::OrchestrationStarted {
                 name: "test".to_string(),
                 version: "1.0".to_string(),
@@ -761,7 +832,15 @@ mod tests {
                 input: "{}".to_string(),
                 execution_id: 1,
             },
-        ]);
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(i, e)| ReplayHistoryEvent {
+            event_id: (i as u64) + 1,
+            scheduled_event_id: None,
+            event: e,
+        })
+        .collect();
 
         let delta_history = vec![];
 
@@ -790,7 +869,7 @@ mod tests {
         // This test verifies that ReplayDurableFuture polls from the open_futures table
         // rather than from OrchestrationContext's internal state
 
-        let history = wrap_events(vec![
+        let history = vec![
             Event::OrchestrationStarted {
                 name: "test".to_string(),
                 version: "1.0".to_string(),
@@ -808,7 +887,11 @@ mod tests {
                 id: 1,
                 result: "result from history".to_string(),
             },
-        ]);
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(i, e)| ReplayHistoryEvent { event_id: (i as u64) + 1, scheduled_event_id: None, event: e })
+        .collect();
 
         let result = replay_orchestration(
             |ctx: ReplayOrchestrationContext| async move {
@@ -835,7 +918,7 @@ mod tests {
     async fn test_open_futures_stores_completion_data() {
         // Test that completion data is properly stored in OpenFuture when events are processed
 
-        let history = wrap_events(vec![
+        let history = vec![
             Event::OrchestrationStarted {
                 name: "test".to_string(),
                 version: "1.0".to_string(),
@@ -862,7 +945,11 @@ mod tests {
                 id: 2,
                 fire_at_ms: 1000,
             },
-        ]);
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(i, e)| ReplayHistoryEvent { event_id: (i as u64) + 1, scheduled_event_id: None, event: e })
+        .collect();
 
         // Use the public API
         let result = replay_orchestration(
@@ -887,13 +974,17 @@ mod tests {
     #[tokio::test]
     async fn test_monotonic_id_generation() {
         // Test that the replay methods generate monotonically increasing IDs
-        let history = wrap_events(vec![Event::OrchestrationStarted {
+        let history: Vec<ReplayHistoryEvent> = vec![Event::OrchestrationStarted {
             name: "test".to_string(),
             version: "1.0".to_string(),
             input: "{}".to_string(),
             parent_instance: None,
             parent_id: None,
-        }]);
+        }]
+        .into_iter()
+        .enumerate()
+        .map(|(i, e)| ReplayHistoryEvent { event_id: (i as u64) + 1, scheduled_event_id: None, event: e })
+        .collect();
 
         let result = replay_orchestration(
             |ctx: ReplayOrchestrationContext| async move {
@@ -941,7 +1032,11 @@ mod tests {
                 execution_id: 1,
             },
         ];
-        let history = wrap_events(base_events.clone());
+        let history: Vec<ReplayHistoryEvent> = base_events
+            .iter()
+            .enumerate()
+            .map(|(i, e)| ReplayHistoryEvent { event_id: (i as u64) + 1, scheduled_event_id: None, event: e.clone() })
+            .collect();
 
         let delta_history = assign_event_ids_for_delta(
             &base_events,
@@ -1050,7 +1145,7 @@ mod tests {
     #[tokio::test]
     async fn replay_e2e_like_control_flow_yes_branch() {
         // ControlFlow orchestration: GetFlag -> yes => SayYes
-        let history = wrap_events(vec![
+        let history = vec![
             Event::OrchestrationStarted {
                 name: "ControlFlow".into(),
                 version: "1.0".into(),
@@ -1078,7 +1173,11 @@ mod tests {
                 id: 2,
                 result: "picked_yes".into(),
             },
-        ]);
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(i, e)| ReplayHistoryEvent { event_id: (i as u64) + 1, scheduled_event_id: None, event: e })
+        .collect();
 
         let result = replay_orchestration(
             |ctx: ReplayOrchestrationContext| async move {
@@ -1102,7 +1201,7 @@ mod tests {
     #[tokio::test]
     async fn replay_e2e_like_loop_three_iterations() {
         // Loop orchestration: Append 3 times accumulating value
-        let history = wrap_events(vec![
+        let history = vec![
             Event::OrchestrationStarted {
                 name: "LoopOrchestration".into(),
                 version: "1.0".into(),
@@ -1140,7 +1239,11 @@ mod tests {
                 id: 3,
                 result: "startxxx".into(),
             },
-        ]);
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(i, e)| ReplayHistoryEvent { event_id: (i as u64) + 1, scheduled_event_id: None, event: e })
+        .collect();
 
         let result = replay_orchestration(
             |ctx: ReplayOrchestrationContext| async move {
@@ -1163,7 +1266,7 @@ mod tests {
     #[tokio::test]
     async fn replay_e2e_like_error_handling() {
         // ErrorHandling orchestration: Fragile(bad) => Err, then Recover => recovered
-        let history = wrap_events(vec![
+        let history = vec![
             Event::OrchestrationStarted {
                 name: "ErrorHandling".into(),
                 version: "1.0".into(),
@@ -1191,7 +1294,11 @@ mod tests {
                 id: 2,
                 result: "recovered".into(),
             },
-        ]);
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(i, e)| ReplayHistoryEvent { event_id: (i as u64) + 1, scheduled_event_id: None, event: e })
+        .collect();
 
         let result = replay_orchestration(
             |ctx: ReplayOrchestrationContext| async move {

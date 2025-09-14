@@ -92,53 +92,7 @@ pub fn assign_event_ids_for_delta(baseline: &[Event], delta: &[Event]) -> Vec<Re
 /// Validate that wrapped delta has monotonically increasing event_ids starting at
 /// baseline.len()+1 and that completion events reference an existing schedule's event_id
 /// either in baseline or earlier in the wrapped delta. Returns Ok(()) if valid; Err(msg) otherwise.
-pub fn validate_wrapped_delta(baseline: &[Event], wrapped: &[ReplayHistoryEvent]) -> Result<(), String> {
-    use std::collections::HashMap;
-    let mut expected_next = (baseline.len() as u64) + 1;
-
-    // Build schedule mapping from baseline first
-    let mut schedule_to_event_id: HashMap<(ScheduleKind, u64), u64> = HashMap::new();
-    for (idx, e) in baseline.iter().enumerate() {
-        let event_id = (idx as u64) + 1;
-        if let Some(key) = schedule_key_for_event(e) {
-            schedule_to_event_id.insert(key, event_id);
-        }
-    }
-
-    for w in wrapped {
-        if w.event_id != expected_next {
-            return Err(format!(
-                "non-monotonic event_id: expected {}, found {}",
-                expected_next, w.event_id
-            ));
-        }
-        expected_next += 1;
-
-        // If completion, ensure we can resolve a schedule event_id
-        if let Some((kind, cid)) = completion_key_for_event(&w.event) {
-            // prefer scheduled_event_id if present, else resolve now
-            let resolved = if let Some(seid) = w.scheduled_event_id {
-                Some(seid)
-            } else {
-                schedule_to_event_id.get(&(kind, cid)).copied()
-            };
-
-            if resolved.is_none() {
-                return Err(format!(
-                    "completion missing schedule reference: kind={:?} id={}",
-                    kind, cid
-                ));
-            }
-        }
-
-        // If this is a schedule, record mapping for subsequent completions in this delta
-        if let Some(key) = schedule_key_for_event(&w.event) {
-            schedule_to_event_id.insert(key, w.event_id);
-        }
-    }
-
-    Ok(())
-}
+// validate_wrapped_delta removed (unused in current runtime)
 
 #[cfg(test)]
 mod tests {
