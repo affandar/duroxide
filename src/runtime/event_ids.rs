@@ -2,7 +2,7 @@ use crate::Event;
 
 /// Runtime-only wrapper to carry a unique, monotonically increasing event_id
 /// and an optional scheduled_event_id reference for completion-type events.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ReplayHistoryEvent {
     pub event_id: u64,
     pub scheduled_event_id: Option<u64>,

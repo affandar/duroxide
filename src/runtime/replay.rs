@@ -498,41 +498,52 @@ fn create_noop_waker() -> Waker {
 mod tests {
     use super::*;
     use crate::runtime::event_ids::assign_event_ids_for_delta;
+    use serde_json;
+
 
     #[tokio::test]
     async fn test_replay_simple_activity() {
         // History with activity scheduled and completed
-        let history = vec![
-            ReplayHistoryEvent {
-                event_id: 1,
-                scheduled_event_id: None,
-                event: Event::OrchestrationStarted {
-                    name: "test".to_string(),
-                    version: "1.0".to_string(),
-                    input: "{}".to_string(),
-                    parent_instance: None,
-                    parent_id: None,
-                },
+        let history_json = r#"
+        [
+            {
+                "event_id": 1,
+                "scheduled_event_id": null,
+                "event": {
+                    "OrchestrationStarted": {
+                        "name": "test",
+                        "version": "1.0",
+                        "input": "{}",
+                        "parent_instance": null,
+                        "parent_id": null
+                    }
+                }
             },
-            ReplayHistoryEvent {
-                event_id: 2,
-                scheduled_event_id: None,
-                event: Event::ActivityScheduled {
-                    id: 1,
-                    name: "my_activity".to_string(),
-                    input: "{}".to_string(),
-                    execution_id: 1,
-                },
+            {
+                "event_id": 2,
+                "scheduled_event_id": null,
+                "event": {
+                    "ActivityScheduled": {
+                        "id": 1,
+                        "name": "my_activity",
+                        "input": "{}",
+                        "execution_id": 1
+                    }
+                }
             },
-            ReplayHistoryEvent {
-                event_id: 3,
-                scheduled_event_id: Some(2), // Points to the ActivityScheduled event
-                event: Event::ActivityCompleted {
-                    id: 1,
-                    result: "done".to_string(),
-                },
-            },
-        ];
+            {
+                "event_id": 3,
+                "scheduled_event_id": 2,
+                "event": {
+                    "ActivityCompleted": {
+                        "id": 1,
+                        "result": "done"
+                    }
+                }
+            }
+        ]
+        "#;
+        let history: Vec<ReplayHistoryEvent> = serde_json::from_str(history_json).unwrap();
 
         let delta_history = vec![];
 
@@ -556,21 +567,36 @@ mod tests {
     #[tokio::test]
     async fn test_replay_missing_activity_completion() {
         // History with activity scheduled but not completed
-        let history = vec![
-            Event::OrchestrationStarted {
-                name: "test".to_string(),
-                version: "1.0".to_string(),
-                input: "{}".to_string(),
-                parent_instance: None,
-                parent_id: None,
+        let history_json = r#"
+        [
+            {
+                "event_id": 1,
+                "scheduled_event_id": null,
+                "event": {
+                    "OrchestrationStarted": {
+                        "name": "test",
+                        "version": "1.0",
+                        "input": "{}",
+                        "parent_instance": null,
+                        "parent_id": null
+                    }
+                }
             },
-            Event::ActivityScheduled {
-                id: 1,
-                name: "my_activity".to_string(),
-                input: "{}".to_string(),
-                execution_id: 1,
-            },
-        ].into_iter().enumerate().map(|(i,e)| ReplayHistoryEvent { event_id: (i as u64)+1, scheduled_event_id: None, event: e }).collect();
+            {
+                "event_id": 2,
+                "scheduled_event_id": null,
+                "event": {
+                    "ActivityScheduled": {
+                        "id": 1,
+                        "name": "my_activity",
+                        "input": "{}",
+                        "execution_id": 1
+                    }
+                }
+            }
+        ]
+        "#;
+        let history: Vec<ReplayHistoryEvent> = serde_json::from_str(history_json).unwrap();
 
         let delta_history = vec![];
 
@@ -592,6 +618,38 @@ mod tests {
     #[tokio::test]
     async fn test_replay_with_delta_completion() {
         // History with activity scheduled
+        let history_json = r#"
+        [
+            {
+                "event_id": 1,
+                "scheduled_event_id": null,
+                "event": {
+                    "OrchestrationStarted": {
+                        "name": "test",
+                        "version": "1.0",
+                        "input": "{}",
+                        "parent_instance": null,
+                        "parent_id": null
+                    }
+                }
+            },
+            {
+                "event_id": 2,
+                "scheduled_event_id": null,
+                "event": {
+                    "ActivityScheduled": {
+                        "id": 1,
+                        "name": "my_activity",
+                        "input": "{}",
+                        "execution_id": 1
+                    }
+                }
+            }
+        ]
+        "#;
+        let history: Vec<ReplayHistoryEvent> = serde_json::from_str(history_json).unwrap();
+
+        // Completion comes in delta
         let base_events = vec![
             Event::OrchestrationStarted {
                 name: "test".to_string(),
@@ -607,13 +665,6 @@ mod tests {
                 execution_id: 1,
             },
         ];
-        let history: Vec<ReplayHistoryEvent> = base_events
-            .iter()
-            .enumerate()
-            .map(|(i, e)| ReplayHistoryEvent { event_id: (i as u64) + 1, scheduled_event_id: None, event: e.clone() })
-            .collect();
-
-        // Completion comes in delta
         let delta_history = assign_event_ids_for_delta(
             &base_events,
             &vec![Event::ActivityCompleted {
@@ -643,24 +694,45 @@ mod tests {
 
     #[tokio::test]
     async fn test_replay_timer() {
-        let history = vec![
-            Event::OrchestrationStarted {
-                name: "test".to_string(),
-                version: "1.0".to_string(),
-                input: "{}".to_string(),
-                parent_instance: None,
-                parent_id: None,
+        let history_json = r#"
+        [
+            {
+                "event_id": 1,
+                "scheduled_event_id": null,
+                "event": {
+                    "OrchestrationStarted": {
+                        "name": "test",
+                        "version": "1.0",
+                        "input": "{}",
+                        "parent_instance": null,
+                        "parent_id": null
+                    }
+                }
             },
-            Event::TimerCreated {
-                id: 1,
-                fire_at_ms: 1000,
-                execution_id: 1,
+            {
+                "event_id": 2,
+                "scheduled_event_id": null,
+                "event": {
+                    "TimerCreated": {
+                        "id": 1,
+                        "fire_at_ms": 1000,
+                        "execution_id": 1
+                    }
+                }
             },
-            Event::TimerFired {
-                id: 1,
-                fire_at_ms: 1000,
-            },
-        ].into_iter().enumerate().map(|(i,e)| ReplayHistoryEvent { event_id: (i as u64)+1, scheduled_event_id: None, event: e }).collect();
+            {
+                "event_id": 3,
+                "scheduled_event_id": 2,
+                "event": {
+                    "TimerFired": {
+                        "id": 1,
+                        "fire_at_ms": 1000
+                    }
+                }
+            }
+        ]
+        "#;
+        let history: Vec<ReplayHistoryEvent> = serde_json::from_str(history_json).unwrap();
 
         let delta_history = vec![];
 
@@ -698,29 +770,36 @@ mod tests {
     #[tokio::test]
     async fn test_scheduled_events_dont_emit_decisions() {
         // History with activity already scheduled but not completed
-        let history = vec![
-            Event::OrchestrationStarted {
-                name: "test".to_string(),
-                version: "1.0".to_string(),
-                input: "{}".to_string(),
-                parent_instance: None,
-                parent_id: None,
+        let history_json = r#"
+        [
+            {
+                "event_id": 1,
+                "scheduled_event_id": null,
+                "event": {
+                    "OrchestrationStarted": {
+                        "name": "test",
+                        "version": "1.0",
+                        "input": "{}",
+                        "parent_instance": null,
+                        "parent_id": null
+                    }
+                }
             },
-            Event::ActivityScheduled {
-                id: 1,
-                name: "my_activity".to_string(),
-                input: "{}".to_string(),
-                execution_id: 1,
-            },
+            {
+                "event_id": 2,
+                "scheduled_event_id": null,
+                "event": {
+                    "ActivityScheduled": {
+                        "id": 1,
+                        "name": "my_activity",
+                        "input": "{}",
+                        "execution_id": 1
+                    }
+                }
+            }
         ]
-        .into_iter()
-        .enumerate()
-        .map(|(i, e)| ReplayHistoryEvent {
-            event_id: (i as u64) + 1,
-            scheduled_event_id: None,
-            event: e,
-        })
-        .collect();
+        "#;
+        let history: Vec<ReplayHistoryEvent> = serde_json::from_str(history_json).unwrap();
 
         let delta_history = vec![];
 
@@ -749,6 +828,37 @@ mod tests {
     async fn test_scheduled_event_proper_tracking() {
         // Test that scheduled events in history properly track the future
         // so when completion comes in delta history, it works correctly
+        let history_json = r#"
+        [
+            {
+                "event_id": 1,
+                "scheduled_event_id": null,
+                "event": {
+                    "OrchestrationStarted": {
+                        "name": "test",
+                        "version": "1.0",
+                        "input": "{}",
+                        "parent_instance": null,
+                        "parent_id": null
+                    }
+                }
+            },
+            {
+                "event_id": 2,
+                "scheduled_event_id": null,
+                "event": {
+                    "ActivityScheduled": {
+                        "id": 1,
+                        "name": "my_activity",
+                        "input": "{}",
+                        "execution_id": 1
+                    }
+                }
+            }
+        ]
+        "#;
+        let history: Vec<ReplayHistoryEvent> = serde_json::from_str(history_json).unwrap();
+
         let base_events = vec![
             Event::OrchestrationStarted {
                 name: "test".to_string(),
@@ -764,15 +874,6 @@ mod tests {
                 execution_id: 1,
             },
         ];
-        let history: Vec<ReplayHistoryEvent> = base_events
-            .iter()
-            .enumerate()
-            .map(|(i, e)| ReplayHistoryEvent {
-                event_id: (i as u64) + 1,
-                scheduled_event_id: None,
-                event: e.clone(),
-            })
-            .collect();
 
         let delta_history = assign_event_ids_for_delta(
             &base_events,
@@ -811,29 +912,36 @@ mod tests {
     #[tokio::test]
     async fn test_nondeterminism_detection() {
         // History shows activity was scheduled
-        let history = vec![
-            Event::OrchestrationStarted {
-                name: "test".to_string(),
-                version: "1.0".to_string(),
-                input: "{}".to_string(),
-                parent_instance: None,
-                parent_id: None,
+        let history_json = r#"
+        [
+            {
+                "event_id": 1,
+                "scheduled_event_id": null,
+                "event": {
+                    "OrchestrationStarted": {
+                        "name": "test",
+                        "version": "1.0",
+                        "input": "{}",
+                        "parent_instance": null,
+                        "parent_id": null
+                    }
+                }
             },
-            Event::ActivityScheduled {
-                id: 1,
-                name: "my_activity".to_string(),
-                input: "{}".to_string(),
-                execution_id: 1,
-            },
+            {
+                "event_id": 2,
+                "scheduled_event_id": null,
+                "event": {
+                    "ActivityScheduled": {
+                        "id": 1,
+                        "name": "my_activity",
+                        "input": "{}",
+                        "execution_id": 1
+                    }
+                }
+            }
         ]
-        .into_iter()
-        .enumerate()
-        .map(|(i, e)| ReplayHistoryEvent {
-            event_id: (i as u64) + 1,
-            scheduled_event_id: None,
-            event: e,
-        })
-        .collect();
+        "#;
+        let history: Vec<ReplayHistoryEvent> = serde_json::from_str(history_json).unwrap();
 
         let delta_history = vec![];
 
@@ -862,29 +970,46 @@ mod tests {
         // This test verifies that ReplayDurableFuture polls from the open_futures table
         // rather than from OrchestrationContext's internal state
 
-        let history = vec![
-            Event::OrchestrationStarted {
-                name: "test".to_string(),
-                version: "1.0".to_string(),
-                input: "{}".to_string(),
-                parent_instance: None,
-                parent_id: None,
+        let history_json = r#"
+        [
+            {
+                "event_id": 1,
+                "scheduled_event_id": null,
+                "event": {
+                    "OrchestrationStarted": {
+                        "name": "test",
+                        "version": "1.0",
+                        "input": "{}",
+                        "parent_instance": null,
+                        "parent_id": null
+                    }
+                }
             },
-            Event::ActivityScheduled {
-                id: 1,
-                name: "my_activity".to_string(),
-                input: "{}".to_string(),
-                execution_id: 1,
+            {
+                "event_id": 2,
+                "scheduled_event_id": null,
+                "event": {
+                    "ActivityScheduled": {
+                        "id": 1,
+                        "name": "my_activity",
+                        "input": "{}",
+                        "execution_id": 1
+                    }
+                }
             },
-            Event::ActivityCompleted {
-                id: 1,
-                result: "result from history".to_string(),
-            },
+            {
+                "event_id": 3,
+                "scheduled_event_id": 2,
+                "event": {
+                    "ActivityCompleted": {
+                        "id": 1,
+                        "result": "result from history"
+                    }
+                }
+            }
         ]
-        .into_iter()
-        .enumerate()
-        .map(|(i, e)| ReplayHistoryEvent { event_id: (i as u64) + 1, scheduled_event_id: None, event: e })
-        .collect();
+        "#;
+        let history: Vec<ReplayHistoryEvent> = serde_json::from_str(history_json).unwrap();
 
         let result = replay_orchestration(
             |ctx: ReplayOrchestrationContext| async move {
@@ -911,38 +1036,67 @@ mod tests {
     async fn test_open_futures_stores_completion_data() {
         // Test that completion data is properly stored in OpenFuture when events are processed
 
-        let history = vec![
-            Event::OrchestrationStarted {
-                name: "test".to_string(),
-                version: "1.0".to_string(),
-                input: "{}".to_string(),
-                parent_instance: None,
-                parent_id: None,
+        let history_json = r#"
+        [
+            {
+                "event_id": 1,
+                "scheduled_event_id": null,
+                "event": {
+                    "OrchestrationStarted": {
+                        "name": "test",
+                        "version": "1.0",
+                        "input": "{}",
+                        "parent_instance": null,
+                        "parent_id": null
+                    }
+                }
             },
-            Event::ActivityScheduled {
-                id: 1,
-                name: "my_activity".to_string(),
-                input: "{}".to_string(),
-                execution_id: 1,
+            {
+                "event_id": 2,
+                "scheduled_event_id": null,
+                "event": {
+                    "ActivityScheduled": {
+                        "id": 1,
+                        "name": "my_activity",
+                        "input": "{}",
+                        "execution_id": 1
+                    }
+                }
             },
-            Event::ActivityCompleted {
-                id: 1,
-                result: "test result".to_string(),
+            {
+                "event_id": 3,
+                "scheduled_event_id": 2,
+                "event": {
+                    "ActivityCompleted": {
+                        "id": 1,
+                        "result": "test result"
+                    }
+                }
             },
-            Event::TimerCreated {
-                id: 2,
-                fire_at_ms: 1000,
-                execution_id: 1,
+            {
+                "event_id": 4,
+                "scheduled_event_id": null,
+                "event": {
+                    "TimerCreated": {
+                        "id": 2,
+                        "fire_at_ms": 1000,
+                        "execution_id": 1
+                    }
+                }
             },
-            Event::TimerFired {
-                id: 2,
-                fire_at_ms: 1000,
-            },
+            {
+                "event_id": 5,
+                "scheduled_event_id": 4,
+                "event": {
+                    "TimerFired": {
+                        "id": 2,
+                        "fire_at_ms": 1000
+                    }
+                }
+            }
         ]
-        .into_iter()
-        .enumerate()
-        .map(|(i, e)| ReplayHistoryEvent { event_id: (i as u64) + 1, scheduled_event_id: None, event: e })
-        .collect();
+        "#;
+        let history: Vec<ReplayHistoryEvent> = serde_json::from_str(history_json).unwrap();
 
         // Use the public API
         let result = replay_orchestration(
@@ -967,17 +1121,24 @@ mod tests {
     #[tokio::test]
     async fn test_monotonic_id_generation() {
         // Test that the replay methods generate monotonically increasing IDs
-        let history: Vec<ReplayHistoryEvent> = vec![Event::OrchestrationStarted {
-            name: "test".to_string(),
-            version: "1.0".to_string(),
-            input: "{}".to_string(),
-            parent_instance: None,
-            parent_id: None,
-        }]
-        .into_iter()
-        .enumerate()
-        .map(|(i, e)| ReplayHistoryEvent { event_id: (i as u64) + 1, scheduled_event_id: None, event: e })
-        .collect();
+        let history_json = r#"
+        [
+            {
+                "event_id": 1,
+                "scheduled_event_id": null,
+                "event": {
+                    "OrchestrationStarted": {
+                        "name": "test",
+                        "version": "1.0",
+                        "input": "{}",
+                        "parent_instance": null,
+                        "parent_id": null
+                    }
+                }
+            }
+        ]
+        "#;
+        let history: Vec<ReplayHistoryEvent> = serde_json::from_str(history_json).unwrap();
 
         let result = replay_orchestration(
             |ctx: ReplayOrchestrationContext| async move {
@@ -1010,6 +1171,37 @@ mod tests {
         // Counter to track how many times the orchestration function is called
         static ORCH_CALL_COUNT: AtomicUsize = AtomicUsize::new(0);
 
+        let history_json = r#"
+        [
+            {
+                "event_id": 1,
+                "scheduled_event_id": null,
+                "event": {
+                    "OrchestrationStarted": {
+                        "name": "test",
+                        "version": "1.0",
+                        "input": "{}",
+                        "parent_instance": null,
+                        "parent_id": null
+                    }
+                }
+            },
+            {
+                "event_id": 2,
+                "scheduled_event_id": null,
+                "event": {
+                    "ActivityScheduled": {
+                        "id": 1,
+                        "name": "my_activity",
+                        "input": "{}",
+                        "execution_id": 1
+                    }
+                }
+            }
+        ]
+        "#;
+        let history: Vec<ReplayHistoryEvent> = serde_json::from_str(history_json).unwrap();
+
         let base_events = vec![
             Event::OrchestrationStarted {
                 name: "test".to_string(),
@@ -1025,11 +1217,6 @@ mod tests {
                 execution_id: 1,
             },
         ];
-        let history: Vec<ReplayHistoryEvent> = base_events
-            .iter()
-            .enumerate()
-            .map(|(i, e)| ReplayHistoryEvent { event_id: (i as u64) + 1, scheduled_event_id: None, event: e.clone() })
-            .collect();
 
         let delta_history = assign_event_ids_for_delta(
             &base_events,
@@ -1069,55 +1256,68 @@ mod tests {
     #[tokio::test]
     async fn replay_e2e_like_hello_world() {
         // HelloWorld orchestration: two activities, return second result
-        let history: Vec<ReplayHistoryEvent> = vec![
-            ReplayHistoryEvent {
-                event_id: 1,
-                scheduled_event_id: None,
-                event: Event::OrchestrationStarted {
-                    name: "HelloWorld".into(),
-                    version: "1.0".into(),
-                    input: "World".into(),
-                    parent_instance: None,
-                    parent_id: None,
-                },
+        let history_json = r#"
+        [
+            {
+                "event_id": 1,
+                "scheduled_event_id": null,
+                "event": {
+                    "OrchestrationStarted": {
+                        "name": "HelloWorld",
+                        "version": "1.0",
+                        "input": "World",
+                        "parent_instance": null,
+                        "parent_id": null
+                    }
+                }
             },
-            ReplayHistoryEvent {
-                event_id: 2,
-                scheduled_event_id: None,
-                event: Event::ActivityScheduled {
-                    id: 1,
-                    name: "Hello".into(),
-                    input: "Rust".into(),
-                    execution_id: 1,
-                },
+            {
+                "event_id": 2,
+                "scheduled_event_id": null,
+                "event": {
+                    "ActivityScheduled": {
+                        "id": 1,
+                        "name": "Hello",
+                        "input": "Rust",
+                        "execution_id": 1
+                    }
+                }
             },
-            ReplayHistoryEvent {
-                event_id: 3,
-                scheduled_event_id: Some(2),
-                event: Event::ActivityCompleted {
-                    id: 1,
-                    result: "Hello, Rust!".into(),
-                },
+            {
+                "event_id": 3,
+                "scheduled_event_id": 2,
+                "event": {
+                    "ActivityCompleted": {
+                        "id": 1,
+                        "result": "Hello, Rust!"
+                    }
+                }
             },
-            ReplayHistoryEvent {
-                event_id: 4,
-                scheduled_event_id: None,
-                event: Event::ActivityScheduled {
-                    id: 2,
-                    name: "Hello".into(),
-                    input: "World".into(),
-                    execution_id: 1,
-                },
+            {
+                "event_id": 4,
+                "scheduled_event_id": null,
+                "event": {
+                    "ActivityScheduled": {
+                        "id": 2,
+                        "name": "Hello",
+                        "input": "World",
+                        "execution_id": 1
+                    }
+                }
             },
-            ReplayHistoryEvent {
-                event_id: 5,
-                scheduled_event_id: Some(4),
-                event: Event::ActivityCompleted {
-                    id: 2,
-                    result: "Hello, World!".into(),
-                },
-            },
-        ];
+            {
+                "event_id": 5,
+                "scheduled_event_id": 4,
+                "event": {
+                    "ActivityCompleted": {
+                        "id": 2,
+                        "result": "Hello, World!"
+                    }
+                }
+            }
+        ]
+        "#;
+        let history: Vec<ReplayHistoryEvent> = serde_json::from_str(history_json).unwrap();
 
         let result = replay_orchestration(
             |ctx: ReplayOrchestrationContext| async move {
@@ -1138,39 +1338,68 @@ mod tests {
     #[tokio::test]
     async fn replay_e2e_like_control_flow_yes_branch() {
         // ControlFlow orchestration: GetFlag -> yes => SayYes
-        let history = vec![
-            Event::OrchestrationStarted {
-                name: "ControlFlow".into(),
-                version: "1.0".into(),
-                input: "".into(),
-                parent_instance: None,
-                parent_id: None,
+        let history_json = r#"
+        [
+            {
+                "event_id": 1,
+                "scheduled_event_id": null,
+                "event": {
+                    "OrchestrationStarted": {
+                        "name": "ControlFlow",
+                        "version": "1.0",
+                        "input": "",
+                        "parent_instance": null,
+                        "parent_id": null
+                    }
+                }
             },
-            Event::ActivityScheduled {
-                id: 1,
-                name: "GetFlag".into(),
-                input: "".into(),
-                execution_id: 1,
+            {
+                "event_id": 2,
+                "scheduled_event_id": null,
+                "event": {
+                    "ActivityScheduled": {
+                        "id": 1,
+                        "name": "GetFlag",
+                        "input": "",
+                        "execution_id": 1
+                    }
+                }
             },
-            Event::ActivityCompleted {
-                id: 1,
-                result: "yes".into(),
+            {
+                "event_id": 3,
+                "scheduled_event_id": 2,
+                "event": {
+                    "ActivityCompleted": {
+                        "id": 1,
+                        "result": "yes"
+                    }
+                }
             },
-            Event::ActivityScheduled {
-                id: 2,
-                name: "SayYes".into(),
-                input: "".into(),
-                execution_id: 1,
+            {
+                "event_id": 4,
+                "scheduled_event_id": null,
+                "event": {
+                    "ActivityScheduled": {
+                        "id": 2,
+                        "name": "SayYes",
+                        "input": "",
+                        "execution_id": 1
+                    }
+                }
             },
-            Event::ActivityCompleted {
-                id: 2,
-                result: "picked_yes".into(),
-            },
+            {
+                "event_id": 5,
+                "scheduled_event_id": 4,
+                "event": {
+                    "ActivityCompleted": {
+                        "id": 2,
+                        "result": "picked_yes"
+                    }
+                }
+            }
         ]
-        .into_iter()
-        .enumerate()
-        .map(|(i, e)| ReplayHistoryEvent { event_id: (i as u64) + 1, scheduled_event_id: None, event: e })
-        .collect();
+        "#;
+        let history: Vec<ReplayHistoryEvent> = serde_json::from_str(history_json).unwrap();
 
         let result = replay_orchestration(
             |ctx: ReplayOrchestrationContext| async move {
@@ -1194,49 +1423,90 @@ mod tests {
     #[tokio::test]
     async fn replay_e2e_like_loop_three_iterations() {
         // Loop orchestration: Append 3 times accumulating value
-        let history = vec![
-            Event::OrchestrationStarted {
-                name: "LoopOrchestration".into(),
-                version: "1.0".into(),
-                input: "".into(),
-                parent_instance: None,
-                parent_id: None,
+        let history_json = r#"
+        [
+            {
+                "event_id": 1,
+                "scheduled_event_id": null,
+                "event": {
+                    "OrchestrationStarted": {
+                        "name": "LoopOrchestration",
+                        "version": "1.0",
+                        "input": "",
+                        "parent_instance": null,
+                        "parent_id": null
+                    }
+                }
             },
-            Event::ActivityScheduled {
-                id: 1,
-                name: "Append".into(),
-                input: "start".into(),
-                execution_id: 1,
+            {
+                "event_id": 2,
+                "scheduled_event_id": null,
+                "event": {
+                    "ActivityScheduled": {
+                        "id": 1,
+                        "name": "Append",
+                        "input": "start",
+                        "execution_id": 1
+                    }
+                }
             },
-            Event::ActivityCompleted {
-                id: 1,
-                result: "startx".into(),
+            {
+                "event_id": 3,
+                "scheduled_event_id": 2,
+                "event": {
+                    "ActivityCompleted": {
+                        "id": 1,
+                        "result": "startx"
+                    }
+                }
             },
-            Event::ActivityScheduled {
-                id: 2,
-                name: "Append".into(),
-                input: "startx".into(),
-                execution_id: 1,
+            {
+                "event_id": 4,
+                "scheduled_event_id": null,
+                "event": {
+                    "ActivityScheduled": {
+                        "id": 2,
+                        "name": "Append",
+                        "input": "startx",
+                        "execution_id": 1
+                    }
+                }
             },
-            Event::ActivityCompleted {
-                id: 2,
-                result: "startxx".into(),
+            {
+                "event_id": 5,
+                "scheduled_event_id": 4,
+                "event": {
+                    "ActivityCompleted": {
+                        "id": 2,
+                        "result": "startxx"
+                    }
+                }
             },
-            Event::ActivityScheduled {
-                id: 3,
-                name: "Append".into(),
-                input: "startxx".into(),
-                execution_id: 1,
+            {
+                "event_id": 6,
+                "scheduled_event_id": null,
+                "event": {
+                    "ActivityScheduled": {
+                        "id": 3,
+                        "name": "Append",
+                        "input": "startxx",
+                        "execution_id": 1
+                    }
+                }
             },
-            Event::ActivityCompleted {
-                id: 3,
-                result: "startxxx".into(),
-            },
+            {
+                "event_id": 7,
+                "scheduled_event_id": 6,
+                "event": {
+                    "ActivityCompleted": {
+                        "id": 3,
+                        "result": "startxxx"
+                    }
+                }
+            }
         ]
-        .into_iter()
-        .enumerate()
-        .map(|(i, e)| ReplayHistoryEvent { event_id: (i as u64) + 1, scheduled_event_id: None, event: e })
-        .collect();
+        "#;
+        let history: Vec<ReplayHistoryEvent> = serde_json::from_str(history_json).unwrap();
 
         let result = replay_orchestration(
             |ctx: ReplayOrchestrationContext| async move {
@@ -1259,39 +1529,68 @@ mod tests {
     #[tokio::test]
     async fn replay_e2e_like_error_handling() {
         // ErrorHandling orchestration: Fragile(bad) => Err, then Recover => recovered
-        let history = vec![
-            Event::OrchestrationStarted {
-                name: "ErrorHandling".into(),
-                version: "1.0".into(),
-                input: "".into(),
-                parent_instance: None,
-                parent_id: None,
+        let history_json = r#"
+        [
+            {
+                "event_id": 1,
+                "scheduled_event_id": null,
+                "event": {
+                    "OrchestrationStarted": {
+                        "name": "ErrorHandling",
+                        "version": "1.0",
+                        "input": "",
+                        "parent_instance": null,
+                        "parent_id": null
+                    }
+                }
             },
-            Event::ActivityScheduled {
-                id: 1,
-                name: "Fragile".into(),
-                input: "bad".into(),
-                execution_id: 1,
+            {
+                "event_id": 2,
+                "scheduled_event_id": null,
+                "event": {
+                    "ActivityScheduled": {
+                        "id": 1,
+                        "name": "Fragile",
+                        "input": "bad",
+                        "execution_id": 1
+                    }
+                }
             },
-            Event::ActivityFailed {
-                id: 1,
-                error: "boom".into(),
+            {
+                "event_id": 3,
+                "scheduled_event_id": 2,
+                "event": {
+                    "ActivityFailed": {
+                        "id": 1,
+                        "error": "boom"
+                    }
+                }
             },
-            Event::ActivityScheduled {
-                id: 2,
-                name: "Recover".into(),
-                input: "".into(),
-                execution_id: 1,
+            {
+                "event_id": 4,
+                "scheduled_event_id": null,
+                "event": {
+                    "ActivityScheduled": {
+                        "id": 2,
+                        "name": "Recover",
+                        "input": "",
+                        "execution_id": 1
+                    }
+                }
             },
-            Event::ActivityCompleted {
-                id: 2,
-                result: "recovered".into(),
-            },
+            {
+                "event_id": 5,
+                "scheduled_event_id": 4,
+                "event": {
+                    "ActivityCompleted": {
+                        "id": 2,
+                        "result": "recovered"
+                    }
+                }
+            }
         ]
-        .into_iter()
-        .enumerate()
-        .map(|(i, e)| ReplayHistoryEvent { event_id: (i as u64) + 1, scheduled_event_id: None, event: e })
-        .collect();
+        "#;
+        let history: Vec<ReplayHistoryEvent> = serde_json::from_str(history_json).unwrap();
 
         let result = replay_orchestration(
             |ctx: ReplayOrchestrationContext| async move {
