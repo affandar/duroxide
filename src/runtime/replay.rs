@@ -8,8 +8,7 @@ use std::task::{Context, Poll, Waker};
 use super::event_ids::ReplayHistoryEvent;
 use super::replay_context_wrapper::ReplayOrchestrationContext;
 
-/// Maximum number of iterations allowed in the replay loop to prevent infinite loops
-const MAX_REPLAY_ITERATIONS: usize = 2000;
+// No replay iteration loop is used anymore
 
 /// Output from the replay function
 #[derive(Debug)]
@@ -198,34 +197,13 @@ where
         iter += 1;
         let event = &wrapped_event.event;
         match event {
-            // OrchestrationStarted: Execute the orchestration handler
-            Event::OrchestrationStarted { .. } => {
-                // The orchestration future is already created and passed in
-                // Poll it once so that orchestration can schedule its first actions
-                println!("[replay][iter={}] OrchestrationStarted encountered - initial poll", iter);
-                if let Some(ref mut fut) = orchestration_future {
-                    if let Some(ref _ctx) = orchestration_context {
-                        let waker = create_noop_waker();
-                        let mut cx = Context::from_waker(&waker);
-                        match fut.as_mut().poll(&mut cx) {
-                            Poll::Ready(output) => {
-                                println!("[replay][iter={}] Orchestration returned at start", iter);
-                                orchestration_output = Some(output);
-                            }
-                            Poll::Pending => {
-                                // Do not collect actions yet; we'll collect after processing events
-                                println!("[replay][iter={}] Orchestration pending after initial poll", iter);
-                            }
-                        }
-                    }
-                }
-            }
+            // OrchestrationStarted: nothing special here; unified polling happens after event
+            Event::OrchestrationStarted { .. } => {}
 
             // Scheduled events: If already in open futures, mark as don't emit decision
             Event::ActivityScheduled { id, .. } => {
                 let futures = open_futures.lock().unwrap();
-                let exists = futures.contains_key(id);
-                println!("[replay][iter={}] ActivityScheduled id={} future_exists={}", iter, id, exists);
+                let _exists = futures.contains_key(id);
                 if let Some(future) = futures.get(id) {
                     *future.should_emit_decision.lock().unwrap() = false; // Already in history, don't emit
                 }
@@ -255,8 +233,7 @@ where
             // Completion events: Mark futures as ready and store completion data
             Event::ActivityCompleted { id, result } => {
                 let futures = open_futures.lock().unwrap();
-                let exists = futures.contains_key(id);
-                println!("[replay][iter={}] ActivityCompleted id={} future_exists={}", iter, id, exists);
+                let _exists = futures.contains_key(id);
                 if let Some(future) = futures.get(id) {
                     let mut ready = future.ready.lock().unwrap();
                     if !*ready {
@@ -279,8 +256,7 @@ where
 
             Event::TimerFired { id, .. } => {
                 let futures = open_futures.lock().unwrap();
-                let exists = futures.contains_key(id);
-                println!("[replay][iter={}] TimerFired id={} future_exists={}", iter, id, exists);
+                let _exists = futures.contains_key(id);
                 if let Some(future) = futures.get(id) {
                     let mut ready = future.ready.lock().unwrap();
                     if !*ready {
@@ -292,8 +268,7 @@ where
 
             Event::ExternalEvent { id, data, .. } => {
                 let futures = open_futures.lock().unwrap();
-                let exists = futures.contains_key(id);
-                println!("[replay][iter={}] ExternalEvent id={} future_exists={}", iter, id, exists);
+                let _exists = futures.contains_key(id);
                 if let Some(future) = futures.get(id) {
                     let mut ready = future.ready.lock().unwrap();
                     if !*ready {
@@ -305,8 +280,7 @@ where
 
             Event::SubOrchestrationCompleted { id, result } => {
                 let futures = open_futures.lock().unwrap();
-                let exists = futures.contains_key(id);
-                println!("[replay][iter={}] SubOrchestrationCompleted id={} future_exists={}", iter, id, exists);
+                let _exists = futures.contains_key(id);
                 if let Some(future) = futures.get(id) {
                     let mut ready = future.ready.lock().unwrap();
                     if !*ready {
@@ -318,8 +292,7 @@ where
 
             Event::SubOrchestrationFailed { id, error } => {
                 let futures = open_futures.lock().unwrap();
-                let exists = futures.contains_key(id);
-                println!("[replay][iter={}] SubOrchestrationFailed id={} future_exists={}", iter, id, exists);
+                let _exists = futures.contains_key(id);
                 if let Some(future) = futures.get(id) {
                     let mut ready = future.ready.lock().unwrap();
                     if !*ready {
@@ -355,41 +328,36 @@ where
                 // This is just recorded in history but doesn't affect replay
             }
         }
-    }
-
-    // Poll the orchestration future once after processing events
-    if let Some(ref mut fut) = orchestration_future {
-        if let Some(ref _ctx) = orchestration_context {
-            let waker = create_noop_waker();
-            let mut cx = Context::from_waker(&waker);
-
-            match fut.as_mut().poll(&mut cx) {
-                Poll::Ready(output) => {
-                    orchestration_output = Some(output);
-                }
-                Poll::Pending => {
-                    // Continue processing
-                }
-            }
-
-            // Collect actions from context (only those that should be emitted)
-            for action in _ctx.take_actions() {
-                // Check if this action should be emitted based on open_futures
-                let should_emit = match &action {
-                    Action::CallActivity { id, .. }
-                    | Action::CreateTimer { id, .. }
-                    | Action::WaitExternal { id, .. }
-                    | Action::StartSubOrchestration { id, .. } => {
-                        let futures = open_futures.lock().unwrap();
-                        futures
-                            .get(id)
-                            .map_or(true, |f| *f.should_emit_decision.lock().unwrap())
+        // After each event, poll orchestration once to allow it to advance
+        if orchestration_output.is_none() {
+            if let Some(ref mut fut) = orchestration_future {
+                if let Some(ref _ctx) = orchestration_context {
+                    let waker = create_noop_waker();
+                    let mut cx = Context::from_waker(&waker);
+                    match fut.as_mut().poll(&mut cx) {
+                        Poll::Ready(output) => {
+                            orchestration_output = Some(output);
+                        }
+                        Poll::Pending => {}
                     }
-                    _ => true,
-                };
-
-                if should_emit {
-                    decisions.push(action);
+                    // Collect actions from context (only those that should be emitted)
+                    for action in _ctx.take_actions() {
+                        let should_emit = match &action {
+                            Action::CallActivity { id, .. }
+                            | Action::CreateTimer { id, .. }
+                            | Action::WaitExternal { id, .. }
+                            | Action::StartSubOrchestration { id, .. } => {
+                                let futures = open_futures.lock().unwrap();
+                                futures
+                                    .get(id)
+                                    .map_or(true, |f| *f.should_emit_decision.lock().unwrap())
+                            }
+                            _ => true,
+                        };
+                        if should_emit {
+                            decisions.push(action);
+                        }
+                    }
                 }
             }
         }
