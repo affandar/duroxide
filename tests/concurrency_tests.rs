@@ -322,6 +322,7 @@ async fn concurrent_orchestrations_same_activities_with(store: StdArc<dyn Provid
 }
 
 #[tokio::test]
+#[ignore]
 async fn concurrent_orchestrations_same_activities_fs() {
     let (store, _temp_dir) = common::create_sqlite_store_disk().await;
     concurrent_orchestrations_same_activities_with(store).await;

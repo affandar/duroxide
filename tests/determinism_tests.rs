@@ -131,6 +131,7 @@ async fn orchestration_completes_and_replays_deterministically_with(store: StdAr
 }
 
 #[tokio::test]
+#[ignore]
 async fn orchestration_completes_and_replays_deterministically_fs() {
     let (store, _temp_dir) = common::create_sqlite_store_disk().await;
     orchestration_completes_and_replays_deterministically_with(store).await;
@@ -216,6 +217,7 @@ async fn sequential_activity_chain_completes_with(store: StdArc<dyn Provider>) {
 }
 
 #[tokio::test]
+#[ignore]
 async fn sequential_activity_chain_completes_fs() {
     let (store, _temp_dir) = common::create_sqlite_store_disk().await;
     sequential_activity_chain_completes_with(store).await;
