@@ -2,15 +2,13 @@
 
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
-use duroxide::{OrchestrationContext, OrchestrationRegistry, Client};
+use duroxide::{Client, OrchestrationContext, OrchestrationRegistry};
 use std::sync::Arc;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize logging
-    tracing_subscriber::fmt()
-        .with_env_filter("duroxide=info")
-        .init();
+    tracing_subscriber::fmt().with_env_filter("duroxide=info").init();
 
     // Create an in-memory SQLite provider
     let store = Arc::new(
@@ -18,51 +16,41 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .await
             .unwrap(),
     );
-    
+
     // Simple activity
     let activities = ActivityRegistry::builder()
-        .register("Echo", |input: String| async move {
-            Ok(format!("Echo: {}", input))
-        })
+        .register("Echo", |input: String| async move { Ok(format!("Echo: {}", input)) })
         .build();
-    
+
     // Orchestration with trace then echo
     let orchestration = |ctx: OrchestrationContext, input: String| async move {
         // First do a trace
-        let trace_result = ctx.trace_info_async(format!("Processing: {}", input))
+        let trace_result = ctx
+            .trace_info_async(format!("Processing: {}", input))
             .into_activity()
             .await?;
         println!("Trace returned: {}", trace_result);
-        
+
         // Then do echo
-        let echo_result = ctx.schedule_activity("Echo", input)
-            .into_activity()
-            .await?;
-        
+        let echo_result = ctx.schedule_activity("Echo", input).into_activity().await?;
+
         Ok(echo_result)
     };
-    
+
     // Register the orchestration
     let orchestrations = OrchestrationRegistry::builder()
         .register("Minimal", orchestration)
         .build();
-    
+
     // Start the runtime
-    let rt = runtime::Runtime::start_with_store(
-        store.clone(),
-        Arc::new(activities),
-        orchestrations,
-    )
-    .await;
-    
+    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activities), orchestrations).await;
+
     // Create a client
     let client = Client::new(store.clone());
-    
+
     // Start an instance
-    client
-        .start_orchestration("minimal-1", "Minimal", "World")
-        .await?;
-    
+    client.start_orchestration("minimal-1", "Minimal", "World").await?;
+
     // Wait for completion
     match client
         .wait_for_orchestration("minimal-1", std::time::Duration::from_secs(1))
@@ -79,9 +67,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         _ => {}
     }
-    
+
     // Shutdown
     rt.shutdown().await;
-    
+
     Ok(())
 }

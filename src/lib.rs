@@ -375,7 +375,7 @@ impl CtxInner {
         // In the new monotonic system, correlation IDs should start from 1
         // regardless of history length, since OrchestrationStarted doesn't use correlation IDs
         let next_id = 1u64;
-        
+
         Self {
             history,
             actions: Vec::new(),

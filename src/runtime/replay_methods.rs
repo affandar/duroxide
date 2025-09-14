@@ -4,9 +4,9 @@ use std::sync::{Arc, Mutex};
 
 use super::replay::ReplayDurableFuture;
 
-/// TODO : CR : IMPORTANT: When merging into mainline code, all of this file should just go away and merge with existing code 
+/// TODO : CR : IMPORTANT: When merging into mainline code, all of this file should just go away and merge with existing code
 /// in OrchestrationContext and other files that use it.
-/// 
+///
 /// Extension trait for OrchestrationContext to add replay-aware scheduling methods
 #[allow(dead_code)]
 pub trait ReplaySchedulingExt {
@@ -44,7 +44,6 @@ impl ReplaySchedulingExt for OrchestrationContext {
         _input: impl Into<String>,
         open_futures: &Arc<Mutex<HashMap<u64, ReplayDurableFuture>>>,
     ) -> ReplayDurableFuture {
-
         // Generate monotonically increasing ID instead of claiming from history
         let mut inner = self.inner.lock().unwrap();
         let id = inner.next_id();
@@ -93,7 +92,6 @@ impl ReplaySchedulingExt for OrchestrationContext {
         _name: impl Into<String>,
         open_futures: &Arc<Mutex<HashMap<u64, ReplayDurableFuture>>>,
     ) -> ReplayDurableFuture {
-        
         // Generate monotonically increasing ID instead of claiming from history
         let mut inner = self.inner.lock().unwrap();
         let id = inner.next_id();
@@ -119,7 +117,6 @@ impl ReplaySchedulingExt for OrchestrationContext {
         _input: impl Into<String>,
         open_futures: &Arc<Mutex<HashMap<u64, ReplayDurableFuture>>>,
     ) -> ReplayDurableFuture {
-        
         // Generate monotonically increasing ID instead of claiming from history
         let mut inner = self.inner.lock().unwrap();
         let id = inner.next_id();

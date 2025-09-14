@@ -5,8 +5,8 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
 
-use super::replay_context_wrapper::ReplayOrchestrationContext;
 use super::event_ids::ReplayHistoryEvent;
+use super::replay_context_wrapper::ReplayOrchestrationContext;
 
 /// Maximum number of iterations allowed in the replay loop to prevent infinite loops
 const MAX_REPLAY_ITERATIONS: usize = 2000;
@@ -119,7 +119,9 @@ where
         return Err("History must not be empty".to_string());
     }
 
-    let has_start = history.iter().any(|he| matches!(he.event, Event::OrchestrationStarted { .. }));
+    let has_start = history
+        .iter()
+        .any(|he| matches!(he.event, Event::OrchestrationStarted { .. }));
     if !has_start {
         return Err("History must contain OrchestrationStarted event".to_string());
     }
@@ -134,18 +136,22 @@ where
     let orchestration_future: Pin<Box<Fut>> = Box::pin(orchestration_fn(ctx.clone()));
 
     // Phase 1: Process existing history
-    let (mut orchestration_output, mut non_determinism_error, pending_future) =
-        replay_core_with_future(&history, open_futures.clone(), &mut decisions, Some((orchestration_future, ctx)))?;
+    let (mut orchestration_output, mut non_determinism_error, pending_future) = replay_core_with_future(
+        &history,
+        open_futures.clone(),
+        &mut decisions,
+        Some((orchestration_future, ctx)),
+    )?;
 
     // Phase 2: Process delta history if orchestration hasn't completed yet and no error
-    if orchestration_output.is_none() && non_determinism_error.is_none() && !delta_history.is_empty() && pending_future.is_some() {
+    if orchestration_output.is_none()
+        && non_determinism_error.is_none()
+        && !delta_history.is_empty()
+        && pending_future.is_some()
+    {
         // Only process the delta events with the existing future
-        let (output, error, _) = replay_core_with_future(
-            &delta_history,
-            open_futures.clone(),
-            &mut decisions,
-            pending_future,
-        )?;
+        let (output, error, _) =
+            replay_core_with_future(&delta_history, open_futures.clone(), &mut decisions, pending_future)?;
         orchestration_output = output;
         non_determinism_error = error;
     }
@@ -165,13 +171,20 @@ fn replay_core_with_future<Fut, O>(
     open_futures: Arc<Mutex<HashMap<u64, ReplayDurableFuture>>>,
     decisions: &mut Vec<Action>,
     existing_future: Option<(Pin<Box<Fut>>, ReplayOrchestrationContext)>,
-) -> Result<(Option<O>, Option<String>, Option<(Pin<Box<Fut>>, ReplayOrchestrationContext)>), String>
+) -> Result<
+    (
+        Option<O>,
+        Option<String>,
+        Option<(Pin<Box<Fut>>, ReplayOrchestrationContext)>,
+    ),
+    String,
+>
 where
     Fut: Future<Output = O>,
 {
     let mut orchestration_future: Option<Pin<Box<Fut>>> = None;
     let mut orchestration_context: Option<ReplayOrchestrationContext> = None;
-    
+
     // Use existing future if provided
     if let Some((fut, ctx)) = existing_future {
         orchestration_future = Some(fut);
@@ -179,263 +192,264 @@ where
     }
     let mut orchestration_output = None;
     let mut non_determinism_error: Option<String> = None;
-    let mut iteration = 0;
-
-    while iteration < MAX_REPLAY_ITERATIONS {
-        iteration += 1;
-        let mut progress_made = false;
-
-        // Single loop to process all events
-        for wrapped_event in events {
-            let event = &wrapped_event.event;
-            match event {
-                // OrchestrationStarted: Execute the orchestration handler
-                Event::OrchestrationStarted { .. } => {
-                    // The orchestration future is already created and passed in
-                }
-
-                // Scheduled events: If already in open futures, mark as don't emit decision
-                Event::ActivityScheduled { id, .. } => {
-                    let futures = open_futures.lock().unwrap();
-                    if let Some(future) = futures.get(id) {
-                        *future.should_emit_decision.lock().unwrap() = false; // Already in history, don't emit
-                    }
-                }
-
-                Event::TimerCreated { id, .. } => {
-                    let futures = open_futures.lock().unwrap();
-                    if let Some(future) = futures.get(id) {
-                        *future.should_emit_decision.lock().unwrap() = false;
-                    }
-                }
-
-                Event::ExternalSubscribed { id, .. } => {
-                    let futures = open_futures.lock().unwrap();
-                    if let Some(future) = futures.get(id) {
-                        *future.should_emit_decision.lock().unwrap() = false;
-                    }
-                }
-
-                Event::SubOrchestrationScheduled { id, .. } => {
-                    let futures = open_futures.lock().unwrap();
-                    if let Some(future) = futures.get(id) {
-                        *future.should_emit_decision.lock().unwrap() = false;
-                    }
-                }
-
-                // Completion events: Mark futures as ready and store completion data
-                Event::ActivityCompleted { id, result } => {
-                    let futures = open_futures.lock().unwrap();
-                    if let Some(future) = futures.get(id) {
-                        let mut ready = future.ready.lock().unwrap();
-                        if !*ready {
-                            *ready = true;
-                            *future.completion.lock().unwrap() = Some(DurableOutput::Activity(Ok(result.clone())));
-                            progress_made = true;
+    // Single pass over all events
+    let mut iter: usize = 0;
+    for wrapped_event in events {
+        iter += 1;
+        let event = &wrapped_event.event;
+        match event {
+            // OrchestrationStarted: Execute the orchestration handler
+            Event::OrchestrationStarted { .. } => {
+                // The orchestration future is already created and passed in
+                // Poll it once so that orchestration can schedule its first actions
+                println!("[replay][iter={}] OrchestrationStarted encountered - initial poll", iter);
+                if let Some(ref mut fut) = orchestration_future {
+                    if let Some(ref _ctx) = orchestration_context {
+                        let waker = create_noop_waker();
+                        let mut cx = Context::from_waker(&waker);
+                        match fut.as_mut().poll(&mut cx) {
+                            Poll::Ready(output) => {
+                                println!("[replay][iter={}] Orchestration returned at start", iter);
+                                orchestration_output = Some(output);
+                            }
+                            Poll::Pending => {
+                                // Do not collect actions yet; we'll collect after processing events
+                                println!("[replay][iter={}] Orchestration pending after initial poll", iter);
+                            }
                         }
                     }
-                }
-
-                Event::ActivityFailed { id, error } => {
-                    let futures = open_futures.lock().unwrap();
-                    if let Some(future) = futures.get(id) {
-                        let mut ready = future.ready.lock().unwrap();
-                        if !*ready {
-                            *ready = true;
-                            *future.completion.lock().unwrap() = Some(DurableOutput::Activity(Err(error.clone())));
-                            progress_made = true;
-                        }
-                    }
-                }
-
-                Event::TimerFired { id, .. } => {
-                    let futures = open_futures.lock().unwrap();
-                    if let Some(future) = futures.get(id) {
-                        let mut ready = future.ready.lock().unwrap();
-                        if !*ready {
-                            *ready = true;
-                            *future.completion.lock().unwrap() = Some(DurableOutput::Timer);
-                            progress_made = true;
-                        }
-                    }
-                }
-
-                Event::ExternalEvent { id, data, .. } => {
-                    let futures = open_futures.lock().unwrap();
-                    if let Some(future) = futures.get(id) {
-                        let mut ready = future.ready.lock().unwrap();
-                        if !*ready {
-                            *ready = true;
-                            *future.completion.lock().unwrap() = Some(DurableOutput::External(data.clone()));
-                            progress_made = true;
-                        }
-                    }
-                }
-
-                Event::SubOrchestrationCompleted { id, result } => {
-                    let futures = open_futures.lock().unwrap();
-                    if let Some(future) = futures.get(id) {
-                        let mut ready = future.ready.lock().unwrap();
-                        if !*ready {
-                            *ready = true;
-                            *future.completion.lock().unwrap() =
-                                Some(DurableOutput::SubOrchestration(Ok(result.clone())));
-                            progress_made = true;
-                        }
-                    }
-                }
-
-                Event::SubOrchestrationFailed { id, error } => {
-                    let futures = open_futures.lock().unwrap();
-                    if let Some(future) = futures.get(id) {
-                        let mut ready = future.ready.lock().unwrap();
-                        if !*ready {
-                            *ready = true;
-                            *future.completion.lock().unwrap() =
-                                Some(DurableOutput::SubOrchestration(Err(error.clone())));
-                            progress_made = true;
-                        }
-                    }
-                }
-
-                // Orchestration lifecycle events - these don't affect scheduling/futures
-                Event::OrchestrationCompleted { .. } => {
-                    // Orchestration completed - this is a terminal event
-                    // The orchestration function should have already returned
-                }
-                
-                Event::OrchestrationFailed { .. } => {
-                    // Orchestration failed - this is a terminal event
-                    // The orchestration function should have already returned with an error
-                }
-                
-                Event::OrchestrationContinuedAsNew { .. } => {
-                    // Continue as new - this is a terminal event for this execution
-                    // A new execution will be created with the new input
-                }
-                
-                Event::OrchestrationCancelRequested { .. } => {
-                    // Cancellation requested - the orchestration should handle this
-                    // TODO: We might need to propagate this to the orchestration context
-                }
-                
-                Event::OrchestrationChained { .. } => {
-                    // Fire-and-forget orchestration - no future to track
-                    // This is just recorded in history but doesn't affect replay
                 }
             }
-        }
 
-        // At end of loop: if progress was made, poll the orchestration future
-        if progress_made || iteration == 1 {
-            if let Some(ref mut fut) = orchestration_future {
-                if let Some(ref _ctx) = orchestration_context {
-                    let waker = create_noop_waker();
-                    let mut cx = Context::from_waker(&waker);
+            // Scheduled events: If already in open futures, mark as don't emit decision
+            Event::ActivityScheduled { id, .. } => {
+                let futures = open_futures.lock().unwrap();
+                let exists = futures.contains_key(id);
+                println!("[replay][iter={}] ActivityScheduled id={} future_exists={}", iter, id, exists);
+                if let Some(future) = futures.get(id) {
+                    *future.should_emit_decision.lock().unwrap() = false; // Already in history, don't emit
+                }
+            }
 
-                    match fut.as_mut().poll(&mut cx) {
-                        Poll::Ready(output) => {
-                            orchestration_output = Some(output);
-                        }
-                        Poll::Pending => {
-                            // Continue processing
-                        }
+            Event::TimerCreated { id, .. } => {
+                let futures = open_futures.lock().unwrap();
+                if let Some(future) = futures.get(id) {
+                    *future.should_emit_decision.lock().unwrap() = false;
+                }
+            }
+
+            Event::ExternalSubscribed { id, .. } => {
+                let futures = open_futures.lock().unwrap();
+                if let Some(future) = futures.get(id) {
+                    *future.should_emit_decision.lock().unwrap() = false;
+                }
+            }
+
+            Event::SubOrchestrationScheduled { id, .. } => {
+                let futures = open_futures.lock().unwrap();
+                if let Some(future) = futures.get(id) {
+                    *future.should_emit_decision.lock().unwrap() = false;
+                }
+            }
+
+            // Completion events: Mark futures as ready and store completion data
+            Event::ActivityCompleted { id, result } => {
+                let futures = open_futures.lock().unwrap();
+                let exists = futures.contains_key(id);
+                println!("[replay][iter={}] ActivityCompleted id={} future_exists={}", iter, id, exists);
+                if let Some(future) = futures.get(id) {
+                    let mut ready = future.ready.lock().unwrap();
+                    if !*ready {
+                        *ready = true;
+                        *future.completion.lock().unwrap() = Some(DurableOutput::Activity(Ok(result.clone())));
                     }
+                }
+            }
 
+            Event::ActivityFailed { id, error } => {
+                let futures = open_futures.lock().unwrap();
+                if let Some(future) = futures.get(id) {
+                    let mut ready = future.ready.lock().unwrap();
+                    if !*ready {
+                        *ready = true;
+                        *future.completion.lock().unwrap() = Some(DurableOutput::Activity(Err(error.clone())));
+                    }
+                }
+            }
+
+            Event::TimerFired { id, .. } => {
+                let futures = open_futures.lock().unwrap();
+                let exists = futures.contains_key(id);
+                println!("[replay][iter={}] TimerFired id={} future_exists={}", iter, id, exists);
+                if let Some(future) = futures.get(id) {
+                    let mut ready = future.ready.lock().unwrap();
+                    if !*ready {
+                        *ready = true;
+                        *future.completion.lock().unwrap() = Some(DurableOutput::Timer);
+                    }
+                }
+            }
+
+            Event::ExternalEvent { id, data, .. } => {
+                let futures = open_futures.lock().unwrap();
+                let exists = futures.contains_key(id);
+                println!("[replay][iter={}] ExternalEvent id={} future_exists={}", iter, id, exists);
+                if let Some(future) = futures.get(id) {
+                    let mut ready = future.ready.lock().unwrap();
+                    if !*ready {
+                        *ready = true;
+                        *future.completion.lock().unwrap() = Some(DurableOutput::External(data.clone()));
+                    }
+                }
+            }
+
+            Event::SubOrchestrationCompleted { id, result } => {
+                let futures = open_futures.lock().unwrap();
+                let exists = futures.contains_key(id);
+                println!("[replay][iter={}] SubOrchestrationCompleted id={} future_exists={}", iter, id, exists);
+                if let Some(future) = futures.get(id) {
+                    let mut ready = future.ready.lock().unwrap();
+                    if !*ready {
+                        *ready = true;
+                        *future.completion.lock().unwrap() = Some(DurableOutput::SubOrchestration(Ok(result.clone())));
+                    }
+                }
+            }
+
+            Event::SubOrchestrationFailed { id, error } => {
+                let futures = open_futures.lock().unwrap();
+                let exists = futures.contains_key(id);
+                println!("[replay][iter={}] SubOrchestrationFailed id={} future_exists={}", iter, id, exists);
+                if let Some(future) = futures.get(id) {
+                    let mut ready = future.ready.lock().unwrap();
+                    if !*ready {
+                        *ready = true;
+                        *future.completion.lock().unwrap() = Some(DurableOutput::SubOrchestration(Err(error.clone())));
+                    }
+                }
+            }
+
+            // Orchestration lifecycle events - these don't affect scheduling/futures
+            Event::OrchestrationCompleted { .. } => {
+                // Orchestration completed - this is a terminal event
+                // The orchestration function should have already returned
+            }
+
+            Event::OrchestrationFailed { .. } => {
+                // Orchestration failed - this is a terminal event
+                // The orchestration function should have already returned with an error
+            }
+
+            Event::OrchestrationContinuedAsNew { .. } => {
+                // Continue as new - this is a terminal event for this execution
+                // A new execution will be created with the new input
+            }
+
+            Event::OrchestrationCancelRequested { .. } => {
+                // Cancellation requested - the orchestration should handle this
+                // TODO: We might need to propagate this to the orchestration context
+            }
+
+            Event::OrchestrationChained { .. } => {
+                // Fire-and-forget orchestration - no future to track
+                // This is just recorded in history but doesn't affect replay
+            }
+        }
+    }
+
+    // Poll the orchestration future once after processing events
+    if let Some(ref mut fut) = orchestration_future {
+        if let Some(ref _ctx) = orchestration_context {
+            let waker = create_noop_waker();
+            let mut cx = Context::from_waker(&waker);
+
+            match fut.as_mut().poll(&mut cx) {
+                Poll::Ready(output) => {
+                    orchestration_output = Some(output);
+                }
+                Poll::Pending => {
+                    // Continue processing
                 }
             }
 
             // Collect actions from context (only those that should be emitted)
-            if let Some(ref _ctx) = orchestration_context {
-                for action in _ctx.take_actions() {
-                        // Check if this action should be emitted based on open_futures
-                        let should_emit = match &action {
-                            Action::CallActivity { id, .. } |
-                            Action::CreateTimer { id, .. } |
-                            Action::WaitExternal { id, .. } |
-                            Action::StartSubOrchestration { id, .. } => {
-                                let futures = open_futures.lock().unwrap();
-                                futures
-                                    .get(id)
-                                    .map_or(true, |f| *f.should_emit_decision.lock().unwrap())
-                            }
-                            _ => true,
-                        };
-
-                    if should_emit {
-                        decisions.push(action);
+            for action in _ctx.take_actions() {
+                // Check if this action should be emitted based on open_futures
+                let should_emit = match &action {
+                    Action::CallActivity { id, .. }
+                    | Action::CreateTimer { id, .. }
+                    | Action::WaitExternal { id, .. }
+                    | Action::StartSubOrchestration { id, .. } => {
+                        let futures = open_futures.lock().unwrap();
+                        futures
+                            .get(id)
+                            .map_or(true, |f| *f.should_emit_decision.lock().unwrap())
                     }
+                    _ => true,
+                };
+
+                if should_emit {
+                    decisions.push(action);
                 }
             }
-        }
-
-        // Check for non-determinism if orchestration completed
-        if orchestration_output.is_some() && non_determinism_error.is_none() {
-            // Re-process events to check for non-determinism
-            for wrapped_event in events {
-                let event = &wrapped_event.event;
-                match event {
-                    Event::ActivityScheduled { id, name, .. } => {
-                        let futures = open_futures.lock().unwrap();
-                        if !futures.contains_key(id) {
-                            non_determinism_error = Some(format!(
-                                "Non-determinism detected: ActivityScheduled event (id={}, name='{}') found in history, but orchestration did not call schedule_activity()",
-                                id, name
-                            ));
-                            break;
-                        }
-                    }
-                    Event::TimerCreated { id, .. } => {
-                        let futures = open_futures.lock().unwrap();
-                        if !futures.contains_key(id) {
-                            non_determinism_error = Some(format!(
-                                "Non-determinism detected: TimerCreated event (id={}) found in history, but orchestration did not call schedule_timer()",
-                                id
-                            ));
-                            break;
-                        }
-                    }
-                    Event::ExternalSubscribed { id, name, .. } => {
-                        let futures = open_futures.lock().unwrap();
-                        if !futures.contains_key(id) {
-                            non_determinism_error = Some(format!(
-                                "Non-determinism detected: ExternalSubscribed event (id={}, name='{}') found in history, but orchestration did not call schedule_wait()",
-                                id, name
-                            ));
-                            break;
-                        }
-                    }
-                    Event::SubOrchestrationScheduled { id, name, .. } => {
-                        let futures = open_futures.lock().unwrap();
-                        if !futures.contains_key(id) {
-                            non_determinism_error = Some(format!(
-                                "Non-determinism detected: SubOrchestrationScheduled event (id={}, name='{}') found in history, but orchestration did not call schedule_sub_orchestration()",
-                                id, name
-                            ));
-                            break;
-                        }
-                    }
-                    Event::OrchestrationChained { .. } => {
-                        // For chained orchestrations, we need to check if it was scheduled
-                        // This is a fire-and-forget operation, so no future tracking needed
-                        // TODO: We might need to track these separately since they don't have futures
-                    }
-                    _ => {}
-                }
-            }
-        }
-
-        // Stop if orchestration completed or error occurred
-        if orchestration_output.is_some() || non_determinism_error.is_some() {
-            break;
-        }
-
-        // Continue if no progress made and no decisions added after first iteration
-        if iteration > 1 && !progress_made {
-            break;
         }
     }
 
+    // Check for non-determinism if orchestration completed
+    if orchestration_output.is_some() && non_determinism_error.is_none() {
+        // Re-process events to check for non-determinism
+        for wrapped_event in events {
+            let event = &wrapped_event.event;
+            match event {
+                Event::ActivityScheduled { id, name, .. } => {
+                    let futures = open_futures.lock().unwrap();
+                    if !futures.contains_key(id) {
+                        non_determinism_error = Some(format!(
+                            "Non-determinism detected: ActivityScheduled event (id={}, name='{}') found in history, but orchestration did not call schedule_activity()",
+                            id, name
+                        ));
+                        break;
+                    }
+                }
+                Event::TimerCreated { id, .. } => {
+                    let futures = open_futures.lock().unwrap();
+                    if !futures.contains_key(id) {
+                        non_determinism_error = Some(format!(
+                            "Non-determinism detected: TimerCreated event (id={}) found in history, but orchestration did not call schedule_timer()",
+                            id
+                        ));
+                        break;
+                    }
+                }
+                Event::ExternalSubscribed { id, name, .. } => {
+                    let futures = open_futures.lock().unwrap();
+                    if !futures.contains_key(id) {
+                        non_determinism_error = Some(format!(
+                            "Non-determinism detected: ExternalSubscribed event (id={}, name='{}') found in history, but orchestration did not call schedule_wait()",
+                            id, name
+                        ));
+                        break;
+                    }
+                }
+                Event::SubOrchestrationScheduled { id, name, .. } => {
+                    let futures = open_futures.lock().unwrap();
+                    if !futures.contains_key(id) {
+                        non_determinism_error = Some(format!(
+                            "Non-determinism detected: SubOrchestrationScheduled event (id={}, name='{}') found in history, but orchestration did not call schedule_sub_orchestration()",
+                            id, name
+                        ));
+                        break;
+                    }
+                }
+                Event::OrchestrationChained { .. } => {
+                    // For chained orchestrations, we need to check if it was scheduled
+                    // This is a fire-and-forget operation, so no future tracking needed
+                    // TODO: We might need to track these separately since they don't have futures
+                }
+                _ => {}
+            }
+        }
+    }
 
     // Return the future if it's still pending
     let pending_future = if orchestration_output.is_none() && orchestration_future.is_some() {
@@ -443,10 +457,9 @@ where
     } else {
         None
     };
-    
+
     Ok((orchestration_output, non_determinism_error, pending_future))
 }
-
 
 // Create a no-op waker for polling
 #[allow(dead_code)]
@@ -466,8 +479,8 @@ fn create_noop_waker() -> Waker {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::event_ids::assign_event_ids_for_delta;
+    use super::*;
 
     /// Helper to convert plain events to wrapped events with monotonic IDs
     fn wrap_events(events: Vec<Event>) -> Vec<ReplayHistoryEvent> {
@@ -511,7 +524,6 @@ mod tests {
 
         let delta_history = vec![];
 
-        
         // Simple orchestration that calls one activity
         let result = replay_orchestration(
             |ctx: ReplayOrchestrationContext| async move {
@@ -586,10 +598,13 @@ mod tests {
         let history = wrap_events(base_events.clone());
 
         // Completion comes in delta
-        let delta_history = assign_event_ids_for_delta(&base_events, &vec![Event::ActivityCompleted {
-            id: 1,
-            result: "done from delta".to_string(),
-        }]);
+        let delta_history = assign_event_ids_for_delta(
+            &base_events,
+            &vec![Event::ActivityCompleted {
+                id: 1,
+                result: "done from delta".to_string(),
+            }],
+        );
 
         let result = replay_orchestration(
             |ctx: ReplayOrchestrationContext| async move {
@@ -727,10 +742,13 @@ mod tests {
         ];
         let history = wrap_events(base_events.clone());
 
-        let delta_history = assign_event_ids_for_delta(&base_events, &vec![Event::ActivityCompleted {
-            id: 1,
-            result: "activity result".to_string(),
-        }]);
+        let delta_history = assign_event_ids_for_delta(
+            &base_events,
+            &vec![Event::ActivityCompleted {
+                id: 1,
+                result: "activity result".to_string(),
+            }],
+        );
 
         // Orchestration that schedules the same activity
         let result = replay_orchestration(
@@ -893,23 +911,21 @@ mod tests {
         let output = result.unwrap();
         assert!(output.non_determinism_error.is_none());
         assert_eq!(output.output, Some(Ok("Activity: test result".to_string())));
-        
+
         // Note: We can't inspect open_futures internals anymore as replay_core is private
         // The test now validates the public API behavior
     }
-    
+
     #[tokio::test]
     async fn test_monotonic_id_generation() {
         // Test that the replay methods generate monotonically increasing IDs
-        let history = wrap_events(vec![
-            Event::OrchestrationStarted {
-                name: "test".to_string(),
-                version: "1.0".to_string(),
-                input: "{}".to_string(),
-                parent_instance: None,
-                parent_id: None,
-            },
-        ]);
+        let history = wrap_events(vec![Event::OrchestrationStarted {
+            name: "test".to_string(),
+            version: "1.0".to_string(),
+            input: "{}".to_string(),
+            parent_instance: None,
+            parent_id: None,
+        }]);
 
         let result = replay_orchestration(
             |ctx: ReplayOrchestrationContext| async move {
@@ -918,10 +934,10 @@ mod tests {
                 let _act1 = ctx.schedule_activity("activity1", "input1");
                 let _act2 = ctx.schedule_activity("activity2", "input2");
                 let _timer = ctx.schedule_timer(1000);
-                
+
                 // In the new replay engine, actions are not recorded during scheduling
                 // They are generated by the replay engine when processing history events
-                
+
                 Ok::<(), String>(())
             },
             history,
@@ -933,15 +949,15 @@ mod tests {
         assert!(output.non_determinism_error.is_none());
         assert_eq!(output.output, Some(Ok(())));
     }
-    
+
     #[tokio::test]
     async fn test_future_reuse_between_phases() {
         // Test that the orchestration future is reused between phase 1 and phase 2
         use std::sync::atomic::{AtomicUsize, Ordering};
-        
+
         // Counter to track how many times the orchestration function is called
         static ORCH_CALL_COUNT: AtomicUsize = AtomicUsize::new(0);
-        
+
         let base_events = vec![
             Event::OrchestrationStarted {
                 name: "test".to_string(),
@@ -958,48 +974,94 @@ mod tests {
             },
         ];
         let history = wrap_events(base_events.clone());
-        
-        let delta_history = assign_event_ids_for_delta(&base_events, &vec![
-            Event::ActivityCompleted {
+
+        let delta_history = assign_event_ids_for_delta(
+            &base_events,
+            &vec![Event::ActivityCompleted {
                 id: 1,
                 result: "done".to_string(),
-            },
-        ]);
-        
+            }],
+        );
+
         ORCH_CALL_COUNT.store(0, Ordering::SeqCst);
-        
+
         let result = replay_orchestration(
             |ctx: ReplayOrchestrationContext| async move {
                 // Increment the call count
                 ORCH_CALL_COUNT.fetch_add(1, Ordering::SeqCst);
-                
+
                 let result = ctx.schedule_activity("my_activity", "{}").into_activity().await?;
                 Ok::<String, String>(format!("Result: {}", result))
             },
             history,
             delta_history,
         );
-        
+
         assert!(result.is_ok());
         let output = result.unwrap();
         assert_eq!(output.output, Some(Ok("Result: done".to_string())));
         assert!(output.non_determinism_error.is_none());
-        
+
         // The orchestration function should only be called once!
-        assert_eq!(ORCH_CALL_COUNT.load(Ordering::SeqCst), 1, 
-            "Orchestration function should only be called once, not recreated in phase 2");
+        assert_eq!(
+            ORCH_CALL_COUNT.load(Ordering::SeqCst),
+            1,
+            "Orchestration function should only be called once, not recreated in phase 2"
+        );
     }
 
     #[tokio::test]
     async fn replay_e2e_like_hello_world() {
         // HelloWorld orchestration: two activities, return second result
-        let history = wrap_events(vec![
-            Event::OrchestrationStarted { name: "HelloWorld".into(), version: "1.0".into(), input: "World".into(), parent_instance: None, parent_id: None },
-            Event::ActivityScheduled { id: 1, name: "Hello".into(), input: "Rust".into(), execution_id: 1 },
-            Event::ActivityCompleted { id: 1, result: "Hello, Rust!".into() },
-            Event::ActivityScheduled { id: 2, name: "Hello".into(), input: "World".into(), execution_id: 1 },
-            Event::ActivityCompleted { id: 2, result: "Hello, World!".into() },
-        ]);
+        let history: Vec<ReplayHistoryEvent> = vec![
+            ReplayHistoryEvent {
+                event_id: 1,
+                scheduled_event_id: None,
+                event: Event::OrchestrationStarted {
+                    name: "HelloWorld".into(),
+                    version: "1.0".into(),
+                    input: "World".into(),
+                    parent_instance: None,
+                    parent_id: None,
+                },
+            },
+            ReplayHistoryEvent {
+                event_id: 2,
+                scheduled_event_id: None,
+                event: Event::ActivityScheduled {
+                    id: 1,
+                    name: "Hello".into(),
+                    input: "Rust".into(),
+                    execution_id: 1,
+                },
+            },
+            ReplayHistoryEvent {
+                event_id: 3,
+                scheduled_event_id: Some(2),
+                event: Event::ActivityCompleted {
+                    id: 1,
+                    result: "Hello, Rust!".into(),
+                },
+            },
+            ReplayHistoryEvent {
+                event_id: 4,
+                scheduled_event_id: None,
+                event: Event::ActivityScheduled {
+                    id: 2,
+                    name: "Hello".into(),
+                    input: "World".into(),
+                    execution_id: 1,
+                },
+            },
+            ReplayHistoryEvent {
+                event_id: 5,
+                scheduled_event_id: Some(4),
+                event: Event::ActivityCompleted {
+                    id: 2,
+                    result: "Hello, World!".into(),
+                },
+            },
+        ];
 
         let result = replay_orchestration(
             |ctx: ReplayOrchestrationContext| async move {
@@ -1021,11 +1083,33 @@ mod tests {
     async fn replay_e2e_like_control_flow_yes_branch() {
         // ControlFlow orchestration: GetFlag -> yes => SayYes
         let history = wrap_events(vec![
-            Event::OrchestrationStarted { name: "ControlFlow".into(), version: "1.0".into(), input: "".into(), parent_instance: None, parent_id: None },
-            Event::ActivityScheduled { id: 1, name: "GetFlag".into(), input: "".into(), execution_id: 1 },
-            Event::ActivityCompleted { id: 1, result: "yes".into() },
-            Event::ActivityScheduled { id: 2, name: "SayYes".into(), input: "".into(), execution_id: 1 },
-            Event::ActivityCompleted { id: 2, result: "picked_yes".into() },
+            Event::OrchestrationStarted {
+                name: "ControlFlow".into(),
+                version: "1.0".into(),
+                input: "".into(),
+                parent_instance: None,
+                parent_id: None,
+            },
+            Event::ActivityScheduled {
+                id: 1,
+                name: "GetFlag".into(),
+                input: "".into(),
+                execution_id: 1,
+            },
+            Event::ActivityCompleted {
+                id: 1,
+                result: "yes".into(),
+            },
+            Event::ActivityScheduled {
+                id: 2,
+                name: "SayYes".into(),
+                input: "".into(),
+                execution_id: 1,
+            },
+            Event::ActivityCompleted {
+                id: 2,
+                result: "picked_yes".into(),
+            },
         ]);
 
         let result = replay_orchestration(
@@ -1051,13 +1135,43 @@ mod tests {
     async fn replay_e2e_like_loop_three_iterations() {
         // Loop orchestration: Append 3 times accumulating value
         let history = wrap_events(vec![
-            Event::OrchestrationStarted { name: "LoopOrchestration".into(), version: "1.0".into(), input: "".into(), parent_instance: None, parent_id: None },
-            Event::ActivityScheduled { id: 1, name: "Append".into(), input: "start".into(), execution_id: 1 },
-            Event::ActivityCompleted { id: 1, result: "startx".into() },
-            Event::ActivityScheduled { id: 2, name: "Append".into(), input: "startx".into(), execution_id: 1 },
-            Event::ActivityCompleted { id: 2, result: "startxx".into() },
-            Event::ActivityScheduled { id: 3, name: "Append".into(), input: "startxx".into(), execution_id: 1 },
-            Event::ActivityCompleted { id: 3, result: "startxxx".into() },
+            Event::OrchestrationStarted {
+                name: "LoopOrchestration".into(),
+                version: "1.0".into(),
+                input: "".into(),
+                parent_instance: None,
+                parent_id: None,
+            },
+            Event::ActivityScheduled {
+                id: 1,
+                name: "Append".into(),
+                input: "start".into(),
+                execution_id: 1,
+            },
+            Event::ActivityCompleted {
+                id: 1,
+                result: "startx".into(),
+            },
+            Event::ActivityScheduled {
+                id: 2,
+                name: "Append".into(),
+                input: "startx".into(),
+                execution_id: 1,
+            },
+            Event::ActivityCompleted {
+                id: 2,
+                result: "startxx".into(),
+            },
+            Event::ActivityScheduled {
+                id: 3,
+                name: "Append".into(),
+                input: "startxx".into(),
+                execution_id: 1,
+            },
+            Event::ActivityCompleted {
+                id: 3,
+                result: "startxxx".into(),
+            },
         ]);
 
         let result = replay_orchestration(
@@ -1082,11 +1196,33 @@ mod tests {
     async fn replay_e2e_like_error_handling() {
         // ErrorHandling orchestration: Fragile(bad) => Err, then Recover => recovered
         let history = wrap_events(vec![
-            Event::OrchestrationStarted { name: "ErrorHandling".into(), version: "1.0".into(), input: "".into(), parent_instance: None, parent_id: None },
-            Event::ActivityScheduled { id: 1, name: "Fragile".into(), input: "bad".into(), execution_id: 1 },
-            Event::ActivityFailed { id: 1, error: "boom".into() },
-            Event::ActivityScheduled { id: 2, name: "Recover".into(), input: "".into(), execution_id: 1 },
-            Event::ActivityCompleted { id: 2, result: "recovered".into() },
+            Event::OrchestrationStarted {
+                name: "ErrorHandling".into(),
+                version: "1.0".into(),
+                input: "".into(),
+                parent_instance: None,
+                parent_id: None,
+            },
+            Event::ActivityScheduled {
+                id: 1,
+                name: "Fragile".into(),
+                input: "bad".into(),
+                execution_id: 1,
+            },
+            Event::ActivityFailed {
+                id: 1,
+                error: "boom".into(),
+            },
+            Event::ActivityScheduled {
+                id: 2,
+                name: "Recover".into(),
+                input: "".into(),
+                execution_id: 1,
+            },
+            Event::ActivityCompleted {
+                id: 2,
+                result: "recovered".into(),
+            },
         ]);
 
         let result = replay_orchestration(

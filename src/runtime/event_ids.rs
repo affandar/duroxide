@@ -41,7 +41,7 @@ fn completion_key_for_event(e: &Event) -> Option<(ScheduleKind, u64)> {
 
 /// TODO : CR : IMPORTANT: When merging into mainline code, the "completion key for event" function should not be needed
 /// the scheduled event id should be written by the entities that are emitting the completion events in the first place
-/// 
+///
 /// Assign deterministic event_id values to the provided delta events based on the
 /// baseline history length, and populate scheduled_event_id for completion events
 /// by referencing the corresponding schedule event's event_id.
@@ -154,12 +154,24 @@ mod tests {
                 parent_instance: None,
                 parent_id: None,
             },
-            Event::ActivityScheduled { id: 1, name: "A".to_string(), input: "x".to_string(), execution_id: 1 },
+            Event::ActivityScheduled {
+                id: 1,
+                name: "A".to_string(),
+                input: "x".to_string(),
+                execution_id: 1,
+            },
         ];
 
         let delta = vec![
-            Event::ActivityCompleted { id: 1, result: "ok".to_string() },
-            Event::TimerCreated { id: 2, fire_at_ms: 123, execution_id: 1 },
+            Event::ActivityCompleted {
+                id: 1,
+                result: "ok".to_string(),
+            },
+            Event::TimerCreated {
+                id: 2,
+                fire_at_ms: 123,
+                execution_id: 1,
+            },
         ];
 
         let wrapped = assign_event_ids_for_delta(&baseline, &delta);
@@ -183,8 +195,16 @@ mod tests {
         }];
 
         let delta = vec![
-            Event::ActivityScheduled { id: 5, name: "A".to_string(), input: "x".to_string(), execution_id: 1 },
-            Event::ActivityCompleted { id: 5, result: "ok".to_string() },
+            Event::ActivityScheduled {
+                id: 5,
+                name: "A".to_string(),
+                input: "x".to_string(),
+                execution_id: 1,
+            },
+            Event::ActivityCompleted {
+                id: 5,
+                result: "ok".to_string(),
+            },
         ];
 
         let wrapped = assign_event_ids_for_delta(&baseline, &delta);
@@ -199,18 +219,32 @@ mod tests {
     fn test_order_preserved() {
         let baseline: Vec<Event> = vec![];
         let delta = vec![
-            Event::TimerCreated { id: 1, fire_at_ms: 10, execution_id: 1 },
-            Event::ExternalSubscribed { id: 2, name: "E".to_string() },
-            Event::ExternalEvent { id: 2, name: "E".to_string(), data: "d".to_string() },
+            Event::TimerCreated {
+                id: 1,
+                fire_at_ms: 10,
+                execution_id: 1,
+            },
+            Event::ExternalSubscribed {
+                id: 2,
+                name: "E".to_string(),
+            },
+            Event::ExternalEvent {
+                id: 2,
+                name: "E".to_string(),
+                data: "d".to_string(),
+            },
         ];
         let wrapped = assign_event_ids_for_delta(&baseline, &delta);
-        assert_eq!(wrapped.iter().map(|w| std::mem::discriminant(&w.event)).collect::<Vec<_>>() ,
-                   delta.iter().map(|e| std::mem::discriminant(e)).collect::<Vec<_>>() );
+        assert_eq!(
+            wrapped
+                .iter()
+                .map(|w| std::mem::discriminant(&w.event))
+                .collect::<Vec<_>>(),
+            delta.iter().map(|e| std::mem::discriminant(e)).collect::<Vec<_>>()
+        );
         assert_eq!(wrapped[2].scheduled_event_id, Some(2)); // ExternalSubscribed at event_id 2
         assert_eq!(wrapped[0].event_id, 1);
         assert_eq!(wrapped[1].event_id, 2);
         assert_eq!(wrapped[2].event_id, 3);
     }
 }
-
-
