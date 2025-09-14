@@ -10,6 +10,8 @@ use super::replay_context_wrapper::ReplayOrchestrationContext;
 
 // No replay iteration loop is used anymore
 
+type OpenFutures = Arc<Mutex<HashMap<u64, ReplayDurableFuture>>>;
+
 /// Output from the replay function
 #[derive(Debug)]
 pub struct ReplayOutput<O> {
@@ -26,7 +28,7 @@ where
 {
     pub(crate) orchestration_future: Pin<Box<Fut>>,
     pub(crate) orchestration_context: ReplayOrchestrationContext,
-    pub(crate) open_futures: Arc<Mutex<HashMap<u64, ReplayDurableFuture>>>,
+    pub(crate) open_futures: OpenFutures,
 }
 
 pub struct ReplayTurnResult<O, Fut>
@@ -37,6 +39,63 @@ where
     pub output: Option<O>,
     pub non_determinism_error: Option<String>,
     pub next_handle: Option<ReplayTurnHandle<Fut>>,
+}
+
+// Helper: set a future ready with provided DurableOutput if present
+fn set_future_ready(open_futures: &OpenFutures, id: u64, output: DurableOutput) {
+    let futures = open_futures.lock().unwrap();
+    if let Some(future) = futures.get(&id) {
+        let mut ready = future.ready.lock().unwrap();
+        if !*ready {
+            *ready = true;
+            *future.completion.lock().unwrap() = Some(output);
+        }
+    }
+}
+
+// Helper: should we emit this decision (i.e., not already in history)?
+fn should_emit_decision(action: &Action, open_futures: &OpenFutures) -> bool {
+    match action {
+        Action::CallActivity { id, .. }
+        | Action::CreateTimer { id, .. }
+        | Action::WaitExternal { id, .. }
+        | Action::StartSubOrchestration { id, .. } => {
+            open_futures
+                .lock()
+                .unwrap()
+                .get(id)
+                .map_or(true, |f| *f.should_emit_decision.lock().unwrap())
+        }
+        _ => true,
+    }
+}
+
+// Helper: poll orchestration once and collect actions
+fn poll_and_collect<Fut, O>(
+    orchestration_future: &mut Option<Pin<Box<Fut>>>,
+    orchestration_context: &Option<ReplayOrchestrationContext>,
+    open_futures: &OpenFutures,
+    decisions: &mut Vec<Action>,
+) -> Option<O>
+where
+    Fut: Future<Output = O>,
+{
+    if let Some(fut) = orchestration_future.as_mut() {
+        if let Some(ctx) = orchestration_context.as_ref() {
+            let waker = create_noop_waker();
+            let mut cx = Context::from_waker(&waker);
+            match fut.as_mut().poll(&mut cx) {
+                Poll::Ready(output) => return Some(output),
+                Poll::Pending => {}
+            }
+            for action in ctx.take_actions() {
+                if should_emit_decision(&action, open_futures) {
+                    decisions.push(action);
+                }
+            }
+        }
+    }
+    None
 }
 
 /// A DurableFuture variant for replay that holds its own completion state
@@ -288,74 +347,35 @@ where
 
             // Completion events: Mark futures as ready and store completion data
             Event::ActivityCompleted { id, result } => {
-                let futures = open_futures.lock().unwrap();
-                let _exists = futures.contains_key(id);
-                if let Some(future) = futures.get(id) {
-                    let mut ready = future.ready.lock().unwrap();
-                    if !*ready {
-                        *ready = true;
-                        *future.completion.lock().unwrap() = Some(DurableOutput::Activity(Ok(result.clone())));
-                    }
-                }
+                set_future_ready(&open_futures, *id, DurableOutput::Activity(Ok(result.clone())));
             }
 
             Event::ActivityFailed { id, error } => {
-                let futures = open_futures.lock().unwrap();
-                if let Some(future) = futures.get(id) {
-                    let mut ready = future.ready.lock().unwrap();
-                    if !*ready {
-                        *ready = true;
-                        *future.completion.lock().unwrap() = Some(DurableOutput::Activity(Err(error.clone())));
-                    }
-                }
+                set_future_ready(&open_futures, *id, DurableOutput::Activity(Err(error.clone())));
             }
 
             Event::TimerFired { id, .. } => {
-                let futures = open_futures.lock().unwrap();
-                let _exists = futures.contains_key(id);
-                if let Some(future) = futures.get(id) {
-                    let mut ready = future.ready.lock().unwrap();
-                    if !*ready {
-                        *ready = true;
-                        *future.completion.lock().unwrap() = Some(DurableOutput::Timer);
-                    }
-                }
+                set_future_ready(&open_futures, *id, DurableOutput::Timer);
             }
 
             Event::ExternalEvent { id, data, .. } => {
-                let futures = open_futures.lock().unwrap();
-                let _exists = futures.contains_key(id);
-                if let Some(future) = futures.get(id) {
-                    let mut ready = future.ready.lock().unwrap();
-                    if !*ready {
-                        *ready = true;
-                        *future.completion.lock().unwrap() = Some(DurableOutput::External(data.clone()));
-                    }
-                }
+                set_future_ready(&open_futures, *id, DurableOutput::External(data.clone()));
             }
 
             Event::SubOrchestrationCompleted { id, result } => {
-                let futures = open_futures.lock().unwrap();
-                let _exists = futures.contains_key(id);
-                if let Some(future) = futures.get(id) {
-                    let mut ready = future.ready.lock().unwrap();
-                    if !*ready {
-                        *ready = true;
-                        *future.completion.lock().unwrap() = Some(DurableOutput::SubOrchestration(Ok(result.clone())));
-                    }
-                }
+                set_future_ready(
+                    &open_futures,
+                    *id,
+                    DurableOutput::SubOrchestration(Ok(result.clone())),
+                );
             }
 
             Event::SubOrchestrationFailed { id, error } => {
-                let futures = open_futures.lock().unwrap();
-                let _exists = futures.contains_key(id);
-                if let Some(future) = futures.get(id) {
-                    let mut ready = future.ready.lock().unwrap();
-                    if !*ready {
-                        *ready = true;
-                        *future.completion.lock().unwrap() = Some(DurableOutput::SubOrchestration(Err(error.clone())));
-                    }
-                }
+                set_future_ready(
+                    &open_futures,
+                    *id,
+                    DurableOutput::SubOrchestration(Err(error.clone())),
+                );
             }
 
             // Orchestration lifecycle events - these don't affect scheduling/futures
@@ -386,35 +406,8 @@ where
         }
         // After each event, poll orchestration once to allow it to advance
         if orchestration_output.is_none() {
-            if let Some(ref mut fut) = orchestration_future {
-                if let Some(ref _ctx) = orchestration_context {
-                    let waker = create_noop_waker();
-                    let mut cx = Context::from_waker(&waker);
-                    match fut.as_mut().poll(&mut cx) {
-                        Poll::Ready(output) => {
-                            orchestration_output = Some(output);
-                        }
-                        Poll::Pending => {}
-                    }
-                    // Collect actions from context (only those that should be emitted)
-                    for action in _ctx.take_actions() {
-                        let should_emit = match &action {
-                            Action::CallActivity { id, .. }
-                            | Action::CreateTimer { id, .. }
-                            | Action::WaitExternal { id, .. }
-                            | Action::StartSubOrchestration { id, .. } => {
-                                let futures = open_futures.lock().unwrap();
-                                futures
-                                    .get(id)
-                                    .map_or(true, |f| *f.should_emit_decision.lock().unwrap())
-                            }
-                            _ => true,
-                        };
-                        if should_emit {
-                            decisions.push(action);
-                        }
-                    }
-                }
+            if let Some(out) = poll_and_collect(&mut orchestration_future, &orchestration_context, &open_futures, decisions) {
+                orchestration_output = Some(out);
             }
         }
     }
