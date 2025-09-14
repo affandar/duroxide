@@ -1,0 +1,59 @@
+[
+    {
+        "event_id": 1,
+        "scheduled_event_id": null,
+        "event": {
+            "OrchestrationStarted": {
+                "name": "ErrorHandling",
+                "version": "1.0",
+                "input": "",
+                "parent_instance": null,
+                "parent_id": null
+            }
+        }
+    },
+    {
+        "event_id": 2,
+        "scheduled_event_id": null,
+        "event": {
+            "ActivityScheduled": {
+                "id": 1,
+                "name": "Fragile",
+                "input": "bad",
+                "execution_id": 1
+            }
+        }
+    },
+    {
+        "event_id": 3,
+        "scheduled_event_id": 2,
+        "event": {
+            "ActivityFailed": {
+                "id": 1,
+                "error": "boom"
+            }
+        }
+    },
+    {
+        "event_id": 4,
+        "scheduled_event_id": null,
+        "event": {
+            "ActivityScheduled": {
+                "id": 2,
+                "name": "Recover",
+                "input": "",
+                "execution_id": 1
+            }
+        }
+    },
+    {
+        "event_id": 5,
+        "scheduled_event_id": 4,
+        "event": {
+            "ActivityCompleted": {
+                "id": 2,
+                "result": "recovered"
+            }
+        }
+    }
+]

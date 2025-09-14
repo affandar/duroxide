@@ -1,0 +1,59 @@
+[
+    {
+        "event_id": 1,
+        "scheduled_event_id": null,
+        "event": {
+            "OrchestrationStarted": {
+                "name": "HelloWorld",
+                "version": "1.0",
+                "input": "World",
+                "parent_instance": null,
+                "parent_id": null
+            }
+        }
+    },
+    {
+        "event_id": 2,
+        "scheduled_event_id": null,
+        "event": {
+            "ActivityScheduled": {
+                "id": 1,
+                "name": "Hello",
+                "input": "Rust",
+                "execution_id": 1
+            }
+        }
+    },
+    {
+        "event_id": 3,
+        "scheduled_event_id": 2,
+        "event": {
+            "ActivityCompleted": {
+                "id": 1,
+                "result": "Hello, Rust!"
+            }
+        }
+    },
+    {
+        "event_id": 4,
+        "scheduled_event_id": null,
+        "event": {
+            "ActivityScheduled": {
+                "id": 2,
+                "name": "Hello",
+                "input": "World",
+                "execution_id": 1
+            }
+        }
+    },
+    {
+        "event_id": 5,
+        "scheduled_event_id": 4,
+        "event": {
+            "ActivityCompleted": {
+                "id": 2,
+                "result": "Hello, World!"
+            }
+        }
+    }
+]

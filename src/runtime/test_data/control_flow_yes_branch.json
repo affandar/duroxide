@@ -1,0 +1,59 @@
+[
+    {
+        "event_id": 1,
+        "scheduled_event_id": null,
+        "event": {
+            "OrchestrationStarted": {
+                "name": "ControlFlow",
+                "version": "1.0",
+                "input": "",
+                "parent_instance": null,
+                "parent_id": null
+            }
+        }
+    },
+    {
+        "event_id": 2,
+        "scheduled_event_id": null,
+        "event": {
+            "ActivityScheduled": {
+                "id": 1,
+                "name": "GetFlag",
+                "input": "",
+                "execution_id": 1
+            }
+        }
+    },
+    {
+        "event_id": 3,
+        "scheduled_event_id": 2,
+        "event": {
+            "ActivityCompleted": {
+                "id": 1,
+                "result": "yes"
+            }
+        }
+    },
+    {
+        "event_id": 4,
+        "scheduled_event_id": null,
+        "event": {
+            "ActivityScheduled": {
+                "id": 2,
+                "name": "SayYes",
+                "input": "",
+                "execution_id": 1
+            }
+        }
+    },
+    {
+        "event_id": 5,
+        "scheduled_event_id": 4,
+        "event": {
+            "ActivityCompleted": {
+                "id": 2,
+                "result": "picked_yes"
+            }
+        }
+    }
+]

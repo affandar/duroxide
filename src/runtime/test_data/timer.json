@@ -1,0 +1,36 @@
+[
+    {
+        "event_id": 1,
+        "scheduled_event_id": null,
+        "event": {
+            "OrchestrationStarted": {
+                "name": "test",
+                "version": "1.0",
+                "input": "{}",
+                "parent_instance": null,
+                "parent_id": null
+            }
+        }
+    },
+    {
+        "event_id": 2,
+        "scheduled_event_id": null,
+        "event": {
+            "TimerCreated": {
+                "id": 1,
+                "fire_at_ms": 1000,
+                "execution_id": 1
+            }
+        }
+    },
+    {
+        "event_id": 3,
+        "scheduled_event_id": 2,
+        "event": {
+            "TimerFired": {
+                "id": 1,
+                "fire_at_ms": 1000
+            }
+        }
+    }
+]
