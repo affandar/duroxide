@@ -351,6 +351,8 @@ struct CtxInner {
 
     // Reserved for future deterministic GUIDs if reintroduced
     next_correlation_id: u64,
+    // Replay-only correlation counter to isolate ID allocation for the new replay engine
+    replay_next_correlation_id: u64,
 
     // Execution metadata
     execution_id: u64,
@@ -395,12 +397,15 @@ impl CtxInner {
             }
         }
         let next_id = max_id.saturating_add(1);
+        let hist_len_u64 = history.len() as u64;
 
         Self {
             history,
             actions: Vec::new(),
             // guid_counter removed
             next_correlation_id: next_id,
+            // Replay IDs are isolated from mainline and advance with history length
+            replay_next_correlation_id: hist_len_u64 + 1,
             execution_id,
             turn_index: 0,
             logging_enabled_this_poll: false,
@@ -429,6 +434,12 @@ impl CtxInner {
     fn next_id(&mut self) -> u64 {
         let id = self.next_correlation_id;
         self.next_correlation_id += 1;
+        id
+    }
+
+    fn replay_next_id(&mut self) -> u64 {
+        let id = self.replay_next_correlation_id;
+        self.replay_next_correlation_id += 1;
         id
     }
 }
