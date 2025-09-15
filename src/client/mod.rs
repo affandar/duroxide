@@ -3,6 +3,7 @@ use std::sync::Arc;
 use crate::_typed_codec::{Codec, Json};
 use crate::providers::{Provider, WorkItem};
 use crate::{Event, OrchestrationStatus};
+use crate::runtime::event_ids::ReplayHistoryEvent;
 use serde::Serialize;
 
 /// Thin client for control-plane operations.
@@ -108,7 +109,7 @@ impl Client {
 
     /// Get the current status of an orchestration by inspecting its history.
     pub async fn get_orchestration_status(&self, instance: &str) -> OrchestrationStatus {
-        let hist = self.store.read(instance).await;
+        let hist: Vec<Event> = self.store.read(instance).await;
         // Find terminal events first
         for e in hist.iter().rev() {
             match e {
@@ -173,7 +174,7 @@ impl Client {
 
     /// List all execution ids for an instance.
     pub async fn list_executions(&self, instance: &str) -> Vec<u64> {
-        let hist = self.store.read(instance).await;
+        let hist: Vec<Event> = self.store.read(instance).await;
         if hist.is_empty() { Vec::new() } else { vec![1] }
     }
 

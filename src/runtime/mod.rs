@@ -1,6 +1,7 @@
 //
 use crate::providers::{Provider, WorkItem};
 use crate::{Event, OrchestrationContext};
+use crate::runtime::event_ids::{assign_event_ids_for_delta, ReplayHistoryEvent};
 use semver::Version;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -13,7 +14,7 @@ pub mod registry;
 pub mod router;
 mod timers;
 use async_trait::async_trait;
-mod event_ids;
+pub mod event_ids;
 
 pub mod completion_aware_futures;
 pub mod completion_map;
@@ -154,7 +155,7 @@ impl Runtime {
         &self,
         instance: &str,
     ) -> Option<crate::runtime::OrchestrationDescriptor> {
-        let hist = self.history_store.read(instance).await;
+        let hist: Vec<Event> = self.history_store.read(instance).await;
         for e in hist.iter().rev() {
             if let Event::OrchestrationStarted {
                 name,
@@ -312,17 +313,18 @@ impl Runtime {
         // EXECUTION: builds deltas and commits via ack_orchestration_item
         let instance = &item.instance;
         let lock_token = &item.lock_token;
+        let history_events: Vec<Event> = item.history.iter().map(|he| he.event.clone()).collect();
 
         debug!(
             instance,
             "Processing orchestration item: messages={}, history_len={}, first_msg={:?}",
             item.messages.len(),
-            item.history.len(),
+            history_events.len(),
             item.messages.first().map(|m| std::mem::discriminant(m))
         );
 
         // Check if instance is already terminal
-        let is_terminal = item.history.iter().rev().any(|e| {
+        let is_terminal = history_events.iter().rev().any(|e| {
             matches!(
                 e,
                 Event::OrchestrationCompleted { .. }
@@ -391,7 +393,7 @@ impl Runtime {
                         parent_instance.as_deref(),
                         parent_id,
                         completion_messages,
-                        &item.history,
+                        &history_events,
                         item.execution_id,
                         lock_token,
                     )
@@ -410,7 +412,7 @@ impl Runtime {
                         &input,
                         version.as_deref(),
                         completion_messages,
-                        &item.history,
+                        &history_events,
                         item.execution_id,
                         lock_token,
                     )
@@ -423,7 +425,7 @@ impl Runtime {
             self.handle_completion_batch_atomic(
                 instance,
                 completion_messages,
-                &item.history,
+                &history_events,
                 item.execution_id,
                 lock_token,
             )
@@ -435,16 +437,7 @@ impl Runtime {
 
         // Assign runtime event_ids deterministically for this delta (runtime-only wrapper)
         // Note: These IDs are computed but not persisted in this iteration
-        if !history_delta.is_empty() {
-            let wrapped_delta = self::event_ids::assign_event_ids_for_delta(&item.history, &history_delta);
-            debug!(
-                instance,
-                first_event_id = wrapped_delta.first().map(|w| w.event_id).unwrap_or(0),
-                last_event_id = wrapped_delta.last().map(|w| w.event_id).unwrap_or(0),
-                count = wrapped_delta.len(),
-                "assigned runtime event_ids for delta (not persisted)"
-            );
-        }
+        let wrapped_delta: Vec<ReplayHistoryEvent> = assign_event_ids_for_delta(&history_events, &history_delta);
 
         // Atomically commit all changes
         debug!(
@@ -638,7 +631,7 @@ impl Runtime {
                     "completion-only batch: detected newly-started instance after re-read"
                 );
                 // Use the latest history instead of the empty snapshot
-                let initial_history = latest;
+                let initial_history: Vec<Event> = latest;
                 let (history_delta, worker_items, timer_items, orchestrator_items, _result) = self
                     .clone()
                     .run_single_execution_atomic(

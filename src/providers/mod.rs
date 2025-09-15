@@ -1,4 +1,5 @@
 use crate::Event;
+use crate::runtime::event_ids::ReplayHistoryEvent;
 
 /// Orchestration item containing all data needed to process an instance atomically.
 #[derive(Debug, Clone)]
@@ -7,7 +8,7 @@ pub struct OrchestrationItem {
     pub orchestration_name: String,
     pub execution_id: u64,
     pub version: String,
-    pub history: Vec<Event>,
+    pub history: Vec<ReplayHistoryEvent>,
     pub messages: Vec<WorkItem>,
     pub lock_token: String,
 }

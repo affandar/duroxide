@@ -5,6 +5,7 @@ use tracing::debug;
 
 use super::{OrchestrationItem, Provider, WorkItem};
 use crate::Event;
+use crate::runtime::event_ids::ReplayHistoryEvent;
 
 /// SQLite-backed provider with full transactional support
 ///
@@ -284,11 +285,12 @@ impl SqliteProvider {
             CREATE TABLE IF NOT EXISTS history (
                 instance_id TEXT NOT NULL,
                 execution_id INTEGER NOT NULL,
-                sequence_num INTEGER NOT NULL,
+                event_id INTEGER NOT NULL,
+                scheduled_event_id INTEGER,
                 event_type TEXT NOT NULL,
                 event_data TEXT NOT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                PRIMARY KEY (instance_id, execution_id, sequence_num)
+                PRIMARY KEY (instance_id, execution_id, event_id)
             )
             "#,
         )
@@ -382,7 +384,7 @@ impl SqliteProvider {
         tx: &mut Transaction<'_, Sqlite>,
         instance: &str,
         execution_id: Option<u64>,
-    ) -> Result<Vec<Event>, sqlx::Error> {
+    ) -> Result<Vec<ReplayHistoryEvent>, sqlx::Error> {
         let execution_id = match execution_id {
             Some(id) => id as i64,
             None => {
@@ -398,10 +400,10 @@ impl SqliteProvider {
 
         let rows = sqlx::query(
             r#"
-            SELECT event_data 
+            SELECT event_id, scheduled_event_id, event_data 
             FROM history 
             WHERE instance_id = ? AND execution_id = ?
-            ORDER BY sequence_num
+            ORDER BY event_id
             "#,
         )
         .bind(instance)
@@ -411,9 +413,15 @@ impl SqliteProvider {
 
         let mut events = Vec::new();
         for row in rows {
+            let event_id: i64 = row.try_get("event_id")?;
+            let scheduled_event_id: Option<i64> = row.try_get("scheduled_event_id").ok();
             let event_data: String = row.try_get("event_data")?;
             if let Ok(event) = serde_json::from_str::<Event>(&event_data) {
-                events.push(event);
+                events.push(ReplayHistoryEvent {
+                    event_id: event_id as u64,
+                    scheduled_event_id: scheduled_event_id.map(|v| v as u64),
+                    event,
+                });
             }
         }
 
@@ -426,23 +434,11 @@ impl SqliteProvider {
         tx: &mut Transaction<'_, Sqlite>,
         instance: &str,
         execution_id: u64,
-        events: Vec<Event>,
+        events: Vec<ReplayHistoryEvent>,
     ) -> Result<(), sqlx::Error> {
-        // Get next sequence number
-        let start_seq: i64 = sqlx::query_scalar(
-            r#"
-            SELECT COALESCE(MAX(sequence_num), 0) + 1
-            FROM history
-            WHERE instance_id = ? AND execution_id = ?
-            "#,
-        )
-        .bind(instance)
-        .bind(execution_id as i64)
-        .fetch_one(&mut **tx)
-        .await?;
-
-        // Insert events
-        for (i, event) in events.iter().enumerate() {
+        // Insert events with provided event_id values
+        for wrapped in events.iter() {
+            let event = &wrapped.event;
             let event_type = match event {
                 Event::OrchestrationStarted { .. } => "OrchestrationStarted",
                 Event::OrchestrationCompleted { .. } => "OrchestrationCompleted",
@@ -463,17 +459,17 @@ impl SqliteProvider {
             };
 
             let event_data = serde_json::to_string(event).unwrap();
-            let seq_num = start_seq + i as i64;
 
             sqlx::query(
                 r#"
-                INSERT INTO history (instance_id, execution_id, sequence_num, event_type, event_data)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO history (instance_id, execution_id, event_id, scheduled_event_id, event_type, event_data)
+                VALUES (?, ?, ?, ?, ?, ?)
                 "#,
             )
             .bind(instance)
             .bind(execution_id as i64)
-            .bind(seq_num)
+            .bind(wrapped.event_id as i64)
+            .bind(wrapped.scheduled_event_id.map(|v| v as i64))
             .bind(event_type)
             .bind(event_data)
             .execute(&mut **tx)
@@ -615,8 +611,8 @@ impl Provider for SqliteProvider {
                 .read_history_in_tx(&mut tx, &instance_id, None)
                 .await
                 .unwrap_or_default();
-            if let Some(first_started) = hist.iter().find_map(|e| {
-                if let crate::Event::OrchestrationStarted { name, version, .. } = e {
+            if let Some(first_started) = hist.iter().find_map(|he| {
+                if let crate::Event::OrchestrationStarted { name, version, .. } = &he.event {
                     Some((name.clone(), version.clone()))
                 } else {
                     None
@@ -707,7 +703,8 @@ impl Provider for SqliteProvider {
         // For new instances from StartOrchestration, we need to get the orchestration info
         // from the first history event (OrchestrationStarted)
         if !history_delta.is_empty() {
-            if let Some(crate::Event::OrchestrationStarted { name, version, .. }) = history_delta.first() {
+            if let Some(first) = history_delta.first() {
+                if let crate::Event::OrchestrationStarted { name, version, .. } = first {
                 // Update instance with correct orchestration info
                 sqlx::query(
                     r#"
@@ -722,6 +719,7 @@ impl Provider for SqliteProvider {
                 .execute(&mut *tx)
                 .await
                 .map_err(|e| e.to_string())?;
+                }
             }
         }
 
@@ -739,13 +737,12 @@ impl Provider for SqliteProvider {
 
         // Always append history_delta to current execution first
         if !history_delta.is_empty() {
-            debug!(
-                instance = %instance_id,
-                events = history_delta.len(),
-                first_event = ?history_delta.first().map(|e| std::mem::discriminant(e)),
-                "Appending history delta"
-            );
-            self.append_history_in_tx(&mut tx, &instance_id, execution_id as u64, history_delta)
+            debug!(instance = %instance_id, events = history_delta.len(), "Appending history delta");
+            // Wrap incoming events with assigned IDs before appending
+            let baseline = self.read_history_in_tx(&mut tx, &instance_id, Some(execution_id as u64)).await.map_err(|e| e.to_string())?;
+            let baseline_plain: Vec<Event> = baseline.into_iter().map(|he| he.event).collect();
+            let wrapped_delta = crate::runtime::event_ids::assign_event_ids_for_delta(&baseline_plain, &history_delta);
+            self.append_history_in_tx(&mut tx, &instance_id, execution_id as u64, wrapped_delta)
                 .await
                 .map_err(|e| format!("Failed to append history: {}", e))?;
         }
@@ -766,15 +763,16 @@ impl Provider for SqliteProvider {
                 })
                 .unwrap_or_default();
 
-            // 2) Append ContinuedAsNew to current execution
-            self.append_history_in_tx(
-                &mut tx,
-                &instance_id,
-                execution_id as u64,
-                vec![Event::OrchestrationContinuedAsNew { input: can_input }],
-            )
-            .await
-            .map_err(|e| format!("Failed to append CAN event: {}", e))?;
+            // 2) Append ContinuedAsNew to current execution with assigned id
+            let baseline = self.read_history_in_tx(&mut tx, &instance_id, Some(execution_id as u64)).await.map_err(|e| e.to_string())?;
+            let baseline_plain: Vec<Event> = baseline.into_iter().map(|he| he.event).collect();
+            let wrapped = crate::runtime::event_ids::assign_event_ids_for_delta(
+                &baseline_plain,
+                &vec![Event::OrchestrationContinuedAsNew { input: can_input }],
+            );
+            self.append_history_in_tx(&mut tx, &instance_id, execution_id as u64, wrapped)
+                .await
+                .map_err(|e| format!("Failed to append CAN event: {}", e))?;
 
             // 3) Create next execution
             let next_exec_id = execution_id + 1;
@@ -993,10 +991,10 @@ impl Provider for SqliteProvider {
 
         let rows = sqlx::query(
             r#"
-            SELECT event_data 
+            SELECT event_id, scheduled_event_id, event_data 
             FROM history 
             WHERE instance_id = ? AND execution_id = ?
-            ORDER BY sequence_num
+            ORDER BY event_id
             "#,
         )
         .bind(instance)
@@ -1004,13 +1002,9 @@ impl Provider for SqliteProvider {
         .fetch_all(&mut *conn)
         .await
         .unwrap_or_default();
-
         rows.into_iter()
-            .filter_map(|row| {
-                row.try_get::<String, _>("event_data")
-                    .ok()
-                    .and_then(|s| serde_json::from_str(&s).ok())
-            })
+            .filter_map(|row| row.try_get::<String, _>("event_data").ok())
+            .filter_map(|s| serde_json::from_str::<Event>(&s).ok())
             .collect()
     }
 
@@ -1162,10 +1156,10 @@ impl Provider for SqliteProvider {
 
         let rows = sqlx::query(
             r#"
-            SELECT event_data 
+            SELECT event_id, scheduled_event_id, event_data 
             FROM history 
             WHERE instance_id = ? AND execution_id = ?
-            ORDER BY sequence_num
+            ORDER BY event_id
             "#,
         )
         .bind(instance)
@@ -1174,13 +1168,14 @@ impl Provider for SqliteProvider {
         .await
         .unwrap_or_default();
 
-        rows.into_iter()
-            .filter_map(|row| {
-                row.try_get::<String, _>("event_data")
-                    .ok()
-                    .and_then(|s| serde_json::from_str(&s).ok())
-            })
-            .collect()
+        let mut out: Vec<Event> = Vec::new();
+        for row in rows {
+            let event_data: String = row.try_get("event_data").unwrap_or_default();
+            if let Ok(event) = serde_json::from_str::<Event>(&event_data) {
+                out.push(event);
+            }
+        }
+        out
     }
 
     async fn append_with_execution(
@@ -1190,8 +1185,11 @@ impl Provider for SqliteProvider {
         new_events: Vec<Event>,
     ) -> Result<(), String> {
         let mut tx = self.pool.begin().await.map_err(|e| e.to_string())?;
-
-        self.append_history_in_tx(&mut tx, instance, execution_id, new_events)
+        // Wrap and append with assigned event_ids
+        let baseline = self.read_history_in_tx(&mut tx, instance, Some(execution_id)).await.map_err(|e| e.to_string())?;
+        let baseline_plain: Vec<Event> = baseline.into_iter().map(|he| he.event).collect();
+        let wrapped = crate::runtime::event_ids::assign_event_ids_for_delta(&baseline_plain, &new_events);
+        self.append_history_in_tx(&mut tx, instance, execution_id, wrapped)
             .await
             .map_err(|e| e.to_string())?;
 
@@ -1254,7 +1252,23 @@ impl Provider for SqliteProvider {
             parent_id,
         };
 
-        self.append_history_in_tx(&mut tx, instance, next_exec_id as u64, vec![start_event])
+        let next_event_id: i64 = sqlx::query_scalar(
+            r#"
+            SELECT COALESCE(MAX(event_id), 0) + 1 FROM history WHERE instance_id = ? AND execution_id = ?
+            "#,
+        )
+        .bind(instance)
+        .bind(next_exec_id)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+
+        self.append_history_in_tx(
+            &mut tx,
+            instance,
+            next_exec_id as u64,
+            vec![ReplayHistoryEvent { event_id: next_event_id as u64, scheduled_event_id: None, event: start_event }],
+        )
             .await
             .map_err(|e| e.to_string())?;
 
