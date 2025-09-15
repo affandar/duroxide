@@ -372,9 +372,29 @@ struct CtxInner {
 
 impl CtxInner {
     fn new(history: Vec<Event>, execution_id: u64) -> Self {
-        // In the new monotonic system, correlation IDs should start from 1
-        // regardless of history length, since OrchestrationStarted doesn't use correlation IDs
-        let next_id = 1u64;
+        // Determine next correlation id by scanning history for max used id across all correlated events
+        let mut max_id: u64 = 0;
+        for e in &history {
+            match e {
+                Event::ActivityScheduled { id, .. }
+                | Event::ActivityCompleted { id, .. }
+                | Event::ActivityFailed { id, .. }
+                | Event::TimerCreated { id, .. }
+                | Event::TimerFired { id, .. }
+                | Event::ExternalSubscribed { id, .. }
+                | Event::ExternalEvent { id, .. }
+                | Event::SubOrchestrationScheduled { id, .. }
+                | Event::SubOrchestrationCompleted { id, .. }
+                | Event::SubOrchestrationFailed { id, .. }
+                | Event::OrchestrationChained { id, .. } => {
+                    if *id > max_id {
+                        max_id = *id;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let next_id = max_id.saturating_add(1);
 
         Self {
             history,

@@ -3,7 +3,6 @@ use std::sync::Arc;
 use crate::_typed_codec::{Codec, Json};
 use crate::providers::{Provider, WorkItem};
 use crate::{Event, OrchestrationStatus};
-use crate::runtime::event_ids::ReplayHistoryEvent;
 use serde::Serialize;
 
 /// Thin client for control-plane operations.

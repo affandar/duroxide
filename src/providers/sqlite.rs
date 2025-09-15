@@ -666,7 +666,25 @@ impl Provider for SqliteProvider {
         timer_items: Vec<WorkItem>,
         orchestrator_items: Vec<WorkItem>,
     ) -> Result<(), String> {
-        let mut tx = self.pool.begin().await.map_err(|e| e.to_string())?;
+        // Retry the entire ack transaction on transient SQLITE_BUSY/locked errors
+        let max_attempts = 5u32;
+        let mut attempt: u32 = 0;
+        loop {
+            let mut tx = match self.pool.begin().await {
+                Ok(tx) => tx,
+                Err(e) => {
+                    let el = e.to_string().to_lowercase();
+                    if (el.contains("database is locked") || el.contains("busy") || el.contains("locked")) && attempt < max_attempts {
+                        attempt += 1;
+                        let delay_ms = 50 * attempt;
+                        tracing::warn!(target="duroxide::providers::sqlite", attempt, delay_ms, error=%e, "begin tx retry due to locked/busy");
+                        tokio::time::sleep(std::time::Duration::from_millis(delay_ms as u64)).await;
+                        continue;
+                    } else {
+                        return Err(e.to_string());
+                    }
+                }
+            };
 
         // Get instance from lock token
         let row = sqlx::query("SELECT DISTINCT instance_id FROM orchestrator_queue WHERE lock_token = ?")
@@ -797,7 +815,7 @@ impl Provider for SqliteProvider {
             count = worker_items.len(),
             "Enqueuing worker items"
         );
-        for item in worker_items {
+        for item in &worker_items {
             let work_item = serde_json::to_string(&item).map_err(|e| e.to_string())?;
             sqlx::query("INSERT INTO worker_queue (work_item) VALUES (?)")
                 .bind(work_item)
@@ -807,7 +825,7 @@ impl Provider for SqliteProvider {
         }
 
         // Enqueue timer items
-        for item in timer_items {
+        for item in &timer_items {
             if let WorkItem::TimerSchedule { fire_at_ms, .. } = &item {
                 let work_item = serde_json::to_string(&item).map_err(|e| e.to_string())?;
                 // Store fire_at_ms directly without division
@@ -821,7 +839,7 @@ impl Provider for SqliteProvider {
         }
 
         // Enqueue orchestrator items within the transaction
-        for item in orchestrator_items {
+        for item in &orchestrator_items {
             let work_item = serde_json::to_string(&item).map_err(|e| e.to_string())?;
             let instance = match &item {
                 WorkItem::StartOrchestration { instance, .. }
@@ -891,14 +909,26 @@ impl Provider for SqliteProvider {
             );
         }
 
-        tx.commit().await.map_err(|e| e.to_string())?;
+        if let Err(e) = tx.commit().await {
+            let el = e.to_string().to_lowercase();
+            if (el.contains("database is locked") || el.contains("busy") || el.contains("locked")) && attempt < max_attempts {
+                attempt += 1;
+                let delay_ms = 50 * attempt;
+                tracing::warn!(target="duroxide::providers::sqlite", attempt, delay_ms, error=%e, "commit retry due to locked/busy");
+                tokio::time::sleep(std::time::Duration::from_millis(delay_ms as u64)).await;
+                continue;
+            } else {
+                return Err(e.to_string());
+            }
+        }
 
         debug!(
             instance = %instance_id,
             "Acknowledged orchestration item"
         );
 
-        Ok(())
+        return Ok(());
+        }
     }
 
     async fn enqueue_timer_work(&self, item: WorkItem) -> Result<(), String> {

@@ -437,7 +437,7 @@ impl Runtime {
 
         // Assign runtime event_ids deterministically for this delta (runtime-only wrapper)
         // Note: These IDs are computed but not persisted in this iteration
-        let wrapped_delta: Vec<ReplayHistoryEvent> = assign_event_ids_for_delta(&history_events, &history_delta);
+        let _wrapped_delta: Vec<ReplayHistoryEvent> = assign_event_ids_for_delta(&history_events, &history_delta);
 
         // Atomically commit all changes
         debug!(
