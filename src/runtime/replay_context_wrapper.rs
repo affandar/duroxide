@@ -1,5 +1,5 @@
 use crate::OrchestrationContext;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 
 use super::replay::ReplayDurableFuture;
@@ -21,6 +21,8 @@ struct ReplayState {
     schedule_cursor: usize,
     // Replay-local next id counter based on event index (history length + processed)
     next_replay_id: u64,
+    // Queue of scheduled kinds in order of orchestration scheduling
+    scheduled_queue: VecDeque<ScheduledKind>,
 }
 
 impl ReplayState {
@@ -30,6 +32,7 @@ impl ReplayState {
             events,
             schedule_cursor: 0,
             next_replay_id,
+            scheduled_queue: VecDeque::new(),
         }
     }
 
@@ -38,6 +41,14 @@ impl ReplayState {
         self.next_replay_id += 1;
         id
     }
+}
+
+#[derive(Debug, Clone)]
+enum ScheduledKind {
+    Activity { name: String, input: String },
+    Timer,
+    External { name: String },
+    SubOrch { name: String, input: String },
 }
 
 #[allow(dead_code)]
@@ -62,7 +73,12 @@ impl ReplayOrchestrationContext {
         self.decisions
             .lock()
             .unwrap()
-            .push(crate::Action::CallActivity { id, name, input });
+            .push(crate::Action::CallActivity { id, name: name.clone(), input: input.clone() });
+        self.state
+            .lock()
+            .unwrap()
+            .scheduled_queue
+            .push_back(ScheduledKind::Activity { name: name.clone(), input: input.clone() });
         fut
     }
 
@@ -72,6 +88,11 @@ impl ReplayOrchestrationContext {
             .lock()
             .unwrap()
             .push(crate::Action::CreateTimer { id, delay_ms });
+        self.state
+            .lock()
+            .unwrap()
+            .scheduled_queue
+            .push_back(ScheduledKind::Timer);
         fut
     }
 
@@ -82,7 +103,12 @@ impl ReplayOrchestrationContext {
         self.decisions
             .lock()
             .unwrap()
-            .push(crate::Action::WaitExternal { id, name });
+            .push(crate::Action::WaitExternal { id, name: name.clone() });
+        self.state
+            .lock()
+            .unwrap()
+            .scheduled_queue
+            .push_back(ScheduledKind::External { name: name.clone() });
         fut
     }
 
@@ -95,11 +121,16 @@ impl ReplayOrchestrationContext {
         let child_instance = format!("sub::{id}");
         self.decisions.lock().unwrap().push(crate::Action::StartSubOrchestration {
             id,
-            name,
+            name: name.clone(),
             version: None,
             instance: child_instance,
-            input,
+            input: input.clone(),
         });
+        self.state
+            .lock()
+            .unwrap()
+            .scheduled_queue
+            .push_back(ScheduledKind::SubOrch { name: name.clone(), input: input.clone() });
         fut
     }
 
@@ -258,5 +289,39 @@ impl Clone for ReplayOrchestrationContext {
             state: self.state.clone(),
             decisions: self.decisions.clone(),
         }
+    }
+}
+
+impl ReplayOrchestrationContext {
+    pub fn verify_next_schedule_against(&self, he: &ReplayHistoryEvent) -> Result<(), String> {
+        let mut st = self.state.lock().unwrap();
+        let Some(next) = st.scheduled_queue.pop_front() else {
+            return Err(match &he.event {
+                crate::Event::ActivityScheduled { .. } =>
+                    "Non-determinism detected: ActivityScheduled event found in history, but orchestration did not call schedule_activity()".to_string(),
+                crate::Event::TimerCreated { .. } =>
+                    "Non-determinism detected: TimerCreated event found in history, but orchestration did not call schedule_timer()".to_string(),
+                crate::Event::ExternalSubscribed { .. } =>
+                    "Non-determinism detected: ExternalSubscribed event found in history, but orchestration did not call schedule_wait()".to_string(),
+                crate::Event::SubOrchestrationScheduled { .. } =>
+                    "Non-determinism detected: SubOrchestrationScheduled event found in history, but orchestration did not call schedule_sub_orchestration()".to_string(),
+                _ =>
+                    "Non-determinism detected: history has more schedules than orchestration produced".to_string(),
+            });
+        };
+        match (next, &he.event) {
+            (ScheduledKind::Activity { name: n1, input: i1 }, crate::Event::ActivityScheduled { name: n2, input: i2, .. }) => {
+                if n1 != *n2 || i1 != *i2 { return Err(format!("Non-determinism detected: ActivityScheduled mismatch. queued=({n1},{i1}) vs history=({n2},{i2})")); }
+            }
+            (ScheduledKind::Timer, crate::Event::TimerCreated { .. }) => {}
+            (ScheduledKind::External { name: n1 }, crate::Event::ExternalSubscribed { name: n2, .. }) => {
+                if n1 != *n2 { return Err(format!("Non-determinism detected: ExternalSubscribed name mismatch. queued={n1} vs history={n2}")); }
+            }
+            (ScheduledKind::SubOrch { name: n1, input: i1 }, crate::Event::SubOrchestrationScheduled { name: n2, input: i2, .. }) => {
+                if n1 != *n2 || i1 != *i2 { return Err(format!("Non-determinism detected: SubOrchestrationScheduled mismatch. queued=({n1},{i1}) vs history=({n2},{i2})")); }
+            }
+            _ => return Err("Non-determinism detected: scheduled kind mismatch".to_string()),
+        }
+        Ok(())
     }
 }

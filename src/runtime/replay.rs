@@ -323,11 +323,16 @@ where
             // OrchestrationStarted: nothing special here; unified polling happens after event
             Event::OrchestrationStarted { .. } => {}
 
-            // Scheduled events: use wrapper event_id to track scheduling
+            // Scheduled events: verify queued schedule order matches history and mark should-not-emit
             Event::ActivityScheduled { .. }
             | Event::TimerCreated { .. }
             | Event::ExternalSubscribed { .. }
             | Event::SubOrchestrationScheduled { .. } => {
+                if let Some(ctx) = orchestration_context.as_ref() {
+                    if let Err(msg) = ctx.verify_next_schedule_against(wrapped_event) {
+                        non_determinism_error = Some(msg);
+                    }
+                }
                 let schedule_eid = wrapped_event.event_id;
                 let futures = open_futures.lock().unwrap();
                 if let Some(future) = futures.get(&schedule_eid) {
@@ -335,7 +340,7 @@ where
                 }
             }
 
-            // Completion events: resolve using wrapper scheduled_event_id when present
+            // Completion events: set ready by scheduled_event_id as before
             Event::ActivityCompleted { result, .. } => {
                 if let Some(sid) = wrapped_event.scheduled_event_id {
                     set_future_ready(&open_futures, sid, DurableOutput::Activity(Ok(result.clone())));
