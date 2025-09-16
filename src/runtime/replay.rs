@@ -243,7 +243,7 @@ where
                 events_this_turn.iter().map(|he| he.event.clone()).collect(),
                 1,
             );
-            let ctx = ReplayOrchestrationContext::new(inner_ctx, open_futures.clone());
+            let ctx = ReplayOrchestrationContext::new(inner_ctx, open_futures.clone(), events_this_turn.clone());
             let orch_fn = orchestration_fn.ok_or("orchestration_fn is required on first turn")?;
             let fut: Pin<Box<Fut>> = Box::pin(orch_fn(ctx.clone()));
             (fut, ctx, open_futures)
@@ -315,67 +315,61 @@ where
             // OrchestrationStarted: nothing special here; unified polling happens after event
             Event::OrchestrationStarted { .. } => {}
 
-            // Scheduled events: If already in open futures, mark as don't emit decision
-            Event::ActivityScheduled { id, .. } => {
+            // Scheduled events: use wrapper event_id to track scheduling
+            Event::ActivityScheduled { .. }
+            | Event::TimerCreated { .. }
+            | Event::ExternalSubscribed { .. }
+            | Event::SubOrchestrationScheduled { .. } => {
+                let schedule_eid = wrapped_event.event_id;
                 let futures = open_futures.lock().unwrap();
-                let _exists = futures.contains_key(id);
-                if let Some(future) = futures.get(id) {
-                    *future.should_emit_decision.lock().unwrap() = false; // Already in history, don't emit
-                }
-            }
-
-            Event::TimerCreated { id, .. } => {
-                let futures = open_futures.lock().unwrap();
-                if let Some(future) = futures.get(id) {
+                if let Some(future) = futures.get(&schedule_eid) {
                     *future.should_emit_decision.lock().unwrap() = false;
                 }
             }
 
-            Event::ExternalSubscribed { id, .. } => {
-                let futures = open_futures.lock().unwrap();
-                if let Some(future) = futures.get(id) {
-                    *future.should_emit_decision.lock().unwrap() = false;
+            // Completion events: resolve using wrapper scheduled_event_id when present
+            Event::ActivityCompleted { result, .. } => {
+                if let Some(sid) = wrapped_event.scheduled_event_id {
+                    set_future_ready(&open_futures, sid, DurableOutput::Activity(Ok(result.clone())));
                 }
             }
 
-            Event::SubOrchestrationScheduled { id, .. } => {
-                let futures = open_futures.lock().unwrap();
-                if let Some(future) = futures.get(id) {
-                    *future.should_emit_decision.lock().unwrap() = false;
+            Event::ActivityFailed { error, .. } => {
+                if let Some(sid) = wrapped_event.scheduled_event_id {
+                    set_future_ready(&open_futures, sid, DurableOutput::Activity(Err(error.clone())));
                 }
             }
 
-            // Completion events: Mark futures as ready and store completion data
-            Event::ActivityCompleted { id, result } => {
-                set_future_ready(&open_futures, *id, DurableOutput::Activity(Ok(result.clone())));
+            Event::TimerFired { .. } => {
+                if let Some(sid) = wrapped_event.scheduled_event_id {
+                    set_future_ready(&open_futures, sid, DurableOutput::Timer);
+                }
             }
 
-            Event::ActivityFailed { id, error } => {
-                set_future_ready(&open_futures, *id, DurableOutput::Activity(Err(error.clone())));
+            Event::ExternalEvent { data, .. } => {
+                if let Some(sid) = wrapped_event.scheduled_event_id {
+                    set_future_ready(&open_futures, sid, DurableOutput::External(data.clone()));
+                }
             }
 
-            Event::TimerFired { id, .. } => {
-                set_future_ready(&open_futures, *id, DurableOutput::Timer);
+            Event::SubOrchestrationCompleted { result, .. } => {
+                if let Some(sid) = wrapped_event.scheduled_event_id {
+                    set_future_ready(
+                        &open_futures,
+                        sid,
+                        DurableOutput::SubOrchestration(Ok(result.clone())),
+                    );
+                }
             }
 
-            Event::ExternalEvent { id, data, .. } => {
-                set_future_ready(&open_futures, *id, DurableOutput::External(data.clone()));
-            }
-
-            Event::SubOrchestrationCompleted { id, result } => {
-                set_future_ready(
-                    &open_futures,
-                    *id,
-                    DurableOutput::SubOrchestration(Ok(result.clone())),
-                );
-            }
-
-            Event::SubOrchestrationFailed { id, error } => {
-                set_future_ready(
-                    &open_futures,
-                    *id,
-                    DurableOutput::SubOrchestration(Err(error.clone())),
-                );
+            Event::SubOrchestrationFailed { error, .. } => {
+                if let Some(sid) = wrapped_event.scheduled_event_id {
+                    set_future_ready(
+                        &open_futures,
+                        sid,
+                        DurableOutput::SubOrchestration(Err(error.clone())),
+                    );
+                }
             }
 
             // Orchestration lifecycle events - these don't affect scheduling/futures
@@ -418,42 +412,42 @@ where
         for wrapped_event in events {
             let event = &wrapped_event.event;
             match event {
-                Event::ActivityScheduled { id, name, .. } => {
+                Event::ActivityScheduled { name, .. } => {
                     let futures = open_futures.lock().unwrap();
-                    if !futures.contains_key(id) {
+                    if !futures.contains_key(&wrapped_event.event_id) {
                         non_determinism_error = Some(format!(
                             "Non-determinism detected: ActivityScheduled event (id={}, name='{}') found in history, but orchestration did not call schedule_activity()",
-                            id, name
+                            wrapped_event.event_id, name
                         ));
                         break;
                     }
                 }
-                Event::TimerCreated { id, .. } => {
+                Event::TimerCreated { .. } => {
                     let futures = open_futures.lock().unwrap();
-                    if !futures.contains_key(id) {
+                    if !futures.contains_key(&wrapped_event.event_id) {
                         non_determinism_error = Some(format!(
                             "Non-determinism detected: TimerCreated event (id={}) found in history, but orchestration did not call schedule_timer()",
-                            id
+                            wrapped_event.event_id
                         ));
                         break;
                     }
                 }
-                Event::ExternalSubscribed { id, name, .. } => {
+                Event::ExternalSubscribed { name, .. } => {
                     let futures = open_futures.lock().unwrap();
-                    if !futures.contains_key(id) {
+                    if !futures.contains_key(&wrapped_event.event_id) {
                         non_determinism_error = Some(format!(
                             "Non-determinism detected: ExternalSubscribed event (id={}, name='{}') found in history, but orchestration did not call schedule_wait()",
-                            id, name
+                            wrapped_event.event_id, name
                         ));
                         break;
                     }
                 }
-                Event::SubOrchestrationScheduled { id, name, .. } => {
+                Event::SubOrchestrationScheduled { name, .. } => {
                     let futures = open_futures.lock().unwrap();
-                    if !futures.contains_key(id) {
+                    if !futures.contains_key(&wrapped_event.event_id) {
                         non_determinism_error = Some(format!(
                             "Non-determinism detected: SubOrchestrationScheduled event (id={}, name='{}') found in history, but orchestration did not call schedule_sub_orchestration()",
-                            id, name
+                            wrapped_event.event_id, name
                         ));
                         break;
                     }
