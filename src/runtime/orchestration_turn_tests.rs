@@ -27,6 +27,7 @@ mod tests {
             input: "test-input".to_string(),
             parent_instance: None,
             parent_id: None,
+            execution_id: 1,
         }];
 
         let turn = OrchestrationTurn::new(
@@ -93,6 +94,7 @@ mod tests {
                 input: "test-input".to_string(),
                 parent_instance: None,
                 parent_id: None,
+                execution_id: 1,
             },
             Event::ExternalSubscribed {
                 id: 5,
@@ -175,6 +177,7 @@ mod tests {
             input: "test-input".to_string(),
             parent_instance: None,
             parent_id: None,
+            execution_id: 1,
         }];
 
         let mut turn = OrchestrationTurn::new(
@@ -206,6 +209,7 @@ mod tests {
             input: "test-input".to_string(),
             parent_instance: None,
             parent_id: None,
+            execution_id: 1,
         }];
 
         let mut turn = OrchestrationTurn::new(
@@ -237,6 +241,7 @@ mod tests {
             input: "test-input".to_string(),
             parent_instance: None,
             parent_id: None,
+            execution_id: 1,
         }];
 
         let mut turn = OrchestrationTurn::new(
@@ -296,6 +301,7 @@ mod tests {
             input: "test-input".to_string(),
             parent_instance: None,
             parent_id: None,
+            execution_id: 1,
         }];
 
         let mut turn = OrchestrationTurn::new(

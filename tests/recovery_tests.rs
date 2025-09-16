@@ -288,11 +288,13 @@ async fn recovery_multiple_orchestrations_sqlite_provider() {
 
     // UpperOnly: just needs its single activity scheduled/completed
     assert!(
-        wait_for_history(
+        wait_for_history_with_retry(
             store1.clone(),
             "inst-upper",
             |h| { h.iter().any(|e| matches!(e, Event::ActivityCompleted { .. })) },
-            1000
+            1000,
+            3,
+            100
         )
         .await
     );

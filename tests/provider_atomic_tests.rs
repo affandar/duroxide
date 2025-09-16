@@ -154,6 +154,7 @@ async fn test_ack_orchestration_item_atomic() {
             input: "test-input".to_string(),
             parent_instance: None,
             parent_id: None,
+            execution_id: 1,
         },
         Event::ActivityScheduled {
             id: 1,
@@ -334,6 +335,7 @@ async fn test_in_memory_provider_atomic_operations() {
         input: "test-input".to_string(),
         parent_instance: None,
         parent_id: None,
+        execution_id: 1,
     }];
 
     store

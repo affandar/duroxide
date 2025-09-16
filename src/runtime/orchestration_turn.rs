@@ -535,6 +535,7 @@ mod tests {
                 input: "test-input".to_string(),
                 parent_instance: None,
                 parent_id: None,
+                execution_id: 1,
             }],
         );
 

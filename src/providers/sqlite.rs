@@ -1280,6 +1280,7 @@ impl Provider for SqliteProvider {
             input: input.to_string(),
             parent_instance: parent_instance.map(|s| s.to_string()),
             parent_id,
+            execution_id: next_exec_id as u64,
         };
 
         let next_event_id: i64 = sqlx::query_scalar(
@@ -1374,6 +1375,7 @@ mod tests {
             input: "{}".to_string(),
             parent_instance: None,
             parent_id: None,
+            execution_id: 1,
         }];
 
         store
@@ -1415,6 +1417,7 @@ mod tests {
                 input: "{}".to_string(),
                 parent_instance: None,
                 parent_id: None,
+                execution_id: 1,
             },
             Event::ActivityScheduled {
                 id: 1,

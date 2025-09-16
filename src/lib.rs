@@ -200,6 +200,8 @@ use crate::_typed_codec::Codec;
 use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+fn default_execution_id_one() -> u64 { 1 }
+
 // Internal codec utilities for typed I/O (kept private; public API remains ergonomic)
 mod _typed_codec {
     use serde::{Serialize, de::DeserializeOwned};
@@ -245,6 +247,7 @@ pub enum Event {
         input: String,
         parent_instance: Option<String>,
         parent_id: Option<u64>,
+        #[serde(default = "default_execution_id_one")] execution_id: u64,
     },
     /// Orchestration completed with a final result.
     OrchestrationCompleted { output: String },

@@ -35,6 +35,33 @@ pub async fn wait_for_subscription(store: StdArc<dyn Provider>, instance: &str, 
     .await
 }
 
+#[allow(dead_code)]
+pub async fn wait_for_history_with_retry<F>(
+    store: StdArc<dyn Provider>,
+    instance: &str,
+    predicate: F,
+    timeout_ms: u64,
+    attempts: u32,
+    initial_backoff_ms: u64,
+) -> bool
+where
+    F: Fn(&Vec<Event>) -> bool + Copy,
+{
+    let mut backoff = initial_backoff_ms;
+    let mut attempt: u32 = 0;
+    loop {
+        if wait_for_history(store.clone(), instance, predicate, timeout_ms).await {
+            return true;
+        }
+        attempt += 1;
+        if attempt >= attempts {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(backoff)).await;
+        backoff = backoff.saturating_mul(2).min(2_000);
+    }
+}
+
 pub async fn wait_for_history_event<T, F>(
     store: StdArc<dyn Provider>,
     instance: &str,

@@ -174,6 +174,7 @@ mod tests {
                 input: "input".to_string(),
                 parent_instance: None,
                 parent_id: None,
+                execution_id: 1,
             },
             Event::ExternalSubscribed {
                 id: 5,
@@ -213,6 +214,7 @@ mod tests {
             input: "input".to_string(),
             parent_instance: None,
             parent_id: None,
+            execution_id: 1,
         }];
 
         // Add external completion for non-subscribed event

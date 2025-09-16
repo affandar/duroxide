@@ -107,6 +107,7 @@ mod tests {
                 input: "{}".to_string(),
                 parent_instance: None,
                 parent_id: None,
+                execution_id: 1,
             },
             Event::ActivityScheduled {
                 id: 1,
@@ -146,6 +147,7 @@ mod tests {
             input: "{}".to_string(),
             parent_instance: None,
             parent_id: None,
+            execution_id: 1,
         }];
 
         let delta = vec![

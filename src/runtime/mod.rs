@@ -506,6 +506,7 @@ impl Runtime {
                 input: input.to_string(),
                 parent_instance: parent_instance.map(|s| s.to_string()),
                 parent_id,
+                execution_id,
             });
         }
 
@@ -572,6 +573,7 @@ impl Runtime {
             input: input.to_string(),
             parent_instance: None,
             parent_id: None,
+            execution_id,
         });
 
         debug!(instance, "ContinueAsNew creating new execution with input: {}", input);

@@ -45,6 +45,7 @@ async fn test_sqlite_provider_basic() {
             input: r#"{"test": true}"#.to_string(),
             parent_instance: None,
             parent_id: None,
+            execution_id: 1,
         },
         Event::ActivityScheduled {
             id: 1,
@@ -129,6 +130,7 @@ async fn test_sqlite_provider_transactional() {
             input: "{}".to_string(),
             parent_instance: None,
             parent_id: None,
+            execution_id: 1,
         },
         Event::ActivityScheduled {
             id: 1,
@@ -241,6 +243,7 @@ async fn test_sqlite_provider_timer_queue() {
                 input: "{}".to_string(),
                 parent_instance: None,
                 parent_id: None,
+                execution_id: 1,
             }],
             vec![],
             timer_items,

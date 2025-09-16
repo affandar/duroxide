@@ -9,13 +9,14 @@ use super::event_ids::ReplayHistoryEvent;
 pub(crate) struct ReplayOrchestrationContext {
     inner: OrchestrationContext,
     open_futures: Arc<Mutex<HashMap<u64, ReplayDurableFuture>>>,
-    state: Arc<Mutex<ReplayState>>, // replay-only state
+    pub(crate) state: Arc<Mutex<ReplayState>>, // replay-only state
+    decisions: Arc<Mutex<Vec<crate::Action>>>,
 }
 
 #[derive(Debug, Clone)]
-struct ReplayState {
+pub(crate) struct ReplayState {
     // Global stream of wrapped events for this turn
-    events: Vec<ReplayHistoryEvent>,
+    pub(crate) events: Vec<ReplayHistoryEvent>,
     // Cursor pointing to the next not-yet-consumed scheduled event in global order
     schedule_cursor: usize,
     // Replay-local next id counter based on event index (history length + processed)
@@ -46,29 +47,60 @@ impl ReplayOrchestrationContext {
         open_futures: Arc<Mutex<HashMap<u64, ReplayDurableFuture>>>,
         events_this_turn: Vec<ReplayHistoryEvent>,
     ) -> Self {
-        Self { inner, open_futures, state: Arc::new(Mutex::new(ReplayState::new(events_this_turn))) }
+        Self {
+            inner,
+            open_futures,
+            state: Arc::new(Mutex::new(ReplayState::new(events_this_turn))),
+            decisions: Arc::new(Mutex::new(Vec::new())),
+        }
     }
 
     pub fn schedule_activity(&self, name: impl Into<String>, input: impl Into<String>) -> ReplayDurableFuture {
-        let _ = (name.into(), input.into());
-        self.schedule_next_or_new()
+        let name: String = name.into();
+        let input: String = input.into();
+        let (fut, id) = self.schedule_next_or_new();
+        self.decisions
+            .lock()
+            .unwrap()
+            .push(crate::Action::CallActivity { id, name, input });
+        fut
     }
 
     pub fn schedule_timer(&self, delay_ms: u64) -> ReplayDurableFuture {
-        let _ = delay_ms;
-        self.schedule_next_or_new()
+        let (fut, id) = self.schedule_next_or_new();
+        self.decisions
+            .lock()
+            .unwrap()
+            .push(crate::Action::CreateTimer { id, delay_ms });
+        fut
     }
 
     #[allow(dead_code)]
     pub fn schedule_wait(&self, name: impl Into<String>) -> ReplayDurableFuture {
-        let _ = name.into();
-        self.schedule_next_or_new()
+        let name: String = name.into();
+        let (fut, id) = self.schedule_next_or_new();
+        self.decisions
+            .lock()
+            .unwrap()
+            .push(crate::Action::WaitExternal { id, name });
+        fut
     }
 
     #[allow(dead_code)]
     pub fn schedule_sub_orchestration(&self, name: impl Into<String>, input: impl Into<String>) -> ReplayDurableFuture {
-        let _ = (name.into(), input.into());
-        self.schedule_next_or_new()
+        let name: String = name.into();
+        let input: String = input.into();
+        let (fut, id) = self.schedule_next_or_new();
+        // Use portable placeholder; runtime will prefix with parent instance
+        let child_instance = format!("sub::{id}");
+        self.decisions.lock().unwrap().push(crate::Action::StartSubOrchestration {
+            id,
+            name,
+            version: None,
+            instance: child_instance,
+            input,
+        });
+        fut
     }
 
     // Delegate other methods to inner context
@@ -78,7 +110,10 @@ impl ReplayOrchestrationContext {
     }
 
     pub fn take_actions(&self) -> Vec<crate::Action> {
-        self.inner.take_actions()
+        let mut out = self.inner.take_actions();
+        let mut mine = self.decisions.lock().unwrap();
+        out.extend(mine.drain(..));
+        out
     }
 
     // Replay-only: called by core after processing an event
@@ -88,7 +123,7 @@ impl ReplayOrchestrationContext {
     }
 
     // Helper: allocate next id by consuming next schedule event's event_id if available; else replay id
-    fn schedule_next_or_new(&self) -> ReplayDurableFuture {
+    fn schedule_next_or_new(&self) -> (ReplayDurableFuture, u64) {
         let mut st = self.state.lock().unwrap();
 
         // Find next scheduled event in global order from the cursor
@@ -118,7 +153,69 @@ impl ReplayOrchestrationContext {
         };
         let mut futures = self.open_futures.lock().unwrap();
         futures.insert(chosen_id, replay_future.clone());
-        replay_future
+        (replay_future, chosen_id)
+    }
+
+    // ===== Decision recording overrides =====
+    pub fn continue_as_new(&self, input: impl Into<String>) {
+        let input: String = input.into();
+        self.decisions
+            .lock()
+            .unwrap()
+            .push(crate::Action::ContinueAsNew { input, version: None });
+    }
+
+    pub fn continue_as_new_versioned(&self, version: impl Into<String>, input: impl Into<String>) {
+        let input: String = input.into();
+        let version: String = version.into();
+        self.decisions.lock().unwrap().push(crate::Action::ContinueAsNew {
+            input,
+            version: Some(version),
+        });
+    }
+
+    pub fn schedule_orchestration(
+        &self,
+        name: impl Into<String>,
+        instance: impl Into<String>,
+        input: impl Into<String>,
+    ) {
+        let name: String = name.into();
+        let instance: String = instance.into();
+        let input: String = input.into();
+        // Allocate a correlation id for chained orchestration
+        let mut st = self.state.lock().unwrap();
+        let id = st.alloc_replay_id();
+        drop(st);
+        self.decisions.lock().unwrap().push(crate::Action::StartOrchestrationDetached {
+            id,
+            name,
+            version: None,
+            instance,
+            input,
+        });
+    }
+
+    pub fn schedule_orchestration_versioned(
+        &self,
+        name: impl Into<String>,
+        version: Option<String>,
+        instance: impl Into<String>,
+        input: impl Into<String>,
+    ) {
+        let name: String = name.into();
+        let instance: String = instance.into();
+        let input: String = input.into();
+        let mut st = self.state.lock().unwrap();
+        let id = st.alloc_replay_id();
+        drop(st);
+        self.decisions.lock().unwrap().push(crate::Action::StartOrchestrationDetached {
+            id,
+            name,
+            version,
+            instance,
+            input,
+        });
     }
 }
 
@@ -129,6 +226,7 @@ impl Clone for ReplayOrchestrationContext {
             inner: self.inner.clone(),
             open_futures: self.open_futures.clone(),
             state: self.state.clone(),
+            decisions: self.decisions.clone(),
         }
     }
 }
