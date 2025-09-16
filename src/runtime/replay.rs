@@ -54,61 +54,20 @@ fn set_future_ready(open_futures: &OpenFutures, id: u64, output: DurableOutput) 
 }
 
 // Helper: should we emit this decision (i.e., not already in history)?
-fn should_emit_decision(
-    action: &Action,
-    open_futures: &OpenFutures,
-    orchestration_context: &Option<ReplayOrchestrationContext>,
-) -> bool {
+fn should_emit_decision(action: &Action, open_futures: &OpenFutures) -> bool {
     match action {
         Action::CallActivity { id, .. }
         | Action::CreateTimer { id, .. }
         | Action::WaitExternal { id, .. }
         | Action::StartSubOrchestration { id, .. } => {
-            // If this schedule already exists in this turn's history (by wrapper event_id), suppress
-            if let Some(ctx) = orchestration_context {
-                let st = ctx.state.lock().unwrap();
-                let exists_in_history = st.events.iter().any(|he| match &he.event {
-                    Event::ActivityScheduled { .. }
-                    | Event::TimerCreated { .. }
-                    | Event::ExternalSubscribed { .. }
-                    | Event::SubOrchestrationScheduled { .. } => he.event_id == *id,
-                    _ => false,
-                });
-                if exists_in_history {
-                    return false;
-                }
-            }
             open_futures
                 .lock()
                 .unwrap()
                 .get(id)
                 .map_or(true, |f| *f.should_emit_decision.lock().unwrap())
         }
-        Action::ContinueAsNew { .. } => {
-            // Suppress if history already has a ContinuedAsNew in this turn
-            if let Some(ctx) = orchestration_context {
-                let st = ctx.state.lock().unwrap();
-                st.events.iter().any(|he| matches!(he.event, Event::OrchestrationContinuedAsNew { .. })) == false
-            } else {
-                true
-            }
-        }
-        Action::StartOrchestrationDetached { name, instance, input, .. } => {
-            // Suppress if history already recorded a chained orchestration with same target
-            if let Some(ctx) = orchestration_context {
-                let st = ctx.state.lock().unwrap();
-                let exists = st.events.iter().any(|he| match &he.event {
-                    Event::OrchestrationChained { name: n, instance: inst, input: inp, .. } => {
-                        n == name && inst == instance && inp == input
-                    }
-                    _ => false,
-                });
-                !exists
-            } else {
-                true
-            }
-        }
-        _ => true,
+        // Non-schedule decisions: always emit if produced (dup suppression handled by ReplayOrchestrationContext)
+        Action::ContinueAsNew { .. } | Action::StartOrchestrationDetached { .. } => true,
     }
 }
 
@@ -131,7 +90,7 @@ where
                 Poll::Pending => {}
             }
             for action in ctx.take_actions() {
-                if should_emit_decision(&action, open_futures, &orchestration_context) {
+                if should_emit_decision(&action, open_futures) {
                     decisions.push(action);
                 }
             }
@@ -422,33 +381,15 @@ where
             }
 
             // Orchestration lifecycle events - these don't affect scheduling/futures
-            Event::OrchestrationCompleted { .. } => {
-                // Terminal event; ensure we don't emit extraneous decisions after completion
-                if let Some(ctx) = orchestration_context.as_ref() {
-                    let _ = ctx; // reserved for future invariant checks
-                }
-            }
+            Event::OrchestrationCompleted { .. } => {}
 
-            Event::OrchestrationFailed { .. } => {
-                // Terminal event; similar handling as OrchestrationCompleted
-            }
+            Event::OrchestrationFailed { .. } => {}
 
-            Event::OrchestrationContinuedAsNew { .. } => {
-                // Terminal for current execution; suppress emitting another ContinueAsNew decision
-                if let Some(ctx) = orchestration_context.as_ref() {
-                    let futures = open_futures.lock().unwrap();
-                    let _ = &*futures; // placeholder for potential cleanup coordination
-                }
-            }
+            Event::OrchestrationContinuedAsNew { .. } => {}
 
-            Event::OrchestrationCancelRequested { .. } => {
-                // Surface cancellation via decision if orchestration chooses to react
-                // No-op here; decisions are produced by orchestration logic
-            }
+            Event::OrchestrationCancelRequested { .. } => {}
 
-            Event::OrchestrationChained { .. } => {
-                // Already chained in history; suppress duplicate StartOrchestrationDetached decisions
-            }
+            Event::OrchestrationChained { .. } => {}
         }
         // After each event, poll orchestration once to allow it to advance
         if orchestration_output.is_none() {
@@ -456,6 +397,7 @@ where
                 orchestration_output = Some(out);
             }
         }
+        // Do not advance schedule cursor on non-schedule events; adoption happens in schedule_next_or_new
     }
 
     // Check for non-determinism if orchestration completed

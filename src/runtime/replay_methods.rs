@@ -46,7 +46,7 @@ impl ReplaySchedulingExt for OrchestrationContext {
     ) -> ReplayDurableFuture {
         // Generate monotonically increasing replay-only correlation ID
         let mut inner = self.inner.lock().unwrap();
-        let id = inner.replay_next_id();
+        let id = inner.next_id();
         drop(inner);
 
         // Create ReplayDurableFuture
@@ -69,7 +69,7 @@ impl ReplaySchedulingExt for OrchestrationContext {
         open_futures: &Arc<Mutex<HashMap<u64, ReplayDurableFuture>>>,
     ) -> ReplayDurableFuture {
         let mut inner = self.inner.lock().unwrap();
-        let id = inner.replay_next_id();
+        let id = inner.next_id();
         drop(inner);
 
         // Create ReplayDurableFuture
@@ -92,7 +92,7 @@ impl ReplaySchedulingExt for OrchestrationContext {
         open_futures: &Arc<Mutex<HashMap<u64, ReplayDurableFuture>>>,
     ) -> ReplayDurableFuture {
         let mut inner = self.inner.lock().unwrap();
-        let id = inner.replay_next_id();
+        let id = inner.next_id();
         drop(inner);
 
         // Create ReplayDurableFuture
@@ -116,7 +116,7 @@ impl ReplaySchedulingExt for OrchestrationContext {
         open_futures: &Arc<Mutex<HashMap<u64, ReplayDurableFuture>>>,
     ) -> ReplayDurableFuture {
         let mut inner = self.inner.lock().unwrap();
-        let id = inner.replay_next_id();
+        let id = inner.next_id();
         drop(inner);
 
         // Create ReplayDurableFuture

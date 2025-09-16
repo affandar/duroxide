@@ -9,12 +9,12 @@ use super::event_ids::ReplayHistoryEvent;
 pub(crate) struct ReplayOrchestrationContext {
     inner: OrchestrationContext,
     open_futures: Arc<Mutex<HashMap<u64, ReplayDurableFuture>>>,
-    pub(crate) state: Arc<Mutex<ReplayState>>, // replay-only state
+    state: Arc<Mutex<ReplayState>>, // replay-only state
     decisions: Arc<Mutex<Vec<crate::Action>>>,
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct ReplayState {
+struct ReplayState {
     // Global stream of wrapped events for this turn
     pub(crate) events: Vec<ReplayHistoryEvent>,
     // Cursor pointing to the next not-yet-consumed scheduled event in global order
@@ -112,14 +112,17 @@ impl ReplayOrchestrationContext {
     pub fn take_actions(&self) -> Vec<crate::Action> {
         let mut out = self.inner.take_actions();
         let mut mine = self.decisions.lock().unwrap();
+        let st = self.state.lock().unwrap();
+        mine.retain(|a| !self.is_duplicate_in_history(&st, a));
         out.extend(mine.drain(..));
         out
     }
 
     // Replay-only: called by core after processing an event
-    pub fn bump_event_index(&self) {
+    // Advance the global cursor once per processed history event
+    pub fn bump_cursor(&self) {
         let mut st = self.state.lock().unwrap();
-        st.next_replay_id += 1;
+        if st.schedule_cursor < st.events.len() { st.schedule_cursor += 1; }
     }
 
     // Helper: allocate next id by consuming next schedule event's event_id if available; else replay id
@@ -154,6 +157,33 @@ impl ReplayOrchestrationContext {
         let mut futures = self.open_futures.lock().unwrap();
         futures.insert(chosen_id, replay_future.clone());
         (replay_future, chosen_id)
+    }
+
+    fn is_duplicate_in_history(&self, st: &ReplayState, action: &crate::Action) -> bool {
+        match action {
+            crate::Action::CallActivity { id, .. }
+            | crate::Action::CreateTimer { id, .. }
+            | crate::Action::WaitExternal { id, .. }
+            | crate::Action::StartSubOrchestration { id, .. } => st.events.iter().any(|he| match &he.event {
+                crate::Event::ActivityScheduled { .. }
+                | crate::Event::TimerCreated { .. }
+                | crate::Event::ExternalSubscribed { .. }
+                | crate::Event::SubOrchestrationScheduled { .. } => he.event_id == *id,
+                _ => false,
+            }),
+            crate::Action::ContinueAsNew { .. } => st
+                .events
+                .iter()
+                .any(|he| matches!(he.event, crate::Event::OrchestrationContinuedAsNew { .. })),
+            crate::Action::StartOrchestrationDetached { name, version: _, instance, input, .. } => st.events.iter().any(
+                |he| match &he.event {
+                    crate::Event::OrchestrationChained { name: n, instance: inst, input: inp, .. } => {
+                        n == name && inst == instance && inp == input
+                    }
+                    _ => false,
+                },
+            ),
+        }
     }
 
     // ===== Decision recording overrides =====
