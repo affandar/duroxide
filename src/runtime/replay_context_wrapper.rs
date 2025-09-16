@@ -12,7 +12,6 @@ pub(crate) struct ReplayOrchestrationContext {
     decisions: Arc<Mutex<Vec<crate::Action>>>,
 }
 
-#[derive(Clone)]
 struct ReplayState {
     // Global stream of wrapped events for this turn
     pub(crate) events: Vec<ReplayHistoryEvent>,
@@ -53,7 +52,6 @@ enum ScheduledKind {
     SubOrch { name: String, input: String },
 }
 
-#[derive(Clone)]
 struct ScheduledEntry {
     kind: ScheduledKind,
     future: ReplayDurableFuture,
@@ -138,12 +136,6 @@ impl ReplayOrchestrationContext {
             st.scheduled_queue.push_back(ScheduledEntry { kind: ScheduledKind::SubOrch { name: name.clone(), input: input.clone() }, future: fut.clone() });
         }
         fut
-    }
-
-    // Delegate other methods to inner context
-    #[allow(dead_code)]
-    pub fn inner(&self) -> &OrchestrationContext {
-        &self.inner
     }
 
     pub fn take_actions(&self) -> Vec<crate::Action> {
