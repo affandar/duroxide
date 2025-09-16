@@ -22,7 +22,6 @@ pub mod execution;
 pub mod orchestration_turn;
 pub mod replay;
 mod replay_context_wrapper;
-mod replay_methods;
 
 /// High-level orchestration status derived from history.
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -155,13 +155,6 @@ impl ReplayOrchestrationContext {
         out
     }
 
-    // Replay-only: called by core after processing an event
-    // Advance the global cursor once per processed history event
-    pub fn bump_cursor(&self) {
-        let mut st = self.state.lock().unwrap();
-        if st.schedule_cursor < st.events.len() { st.schedule_cursor += 1; }
-    }
-
     // Helper: allocate next id by consuming next schedule event's event_id if available; else replay id
     fn schedule_next_or_new(&self) -> (ReplayDurableFuture, u64) {
         let mut st = self.state.lock().unwrap();
