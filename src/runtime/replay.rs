@@ -1,5 +1,4 @@
 use crate::{Action, DurableOutput, Event, OrchestrationContext};
-use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
@@ -10,7 +9,7 @@ use super::replay_context_wrapper::ReplayOrchestrationContext;
 
 // No replay iteration loop is used anymore
 
-type OpenFutures = Arc<Mutex<HashMap<u64, ReplayDurableFuture>>>;
+// open_futures map removed; futures are tracked inside ReplayOrchestrationContext
 
 /// Output from the replay function
 #[derive(Debug)]
@@ -28,7 +27,6 @@ where
 {
     pub(crate) orchestration_future: Pin<Box<Fut>>,
     pub(crate) orchestration_context: ReplayOrchestrationContext,
-    pub(crate) open_futures: OpenFutures,
 }
 
 pub struct ReplayTurnResult<O, Fut>
@@ -41,41 +39,12 @@ where
     pub next_handle: Option<ReplayTurnHandle<Fut>>,
 }
 
-// Helper: set a future ready with provided DurableOutput if present
-fn set_future_ready(open_futures: &OpenFutures, id: u64, output: DurableOutput) {
-    let futures = open_futures.lock().unwrap();
-    if let Some(future) = futures.get(&id) {
-        let mut ready = future.ready.lock().unwrap();
-        if !*ready {
-            *ready = true;
-            *future.completion.lock().unwrap() = Some(output);
-        }
-    }
-}
-
-// Helper: should we emit this decision (i.e., not already in history)?
-fn should_emit_decision(action: &Action, open_futures: &OpenFutures) -> bool {
-    match action {
-        Action::CallActivity { id, .. }
-        | Action::CreateTimer { id, .. }
-        | Action::WaitExternal { id, .. }
-        | Action::StartSubOrchestration { id, .. } => {
-            open_futures
-                .lock()
-                .unwrap()
-                .get(id)
-                .map_or(true, |f| *f.should_emit_decision.lock().unwrap())
-        }
-        // Non-schedule decisions: always emit if produced (dup suppression handled by ReplayOrchestrationContext)
-        Action::ContinueAsNew { .. } | Action::StartOrchestrationDetached { .. } => true,
-    }
-}
+// Decision emission is handled by ReplayOrchestrationContext.take_actions duplicate suppression
 
 // Helper: poll orchestration once and collect actions
 fn poll_and_collect<Fut, O>(
     orchestration_future: &mut Option<Pin<Box<Fut>>>,
     orchestration_context: &Option<ReplayOrchestrationContext>,
-    open_futures: &OpenFutures,
     decisions: &mut Vec<Action>,
 ) -> Option<O>
 where
@@ -89,11 +58,7 @@ where
                 Poll::Ready(output) => return Some(output),
                 Poll::Pending => {}
             }
-            for action in ctx.take_actions() {
-                if should_emit_decision(&action, open_futures) {
-                    decisions.push(action);
-                }
-            }
+            decisions.extend(ctx.take_actions().into_iter());
         }
     }
     None
@@ -230,8 +195,8 @@ where
     O: Send + 'static,
 {
     // Prepare or reuse future/context
-    let (orchestration_future, orchestration_context, open_futures) = match handle {
-        Some(h) => (h.orchestration_future, h.orchestration_context, h.open_futures),
+    let (orchestration_future, orchestration_context) = match handle {
+        Some(h) => (h.orchestration_future, h.orchestration_context),
         None => {
             let has_start = events_this_turn
                 .iter()
@@ -239,7 +204,6 @@ where
             if !has_start {
                 return Err("First turn must contain OrchestrationStarted".to_string());
             }
-            let open_futures = Arc::new(Mutex::new(HashMap::<u64, ReplayDurableFuture>::new()));
             let exec_id = events_this_turn
                 .iter()
                 .find_map(|he| match &he.event {
@@ -251,10 +215,10 @@ where
                 events_this_turn.iter().map(|he| he.event.clone()).collect(),
                 exec_id,
             );
-            let ctx = ReplayOrchestrationContext::new(inner_ctx, open_futures.clone(), events_this_turn.clone());
+            let ctx = ReplayOrchestrationContext::new(inner_ctx, events_this_turn.clone());
             let orch_fn = orchestration_fn.ok_or("orchestration_fn is required on first turn")?;
             let fut: Pin<Box<Fut>> = Box::pin(orch_fn(ctx.clone()));
-            (fut, ctx, open_futures)
+            (fut, ctx)
         }
     };
 
@@ -262,7 +226,6 @@ where
     let mut decisions = Vec::new();
     let (output, non_determinism_error, pending) = replay_core_with_future(
         &events_this_turn,
-        open_futures.clone(),
         &mut decisions,
         Some((orchestration_future, orchestration_context.clone())),
     )?;
@@ -271,7 +234,6 @@ where
         Some(ReplayTurnHandle {
             orchestration_future: f,
             orchestration_context,
-            open_futures,
         })
     } else {
         None
@@ -290,7 +252,6 @@ where
 #[allow(dead_code)]
 fn replay_core_with_future<Fut, O>(
     events: &[ReplayHistoryEvent],
-    open_futures: Arc<Mutex<HashMap<u64, ReplayDurableFuture>>>,
     decisions: &mut Vec<Action>,
     existing_future: Option<(Pin<Box<Fut>>, ReplayOrchestrationContext)>,
 ) -> Result<
@@ -329,59 +290,69 @@ where
             | Event::ExternalSubscribed { .. }
             | Event::SubOrchestrationScheduled { .. } => {
                 if let Some(ctx) = orchestration_context.as_ref() {
-                    if let Err(msg) = ctx.verify_next_schedule_against(wrapped_event) {
-                        non_determinism_error = Some(msg);
+                    match ctx.verify_and_dequeue_next_schedule(wrapped_event) {
+                        Ok(fut) => {
+                            *fut.should_emit_decision.lock().unwrap() = false;
+                        }
+                        Err(msg) => {
+                            non_determinism_error = Some(msg);
+                        }
                     }
-                }
-                let schedule_eid = wrapped_event.event_id;
-                let futures = open_futures.lock().unwrap();
-                if let Some(future) = futures.get(&schedule_eid) {
-                    *future.should_emit_decision.lock().unwrap() = false;
                 }
             }
 
             // Completion events: set ready by scheduled_event_id as before
             Event::ActivityCompleted { result, .. } => {
                 if let Some(sid) = wrapped_event.scheduled_event_id {
-                    set_future_ready(&open_futures, sid, DurableOutput::Activity(Ok(result.clone())));
+                    if let Some(ctx) = orchestration_context.as_ref() {
+                        ctx.complete_scheduled_future(sid, DurableOutput::Activity(Ok(result.clone())));
+                    }
                 }
             }
 
             Event::ActivityFailed { error, .. } => {
                 if let Some(sid) = wrapped_event.scheduled_event_id {
-                    set_future_ready(&open_futures, sid, DurableOutput::Activity(Err(error.clone())));
+                    if let Some(ctx) = orchestration_context.as_ref() {
+                        ctx.complete_scheduled_future(sid, DurableOutput::Activity(Err(error.clone())));
+                    }
                 }
             }
 
             Event::TimerFired { .. } => {
                 if let Some(sid) = wrapped_event.scheduled_event_id {
-                    set_future_ready(&open_futures, sid, DurableOutput::Timer);
+                    if let Some(ctx) = orchestration_context.as_ref() {
+                        ctx.complete_scheduled_future(sid, DurableOutput::Timer);
+                    }
                 }
             }
 
             Event::ExternalEvent { data, .. } => {
                 if let Some(sid) = wrapped_event.scheduled_event_id {
-                    set_future_ready(&open_futures, sid, DurableOutput::External(data.clone()));
+                    if let Some(ctx) = orchestration_context.as_ref() {
+                        ctx.complete_scheduled_future(sid, DurableOutput::External(data.clone()));
+                    }
                 }
             }
 
             Event::SubOrchestrationCompleted { result, .. } => {
                 if let Some(sid) = wrapped_event.scheduled_event_id {
-                    set_future_ready(
-                        &open_futures,
-                        sid,
-                        DurableOutput::SubOrchestration(Ok(result.clone())),
-                    );
+                    if let Some(ctx) = orchestration_context.as_ref() {
+                        ctx.complete_scheduled_future(
+                            sid,
+                            DurableOutput::SubOrchestration(Ok(result.clone())),
+                        );
+                    }
                 }
             }
 
             Event::SubOrchestrationFailed { error, .. } => {
                 if let Some(sid) = wrapped_event.scheduled_event_id {
-                    set_future_ready(
-                        &open_futures,
-                        sid,
-                        DurableOutput::SubOrchestration(Err(error.clone())),
-                    );
+                    if let Some(ctx) = orchestration_context.as_ref() {
+                        ctx.complete_scheduled_future(
+                            sid,
+                            DurableOutput::SubOrchestration(Err(error.clone())),
+                        );
+                    }
                 }
             }
 
@@ -398,7 +369,7 @@ where
         }
         // After each event, poll orchestration once to allow it to advance
         if orchestration_output.is_none() {
-            if let Some(out) = poll_and_collect(&mut orchestration_future, &orchestration_context, &open_futures, decisions) {
+            if let Some(out) = poll_and_collect(&mut orchestration_future, &orchestration_context, decisions) {
                 orchestration_output = Some(out);
             }
         }
@@ -406,60 +377,7 @@ where
     }
 
     // Check for non-determinism if orchestration completed
-    if orchestration_output.is_some() && non_determinism_error.is_none() {
-        // Re-process events to check for non-determinism
-        for wrapped_event in events {
-            let event = &wrapped_event.event;
-            match event {
-                Event::ActivityScheduled { name, .. } => {
-                    let futures = open_futures.lock().unwrap();
-                    if !futures.contains_key(&wrapped_event.event_id) {
-                        non_determinism_error = Some(format!(
-                            "Non-determinism detected: ActivityScheduled event (id={}, name='{}') found in history, but orchestration did not call schedule_activity()",
-                            wrapped_event.event_id, name
-                        ));
-                        break;
-                    }
-                }
-                Event::TimerCreated { .. } => {
-                    let futures = open_futures.lock().unwrap();
-                    if !futures.contains_key(&wrapped_event.event_id) {
-                        non_determinism_error = Some(format!(
-                            "Non-determinism detected: TimerCreated event (id={}) found in history, but orchestration did not call schedule_timer()",
-                            wrapped_event.event_id
-                        ));
-                        break;
-                    }
-                }
-                Event::ExternalSubscribed { name, .. } => {
-                    let futures = open_futures.lock().unwrap();
-                    if !futures.contains_key(&wrapped_event.event_id) {
-                        non_determinism_error = Some(format!(
-                            "Non-determinism detected: ExternalSubscribed event (id={}, name='{}') found in history, but orchestration did not call schedule_wait()",
-                            wrapped_event.event_id, name
-                        ));
-                        break;
-                    }
-                }
-                Event::SubOrchestrationScheduled { name, .. } => {
-                    let futures = open_futures.lock().unwrap();
-                    if !futures.contains_key(&wrapped_event.event_id) {
-                        non_determinism_error = Some(format!(
-                            "Non-determinism detected: SubOrchestrationScheduled event (id={}, name='{}') found in history, but orchestration did not call schedule_sub_orchestration()",
-                            wrapped_event.event_id, name
-                        ));
-                        break;
-                    }
-                }
-                Event::OrchestrationChained { .. } => {
-                    // For chained orchestrations, we need to check if it was scheduled
-                    // This is a fire-and-forget operation, so no future tracking needed
-                    // TODO: We might need to track these separately since they don't have futures
-                }
-                _ => {}
-            }
-        }
-    }
+    // Additional non-determinism checks are handled during schedule-event verification
 
     // Return the future if it's still pending
     let pending_future = if orchestration_output.is_none() && orchestration_future.is_some() {

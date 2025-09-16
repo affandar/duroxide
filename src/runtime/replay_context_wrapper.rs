@@ -8,12 +8,11 @@ use super::event_ids::ReplayHistoryEvent;
 /// A wrapper around OrchestrationContext that intercepts schedule_* calls for replay
 pub(crate) struct ReplayOrchestrationContext {
     inner: OrchestrationContext,
-    open_futures: Arc<Mutex<HashMap<u64, ReplayDurableFuture>>>,
     state: Arc<Mutex<ReplayState>>, // replay-only state
     decisions: Arc<Mutex<Vec<crate::Action>>>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 struct ReplayState {
     // Global stream of wrapped events for this turn
     pub(crate) events: Vec<ReplayHistoryEvent>,
@@ -21,8 +20,10 @@ struct ReplayState {
     schedule_cursor: usize,
     // Replay-local next id counter based on event index (history length + processed)
     next_replay_id: u64,
-    // Queue of scheduled kinds in order of orchestration scheduling
-    scheduled_queue: VecDeque<ScheduledKind>,
+    // Queue of scheduled entries (kind + future) in order of orchestration scheduling
+    scheduled_queue: VecDeque<ScheduledEntry>,
+    // Track futures by scheduled event id for completion mapping
+    futures_by_id: HashMap<u64, ReplayDurableFuture>,
 }
 
 impl ReplayState {
@@ -33,6 +34,7 @@ impl ReplayState {
             schedule_cursor: 0,
             next_replay_id,
             scheduled_queue: VecDeque::new(),
+            futures_by_id: HashMap::new(),
         }
     }
 
@@ -51,16 +53,20 @@ enum ScheduledKind {
     SubOrch { name: String, input: String },
 }
 
+#[derive(Clone)]
+struct ScheduledEntry {
+    kind: ScheduledKind,
+    future: ReplayDurableFuture,
+}
+
 #[allow(dead_code)]
 impl ReplayOrchestrationContext {
     pub(crate) fn new(
         inner: OrchestrationContext,
-        open_futures: Arc<Mutex<HashMap<u64, ReplayDurableFuture>>>,
         events_this_turn: Vec<ReplayHistoryEvent>,
     ) -> Self {
         Self {
             inner,
-            open_futures,
             state: Arc::new(Mutex::new(ReplayState::new(events_this_turn))),
             decisions: Arc::new(Mutex::new(Vec::new())),
         }
@@ -74,11 +80,11 @@ impl ReplayOrchestrationContext {
             .lock()
             .unwrap()
             .push(crate::Action::CallActivity { id, name: name.clone(), input: input.clone() });
-        self.state
-            .lock()
-            .unwrap()
-            .scheduled_queue
-            .push_back(ScheduledKind::Activity { name: name.clone(), input: input.clone() });
+        {
+            let mut st = self.state.lock().unwrap();
+            st.futures_by_id.insert(id, fut.clone());
+            st.scheduled_queue.push_back(ScheduledEntry { kind: ScheduledKind::Activity { name: name.clone(), input: input.clone() }, future: fut.clone() });
+        }
         fut
     }
 
@@ -88,11 +94,11 @@ impl ReplayOrchestrationContext {
             .lock()
             .unwrap()
             .push(crate::Action::CreateTimer { id, delay_ms });
-        self.state
-            .lock()
-            .unwrap()
-            .scheduled_queue
-            .push_back(ScheduledKind::Timer);
+        {
+            let mut st = self.state.lock().unwrap();
+            st.futures_by_id.insert(id, fut.clone());
+            st.scheduled_queue.push_back(ScheduledEntry { kind: ScheduledKind::Timer, future: fut.clone() });
+        }
         fut
     }
 
@@ -104,11 +110,11 @@ impl ReplayOrchestrationContext {
             .lock()
             .unwrap()
             .push(crate::Action::WaitExternal { id, name: name.clone() });
-        self.state
-            .lock()
-            .unwrap()
-            .scheduled_queue
-            .push_back(ScheduledKind::External { name: name.clone() });
+        {
+            let mut st = self.state.lock().unwrap();
+            st.futures_by_id.insert(id, fut.clone());
+            st.scheduled_queue.push_back(ScheduledEntry { kind: ScheduledKind::External { name: name.clone() }, future: fut.clone() });
+        }
         fut
     }
 
@@ -126,11 +132,11 @@ impl ReplayOrchestrationContext {
             instance: child_instance,
             input: input.clone(),
         });
-        self.state
-            .lock()
-            .unwrap()
-            .scheduled_queue
-            .push_back(ScheduledKind::SubOrch { name: name.clone(), input: input.clone() });
+        {
+            let mut st = self.state.lock().unwrap();
+            st.futures_by_id.insert(id, fut.clone());
+            st.scheduled_queue.push_back(ScheduledEntry { kind: ScheduledKind::SubOrch { name: name.clone(), input: input.clone() }, future: fut.clone() });
+        }
         fut
     }
 
@@ -177,16 +183,13 @@ impl ReplayOrchestrationContext {
                 break;
             }
         }
-        drop(st);
-
         // Create and register replay future under chosen_id
         let replay_future = ReplayDurableFuture {
             ready: Arc::new(Mutex::new(false)),
             completion: Arc::new(Mutex::new(None)),
             should_emit_decision: Arc::new(Mutex::new(true)),
         };
-        let mut futures = self.open_futures.lock().unwrap();
-        futures.insert(chosen_id, replay_future.clone());
+        st.futures_by_id.insert(chosen_id, replay_future.clone());
         (replay_future, chosen_id)
     }
 
@@ -285,7 +288,6 @@ impl Clone for ReplayOrchestrationContext {
     fn clone(&self) -> Self {
         Self {
             inner: self.inner.clone(),
-            open_futures: self.open_futures.clone(),
             state: self.state.clone(),
             decisions: self.decisions.clone(),
         }
@@ -293,7 +295,7 @@ impl Clone for ReplayOrchestrationContext {
 }
 
 impl ReplayOrchestrationContext {
-    pub fn verify_next_schedule_against(&self, he: &ReplayHistoryEvent) -> Result<(), String> {
+    pub fn verify_and_dequeue_next_schedule(&self, he: &ReplayHistoryEvent) -> Result<ReplayDurableFuture, String> {
         let mut st = self.state.lock().unwrap();
         let Some(next) = st.scheduled_queue.pop_front() else {
             return Err(match &he.event {
@@ -309,19 +311,30 @@ impl ReplayOrchestrationContext {
                     "Non-determinism detected: history has more schedules than orchestration produced".to_string(),
             });
         };
-        match (next, &he.event) {
+        match (&next.kind, &he.event) {
             (ScheduledKind::Activity { name: n1, input: i1 }, crate::Event::ActivityScheduled { name: n2, input: i2, .. }) => {
-                if n1 != *n2 || i1 != *i2 { return Err(format!("Non-determinism detected: ActivityScheduled mismatch. queued=({n1},{i1}) vs history=({n2},{i2})")); }
+                if n1 != n2 || i1 != i2 { return Err(format!("Non-determinism detected: ActivityScheduled mismatch. queued=({n1},{i1}) vs history=({n2},{i2})")); }
             }
             (ScheduledKind::Timer, crate::Event::TimerCreated { .. }) => {}
             (ScheduledKind::External { name: n1 }, crate::Event::ExternalSubscribed { name: n2, .. }) => {
-                if n1 != *n2 { return Err(format!("Non-determinism detected: ExternalSubscribed name mismatch. queued={n1} vs history={n2}")); }
+                if n1 != n2 { return Err(format!("Non-determinism detected: ExternalSubscribed name mismatch. queued={n1} vs history={n2}")); }
             }
             (ScheduledKind::SubOrch { name: n1, input: i1 }, crate::Event::SubOrchestrationScheduled { name: n2, input: i2, .. }) => {
-                if n1 != *n2 || i1 != *i2 { return Err(format!("Non-determinism detected: SubOrchestrationScheduled mismatch. queued=({n1},{i1}) vs history=({n2},{i2})")); }
+                if n1 != n2 || i1 != i2 { return Err(format!("Non-determinism detected: SubOrchestrationScheduled mismatch. queued=({n1},{i1}) vs history=({n2},{i2})")); }
             }
             _ => return Err("Non-determinism detected: scheduled kind mismatch".to_string()),
         }
-        Ok(())
+        Ok(next.future.clone())
+    }
+
+    // Mark the scheduled future (by id) as ready with provided output
+    pub fn complete_scheduled_future(&self, scheduled_id: u64, output: crate::DurableOutput) {
+        if let Some(f) = self.state.lock().unwrap().futures_by_id.get(&scheduled_id).cloned() {
+            let mut ready = f.ready.lock().unwrap();
+            if !*ready {
+                *ready = true;
+                *f.completion.lock().unwrap() = Some(output);
+            }
+        }
     }
 }
