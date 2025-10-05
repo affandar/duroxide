@@ -735,24 +735,18 @@ impl Provider for SqliteProvider {
         let has_continue_as_new = orchestrator_items.iter().any(|item| matches!(item, WorkItem::ContinueAsNew { .. }));
         
         if has_continue_as_new {
-            // Handle ContinueAsNew transition
-            // 1) Get the input from the ContinueAsNew work item
-            let can_input = orchestrator_items.iter().find_map(|item| match item {
-                WorkItem::ContinueAsNew { input, .. } => Some(input.clone()),
+            // OrchestrationContinuedAsNew event should already be in history_delta from runtime
+            // Just create the next execution
+            
+            // Get orchestration info from ContinueAsNew work item
+            let (can_orch, can_input, can_version) = orchestrator_items.iter().find_map(|item| match item {
+                WorkItem::ContinueAsNew { orchestration, input, version, .. } => {
+                    Some((orchestration.clone(), input.clone(), version.clone()))
+                }
                 _ => None,
-            }).unwrap_or_default();
+            }).expect("ContinueAsNew work item must be present");
             
-            // 2) Append ContinuedAsNew to current execution
-            self.append_history_in_tx(
-                &mut tx,
-                &instance_id,
-                execution_id as u64,
-                vec![Event::OrchestrationContinuedAsNew { event_id: 0, input: can_input }],
-            )
-            .await
-            .map_err(|e| format!("Failed to append CAN event: {}", e))?;
-            
-            // 3) Create next execution
+            // Create next execution
             let next_exec_id = execution_id + 1;
             sqlx::query(
                 r#"

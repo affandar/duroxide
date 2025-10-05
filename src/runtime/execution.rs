@@ -362,8 +362,12 @@ impl Runtime {
                 Err(error)
             }
             TurnResult::ContinueAsNew { input, version } => {
-                // For atomic execution, we don't add the ContinuedAsNew event here
-                // It will be handled by the provider when transitioning executions
+                // Add ContinuedAsNew terminal event to history
+                let terminal_event = Event::OrchestrationContinuedAsNew {
+                    event_id: 0,  // Will be assigned by provider
+                    input: input.clone(),
+                };
+                history_delta.push(terminal_event);
 
                 // Enqueue continue as new work item
                 orchestrator_items.push(WorkItem::ContinueAsNew {

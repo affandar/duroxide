@@ -151,38 +151,17 @@ impl Future for DurableFuture {
                         }
                         
                         // Is this a completion for someone else?
-                        Event::ActivityCompleted { source_event_id, .. }
-                        | Event::ActivityFailed { source_event_id, .. } => {
-                            panic!(
-                                "Non-deterministic execution: Activity '{}' (event_id={}) expected its completion next, \
-                                 but found completion for event_id={}",
-                                name, our_event_id, source_event_id
-                            );
-                        }
-                        
-                        Event::TimerFired { source_event_id, .. } => {
-                            panic!(
-                                "Non-deterministic execution: Activity '{}' (event_id={}) expected its completion next, \
-                                 but found TimerFired for event_id={}",
-                                name, our_event_id, source_event_id
-                            );
-                        }
-                        
-                        Event::ExternalEvent { name: ext_name, .. } => {
-                            panic!(
-                                "Non-deterministic execution: Activity '{}' (event_id={}) expected its completion next, \
-                                 but found ExternalEvent '{}'",
-                                name, our_event_id, ext_name
-                            );
-                        }
-                        
-                        Event::SubOrchestrationCompleted { source_event_id, .. }
-                        | Event::SubOrchestrationFailed { source_event_id, .. } => {
-                            panic!(
-                                "Non-deterministic execution: Activity '{}' (event_id={}) expected its completion next, \
-                                 but found SubOrchestration completion for event_id={}",
-                                name, our_event_id, source_event_id
-                            );
+                        // Don't panic - just return Pending and let aggregate handle it
+                        // (might be for another future in a select/join)
+                        Event::ActivityCompleted { .. }
+                        | Event::ActivityFailed { .. }
+                        | Event::TimerFired { .. }
+                        | Event::ExternalEvent { .. }
+                        | Event::SubOrchestrationCompleted { .. }
+                        | Event::SubOrchestrationFailed { .. } => {
+                            // Completion not for us - return Pending without advancing cursor
+                            // Aggregate will check if any other future matches
+                            return Poll::Pending;
                         }
                         
                         // Not a completion - skip it
@@ -256,25 +235,14 @@ impl Future for DurableFuture {
                             return Poll::Ready(DurableOutput::Timer);
                         }
                         
-                        // Completion for someone else?
-                        Event::ActivityCompleted { source_event_id, .. }
-                        | Event::ActivityFailed { source_event_id, .. }
-                        | Event::TimerFired { source_event_id, .. }
-                        | Event::SubOrchestrationCompleted { source_event_id, .. }
-                        | Event::SubOrchestrationFailed { source_event_id, .. } => {
-                            panic!(
-                                "Non-deterministic execution: Timer (event_id={}) expected TimerFired next, \
-                                 but found different completion for event_id={}",
-                                our_event_id, source_event_id
-                            );
-                        }
-                        
-                        Event::ExternalEvent { name, .. } => {
-                            panic!(
-                                "Non-deterministic execution: Timer (event_id={}) expected TimerFired next, \
-                                 but found ExternalEvent '{}'",
-                                our_event_id, name
-                            );
+                        // Completion for someone else - return Pending without advancing cursor
+                        Event::ActivityCompleted { .. }
+                        | Event::ActivityFailed { .. }
+                        | Event::TimerFired { .. }
+                        | Event::ExternalEvent { .. }
+                        | Event::SubOrchestrationCompleted { .. }
+                        | Event::SubOrchestrationFailed { .. } => {
+                            return Poll::Pending;
                         }
                         
                         // Skip non-completions
@@ -466,25 +434,14 @@ impl Future for DurableFuture {
                             return Poll::Ready(DurableOutput::SubOrchestration(Err(error.clone())));
                         }
                         
-                        // Other completions?
-                        Event::ActivityCompleted { source_event_id, .. }
-                        | Event::ActivityFailed { source_event_id, .. }
-                        | Event::TimerFired { source_event_id, .. }
-                        | Event::SubOrchestrationCompleted { source_event_id, .. }
-                        | Event::SubOrchestrationFailed { source_event_id, .. } => {
-                            panic!(
-                                "Non-deterministic execution: SubOrchestration '{}' (event_id={}) expected its completion next, \
-                                 but found different completion for event_id={}",
-                                name, our_event_id, source_event_id
-                            );
-                        }
-                        
-                        Event::ExternalEvent { name: ext_name, .. } => {
-                            panic!(
-                                "Non-deterministic execution: SubOrchestration '{}' (event_id={}) expected its completion next, \
-                                 but found ExternalEvent '{}'",
-                                name, our_event_id, ext_name
-                            );
+                        // Completion for someone else - return Pending without advancing cursor
+                        Event::ActivityCompleted { .. }
+                        | Event::ActivityFailed { .. }
+                        | Event::TimerFired { .. }
+                        | Event::ExternalEvent { .. }
+                        | Event::SubOrchestrationCompleted { .. }
+                        | Event::SubOrchestrationFailed { .. } => {
+                            return Poll::Pending;
                         }
                         
                         // Skip non-completions
