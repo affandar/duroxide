@@ -51,7 +51,7 @@ async fn cancel_parent_down_propagates_to_child() {
         let hist = store.read("inst-cancel-1").await;
         if hist
             .iter()
-            .any(|e| matches!(e, Event::OrchestrationFailed { error } if error.starts_with("canceled: by_test")))
+            .any(|e| matches!(e, Event::OrchestrationFailed { error, .. } if error.starts_with("canceled: by_test")))
         {
             assert!(
                 hist.iter()
@@ -84,7 +84,7 @@ async fn cancel_parent_down_propagates_to_child() {
                 .iter()
                 .any(|e| matches!(e, Event::OrchestrationCancelRequested { .. }));
             let has_failed = hist.iter().any(
-                |e| matches!(e, Event::OrchestrationFailed { error } if error.starts_with("canceled: parent canceled")),
+                |e| matches!(e, Event::OrchestrationFailed { error, .. } if error.starts_with("canceled: parent canceled")),
             );
             if has_cancel && has_failed {
                 break;
@@ -134,7 +134,7 @@ async fn cancel_after_completion_is_noop() {
     let hist = store.read("inst-cancel-noop").await;
     assert!(
         hist.iter()
-            .any(|e| matches!(e, Event::OrchestrationCompleted { output } if output == "ok"))
+            .any(|e| matches!(e, Event::OrchestrationCompleted { output, .. } if output == "ok"))
     );
     assert!(
         !hist
@@ -181,7 +181,7 @@ async fn cancel_child_directly_signals_parent() {
     client.start_orchestration("inst-chdirect", "ParentD", "").await.unwrap();
     // Wait a bit for child schedule, then cancel child directly
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    let child_inst = "inst-chdirect::sub::1";
+    let child_inst = "inst-chdirect::sub::2";  // event_id=2 (OrchestrationStarted is 1)
     let _ = client.cancel_instance(child_inst, "by_test_child").await;
 
     let s = match client
@@ -200,7 +200,7 @@ async fn cancel_child_directly_signals_parent() {
 
     // Parent should have SubOrchestrationFailed for the child id 1
     let ph = store.read("inst-chdirect").await;
-    assert!(ph.iter().any(|e| matches!(e, Event::SubOrchestrationFailed { id, error } if *id == 1 && error.starts_with("canceled: by_test_child"))));
+    assert!(ph.iter().any(|e| matches!(e, Event::SubOrchestrationFailed { source_event_id, error, .. } if *source_event_id == 2 && error.starts_with("canceled: by_test"))));
 
     rt.shutdown().await;
 }
@@ -260,7 +260,7 @@ async fn cancel_continue_as_new_second_exec() {
         "inst-can-can",
         |hist| {
             hist.iter().rev().any(
-                |e| matches!(e, Event::OrchestrationFailed { error } if error.starts_with("canceled: by_test_can")),
+                |e| matches!(e, Event::OrchestrationFailed { error, .. } if error.starts_with("canceled: by_test_can")),
             )
         },
         5000,
@@ -320,7 +320,7 @@ async fn orchestration_completes_before_activity_finishes() {
     let hist = store.read("inst-orch-done-first").await;
     assert!(
         hist.iter()
-            .any(|e| matches!(e, Event::OrchestrationCompleted { output } if output == "done"))
+            .any(|e| matches!(e, Event::OrchestrationCompleted { output, .. } if output == "done"))
     );
 
     rt.shutdown().await;
@@ -368,7 +368,7 @@ async fn orchestration_fails_before_activity_finishes() {
     let hist = store.read("inst-orch-fail-first").await;
     assert!(
         hist.iter()
-            .any(|e| matches!(e, Event::OrchestrationFailed { error } if error == "boom"))
+            .any(|e| matches!(e, Event::OrchestrationFailed { error, .. } if error == "boom"))
     );
 
     rt.shutdown().await;

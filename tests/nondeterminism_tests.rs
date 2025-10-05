@@ -128,7 +128,7 @@ async fn completion_kind_mismatch_triggers_nondeterminism() {
         "inst-mismatch",
         |hist| {
             hist.iter().find_map(|e| match e {
-                Event::TimerCreated { id, .. } => Some(*id),
+                Event::TimerCreated { event_id, .. } => Some(*event_id),
                 _ => None,
             })
         },

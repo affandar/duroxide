@@ -55,7 +55,7 @@ async fn continue_as_new_multiexec() {
         |hist| {
             hist.iter()
                 .rev()
-                .any(|e| matches!(e, Event::OrchestrationCompleted { output } if output == "done:2"))
+                .any(|e| matches!(e, Event::OrchestrationCompleted { output, .. } if output == "done:2"))
         },
         1_000,
     )
@@ -79,7 +79,7 @@ async fn continue_as_new_multiexec() {
     );
     assert!(
         e1.iter()
-            .any(|e| matches!(e, Event::OrchestrationContinuedAsNew { input } if input == "1"))
+            .any(|e| matches!(e, Event::OrchestrationContinuedAsNew { input, .. } if input == "1"))
     );
     assert!(!e1.iter().any(|e| matches!(e, Event::OrchestrationCompleted { .. })));
 
@@ -90,7 +90,7 @@ async fn continue_as_new_multiexec() {
     );
     assert!(
         e2.iter()
-            .any(|e| matches!(e, Event::OrchestrationContinuedAsNew { input } if input == "2"))
+            .any(|e| matches!(e, Event::OrchestrationContinuedAsNew { input, .. } if input == "2"))
     );
     assert!(!e2.iter().any(|e| matches!(e, Event::OrchestrationCompleted { .. })));
 
@@ -101,7 +101,7 @@ async fn continue_as_new_multiexec() {
     );
     assert!(
         e3.iter()
-            .any(|e| matches!(e, Event::OrchestrationCompleted { output } if output == "done:2"))
+            .any(|e| matches!(e, Event::OrchestrationCompleted { output, .. } if output == "done:2"))
     );
 
     rt.shutdown().await;
@@ -169,7 +169,7 @@ async fn continue_as_new_event_routes_to_latest() {
         |hist| {
             hist.iter()
                 .rev()
-                .any(|e| matches!(e, Event::OrchestrationCompleted { output } if output == "ok"))
+                .any(|e| matches!(e, Event::OrchestrationCompleted { output, .. } if output == "ok"))
         },
         1_000,
     )
@@ -180,7 +180,7 @@ async fn continue_as_new_event_routes_to_latest() {
     let e1 = store.read_with_execution("inst-can-evt", 1).await;
     assert!(
         e1.iter()
-            .any(|e| matches!(e, Event::OrchestrationContinuedAsNew { input } if input == "wait"))
+            .any(|e| matches!(e, Event::OrchestrationContinuedAsNew { input, .. } if input == "wait"))
     );
     assert!(
         !e1.iter()
@@ -280,7 +280,7 @@ async fn continue_as_new_event_drop_then_process() {
         |hist| {
             hist.iter()
                 .rev()
-                .any(|e| matches!(e, Event::OrchestrationCompleted { output } if output == "late"))
+                .any(|e| matches!(e, Event::OrchestrationCompleted { output, .. } if output == "late"))
         },
         1_000,
     )

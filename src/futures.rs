@@ -45,14 +45,7 @@ pub(crate) enum Kind {
     },
 }
 
-// Internal tag to classify DurableFuture kinds for history indexing
-#[derive(Clone, Copy, Debug)]
-pub(crate) enum KindTag {
-    Activity,
-    Timer,
-    External,
-    SubOrch,
-}
+// KindTag removed - no longer needed with cursor model
 
 impl Future for DurableFuture {
     type Output = DurableOutput;
@@ -309,7 +302,7 @@ impl Future for DurableFuture {
                     }
                 }
                 
-                let our_event_id = claimed_event_id.get().unwrap();
+                let _our_event_id = claimed_event_id.get().unwrap();
                 
                 // Step 2: Look for ExternalEvent (special case - search by name)
                 // External events can arrive in any order, so we search from cursor position

@@ -76,7 +76,7 @@ async fn unknown_activity_is_isolated_from_other_orchestrations_fs() {
             .any(|e| matches!(e, Event::ActivityFailed { error, .. } if error == "unregistered:Missing"))
     );
     assert!(
-        matches!(hist_fail.last().unwrap(), Event::OrchestrationFailed { error } if error == "unregistered:Missing")
+        matches!(hist_fail.last().unwrap(), Event::OrchestrationFailed { error, .. } if error == "unregistered:Missing")
     );
 
     // Status API should reflect isolation as well

@@ -738,8 +738,8 @@ impl Provider for SqliteProvider {
             // OrchestrationContinuedAsNew event should already be in history_delta from runtime
             // Just create the next execution
             
-            // Get orchestration info from ContinueAsNew work item
-            let (can_orch, can_input, can_version) = orchestrator_items.iter().find_map(|item| match item {
+            // Get orchestration info from ContinueAsNew work item (for future use if needed)
+            let (_can_orch, _can_input, _can_version) = orchestrator_items.iter().find_map(|item| match item {
                 WorkItem::ContinueAsNew { orchestration, input, version, .. } => {
                     Some((orchestration.clone(), input.clone(), version.clone()))
                 }
@@ -1295,6 +1295,7 @@ mod tests {
         
         // Ack with some history
         let history_delta = vec![Event::OrchestrationStarted {
+            event_id: 0,
             name: "TestOrch".to_string(),
             version: "1.0.0".to_string(),
             input: "{}".to_string(),
@@ -1339,6 +1340,7 @@ mod tests {
         // Ack with multiple outputs - all should be atomic
         let history_delta = vec![
             Event::OrchestrationStarted {
+                event_id: 0,  // Will be assigned by append_history_in_tx
                 name: "AtomicTest".to_string(),
                 version: "1.0.0".to_string(),
                 input: "{}".to_string(),
@@ -1346,13 +1348,13 @@ mod tests {
                 parent_id: None,
             },
             Event::ActivityScheduled {
-                event_id: 1,
+                event_id: 0,  // Will be assigned by append_history_in_tx
                 name: "Activity1".to_string(),
                 input: "{}".to_string(),
                 execution_id: 1,
             },
             Event::ActivityScheduled {
-                event_id: 2,
+                event_id: 0,  // Will be assigned by append_history_in_tx
                 name: "Activity2".to_string(),
                 input: "{}".to_string(),
                 execution_id: 1,

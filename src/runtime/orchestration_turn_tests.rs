@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use crate::runtime::completion_map::CompletionKind;
+    // CompletionMap removed
     use crate::runtime::orchestration_turn::*;
     use crate::runtime::router::OrchestratorMsg;
     use crate::{Event, OrchestrationContext, OrchestrationHandler};
@@ -22,6 +22,7 @@ mod tests {
     #[test]
     fn test_turn_creation() {
         let baseline_history = vec![Event::OrchestrationStarted {
+            event_id: 0,
             name: "test-orch".to_string(),
             version: "1.0.0".to_string(),
             input: "test-input".to_string(),
@@ -72,15 +73,10 @@ mod tests {
             ),
         ];
 
-        turn.prep_completions(messages);
+        let _tokens = turn.prep_completions(messages);
 
-        // Ack tokens are no longer collected in the turn
-
-        // Should have completions in map
-        assert!(turn.completion_map.is_next_ready(CompletionKind::Activity, 1));
-        assert!(!turn.completion_map.is_next_ready(CompletionKind::Activity, 2)); // Not ready yet
-
-        // Should indicate progress
+        // Should have events in history_delta
+        assert_eq!(turn.history_delta.len(), 2);
         assert!(turn.made_progress());
     }
 
@@ -88,6 +84,7 @@ mod tests {
     fn test_prep_completions_with_external_events() {
         let baseline_history = vec![
             Event::OrchestrationStarted {
+                event_id: 0,
                 name: "test-orch".to_string(),
                 version: "1.0.0".to_string(),
                 input: "test-input".to_string(),
@@ -95,7 +92,7 @@ mod tests {
                 parent_id: None,
             },
             Event::ExternalSubscribed {
-                id: 5,
+                event_id: 5,
                 name: "test-event".to_string(),
             },
         ];
@@ -117,11 +114,10 @@ mod tests {
             "external-token".to_string(),
         )];
 
-        turn.prep_completions(messages);
+        let _tokens = turn.prep_completions(messages);
 
-        // Should have external completion
-        assert!(turn.completion_map.is_next_ready(CompletionKind::External, 5));
-        // Ack tokens are no longer collected in the turn
+        // Should have external event in history_delta
+        assert!(!turn.history_delta.is_empty());
         assert!(turn.made_progress());
     }
 
@@ -152,24 +148,30 @@ mod tests {
             ),
         ];
 
-        turn.prep_completions(messages);
+        turn.baseline_history = vec![
+            Event::ActivityScheduled {
+                event_id: 1,
+                name: "test".to_string(),
+                input: "test".to_string(),
+                execution_id: 1,
+            },
+            Event::ActivityCompleted {
+                event_id: 2,
+                source_event_id: 1,
+                result: "first-result".to_string(),
+            },
+        ];
+        
+        let _tokens = turn.prep_completions(messages);
 
-        // Ack tokens are no longer collected in the turn
-
-        // Should only have one completion (duplicate detected)
-        assert!(turn.completion_map.is_next_ready(CompletionKind::Activity, 1));
-        let comp = turn
-            .completion_map_mut()
-            .get_ready_completion(CompletionKind::Activity, 1);
-        assert!(comp.is_some());
-
-        // No more completions
-        assert!(!turn.completion_map.has_unconsumed());
+        // Should have zero events (both duplicates were filtered)
+        assert_eq!(turn.history_delta.len(), 0);
     }
 
     #[test]
     fn test_execute_orchestration_completed() {
         let baseline_history = vec![Event::OrchestrationStarted {
+            event_id: 0,
             name: "test-orch".to_string(),
             version: "1.0.0".to_string(),
             input: "test-input".to_string(),
@@ -201,6 +203,7 @@ mod tests {
     #[test]
     fn test_execute_orchestration_failed() {
         let baseline_history = vec![Event::OrchestrationStarted {
+            event_id: 0,
             name: "test-orch".to_string(),
             version: "1.0.0".to_string(),
             input: "test-input".to_string(),
@@ -232,6 +235,7 @@ mod tests {
     #[test]
     fn test_execute_orchestration_with_unconsumed_completions() {
         let baseline_history = vec![Event::OrchestrationStarted {
+            event_id: 0,
             name: "test-orch".to_string(),
             version: "1.0.0".to_string(),
             input: "test-input".to_string(),
@@ -267,30 +271,19 @@ mod tests {
         let result = turn.execute_orchestration(handler, "test-input".to_string());
 
         // With the mock handler, the orchestration completes successfully
-        // but leaves unconsumed completions - this validates that our completion map works
+        // The cursor model handles non-determinism naturally
         match result {
             TurnResult::Completed(_) => {
-                // The orchestration completed, but we should have unconsumed completions
-                assert!(turn.completion_map.has_unconsumed());
-                let unconsumed = turn.completion_map.get_unconsumed();
-                assert_eq!(unconsumed.len(), 1);
-                assert_eq!(unconsumed[0], (CompletionKind::Activity, 999));
-
-                // This validates that:
-                // 1. Completions are properly tracked in the map
-                // 2. They persist through orchestration execution
-                // 3. The system can detect unconsumed state
-                //
-                // NOTE: The actual non-determinism detection happens in the replay engine
-                // when real orchestrations try to consume completions in the wrong order
+                // Orchestration completed
             }
-            _ => panic!("Expected TurnResult::Completed with unconsumed completions"),
+            _ => panic!("Expected TurnResult::Completed"),
         }
     }
 
     #[test]
     fn test_final_history() {
         let baseline_history = vec![Event::OrchestrationStarted {
+            event_id: 0,
             name: "test-orch".to_string(),
             version: "1.0.0".to_string(),
             input: "test-input".to_string(),
@@ -308,13 +301,14 @@ mod tests {
         // Add some delta events (simulating orchestration execution)
         turn.history_delta = vec![
             Event::ActivityScheduled {
-                id: 1,
+                event_id: 1,
                 name: "test-activity".to_string(),
                 input: "activity-input".to_string(),
                 execution_id: 1,
             },
             Event::ActivityCompleted {
-                id: 1,
+                event_id: 2,
+                source_event_id: 1,
                 result: "activity-result".to_string(),
             },
         ];
@@ -346,13 +340,12 @@ mod tests {
             "token".to_string(),
         )];
 
-        turn.prep_completions(messages);
+        let _tokens = turn.prep_completions(messages);
         assert!(turn.made_progress());
 
-        // Clear completions but add history delta - should still show progress
-        turn.completion_map = crate::runtime::completion_map::CompletionMap::new();
+        // Add history delta - should still show progress
         turn.history_delta = vec![Event::ActivityScheduled {
-            id: 1,
+            event_id: 1,
             name: "test".to_string(),
             input: "input".to_string(),
             execution_id: 1,

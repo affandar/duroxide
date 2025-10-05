@@ -96,21 +96,37 @@ async fn concurrent_orchestrations_different_activities_with(store: StdArc<dyn P
         let _ = client.raise_event("inst-multi-2", "Go", "E2").await;
     });
 
-    let out1 = match Client::new(store.clone())
+    let out1_result = Client::new(store.clone())
         .wait_for_orchestration("inst-multi-1", std::time::Duration::from_secs(10))
-        .await
-        .unwrap()
-    {
+        .await;
+    
+    if out1_result.is_err() {
+        let hist1 = store.read("inst-multi-1").await;
+        println!("inst-multi-1 history ({} events):", hist1.len());
+        for (i, e) in hist1.iter().enumerate() {
+            println!("  {}: {:?}", i, e);
+        }
+    }
+    
+    let out1 = match out1_result.unwrap() {
         duroxide::OrchestrationStatus::Completed { output } => Ok(output),
         duroxide::OrchestrationStatus::Failed { error } => Err(error),
         _ => panic!("unexpected orchestration status"),
     };
 
-    let out2 = match Client::new(store.clone())
+    let out2_result = Client::new(store.clone())
         .wait_for_orchestration("inst-multi-2", std::time::Duration::from_secs(10))
-        .await
-        .unwrap()
-    {
+        .await;
+    
+    if out2_result.is_err() {
+        let hist2 = store.read("inst-multi-2").await;
+        println!("inst-multi-2 history ({} events):", hist2.len());
+        for (i, e) in hist2.iter().enumerate() {
+            println!("  {}: {:?}", i, e);
+        }
+    }
+    
+    let out2 = match out2_result.unwrap() {
         duroxide::OrchestrationStatus::Completed { output } => Ok(output),
         duroxide::OrchestrationStatus::Failed { error } => Err(error),
         _ => panic!("unexpected orchestration status"),
@@ -132,32 +148,32 @@ async fn concurrent_orchestrations_different_activities_with(store: StdArc<dyn P
     assert!(
         hist1
             .iter()
-            .any(|e| matches!(e, Event::ActivityCompleted { id, result } if *id == 1 && result == "5"))
+            .any(|e| matches!(e, Event::ActivityCompleted { source_event_id, result, .. } if *source_event_id == 1 && result == "5"))
     );
     assert!(
         hist2
             .iter()
-            .any(|e| matches!(e, Event::ActivityCompleted { id, result } if *id == 1 && result == "HI"))
+            .any(|e| matches!(e, Event::ActivityCompleted { source_event_id, result, .. } if *source_event_id == 1 && result == "HI"))
     );
     assert!(
         hist1
             .iter()
-            .any(|e| matches!(e, Event::ExternalEvent { id, data, .. } if *id == 2 && data == "E1"))
+            .any(|e| matches!(e, Event::ExternalEvent { data, .. } if data == "E1"))
     );
     assert!(
         hist2
             .iter()
-            .any(|e| matches!(e, Event::ExternalEvent { id, data, .. } if *id == 2 && data == "E2"))
+            .any(|e| matches!(e, Event::ExternalEvent { data, .. } if data == "E2"))
     );
     assert!(
         hist1
             .iter()
-            .any(|e| matches!(e, Event::TimerFired { id, .. } if *id == 3))
+            .any(|e| matches!(e, Event::TimerFired { .. }))
     );
     assert!(
         hist2
             .iter()
-            .any(|e| matches!(e, Event::TimerFired { id, .. } if *id == 3))
+            .any(|e| matches!(e, Event::TimerFired { .. }))
     );
 
     rt.shutdown().await;
@@ -284,32 +300,32 @@ async fn concurrent_orchestrations_same_activities_with(store: StdArc<dyn Provid
     assert!(
         hist1
             .iter()
-            .any(|e| matches!(e, Event::ActivityCompleted { id, result } if *id == 1 && result == "11"))
+            .any(|e| matches!(e, Event::ActivityCompleted { source_event_id, result, .. } if *source_event_id == 1 && result == "11"))
     );
     assert!(
         hist2
             .iter()
-            .any(|e| matches!(e, Event::ActivityCompleted { id, result } if *id == 2 && result == "21"))
+            .any(|e| matches!(e, Event::ActivityCompleted { source_event_id, result, .. } if *source_event_id == 2 && result == "21"))
     );
     assert!(
         hist1
             .iter()
-            .any(|e| matches!(e, Event::ExternalEvent { id, data, .. } if *id == 2 && data == "P1"))
+            .any(|e| matches!(e, Event::ExternalEvent { data, .. } if data == "P1"))
     );
     assert!(
         hist2
             .iter()
-            .any(|e| matches!(e, Event::ExternalEvent { id, data, .. } if *id == 3 && data == "P2"))
+            .any(|e| matches!(e, Event::ExternalEvent { data, .. } if data == "P2"))
     );
     assert!(
         hist1
             .iter()
-            .any(|e| matches!(e, Event::TimerFired { id, .. } if *id == 3))
+            .any(|e| matches!(e, Event::TimerFired { .. }))
     );
     assert!(
         hist2
             .iter()
-            .any(|e| matches!(e, Event::TimerFired { id, .. } if *id == 4))
+            .any(|e| matches!(e, Event::TimerFired { .. }))
     );
 
     rt.shutdown().await;

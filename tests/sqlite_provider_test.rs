@@ -41,6 +41,7 @@ async fn test_sqlite_provider_basic() {
     // 3. Process and acknowledge with history
     let history_delta = vec![
         Event::OrchestrationStarted {
+            event_id: 0,
             name: "TestOrchestration".to_string(),
             version: "1.0.0".to_string(),
             input: r#"{"test": true}"#.to_string(),
@@ -48,7 +49,7 @@ async fn test_sqlite_provider_basic() {
             parent_id: None,
         },
         Event::ActivityScheduled {
-            id: 1,
+            event_id: 1,
             name: "ProcessData".to_string(),
             input: r#"{"data": "test"}"#.to_string(),
             execution_id: 1,
@@ -131,6 +132,7 @@ async fn test_sqlite_provider_transactional() {
     // Simulate orchestration that schedules multiple activities atomically
     let history_delta = vec![
         Event::OrchestrationStarted {
+            event_id: 0,
             name: "TransactionalTest".to_string(),
             version: "1.0.0".to_string(),
             input: "{}".to_string(),
@@ -138,19 +140,19 @@ async fn test_sqlite_provider_transactional() {
             parent_id: None,
         },
         Event::ActivityScheduled {
-            id: 1,
+            event_id: 1,
             name: "Activity1".to_string(),
             input: "{}".to_string(),
             execution_id: 1,
         },
         Event::ActivityScheduled {
-            id: 2,
+            event_id: 2,
             name: "Activity2".to_string(),
             input: "{}".to_string(),
             execution_id: 1,
         },
         Event::ActivityScheduled {
-            id: 3,
+            event_id: 3,
             name: "Activity3".to_string(),
             input: "{}".to_string(),
             execution_id: 1,
@@ -247,6 +249,7 @@ async fn test_sqlite_provider_timer_queue() {
     store.ack_orchestration_item(
         &item.lock_token,
         vec![Event::OrchestrationStarted {
+            event_id: 0,
             name: "TimerTest".to_string(),
             version: "1.0.0".to_string(),
             input: "{}".to_string(),

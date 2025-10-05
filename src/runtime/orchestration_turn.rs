@@ -370,13 +370,14 @@ mod tests {
     use crate::runtime::router::OrchestratorMsg;
 
     #[test]
-    fn test_turn_lifecycle() {
-        let mut turn = OrchestrationTurn::new(
+    fn test_turn_creation() {
+        let turn = OrchestrationTurn::new(
             "test-instance".to_string(),
             1,
             1, // execution_id
             vec![Event::OrchestrationStarted {
-                name: "test-orchestration".to_string(),
+                event_id: 0,
+                name: "test-orch".to_string(),
                 version: "1.0.0".to_string(),
                 input: "test-input".to_string(),
                 parent_instance: None,
@@ -384,7 +385,16 @@ mod tests {
             }],
         );
 
-        // Stage 1: Prep completions
+        assert_eq!(turn.instance, "test-instance");
+        assert_eq!(turn.turn_index, 1);
+        assert!(turn.history_delta.is_empty());
+        assert!(!turn.made_progress());
+    }
+
+    #[test]
+    fn test_prep_completions_creates_events() {
+        let mut turn = OrchestrationTurn::new("test-instance".to_string(), 1, 1, vec![]);
+
         let messages = vec![(
             OrchestratorMsg::ActivityCompleted {
                 instance: "test-instance".to_string(),
@@ -396,11 +406,12 @@ mod tests {
             "token1".to_string(),
         )];
 
-        turn.prep_completions(messages);
-        // Ack tokens are no longer collected in the turn
-        assert!(turn.completion_map.is_next_ready(CompletionKind::Activity, 1));
-
-        // Other stages would require actual runtime integration to test properly
+        let ack_tokens = turn.prep_completions(messages);
+        
+        // Should have converted message to event
+        assert_eq!(ack_tokens.len(), 1);
+        assert_eq!(turn.history_delta.len(), 1);
+        assert!(turn.made_progress());
     }
 }
 

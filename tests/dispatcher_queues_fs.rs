@@ -49,7 +49,7 @@ async fn dispatcher_enqueues_timer_schedule_then_completes() {
         inst,
         |h| {
             h.iter()
-                .any(|e| matches!(e, Event::OrchestrationCompleted { output } if output == "ok"))
+                .any(|e| matches!(e, Event::OrchestrationCompleted { output, .. } if output == "ok"))
         },
         5_000,
     )
@@ -85,7 +85,7 @@ async fn dispatcher_enqueues_start_orchestration_to_orch_queue() {
         "W1",
         |h| {
             h.iter()
-                .any(|e| matches!(e, Event::OrchestrationCompleted { output } if output == "A"))
+                .any(|e| matches!(e, Event::OrchestrationCompleted { output, .. } if output == "A"))
         },
         5_000,
     )

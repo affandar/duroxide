@@ -64,7 +64,7 @@ async fn test_fetch_orchestration_item_existing_instance() {
         "test-instance",
         1,
         vec![Event::ActivityScheduled {
-            id: 1,
+            event_id: 1,
             name: "TestActivity".to_string(),
             input: "activity-input".to_string(),
             execution_id: 1,
@@ -140,6 +140,7 @@ async fn test_ack_orchestration_item_atomic() {
     // Prepare updates
     let history_delta = vec![
         Event::OrchestrationStarted {
+            event_id: 0,
             name: "TestOrch".to_string(),
             version: "1.0.0".to_string(),
             input: "test-input".to_string(),
@@ -147,7 +148,7 @@ async fn test_ack_orchestration_item_atomic() {
             parent_id: None,
         },
         Event::ActivityScheduled {
-            id: 1,
+            event_id: 1,
             name: "TestActivity".to_string(),
             input: "activity-input".to_string(),
             execution_id: 1,
@@ -311,6 +312,7 @@ async fn test_in_memory_provider_atomic_operations() {
 
     // Test ack with updates
     let history_delta = vec![Event::OrchestrationStarted {
+        event_id: 0,
         name: "TestOrch".to_string(),
         version: "1.0.0".to_string(),
         input: "test-input".to_string(),

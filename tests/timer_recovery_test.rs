@@ -87,7 +87,7 @@ async fn timer_recovery_after_crash_before_fire() {
     let (timer_id, fire_at_ms) = hist_before
         .iter()
         .find_map(|e| match e {
-            Event::TimerCreated { id, fire_at_ms, .. } => Some((*id, *fire_at_ms)),
+            Event::TimerCreated { event_id, fire_at_ms, .. } => Some((*event_id, *fire_at_ms)),
             _ => None,
         })
         .expect("Timer created event should exist");
@@ -116,7 +116,7 @@ async fn timer_recovery_after_crash_before_fire() {
     let timer_fired = common::wait_for_history(
         store2.clone(),
         instance,
-        |h| h.iter().any(|e| matches!(e, Event::TimerFired { id, .. } if *id == timer_id)),
+        |h| h.iter().any(|e| matches!(e, Event::TimerFired { source_event_id, .. } if *source_event_id == timer_id)),
         3_000  // Give timer dispatcher a few seconds to process
     )
     .await;
@@ -151,8 +151,8 @@ async fn timer_recovery_after_crash_before_fire() {
     let timer_in_history = common::wait_for_history(
         store2.clone(),
         instance,
-        |h| h.iter().any(|e| matches!(e, Event::TimerFired { id, .. } 
-                                    if *id == timer_id)),
+        |h| h.iter().any(|e| matches!(e, Event::TimerFired { source_event_id, .. } 
+                                    if *source_event_id == timer_id)),
         3_000  // Wait a few seconds for the event to be written
     )
     .await;
@@ -162,12 +162,12 @@ async fn timer_recovery_after_crash_before_fire() {
     // Should have exactly one TimerCreated and one TimerFired
     let timer_created_count = hist_after
         .iter()
-        .filter(|e| matches!(e, Event::TimerCreated { id, .. } if *id == timer_id))
+        .filter(|e| matches!(e, Event::TimerCreated { event_id, .. } if *event_id == timer_id))
         .count();
     let timer_fired_count = hist_after
         .iter()
-        .filter(|e| matches!(e, Event::TimerFired { id, .. } 
-                           if *id == timer_id))
+        .filter(|e| matches!(e, Event::TimerFired { source_event_id, .. } 
+                           if *source_event_id == timer_id))
         .count();
     
     // Debug output if timer didn't fire

@@ -35,7 +35,7 @@ async fn unknown_orchestration_fails_gracefully() {
     let hist = client.get_execution_history("inst-unknown-1", 1).await;
     assert!(
         hist.iter()
-            .any(|e| matches!(e, Event::OrchestrationFailed { error } if error == "unregistered:DoesNotExist"))
+            .any(|e| matches!(e, Event::OrchestrationFailed { error, .. } if error == "unregistered:DoesNotExist"))
     );
 
     // Store history should also include the failed terminal
@@ -43,7 +43,7 @@ async fn unknown_orchestration_fails_gracefully() {
     assert!(
         persisted
             .iter()
-            .any(|e| matches!(e, Event::OrchestrationFailed { error } if error == "unregistered:DoesNotExist"))
+            .any(|e| matches!(e, Event::OrchestrationFailed { error, .. } if error == "unregistered:DoesNotExist"))
     );
 
     rt.shutdown().await;
