@@ -462,9 +462,14 @@ struct CtxInner {
     history: Vec<Event>,
     actions: Vec<Action>,
 
-    // Event ID generation and cursor for sequential event processing
+    // Event ID generation
     next_event_id: u64,
-    next_event_index: usize,
+    
+    // Cursor for completion consumption (FIFO order)
+    next_completion_index: usize,
+    
+    // Track claimed scheduling events (to prevent collision)
+    claimed_scheduling_events: std::collections::HashSet<u64>,
 
     // Track consumed external events (by name) since they're searched, not cursor-based
     consumed_external_events: std::collections::HashSet<String>,
@@ -493,7 +498,8 @@ impl CtxInner {
             history,
             actions: Vec::new(),
             next_event_id,
-            next_event_index: 0,  // Cursor starts at beginning
+            next_completion_index: 0,  // Completion cursor starts at beginning
+            claimed_scheduling_events: Default::default(),
             consumed_external_events: Default::default(),
             execution_id,
             turn_index: 0,
@@ -801,7 +807,7 @@ impl OrchestrationContext {
     /// - Long polling or waiting
     /// - Timeouts (use `select2` with timers instead)
     pub fn schedule_activity(&self, name: impl Into<String>, input: impl Into<String>) -> DurableFuture {
-        // No ID allocation here - event_id is discovered during first poll
+        // event_id will be claimed during first poll
         DurableFuture(Kind::Activity {
             name: name.into(),
             input: input.into(),
