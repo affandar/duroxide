@@ -115,10 +115,10 @@ impl Client {
         // Find terminal events first
         for e in hist.iter().rev() {
             match e {
-                Event::OrchestrationCompleted { output } => {
+                Event::OrchestrationCompleted { output, .. } => {
                     return OrchestrationStatus::Completed { output: output.clone() }
                 }
-                Event::OrchestrationFailed { error } => {
+                Event::OrchestrationFailed { error, .. } => {
                     return OrchestrationStatus::Failed { error: error.clone() }
                 }
                 _ => {}

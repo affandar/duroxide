@@ -90,7 +90,7 @@ async fn select2_two_externals_history_order_wins() {
     );
     let hist = store.read("inst-ab2").await;
     let output = match hist.last().unwrap() {
-        Event::OrchestrationCompleted { output } => output.clone(),
+        Event::OrchestrationCompleted { output, .. } => output.clone(),
         _ => String::new(),
     };
 
@@ -207,7 +207,7 @@ async fn select_two_externals_history_order_wins() {
     );
     let hist = store.read("inst-ab").await;
     let output = match hist.last().unwrap() {
-        Event::OrchestrationCompleted { output } => output.clone(),
+        Event::OrchestrationCompleted { output, .. } => output.clone(),
         _ => String::new(),
     };
 
@@ -324,7 +324,7 @@ async fn select_three_mixed_history_winner() {
     );
     let hist = store.read("inst-atb").await;
     let output = match hist.last().unwrap() {
-        Event::OrchestrationCompleted { output } => output.clone(),
+        Event::OrchestrationCompleted { output, .. } => output.clone(),
         _ => String::new(),
     };
 
@@ -444,7 +444,7 @@ async fn join_returns_history_order() {
     );
     let hist = store.read("inst-join").await;
     let output = match hist.last().unwrap() {
-        Event::OrchestrationCompleted { output } => output.clone(),
+        Event::OrchestrationCompleted { output, .. } => output.clone(),
         _ => String::new(),
     };
     // Ensure output is vb,va to reflect history order B before A

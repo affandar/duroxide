@@ -25,11 +25,11 @@ CREATE TABLE IF NOT EXISTS executions (
 CREATE TABLE IF NOT EXISTS history (
     instance_id TEXT NOT NULL,
     execution_id INTEGER NOT NULL,
-    sequence_num INTEGER NOT NULL,
+    event_id INTEGER NOT NULL,
     event_type TEXT NOT NULL,
     event_data TEXT NOT NULL, -- JSON serialized Event
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (instance_id, execution_id, sequence_num)
+    PRIMARY KEY (instance_id, execution_id, event_id)
 );
 
 -- Orchestrator queue

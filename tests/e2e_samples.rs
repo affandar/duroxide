@@ -1183,7 +1183,7 @@ async fn sample_cancellation_parent_cascades_to_children_fs() {
         "inst-sample-cancel",
         |hist| {
             hist.iter().rev().any(
-                |e| matches!(e, Event::OrchestrationFailed { error } if error.starts_with("canceled: user_request")),
+                |e| matches!(e, Event::OrchestrationFailed { error, .. } if error.starts_with("canceled: user_request")),
             )
         },
         5_000,
@@ -1202,7 +1202,7 @@ async fn sample_cancellation_parent_cascades_to_children_fs() {
     for child in children {
         let ok_child = common::wait_for_history(store.clone(), &child, |hist| {
             hist.iter().any(|e| matches!(e, Event::OrchestrationCancelRequested { .. })) &&
-            hist.iter().any(|e| matches!(e, Event::OrchestrationFailed { error } if error.starts_with("canceled: parent canceled")))
+            hist.iter().any(|e| matches!(e, Event::OrchestrationFailed { error, .. } if error.starts_with("canceled: parent canceled")))
         }, 5_000).await;
         assert!(ok_child, "timeout waiting for child cancel for {child}");
     }

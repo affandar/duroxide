@@ -172,7 +172,7 @@
 //! - **DurableFuture**: Unified futures that can be composed with `join`/`select`
 //! - **Runtime**: In-process execution engine with dispatchers and workers
 //! - **Providers**: Pluggable storage backends (filesystem, in-memory)
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
@@ -233,13 +233,15 @@ mod _typed_codec {
 }
 
 /// Append-only orchestration history entries persisted by a provider and
-/// consumed during replay. Variants use stable correlation IDs to pair
-/// scheduling operations with their completions.
+/// consumed during replay. All events have a monotonically increasing event_id
+/// representing their position in history. Scheduling and completion events
+/// are linked via source_event_id.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum Event {
     /// Orchestration instance was created and started by name with input.
     /// Version is required; parent linkage is present when this is a child orchestration.
     OrchestrationStarted {
+        event_id: u64,
         name: String,
         version: String,
         input: String,
@@ -247,38 +249,63 @@ pub enum Event {
         parent_id: Option<u64>,
     },
     /// Orchestration completed with a final result.
-    OrchestrationCompleted { output: String },
+    OrchestrationCompleted {
+        event_id: u64,
+        output: String,
+    },
     /// Orchestration failed with a final error.
-    OrchestrationFailed { error: String },
-    /// Activity was scheduled with a unique ID and input.
+    OrchestrationFailed {
+        event_id: u64,
+        error: String,
+    },
+    /// Activity was scheduled. event_id is THE id for this operation.
     ActivityScheduled {
-        id: u64,
+        event_id: u64,
         name: String,
         input: String,
         execution_id: u64,
     },
     /// Activity completed successfully with a result.
-    ActivityCompleted { id: u64, result: String },
+    ActivityCompleted {
+        event_id: u64,
+        source_event_id: u64,
+        result: String,
+    },
     /// Activity failed with an error string.
-    ActivityFailed { id: u64, error: String },
+    ActivityFailed {
+        event_id: u64,
+        source_event_id: u64,
+        error: String,
+    },
 
     /// Timer was created and will logically fire at `fire_at_ms`.
     TimerCreated {
-        id: u64,
+        event_id: u64,
         fire_at_ms: u64,
         execution_id: u64,
     },
     /// Timer fired at logical time `fire_at_ms`.
-    TimerFired { id: u64, fire_at_ms: u64 },
+    TimerFired {
+        event_id: u64,
+        source_event_id: u64,
+        fire_at_ms: u64,
+    },
 
-    /// Subscription to an external event by name was recorded with a unique ID.
-    ExternalSubscribed { id: u64, name: String },
-    /// An external event with correlation `id` was raised with some data.
-    ExternalEvent { id: u64, name: String, data: String },
+    /// Subscription to an external event by name was recorded.
+    ExternalSubscribed {
+        event_id: u64,
+        name: String,
+    },
+    /// An external event was raised. No source_event_id - matched by name.
+    ExternalEvent {
+        event_id: u64,
+        name: String,
+        data: String,
+    },
 
     /// Fire-and-forget orchestration scheduling (detached).
     OrchestrationChained {
-        id: u64,
+        event_id: u64,
         name: String,
         instance: String,
         input: String,
@@ -286,23 +313,97 @@ pub enum Event {
 
     /// Sub-orchestration was scheduled with deterministic child instance id.
     SubOrchestrationScheduled {
-        id: u64,
+        event_id: u64,
         name: String,
         instance: String,
         input: String,
         execution_id: u64,
     },
     /// Sub-orchestration completed and returned a result to the parent.
-    SubOrchestrationCompleted { id: u64, result: String },
+    SubOrchestrationCompleted {
+        event_id: u64,
+        source_event_id: u64,
+        result: String,
+    },
     /// Sub-orchestration failed and returned an error to the parent.
-    SubOrchestrationFailed { id: u64, error: String },
+    SubOrchestrationFailed {
+        event_id: u64,
+        source_event_id: u64,
+        error: String,
+    },
 
     /// Orchestration continued as new with fresh input (terminal for this execution).
-    OrchestrationContinuedAsNew { input: String },
+    OrchestrationContinuedAsNew {
+        event_id: u64,
+        input: String,
+    },
 
     /// Cancellation has been requested for the orchestration (terminal will follow deterministically).
-    OrchestrationCancelRequested { reason: String },
+    OrchestrationCancelRequested {
+        event_id: u64,
+        reason: String,
+    },
 
+}
+
+impl Event {
+    /// Get the event_id (position in history) for any event.
+    pub fn event_id(&self) -> u64 {
+        match self {
+            Event::OrchestrationStarted { event_id, .. } => *event_id,
+            Event::OrchestrationCompleted { event_id, .. } => *event_id,
+            Event::OrchestrationFailed { event_id, .. } => *event_id,
+            Event::ActivityScheduled { event_id, .. } => *event_id,
+            Event::ActivityCompleted { event_id, .. } => *event_id,
+            Event::ActivityFailed { event_id, .. } => *event_id,
+            Event::TimerCreated { event_id, .. } => *event_id,
+            Event::TimerFired { event_id, .. } => *event_id,
+            Event::ExternalSubscribed { event_id, .. } => *event_id,
+            Event::ExternalEvent { event_id, .. } => *event_id,
+            Event::OrchestrationChained { event_id, .. } => *event_id,
+            Event::SubOrchestrationScheduled { event_id, .. } => *event_id,
+            Event::SubOrchestrationCompleted { event_id, .. } => *event_id,
+            Event::SubOrchestrationFailed { event_id, .. } => *event_id,
+            Event::OrchestrationContinuedAsNew { event_id, .. } => *event_id,
+            Event::OrchestrationCancelRequested { event_id, .. } => *event_id,
+        }
+    }
+
+    /// Set the event_id (used by runtime when adding events to history).
+    pub(crate) fn set_event_id(&mut self, id: u64) {
+        match self {
+            Event::OrchestrationStarted { event_id, .. } => *event_id = id,
+            Event::OrchestrationCompleted { event_id, .. } => *event_id = id,
+            Event::OrchestrationFailed { event_id, .. } => *event_id = id,
+            Event::ActivityScheduled { event_id, .. } => *event_id = id,
+            Event::ActivityCompleted { event_id, .. } => *event_id = id,
+            Event::ActivityFailed { event_id, .. } => *event_id = id,
+            Event::TimerCreated { event_id, .. } => *event_id = id,
+            Event::TimerFired { event_id, .. } => *event_id = id,
+            Event::ExternalSubscribed { event_id, .. } => *event_id = id,
+            Event::ExternalEvent { event_id, .. } => *event_id = id,
+            Event::OrchestrationChained { event_id, .. } => *event_id = id,
+            Event::SubOrchestrationScheduled { event_id, .. } => *event_id = id,
+            Event::SubOrchestrationCompleted { event_id, .. } => *event_id = id,
+            Event::SubOrchestrationFailed { event_id, .. } => *event_id = id,
+            Event::OrchestrationContinuedAsNew { event_id, .. } => *event_id = id,
+            Event::OrchestrationCancelRequested { event_id, .. } => *event_id = id,
+        }
+    }
+
+    /// Get the source_event_id if this is a completion event.
+    /// Returns None for lifecycle and scheduling events.
+    /// Note: ExternalEvent does not have source_event_id (matched by name).
+    pub fn source_event_id(&self) -> Option<u64> {
+        match self {
+            Event::ActivityCompleted { source_event_id, .. } => Some(*source_event_id),
+            Event::ActivityFailed { source_event_id, .. } => Some(*source_event_id),
+            Event::TimerFired { source_event_id, .. } => Some(*source_event_id),
+            Event::SubOrchestrationCompleted { source_event_id, .. } => Some(*source_event_id),
+            Event::SubOrchestrationFailed { source_event_id, .. } => Some(*source_event_id),
+            _ => None,
+        }
+    }
 }
 
 /// Log levels for orchestration context logging.
@@ -317,23 +418,33 @@ pub enum LogLevel {
 /// is responsible for materializing these into corresponding `Event`s.
 #[derive(Debug, Clone)]
 pub enum Action {
-    /// Schedule an activity invocation.
-    CallActivity { id: u64, name: String, input: String },
-    /// Create a timer that will fire after the requested delay.
-    CreateTimer { id: u64, delay_ms: u64 },
-    /// Subscribe to an external event by name.
-    WaitExternal { id: u64, name: String },
+    /// Schedule an activity invocation. scheduling_event_id is the event_id of the ActivityScheduled event.
+    CallActivity {
+        scheduling_event_id: u64,
+        name: String,
+        input: String,
+    },
+    /// Create a timer that will fire after the requested delay. scheduling_event_id is the event_id of the TimerCreated event.
+    CreateTimer {
+        scheduling_event_id: u64,
+        delay_ms: u64,
+    },
+    /// Subscribe to an external event by name. scheduling_event_id is the event_id of the ExternalSubscribed event.
+    WaitExternal {
+        scheduling_event_id: u64,
+        name: String,
+    },
     /// Start a detached orchestration (no result routing back to parent).
     StartOrchestrationDetached {
-        id: u64,
+        scheduling_event_id: u64,
         name: String,
         version: Option<String>,
         instance: String,
         input: String,
     },
-    /// Start a sub-orchestration by name and child instance id. Optional version selects target orchestration version.
+    /// Start a sub-orchestration by name and child instance id. scheduling_event_id is the event_id of the SubOrchestrationScheduled event.
     StartSubOrchestration {
-        id: u64,
+        scheduling_event_id: u64,
         name: String,
         version: Option<String>,
         instance: String,
@@ -351,66 +462,42 @@ struct CtxInner {
     history: Vec<Event>,
     actions: Vec<Action>,
 
-    // Reserved for future deterministic GUIDs if reintroduced
-    next_correlation_id: u64,
+    // Event ID generation and cursor for sequential event processing
+    next_event_id: u64,
+    next_event_index: usize,
+
+    // Track consumed external events (by name) since they're searched, not cursor-based
+    consumed_external_events: std::collections::HashSet<String>,
 
     // Execution metadata
     execution_id: u64,
 
-    // Logging and turn metadata
+    // Turn metadata
     turn_index: u64,
     logging_enabled_this_poll: bool,
-    // Per-turn buffered logs (messages to flush once per progress turn)
-    log_buffer: Vec<(LogLevel, String)>,
-
-    // Per-turn claimed correlation IDs to prevent reusing IDs across multiple
-    // futures scheduled within the same poll turn. This preserves deterministic
-    // replay semantics when multiple timers/external waits/activities are
-    // scheduled sequentially in one turn.
-    claimed_activity_ids: std::collections::HashSet<u64>,
-    claimed_timer_ids: std::collections::HashSet<u64>,
-    claimed_external_ids: std::collections::HashSet<u64>,
 }
 
 impl CtxInner {
     fn new(history: Vec<Event>, execution_id: u64) -> Self {
-        // Compute next correlation id based on max id found in history
-        let mut max_id = 0u64;
-        for ev in &history {
-            let id_opt = match ev {
-                Event::ActivityScheduled { id, .. }
-                | Event::ActivityCompleted { id, .. }
-                | Event::ActivityFailed { id, .. }
-                | Event::TimerCreated { id, .. }
-                | Event::TimerFired { id, .. }
-                | Event::ExternalSubscribed { id, .. }
-                | Event::ExternalEvent { id, .. }
-                | Event::OrchestrationChained { id, .. }
-                | Event::SubOrchestrationScheduled { id, .. }
-                | Event::SubOrchestrationCompleted { id, .. }
-                | Event::SubOrchestrationFailed { id, .. } => Some(*id),
-                Event::OrchestrationStarted { .. }
-                | Event::OrchestrationCompleted { .. }
-                | Event::OrchestrationFailed { .. }
-                | Event::OrchestrationContinuedAsNew { .. }
-                | Event::OrchestrationCancelRequested { .. } => None,
-            };
-            if let Some(id) = id_opt {
-                max_id = max_id.max(id);
-            }
-        }
+        // Compute next event_id based on maximum event_id in history
+        // (skip event_id=0 which are placeholders)
+        let next_event_id = history
+            .iter()
+            .map(|e| e.event_id())
+            .filter(|id| *id > 0)
+            .max()
+            .map(|max_id| max_id + 1)
+            .unwrap_or(1);
+
         Self {
             history,
             actions: Vec::new(),
-            // guid_counter removed
-            next_correlation_id: max_id.saturating_add(1),
+            next_event_id,
+            next_event_index: 0,  // Cursor starts at beginning
+            consumed_external_events: Default::default(),
             execution_id,
             turn_index: 0,
             logging_enabled_this_poll: false,
-            log_buffer: Vec::new(),
-            claimed_activity_ids: Default::default(),
-            claimed_timer_ids: Default::default(),
-            claimed_external_ids: Default::default(),
         }
     }
 
@@ -428,12 +515,6 @@ impl CtxInner {
     }
 
     // Note: deterministic GUID generation was removed from public API.
-
-    fn next_id(&mut self) -> u64 {
-        let id = self.next_correlation_id;
-        self.next_correlation_id += 1;
-        id
-    }
 }
 
 /// User-facing orchestration context for scheduling and replay-safe helpers.
@@ -475,22 +556,19 @@ impl OrchestrationContext {
     pub fn is_logging_enabled(&self) -> bool {
         self.inner.lock().unwrap().logging_enabled_this_poll
     }
-    /// Drain the buffered log messages accumulated during the last turn.
-    pub fn take_log_buffer(&self) -> Vec<(LogLevel, String)> {
-        std::mem::take(&mut self.inner.lock().unwrap().log_buffer)
-    }
-    /// Buffer a structured log message for the current turn.
-    pub fn push_log(&self, level: LogLevel, msg: String) {
-        self.inner.lock().unwrap().log_buffer.push((level, msg));
-    }
+    // log_buffer removed - not used
 
-    /// Emit a structured trace entry using the system trace activity.
-    /// This is fire-and-forget - the trace is recorded in history but doesn't need to be awaited.
+    /// Emit a structured trace entry.
+    /// For now, just logs directly - will be modeled as activity later.
     pub fn trace(&self, level: impl Into<String>, message: impl Into<String>) {
-        let payload = format!("{}:{}", level.into(), message.into());
-        let mut fut = self.schedule_activity(SYSTEM_TRACE_ACTIVITY, payload);
-        // Fire and forget - poll once to schedule the activity
-        let _ = poll_once(&mut fut);
+        let level_str = level.into();
+        let msg = message.into();
+        match level_str.as_str() {
+            "ERROR" => tracing::error!(target: "duroxide::trace", "{}", msg),
+            "WARN" => tracing::warn!(target: "duroxide::trace", "{}", msg),
+            "DEBUG" => tracing::debug!(target: "duroxide::trace", "{}", msg),
+            _ => tracing::info!(target: "duroxide::trace", "{}", msg),
+        }
     }
 
     /// Convenience wrapper for INFO level tracing.
@@ -565,7 +643,7 @@ use crate::futures::Kind;
 
 // Internal tag to classify DurableFuture kinds for history indexing
 use crate::futures::AggregateDurableFuture;
-use crate::futures::KindTag;
+// KindTag no longer needed - cursor model doesn't use it for matching
 
 // DurableFuture's Future impl lives in crate::futures
 
@@ -723,30 +801,11 @@ impl OrchestrationContext {
     /// - Long polling or waiting
     /// - Timeouts (use `select2` with timers instead)
     pub fn schedule_activity(&self, name: impl Into<String>, input: impl Into<String>) -> DurableFuture {
-        let name: String = name.into();
-        let input: String = input.into();
-        let mut inner = self.inner.lock().unwrap();
-        // Try to adopt an existing scheduled activity id that matches and isn't claimed yet
-        let adopted_id = inner
-            .history
-            .iter()
-            .find_map(|e| match e {
-                Event::ActivityScheduled {
-                    id,
-                    name: n,
-                    input: inp,
-                    execution_id: _,
-                } if n == &name && inp == &input && !inner.claimed_activity_ids.contains(id) => Some(*id),
-                _ => None,
-            })
-            .unwrap_or_else(|| inner.next_id());
-        inner.claimed_activity_ids.insert(adopted_id);
-        drop(inner);
+        // No ID allocation here - event_id is discovered during first poll
         DurableFuture(Kind::Activity {
-            id: adopted_id,
-            name,
-            input,
-            scheduled: Cell::new(false),
+            name: name.into(),
+            input: input.into(),
+            claimed_event_id: Cell::new(None),
             ctx: self.clone(),
         })
     }
@@ -790,46 +849,21 @@ impl OrchestrationContext {
     /// # }
     /// ```
     pub fn schedule_timer(&self, delay_ms: u64) -> DurableFuture {
-        let mut inner = self.inner.lock().unwrap();
-        // Adopt first unclaimed TimerCreated id if any, else allocate
-        let adopted_id = inner
-            .history
-            .iter()
-            .find_map(|e| match e {
-                Event::TimerCreated { id, .. } if !inner.claimed_timer_ids.contains(id) => Some(*id),
-                _ => None,
-            })
-            .unwrap_or_else(|| inner.next_id());
-        inner.claimed_timer_ids.insert(adopted_id);
-        drop(inner);
+        // No ID allocation here - event_id is discovered during first poll
         DurableFuture(Kind::Timer {
-            id: adopted_id,
             delay_ms,
-            scheduled: Cell::new(false),
+            claimed_event_id: Cell::new(None),
             ctx: self.clone(),
         })
     }
 
     /// Subscribe to an external event by name and return its `DurableFuture`.
     pub fn schedule_wait(&self, name: impl Into<String>) -> DurableFuture {
-        let name: String = name.into();
-        let mut inner = self.inner.lock().unwrap();
-        // Adopt existing subscription id for this name if present and unclaimed, else allocate
-        let adopted_id = inner
-            .history
-            .iter()
-            .find_map(|e| match e {
-                Event::ExternalSubscribed { id, name: n }
-                    if n == &name && !inner.claimed_external_ids.contains(id) => Some(*id),
-                _ => None,
-            })
-            .unwrap_or_else(|| inner.next_id());
-        inner.claimed_external_ids.insert(adopted_id);
-        drop(inner);
+        // No ID allocation here - event_id is discovered during first poll
         DurableFuture(Kind::External {
-            id: adopted_id,
-            name,
-            scheduled: Cell::new(false),
+            name: name.into(),
+            claimed_event_id: Cell::new(None),
+            result: RefCell::new(None),
             ctx: self.clone(),
         })
     }
@@ -840,41 +874,21 @@ impl OrchestrationContext {
     }
 
     /// Schedule a sub-orchestration by name with deterministic child instance id derived
-    /// from parent context and correlation id.
+    /// from parent context and event_id (determined during first poll).
     pub fn schedule_sub_orchestration(&self, name: impl Into<String>, input: impl Into<String>) -> DurableFuture {
         let name: String = name.into();
         let input: String = input.into();
-        let mut inner = self.inner.lock().unwrap();
-        // Adopt existing record or allocate new id
-        let adopted = inner.history.iter().find_map(|e| match e {
-            Event::SubOrchestrationScheduled {
-                id,
-                name: n,
-                input: inp,
-                instance: inst,
-                execution_id: _,
-            } if n == &name && inp == &input => Some((*id, inst.clone())),
-            _ => None,
-        });
-        let (id, instance) = if let Some((id, inst)) = adopted {
-            (id, inst)
-        } else {
-            (inner.next_id(), String::new())
-        };
-        // Use a portable placeholder that the runtime can disambiguate by prefixing parent instance
-        let child_instance = if instance.is_empty() {
-            format!("sub::{id}")
-        } else {
-            instance
-        };
-        drop(inner);
+        
+        // Instance will be determined during polling based on event_id
+        // Use a placeholder for now
+        let child_instance = RefCell::new(String::from("sub::pending"));
+        
         DurableFuture(Kind::SubOrch {
-            id,
             name,
             version: None,
             instance: child_instance,
             input,
-            scheduled: Cell::new(false),
+            claimed_event_id: Cell::new(None),
             ctx: self.clone(),
         })
     }
@@ -895,37 +909,14 @@ impl OrchestrationContext {
         version: Option<String>,
         input: impl Into<String>,
     ) -> DurableFuture {
-        let name: String = name.into();
-        let input: String = input.into();
-        let mut inner = self.inner.lock().unwrap();
-        let adopted = inner.history.iter().find_map(|e| match e {
-            Event::SubOrchestrationScheduled {
-                id,
-                name: n,
-                input: inp,
-                instance: inst,
-                execution_id: _,
-            } if n == &name && inp == &input => Some((*id, inst.clone())),
-            _ => None,
-        });
-        let (id, instance) = if let Some((id, inst)) = adopted {
-            (id, inst)
-        } else {
-            (inner.next_id(), String::new())
-        };
-        let child_instance = if instance.is_empty() {
-            format!("sub::{id}")
-        } else {
-            instance
-        };
-        drop(inner);
+        let child_instance = RefCell::new(String::from("sub::pending"));
+        
         DurableFuture(Kind::SubOrch {
-            id,
-            name,
+            name: name.into(),
             version,
             instance: child_instance,
-            input,
-            scheduled: Cell::new(false),
+            input: input.into(),
+            claimed_event_id: Cell::new(None),
             ctx: self.clone(),
         })
     }
@@ -953,24 +944,19 @@ impl OrchestrationContext {
         let instance: String = instance.into();
         let input: String = input.into();
         let mut inner = self.inner.lock().unwrap();
-        let adopted = inner.history.iter().find_map(|e| match e {
-            Event::OrchestrationChained {
-                id,
-                name: n,
-                instance: inst,
-                input: inp,
-            } if n == &name && inp == &input && inst == &instance => Some(*id),
-            _ => None,
-        });
-        let id = adopted.unwrap_or_else(|| inner.next_id());
+        
+        // Assign event_id for the chained orchestration event
+        let event_id = inner.next_event_id;
+        inner.next_event_id += 1;
+        
         inner.history.push(Event::OrchestrationChained {
-            id,
+            event_id,
             name: name.clone(),
             instance: instance.clone(),
             input: input.clone(),
         });
         inner.record_action(Action::StartOrchestrationDetached {
-            id,
+            scheduling_event_id: event_id,
             name,
             version: None,
             instance,
@@ -1000,35 +986,24 @@ impl OrchestrationContext {
         let instance: String = instance.into();
         let input: String = input.into();
         let mut inner = self.inner.lock().unwrap();
-        let adopted = inner.history.iter().find_map(|e| match e {
-            Event::OrchestrationChained {
-                id,
-                name: n,
-                instance: inst,
-                input: inp,
-            } if n == &name && inp == &input && inst == &instance => Some(*id),
-            _ => None,
-        });
-        let id = adopted.unwrap_or_else(|| inner.next_id());
+        
+        let event_id = inner.next_event_id;
+        inner.next_event_id += 1;
+        
         inner.history.push(Event::OrchestrationChained {
-            id,
+            event_id,
             name: name.clone(),
             instance: instance.clone(),
             input: input.clone(),
         });
-        let version_for_note = version.clone();
+        
         inner.record_action(Action::StartOrchestrationDetached {
-            id,
+            scheduling_event_id: event_id,
             name,
             version,
             instance,
             input,
         });
-        drop(inner);
-        if let Some(ver) = version_for_note {
-            // best-effort: stash as a side-effect by pinning child on the host when dispatched (handled in runtime)
-            let _ = ver; // signaling only; runtime will resolve by policy unless explicitly set elsewhere
-        }
     }
 
     pub fn schedule_orchestration_versioned_typed<In: serde::Serialize>(
@@ -1061,45 +1036,7 @@ impl OrchestrationContext {
         JoinFuture(AggregateDurableFuture::new_join(self.clone(), futures))
     }
 
-    fn find_history_index(hist: &Vec<Event>, id: u64, kind: KindTag) -> Option<usize> {
-        for (idx, e) in hist.iter().enumerate() {
-            match (kind, e) {
-                (KindTag::Activity, Event::ActivityCompleted { id: cid, .. }) if *cid == id => return Some(idx),
-                (KindTag::Activity, Event::ActivityFailed { id: cid, .. }) if *cid == id => return Some(idx),
-                (KindTag::Timer, Event::TimerFired { id: cid, .. }) if *cid == id => return Some(idx),
-                (KindTag::External, Event::ExternalEvent { id: cid, .. }) if *cid == id => return Some(idx),
-                (KindTag::SubOrch, Event::SubOrchestrationCompleted { id: cid, .. }) if *cid == id => return Some(idx),
-                (KindTag::SubOrch, Event::SubOrchestrationFailed { id: cid, .. }) if *cid == id => return Some(idx),
-                _ => {}
-            }
-        }
-        None
-    }
-
-    fn synth_output_from_history(hist: &Vec<Event>, id: u64, kind: KindTag) -> DurableOutput {
-        for e in hist.iter().rev() {
-            match (kind, e) {
-                (KindTag::Activity, Event::ActivityCompleted { id: cid, result }) if *cid == id => {
-                    return DurableOutput::Activity(Ok(result.clone()));
-                }
-                (KindTag::Activity, Event::ActivityFailed { id: cid, error }) if *cid == id => {
-                    return DurableOutput::Activity(Err(error.clone()));
-                }
-                (KindTag::Timer, Event::TimerFired { id: cid, .. }) if *cid == id => return DurableOutput::Timer,
-                (KindTag::External, Event::ExternalEvent { id: cid, data, .. }) if *cid == id => {
-                    return DurableOutput::External(data.clone());
-                }
-                (KindTag::SubOrch, Event::SubOrchestrationCompleted { id: cid, result }) if *cid == id => {
-                    return DurableOutput::SubOrchestration(Ok(result.clone()));
-                }
-                (KindTag::SubOrch, Event::SubOrchestrationFailed { id: cid, error }) if *cid == id => {
-                    return DurableOutput::SubOrchestration(Err(error.clone()));
-                }
-                _ => {}
-            }
-        }
-        DurableOutput::Timer
-    }
+    // find_history_index and synth_output_from_history removed - cursor model handles this
 }
 
 fn noop_waker() -> Waker {
@@ -1121,119 +1058,12 @@ fn poll_once<F: Future>(fut: &mut F) -> Poll<F::Output> {
 }
 
 /// Poll the orchestrator once with the provided history, producing
-/// updated history, requested `Action`s, buffered logs, and an optional output.
-/// Tuple returned by `run_turn` and `run_turn_with` containing the updated
-/// history, actions to execute, per-turn logs, and an optional output.
-pub type TurnResult<O> = (Vec<Event>, Vec<Action>, Vec<(LogLevel, String)>, Option<O>);
+/// updated history, requested `Action`s, and an optional output.
+pub type TurnResult<O> = (Vec<Event>, Vec<Action>, Option<O>);
 
-pub fn run_turn<O, F>(history: Vec<Event>, orchestrator: impl Fn(OrchestrationContext) -> F) -> TurnResult<O>
-where
-    F: Future<Output = O>,
-{
-    let ctx = OrchestrationContext::new(history, 1); // Default execution_id for legacy compatibility
-    let mut fut = orchestrator(ctx.clone());
-    // Reset logging flag at start of poll; it will be flipped to true when a decision is recorded
-    ctx.inner.lock().unwrap().logging_enabled_this_poll = false;
-    match poll_once(&mut fut) {
-        Poll::Ready(out) => {
-            ctx.inner.lock().unwrap().logging_enabled_this_poll = true;
-            let logs = ctx.take_log_buffer();
-            let actions = ctx.take_actions();
-            let hist_after = ctx.inner.lock().unwrap().history.clone();
-            (hist_after, actions, logs, Some(out))
-        }
-        Poll::Pending => {
-            let actions = ctx.take_actions();
-            let hist_after = ctx.inner.lock().unwrap().history.clone();
-            let logs = ctx.take_log_buffer();
-            (hist_after, actions, logs, None)
-        }
-    }
-}
-
-/// Same as `run_turn` but annotates the context with a caller-supplied
-/// turn index for diagnostics and logging.
+/// Execute one orchestration turn with explicit turn_index and execution_id.
+/// This is the full-featured run_turn implementation used by the runtime.
 pub fn run_turn_with<O, F>(
-    history: Vec<Event>,
-    turn_index: u64,
-    orchestrator: impl Fn(OrchestrationContext) -> F,
-) -> TurnResult<O>
-where
-    F: Future<Output = O>,
-{
-    let ctx = OrchestrationContext::new(history, 1); // Default execution_id for legacy compatibility
-    ctx.set_turn_index(turn_index);
-    ctx.inner.lock().unwrap().logging_enabled_this_poll = false;
-    let mut fut = orchestrator(ctx.clone());
-    match poll_once(&mut fut) {
-        Poll::Ready(out) => {
-            ctx.inner.lock().unwrap().logging_enabled_this_poll = true;
-            let logs = ctx.take_log_buffer();
-            let actions = ctx.take_actions();
-            let hist_after = ctx.inner.lock().unwrap().history.clone();
-            (hist_after, actions, logs, Some(out))
-        }
-        Poll::Pending => {
-            let actions = ctx.take_actions();
-            let hist_after = ctx.inner.lock().unwrap().history.clone();
-            let logs = ctx.take_log_buffer();
-            (hist_after, actions, logs, None)
-        }
-    }
-}
-
-/// Snapshot of IDs claimed by the orchestrator during a single poll turn.
-#[derive(Debug, Clone, Default)]
-pub struct ClaimedIdsSnapshot {
-    pub activities: std::collections::HashSet<u64>,
-    pub timers: std::collections::HashSet<u64>,
-    pub externals: std::collections::HashSet<u64>,
-    pub sub_orchestrations: std::collections::HashSet<u64>,
-}
-
-impl OrchestrationContext {
-    /// Internal: export a snapshot of correlation IDs that were claimed during this poll.
-    pub(crate) fn claimed_ids_snapshot(&self) -> ClaimedIdsSnapshot {
-        let inner = self.inner.lock().unwrap();
-        ClaimedIdsSnapshot {
-            activities: inner
-                .history
-                .iter()
-                .filter_map(|e| match e {
-                    Event::ActivityScheduled { id, .. } => Some(*id),
-                    _ => None,
-                })
-                .collect(),
-            timers: inner
-                .history
-                .iter()
-                .filter_map(|e| match e {
-                    Event::TimerCreated { id, .. } => Some(*id),
-                    _ => None,
-                })
-                .collect(),
-            externals: inner
-                .history
-                .iter()
-                .filter_map(|e| match e {
-                    Event::ExternalSubscribed { id, .. } => Some(*id),
-                    _ => None,
-                })
-                .collect(),
-            sub_orchestrations: inner
-                .history
-                .iter()
-                .filter_map(|e| match e {
-                    Event::SubOrchestrationScheduled { id, .. } => Some(*id),
-                    _ => None,
-                })
-                .collect(),
-        }
-    }
-}
-
-/// Same as `run_turn_with` but also returns which correlation IDs were claimed during the poll.
-pub fn run_turn_with_claims<O, F>(
     history: Vec<Event>,
     turn_index: u64,
     execution_id: u64,
@@ -1241,9 +1071,7 @@ pub fn run_turn_with_claims<O, F>(
 ) -> (
     Vec<Event>,
     Vec<Action>,
-    Vec<(LogLevel, String)>,
     Option<O>,
-    ClaimedIdsSnapshot,
 )
 where
     F: Future<Output = O>,
@@ -1252,49 +1080,27 @@ where
     ctx.set_turn_index(turn_index);
     ctx.inner.lock().unwrap().logging_enabled_this_poll = false;
     let mut fut = orchestrator(ctx.clone());
-    let res = match poll_once(&mut fut) {
+    match poll_once(&mut fut) {
         Poll::Ready(out) => {
             ctx.inner.lock().unwrap().logging_enabled_this_poll = true;
-            let logs = ctx.take_log_buffer();
             let actions = ctx.take_actions();
             let hist_after = ctx.inner.lock().unwrap().history.clone();
-            let claims = ctx.claimed_ids_snapshot();
-            (hist_after, actions, logs, Some(out), claims)
+            (hist_after, actions, Some(out))
         }
         Poll::Pending => {
             let actions = ctx.take_actions();
             let hist_after = ctx.inner.lock().unwrap().history.clone();
-            let logs = ctx.take_log_buffer();
-            let claims = ctx.claimed_ids_snapshot();
-            (hist_after, actions, logs, None, claims)
-        }
-    };
-    res
-}
-
-/// Helper for single-threaded, host-driven execution in tests and samples.
-pub struct Executor;
-
-impl Executor {
-    /// Drives an orchestrator by alternately replaying one turn and invoking
-    /// the provided `execute_actions` to materialize requested actions into
-    /// history, until the orchestrator completes.
-    pub fn drive_to_completion<O, F, X>(
-        mut history: Vec<Event>,
-        orchestrator: impl Fn(OrchestrationContext) -> F,
-        mut execute_actions: X,
-    ) -> (Vec<Event>, O)
-    where
-        F: Future<Output = O>,
-        X: FnMut(Vec<Action>, &mut Vec<Event>),
-    {
-        loop {
-            let (hist_after_replay, actions, _logs, output) = run_turn(history, &orchestrator);
-            history = hist_after_replay;
-            if let Some(out) = output {
-                return (history, out);
-            }
-            execute_actions(actions, &mut history);
+            (hist_after, actions, None)
         }
     }
 }
+
+/// Simple run_turn for tests. Uses default execution_id=1 and turn_index=0.
+pub fn run_turn<O, F>(history: Vec<Event>, orchestrator: impl Fn(OrchestrationContext) -> F) -> TurnResult<O>
+where
+    F: Future<Output = O>,
+{
+    run_turn_with(history, 0, 1, orchestrator)
+}
+
+// Executor helper removed - not used anywhere

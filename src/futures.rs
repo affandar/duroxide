@@ -1,4 +1,4 @@
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -15,149 +15,32 @@ pub enum DurableOutput {
 
 pub struct DurableFuture(pub(crate) Kind);
 
-impl DurableFuture {
-    /// Try to poll using completion map (deterministic execution)
-    fn try_completion_map_poll(&self) -> Option<Poll<DurableOutput>> {
-        // Access the shared thread-local completion map accessor
-        crate::runtime::completion_aware_futures::with_completion_map_accessor(|accessor_opt| {
-            if let Some(accessor) = accessor_opt {
-                // Extract completion info from this future
-                let (kind, correlation_id) = match &self.0 {
-                    Kind::Activity { id, .. } => (crate::runtime::completion_map::CompletionKind::Activity, *id),
-                    Kind::Timer { id, .. } => (crate::runtime::completion_map::CompletionKind::Timer, *id),
-                    Kind::External { id, .. } => (crate::runtime::completion_map::CompletionKind::External, *id),
-                    Kind::SubOrch { id, .. } => (crate::runtime::completion_map::CompletionKind::SubOrchestration, *id),
-                };
-
-                // Check completion map for deterministic ordering
-
-                // Check if this completion is ready in the ordered map
-                if accessor.is_completion_ready(kind, correlation_id) {
-                    if let Some(completion_value) = accessor.get_completion(kind, correlation_id) {
-                        // Found ready completion - consume it and add to history
-
-                        // IMPORTANT: Add corresponding history event when consuming completion
-                        // This ensures history consistency
-                        let history_event = match &completion_value {
-                            crate::runtime::completion_map::CompletionValue::ActivityResult(result) => match result {
-                                Ok(result) => Some(crate::Event::ActivityCompleted {
-                                    id: correlation_id,
-                                    result: result.clone(),
-                                }),
-                                Err(error) => Some(crate::Event::ActivityFailed {
-                                    id: correlation_id,
-                                    error: error.clone(),
-                                }),
-                            },
-                            crate::runtime::completion_map::CompletionValue::TimerFired { fire_at_ms } => {
-                                Some(crate::Event::TimerFired {
-                                    id: correlation_id,
-                                    fire_at_ms: *fire_at_ms,
-                                })
-                            }
-                            crate::runtime::completion_map::CompletionValue::ExternalData { data, name } => {
-                                Some(crate::Event::ExternalEvent {
-                                    id: correlation_id,
-                                    name: name.clone(),
-                                    data: data.clone(),
-                                })
-                            }
-                            crate::runtime::completion_map::CompletionValue::SubOrchResult(result) => match result {
-                                Ok(result) => Some(crate::Event::SubOrchestrationCompleted {
-                                    id: correlation_id,
-                                    result: result.clone(),
-                                }),
-                                Err(error) => Some(crate::Event::SubOrchestrationFailed {
-                                    id: correlation_id,
-                                    error: error.clone(),
-                                }),
-                            },
-                            crate::runtime::completion_map::CompletionValue::CancelReason(_) => {
-                                // Cancel is handled differently, fall back to normal polling
-                                return None;
-                            }
-                        };
-
-                        // Add the history event to the context (we need access to ctx for this)
-                        // For now, let's see if we can access the context through the future
-                        if let Some(event) = history_event {
-                            // We need to add this event to the orchestration context's history
-                            // The context is available in the future's Kind enum
-                                                    let ctx = match &self.0 {
-                            Kind::Activity { ctx, .. } => Some(ctx),
-                            Kind::Timer { ctx, .. } => Some(ctx),
-                            Kind::External { ctx, .. } => Some(ctx),
-                            Kind::SubOrch { ctx, .. } => Some(ctx),
-                        };
-
-                            if let Some(context) = ctx {
-                                // Add completion event to history for consistency
-                                context.inner.lock().unwrap().history.push(event);
-                            }
-                        }
-
-                        let output = match completion_value {
-                            crate::runtime::completion_map::CompletionValue::ActivityResult(result) => {
-                                DurableOutput::Activity(result)
-                            }
-                            crate::runtime::completion_map::CompletionValue::TimerFired { .. } => DurableOutput::Timer,
-                            crate::runtime::completion_map::CompletionValue::ExternalData { data, .. } => {
-                                DurableOutput::External(data)
-                            }
-                            crate::runtime::completion_map::CompletionValue::SubOrchResult(result) => {
-                                DurableOutput::SubOrchestration(result)
-                            }
-                            crate::runtime::completion_map::CompletionValue::CancelReason(_) => {
-                                // Cancel is handled differently, fall back to normal polling
-                                return None;
-                            }
-                        };
-                        return Some(Poll::Ready(output));
-                    }
-                }
-
-                // Completion not ready yet - fall back to original logic for scheduling
-
-                // IMPORTANT: We still need to handle scheduling even when using completion map!
-                // The completion map only handles *completed* operations, but we still need to
-                // schedule operations that haven't been scheduled yet.
-                // Fall back to original logic for scheduling side effects, but return early if already scheduled.
-                None // This will cause fall-through to original logic which handles scheduling
-            } else {
-                // No completion map accessor available, fall back to original logic
-                None
-            }
-        })
-    }
-}
+// CompletionMap-based polling removed - replaced with unified cursor approach
 
 pub(crate) enum Kind {
     Activity {
-        id: u64,
         name: String,
         input: String,
-        scheduled: Cell<bool>,
+        claimed_event_id: Cell<Option<u64>>,
         ctx: OrchestrationContext,
     },
     Timer {
-        id: u64,
         delay_ms: u64,
-        scheduled: Cell<bool>,
+        claimed_event_id: Cell<Option<u64>>,
         ctx: OrchestrationContext,
     },
     External {
-        id: u64,
         name: String,
-        scheduled: Cell<bool>,
+        claimed_event_id: Cell<Option<u64>>,
+        result: RefCell<Option<String>>,  // Cache result once found
         ctx: OrchestrationContext,
     },
     SubOrch {
-        id: u64,
         name: String,
         version: Option<String>,
-        instance: String,
+        instance: RefCell<String>,  // Updated once event_id is known
         input: String,
-        scheduled: Cell<bool>,
+        claimed_event_id: Cell<Option<u64>>,
         ctx: OrchestrationContext,
     },
 }
@@ -174,152 +57,442 @@ pub(crate) enum KindTag {
 impl Future for DurableFuture {
     type Output = DurableOutput;
     fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
-        // First try completion map approach if available
-        if let Some(result) = self.as_ref().try_completion_map_poll() {
-            return result;
-        }
-
         // Safety: We never move fields that are !Unpin; we only take &mut to mutate inner Cells and use ctx by reference.
         let this = unsafe { self.get_unchecked_mut() };
 
-        // Fall back to history-based approach
         match &mut this.0 {
             Kind::Activity {
-                id,
                 name,
                 input,
-                scheduled,
+                claimed_event_id,
                 ctx,
             } => {
                 let mut inner = ctx.inner.lock().unwrap();
-                if let Some(outcome) = inner.history.iter().rev().find_map(|e| match e {
-                    Event::ActivityCompleted { id: cid, result } if cid == id => Some(Ok(result.clone())),
-                    Event::ActivityFailed { id: cid, error } if cid == id => Some(Err(error.clone())),
-                    _ => None,
-                }) {
-                    return Poll::Ready(DurableOutput::Activity(outcome));
-                }
-                let already_scheduled = inner
-                    .history
-                    .iter()
-                    .any(|e| matches!(e, Event::ActivityScheduled { id: cid, .. } if cid == id));
-                if !already_scheduled && !scheduled.replace(true) {
+                
+                // Step 1: Claim our scheduling event_id (if not already claimed)
+                if claimed_event_id.get().is_none() {
+                    loop {
+                        if inner.next_event_index >= inner.history.len() {
+                            // Reached end - create new scheduling event (first execution)
+                            let new_id = inner.next_event_id;
+                            inner.next_event_id += 1;
                     let exec_id = inner.execution_id;
+                            
                     inner.history.push(Event::ActivityScheduled {
-                        id: *id,
+                                event_id: new_id,
                         name: name.clone(),
                         input: input.clone(),
                         execution_id: exec_id,
                     });
+                            
                     inner.record_action(Action::CallActivity {
-                        id: *id,
+                                scheduling_event_id: new_id,
                         name: name.clone(),
                         input: input.clone(),
                     });
+                            
+                            claimed_event_id.set(Some(new_id));
+                            break;
+                        }
+                        
+                        // Clone event to avoid borrow issues
+                        let event = inner.history[inner.next_event_index].clone();
+                        
+                        // Is this an ActivityScheduled?
+                        if let Event::ActivityScheduled { event_id, name: ref n, input: ref inp, .. } = event {
+                            // STRICT: Next ActivityScheduled MUST be ours!
+                            if n != name {
+                                panic!(
+                                    "Non-deterministic execution: Expected to schedule activity '{}' \
+                                     but found '{}' at event_id={}. Code changed or corrupted history.",
+                                    name, n, event_id
+                                );
+                            }
+                            if inp != input {
+                                panic!(
+                                    "Non-deterministic execution: Expected activity '{}' with input '{}' \
+                                     but found input '{}' at event_id={}. Code changed or corrupted history.",
+                                    name, input, inp, event_id
+                                );
+                            }
+                            
+                            // Valid! Claim and advance cursor
+                            claimed_event_id.set(Some(event_id));
+                            inner.next_event_index += 1;
+                            break;
+                        }
+                        
+                        // Not an ActivityScheduled - skip it
+                        inner.next_event_index += 1;
+                    }
                 }
-                Poll::Pending
+                
+                let our_event_id = claimed_event_id.get().unwrap();
+                
+                // Step 2: Look for our completion using strict cursor
+                loop {
+                    if inner.next_event_index >= inner.history.len() {
+                        return Poll::Pending;
+                    }
+                    
+                    let event = inner.history[inner.next_event_index].clone();
+                    
+                    match event {
+                        Event::ActivityCompleted { source_event_id, ref result, .. }
+                            if source_event_id == our_event_id => {
+                            inner.next_event_index += 1;
+                            return Poll::Ready(DurableOutput::Activity(Ok(result.clone())));
+                        }
+                        
+                        Event::ActivityFailed { source_event_id, ref error, .. }
+                            if source_event_id == our_event_id => {
+                            inner.next_event_index += 1;
+                            return Poll::Ready(DurableOutput::Activity(Err(error.clone())));
+                        }
+                        
+                        // Is this a completion for someone else?
+                        Event::ActivityCompleted { source_event_id, .. }
+                        | Event::ActivityFailed { source_event_id, .. } => {
+                            panic!(
+                                "Non-deterministic execution: Activity '{}' (event_id={}) expected its completion next, \
+                                 but found completion for event_id={}",
+                                name, our_event_id, source_event_id
+                            );
+                        }
+                        
+                        Event::TimerFired { source_event_id, .. } => {
+                            panic!(
+                                "Non-deterministic execution: Activity '{}' (event_id={}) expected its completion next, \
+                                 but found TimerFired for event_id={}",
+                                name, our_event_id, source_event_id
+                            );
+                        }
+                        
+                        Event::ExternalEvent { name: ext_name, .. } => {
+                            panic!(
+                                "Non-deterministic execution: Activity '{}' (event_id={}) expected its completion next, \
+                                 but found ExternalEvent '{}'",
+                                name, our_event_id, ext_name
+                            );
+                        }
+                        
+                        Event::SubOrchestrationCompleted { source_event_id, .. }
+                        | Event::SubOrchestrationFailed { source_event_id, .. } => {
+                            panic!(
+                                "Non-deterministic execution: Activity '{}' (event_id={}) expected its completion next, \
+                                 but found SubOrchestration completion for event_id={}",
+                                name, our_event_id, source_event_id
+                            );
+                        }
+                        
+                        // Not a completion - skip it
+                        _ => {
+                            inner.next_event_index += 1;
+                        }
+                    }
+                }
             }
             Kind::Timer {
-                id,
                 delay_ms,
-                scheduled,
+                claimed_event_id,
                 ctx,
             } => {
                 let mut inner = ctx.inner.lock().unwrap();
-                if inner
-                    .history
-                    .iter()
-                    .any(|e| matches!(e, Event::TimerFired { id: cid, .. } if cid == id))
-                {
-                    return Poll::Ready(DurableOutput::Timer);
-                }
-                let already_created = inner
-                    .history
-                    .iter()
-                    .any(|e| matches!(e, Event::TimerCreated { id: cid, .. } if cid == id));
-                if !already_created && !scheduled.replace(true) {
-                    let fire_at_ms = inner.now_ms().saturating_add(*delay_ms);
+                
+                // Step 1: Claim our scheduling event_id
+                if claimed_event_id.get().is_none() {
+                    loop {
+                        if inner.next_event_index >= inner.history.len() {
+                            // Create new TimerCreated event
+                            let new_id = inner.next_event_id;
+                            inner.next_event_id += 1;
+                            let now = inner.now_ms();
+                            let fire_at_ms = now.saturating_add(*delay_ms);
                     let exec_id = inner.execution_id;
+                            
                     inner.history.push(Event::TimerCreated {
-                        id: *id,
+                                event_id: new_id,
                         fire_at_ms,
                         execution_id: exec_id,
                     });
+                            
                     inner.record_action(Action::CreateTimer {
-                        id: *id,
+                                scheduling_event_id: new_id,
                         delay_ms: *delay_ms,
                     });
+                            
+                            claimed_event_id.set(Some(new_id));
+                            break;
+                        }
+                        
+                        let event = inner.history[inner.next_event_index].clone();
+                        
+                        // Is this a TimerCreated?
+                        if let Event::TimerCreated { event_id, .. } = event {
+                            // Claim it
+                            claimed_event_id.set(Some(event_id));
+                            inner.next_event_index += 1;
+                            break;
+                        }
+                        
+                        inner.next_event_index += 1;
+                    }
                 }
-                Poll::Pending
+                
+                let our_event_id = claimed_event_id.get().unwrap();
+                
+                // Step 2: Look for TimerFired
+                loop {
+                    if inner.next_event_index >= inner.history.len() {
+                        return Poll::Pending;
+                    }
+                    
+                    let event = inner.history[inner.next_event_index].clone();
+                    
+                    match event {
+                        Event::TimerFired { source_event_id, .. }
+                            if source_event_id == our_event_id => {
+                            inner.next_event_index += 1;
+                            return Poll::Ready(DurableOutput::Timer);
+                        }
+                        
+                        // Completion for someone else?
+                        Event::ActivityCompleted { source_event_id, .. }
+                        | Event::ActivityFailed { source_event_id, .. }
+                        | Event::TimerFired { source_event_id, .. }
+                        | Event::SubOrchestrationCompleted { source_event_id, .. }
+                        | Event::SubOrchestrationFailed { source_event_id, .. } => {
+                            panic!(
+                                "Non-deterministic execution: Timer (event_id={}) expected TimerFired next, \
+                                 but found different completion for event_id={}",
+                                our_event_id, source_event_id
+                            );
+                        }
+                        
+                        Event::ExternalEvent { name, .. } => {
+                            panic!(
+                                "Non-deterministic execution: Timer (event_id={}) expected TimerFired next, \
+                                 but found ExternalEvent '{}'",
+                                our_event_id, name
+                            );
+                        }
+                        
+                        // Skip non-completions
+                        _ => {
+                            inner.next_event_index += 1;
+                        }
+                    }
+                }
             }
             Kind::External {
-                id,
                 name,
-                scheduled,
+                claimed_event_id,
+                result,
                 ctx,
             } => {
+                // Check if we already have the result cached
+                if let Some(cached) = result.borrow().clone() {
+                    return Poll::Ready(DurableOutput::External(cached));
+                }
+                
                 let mut inner = ctx.inner.lock().unwrap();
-                if let Some(data) = inner.history.iter().rev().find_map(|e| match e {
-                    Event::ExternalEvent { id: cid, data, .. } if cid == id => Some(data.clone()),
-                    _ => None,
-                }) {
-                    return Poll::Ready(DurableOutput::External(data));
-                }
-                let already_subscribed = inner
-                    .history
-                    .iter()
-                    .any(|e| matches!(e, Event::ExternalSubscribed { id: cid, .. } if cid == id));
-                if !already_subscribed && !scheduled.replace(true) {
+                
+                // Step 1: Claim our ExternalSubscribed event_id
+                if claimed_event_id.get().is_none() {
+                    loop {
+                        if inner.next_event_index >= inner.history.len() {
+                            // Create new ExternalSubscribed event
+                            let new_id = inner.next_event_id;
+                            inner.next_event_id += 1;
+                            
                     inner.history.push(Event::ExternalSubscribed {
-                        id: *id,
+                                event_id: new_id,
                         name: name.clone(),
                     });
+                            
                     inner.record_action(Action::WaitExternal {
-                        id: *id,
+                                scheduling_event_id: new_id,
                         name: name.clone(),
                     });
+                            
+                            claimed_event_id.set(Some(new_id));
+                            break;
+                        }
+                        
+                        let event = inner.history[inner.next_event_index].clone();
+                        
+                        // Is this an ExternalSubscribed?
+                        if let Event::ExternalSubscribed { event_id, name: ref n } = event {
+                            // STRICT: Must match our event name
+                            if n != name {
+                                panic!(
+                                    "Non-deterministic execution: Expected to subscribe to '{}' \
+                                     but found '{}' at event_id={}",
+                                    name, n, event_id
+                                );
+                            }
+                            
+                            claimed_event_id.set(Some(event_id));
+                            inner.next_event_index += 1;
+                            break;
+                        }
+                        
+                        inner.next_event_index += 1;
+                    }
                 }
+                
+                let our_event_id = claimed_event_id.get().unwrap();
+                
+                // Step 2: Look for ExternalEvent (special case - search by name)
+                // External events can arrive in any order, so we search from cursor position
+                // Track consumed events to avoid re-reading the same one
+                let name_clone = name.clone();
+                let already_consumed = inner.consumed_external_events.contains(&name_clone);
+                
+                if !already_consumed {
+                    for i in 0..inner.history.len() {
+                        if let Event::ExternalEvent { name: ref ext_name, ref data, .. } = inner.history[i] {
+                            if ext_name == &name_clone {
+                                // Found our event! Mark as consumed and cache result
+                                let result_data = data.clone();
+                                inner.consumed_external_events.insert(name_clone);
+                                *result.borrow_mut() = Some(result_data.clone());
+                                return Poll::Ready(DurableOutput::External(result_data));
+                            }
+                        }
+                    }
+                }
+                
                 Poll::Pending
             }
             Kind::SubOrch {
-                id,
                 name,
                 version,
                 instance,
                 input,
-                scheduled,
+                claimed_event_id,
                 ctx,
             } => {
                 let mut inner = ctx.inner.lock().unwrap();
-                if let Some(outcome) = inner.history.iter().rev().find_map(|e| match e {
-                    Event::SubOrchestrationCompleted { id: cid, result } if cid == id => Some(Ok(result.clone())),
-                    Event::SubOrchestrationFailed { id: cid, error } if cid == id => Some(Err(error.clone())),
-                    _ => None,
-                }) {
-                    return Poll::Ready(DurableOutput::SubOrchestration(outcome));
-                }
-                let already_scheduled = inner
-                    .history
-                    .iter()
-                    .any(|e| matches!(e, Event::SubOrchestrationScheduled { id: cid, .. } if cid == id));
-                if !already_scheduled && !scheduled.replace(true) {
+                
+                // Step 1: Claim our SubOrchestrationScheduled event_id
+                if claimed_event_id.get().is_none() {
+                    loop {
+                        if inner.next_event_index >= inner.history.len() {
+                            // Create new SubOrchestrationScheduled event
+                            let new_id = inner.next_event_id;
+                            inner.next_event_id += 1;
                     let exec_id = inner.execution_id;
-                    inner.history.push(Event::SubOrchestrationScheduled {
-                        id: *id,
-                        name: name.clone(),
-                        instance: instance.clone(),
-                        input: input.clone(),
-                        execution_id: exec_id,
-                    });
-                    inner.record_action(Action::StartSubOrchestration {
-                        id: *id,
-                        name: name.clone(),
-                        version: version.clone(),
-                        instance: instance.clone(),
-                        input: input.clone(),
-                    });
+                            
+                            // Use event_id for deterministic instance naming
+                            let child_instance = format!("sub::{}", new_id);
+                            
+                            // Update the instance field now that we know event_id
+                            *instance.borrow_mut() = child_instance.clone();
+                            
+                            inner.history.push(Event::SubOrchestrationScheduled {
+                                event_id: new_id,
+                                name: name.clone(),
+                                instance: child_instance.clone(),
+                                input: input.clone(),
+                                execution_id: exec_id,
+                            });
+                            
+                            inner.record_action(Action::StartSubOrchestration {
+                                scheduling_event_id: new_id,
+                                name: name.clone(),
+                                version: version.clone(),
+                                instance: child_instance,
+                                input: input.clone(),
+                            });
+                            
+                            claimed_event_id.set(Some(new_id));
+                            break;
+                        }
+                        
+                        let event = inner.history[inner.next_event_index].clone();
+                        
+                        // Is this a SubOrchestrationScheduled?
+                        if let Event::SubOrchestrationScheduled { event_id, name: ref n, input: ref inp, instance: ref inst, .. } = event {
+                            // STRICT: Must match our sub-orchestration
+                            if n != name {
+                                panic!(
+                                    "Non-deterministic execution: Expected to schedule sub-orch '{}' \
+                                     but found '{}' at event_id={}",
+                                    name, n, event_id
+                                );
+                            }
+                            if inp != input {
+                                panic!(
+                                    "Non-deterministic execution: Expected sub-orch '{}' with input '{}' \
+                                     but found input '{}' at event_id={}",
+                                    name, input, inp, event_id
+                                );
+                            }
+                            // Note: Don't validate instance - it gets updated based on event_id
+                            
+                            // Update instance now that we know the event_id
+                            *instance.borrow_mut() = inst.clone();
+                            
+                            claimed_event_id.set(Some(event_id));
+                            inner.next_event_index += 1;
+                            break;
+                        }
+                        
+                        inner.next_event_index += 1;
+                    }
                 }
-                Poll::Pending
+                
+                let our_event_id = claimed_event_id.get().unwrap();
+                
+                // Step 2: Look for SubOrchestration completion
+                loop {
+                    if inner.next_event_index >= inner.history.len() {
+                        return Poll::Pending;
+                    }
+                    
+                    let event = inner.history[inner.next_event_index].clone();
+                    
+                    match event {
+                        Event::SubOrchestrationCompleted { source_event_id, ref result, .. }
+                            if source_event_id == our_event_id => {
+                            inner.next_event_index += 1;
+                            return Poll::Ready(DurableOutput::SubOrchestration(Ok(result.clone())));
+                        }
+                        
+                        Event::SubOrchestrationFailed { source_event_id, ref error, .. }
+                            if source_event_id == our_event_id => {
+                            inner.next_event_index += 1;
+                            return Poll::Ready(DurableOutput::SubOrchestration(Err(error.clone())));
+                        }
+                        
+                        // Other completions?
+                        Event::ActivityCompleted { source_event_id, .. }
+                        | Event::ActivityFailed { source_event_id, .. }
+                        | Event::TimerFired { source_event_id, .. }
+                        | Event::SubOrchestrationCompleted { source_event_id, .. }
+                        | Event::SubOrchestrationFailed { source_event_id, .. } => {
+                            panic!(
+                                "Non-deterministic execution: SubOrchestration '{}' (event_id={}) expected its completion next, \
+                                 but found different completion for event_id={}",
+                                name, our_event_id, source_event_id
+                            );
+                        }
+                        
+                        Event::ExternalEvent { name: ext_name, .. } => {
+                            panic!(
+                                "Non-deterministic execution: SubOrchestration '{}' (event_id={}) expected its completion next, \
+                                 but found ExternalEvent '{}'",
+                                name, our_event_id, ext_name
+                            );
+                        }
+                        
+                        // Skip non-completions
+                        _ => {
+                            inner.next_event_index += 1;
+                        }
+                    }
+                }
             }
         }
     }
@@ -337,76 +510,27 @@ pub enum AggregateOutput {
 }
 
 pub struct AggregateDurableFuture {
-    ctx: OrchestrationContext,
     children: Vec<DurableFuture>,
-    meta: Vec<(u64, KindTag)>,
     mode: AggregateMode,
 }
 
 impl AggregateDurableFuture {
-    pub(crate) fn new_select(ctx: OrchestrationContext, children: Vec<DurableFuture>) -> Self {
-        let meta = children
-            .iter()
-            .map(|f| match &f.0 {
-                Kind::Activity { id, .. } => (*id, KindTag::Activity),
-                Kind::Timer { id, .. } => (*id, KindTag::Timer),
-                Kind::External { id, .. } => (*id, KindTag::External),
-                Kind::SubOrch { id, .. } => (*id, KindTag::SubOrch),
-            })
-            .collect();
+    pub(crate) fn new_select(_ctx: OrchestrationContext, children: Vec<DurableFuture>) -> Self {
         Self {
-            ctx,
             children,
-            meta,
             mode: AggregateMode::Select,
         }
     }
-    pub(crate) fn new_join(ctx: OrchestrationContext, children: Vec<DurableFuture>) -> Self {
-        let meta = children
-            .iter()
-            .map(|f| match &f.0 {
-                Kind::Activity { id, .. } => (*id, KindTag::Activity),
-                Kind::Timer { id, .. } => (*id, KindTag::Timer),
-                Kind::External { id, .. } => (*id, KindTag::External),
-                Kind::SubOrch { id, .. } => (*id, KindTag::SubOrch),
-            })
-            .collect();
+    pub(crate) fn new_join(_ctx: OrchestrationContext, children: Vec<DurableFuture>) -> Self {
         Self {
-            ctx,
             children,
-            meta,
             mode: AggregateMode::Join,
         }
     }
 
-    /// Check if there are any available completions that weren't consumed by our children
-    fn check_for_unconsumed_completions(&self) -> Option<Vec<(crate::runtime::completion_map::CompletionKind, u64)>> {
-        // Access the completion map via the thread-local accessor
-        let unconsumed = crate::runtime::completion_aware_futures::with_completion_map_accessor(|accessor_opt| {
-            let mut unconsumed = Vec::new();
-
-            if let Some(accessor) = accessor_opt {
-                // Check each of our children's expected completions
-                for (cid, tag) in &self.meta {
-                    let kind = match tag {
-                        KindTag::Activity => crate::runtime::completion_map::CompletionKind::Activity,
-                        KindTag::Timer => crate::runtime::completion_map::CompletionKind::Timer,
-                        KindTag::External => crate::runtime::completion_map::CompletionKind::External,
-                        KindTag::SubOrch => crate::runtime::completion_map::CompletionKind::SubOrchestration,
-                    };
-
-                    // Check if this completion is available but not consumed
-                    if accessor.is_completion_ready(kind, *cid) {
-                        unconsumed.push((kind, *cid));
-                    }
-                }
-            }
-
-            unconsumed
-        });
-
-        if unconsumed.is_empty() { None } else { Some(unconsumed) }
-    }
+    // Note: Unconsumed completion detection removed - the cursor model naturally
+    // handles this via strict sequential consumption. Any unconsumed completions
+    // will cause a panic when the next future tries to poll.
 }
 
 impl Future for AggregateDurableFuture {
@@ -414,76 +538,40 @@ impl Future for AggregateDurableFuture {
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = unsafe { self.get_unchecked_mut() };
 
-        // Continue polling children until no more progress is made
-        // Track which children became ready in previous rounds
-        let mut children_ready_status = vec![false; this.children.len()];
-        let mut round = 0;
-        const MAX_POLLING_ROUNDS: usize = 10; // Safety limit
-
-        loop {
-            let mut any_new_ready = false;
-            round += 1;
-
-            if round > MAX_POLLING_ROUNDS {
-                // Emergency brake to prevent infinite loops
-                break;
-            }
-
-            for (i, f) in this.children.iter_mut().enumerate() {
-                let poll_result = Pin::new(f).poll(cx);
-                let is_ready = poll_result.is_ready();
-
-                // Only count as "new progress" if this child wasn't ready before
-                if is_ready && !children_ready_status[i] {
-                    any_new_ready = true;
-                    children_ready_status[i] = true;
-                }
-            }
-
-            // If no child became newly ready this round, break out of polling loop
-            if !any_new_ready {
-                break;
+        // Poll all children and collect results
+        let mut results: Vec<Option<DurableOutput>> = vec![None; this.children.len()];
+        
+        for (i, child) in this.children.iter_mut().enumerate() {
+            let poll_result = Pin::new(child).poll(cx);
+            if let Poll::Ready(output) = poll_result {
+                results[i] = Some(output);
             }
         }
 
-        // Check for unconsumed completions (non-deterministic execution error)
-        if let Some(unconsumed) = this.check_for_unconsumed_completions() {
-            panic!("non-deterministic execution: unconsumed completions: {:?}", unconsumed);
-        }
-
-        let hist = this.ctx.inner.lock().unwrap().history.clone();
-        let mut present: Vec<(usize, usize)> = Vec::new();
-        for (i, (cid, tag)) in this.meta.iter().enumerate() {
-            if let Some(idx) = OrchestrationContext::find_history_index(&hist, *cid, *tag) {
-                present.push((i, idx));
-            }
-        }
         match this.mode {
             AggregateMode::Select => {
-                if let Some((win, _)) = present.into_iter().min_by_key(|(_, idx)| *idx) {
-                    let (cid, tag) = this.meta[win];
-                    let out = OrchestrationContext::synth_output_from_history(&hist, cid, tag);
+                // Return the first child that became ready
+                for (i, result) in results.into_iter().enumerate() {
+                    if let Some(output) = result {
                     return Poll::Ready(AggregateOutput::Select {
-                        winner_index: win,
-                        output: out,
+                            winner_index: i,
+                            output,
                     });
+                    }
                 }
+                Poll::Pending
             }
             AggregateMode::Join => {
-                if present.len() == this.meta.len() {
-                    let mut outs: Vec<(usize, DurableOutput)> = Vec::with_capacity(this.meta.len());
-                    for (i, idx) in present {
-                        let (cid, tag) = this.meta[i];
-                        let out = OrchestrationContext::synth_output_from_history(&hist, cid, tag);
-                        outs.push((idx, out));
-                    }
-                    outs.sort_by_key(|(idx, _)| *idx);
-                    let res = outs.into_iter().map(|(_, o)| o).collect();
-                    return Poll::Ready(AggregateOutput::Join { outputs: res });
+                // Return when all children are ready
+                if results.iter().all(|r| r.is_some()) {
+                    let outputs: Vec<DurableOutput> = results.into_iter()
+                        .filter_map(|r| r)
+                        .collect();
+                    return Poll::Ready(AggregateOutput::Join { outputs });
                 }
+                Poll::Pending
             }
         }
-        Poll::Pending
     }
 }
 
@@ -512,3 +600,4 @@ impl Future for JoinFuture {
         }
     }
 }
+

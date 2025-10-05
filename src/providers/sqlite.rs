@@ -270,11 +270,11 @@ impl SqliteProvider {
             CREATE TABLE IF NOT EXISTS history (
                 instance_id TEXT NOT NULL,
                 execution_id INTEGER NOT NULL,
-                sequence_num INTEGER NOT NULL,
+                event_id INTEGER NOT NULL,
                 event_type TEXT NOT NULL,
                 event_data TEXT NOT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                PRIMARY KEY (instance_id, execution_id, sequence_num)
+                PRIMARY KEY (instance_id, execution_id, event_id)
             )
             "#
         )
@@ -393,7 +393,7 @@ impl SqliteProvider {
             SELECT event_data 
             FROM history 
             WHERE instance_id = ? AND execution_id = ?
-            ORDER BY sequence_num
+            ORDER BY event_id
             "#
         )
         .bind(instance)
@@ -418,12 +418,12 @@ impl SqliteProvider {
         tx: &mut Transaction<'_, Sqlite>,
         instance: &str,
         execution_id: u64,
-        events: Vec<Event>,
+        mut events: Vec<Event>,
     ) -> Result<(), sqlx::Error> {
-        // Get next sequence number
-        let start_seq: i64 = sqlx::query_scalar(
+        // Get next event_id
+        let start_id: i64 = sqlx::query_scalar(
             r#"
-            SELECT COALESCE(MAX(sequence_num), 0) + 1
+            SELECT COALESCE(MAX(event_id), 0) + 1
             FROM history
             WHERE instance_id = ? AND execution_id = ?
             "#
@@ -433,8 +433,15 @@ impl SqliteProvider {
         .fetch_one(&mut **tx)
         .await?;
         
+        // Assign event_ids to all events before serialization
+        for (i, event) in events.iter_mut().enumerate() {
+            if event.event_id() == 0 {
+                event.set_event_id((start_id + i as i64) as u64);
+            }
+        }
+        
         // Insert events
-        for (i, event) in events.iter().enumerate() {
+        for event in &events {
             let event_type = match event {
                 Event::OrchestrationStarted { .. } => "OrchestrationStarted",
                 Event::OrchestrationCompleted { .. } => "OrchestrationCompleted",
@@ -454,18 +461,18 @@ impl SqliteProvider {
                 Event::OrchestrationChained { .. } => "OrchestrationChained",
             };
             
-            let event_data = serde_json::to_string(event).unwrap();
-            let seq_num = start_seq + i as i64;
+            let event_data = serde_json::to_string(&event).unwrap();
+            let event_id = event.event_id() as i64;
             
             sqlx::query(
                 r#"
-                INSERT INTO history (instance_id, execution_id, sequence_num, event_type, event_data)
+                INSERT INTO history (instance_id, execution_id, event_id, event_type, event_data)
                 VALUES (?, ?, ?, ?, ?)
                 "#
             )
             .bind(instance)
             .bind(execution_id as i64)
-            .bind(seq_num)
+            .bind(event_id)
             .bind(event_type)
             .bind(event_data)
             .execute(&mut **tx)
@@ -740,7 +747,7 @@ impl Provider for SqliteProvider {
                 &mut tx,
                 &instance_id,
                 execution_id as u64,
-                vec![Event::OrchestrationContinuedAsNew { input: can_input }],
+                vec![Event::OrchestrationContinuedAsNew { event_id: 0, input: can_input }],
             )
             .await
             .map_err(|e| format!("Failed to append CAN event: {}", e))?;
@@ -962,7 +969,7 @@ impl Provider for SqliteProvider {
             SELECT event_data 
             FROM history 
             WHERE instance_id = ? AND execution_id = ?
-            ORDER BY sequence_num
+            ORDER BY event_id
             "#
         )
         .bind(instance)
@@ -1129,7 +1136,7 @@ impl Provider for SqliteProvider {
             SELECT event_data 
             FROM history 
             WHERE instance_id = ? AND execution_id = ?
-            ORDER BY sequence_num
+            ORDER BY event_id
             "#
         )
         .bind(instance)
@@ -1212,6 +1219,7 @@ impl Provider for SqliteProvider {
         
         // Create OrchestrationStarted event
         let start_event = Event::OrchestrationStarted {
+            event_id: 0,  // Will be assigned by append_history_in_tx
             name: orchestration.to_string(),
             version: version.to_string(),
             input: input.to_string(),
@@ -1344,13 +1352,13 @@ mod tests {
                 parent_id: None,
             },
             Event::ActivityScheduled {
-                id: 1,
+                event_id: 1,
                 name: "Activity1".to_string(),
                 input: "{}".to_string(),
                 execution_id: 1,
             },
             Event::ActivityScheduled {
-                id: 2,
+                event_id: 2,
                 name: "Activity2".to_string(),
                 input: "{}".to_string(),
                 execution_id: 1,
@@ -1493,7 +1501,7 @@ mod tests {
         store.append_with_execution(
             instance,
             1,
-            vec![Event::OrchestrationCompleted { output: "result1".to_string() }],
+            vec![Event::OrchestrationCompleted { event_id: 0, output: "result1".to_string() }],
         ).await.unwrap();
         
         // Create second execution (ContinueAsNew)

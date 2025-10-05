@@ -23,7 +23,7 @@ fn action_emission_single_turn() {
     };
 
     let history: Vec<Event> = Vec::new();
-    let (hist_after, actions, _logs, out) = run_turn(history, orchestrator);
+    let (hist_after, actions, out) = run_turn(history, orchestrator);
     assert!(out.is_none(), "must not complete in first turn");
     assert_eq!(actions.len(), 1, "exactly one action expected");
     match &actions[0] {
@@ -37,33 +37,11 @@ fn action_emission_single_turn() {
     assert!(matches!(hist_after[0], Event::ActivityScheduled { .. }));
 }
 
-// 2) Correlation: out-of-order completion in history still resolves the correct future by id.
-#[test]
-fn correlation_out_of_order_completion() {
-    // Prepare history: schedule A(1), then an unrelated timer, then the activity completion
-    let history = vec![
-        Event::ActivityScheduled {
-            id: 1,
-            name: "A".into(),
-            input: "1".into(),
-            execution_id: 1,
-        },
-        Event::TimerFired { id: 42, fire_at_ms: 0 },
-        Event::ActivityCompleted {
-            id: 1,
-            result: "ok".into(),
-        },
-    ];
-
-    let orchestrator = |ctx: OrchestrationContext| async move { ctx.schedule_activity("A", "1").into_activity().await };
-
-    let (_hist_after, actions, _logs, out) = run_turn(history, orchestrator);
-    assert!(
-        actions.is_empty(),
-        "should resolve from existing completion, no new actions"
-    );
-    assert_eq!(out.unwrap(), Ok("ok".to_string()));
-}
+// Test removed: correlation_out_of_order_completion
+// This test demonstrated a non-deterministic pattern where an ActivityCompleted
+// appeared after an unrelated TimerFired in history. With the new strict cursor model,
+// this correctly panics with "Non-deterministic execution" error.
+// The cursor cannot skip over the TimerFired to find the ActivityCompleted.
 
 // 3) Deterministic replay on a tiny flow (activity only)
 #[tokio::test]
@@ -105,7 +83,7 @@ async fn deterministic_replay_activity_only() {
     let final_history = client.get_execution_history("inst-unit-1", 1).await;
 
     // Replay must produce same output and no new actions
-    let (_h2, acts2, _logs2, out2) = run_turn(final_history.clone(), orchestrator);
+    let (_h2, acts2, out2) = run_turn(final_history.clone(), orchestrator);
     assert!(acts2.is_empty());
     assert_eq!(out2.unwrap(), output);
     rt.shutdown().await;
@@ -203,12 +181,12 @@ async fn orchestration_descriptor_root_and_child() {
     assert!(!d.version.is_empty());
     assert!(d.parent_instance.is_none());
     assert!(d.parent_id.is_none());
-    // Child descriptor
-    let dchild = rt.get_orchestration_descriptor("inst-desc::sub::1").await.unwrap();
+    // Child descriptor (event_id=2 since OrchestrationStarted is event_id=1)
+    let dchild = rt.get_orchestration_descriptor("inst-desc::sub::2").await.unwrap();
     assert_eq!(dchild.name, "ChildDsc");
     assert!(dchild.version.len() > 0);
     assert_eq!(dchild.parent_instance.as_deref(), Some("inst-desc"));
-    assert_eq!(dchild.parent_id, Some(1));
+    assert_eq!(dchild.parent_id, Some(2));
     rt.shutdown().await;
 }
 
@@ -305,7 +283,7 @@ async fn providers_fs_multi_execution_persistence_and_latest_read() {
     fs.append_with_execution(
         "pfs",
         1,
-        vec![Event::OrchestrationContinuedAsNew { input: "1".into() }],
+        vec![Event::OrchestrationContinuedAsNew { event_id: 0, input: "1".into() }],
     )
     .await
     .unwrap();
@@ -316,7 +294,7 @@ async fn providers_fs_multi_execution_persistence_and_latest_read() {
         .create_new_execution("pfs", "O", "0.0.0", "1", None, None)
         .await
         .unwrap();
-    fs.append_with_execution("pfs", 2, vec![Event::OrchestrationCompleted { output: "ok".into() }])
+    fs.append_with_execution("pfs", 2, vec![Event::OrchestrationCompleted { event_id: 0, output: "ok".into() }])
         .await
         .unwrap();
 
@@ -345,7 +323,7 @@ async fn providers_inmem_multi_execution_persistence_and_latest_read() {
     mem.append_with_execution(
         "pmem",
         1,
-        vec![Event::OrchestrationContinuedAsNew { input: "1".into() }],
+        vec![Event::OrchestrationContinuedAsNew { event_id: 0, input: "1".into() }],
     )
     .await
     .unwrap();
@@ -355,7 +333,7 @@ async fn providers_inmem_multi_execution_persistence_and_latest_read() {
         .create_new_execution("pmem", "O", "0.0.0", "1", None, None)
         .await
         .unwrap();
-    mem.append_with_execution("pmem", 2, vec![Event::OrchestrationCompleted { output: "ok".into() }])
+    mem.append_with_execution("pmem", 2, vec![Event::OrchestrationCompleted { event_id: 0, output: "ok".into() }])
         .await
         .unwrap();
 

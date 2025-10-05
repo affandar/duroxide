@@ -14,8 +14,7 @@ pub mod router;
 mod timers;
 use async_trait::async_trait;
 
-pub mod completion_aware_futures;
-pub mod completion_map;
+// CompletionMap removed - replaced with unified cursor model
 pub mod execution;
 pub mod orchestration_turn;
 
@@ -104,26 +103,26 @@ impl Runtime {
         for d in decisions {
             match d {
                 crate::Action::ContinueAsNew { .. } => { /* handled by caller */ }
-                crate::Action::CallActivity { id, name, input } => {
-                    dispatch::dispatch_call_activity(self, instance, history, id, name, input).await;
+                crate::Action::CallActivity { scheduling_event_id, name, input } => {
+                    dispatch::dispatch_call_activity(self, instance, history, scheduling_event_id, name, input).await;
                 }
-                crate::Action::CreateTimer { id, delay_ms } => {
-                    dispatch::dispatch_create_timer(self, instance, history, id, delay_ms).await;
+                crate::Action::CreateTimer { scheduling_event_id, delay_ms } => {
+                    dispatch::dispatch_create_timer(self, instance, history, scheduling_event_id, delay_ms).await;
                 }
-                crate::Action::WaitExternal { id, name } => {
-                    dispatch::dispatch_wait_external(self, instance, history, id, name).await;
+                crate::Action::WaitExternal { scheduling_event_id, name } => {
+                    dispatch::dispatch_wait_external(self, instance, history, scheduling_event_id, name).await;
                 }
                 crate::Action::StartOrchestrationDetached {
-                    id,
+                    scheduling_event_id,
                     name,
                     version,
                     instance: child_inst,
                     input,
                 } => {
-                    dispatch::dispatch_start_detached(self, instance, id, name, version, child_inst, input).await;
+                    dispatch::dispatch_start_detached(self, instance, scheduling_event_id, name, version, child_inst, input).await;
                 }
                 crate::Action::StartSubOrchestration {
-                    id,
+                    scheduling_event_id,
                     name,
                     version,
                     instance: child_suffix,
@@ -133,7 +132,7 @@ impl Runtime {
                         self,
                         instance,
                         history,
-                        id,
+                        scheduling_event_id,
                         name,
                         version,
                         child_suffix,
@@ -487,6 +486,7 @@ impl Runtime {
             }
 
             history_delta.push(Event::OrchestrationStarted {
+                event_id: 1,  // First event always has event_id=1
                 name: orchestration.to_string(),
                 version: resolved_version,
                 input: input.to_string(),
@@ -553,6 +553,7 @@ impl Runtime {
 
         // Add the OrchestrationStarted event for the new execution
         history_delta.push(Event::OrchestrationStarted {
+            event_id: 1,  // First event of new execution always has event_id=1
             name: orchestration.to_string(),
             version: resolved_version,
             input: input.to_string(),

@@ -26,32 +26,32 @@ pub enum WorkItem {
     ActivityExecute {
         instance: String,
         execution_id: u64,
-        id: u64,
+        id: u64,  // scheduling_event_id from ActivityScheduled
         name: String,
         input: String,
     },
     ActivityCompleted {
         instance: String,
         execution_id: u64,
-        id: u64,
+        id: u64,  // source_event_id referencing ActivityScheduled
         result: String,
     },
     ActivityFailed {
         instance: String,
         execution_id: u64,
-        id: u64,
+        id: u64,  // source_event_id referencing ActivityScheduled
         error: String,
     },
     TimerSchedule {
         instance: String,
         execution_id: u64,
-        id: u64,
+        id: u64,  // scheduling_event_id from TimerCreated
         fire_at_ms: u64,
     },
     TimerFired {
         instance: String,
         execution_id: u64,
-        id: u64,
+        id: u64,  // source_event_id referencing TimerCreated
         fire_at_ms: u64,
     },
     ExternalRaised {
@@ -62,13 +62,13 @@ pub enum WorkItem {
     SubOrchCompleted {
         parent_instance: String,
         parent_execution_id: u64,
-        parent_id: u64,
+        parent_id: u64,  // source_event_id referencing SubOrchestrationScheduled
         result: String,
     },
     SubOrchFailed {
         parent_instance: String,
         parent_execution_id: u64,
-        parent_id: u64,
+        parent_id: u64,  // source_event_id referencing SubOrchestrationScheduled
         error: String,
     },
     CancelInstance {

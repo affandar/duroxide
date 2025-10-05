@@ -124,7 +124,7 @@ async fn orchestration_completes_and_replays_deterministically_with(store: StdAr
         let b = ctx.schedule_activity("B", a.clone()).into_activity().await.unwrap();
         format!("id=_hidden, start={start}, evt={evt}, b={b}")
     };
-    let (_h2, acts2, _logs2, out2) = run_turn(final_history.clone(), replay);
+    let (_h2, acts2, out2) = run_turn(final_history.clone(), replay);
     assert!(acts2.is_empty(), "replay should not produce new actions");
     assert_eq!(out2.unwrap(), output);
     rt.shutdown().await;
@@ -147,7 +147,7 @@ fn action_order_is_deterministic_in_first_turn() {
     };
 
     let history: Vec<Event> = Vec::new();
-    let (_hist_after, actions, _logs, _out) = run_turn(history, orchestrator);
+    let (_hist_after, actions, _out) = run_turn(history, orchestrator);
     let kinds: Vec<&'static str> = actions
         .iter()
         .map(|a| match a {

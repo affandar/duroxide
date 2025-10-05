@@ -149,7 +149,7 @@ impl Runtime {
             Ok(h) => h,
             Err(error) => {
                 // Handle unregistered orchestration
-                let terminal_event = Event::OrchestrationFailed { error: error.clone() };
+                let terminal_event = Event::OrchestrationFailed { event_id: 0, error: error.clone() };
                 history_delta.push(terminal_event);
                 return (history_delta, worker_items, timer_items, orchestrator_items, Err(error));
             }
@@ -204,28 +204,28 @@ impl Runtime {
                 // Collect work items from pending actions
                 for action in turn.pending_actions() {
                     match action {
-                        crate::Action::CallActivity { id, name, input } => {
+                        crate::Action::CallActivity { scheduling_event_id, name, input } => {
                             let execution_id = self.get_execution_id_for_instance(instance).await;
                             worker_items.push(WorkItem::ActivityExecute {
                                 instance: instance.to_string(),
                                 execution_id,
-                                id: *id,
+                                id: *scheduling_event_id,
                                 name: name.clone(),
                                 input: input.clone(),
                             });
                         }
-                        crate::Action::CreateTimer { id, delay_ms } => {
+                        crate::Action::CreateTimer { scheduling_event_id, delay_ms } => {
                             let execution_id = self.get_execution_id_for_instance(instance).await;
                             let fire_at_ms = Self::calculate_timer_fire_time(&turn.final_history(), *delay_ms);
                             timer_items.push(WorkItem::TimerSchedule {
                                 instance: instance.to_string(),
                                 execution_id,
-                                id: *id,
+                                id: *scheduling_event_id,
                                 fire_at_ms,
                             });
                         }
                         crate::Action::StartSubOrchestration {
-                            id,
+                            scheduling_event_id,
                             name,
                             version,
                             instance: sub_instance,
@@ -239,11 +239,11 @@ impl Runtime {
                                 input: input.clone(),
                                 version: version.clone(),
                                 parent_instance: Some(instance.to_string()),
-                                parent_id: Some(*id),
+                                parent_id: Some(*scheduling_event_id),
                             });
                         }
                         crate::Action::StartOrchestrationDetached {
-                            id: _,
+                            scheduling_event_id: _,
                             name,
                             version,
                             instance: sub_instance,
@@ -268,28 +268,28 @@ impl Runtime {
                 // Process any pending actions before completing
                 for action in turn.pending_actions() {
                     match action {
-                        crate::Action::CallActivity { id, name, input } => {
+                        crate::Action::CallActivity { scheduling_event_id, name, input } => {
                             let execution_id = self.get_execution_id_for_instance(instance).await;
                             worker_items.push(WorkItem::ActivityExecute {
                                 instance: instance.to_string(),
                                 execution_id,
-                                id: *id,
+                                id: *scheduling_event_id,
                                 name: name.clone(),
                                 input: input.clone(),
                             });
                         }
-                        crate::Action::CreateTimer { id, delay_ms } => {
+                        crate::Action::CreateTimer { scheduling_event_id, delay_ms } => {
                             let execution_id = self.get_execution_id_for_instance(instance).await;
                             let fire_at_ms = Self::calculate_timer_fire_time(&history, *delay_ms);
                             timer_items.push(WorkItem::TimerSchedule {
                                 instance: instance.to_string(),
                                 execution_id,
-                                id: *id,
+                                id: *scheduling_event_id,
                                 fire_at_ms,
                             });
                         }
                         crate::Action::StartSubOrchestration {
-                            id,
+                            scheduling_event_id,
                             name,
                             version,
                             instance: sub_instance,
@@ -303,11 +303,11 @@ impl Runtime {
                                 input: input.clone(),
                                 version: version.clone(),
                                 parent_instance: Some(instance.to_string()),
-                                parent_id: Some(*id),
+                                parent_id: Some(*scheduling_event_id),
                             });
                         }
                         crate::Action::StartOrchestrationDetached {
-                            id: _,
+                            scheduling_event_id: _,
                             name,
                             version,
                             instance: sub_instance,
@@ -327,7 +327,7 @@ impl Runtime {
                 }
 
                 // Add completion event
-                let terminal_event = Event::OrchestrationCompleted { output: output.clone() };
+                let terminal_event = Event::OrchestrationCompleted { event_id: 0, output: output.clone() };
                 history_delta.push(terminal_event);
 
                 // Notify parent if this is a sub-orchestration
@@ -345,7 +345,7 @@ impl Runtime {
             }
             TurnResult::Failed(error) => {
                 // Add failure event
-                let terminal_event = Event::OrchestrationFailed { error: error.clone() };
+                let terminal_event = Event::OrchestrationFailed { event_id: 0, error: error.clone() };
                 history_delta.push(terminal_event);
 
                 // Notify parent if this is a sub-orchestration
@@ -378,7 +378,7 @@ impl Runtime {
             TurnResult::Cancelled(reason) => {
                 // Add cancellation as failure event
                 let error = format!("canceled: {}", reason);
-                let terminal_event = Event::OrchestrationFailed { error: error.clone() };
+                let terminal_event = Event::OrchestrationFailed { event_id: 0, error: error.clone() };
                 history_delta.push(terminal_event);
 
                 // Propagate cancellation to children
@@ -422,17 +422,18 @@ impl Runtime {
             .iter()
             .filter_map(|e| match e {
                 Event::SubOrchestrationScheduled {
-                    id, instance: child, ..
-                } => Some((*id, child.clone())),
+                    event_id, instance: child, ..
+                } => Some((*event_id, child.clone())),
                 _ => None,
             })
             .collect();
 
-        // Find all completed sub-orchestrations
+        // Find all completed sub-orchestrations (by source_event_id)
         let completed_ids: std::collections::HashSet<u64> = history
             .iter()
             .filter_map(|e| match e {
-                Event::SubOrchestrationCompleted { id, .. } | Event::SubOrchestrationFailed { id, .. } => Some(*id),
+                Event::SubOrchestrationCompleted { source_event_id, .. } 
+                | Event::SubOrchestrationFailed { source_event_id, .. } => Some(*source_event_id),
                 _ => None,
             })
             .collect();

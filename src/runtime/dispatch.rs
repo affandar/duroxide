@@ -10,19 +10,19 @@ pub async fn dispatch_call_activity(
     rt: &Arc<Runtime>,
     instance: &str,
     history: &[Event],
-    id: u64,
+    scheduling_event_id: u64,
     name: String,
     input: String,
 ) {
     let already_done = history.iter().rev().any(|e| match e {
-        Event::ActivityCompleted { id: cid, .. } if *cid == id => true,
-        Event::ActivityFailed { id: cid, .. } if *cid == id => true,
+        Event::ActivityCompleted { source_event_id, .. } if *source_event_id == scheduling_event_id => true,
+        Event::ActivityFailed { source_event_id, .. } if *source_event_id == scheduling_event_id => true,
         _ => false,
     });
     if already_done {
-        debug!(instance, id, name=%name, "skip dispatch: activity already completed/failed");
+        debug!(instance, scheduling_event_id, name=%name, "skip dispatch: activity already completed/failed");
     } else {
-        debug!(instance, id, name=%name, "dispatch activity");
+        debug!(instance, scheduling_event_id, name=%name, "dispatch activity");
         // Enqueue provider-backed execution; WorkDispatcher will execute and enqueue completion/failure
         let execution_id = rt.get_execution_id_for_instance(instance).await;
         let _ = rt
@@ -30,7 +30,7 @@ pub async fn dispatch_call_activity(
             .enqueue_worker_work(WorkItem::ActivityExecute {
                 instance: instance.to_string(),
                 execution_id,
-                id,
+                id: scheduling_event_id,
                 name,
                 input,
             })
@@ -38,13 +38,13 @@ pub async fn dispatch_call_activity(
     }
 }
 
-pub async fn dispatch_create_timer(rt: &Arc<Runtime>, instance: &str, history: &[Event], id: u64, delay_ms: u64) {
+pub async fn dispatch_create_timer(rt: &Arc<Runtime>, instance: &str, history: &[Event], scheduling_event_id: u64, delay_ms: u64) {
     let already_fired = history
         .iter()
         .rev()
-        .any(|e| matches!(e, Event::TimerFired { id: cid, .. } if *cid == id));
+        .any(|e| matches!(e, Event::TimerFired { source_event_id, .. } if *source_event_id == scheduling_event_id));
     if already_fired {
-        debug!(instance, id, "skip dispatch: timer already fired");
+        debug!(instance, scheduling_event_id, "skip dispatch: timer already fired");
         return;
     }
     let fire_at_ms = history
@@ -52,14 +52,14 @@ pub async fn dispatch_create_timer(rt: &Arc<Runtime>, instance: &str, history: &
         .rev()
         .find_map(|e| match e {
             Event::TimerCreated {
-                id: cid,
+                event_id,
                 fire_at_ms,
                 execution_id: _,
-            } if *cid == id => Some(*fire_at_ms),
+            } if *event_id == scheduling_event_id => Some(*fire_at_ms),
             _ => None,
         })
         .unwrap_or(0);
-    debug!(instance, id, fire_at_ms, delay_ms, "dispatch timer");
+    debug!(instance, scheduling_event_id, fire_at_ms, delay_ms, "dispatch timer");
     // Enqueue provider-backed schedule; a TimerDispatcher can later materialize TimerFired
     let execution_id = rt.get_execution_id_for_instance(instance).await;
     let _ = rt
@@ -67,20 +67,20 @@ pub async fn dispatch_create_timer(rt: &Arc<Runtime>, instance: &str, history: &
         .enqueue_timer_work(WorkItem::TimerSchedule {
             instance: instance.to_string(),
             execution_id,
-            id,
+            id: scheduling_event_id,
             fire_at_ms,
         })
         .await;
 }
 
-pub async fn dispatch_wait_external(_rt: &Arc<Runtime>, instance: &str, _history: &[Event], id: u64, name: String) {
-    debug!(instance, id, name=%name, "subscribe external");
+pub async fn dispatch_wait_external(_rt: &Arc<Runtime>, instance: &str, _history: &[Event], scheduling_event_id: u64, name: String) {
+    debug!(instance, scheduling_event_id, name=%name, "subscribe external");
 }
 
 pub async fn dispatch_start_detached(
     rt: &Arc<Runtime>,
     instance: &str,
-    id: u64,
+    scheduling_event_id: u64,
     name: String,
     version: Option<String>,
     child_instance: String,
@@ -103,9 +103,9 @@ pub async fn dispatch_start_detached(
         parent_id: None,
     };
     if let Err(e) = rt.history_store.enqueue_orchestrator_work(wi, None).await {
-        warn!(instance, id, name=%name, child_instance=%child_instance, error=%e, "failed to enqueue detached start; will rely on bootstrap rehydration");
+        warn!(instance, scheduling_event_id, name=%name, child_instance=%child_instance, error=%e, "failed to enqueue detached start; will rely on bootstrap rehydration");
     } else {
-        debug!(instance, id, name=%name, child_instance=%child_instance, "enqueued detached orchestration start");
+        debug!(instance, scheduling_event_id, name=%name, child_instance=%child_instance, "enqueued detached orchestration start");
     }
 }
 
@@ -113,18 +113,18 @@ pub async fn dispatch_start_sub_orchestration(
     rt: &Arc<Runtime>,
     parent_instance: &str,
     history: &[Event],
-    id: u64,
+    scheduling_event_id: u64,
     name: String,
     version: Option<String>,
     child_suffix: String,
     input: String,
 ) {
     let already_done = history.iter().rev().any(|e| {
-        matches!(e, Event::SubOrchestrationCompleted { id: cid, .. } if *cid == id)
-            || matches!(e, Event::SubOrchestrationFailed { id: cid, .. } if *cid == id)
+        matches!(e, Event::SubOrchestrationCompleted { source_event_id, .. } if *source_event_id == scheduling_event_id)
+            || matches!(e, Event::SubOrchestrationFailed { source_event_id, .. } if *source_event_id == scheduling_event_id)
     });
     if already_done {
-        debug!(parent_instance, id, name=%name, "skip dispatch: sub-orch already completed/failed");
+        debug!(parent_instance, scheduling_event_id, name=%name, "skip dispatch: sub-orch already completed/failed");
         return;
     }
     let child_full = format!("{}::{}", parent_instance, child_suffix);
@@ -140,7 +140,7 @@ pub async fn dispatch_start_sub_orchestration(
     } else if let Some((v, _h)) = rt.orchestration_registry.resolve_for_start(&name).await {
         rt_for_child.pinned_versions.lock().await.insert(child_full.clone(), v);
     }
-    debug!(parent_instance, id, name=%name, child_instance=%child_full, "start child orchestration");
+    debug!(parent_instance, scheduling_event_id, name=%name, child_instance=%child_full, "start child orchestration");
 
     // Try to parse version for pinning (will be pinned in start_internal_wait as well)
     let version_pin = version.clone().and_then(|s| semver::Version::parse(&s).ok());
@@ -152,19 +152,19 @@ pub async fn dispatch_start_sub_orchestration(
             &name_clone,
             input_clone,
             parent_inst.clone(),
-            id,
+            scheduling_event_id,
             version_pin,
         )
         .await
     {
         Ok(()) => {
-            debug!(parent_instance, id, child_instance=%child_full, 
+            debug!(parent_instance, scheduling_event_id, child_instance=%child_full, 
                    "sub-orchestration started successfully - completion will be automatic");
             // Done! Child will auto-notify parent when it completes via handle_orchestration_completion
         }
         Err(e) => {
             // Only handle start failures - completion failures are handled by the child itself
-            debug!(parent_instance, id, child_instance=%child_full, error=%e, 
+            debug!(parent_instance, scheduling_event_id, child_instance=%child_full, error=%e, 
                    "sub-orchestration start failed, enqueuing failure");
             let parent_execution_id = rt.get_execution_id_for_instance(parent_instance).await;
             let _ = rt
@@ -172,7 +172,7 @@ pub async fn dispatch_start_sub_orchestration(
                 .enqueue_orchestrator_work(WorkItem::SubOrchFailed {
                     parent_instance: parent_inst,
                     parent_execution_id,
-                    parent_id: id,
+                    parent_id: scheduling_event_id,
                     error: e,
                 }, None)
                 .await;

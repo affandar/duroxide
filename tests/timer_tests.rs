@@ -109,7 +109,7 @@ async fn multiple_timers_ordering() {
     let fired: Vec<(u64, u64)> = hist
         .iter()
         .filter_map(|e| match e {
-            Event::TimerFired { id, fire_at_ms } => Some((*id, *fire_at_ms)),
+            Event::TimerFired { source_event_id, fire_at_ms, .. } => Some((*source_event_id, *fire_at_ms)),
             _ => None,
         })
         .collect();
@@ -149,11 +149,11 @@ async fn timer_deduplication() {
         let hist = store.read(inst).await;
         hist.iter()
             .find_map(|e| match e {
-                Event::TimerCreated {
-                    id,
-                    fire_at_ms,
-                    execution_id: _,
-                } => Some((*id, *fire_at_ms)),
+            Event::TimerCreated {
+                event_id,
+                fire_at_ms,
+                execution_id: _,
+            } => Some((*event_id, *fire_at_ms)),
                 _ => None,
             })
             .unwrap()
