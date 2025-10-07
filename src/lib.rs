@@ -465,11 +465,11 @@ struct CtxInner {
     // Event ID generation
     next_event_id: u64,
     
-    // Cursor for completion consumption (FIFO order)
-    next_completion_index: usize,
-    
     // Track claimed scheduling events (to prevent collision)
     claimed_scheduling_events: std::collections::HashSet<u64>,
+    
+    // Track consumed completions by event_id (FIFO enforcement)
+    consumed_completions: std::collections::HashSet<u64>,
 
     // Track consumed external events (by name) since they're searched, not cursor-based
     consumed_external_events: std::collections::HashSet<String>,
@@ -480,6 +480,8 @@ struct CtxInner {
     // Turn metadata
     turn_index: u64,
     logging_enabled_this_poll: bool,
+    // When set, indicates a nondeterminism condition detected by futures during polling
+    nondeterminism_error: Option<String>,
 }
 
 impl CtxInner {
@@ -498,12 +500,13 @@ impl CtxInner {
             history,
             actions: Vec::new(),
             next_event_id,
-            next_completion_index: 0,  // Completion cursor starts at beginning
             claimed_scheduling_events: Default::default(),
+            consumed_completions: Default::default(),
             consumed_external_events: Default::default(),
             execution_id,
             turn_index: 0,
             logging_enabled_this_poll: false,
+            nondeterminism_error: None,
         }
     }
 
@@ -1097,6 +1100,44 @@ where
             let actions = ctx.take_actions();
             let hist_after = ctx.inner.lock().unwrap().history.clone();
             (hist_after, actions, None)
+        }
+    }
+}
+
+/// Execute one orchestration turn and also return any nondeterminism flagged by futures.
+/// This does not change the deterministic behavior of the orchestrator; it only surfaces
+/// `CtxInner.nondeterminism_error` that futures may set during scheduling order checks.
+pub fn run_turn_with_status<O, F>(
+    history: Vec<Event>,
+    turn_index: u64,
+    execution_id: u64,
+    orchestrator: impl Fn(OrchestrationContext) -> F,
+) -> (
+    Vec<Event>,
+    Vec<Action>,
+    Option<O>,
+    Option<String>,
+)
+where
+    F: Future<Output = O>,
+{
+    let ctx = OrchestrationContext::new(history, execution_id);
+    ctx.set_turn_index(turn_index);
+    ctx.inner.lock().unwrap().logging_enabled_this_poll = false;
+    let mut fut = orchestrator(ctx.clone());
+    match poll_once(&mut fut) {
+        Poll::Ready(out) => {
+            ctx.inner.lock().unwrap().logging_enabled_this_poll = true;
+            let actions = ctx.take_actions();
+            let hist_after = ctx.inner.lock().unwrap().history.clone();
+            let nondet = ctx.inner.lock().unwrap().nondeterminism_error.clone();
+            (hist_after, actions, Some(out), nondet)
+        }
+        Poll::Pending => {
+            let actions = ctx.take_actions();
+            let hist_after = ctx.inner.lock().unwrap().history.clone();
+            let nondet = ctx.inner.lock().unwrap().nondeterminism_error.clone();
+            (hist_after, actions, None, nondet)
         }
     }
 }

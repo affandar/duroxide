@@ -148,12 +148,12 @@ async fn concurrent_orchestrations_different_activities_with(store: StdArc<dyn P
     assert!(
         hist1
             .iter()
-            .any(|e| matches!(e, Event::ActivityCompleted { source_event_id, result, .. } if *source_event_id == 1 && result == "5"))
+            .any(|e| matches!(e, Event::ActivityCompleted { source_event_id, result, .. } if *source_event_id == 2 && result == "5"))
     );
     assert!(
         hist2
             .iter()
-            .any(|e| matches!(e, Event::ActivityCompleted { source_event_id, result, .. } if *source_event_id == 1 && result == "HI"))
+            .any(|e| matches!(e, Event::ActivityCompleted { source_event_id, result, .. } if *source_event_id == 2 && result == "HI"))
     );
     assert!(
         hist1
@@ -300,12 +300,12 @@ async fn concurrent_orchestrations_same_activities_with(store: StdArc<dyn Provid
     assert!(
         hist1
             .iter()
-            .any(|e| matches!(e, Event::ActivityCompleted { source_event_id, result, .. } if *source_event_id == 1 && result == "11"))
+            .any(|e| matches!(e, Event::ActivityCompleted { source_event_id, result, .. } if *source_event_id == 2 && result == "11"))
     );
     assert!(
         hist2
             .iter()
-            .any(|e| matches!(e, Event::ActivityCompleted { source_event_id, result, .. } if *source_event_id == 2 && result == "21"))
+            .any(|e| matches!(e, Event::ActivityCompleted { source_event_id, result, .. } if *source_event_id == 4 && result == "21"))
     );
     assert!(
         hist1
@@ -335,4 +335,82 @@ async fn concurrent_orchestrations_same_activities_with(store: StdArc<dyn Provid
 async fn concurrent_orchestrations_same_activities_fs() {
     let (store, _temp_dir) = common::create_sqlite_store_disk().await;
     concurrent_orchestrations_same_activities_with(store).await;
+}
+
+#[tokio::test]
+async fn single_orchestration_with_join_test() {
+    let (store, _temp_dir) = common::create_sqlite_store_disk().await;
+    
+    // Just run ONE orchestration (same as o1 from the concurrent test)
+    let o1 = |ctx: OrchestrationContext, _input: String| async move {
+        let f_a = ctx.schedule_activity("Proc", "10");
+        let f_e = ctx.schedule_wait("Go");
+        let f_t = ctx.schedule_timer(1);
+        let results = ctx.join(vec![f_a, f_e, f_t]).await;
+
+        let mut a = None;
+        let mut e = None;
+        for result in &results {
+            match result {
+                duroxide::futures::DurableOutput::Activity(Ok(activity_result)) => {
+                    a = Some(activity_result.clone());
+                }
+                duroxide::futures::DurableOutput::External(external_data) => {
+                    e = Some(external_data.clone());
+                }
+                _ => {}
+            }
+        }
+
+        let a = a.expect("activity result not found");
+        let e = e.expect("external result not found");
+        Ok(format!("o1:a={a};evt={e}"))
+    };
+
+    let activity_registry = ActivityRegistry::builder()
+        .register("Proc", |input: String| async move {
+            let n = input.parse::<i64>().unwrap_or(0);
+            Ok((n + 1).to_string())
+        })
+        .build();
+
+    let orchestration_registry = OrchestrationRegistry::builder()
+        .register("ProcOrchestration1", o1)
+        .build();
+
+    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+    let client = Client::new(store.clone());
+    
+    // Start only ONE orchestration
+    let _ = client.start_orchestration("inst-single", "ProcOrchestration1", "").await;
+
+    // Raise event
+    let store_for_wait = store.clone();
+    tokio::spawn(async move {
+        let _ = common::wait_for_subscription(store_for_wait.clone(), "inst-single", "Go", 3000).await;
+        let client = Client::new(store_for_wait);
+        let _ = client.raise_event("inst-single", "Go", "P1").await;
+    });
+
+    // Wait for completion
+    let result = client.wait_for_orchestration("inst-single", std::time::Duration::from_secs(10)).await;
+    
+    if result.is_err() {
+        let hist = store.read("inst-single").await;
+        println!("❌ Timeout! History ({} events):", hist.len());
+        for (i, e) in hist.iter().enumerate() {
+            println!("  {}: {:?}", i, e);
+        }
+    }
+    
+    match result.unwrap() {
+        duroxide::OrchestrationStatus::Completed { output } => {
+            println!("✅ Single orch completed: {}", output);
+            assert_eq!(output, "o1:a=11;evt=P1");
+        },
+        duroxide::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        _ => panic!("unexpected orchestration status"),
+    }
+
+    rt.shutdown().await;
 }

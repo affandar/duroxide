@@ -6,6 +6,7 @@ use crate::{
 };
 use std::sync::Arc;
 use tracing::{debug, warn};
+use std::panic::{catch_unwind, AssertUnwindSafe};
 
 /// Result of executing an orchestration turn
 #[derive(Debug)]
@@ -39,6 +40,8 @@ pub struct OrchestrationTurn {
     baseline_history: Vec<Event>,
     /// Next event_id for new events added this turn
     next_event_id: u64,
+    /// If set, indicates a nondeterminism error detected during this turn
+    nondet_error: Option<String>,
 }
 
 impl OrchestrationTurn {
@@ -57,6 +60,7 @@ impl OrchestrationTurn {
             pending_actions: Vec::new(),
             baseline_history,
             next_event_id,
+            nondet_error: None,
         }
     }
 
@@ -89,6 +93,56 @@ impl OrchestrationTurn {
                 continue;
             }
 
+            // Nondeterminism detection: ensure completion has a matching schedule and kind
+            let schedule_kind = |id: &u64| -> Option<&'static str> {
+                for e in self.baseline_history.iter().chain(self.history_delta.iter()) {
+                    match e {
+                        Event::ActivityScheduled { event_id, .. } if event_id == id => return Some("activity"),
+                        Event::TimerCreated { event_id, .. } if event_id == id => return Some("timer"),
+                        Event::SubOrchestrationScheduled { event_id, .. } if event_id == id => return Some("suborchestration"),
+                        _ => {}
+                    }
+                }
+                None
+            };
+            let mut nd_err: Option<String> = None;
+            match &msg {
+                OrchestratorMsg::ActivityCompleted { id, .. } | OrchestratorMsg::ActivityFailed { id, .. } => {
+                    match schedule_kind(id) {
+                        Some("activity") => {}
+                        Some(other) => nd_err = Some(format!(
+                            "nondeterministic: completion kind mismatch for id={}, expected '{}', got 'activity'",
+                            id, other
+                        )),
+                        None => nd_err = Some(format!("nondeterministic: no matching schedule for completion id={}", id)),
+                    }
+                }
+                OrchestratorMsg::TimerFired { id, .. } => match schedule_kind(id) {
+                    Some("timer") => {}
+                    Some(other) => nd_err = Some(format!(
+                        "nondeterministic: completion kind mismatch for id={}, expected '{}', got 'timer'",
+                        id, other
+                    )),
+                    None => nd_err = Some(format!("nondeterministic: no matching schedule for timer id={}", id)),
+                },
+                OrchestratorMsg::SubOrchCompleted { id, .. } | OrchestratorMsg::SubOrchFailed { id, .. } =>
+                    match schedule_kind(id) {
+                        Some("suborchestration") => {}
+                        Some(other) => nd_err = Some(format!(
+                            "nondeterministic: completion kind mismatch for id={}, expected '{}', got 'suborchestration'",
+                            id, other
+                        )),
+                        None => nd_err = Some(format!("nondeterministic: no matching schedule for sub-orchestration id={}", id)),
+                    },
+                OrchestratorMsg::ExternalByName { .. } | OrchestratorMsg::CancelRequested { .. } => {}
+            }
+            if let Some(err) = nd_err {
+                warn!(instance = %self.instance, error=%err, "detected nondeterminism in completion batch");
+                self.nondet_error = Some(err);
+                ack_tokens.push(token);
+                continue;
+            }
+
             // Convert message to event
             let event_opt = match msg {
                 OrchestratorMsg::ActivityCompleted { id, result, .. } => {
@@ -113,11 +167,20 @@ impl OrchestrationTurn {
                     })
                 }
                 OrchestratorMsg::ExternalByName { name, data, .. } => {
-                    Some(Event::ExternalEvent {
-                        event_id: 0,
-                        name,
-                        data,
-                    })
+                    // Only materialize ExternalEvent if a subscription exists in this execution
+                    let subscribed = self.baseline_history.iter().any(|e| {
+                        matches!(e, Event::ExternalSubscribed { name: hist_name, .. } if hist_name == &name)
+                    });
+                    if subscribed {
+                        Some(Event::ExternalEvent {
+                            event_id: 0,  // Will be assigned
+                            name,
+                            data,
+                        })
+                    } else {
+                        warn!(instance = %self.instance, event_name=%name, "dropping ExternalByName with no matching subscription in history");
+                        None
+                    }
                 }
                 OrchestratorMsg::SubOrchCompleted { id, result, .. } => {
                     Some(Event::SubOrchestrationCompleted {
@@ -232,6 +295,9 @@ impl OrchestrationTurn {
             turn_index = self.turn_index,
             "executing orchestration turn"
         );
+        if let Some(err) = self.nondet_error.clone() {
+            return TurnResult::Failed(err);
+        }
 
         // Build working history: baseline + completion events from this turn
         let working_history_len_before = self.baseline_history.len() + self.history_delta.len();
@@ -240,8 +306,8 @@ impl OrchestrationTurn {
 
         // Run orchestration with unified cursor model
         let execution_id = self.get_current_execution_id();
-        let (updated_history, decisions, output_opt) =
-            crate::run_turn_with(
+        let run_result = catch_unwind(AssertUnwindSafe(|| {
+            crate::run_turn_with_status(
                 working_history,
                 self.turn_index,
                 execution_id,
@@ -250,7 +316,42 @@ impl OrchestrationTurn {
                     let inp = input.clone();
                     async move { h.invoke(ctx, inp).await }
                 },
-            );
+            )
+        }));
+
+        let (updated_history, decisions, output_opt, nondet_flag) = match run_result {
+            Ok(tuple) => tuple,
+            Err(panic_payload) => {
+                let msg = if let Some(s) = panic_payload.downcast_ref::<&str>() {
+                    format!("nondeterministic: {}", s)
+                } else if let Some(s) = panic_payload.downcast_ref::<String>() {
+                    format!("nondeterministic: {}", s)
+                } else {
+                    "nondeterministic: orchestration panicked".to_string()
+                };
+                return TurnResult::Failed(msg);
+            }
+        };
+
+        // If futures flagged nondeterminism (scheduling-order mismatch), fail gracefully
+        if let Some(err) = nondet_flag.clone() {
+            return TurnResult::Failed(err);
+        }
+
+        // If futures recorded nondeterminism, fail gracefully
+        if updated_history.is_empty() {
+            // Nothing to check; proceed
+        }
+        // Inspect nondeterminism flag
+        if let Some(err) = {
+            // Rebuild a context view to peek at the flag by leveraging a small helper
+            // We can infer nondeterminism if no new scheduling matched and futures set the flag
+            // Here, we conservatively check the last delta for no-op and rely on prep_completions filtering.
+            // Since we cannot access ctx here, rely on Turn-level flag (set earlier) or re-run minimal check.
+            None::<String>
+        } {
+            return TurnResult::Failed(err);
+        }
 
         // Calculate NEW events added during orchestration execution
         // (beyond the completion events we already added in prep_completions)
@@ -393,7 +494,9 @@ mod tests {
 
     #[test]
     fn test_prep_completions_creates_events() {
-        let mut turn = OrchestrationTurn::new("test-instance".to_string(), 1, 1, vec![]);
+        // Provide matching schedule for the injected completion
+        let baseline = vec![Event::ActivityScheduled { event_id: 1, name: "x".to_string(), input: "y".to_string(), execution_id: 1 }];
+        let mut turn = OrchestrationTurn::new("test-instance".to_string(), 1, 1, baseline);
 
         let messages = vec![(
             OrchestratorMsg::ActivityCompleted {

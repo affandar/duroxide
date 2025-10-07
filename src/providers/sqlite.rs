@@ -433,11 +433,9 @@ impl SqliteProvider {
         .fetch_one(&mut **tx)
         .await?;
         
-        // Assign event_ids to all events before serialization
+        // Assign event_ids to all events before serialization (provider owns event_id assignment)
         for (i, event) in events.iter_mut().enumerate() {
-            if event.event_id() == 0 {
-                event.set_event_id((start_id + i as i64) as u64);
-            }
+            event.set_event_id((start_id + i as i64) as u64);
         }
         
         // Insert events
