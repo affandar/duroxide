@@ -433,9 +433,11 @@ impl SqliteProvider {
         .fetch_one(&mut **tx)
         .await?;
         
-        // Assign event_ids to all events before serialization (provider owns event_id assignment)
-        for (i, event) in events.iter_mut().enumerate() {
-            event.set_event_id((start_id + i as i64) as u64);
+        // Validate that runtime provided concrete event_ids
+        for event in &events {
+            if event.event_id() == 0 {
+                return Err(sqlx::Error::Protocol("event_id must be set by runtime".into()));
+            }
         }
         
         // Insert events
@@ -1209,9 +1211,9 @@ impl Provider for SqliteProvider {
         .await
         .map_err(|e| e.to_string())?;
         
-        // Create OrchestrationStarted event
+        // Create OrchestrationStarted event with explicit event_id=1 for new execution
         let start_event = Event::OrchestrationStarted {
-            event_id: 0,  // Will be assigned by append_history_in_tx
+            event_id: 1,
             name: orchestration.to_string(),
             version: version.to_string(),
             input: input.to_string(),
@@ -1293,7 +1295,7 @@ mod tests {
         
         // Ack with some history
         let history_delta = vec![Event::OrchestrationStarted {
-            event_id: 0,
+            event_id: 1,
             name: "TestOrch".to_string(),
             version: "1.0.0".to_string(),
             input: "{}".to_string(),
@@ -1338,7 +1340,7 @@ mod tests {
         // Ack with multiple outputs - all should be atomic
         let history_delta = vec![
             Event::OrchestrationStarted {
-                event_id: 0,  // Will be assigned by append_history_in_tx
+                event_id: 1,
                 name: "AtomicTest".to_string(),
                 version: "1.0.0".to_string(),
                 input: "{}".to_string(),
@@ -1346,13 +1348,13 @@ mod tests {
                 parent_id: None,
             },
             Event::ActivityScheduled {
-                event_id: 0,  // Will be assigned by append_history_in_tx
+                event_id: 2,
                 name: "Activity1".to_string(),
                 input: "{}".to_string(),
                 execution_id: 1,
             },
             Event::ActivityScheduled {
-                event_id: 0,  // Will be assigned by append_history_in_tx
+                event_id: 3,
                 name: "Activity2".to_string(),
                 input: "{}".to_string(),
                 execution_id: 1,
@@ -1495,7 +1497,7 @@ mod tests {
         store.append_with_execution(
             instance,
             1,
-            vec![Event::OrchestrationCompleted { event_id: 0, output: "result1".to_string() }],
+            vec![Event::OrchestrationCompleted { event_id: 2, output: "result1".to_string() }],
         ).await.unwrap();
         
         // Create second execution (ContinueAsNew)

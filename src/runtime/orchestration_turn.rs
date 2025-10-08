@@ -93,6 +93,36 @@ impl OrchestrationTurn {
                 continue;
             }
 
+            // Drop duplicates already staged in this turn's history_delta
+            let already_in_delta = match &msg {
+                OrchestratorMsg::ActivityCompleted { id, .. } | OrchestratorMsg::ActivityFailed { id, .. } => {
+                    self.history_delta.iter().any(|e| match e {
+                        Event::ActivityCompleted { source_event_id, .. } if source_event_id == id => true,
+                        Event::ActivityFailed { source_event_id, .. } if source_event_id == id => true,
+                        _ => false,
+                    })
+                }
+                OrchestratorMsg::TimerFired { id, .. } => {
+                    self.history_delta.iter().any(|e| matches!(e, Event::TimerFired { source_event_id, .. } if source_event_id == id))
+                }
+                OrchestratorMsg::SubOrchCompleted { id, .. } | OrchestratorMsg::SubOrchFailed { id, .. } => {
+                    self.history_delta.iter().any(|e| match e {
+                        Event::SubOrchestrationCompleted { source_event_id, .. } if source_event_id == id => true,
+                        Event::SubOrchestrationFailed { source_event_id, .. } if source_event_id == id => true,
+                        _ => false,
+                    })
+                }
+                OrchestratorMsg::ExternalByName { name, data, .. } => {
+                    self.history_delta.iter().any(|e| matches!(e, Event::ExternalEvent { name: n, data: d, .. } if n == name && d == data))
+                }
+                OrchestratorMsg::CancelRequested { .. } => false,
+            };
+            if already_in_delta {
+                warn!(instance = %self.instance, "dropping duplicate completion in current turn");
+                ack_tokens.push(token);
+                continue;
+            }
+
             // Nondeterminism detection: ensure completion has a matching schedule and kind
             let schedule_kind = |id: &u64| -> Option<&'static str> {
                 for e in self.baseline_history.iter().chain(self.history_delta.iter()) {

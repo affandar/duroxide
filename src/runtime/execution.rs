@@ -149,7 +149,9 @@ impl Runtime {
             Ok(h) => h,
             Err(error) => {
                 // Handle unregistered orchestration
-                let terminal_event = Event::OrchestrationFailed { event_id: 0, error: error.clone() };
+                let max_existing = history.iter().map(|e| e.event_id()).max().unwrap_or(0);
+                let next_id = max_existing + 1;
+                let terminal_event = Event::OrchestrationFailed { event_id: next_id, error: error.clone() };
                 history_delta.push(terminal_event);
                 return (history_delta, worker_items, timer_items, orchestrator_items, Err(error));
             }
@@ -326,8 +328,15 @@ impl Runtime {
                     }
                 }
 
-                // Add completion event
-                let terminal_event = Event::OrchestrationCompleted { event_id: 0, output: output.clone() };
+                // Add completion event with next event_id
+                let max_history = history
+                    .iter()
+                    .chain(history_delta.iter())
+                    .map(|e| e.event_id())
+                    .max()
+                    .unwrap_or(0);
+                let next_id = max_history + 1;
+                let terminal_event = Event::OrchestrationCompleted { event_id: next_id, output: output.clone() };
                 history_delta.push(terminal_event);
 
                 // Notify parent if this is a sub-orchestration
@@ -345,7 +354,14 @@ impl Runtime {
             }
             TurnResult::Failed(error) => {
                 // Add failure event
-                let terminal_event = Event::OrchestrationFailed { event_id: 0, error: error.clone() };
+                let max_history = history
+                    .iter()
+                    .chain(history_delta.iter())
+                    .map(|e| e.event_id())
+                    .max()
+                    .unwrap_or(0);
+                let next_id = max_history + 1;
+                let terminal_event = Event::OrchestrationFailed { event_id: next_id, error: error.clone() };
                 history_delta.push(terminal_event);
 
                 // Notify parent if this is a sub-orchestration
@@ -363,10 +379,14 @@ impl Runtime {
             }
             TurnResult::ContinueAsNew { input, version } => {
                 // Add ContinuedAsNew terminal event to history
-                let terminal_event = Event::OrchestrationContinuedAsNew {
-                    event_id: 0,  // Will be assigned by provider
-                    input: input.clone(),
-                };
+                let max_history = history
+                    .iter()
+                    .chain(history_delta.iter())
+                    .map(|e| e.event_id())
+                    .max()
+                    .unwrap_or(0);
+                let next_id = max_history + 1;
+                let terminal_event = Event::OrchestrationContinuedAsNew { event_id: next_id, input: input.clone() };
                 history_delta.push(terminal_event);
 
                 // Enqueue continue as new work item
@@ -382,7 +402,14 @@ impl Runtime {
             TurnResult::Cancelled(reason) => {
                 // Add cancellation as failure event
                 let error = format!("canceled: {}", reason);
-                let terminal_event = Event::OrchestrationFailed { event_id: 0, error: error.clone() };
+                let max_history = history
+                    .iter()
+                    .chain(history_delta.iter())
+                    .map(|e| e.event_id())
+                    .max()
+                    .unwrap_or(0);
+                let next_id = max_history + 1;
+                let terminal_event = Event::OrchestrationFailed { event_id: next_id, error: error.clone() };
                 history_delta.push(terminal_event);
 
                 // Propagate cancellation to children

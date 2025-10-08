@@ -437,13 +437,35 @@ impl Runtime {
         if !worker_items.is_empty() {
             debug!(instance, "Worker items to enqueue: {:?}", worker_items);
         }
-        match self
-            .history_store
-            .ack_orchestration_item(lock_token, history_delta, worker_items, timer_items, orchestrator_items)
-            .await
-        {
-            Ok(()) => debug!(instance, "Successfully acked orchestration item"),
-            Err(e) => warn!(instance, error = %e, "Failed to ack orchestration item"),
+        // Robust ack with basic retry on SQLITE_BUSY (database is locked)
+        let mut attempts: u32 = 0;
+        let max_attempts: u32 = 5;
+        loop {
+            match self
+                .history_store
+                .ack_orchestration_item(lock_token, history_delta.clone(), worker_items.clone(), timer_items.clone(), orchestrator_items.clone())
+                .await
+            {
+                Ok(()) => {
+                    debug!(instance, "Successfully acked orchestration item");
+                    break;
+                }
+                Err(e) => {
+                    let emsg = e.to_lowercase();
+                    if (emsg.contains("database is locked") || emsg.contains("busy")) && attempts < max_attempts {
+                        let backoff_ms = 10u64.saturating_mul(1 << attempts);
+                        warn!(instance, attempts, backoff_ms, error = %e, "Ack failed due to lock; retrying");
+                        tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
+                        attempts += 1;
+                        continue;
+                    } else {
+                        warn!(instance, attempts, error = %e, "Failed to ack orchestration item");
+                        // Best-effort: abandon so it can be retried later
+                        let _ = self.history_store.abandon_orchestration_item(lock_token, Some(50)).await;
+                        break;
+                    }
+                }
+            }
         }
     }
 
