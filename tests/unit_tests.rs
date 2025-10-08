@@ -283,7 +283,7 @@ async fn providers_fs_multi_execution_persistence_and_latest_read() {
     fs.append_with_execution(
         "pfs",
         1,
-        vec![Event::OrchestrationContinuedAsNew { event_id: 0, input: "1".into() }],
+        vec![Event::OrchestrationContinuedAsNew { event_id: 2, input: "1".into() }],
     )
     .await
     .unwrap();
@@ -294,7 +294,7 @@ async fn providers_fs_multi_execution_persistence_and_latest_read() {
         .create_new_execution("pfs", "O", "0.0.0", "1", None, None)
         .await
         .unwrap();
-    fs.append_with_execution("pfs", 2, vec![Event::OrchestrationCompleted { event_id: 0, output: "ok".into() }])
+    fs.append_with_execution("pfs", 2, vec![Event::OrchestrationCompleted { event_id: 2, output: "ok".into() }])
         .await
         .unwrap();
 
@@ -323,7 +323,7 @@ async fn providers_inmem_multi_execution_persistence_and_latest_read() {
     mem.append_with_execution(
         "pmem",
         1,
-        vec![Event::OrchestrationContinuedAsNew { event_id: 0, input: "1".into() }],
+        vec![Event::OrchestrationContinuedAsNew { event_id: 2, input: "1".into() }],
     )
     .await
     .unwrap();
@@ -333,7 +333,7 @@ async fn providers_inmem_multi_execution_persistence_and_latest_read() {
         .create_new_execution("pmem", "O", "0.0.0", "1", None, None)
         .await
         .unwrap();
-    mem.append_with_execution("pmem", 2, vec![Event::OrchestrationCompleted { event_id: 0, output: "ok".into() }])
+    mem.append_with_execution("pmem", 2, vec![Event::OrchestrationCompleted { event_id: 2, output: "ok".into() }])
         .await
         .unwrap();
 

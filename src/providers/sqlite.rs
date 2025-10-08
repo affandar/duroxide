@@ -418,10 +418,10 @@ impl SqliteProvider {
         tx: &mut Transaction<'_, Sqlite>,
         instance: &str,
         execution_id: u64,
-        mut events: Vec<Event>,
+        events: Vec<Event>,
     ) -> Result<(), sqlx::Error> {
         // Get next event_id
-        let start_id: i64 = sqlx::query_scalar(
+        let _start_id: i64 = sqlx::query_scalar(
             r#"
             SELECT COALESCE(MAX(event_id), 0) + 1
             FROM history
