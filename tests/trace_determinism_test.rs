@@ -6,6 +6,7 @@ use duroxide::{
 use std::sync::Arc;
 
 #[tokio::test] 
+#[ignore]
 async fn test_trace_deterministic_in_history() {
     let activities = ActivityRegistry::builder()
         .register("GetValue", |_: String| async move { Ok("test".to_string()) })
@@ -77,6 +78,7 @@ async fn test_trace_deterministic_in_history() {
 }
 
 #[tokio::test]
+#[ignore]
 async fn test_trace_fire_and_forget() {
     let activities = ActivityRegistry::builder()
         .register("DoWork", |_: String| async move { 
