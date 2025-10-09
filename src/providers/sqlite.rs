@@ -459,6 +459,7 @@ impl SqliteProvider {
                 Event::SubOrchestrationFailed { .. } => "SubOrchestrationFailed",
                 Event::OrchestrationCancelRequested { .. } => "OrchestrationCancelRequested",
                 Event::OrchestrationChained { .. } => "OrchestrationChained",
+                Event::SystemCall { .. } => crate::EVENT_TYPE_SYSTEM_CALL,
             };
             
             let event_data = serde_json::to_string(&event).unwrap();

@@ -397,9 +397,8 @@ async fn sample_system_activities_fs() {
     let activity_registry = ActivityRegistry::builder().build();
 
     let orchestration = |ctx: OrchestrationContext, _input: String| async move {
-        let now_str = ctx.utcnow_ms().into_activity().await?;
-        let now: u128 = now_str.parse().unwrap();
-        let guid = ctx.new_guid().into_activity().await?;
+        let now = ctx.utcnow_ms().await?;
+        let guid = ctx.new_guid().await?;
         ctx.trace_info(format!("system now={now}, guid={guid}"));
         Ok(format!("n={now},g={guid}"))
     };
@@ -427,11 +426,12 @@ async fn sample_system_activities_fs() {
     let parts: Vec<&str> = out.split([',', '=']).collect();
     // parts like ["n", now, "g", guid]
     assert!(parts.len() >= 4);
-    let now_val: u128 = parts[1].parse().unwrap_or(0);
+    let now_val: u64 = parts[1].parse().unwrap_or(0);
     let guid_str = parts[3];
     assert!(now_val > 0);
-    assert_eq!(guid_str.len(), 32);
-    assert!(guid_str.chars().all(|c| c.is_ascii_hexdigit()));
+    // GUID format: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" (36 chars with hyphens)
+    assert_eq!(guid_str.len(), 36);
+    assert!(guid_str.chars().filter(|c| *c != '-').all(|c| c.is_ascii_hexdigit()));
 
     rt.shutdown().await;
 }

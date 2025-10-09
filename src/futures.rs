@@ -43,6 +43,12 @@ pub(crate) enum Kind {
         claimed_event_id: Cell<Option<u64>>,
         ctx: OrchestrationContext,
     },
+    System {
+        op: String,
+        claimed_event_id: Cell<Option<u64>>,
+        value: RefCell<Option<String>>,
+        ctx: OrchestrationContext,
+    },
 }
 
 // KindTag removed - no longer needed with cursor model
@@ -532,8 +538,127 @@ impl Future for DurableFuture {
                 
                 Poll::Pending
             }
+            Kind::System {
+                op,
+                claimed_event_id,
+                value,
+                ctx,
+            } => {
+                // Check if we already computed the value
+                if let Some(v) = value.borrow().clone() {
+                    return Poll::Ready(DurableOutput::Activity(Ok(v)));
+                }
+
+                let mut inner = ctx.inner.lock().unwrap();
+
+                // Step 1: Try to adopt from history (replay)
+                if claimed_event_id.get().is_none() {
+                    // Look for matching SystemCall event in history
+                    let found = inner.history.iter().find_map(|e| {
+                        if let Event::SystemCall { event_id, op: hist_op, value: hist_value, .. } = e {
+                            if hist_op == op && !inner.claimed_scheduling_events.contains(event_id) {
+                                return Some((*event_id, hist_value.clone()));
+                            }
+                        }
+                        None
+                    });
+                    
+                    if let Some((found_event_id, found_value)) = found {
+                        // Found our system call in history - adopt it
+                        inner.claimed_scheduling_events.insert(found_event_id);
+                        claimed_event_id.set(Some(found_event_id));
+                        *value.borrow_mut() = Some(found_value.clone());
+                        return Poll::Ready(DurableOutput::Activity(Ok(found_value)));
+                    }
+                }
+
+                // Step 2: First execution - compute value synchronously
+                if claimed_event_id.get().is_none() {
+                    let computed_value = match op.as_str() {
+                        crate::SYSCALL_OP_GUID => generate_guid(),
+                        crate::SYSCALL_OP_UTCNOW_MS => inner.now_ms().to_string(),
+                        s if s.starts_with(crate::SYSCALL_OP_TRACE_PREFIX) => {
+                            // Parse trace operation: "trace:{level}:{message}"
+                            let parts: Vec<&str> = s.splitn(3, ':').collect();
+                            if parts.len() == 3 {
+                                let level = parts[1];
+                                let message = parts[2];
+                                // Log to tracing only on first execution (not during replay)
+                                match level {
+                                    "ERROR" => tracing::error!(target: "duroxide::trace", "{}", message),
+                                    "WARN" => tracing::warn!(target: "duroxide::trace", "{}", message),
+                                    "DEBUG" => tracing::debug!(target: "duroxide::trace", "{}", message),
+                                    _ => tracing::info!(target: "duroxide::trace", "{}", message),
+                                }
+                            }
+                            // trace operations don't return values, just empty string
+                            String::new()
+                        }
+                        _ => {
+                            inner.nondeterminism_error = Some(format!("unknown system operation: {}", op));
+                            return Poll::Pending;
+                        }
+                    };
+
+                    // Allocate event_id and record event
+                    let event_id = inner.next_event_id;
+                    inner.next_event_id += 1;
+                    let exec_id = inner.execution_id;
+
+                    inner.history.push(Event::SystemCall {
+                        event_id,
+                        op: op.clone(),
+                        value: computed_value.clone(),
+                        execution_id: exec_id,
+                    });
+
+                    inner.record_action(Action::SystemCall {
+                        scheduling_event_id: event_id,
+                        op: op.clone(),
+                        value: computed_value.clone(),
+                    });
+
+                    inner.claimed_scheduling_events.insert(event_id);
+                    claimed_event_id.set(Some(event_id));
+                    *value.borrow_mut() = Some(computed_value.clone());
+
+                    return Poll::Ready(DurableOutput::Activity(Ok(computed_value)));
+                }
+
+                Poll::Pending
+            }
         }
     }
+}
+
+// Helper function to generate deterministic GUIDs
+fn generate_guid() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    
+    // Thread-local counter for uniqueness within the same timestamp
+    thread_local! {
+        static COUNTER: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    }
+    let counter = COUNTER.with(|c| {
+        let val = c.get();
+        c.set(val.wrapping_add(1));
+        val
+    });
+    
+    // Format as UUID-like string
+    format!(
+        "{:08x}-{:04x}-{:04x}-{:04x}-{:012x}",
+        (timestamp >> 96) as u32,
+        ((timestamp >> 80) & 0xFFFF) as u16,
+        (counter & 0xFFFF) as u16,
+        ((timestamp >> 64) & 0xFFFF) as u16,
+        (timestamp & 0xFFFFFFFFFFFF) as u64
+    )
 }
 
 // Aggregate future machinery
@@ -643,6 +768,10 @@ impl Future for AggregateDurableFuture {
                                             Event::SubOrchestrationFailed { event_id, source_event_id, .. } if *source_event_id == sid => Some(*event_id),
                                             _ => None,
                                         }).unwrap_or(u64::MAX)
+                                    }
+                                    Kind::System { claimed_event_id, .. } => {
+                                        // For system calls, the event itself is the completion
+                                        claimed_event_id.get().expect("system call must claim id")
                                     }
                                 }
                             };

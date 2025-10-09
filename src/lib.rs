@@ -190,10 +190,11 @@ pub mod providers;
 // Re-export key runtime types for convenience
 pub use runtime::{OrchestrationHandler, OrchestrationRegistry, OrchestrationRegistryBuilder, OrchestrationStatus};
 pub use client::Client;
-// Internal system activity names
-pub(crate) const SYSTEM_NOW_ACTIVITY: &str = "__system_now";
-pub(crate) const SYSTEM_NEW_GUID_ACTIVITY: &str = "__system_new_guid";
-pub(crate) const SYSTEM_TRACE_ACTIVITY: &str = "__system_trace";
+
+// System call operation constants
+pub(crate) const SYSCALL_OP_GUID: &str = "guid";
+pub(crate) const SYSCALL_OP_UTCNOW_MS: &str = "utcnow_ms";
+pub(crate) const SYSCALL_OP_TRACE_PREFIX: &str = "trace:";
 
 use crate::_typed_codec::Codec;
 // LogLevel is now defined locally in this file
@@ -344,7 +345,18 @@ pub enum Event {
         reason: String,
     },
 
+    /// System call executed synchronously during orchestration turn (single event for schedule+completion).
+    SystemCall {
+        event_id: u64,
+        op: String,
+        value: String,
+        execution_id: u64,
+    },
 }
+
+// Event type name for SystemCall (used by providers for persistence)
+pub(crate) const EVENT_TYPE_SYSTEM_CALL: &str = "SystemCall";
+
 
 impl Event {
     /// Get the event_id (position in history) for any event.
@@ -366,6 +378,7 @@ impl Event {
             Event::SubOrchestrationFailed { event_id, .. } => *event_id,
             Event::OrchestrationContinuedAsNew { event_id, .. } => *event_id,
             Event::OrchestrationCancelRequested { event_id, .. } => *event_id,
+            Event::SystemCall { event_id, .. } => *event_id,
         }
     }
 
@@ -388,6 +401,7 @@ impl Event {
             Event::SubOrchestrationFailed { event_id, .. } => *event_id = id,
             Event::OrchestrationContinuedAsNew { event_id, .. } => *event_id = id,
             Event::OrchestrationCancelRequested { event_id, .. } => *event_id = id,
+            Event::SystemCall { event_id, .. } => *event_id = id,
         }
     }
 
@@ -454,6 +468,13 @@ pub enum Action {
     /// Continue the current orchestration as a new execution with new input (terminal for current execution).
     /// Optional version string selects the target orchestration version for the new execution.
     ContinueAsNew { input: String, version: Option<String> },
+
+    /// System call executed synchronously (no worker dispatch needed).
+    SystemCall {
+        scheduling_event_id: u64,
+        op: String,
+        value: String,
+    },
 
 }
 
@@ -568,16 +589,18 @@ impl OrchestrationContext {
     // log_buffer removed - not used
 
     /// Emit a structured trace entry.
-    /// For now, just logs directly - will be modeled as activity later.
+    /// Creates a system call event for deterministic replay and logs to tracing.
     pub fn trace(&self, level: impl Into<String>, message: impl Into<String>) {
         let level_str = level.into();
         let msg = message.into();
-        match level_str.as_str() {
-            "ERROR" => tracing::error!(target: "duroxide::trace", "{}", msg),
-            "WARN" => tracing::warn!(target: "duroxide::trace", "{}", msg),
-            "DEBUG" => tracing::debug!(target: "duroxide::trace", "{}", msg),
-            _ => tracing::info!(target: "duroxide::trace", "{}", msg),
-        }
+        
+        // Schedule and poll system call synchronously for deterministic replay
+        // Format: "trace:{level}:{message}"
+        // Note: Actual logging happens inside the System future during first execution only
+        let op = format!("{}{}:{}", SYSCALL_OP_TRACE_PREFIX, level_str, msg);
+        let mut fut = self.schedule_system_call(&op);
+        // Poll immediately to record the event synchronously
+        let _ = poll_once(&mut fut);
     }
 
     /// Convenience wrapper for INFO level tracing.
@@ -598,18 +621,43 @@ impl OrchestrationContext {
     }
 
 
+    /// Schedule a system call operation (internal helper).
+    pub(crate) fn schedule_system_call(&self, op: &str) -> DurableFuture {
+        DurableFuture(Kind::System {
+            op: op.to_string(),
+            claimed_event_id: Cell::new(None),
+            value: RefCell::new(None),
+            ctx: self.clone(),
+        })
+    }
+
     /// Generate a new deterministic GUID.
-    /// This is syntactic sugar for scheduling the system GUID activity.
-    /// Returns a DurableFuture that must be awaited to get the GUID value.
-    pub fn new_guid(&self) -> DurableFuture {
-        self.schedule_activity(SYSTEM_NEW_GUID_ACTIVITY, "")
+    /// Returns a future that resolves to a String GUID.
+    pub fn new_guid(&self) -> impl Future<Output = Result<String, String>> {
+        self.schedule_system_call(SYSCALL_OP_GUID).into_activity()
+    }
+
+    /// Generate a new deterministic GUID as a DurableFuture.
+    /// This variant returns a DurableFuture that can be used with join/select.
+    pub fn new_guid_future(&self) -> DurableFuture {
+        self.schedule_system_call(SYSCALL_OP_GUID)
     }
 
     /// Get the current UTC time in milliseconds since epoch.
-    /// This is syntactic sugar for scheduling the system time activity.
-    /// Returns a DurableFuture that must be awaited to get the timestamp value.
-    pub fn utcnow_ms(&self) -> DurableFuture {
-        self.schedule_activity(SYSTEM_NOW_ACTIVITY, "")
+    /// Returns a future that resolves to a u64 timestamp.
+    pub fn utcnow_ms(&self) -> impl Future<Output = Result<u64, String>> {
+        let fut = self.schedule_system_call(SYSCALL_OP_UTCNOW_MS).into_activity();
+        async move {
+            let s = fut.await?;
+            s.parse::<u64>().map_err(|e| e.to_string())
+        }
+    }
+
+    /// Get the current UTC time as a DurableFuture.
+    /// This variant returns a DurableFuture that can be used with join/select.
+    /// The result will be a String representation of milliseconds since epoch.
+    pub fn utcnow_ms_future(&self) -> DurableFuture {
+        self.schedule_system_call(SYSCALL_OP_UTCNOW_MS)
     }
 
     pub fn continue_as_new(&self, input: impl Into<String>) {

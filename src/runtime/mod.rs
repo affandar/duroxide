@@ -140,6 +140,10 @@ impl Runtime {
                     )
                     .await;
                 }
+                crate::Action::SystemCall { .. } => {
+                    // System calls are handled synchronously during orchestration turn
+                    // No worker dispatch needed - they complete immediately
+                }
             }
         }
     }

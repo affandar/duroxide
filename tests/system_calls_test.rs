@@ -9,15 +9,15 @@ async fn test_new_guid() {
     
     let orchestrations = OrchestrationRegistry::builder()
         .register("TestGuid", |ctx: OrchestrationContext, _input: String| async move {
-            let guid1 = ctx.new_guid().into_activity().await.unwrap();
-            let guid2 = ctx.new_guid().into_activity().await.unwrap();
+            let guid1 = ctx.new_guid().await?;
+            let guid2 = ctx.new_guid().await?;
             
             // GUIDs should be different
             assert_ne!(guid1, guid2);
             
-            // GUIDs should be valid hex strings
-            assert!(guid1.chars().all(|c| c.is_ascii_hexdigit()));
-            assert!(guid2.chars().all(|c| c.is_ascii_hexdigit()));
+            // GUIDs should be valid hex strings (excluding hyphens)
+            assert!(guid1.chars().filter(|c| *c != '-').all(|c| c.is_ascii_hexdigit()));
+            assert!(guid2.chars().filter(|c| *c != '-').all(|c| c.is_ascii_hexdigit()));
             
             Ok(format!("{},{}", guid1, guid2))
         })
@@ -48,12 +48,12 @@ async fn test_utcnow_ms() {
     
     let orchestrations = OrchestrationRegistry::builder()
         .register("TestTime", |ctx: OrchestrationContext, _input: String| async move {
-            let time1: u128 = ctx.utcnow_ms().into_activity().await.unwrap().parse().unwrap();
+            let time1 = ctx.utcnow_ms().await?;
             
             // Add a small timer to ensure time progresses
             ctx.schedule_timer(100).into_timer().await;
             
-            let time2: u128 = ctx.utcnow_ms().into_activity().await.unwrap().parse().unwrap();
+            let time2 = ctx.utcnow_ms().await?;
             
             // Times should be valid millisecond timestamps
             let t1 = time1;
@@ -94,8 +94,8 @@ async fn test_system_calls_deterministic_replay() {
     
     let orchestrations = OrchestrationRegistry::builder()
         .register("TestDeterminism", |ctx: OrchestrationContext, _input: String| async move {
-            let guid = ctx.new_guid().into_activity().await.unwrap();
-            let time = ctx.utcnow_ms().into_activity().await.unwrap();
+            let guid = ctx.new_guid().await?;
+            let time = ctx.utcnow_ms().await?;
             
             // Use values in some computation
             let result = format!("guid:{},time:{}", guid, time);
@@ -151,35 +151,31 @@ async fn test_system_calls_with_select() {
     
     let orchestrations = OrchestrationRegistry::builder()
         .register("TestSelect", |ctx: OrchestrationContext, _input: String| async move {
-            // System calls should complete immediately, even with select
-            // First test that GUID completes immediately
-            let guid = ctx.new_guid().into_activity().await.unwrap();
+            // Test: System calls should work correctly with activities in select/join
             
-            // Now test racing against an activity
-            let guid_future = ctx.new_guid();
-            let activity_future = ctx.schedule_activity("QuickTask", "");
+            // First, get a system call result
+            let guid = ctx.new_guid().await?;
             
-            let (winner_idx, output) = ctx.select2(guid_future, activity_future).await;
+            // Test select2 with activities - system calls complete synchronously in the background
+            let activity1 = ctx.schedule_activity("QuickTask", "task1");
+            let activity2 = ctx.schedule_activity("QuickTask", "task2");
             
-            match winner_idx {
-                0 => {
-                    // GUID won
-                    if let duroxide::DurableOutput::Activity(Ok(guid2)) = output {
-                        Ok(format!("guid_won:{},{}", guid, guid2))
-                    } else {
-                        Err("Unexpected output type".to_string())
-                    }
-                }
-                1 => {
-                    // Activity won
-                    if let duroxide::DurableOutput::Activity(Ok(result)) = output {
-                        Ok(format!("activity_won:{},{}", guid, result))
-                    } else {
-                        Err("Unexpected output type".to_string())
-                    }
-                }
-                _ => Err("Invalid winner index".to_string())
-            }
+            let (winner_idx, output) = ctx.select2(activity1, activity2).await;
+            
+            let first_result = match output {
+                duroxide::DurableOutput::Activity(Ok(s)) => s,
+                _ => "unexpected".to_string(),
+            };
+            
+            // Get another system call to verify they work throughout the orchestration
+            let time = ctx.utcnow_ms().await?;
+            
+            // Verify both system calls returned valid values
+            assert!(guid.len() == 36, "GUID should be valid");
+            assert!(time > 0, "Time should be positive");
+            
+            Ok(format!("winner:{},result:{},guid_len:{},time_valid:true", 
+                winner_idx, first_result, guid.len()))
         })
         .build();
         
@@ -190,25 +186,90 @@ async fn test_system_calls_with_select() {
     
     if let duroxide::runtime::OrchestrationStatus::Completed { output } = status {
         println!("Output: {}", output);
-        // Parse the output
-        if output.starts_with("guid_won:") {
-            let guid_part = output.strip_prefix("guid_won:").unwrap();
-            let parts: Vec<&str> = guid_part.split(',').collect();
-            assert_eq!(parts.len(), 2, "Expected two GUIDs");
-            assert!(parts[0].chars().all(|c| c.is_ascii_hexdigit()), "First GUID should be hex");
-            assert!(parts[1].chars().all(|c| c.is_ascii_hexdigit()), "Second GUID should be hex");
-        } else if output.starts_with("activity_won:") {
-            let activity_part = output.strip_prefix("activity_won:").unwrap();
-            let parts: Vec<&str> = activity_part.split(',').collect();
-            assert_eq!(parts.len(), 2, "Expected GUID and activity result");
-            assert!(parts[0].chars().all(|c| c.is_ascii_hexdigit()), "First part should be GUID");
-            assert_eq!(parts[1], "task_done", "Second part should be activity result");
-        } else {
-            panic!("Unexpected output format: {}", output);
-        }
+        // Output should contain winner index, result, guid validation, and time validation
+        assert!(output.starts_with("winner:"), "Output should start with 'winner:'");
+        assert!(output.contains("result:task_done"), "Output should contain task result");
+        assert!(output.contains("guid_len:36"), "GUID should be 36 chars");
+        assert!(output.contains("time_valid:true"), "Time should be valid");
+    } else {
+        panic!("Orchestration did not complete successfully: {:?}", status);
+    }
+    
+    rt.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_system_calls_join_with_activities() {
+    let store = Arc::new(duroxide::providers::sqlite::SqliteProvider::new_in_memory().await.unwrap());
+    let activities = Arc::new(ActivityRegistry::builder()
+        .register("SlowTask", |input: String| async move {
+            Ok(format!("processed:{}", input))
+        })
+        .build());
+    
+    let orchestrations = OrchestrationRegistry::builder()
+        .register("TestJoin", |ctx: OrchestrationContext, _input: String| async move {
+            // Test 1: Join system call futures with activity futures
+            let guid_future = ctx.new_guid_future();
+            let time_future = ctx.utcnow_ms_future();
+            let activity_future = ctx.schedule_activity("SlowTask", "data1");
+            
+            let results = ctx.join(vec![guid_future, time_future, activity_future]).await;
+            
+            // All should complete successfully
+            assert_eq!(results.len(), 3, "Should have 3 results from join");
+            
+            // Extract and validate results
+            let guid = match &results[0] {
+                duroxide::DurableOutput::Activity(Ok(s)) => s.clone(),
+                _ => panic!("Expected GUID from first result"),
+            };
+            
+            let time_str = match &results[1] {
+                duroxide::DurableOutput::Activity(Ok(s)) => s.clone(),
+                _ => panic!("Expected time from second result"),
+            };
+            
+            let activity_result = match &results[2] {
+                duroxide::DurableOutput::Activity(Ok(s)) => s.clone(),
+                _ => panic!("Expected activity result from third result"),
+            };
+            
+            // Validate the values
+            assert_eq!(guid.len(), 36, "GUID should be 36 chars");
+            let time: u64 = time_str.parse().expect("Time should parse");
+            assert!(time > 0, "Time should be positive");
+            assert_eq!(activity_result, "processed:data1");
+            
+            // Test 2: Select system call future vs activity future
+            let guid_future2 = ctx.new_guid_future();
+            let activity_future2 = ctx.schedule_activity("SlowTask", "data2");
+            
+            let (winner_idx, output) = ctx.select2(guid_future2, activity_future2).await;
+            
+            let winner_result = match output {
+                duroxide::DurableOutput::Activity(Ok(s)) => s,
+                _ => panic!("Expected activity output"),
+            };
+            
+            // System call should typically win since it completes synchronously
+            // But we accept either winner
+            
+            Ok(format!("guid_len:{},time:{},activity:{},winner:{},winner_result:{}", 
+                guid.len(), time, activity_result, winner_idx, winner_result))
+        })
+        .build();
         
-        // Test passed - either guid_won or activity_won is acceptable
-        // The key is that system calls work correctly
+    let rt = runtime::Runtime::start_with_store(store.clone(), activities, orchestrations).await;
+    let client = duroxide::Client::new(store.clone());
+    client.start_orchestration("test-join", "TestJoin", "").await.unwrap();
+    let status = client.wait_for_orchestration("test-join", tokio::time::Duration::from_secs(5)).await.unwrap();
+    
+    if let duroxide::runtime::OrchestrationStatus::Completed { output } = status {
+        println!("Output: {}", output);
+        assert!(output.contains("guid_len:36"), "GUID should be 36 chars");
+        assert!(output.contains("activity:processed:data1"), "Activity should process correctly");
+        assert!(output.contains("winner:"), "Should have winner");
     } else {
         panic!("Orchestration did not complete successfully: {:?}", status);
     }
