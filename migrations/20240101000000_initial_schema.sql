@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS executions (
     instance_id TEXT NOT NULL,
     execution_id INTEGER NOT NULL,
     status TEXT NOT NULL DEFAULT 'Running',
+    output TEXT,
     started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     completed_at TIMESTAMP,
     PRIMARY KEY (instance_id, execution_id)

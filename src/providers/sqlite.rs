@@ -256,6 +256,7 @@ impl SqliteProvider {
                 instance_id TEXT NOT NULL,
                 execution_id INTEGER NOT NULL,
                 status TEXT NOT NULL DEFAULT 'Running',
+                output TEXT,
                 started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 completed_at TIMESTAMP,
                 PRIMARY KEY (instance_id, execution_id)
@@ -264,6 +265,22 @@ impl SqliteProvider {
         )
         .execute(pool)
         .await?;
+        
+        // Migration: Add output column if it doesn't exist (for existing databases)
+        // Check if column exists first to avoid errors
+        let column_exists: bool = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM pragma_table_info('executions') WHERE name = 'output'"
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap_or(0) > 0;
+        
+        if !column_exists {
+            sqlx::query("ALTER TABLE executions ADD COLUMN output TEXT")
+                .execute(pool)
+                .await?;
+            debug!("Added output column to executions table");
+        }
         
         sqlx::query(
             r#"
@@ -734,14 +751,15 @@ impl Provider for SqliteProvider {
             // Update execution status based on terminal events
             for event in &history_delta {
                 match event {
-                    Event::OrchestrationCompleted { .. } => {
+                    Event::OrchestrationCompleted { output, .. } => {
                         sqlx::query(
                             r#"
                             UPDATE executions 
-                            SET status = 'Completed', completed_at = CURRENT_TIMESTAMP 
+                            SET status = 'Completed', output = ?, completed_at = CURRENT_TIMESTAMP 
                             WHERE instance_id = ? AND execution_id = ?
                             "#
                         )
+                        .bind(output)
                         .bind(&instance_id)
                         .bind(execution_id)
                         .execute(&mut *tx)
@@ -751,18 +769,19 @@ impl Provider for SqliteProvider {
                         debug!(
                             instance = %instance_id,
                             execution_id = %execution_id,
-                            "Updated execution status to Completed"
+                            "Updated execution status to Completed with output"
                         );
                         break;
                     }
-                    Event::OrchestrationFailed { .. } => {
+                    Event::OrchestrationFailed { error, .. } => {
                         sqlx::query(
                             r#"
                             UPDATE executions 
-                            SET status = 'Failed', completed_at = CURRENT_TIMESTAMP 
+                            SET status = 'Failed', output = ?, completed_at = CURRENT_TIMESTAMP 
                             WHERE instance_id = ? AND execution_id = ?
                             "#
                         )
+                        .bind(error)
                         .bind(&instance_id)
                         .bind(execution_id)
                         .execute(&mut *tx)
@@ -772,18 +791,19 @@ impl Provider for SqliteProvider {
                         debug!(
                             instance = %instance_id,
                             execution_id = %execution_id,
-                            "Updated execution status to Failed"
+                            "Updated execution status to Failed with error"
                         );
                         break;
                     }
-                    Event::OrchestrationContinuedAsNew { .. } => {
+                    Event::OrchestrationContinuedAsNew { input, .. } => {
                         sqlx::query(
                             r#"
                             UPDATE executions 
-                            SET status = 'ContinuedAsNew', completed_at = CURRENT_TIMESTAMP 
+                            SET status = 'ContinuedAsNew', output = ?, completed_at = CURRENT_TIMESTAMP 
                             WHERE instance_id = ? AND execution_id = ?
                             "#
                         )
+                        .bind(input)
                         .bind(&instance_id)
                         .bind(execution_id)
                         .execute(&mut *tx)
@@ -793,7 +813,7 @@ impl Provider for SqliteProvider {
                         debug!(
                             instance = %instance_id,
                             execution_id = %execution_id,
-                            "Updated execution status to ContinuedAsNew"
+                            "Updated execution status to ContinuedAsNew with next input"
                         );
                         break;
                     }
@@ -831,7 +851,26 @@ impl Provider for SqliteProvider {
             .await
             .map_err(|e| e.to_string())?;
             
-            debug!("Created execution {} for ContinueAsNew", next_exec_id);
+            // Update instances.current_execution_id to point to the new execution
+            sqlx::query(
+                r#"
+                UPDATE instances 
+                SET current_execution_id = ?
+                WHERE instance_id = ?
+                "#
+            )
+            .bind(next_exec_id)
+            .bind(&instance_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?;
+            
+            debug!(
+                instance = %instance_id,
+                next_exec_id = %next_exec_id,
+                "Created execution {} for ContinueAsNew and updated current_execution_id",
+                next_exec_id
+            );
         }
         
         // Enqueue worker items
