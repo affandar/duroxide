@@ -727,9 +727,79 @@ impl Provider for SqliteProvider {
                 first_event = ?history_delta.first().map(|e| std::mem::discriminant(e)),
                 "Appending history delta"
             );
-            self.append_history_in_tx(&mut tx, &instance_id, execution_id as u64, history_delta)
+            self.append_history_in_tx(&mut tx, &instance_id, execution_id as u64, history_delta.clone())
                 .await
                 .map_err(|e| format!("Failed to append history: {}", e))?;
+            
+            // Update execution status based on terminal events
+            for event in &history_delta {
+                match event {
+                    Event::OrchestrationCompleted { .. } => {
+                        sqlx::query(
+                            r#"
+                            UPDATE executions 
+                            SET status = 'Completed', completed_at = CURRENT_TIMESTAMP 
+                            WHERE instance_id = ? AND execution_id = ?
+                            "#
+                        )
+                        .bind(&instance_id)
+                        .bind(execution_id)
+                        .execute(&mut *tx)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                        
+                        debug!(
+                            instance = %instance_id,
+                            execution_id = %execution_id,
+                            "Updated execution status to Completed"
+                        );
+                        break;
+                    }
+                    Event::OrchestrationFailed { .. } => {
+                        sqlx::query(
+                            r#"
+                            UPDATE executions 
+                            SET status = 'Failed', completed_at = CURRENT_TIMESTAMP 
+                            WHERE instance_id = ? AND execution_id = ?
+                            "#
+                        )
+                        .bind(&instance_id)
+                        .bind(execution_id)
+                        .execute(&mut *tx)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                        
+                        debug!(
+                            instance = %instance_id,
+                            execution_id = %execution_id,
+                            "Updated execution status to Failed"
+                        );
+                        break;
+                    }
+                    Event::OrchestrationContinuedAsNew { .. } => {
+                        sqlx::query(
+                            r#"
+                            UPDATE executions 
+                            SET status = 'ContinuedAsNew', completed_at = CURRENT_TIMESTAMP 
+                            WHERE instance_id = ? AND execution_id = ?
+                            "#
+                        )
+                        .bind(&instance_id)
+                        .bind(execution_id)
+                        .execute(&mut *tx)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                        
+                        debug!(
+                            instance = %instance_id,
+                            execution_id = %execution_id,
+                            "Updated execution status to ContinuedAsNew"
+                        );
+                        break;
+                    }
+                    _ => {}
+                }
+            }
         }
         
         // After appending history, check if we need to handle ContinueAsNew
