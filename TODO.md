@@ -14,6 +14,7 @@
 - [ ] Parent-child cancellation cascading
 
 ### Other TODOs
+- updated to sqlx 0.8
 - review duplicate orch instance ids
 - perf pass over replay engine
 - parallelize dispatcher loops
