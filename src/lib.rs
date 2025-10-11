@@ -205,6 +205,9 @@ pub mod providers;
 pub use runtime::{OrchestrationHandler, OrchestrationRegistry, OrchestrationRegistryBuilder, OrchestrationStatus, RuntimeOptions};
 pub use client::Client;
 
+// Re-export management types for convenience
+pub use providers::{ManagementCapability, InstanceInfo, ExecutionInfo, SystemMetrics, QueueDepths};
+
 // System call operation constants
 pub(crate) const SYSCALL_OP_GUID: &str = "guid";
 pub(crate) const SYSCALL_OP_UTCNOW_MS: &str = "utcnow_ms";

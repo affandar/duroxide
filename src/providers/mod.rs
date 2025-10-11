@@ -1,4 +1,5 @@
 use crate::Event;
+use std::any::Any;
 
 /// Orchestration item containing all data needed to process an instance atomically.
 ///
@@ -26,7 +27,7 @@ use crate::Event;
 ///
 /// # Example from SQLite Provider
 ///
-/// ```ignore
+/// ```text
 /// // 1. Lock all visible messages for an instance
 /// UPDATE orchestrator_queue SET lock_token = ?, locked_until = ?
 /// WHERE instance_id = ? AND lock_token IS NULL
@@ -671,8 +672,85 @@ pub enum WorkItem {
 ///
 /// All tests use the Provider trait directly (not runtime), so they're portable to new providers.
 ///
+/// Core provider trait for runtime orchestration operations.
+///
+/// This trait defines the essential methods required for durable orchestration execution.
+/// It focuses on runtime-critical operations: fetching work items, processing history,
+/// and managing queues. Management and observability features are provided through
+/// optional capability traits.
+///
+/// # Capability Discovery
+///
+/// Providers can implement additional capability traits (like `ManagementCapability`)
+/// to expose richer features. The `Client` automatically discovers these capabilities
+/// through the `as_management_capability()` method.
+///
+/// # Implementation Guide for LLMs
+///
+/// When implementing a new provider, focus on these core methods:
+///
+/// ## Required Methods (11 total)
+///
+/// 1. **Orchestration Processing (3 methods)**
+///    - `fetch_orchestration_item()` - Atomic batch processing
+///    - `ack_orchestration_item()` - Commit processing results
+///    - `abandon_orchestration_item()` - Release locks and retry
+///
+/// 2. **History Access (1 method)**
+///    - `read()` - Get event history for status checks
+///
+/// 3. **Worker Queue (2 methods)**
+///    - `dequeue_worker_peek_lock()` - Get activity work items
+///    - `ack_worker()` - Acknowledge activity completion
+///
+/// 4. **Orchestrator Queue (1 method)**
+///    - `enqueue_orchestrator_work()` - Enqueue control messages
+///
+/// 5. **Timer Support (4 methods, conditional)**
+///    - `supports_delayed_visibility()` - Check timer capability
+///    - `enqueue_timer_work()` - Schedule delayed messages
+///    - `dequeue_timer_peek_lock()` - Get timer messages
+///    - `ack_timer()` - Acknowledge timer processing
+///
+/// ## Optional Management Methods (2 methods)
+///
+/// These are included for backward compatibility but will be moved to
+/// `ManagementCapability` in future versions:
+///
+/// - `list_instances()` - List all instance IDs
+/// - `list_executions()` - List execution IDs for an instance
+///
+/// # Capability Detection
+///
+/// Implement `as_management_capability()` to expose management features:
+///
+/// ```ignore
+/// impl Provider for MyProvider {
+///     // ... implement required methods
+///     
+///     fn as_management_capability(&self) -> Option<&dyn ManagementCapability> {
+///         Some(self as &dyn ManagementCapability)
+///     }
+/// }
+///
+/// impl ManagementCapability for MyProvider {
+///     // ... implement management methods
+/// }
+/// ```
+///
+/// # Testing Your Provider
+///
+/// See `tests/sqlite_provider_test.rs` for comprehensive provider tests:
+/// - Basic enqueue/dequeue operations
+/// - Transactional atomicity
+/// - Lock expiration and redelivery
+/// - Multi-execution support
+/// - Execution status and output persistence
+///
+/// All tests use the Provider trait directly (not runtime), so they're portable to new providers.
+///
 #[async_trait::async_trait]
-pub trait Provider: Send + Sync {
+pub trait Provider: Any + Send + Sync {
     // ===== Core Atomic Orchestration Methods (REQUIRED) =====
     // These three methods form the heart of reliable orchestration execution.
     
@@ -715,7 +793,7 @@ pub trait Provider: Send + Sync {
     /// - For multi-execution instances: return ONLY the LATEST execution's history
     ///
     /// SQLite example:
-    /// ```ignore
+    /// ```text
     /// // Get current execution ID
     /// let exec_id = SELECT current_execution_id FROM instances WHERE instance_id = ?
     ///
@@ -879,7 +957,7 @@ pub trait Provider: Send + Sync {
     /// # Lock Release
     ///
     /// Delete all messages with this lock_token:
-    /// ```ignore
+    /// ```text
     /// DELETE FROM orchestrator_queue WHERE lock_token = ?
     /// ```
     ///
@@ -1565,6 +1643,42 @@ pub trait Provider: Send + Sync {
     // - Add refresh_worker_lock(token, extend_ms) and refresh_timer_lock(token, extend_ms)
     // - Provider should auto-abandon messages if lock expires without ack
     // This would enable graceful handling of worker crashes and long-running activities
+    
+    // ===== Capability Discovery =====
+    
+    /// Check if this provider implements management capabilities.
+    ///
+    /// # Purpose
+    ///
+    /// This method enables automatic capability discovery by the `Client`.
+    /// When a provider implements `ManagementCapability`, it should return
+    /// `Some(self as &dyn ManagementCapability)` to expose management features.
+    ///
+    /// # Default Implementation
+    ///
+    /// Returns `None` (no management capabilities). Override to expose capabilities:
+    ///
+    /// ```ignore
+    /// impl Provider for MyProvider {
+    ///     fn as_management_capability(&self) -> Option<&dyn ManagementCapability> {
+    ///         Some(self as &dyn ManagementCapability)
+    ///     }
+    /// }
+    /// ```
+    ///
+    /// # Usage
+    ///
+    /// The `Client` automatically discovers capabilities:
+    ///
+    /// ```ignore
+    /// let client = Client::new(provider);
+    /// if client.has_management_capability() {
+    ///     let instances = client.list_all_instances().await?;
+    /// }
+    /// ```
+    fn as_management_capability(&self) -> Option<&dyn ManagementCapability> {
+        None
+    }
 }
 
 /// Management and observability provider interface.
@@ -1575,3 +1689,351 @@ pub mod sqlite;
 
 // Re-export management types for convenience
 pub use management::{ManagementProvider, InstanceInfo, ExecutionInfo, SystemMetrics, QueueDepths};
+
+/// Management capability trait for observability and administrative operations.
+///
+/// This trait provides rich management and observability features that extend
+/// the core `Provider` functionality. Providers can implement this trait to
+/// expose administrative capabilities to the `Client`.
+///
+/// # Automatic Discovery
+///
+/// The `Client` automatically discovers this capability through the
+/// `Provider::as_management_capability()` method. When available, management
+/// methods become accessible through the client.
+///
+/// # Implementation Guide for LLMs
+///
+/// When implementing a new provider, you can optionally implement this trait
+/// to expose management features:
+///
+/// ```ignore
+/// impl Provider for MyProvider {
+///     // ... implement required Provider methods
+///     
+///     fn as_management_capability(&self) -> Option<&dyn ManagementCapability> {
+///         Some(self as &dyn ManagementCapability)
+///     }
+/// }
+///
+/// impl ManagementCapability for MyProvider {
+///     async fn list_instances(&self) -> Result<Vec<String>, String> {
+///         // Query your storage for all instance IDs
+///         Ok(vec!["instance-1".to_string(), "instance-2".to_string()])
+///     }
+///     
+///     async fn get_instance_info(&self, instance: &str) -> Result<InstanceInfo, String> {
+///         // Query instance metadata from your storage
+///         Ok(InstanceInfo {
+///             instance_id: instance.to_string(),
+///             orchestration_name: "ProcessOrder".to_string(),
+///             orchestration_version: "1.0.0".to_string(),
+///             current_execution_id: 1,
+///             status: "Running".to_string(),
+///             output: None,
+///             created_at: 1234567890,
+///             updated_at: 1234567890,
+///         })
+///     }
+///     
+///     // ... implement other management methods
+/// }
+/// ```
+///
+/// # Required Methods (8 total)
+///
+/// 1. **Instance Discovery (2 methods)**
+///    - `list_instances()` - List all instance IDs
+///    - `list_instances_by_status()` - Filter instances by status
+///
+/// 2. **Execution Inspection (3 methods)**
+///    - `list_executions()` - List execution IDs for an instance
+///    - `read_execution()` - Read history for a specific execution
+///    - `latest_execution_id()` - Get the latest execution ID
+///
+/// 3. **Metadata Access (2 methods)**
+///    - `get_instance_info()` - Get comprehensive instance information
+///    - `get_execution_info()` - Get detailed execution information
+///
+/// 4. **System Metrics (2 methods)**
+///    - `get_system_metrics()` - Get system-wide metrics
+///    - `get_queue_depths()` - Get current queue depths
+///
+/// # Default Implementations
+///
+/// All methods have default implementations that return empty results or errors,
+/// making this trait optional for providers that don't need management features.
+///
+/// # Usage
+///
+/// ```ignore
+/// let client = Client::new(provider);
+/// 
+/// // Check if management features are available
+/// if client.has_management_capability() {
+///     let instances = client.list_all_instances().await?;
+///     let metrics = client.get_system_metrics().await?;
+///     println!("System has {} instances", metrics.total_instances);
+/// } else {
+///     println!("Management features not available");
+/// }
+/// ```
+#[async_trait::async_trait]
+pub trait ManagementCapability: Any + Send + Sync {
+    // ===== Instance Discovery =====
+    
+    /// List all known instance IDs.
+    ///
+    /// # Returns
+    ///
+    /// Vector of instance IDs, typically sorted by creation time (newest first).
+    ///
+    /// # Use Cases
+    ///
+    /// - Admin dashboards showing all workflows
+    /// - Bulk operations across instances
+    /// - Testing (verify instance creation)
+    ///
+    /// # Implementation Example
+    ///
+    /// ```ignore
+    /// async fn list_instances(&self) -> Result<Vec<String>, String> {
+    ///     SELECT instance_id FROM instances ORDER BY created_at DESC
+    /// }
+    /// ```
+    ///
+    /// # Default
+    ///
+    /// Returns empty Vec if not supported.
+    async fn list_instances(&self) -> Result<Vec<String>, String> {
+        Ok(Vec::new())
+    }
+    
+    /// List instances matching a status filter.
+    ///
+    /// # Parameters
+    ///
+    /// * `status` - Filter by execution status: "Running", "Completed", "Failed", "ContinuedAsNew"
+    ///
+    /// # Returns
+    ///
+    /// Vector of instance IDs with the specified status.
+    ///
+    /// # Implementation Example
+    ///
+    /// ```ignore
+    /// async fn list_instances_by_status(&self, status: &str) -> Result<Vec<String>, String> {
+    ///     SELECT i.instance_id FROM instances i
+    ///     JOIN executions e ON i.instance_id = e.instance_id AND i.current_execution_id = e.execution_id
+    ///     WHERE e.status = ?
+    ///     ORDER BY i.created_at DESC
+    /// }
+    /// ```
+    ///
+    /// # Default
+    ///
+    /// Returns empty Vec if not supported.
+    async fn list_instances_by_status(&self, _status: &str) -> Result<Vec<String>, String> {
+        Ok(Vec::new())
+    }
+    
+    // ===== Execution Inspection =====
+    
+    /// List all execution IDs for an instance.
+    ///
+    /// # Returns
+    ///
+    /// Vector of execution IDs in ascending order: [1], [1, 2], [1, 2, 3], etc.
+    ///
+    /// # Multi-Execution Context
+    ///
+    /// When an orchestration uses ContinueAsNew, multiple executions exist:
+    /// - Execution 1: Original execution
+    /// - Execution 2: First ContinueAsNew
+    /// - Execution 3: Second ContinueAsNew
+    /// - etc.
+    ///
+    /// # Implementation Example
+    ///
+    /// ```ignore
+    /// async fn list_executions(&self, instance: &str) -> Result<Vec<u64>, String> {
+    ///     SELECT execution_id FROM executions
+    ///     WHERE instance_id = ?
+    ///     ORDER BY execution_id
+    /// }
+    /// ```
+    ///
+    /// # Default
+    ///
+    /// Returns [1] if instance exists, empty Vec otherwise.
+    async fn list_executions(&self, instance: &str) -> Result<Vec<u64>, String> {
+        // Default assumes single execution if instance exists
+        if let Ok(info) = self.get_instance_info(instance).await {
+            Ok(vec![info.current_execution_id])
+        } else {
+            Ok(Vec::new())
+        }
+    }
+    
+    /// Read the full event history for a specific execution within an instance.
+    ///
+    /// # Parameters
+    ///
+    /// * `instance` - The ID of the orchestration instance.
+    /// * `execution_id` - The specific execution ID to read history for.
+    ///
+    /// # Returns
+    ///
+    /// Vector of events in chronological order (oldest first).
+    ///
+    /// # Implementation Example
+    ///
+    /// ```ignore
+    /// async fn read_execution(&self, instance: &str, execution_id: u64) -> Result<Vec<Event>, String> {
+    ///     SELECT event_data FROM history
+    ///     WHERE instance_id = ? AND execution_id = ?
+    ///     ORDER BY event_id
+    /// }
+    /// ```
+    ///
+    /// # Default
+    ///
+    /// Returns empty vector.
+    async fn read_execution(&self, _instance: &str, _execution_id: u64) -> Result<Vec<Event>, String> {
+        Ok(Vec::new())
+    }
+    
+    /// Get the latest (current) execution ID for an instance.
+    ///
+    /// # Parameters
+    ///
+    /// * `instance` - The ID of the orchestration instance.
+    ///
+    /// # Implementation Pattern
+    ///
+    /// ```ignore
+    /// async fn latest_execution_id(&self, instance: &str) -> Result<u64, String> {
+    ///     SELECT COALESCE(MAX(execution_id), 1) FROM executions WHERE instance_id = ?
+    /// }
+    /// ```
+    ///
+    /// # Default
+    ///
+    /// Returns 1 (assumes single execution).
+    async fn latest_execution_id(&self, _instance: &str) -> Result<u64, String> {
+        Ok(1)
+    }
+    
+    // ===== Instance Metadata =====
+    
+    /// Get comprehensive information about an instance.
+    ///
+    /// # Parameters
+    ///
+    /// * `instance` - The ID of the orchestration instance.
+    ///
+    /// # Returns
+    ///
+    /// Detailed instance information including status, output, and metadata.
+    ///
+    /// # Implementation Example
+    ///
+    /// ```ignore
+    /// async fn get_instance_info(&self, instance: &str) -> Result<InstanceInfo, String> {
+    ///     SELECT i.*, e.status, e.output
+    ///     FROM instances i
+    ///     JOIN executions e ON i.instance_id = e.instance_id AND i.current_execution_id = e.execution_id
+    ///     WHERE i.instance_id = ?
+    /// }
+    /// ```
+    ///
+    /// # Default
+    ///
+    /// Returns an error indicating not implemented.
+    async fn get_instance_info(&self, instance: &str) -> Result<InstanceInfo, String> {
+        Err(format!("get_instance_info not implemented for instance {}", instance))
+    }
+    
+    /// Get detailed information about a specific execution.
+    ///
+    /// # Parameters
+    ///
+    /// * `instance` - The ID of the orchestration instance.
+    /// * `execution_id` - The specific execution ID.
+    ///
+    /// # Returns
+    ///
+    /// Detailed execution information including status, output, and event count.
+    ///
+    /// # Implementation Example
+    ///
+    /// ```ignore
+    /// async fn get_execution_info(&self, instance: &str, execution_id: u64) -> Result<ExecutionInfo, String> {
+    ///     SELECT e.*, COUNT(h.event_id) as event_count
+    ///     FROM executions e
+    ///     LEFT JOIN history h ON e.instance_id = h.instance_id AND e.execution_id = h.execution_id
+    ///     WHERE e.instance_id = ? AND e.execution_id = ?
+    ///     GROUP BY e.execution_id
+    /// }
+    /// ```
+    ///
+    /// # Default
+    ///
+    /// Returns an error indicating not implemented.
+    async fn get_execution_info(&self, _instance: &str, _execution_id: u64) -> Result<ExecutionInfo, String> {
+        Err("get_execution_info not implemented".to_string())
+    }
+    
+    // ===== System Metrics =====
+    
+    /// Get system-wide metrics for the orchestration engine.
+    ///
+    /// # Returns
+    ///
+    /// System metrics including instance counts, execution counts, and status breakdown.
+    ///
+    /// # Implementation Example
+    ///
+    /// ```ignore
+    /// async fn get_system_metrics(&self) -> Result<SystemMetrics, String> {
+    ///     SELECT 
+    ///         COUNT(*) as total_instances,
+    ///         SUM(CASE WHEN e.status = 'Running' THEN 1 ELSE 0 END) as running_instances,
+    ///         SUM(CASE WHEN e.status = 'Completed' THEN 1 ELSE 0 END) as completed_instances,
+    ///         SUM(CASE WHEN e.status = 'Failed' THEN 1 ELSE 0 END) as failed_instances
+    ///     FROM instances i
+    ///     JOIN executions e ON i.instance_id = e.instance_id AND i.current_execution_id = e.execution_id
+    /// }
+    /// ```
+    ///
+    /// # Default
+    ///
+    /// Returns default `SystemMetrics`.
+    async fn get_system_metrics(&self) -> Result<SystemMetrics, String> {
+        Ok(SystemMetrics::default())
+    }
+    
+    /// Get the current depths of the internal work queues.
+    ///
+    /// # Returns
+    ///
+    /// Queue depths for orchestrator, worker, and timer queues.
+    ///
+    /// # Implementation Example
+    ///
+    /// ```ignore
+    /// async fn get_queue_depths(&self) -> Result<QueueDepths, String> {
+    ///     SELECT 
+    ///         (SELECT COUNT(*) FROM orchestrator_queue WHERE lock_token IS NULL) as orchestrator_queue,
+    ///         (SELECT COUNT(*) FROM worker_queue WHERE lock_token IS NULL) as worker_queue,
+    ///         (SELECT COUNT(*) FROM timer_queue WHERE lock_token IS NULL) as timer_queue
+    /// }
+    /// ```
+    ///
+    /// # Default
+    ///
+    /// Returns default `QueueDepths`.
+    async fn get_queue_depths(&self) -> Result<QueueDepths, String> {
+        Ok(QueueDepths::default())
+    }
+}

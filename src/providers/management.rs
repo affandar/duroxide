@@ -127,7 +127,7 @@ pub trait ManagementProvider: Send + Sync {
     /// # Default
     ///
     /// Returns [1] if instance exists, empty Vec otherwise.
-    async fn list_executions(&self, instance: &str) -> Result<Vec<u64>, String> {
+    async fn list_executions(&self, _instance: &str) -> Result<Vec<u64>, String> {
         // Default: assume single execution
         Ok(vec![1])
     }

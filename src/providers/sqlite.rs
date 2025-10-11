@@ -3,7 +3,7 @@ use sqlx::{Transaction, Sqlite, Row};
 use std::time::{SystemTime, Duration, UNIX_EPOCH};
 use tracing::debug;
 
-use super::{Provider, WorkItem, OrchestrationItem};
+use super::{Provider, WorkItem, OrchestrationItem, ManagementCapability, InstanceInfo, ExecutionInfo, SystemMetrics, QueueDepths};
 use crate::Event;
 
 /// SQLite-backed provider with full transactional support
@@ -1310,6 +1310,299 @@ impl Provider for SqliteProvider {
         
         exec_ids.into_iter().map(|id| id as u64).collect()
     }
+    
+    fn as_management_capability(&self) -> Option<&dyn ManagementCapability> {
+        Some(self as &dyn ManagementCapability)
+    }
+}
+
+#[async_trait::async_trait]
+impl ManagementCapability for SqliteProvider {
+    async fn list_instances(&self) -> Result<Vec<String>, String> {
+        let rows = sqlx::query("SELECT instance_id FROM instances ORDER BY created_at DESC")
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+        
+        let instances: Vec<String> = rows
+            .into_iter()
+            .map(|row| row.try_get("instance_id").unwrap_or_default())
+            .collect();
+        
+        Ok(instances)
+    }
+    
+    async fn list_instances_by_status(&self, status: &str) -> Result<Vec<String>, String> {
+        let rows = sqlx::query(
+            r#"
+            SELECT i.instance_id 
+            FROM instances i
+            JOIN executions e ON i.instance_id = e.instance_id AND i.current_execution_id = e.execution_id
+            WHERE e.status = ?
+            ORDER BY i.created_at DESC
+            "#
+        )
+        .bind(status)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+        
+        let instances: Vec<String> = rows
+            .into_iter()
+            .map(|row| row.try_get("instance_id").unwrap_or_default())
+            .collect();
+        
+        Ok(instances)
+    }
+    
+    async fn list_executions(&self, instance: &str) -> Result<Vec<u64>, String> {
+        let rows = sqlx::query(
+            "SELECT execution_id FROM executions WHERE instance_id = ? ORDER BY execution_id"
+        )
+        .bind(instance)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+        
+        let executions: Vec<u64> = rows
+            .into_iter()
+            .map(|row| row.try_get::<i64, _>("execution_id").unwrap_or(0) as u64)
+            .collect();
+        
+        Ok(executions)
+    }
+    
+    async fn read_execution(&self, instance: &str, execution_id: u64) -> Result<Vec<Event>, String> {
+        let rows = sqlx::query(
+            r#"
+            SELECT event_data 
+            FROM history 
+            WHERE instance_id = ? AND execution_id = ? 
+            ORDER BY event_id
+            "#
+        )
+        .bind(instance)
+        .bind(execution_id as i64)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+        
+        let mut events = Vec::new();
+        for row in rows {
+            let event_data: String = row.try_get("event_data").map_err(|e| e.to_string())?;
+            let event: Event = serde_json::from_str(&event_data).map_err(|e| e.to_string())?;
+            events.push(event);
+        }
+        
+        Ok(events)
+    }
+    
+    async fn latest_execution_id(&self, instance: &str) -> Result<u64, String> {
+        let row = sqlx::query(
+            "SELECT COALESCE(MAX(execution_id), 1) as max_execution_id FROM executions WHERE instance_id = ?"
+        )
+        .bind(instance)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+        
+        match row {
+            Some(row) => {
+                let max_id: i64 = row.try_get("max_execution_id").unwrap_or(1);
+                Ok(max_id as u64)
+            }
+            None => Ok(1), // Default to execution 1 if no executions exist
+        }
+    }
+    
+    async fn get_instance_info(&self, instance: &str) -> Result<InstanceInfo, String> {
+        let row = sqlx::query(
+            r#"
+            SELECT 
+                i.instance_id,
+                i.orchestration_name,
+                i.orchestration_version,
+                i.current_execution_id,
+                i.created_at,
+                i.updated_at,
+                e.status,
+                e.output
+            FROM instances i
+            LEFT JOIN executions e ON i.instance_id = e.instance_id AND i.current_execution_id = e.execution_id
+            WHERE i.instance_id = ?
+            "#
+        )
+        .bind(instance)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+        
+        match row {
+            Some(row) => {
+                let instance_id: String = row.try_get("instance_id").map_err(|e| e.to_string())?;
+                let orchestration_name: String = row.try_get("orchestration_name").map_err(|e| e.to_string())?;
+                let orchestration_version: String = row.try_get("orchestration_version").map_err(|e| e.to_string())?;
+                let current_execution_id: i64 = row.try_get("current_execution_id").unwrap_or(1);
+                let created_at: i64 = row.try_get("created_at").unwrap_or(0);
+                let updated_at: i64 = row.try_get("updated_at").unwrap_or(0);
+                let status: String = row.try_get("status").unwrap_or_else(|_| "Unknown".to_string());
+                let output: Option<String> = row.try_get("output").ok();
+                
+                Ok(InstanceInfo {
+                    instance_id,
+                    orchestration_name,
+                    orchestration_version,
+                    current_execution_id: current_execution_id as u64,
+                    status,
+                    output,
+                    created_at: created_at as u64,
+                    updated_at: updated_at as u64,
+                })
+            }
+            None => Err(format!("Instance {} not found", instance)),
+        }
+    }
+    
+    async fn get_execution_info(&self, instance: &str, execution_id: u64) -> Result<ExecutionInfo, String> {
+        let row = sqlx::query(
+            r#"
+            SELECT 
+                e.execution_id,
+                e.status,
+                e.output,
+                e.started_at,
+                e.completed_at,
+                COUNT(h.event_id) as event_count
+            FROM executions e
+            LEFT JOIN history h ON e.instance_id = h.instance_id AND e.execution_id = h.execution_id
+            WHERE e.instance_id = ? AND e.execution_id = ?
+            GROUP BY e.execution_id
+            "#
+        )
+        .bind(instance)
+        .bind(execution_id as i64)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+        
+        match row {
+            Some(row) => {
+                let execution_id: i64 = row.try_get("execution_id").map_err(|e| e.to_string())?;
+                let status: String = row.try_get("status").map_err(|e| e.to_string())?;
+                let output: Option<String> = row.try_get("output").ok();
+                let started_at: i64 = row.try_get("started_at").unwrap_or(0);
+                let completed_at: Option<i64> = row.try_get("completed_at").ok();
+                let event_count: i64 = row.try_get("event_count").unwrap_or(0);
+                
+                Ok(ExecutionInfo {
+                    execution_id: execution_id as u64,
+                    status,
+                    output,
+                    started_at: started_at as u64,
+                    completed_at: completed_at.map(|t| t as u64),
+                    event_count: event_count as usize,
+                })
+            }
+            None => Err(format!("Execution {} not found for instance {}", execution_id, instance)),
+        }
+    }
+    
+    async fn get_system_metrics(&self) -> Result<SystemMetrics, String> {
+        let row = sqlx::query(
+            r#"
+            SELECT 
+                COUNT(*) as total_instances,
+                SUM(CASE WHEN e.status = 'Running' THEN 1 ELSE 0 END) as running_instances,
+                SUM(CASE WHEN e.status = 'Completed' THEN 1 ELSE 0 END) as completed_instances,
+                SUM(CASE WHEN e.status = 'Failed' THEN 1 ELSE 0 END) as failed_instances,
+                SUM(CASE WHEN e.status = 'ContinuedAsNew' THEN 1 ELSE 0 END) as continued_as_new_instances
+            FROM instances i
+            LEFT JOIN executions e ON i.instance_id = e.instance_id AND i.current_execution_id = e.execution_id
+            "#
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+        
+        match row {
+            Some(row) => {
+                let total_instances: i64 = row.try_get("total_instances").unwrap_or(0);
+                let running_instances: i64 = row.try_get("running_instances").unwrap_or(0);
+                let completed_instances: i64 = row.try_get("completed_instances").unwrap_or(0);
+                let failed_instances: i64 = row.try_get("failed_instances").unwrap_or(0);
+                let _: i64 = row.try_get("continued_as_new_instances").unwrap_or(0);
+                
+                // Get total executions count
+                let total_executions_row = sqlx::query("SELECT COUNT(*) as total_executions FROM executions")
+                    .fetch_optional(&self.pool)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                let total_executions: i64 = total_executions_row
+                    .and_then(|row| row.try_get("total_executions").ok())
+                    .unwrap_or(0);
+                
+                // Get total events count
+                let total_events_row = sqlx::query("SELECT COUNT(*) as total_events FROM history")
+                    .fetch_optional(&self.pool)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                let total_events: i64 = total_events_row
+                    .and_then(|row| row.try_get("total_events").ok())
+                    .unwrap_or(0);
+                
+                Ok(SystemMetrics {
+                    total_instances: total_instances as u64,
+                    total_executions: total_executions as u64,
+                    running_instances: running_instances as u64,
+                    completed_instances: completed_instances as u64,
+                    failed_instances: failed_instances as u64,
+                    total_events: total_events as u64,
+                })
+            }
+            None => Ok(SystemMetrics::default()),
+        }
+    }
+    
+    async fn get_queue_depths(&self) -> Result<QueueDepths, String> {
+        // Get orchestrator queue depth
+        let orchestrator_row = sqlx::query(
+            "SELECT COUNT(*) as count FROM orchestrator_queue WHERE lock_token IS NULL"
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+        let orchestrator_queue: usize = orchestrator_row
+            .and_then(|row| row.try_get("count").ok())
+            .unwrap_or(0) as usize;
+        
+        // Get worker queue depth
+        let worker_row = sqlx::query(
+            "SELECT COUNT(*) as count FROM worker_queue WHERE lock_token IS NULL"
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+        let worker_queue: usize = worker_row
+            .and_then(|row| row.try_get("count").ok())
+            .unwrap_or(0) as usize;
+        
+        // Get timer queue depth
+        let timer_row = sqlx::query(
+            "SELECT COUNT(*) as count FROM timer_queue WHERE lock_token IS NULL"
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+        let timer_queue: usize = timer_row
+            .and_then(|row| row.try_get("count").ok())
+            .unwrap_or(0) as usize;
+        
+        Ok(QueueDepths {
+            orchestrator_queue,
+            worker_queue,
+            timer_queue,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -1526,8 +1819,8 @@ mod tests {
         let instance = "test-multi-exec";
         
         // No execution initially
-        assert_eq!(store.latest_execution_id(instance).await, None);
-        assert!(store.list_executions(instance).await.is_empty());
+        assert_eq!(ManagementCapability::latest_execution_id(&store, instance).await, Ok(1)); // ManagementCapability default
+        assert!(Provider::list_executions(&store, instance).await.is_empty());
         
         // Create first execution
         let exec1 = store.create_new_execution(
@@ -1541,8 +1834,8 @@ mod tests {
         assert_eq!(exec1, 1);
         
         // Verify execution exists
-        assert_eq!(store.latest_execution_id(instance).await, Some(1));
-        assert_eq!(store.list_executions(instance).await, vec![1]);
+        assert_eq!(ManagementCapability::latest_execution_id(&store, instance).await, Ok(1));
+        assert_eq!(Provider::list_executions(&store, instance).await, vec![1]);
         
         // Read history from first execution
         let hist1 = store.read_with_execution(instance, 1).await;
@@ -1568,8 +1861,8 @@ mod tests {
         assert_eq!(exec2, 2);
         
         // Verify latest execution
-        assert_eq!(store.latest_execution_id(instance).await, Some(2));
-        assert_eq!(store.list_executions(instance).await, vec![1, 2]);
+        assert_eq!(ManagementCapability::latest_execution_id(&store, instance).await, Ok(2));
+        assert_eq!(Provider::list_executions(&store, instance).await, vec![1, 2]);
         
         // Verify each execution has separate history
         let hist1_final = store.read_with_execution(instance, 1).await;
@@ -1620,7 +1913,7 @@ mod tests {
         let store = create_test_store().await;
         
         // Initially empty
-        assert!(store.list_instances().await.is_empty());
+        assert!(Provider::list_instances(&store).await.is_empty());
         
         // Create a few instances
         for i in 1..=3 {
@@ -1635,7 +1928,7 @@ mod tests {
         }
         
         // List instances
-        let instances = store.list_instances().await;
+        let instances = Provider::list_instances(&store).await;
         assert_eq!(instances.len(), 3);
         assert!(instances.contains(&"instance-1".to_string()));
         assert!(instances.contains(&"instance-2".to_string()));
