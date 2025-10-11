@@ -1567,5 +1567,11 @@ pub trait Provider: Send + Sync {
     // This would enable graceful handling of worker crashes and long-running activities
 }
 
+/// Management and observability provider interface.
+pub mod management;
+
 /// SQLite-backed provider with full transactional support.
 pub mod sqlite;
+
+// Re-export management types for convenience
+pub use management::{ManagementProvider, InstanceInfo, ExecutionInfo, SystemMetrics, QueueDepths};
