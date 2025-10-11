@@ -665,6 +665,7 @@ impl Provider for SqliteProvider {
         worker_items: Vec<WorkItem>,
         timer_items: Vec<WorkItem>,
         orchestrator_items: Vec<WorkItem>,
+        metadata: crate::providers::ExecutionMetadata,
     ) -> Result<(), String> {
         let mut tx = self.pool.begin().await.map_err(|e| e.to_string())?;
         
@@ -748,129 +749,69 @@ impl Provider for SqliteProvider {
                 .await
                 .map_err(|e| format!("Failed to append history: {}", e))?;
             
-            // Update execution status based on terminal events
-            for event in &history_delta {
-                match event {
-                    Event::OrchestrationCompleted { output, .. } => {
-                        sqlx::query(
-                            r#"
-                            UPDATE executions 
-                            SET status = 'Completed', output = ?, completed_at = CURRENT_TIMESTAMP 
-                            WHERE instance_id = ? AND execution_id = ?
-                            "#
-                        )
-                        .bind(output)
-                        .bind(&instance_id)
-                        .bind(execution_id)
-                        .execute(&mut *tx)
-                        .await
-                        .map_err(|e| e.to_string())?;
-                        
-                        debug!(
-                            instance = %instance_id,
-                            execution_id = %execution_id,
-                            "Updated execution status to Completed with output"
-                        );
-                        break;
-                    }
-                    Event::OrchestrationFailed { error, .. } => {
-                        sqlx::query(
-                            r#"
-                            UPDATE executions 
-                            SET status = 'Failed', output = ?, completed_at = CURRENT_TIMESTAMP 
-                            WHERE instance_id = ? AND execution_id = ?
-                            "#
-                        )
-                        .bind(error)
-                        .bind(&instance_id)
-                        .bind(execution_id)
-                        .execute(&mut *tx)
-                        .await
-                        .map_err(|e| e.to_string())?;
-                        
-                        debug!(
-                            instance = %instance_id,
-                            execution_id = %execution_id,
-                            "Updated execution status to Failed with error"
-                        );
-                        break;
-                    }
-                    Event::OrchestrationContinuedAsNew { input, .. } => {
-                        sqlx::query(
-                            r#"
-                            UPDATE executions 
-                            SET status = 'ContinuedAsNew', output = ?, completed_at = CURRENT_TIMESTAMP 
-                            WHERE instance_id = ? AND execution_id = ?
-                            "#
-                        )
-                        .bind(input)
-                        .bind(&instance_id)
-                        .bind(execution_id)
-                        .execute(&mut *tx)
-                        .await
-                        .map_err(|e| e.to_string())?;
-                        
-                        debug!(
-                            instance = %instance_id,
-                            execution_id = %execution_id,
-                            "Updated execution status to ContinuedAsNew with next input"
-                        );
-                        break;
-                    }
-                    _ => {}
-                }
+            // Update execution status and output from pre-computed metadata (no event inspection!)
+            if let Some(status) = &metadata.status {
+                sqlx::query(
+                    r#"
+                    UPDATE executions 
+                    SET status = ?, output = ?, completed_at = CURRENT_TIMESTAMP 
+                    WHERE instance_id = ? AND execution_id = ?
+                    "#
+                )
+                .bind(status)
+                .bind(&metadata.output)
+                .bind(&instance_id)
+                .bind(execution_id)
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| e.to_string())?;
+                
+                debug!(
+                    instance = %instance_id,
+                    execution_id = %execution_id,
+                    status = %status,
+                    "Updated execution status and output from metadata"
+                );
             }
         }
         
-        // After appending history, check if we need to handle ContinueAsNew
-        let has_continue_as_new = orchestrator_items.iter().any(|item| matches!(item, WorkItem::ContinueAsNew { .. }));
-        
-        if has_continue_as_new {
-            // OrchestrationContinuedAsNew event should already be in history_delta from runtime
-            // Just create the next execution
-            
-            // Get orchestration info from ContinueAsNew work item (for future use if needed)
-            let (_can_orch, _can_input, _can_version) = orchestrator_items.iter().find_map(|item| match item {
-                WorkItem::ContinueAsNew { orchestration, input, version, .. } => {
-                    Some((orchestration.clone(), input.clone(), version.clone()))
-                }
-                _ => None,
-            }).expect("ContinueAsNew work item must be present");
-            
-            // Create next execution
-            let next_exec_id = execution_id + 1;
-            sqlx::query(
-                r#"
-                INSERT OR IGNORE INTO executions (instance_id, execution_id, status)
-                VALUES (?, ?, 'Running')
-                "#
-            )
-            .bind(&instance_id)
-            .bind(next_exec_id)
-            .execute(&mut *tx)
-            .await
-            .map_err(|e| e.to_string())?;
-            
-            // Update instances.current_execution_id to point to the new execution
-            sqlx::query(
-                r#"
-                UPDATE instances 
-                SET current_execution_id = ?
-                WHERE instance_id = ?
-                "#
-            )
-            .bind(next_exec_id)
-            .bind(&instance_id)
-            .execute(&mut *tx)
-            .await
-            .map_err(|e| e.to_string())?;
-            
-            debug!(
-                instance = %instance_id,
-                next_exec_id = %next_exec_id,
-                "Created execution {} for ContinueAsNew and updated current_execution_id",
-                next_exec_id
-            );
+        // Handle execution creation from pre-computed metadata (no WorkItem inspection!)
+        if metadata.create_next_execution {
+            if let Some(next_exec_id) = metadata.next_execution_id {
+                // Create next execution
+                sqlx::query(
+                    r#"
+                    INSERT OR IGNORE INTO executions (instance_id, execution_id, status)
+                    VALUES (?, ?, 'Running')
+                    "#
+                )
+                .bind(&instance_id)
+                .bind(next_exec_id as i64)
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| e.to_string())?;
+                
+                // Update instances.current_execution_id to point to the new execution
+                sqlx::query(
+                    r#"
+                    UPDATE instances 
+                    SET current_execution_id = ?
+                    WHERE instance_id = ?
+                    "#
+                )
+                .bind(next_exec_id as i64)
+                .bind(&instance_id)
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| e.to_string())?;
+                
+                debug!(
+                    instance = %instance_id,
+                    next_exec_id = %next_exec_id,
+                    "Created execution {} from metadata and updated current_execution_id",
+                    next_exec_id
+                );
+            }
         }
         
         // Enqueue worker items
@@ -1374,6 +1315,7 @@ impl Provider for SqliteProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::providers::ExecutionMetadata;
     
     async fn create_test_store() -> SqliteProvider {
         SqliteProvider::new("sqlite::memory:")
@@ -1419,6 +1361,7 @@ mod tests {
             vec![],
             vec![],
             vec![],
+            ExecutionMetadata::default(),
         ).await.unwrap();
         
         // Verify no more work
@@ -1494,6 +1437,7 @@ mod tests {
             worker_items,
             vec![],
             vec![],
+            ExecutionMetadata::default(),
         ).await.unwrap();
         
         // Verify all operations succeeded atomically
@@ -1562,6 +1506,7 @@ mod tests {
             vec![],
             vec![],
             vec![],
+            ExecutionMetadata::default(),
         ).await.unwrap();
         
         // Original ack should fail
@@ -1571,6 +1516,7 @@ mod tests {
             vec![],
             vec![],
             vec![],
+            ExecutionMetadata::default(),
         ).await.is_err());
     }
     
@@ -1759,6 +1705,7 @@ mod tests {
             vec![],
             vec![],
             vec![],
+            ExecutionMetadata::default(),
         ).await.unwrap();
         
         // Test 2: Timer with delayed visibility via enqueue_orchestrator_work_delayed
@@ -1780,6 +1727,7 @@ mod tests {
             vec![],
             vec![],
             vec![],
+            ExecutionMetadata::default(),
         ).await.unwrap();
         
         let timer_fired = WorkItem::TimerFired {

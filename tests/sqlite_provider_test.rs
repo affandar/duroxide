@@ -1,4 +1,4 @@
-use duroxide::providers::{Provider, WorkItem};
+use duroxide::providers::{Provider, WorkItem, ExecutionMetadata};
 use duroxide::providers::sqlite::SqliteProvider;
 use duroxide::Event;
 
@@ -72,6 +72,7 @@ async fn test_sqlite_provider_basic() {
         worker_items,
         vec![],  // No timers
         vec![],  // No new orchestrator items
+        ExecutionMetadata::default(),
     )
     .await
     .expect("Failed to ack");
@@ -190,6 +191,7 @@ async fn test_sqlite_provider_transactional() {
         worker_items,
         vec![],
         vec![],
+        ExecutionMetadata::default(),
     )
     .await
     .expect("Failed to ack");
@@ -259,6 +261,7 @@ async fn test_sqlite_provider_timer_queue() {
         vec![],
         timer_items,
         vec![],
+        ExecutionMetadata::default(),
     )
     .await
     .expect("Failed to ack");
@@ -307,7 +310,14 @@ async fn test_execution_status_completed() {
         },
     ];
     
-    store.ack_orchestration_item(&item.lock_token, history_delta, vec![], vec![], vec![])
+    let metadata = ExecutionMetadata {
+        status: Some("Completed".to_string()),
+        output: Some("success".to_string()),
+        create_next_execution: false,
+        next_execution_id: None,
+    };
+    
+    store.ack_orchestration_item(&item.lock_token, history_delta, vec![], vec![], vec![], metadata)
         .await
         .unwrap();
     
@@ -375,7 +385,14 @@ async fn test_execution_status_failed() {
         },
     ];
     
-    store.ack_orchestration_item(&item.lock_token, history_delta, vec![], vec![], vec![])
+    let metadata = ExecutionMetadata {
+        status: Some("Failed".to_string()),
+        output: Some("something went wrong".to_string()),
+        create_next_execution: false,
+        next_execution_id: None,
+    };
+    
+    store.ack_orchestration_item(&item.lock_token, history_delta, vec![], vec![], vec![], metadata)
         .await
         .unwrap();
     
@@ -452,12 +469,20 @@ async fn test_execution_status_continued_as_new() {
         version: Some("1.0.0".to_string()),
     };
     
+    let metadata = ExecutionMetadata {
+        status: Some("ContinuedAsNew".to_string()),
+        output: Some("1".to_string()),
+        create_next_execution: true,
+        next_execution_id: Some(2),
+    };
+    
     store.ack_orchestration_item(
         &item.lock_token, 
         history_delta, 
         vec![], 
         vec![], 
-        vec![continue_work]
+        vec![continue_work],
+        metadata,
     )
     .await
     .unwrap();
@@ -517,7 +542,14 @@ async fn test_execution_status_continued_as_new() {
         },
     ];
     
-    store.ack_orchestration_item(&item2.lock_token, history_delta2, vec![], vec![], vec![])
+    let metadata2 = ExecutionMetadata {
+        status: Some("Completed".to_string()),
+        output: Some("done".to_string()),
+        create_next_execution: false,
+        next_execution_id: None,
+    };
+    
+    store.ack_orchestration_item(&item2.lock_token, history_delta2, vec![], vec![], vec![], metadata2)
         .await
         .unwrap();
     
@@ -583,7 +615,7 @@ async fn test_execution_status_running() {
         input: "input".to_string(),
     };
     
-    store.ack_orchestration_item(&item.lock_token, history_delta, vec![activity_work], vec![], vec![])
+    store.ack_orchestration_item(&item.lock_token, history_delta, vec![activity_work], vec![], vec![], ExecutionMetadata::default())
         .await
         .unwrap();
     
@@ -650,7 +682,14 @@ async fn test_execution_output_captured_on_completion() {
         },
     ];
     
-    store.ack_orchestration_item(&item.lock_token, history_delta, vec![], vec![], vec![])
+    let metadata = ExecutionMetadata {
+        status: Some("Completed".to_string()),
+        output: Some(expected_output.to_string()),
+        create_next_execution: false,
+        next_execution_id: None,
+    };
+    
+    store.ack_orchestration_item(&item.lock_token, history_delta, vec![], vec![], vec![], metadata)
         .await
         .unwrap();
     
@@ -707,7 +746,14 @@ async fn test_execution_output_captured_on_failure() {
         },
     ];
     
-    store.ack_orchestration_item(&item.lock_token, history_delta, vec![], vec![], vec![])
+    let metadata = ExecutionMetadata {
+        status: Some("Failed".to_string()),
+        output: Some(expected_error.to_string()),
+        create_next_execution: false,
+        next_execution_id: None,
+    };
+    
+    store.ack_orchestration_item(&item.lock_token, history_delta, vec![], vec![], vec![], metadata)
         .await
         .unwrap();
     
@@ -771,12 +817,20 @@ async fn test_execution_output_captured_on_continue_as_new() {
         version: Some("1.0.0".to_string()),
     };
     
+    let metadata = ExecutionMetadata {
+        status: Some("ContinuedAsNew".to_string()),
+        output: Some(next_input.to_string()),
+        create_next_execution: true,
+        next_execution_id: Some(2),
+    };
+    
     store.ack_orchestration_item(
         &item.lock_token,
         history_delta,
         vec![],
         vec![],
-        vec![continue_work]
+        vec![continue_work],
+        metadata,
     )
     .await
     .unwrap();
@@ -843,7 +897,7 @@ async fn test_execution_output_null_when_running() {
         input: "activity-input".to_string(),
     };
     
-    store.ack_orchestration_item(&item.lock_token, history_delta, vec![activity_work], vec![], vec![])
+    store.ack_orchestration_item(&item.lock_token, history_delta, vec![activity_work], vec![], vec![], ExecutionMetadata::default())
         .await
         .unwrap();
     
@@ -901,7 +955,14 @@ async fn test_execution_output_complex_json() {
         },
     ];
     
-    store.ack_orchestration_item(&item.lock_token, history_delta, vec![], vec![], vec![])
+    let metadata = ExecutionMetadata {
+        status: Some("Completed".to_string()),
+        output: Some(complex_output.to_string()),
+        create_next_execution: false,
+        next_execution_id: None,
+    };
+    
+    store.ack_orchestration_item(&item.lock_token, history_delta, vec![], vec![], vec![], metadata)
         .await
         .unwrap();
     

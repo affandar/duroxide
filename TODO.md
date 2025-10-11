@@ -14,19 +14,20 @@
 - [ ] Parent-child cancellation cascading
 
 ### Other TODOs
-- host level events (tracing, guid, time) [IN PROGRESS via RFC]
+- drop the polling frequence for the dispatchers
+- review duplicate orch instance ids
+- perf pass over replay engine
+- implementing a provider requires the implementor to look deeply at the sqlite provider code
+- clean up leaky abstractions (provider should not have to compute the orchestration state and output e.g)
 - parallelize dispatcher loops
 - lock TTL for timer and worker queues and update lease
 - Reduce ornamental user code in orchestrations and acivities
 - Continue the provider simplification
 - Rename to provider
-- fix up the tracing to not use activities [DONE - tracing is now host-side only]
 - fault inject: "TODO : fault injection :"
 - code coverage
-- Cleanup the docs before making public
 - CLI tooling to manipulate history/queue state for devops
 - add cancellation and status from within the orchestration
-- write a real world orchestrations with versioning etc
 - example versioned crates with orchestrations and loaders
 - profiling replay and providers
 - performance improvements for runtime
@@ -43,6 +44,10 @@
 
 ## DONE
 
+- Cleanup the docs before making public
+- write a real world orchestrations with versioning etc
+- fix up the tracing to not use activities [DONE - tracing is now host-side only]
+- host level events (tracing, guid, time) [IN PROGRESS via RFC]
 - SQLite provider with full transactional support and e2e test parity
   - Full ACID transactional semantics
   - Provider-backed timer queue with delayed visibility

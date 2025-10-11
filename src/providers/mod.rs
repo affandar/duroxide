@@ -12,6 +12,20 @@ pub struct OrchestrationItem {
     pub lock_token: String,
 }
 
+/// Execution metadata computed by the runtime to be persisted by the provider.
+/// This allows the provider to store execution state without inspecting event contents.
+#[derive(Debug, Clone, Default)]
+pub struct ExecutionMetadata {
+    /// New status for the execution ('Completed', 'Failed', 'ContinuedAsNew', or None to keep current)
+    pub status: Option<String>,
+    /// Output/error/input to store (for Completed/Failed/ContinuedAsNew)
+    pub output: Option<String>,
+    /// Whether a new execution should be created (for ContinueAsNew)
+    pub create_next_execution: bool,
+    /// The next execution ID if create_next_execution is true
+    pub next_execution_id: Option<u64>,
+}
+
 /// Provider-backed work queue items the runtime consumes continually.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub enum WorkItem {
@@ -115,10 +129,14 @@ pub trait Provider: Send + Sync {
     /// 
     /// This method MUST atomically:
     /// 1. Append history_delta to the instance's history
-    /// 2. Enqueue all worker_items to the worker queue
-    /// 3. Enqueue all timer_items to the timer queue
-    /// 4. Enqueue all orchestrator_items to the orchestrator queue
-    /// 5. Release the instance lock
+    /// 2. Update execution metadata (status, output) based on provided metadata
+    /// 3. Enqueue all worker_items to the worker queue
+    /// 4. Enqueue all timer_items to the timer queue
+    /// 5. Enqueue all orchestrator_items to the orchestrator queue
+    /// 6. Release the instance lock
+    /// 
+    /// The metadata parameter contains pre-computed execution state from the runtime.
+    /// Providers should store this metadata without inspecting event contents.
     /// 
     /// If any operation fails, the entire operation should be rolled back if possible.
     /// For simple providers, best-effort atomicity is acceptable.
@@ -129,6 +147,7 @@ pub trait Provider: Send + Sync {
         _worker_items: Vec<WorkItem>,
         _timer_items: Vec<WorkItem>,
         _orchestrator_items: Vec<WorkItem>,
+        _metadata: ExecutionMetadata,
     ) -> Result<(), String>;
 
     /// Abandon orchestration processing (used for errors/retries).

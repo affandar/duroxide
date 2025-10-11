@@ -1,5 +1,5 @@
 //
-use crate::providers::{Provider, WorkItem};
+use crate::providers::{Provider, WorkItem, ExecutionMetadata};
 use crate::{Event, OrchestrationContext};
 use semver::Version;
 use std::collections::HashMap;
@@ -96,6 +96,53 @@ pub struct OrchestrationDescriptor {
 }
 
 impl Runtime {
+    /// Compute execution metadata from history delta without inspecting event contents.
+    /// This allows the runtime to extract semantic information and pass it to the provider
+    /// as pre-computed metadata, preventing the provider from needing orchestration knowledge.
+    fn compute_execution_metadata(
+        history_delta: &[Event],
+        orchestrator_items: &[WorkItem],
+        current_execution_id: u64,
+    ) -> ExecutionMetadata {
+        let mut metadata = ExecutionMetadata::default();
+        
+        // Scan history_delta for terminal events
+        for event in history_delta {
+            match event {
+                Event::OrchestrationCompleted { output, .. } => {
+                    metadata.status = Some("Completed".to_string());
+                    metadata.output = Some(output.clone());
+                    break;
+                }
+                Event::OrchestrationFailed { error, .. } => {
+                    metadata.status = Some("Failed".to_string());
+                    metadata.output = Some(error.clone());
+                    break;
+                }
+                Event::OrchestrationContinuedAsNew { input, .. } => {
+                    metadata.status = Some("ContinuedAsNew".to_string());
+                    metadata.output = Some(input.clone());
+                    metadata.create_next_execution = true;
+                    metadata.next_execution_id = Some(current_execution_id + 1);
+                    break;
+                }
+                _ => {}
+            }
+        }
+        
+        // Double-check with orchestrator_items for ContinueAsNew
+        if orchestrator_items.iter().any(|item| matches!(item, WorkItem::ContinueAsNew { .. })) {
+            if !metadata.create_next_execution {
+                // ContinueAsNew work item without ContinuedAsNew event shouldn't happen,
+                // but be defensive
+                metadata.create_next_execution = true;
+                metadata.next_execution_id = Some(current_execution_id + 1);
+            }
+        }
+        
+        metadata
+    }
+    
     // Execution engine: consumes provider queues and persists history atomically.
     /// Internal: apply pure decisions by appending necessary history and dispatching work.
     async fn apply_decisions(self: &Arc<Self>, instance: &str, history: &Vec<Event>, decisions: Vec<crate::Action>) {
@@ -336,6 +383,7 @@ impl Runtime {
                     vec![], // No worker items
                     vec![], // No timer items
                     vec![], // No orchestrator items
+                    ExecutionMetadata::default(), // No metadata changes
                 )
                 .await;
             return;
@@ -441,13 +489,34 @@ impl Runtime {
         if !worker_items.is_empty() {
             debug!(instance, "Worker items to enqueue: {:?}", worker_items);
         }
+        
+        // Compute execution metadata from history_delta (runtime responsibility)
+        let metadata = Runtime::compute_execution_metadata(
+            &history_delta,
+            &orchestrator_items,
+            item.execution_id,
+        );
+        
+        debug!(
+            instance,
+            metadata = ?metadata,
+            "Computed execution metadata from history_delta"
+        );
+        
         // Robust ack with basic retry on SQLITE_BUSY (database is locked)
         let mut attempts: u32 = 0;
         let max_attempts: u32 = 5;
         loop {
             match self
                 .history_store
-                .ack_orchestration_item(lock_token, history_delta.clone(), worker_items.clone(), timer_items.clone(), orchestrator_items.clone())
+                .ack_orchestration_item(
+                    lock_token,
+                    history_delta.clone(),
+                    worker_items.clone(),
+                    timer_items.clone(),
+                    orchestrator_items.clone(),
+                    metadata.clone(),
+                )
                 .await
             {
                 Ok(()) => {
