@@ -8,6 +8,24 @@ use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tracing::{debug, error, warn};
 
+/// Configuration options for the Runtime.
+#[derive(Debug, Clone)]
+pub struct RuntimeOptions {
+    /// Polling interval in milliseconds when dispatcher queues are empty.
+    /// Lower values = more responsive, higher CPU usage when idle.
+    /// Higher values = less CPU usage, higher latency when idle.
+    /// Default: 10ms (100 Hz)
+    pub dispatcher_idle_sleep_ms: u64,
+}
+
+impl Default for RuntimeOptions {
+    fn default() -> Self {
+        Self {
+            dispatcher_idle_sleep_ms: 10,
+        }
+    }
+}
+
 pub mod dispatch;
 pub mod registry;
 pub mod router;
@@ -84,6 +102,9 @@ pub struct Runtime {
     /// Track the current execution ID for each active instance
     current_execution_ids: Mutex<HashMap<String, u64>>,
     // StartRequest layer removed; instances are activated directly
+    
+    /// Runtime configuration options
+    options: RuntimeOptions,
 }
 
 /// Introspection: descriptor of an orchestration derived from history.
@@ -220,9 +241,6 @@ impl Runtime {
         }
         None
     }
-    // Associated constants for runtime behavior
-    const POLLER_IDLE_SLEEP_MS: u64 = 10;
-
     // ensure_instance_active is no longer needed in the direct execution model
     // Each completion message triggers a direct one-shot execution
 
@@ -303,6 +321,16 @@ impl Runtime {
         activity_registry: Arc<registry::ActivityRegistry>,
         orchestration_registry: OrchestrationRegistry,
     ) -> Arc<Self> {
+        Self::start_with_options(history_store, activity_registry, orchestration_registry, RuntimeOptions::default()).await
+    }
+
+    /// Start a new runtime with custom options.
+    pub async fn start_with_options(
+        history_store: Arc<dyn Provider>,
+        activity_registry: Arc<registry::ActivityRegistry>,
+        orchestration_registry: OrchestrationRegistry,
+        options: RuntimeOptions,
+    ) -> Arc<Self> {
         // Install a default subscriber if none set (ok to call many times)
         let _ = tracing_subscriber::fmt()
             .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
@@ -318,6 +346,8 @@ impl Runtime {
             orchestration_registry,
             pinned_versions: Mutex::new(HashMap::new()),
             current_execution_ids: Mutex::new(HashMap::new()),
+            
+            options,
         });
 
         // background orchestrator dispatcher (extracted from inline poller)
@@ -344,7 +374,7 @@ impl Runtime {
                     // Process orchestration item atomically
                     self.process_orchestration_item(item).await;
                 } else {
-                    tokio::time::sleep(std::time::Duration::from_millis(Self::POLLER_IDLE_SLEEP_MS)).await;
+                    tokio::time::sleep(std::time::Duration::from_millis(self.options.dispatcher_idle_sleep_ms)).await;
                 }
             }
         })
@@ -354,14 +384,6 @@ impl Runtime {
         // EXECUTION: builds deltas and commits via ack_orchestration_item
         let instance = &item.instance;
         let lock_token = &item.lock_token;
-
-        debug!(
-            instance,
-            "Processing orchestration item: messages={}, history_len={}, first_msg={:?}",
-            item.messages.len(),
-            item.history.len(),
-            item.messages.first().map(|m| std::mem::discriminant(m))
-        );
 
         // Check if instance is already terminal
         let is_terminal = item.history.iter().rev().any(|e| {
@@ -393,9 +415,7 @@ impl Runtime {
         let mut start_or_continue: Option<WorkItem> = None;
         let mut completion_messages: Vec<OrchestratorMsg> = Vec::new();
 
-        debug!(instance, "Processing {} work items", item.messages.len());
         for work_item in &item.messages {
-            debug!(instance, "Work item: {:?}", work_item);
             match work_item {
                 WorkItem::StartOrchestration { .. } | WorkItem::ContinueAsNew { .. } => {
                     if start_or_continue.is_some() {
@@ -486,21 +506,11 @@ impl Runtime {
             orchestrator_items.len()
         );
         
-        if !worker_items.is_empty() {
-            debug!(instance, "Worker items to enqueue: {:?}", worker_items);
-        }
-        
         // Compute execution metadata from history_delta (runtime responsibility)
         let metadata = Runtime::compute_execution_metadata(
             &history_delta,
             &orchestrator_items,
             item.execution_id,
-        );
-        
-        debug!(
-            instance,
-            metadata = ?metadata,
-            "Computed execution metadata from history_delta"
         );
         
         // Robust ack with basic retry on SQLITE_BUSY (database is locked)
@@ -767,12 +777,10 @@ impl Runtime {
                             name,
                             input,
                         } => {
-                            debug!(instance = %instance, execution_id, id, name = %name, "worker: dequeued ActivityExecute");
                             // Execute activity via registry directly; enqueue completion/failure to orchestrator queue
                             let enqueue_result = if let Some(handler) = activities.get(&name) {
                                 match handler.invoke(input).await {
                                     Ok(result) => {
-                                        debug!(instance = %instance, execution_id, id, "worker: activity succeeded, enqueue completion");
                                         self.history_store
                                             .enqueue_orchestrator_work(WorkItem::ActivityCompleted {
                                                 instance: instance.clone(),
@@ -783,7 +791,6 @@ impl Runtime {
                                             .await
                                     }
                                     Err(error) => {
-                                        debug!(instance = %instance, execution_id, id, error = %error, "worker: activity failed, enqueue failure");
                                         self.history_store
                                             .enqueue_orchestrator_work(WorkItem::ActivityFailed {
                                                 instance: instance.clone(),
@@ -795,7 +802,6 @@ impl Runtime {
                                     }
                                 }
                             } else {
-                                debug!(instance = %instance, execution_id, id, name = %name, "worker: unregistered activity, enqueue failure");
                                 self.history_store
                                     .enqueue_orchestrator_work(WorkItem::ActivityFailed {
                                         instance: instance.clone(),
@@ -808,7 +814,6 @@ impl Runtime {
                             
                             // Only acknowledge after successful enqueue
                             if enqueue_result.is_ok() {
-                                debug!(instance = %instance, execution_id, id, "worker: acking worker lock");
                                 let _ = self.history_store.ack_worker(&token).await;
                             } else {
                                 warn!(instance = %instance, execution_id, id, "worker: enqueue to orchestrator failed; not acking");
@@ -820,7 +825,7 @@ impl Runtime {
                         }
                     }
                 } else {
-                    tokio::time::sleep(std::time::Duration::from_millis(Self::POLLER_IDLE_SLEEP_MS)).await;
+                    tokio::time::sleep(std::time::Duration::from_millis(self.options.dispatcher_idle_sleep_ms)).await;
                 }
             }
         })
@@ -867,16 +872,17 @@ impl Runtime {
                             }
                         }
                     } else {
-                        tokio::time::sleep(std::time::Duration::from_millis(Self::POLLER_IDLE_SLEEP_MS)).await;
+                        tokio::time::sleep(std::time::Duration::from_millis(self.options.dispatcher_idle_sleep_ms)).await;
                     }
                 }
             });
         }
 
         // Fallback in-process timer service (refactored)
+        let idle_sleep_ms = self.options.dispatcher_idle_sleep_ms;
         tokio::spawn(async move {
             let (svc_jh, svc_tx) =
-                crate::runtime::timers::TimerService::start(self.history_store.clone(), Self::POLLER_IDLE_SLEEP_MS);
+                crate::runtime::timers::TimerService::start(self.history_store.clone(), idle_sleep_ms);
 
             // Intake task: keep pulling schedules and forwarding to service
             // The timer service will handle acknowledgment after firing
@@ -911,7 +917,7 @@ impl Runtime {
                             }
                         }
                     } else {
-                        tokio::time::sleep(std::time::Duration::from_millis(Self::POLLER_IDLE_SLEEP_MS)).await;
+                        tokio::time::sleep(std::time::Duration::from_millis(idle_sleep_ms)).await;
                     }
                 }
             });

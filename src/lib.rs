@@ -188,7 +188,7 @@ pub use runtime::OrchestrationDescriptor;
 pub mod providers;
 
 // Re-export key runtime types for convenience
-pub use runtime::{OrchestrationHandler, OrchestrationRegistry, OrchestrationRegistryBuilder, OrchestrationStatus};
+pub use runtime::{OrchestrationHandler, OrchestrationRegistry, OrchestrationRegistryBuilder, OrchestrationStatus, RuntimeOptions};
 pub use client::Client;
 
 // System call operation constants
