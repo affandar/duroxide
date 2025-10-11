@@ -51,39 +51,53 @@
 //!
 //! ## Key Concepts
 //!
-//! - **Orchestrations**: Long-running workflows written as async functions
-//! - **Activities**: Stateless functions that perform actual work (NO sleeping/delays!)
-//! - **Timers**: Use `ctx.schedule_timer(ms)` for delays, timeouts, and scheduling
+//! - **Orchestrations**: Long-running workflows written as async functions (coordination logic)
+//! - **Activities**: Single-purpose work units (can do anything - DB, API, polling, etc.)
+//! - **Timers**: Use `ctx.schedule_timer(ms)` for orchestration-level delays and timeouts
 //! - **Deterministic Replay**: Orchestrations are replayed from history to ensure consistency
 //! - **Durable Futures**: Composable futures for activities, timers, and external events
 //!
-//! ## ⚠️ Important: Timers vs Activities
+//! ## ⚠️ Important: Orchestrations vs Activities
 //!
-//! **For delays and timeouts, always use timers, NOT activities:**
+//! **Orchestrations = Coordination (control flow, business logic)**
+//! **Activities = Execution (single-purpose work units)**
 //!
 //! ```rust,no_run
 //! # use duroxide::OrchestrationContext;
 //! # async fn example(ctx: OrchestrationContext) -> Result<(), String> {
-//! // ✅ CORRECT: Use timers for delays
-//! ctx.schedule_timer(5000).into_timer().await; // Wait 5 seconds
+//! // ✅ CORRECT: Orchestration-level delay using timer
+//! ctx.schedule_timer(5000).into_timer().await;  // Wait 5 seconds
 //!
-//! // ❌ WRONG: Don't put delays in activities
-//! // ctx.schedule_activity("Sleep", "5000").into_activity().await; // DON'T DO THIS
+//! // ✅ ALSO CORRECT: Activity can poll/sleep as part of its work
+//! // Example: Activity that provisions a VM and polls for readiness
+//! // activities.register("ProvisionVM", |config| async move {
+//! //     let vm = create_vm(config).await?;
+//! //     while !vm_ready(&vm).await {
+//! //         tokio::time::sleep(Duration::from_secs(5)).await;  // ✅ OK - part of provisioning
+//! //     }
+//! //     Ok(vm.id)
+//! // });
+//!
+//! // ❌ WRONG: Activity that ONLY sleeps (use timer instead)
+//! // ctx.schedule_activity("Sleep5Seconds", "").into_activity().await;
 //! # Ok(())
 //! # }
 //! ```
 //!
-//! **Activities should be pure business logic without delays:**
+//! **Put in Activities (single-purpose execution units):**
 //! - Database operations
-//! - API calls  
+//! - API calls (can include retries/polling)
 //! - Data transformations
 //! - File I/O
+//! - VM provisioning (with internal polling)
 //!
-//! **Use timers for:**
-//! - Delays and waiting periods
-//! - Timeouts and deadlines
-//! - Scheduled execution
-//! - Rate limiting
+//! **Put in Orchestrations (coordination and business logic):**
+//! - Control flow (if/else, match, loops)
+//! - Business decisions
+//! - Multi-step workflows
+//! - Error handling and compensation
+//! - Timeouts and deadlines (use timers)
+//! - Waiting for external events
 //!
 //! ## ⚠️ Critical: DurableFuture Conversion Pattern
 //!
@@ -829,8 +843,8 @@ impl DurableFuture {
 impl OrchestrationContext {
     /// Schedule an activity and return a `DurableFuture` correlated to it.
     /// 
-    /// **Activities should be pure business logic without delays or sleeps!**
-    /// For time-based waiting, use `schedule_timer()` instead.
+    /// **Activities should be single-purpose execution units.**
+    /// Pull multi-step logic and control flow into orchestrations.
     /// 
     /// ⚠️ **IMPORTANT**: You MUST call `.into_activity().await`, not just `.await`!
     /// 
@@ -849,14 +863,25 @@ impl OrchestrationContext {
     /// 
     /// # Good Activity Examples
     /// - Database queries
-    /// - HTTP API calls
+    /// - HTTP API calls (can include retries)
     /// - File operations
     /// - Data transformations
+    /// - VM provisioning (can poll for readiness internally)
+    /// - Any single-purpose work unit
     /// 
     /// # What NOT to put in activities
-    /// - `tokio::time::sleep()` or similar delays
-    /// - Long polling or waiting
-    /// - Timeouts (use `select2` with timers instead)
+    /// - Multi-step business logic (pull into orchestration)
+    /// - Control flow decisions (if/match on business rules)
+    /// - Pure delays with no work (use `schedule_timer()` instead)
+    /// - Timeouts for orchestration coordination (use `select2` with timers)
+    /// 
+    /// # Note on Sleep/Polling in Activities
+    /// 
+    /// Activities **CAN** sleep or poll as part of their work:
+    /// - ✅ Provisioning a resource and polling for readiness
+    /// - ✅ Retrying an external API with backoff
+    /// - ✅ Waiting for async operation to complete
+    /// - ❌ Activity that ONLY sleeps (use orchestration timer instead)
     pub fn schedule_activity(&self, name: impl Into<String>, input: impl Into<String>) -> DurableFuture {
         // event_id will be claimed during first poll
         DurableFuture(Kind::Activity {

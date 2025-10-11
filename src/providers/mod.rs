@@ -1,6 +1,47 @@
 use crate::Event;
 
 /// Orchestration item containing all data needed to process an instance atomically.
+///
+/// This represents a locked batch of work for a single orchestration instance.
+/// The provider must guarantee that no other process can modify this instance
+/// until `ack_orchestration_item()` or `abandon_orchestration_item()` is called.
+///
+/// # Fields
+///
+/// * `instance` - Unique identifier for the orchestration instance (e.g., "order-123")
+/// * `orchestration_name` - Name of the orchestration being executed (e.g., "ProcessOrder")
+/// * `execution_id` - Current execution ID (starts at 1, increments with ContinueAsNew)
+/// * `version` - Orchestration version string (e.g., "1.0.0")
+/// * `history` - Complete event history for the current execution (ordered by event_id)
+/// * `messages` - Batch of WorkItems to process (may include Start, completions, external events)
+/// * `lock_token` - Unique token that must be used to ack or abandon this batch
+///
+/// # Implementation Notes
+///
+/// - The provider must ensure `history` contains ALL events for `execution_id` in order
+/// - For multi-execution instances (ContinueAsNew), only return the LATEST execution's history
+/// - The `lock_token` must be unique and prevent concurrent processing of the same instance
+/// - All messages in the batch should belong to the same instance
+/// - The lock should expire after a timeout (e.g., 30s) to handle worker crashes
+///
+/// # Example from SQLite Provider
+///
+/// ```ignore
+/// // 1. Lock all visible messages for an instance
+/// UPDATE orchestrator_queue SET lock_token = ?, locked_until = ?
+/// WHERE instance_id = ? AND lock_token IS NULL
+///
+/// // 2. Load instance metadata
+/// SELECT orchestration_name, orchestration_version, current_execution_id
+/// FROM instances WHERE instance_id = ?
+///
+/// // 3. Load history for current execution
+/// SELECT event_data FROM history
+/// WHERE instance_id = ? AND execution_id = ?
+/// ORDER BY event_id
+///
+/// // 4. Return OrchestrationItem with lock_token
+/// ```
 #[derive(Debug, Clone)]
 pub struct OrchestrationItem {
     pub instance: String,
@@ -13,7 +54,49 @@ pub struct OrchestrationItem {
 }
 
 /// Execution metadata computed by the runtime to be persisted by the provider.
-/// This allows the provider to store execution state without inspecting event contents.
+///
+/// The runtime inspects the `history_delta` and `orchestrator_items` to compute this metadata.
+/// **Providers must NOT inspect event contents themselves** - they should blindly store this metadata.
+///
+/// This design ensures the provider remains a pure storage abstraction without orchestration knowledge.
+///
+/// # Fields
+///
+/// * `status` - New execution status: `Some("Completed")`, `Some("Failed")`, `Some("ContinuedAsNew")`, or `None`
+///   - `None` means the execution is still running (no status update needed)
+///   - Provider should UPDATE the execution status column when `Some(...)`
+///
+/// * `output` - The terminal value to store (depends on status):
+///   - `Completed`: The orchestration's successful result
+///   - `Failed`: The error message
+///   - `ContinuedAsNew`: The input for the next execution
+///   - `None`: No output (execution still running)
+///
+/// * `create_next_execution` - Whether to create a new execution row
+///   - `true`: ContinueAsNew occurred, create execution with `next_execution_id`
+///   - `false`: Normal completion or still running
+///
+/// * `next_execution_id` - The ID for the new execution (only valid if `create_next_execution = true`)
+///   - Provider should: INSERT INTO executions (instance_id, execution_id, status) VALUES (?, next_execution_id, 'Running')
+///   - Provider should: UPDATE instances SET current_execution_id = next_execution_id
+///
+/// # Example Usage in Provider
+///
+/// ```ignore
+/// async fn ack_orchestration_item(..., metadata: ExecutionMetadata) {
+///     // Store metadata without understanding what it means
+///     if let Some(status) = &metadata.status {
+///         UPDATE executions SET status = ?, output = ? WHERE instance_id = ? AND execution_id = ?
+///     }
+///     
+///     if metadata.create_next_execution {
+///         if let Some(next_id) = metadata.next_execution_id {
+///             INSERT INTO executions (instance_id, execution_id, status) VALUES (?, next_id, 'Running')
+///             UPDATE instances SET current_execution_id = next_id
+///         }
+///     }
+/// }
+/// ```
 #[derive(Debug, Clone, Default)]
 pub struct ExecutionMetadata {
     /// New status for the execution ('Completed', 'Failed', 'ContinuedAsNew', or None to keep current)
@@ -27,8 +110,44 @@ pub struct ExecutionMetadata {
 }
 
 /// Provider-backed work queue items the runtime consumes continually.
+///
+/// WorkItems represent messages that flow through provider-managed queues.
+/// They are serialized/deserialized using serde_json for storage.
+///
+/// # Queue Routing
+///
+/// Different WorkItem types go to different queues:
+/// - `StartOrchestration, ContinueAsNew, ActivityCompleted/Failed, TimerFired, ExternalRaised, SubOrchCompleted/Failed, CancelInstance` → **Orchestrator queue**
+/// - `ActivityExecute` → **Worker queue**
+/// - `TimerSchedule` → **Timer queue**
+///
+/// # Instance ID Extraction
+///
+/// Most WorkItems have an `instance` field. Sub-orchestration completions use `parent_instance`.
+/// Providers need to extract the instance ID for routing. SQLite example:
+///
+/// ```ignore
+/// let instance = match &item {
+///     WorkItem::StartOrchestration { instance, .. } |
+///     WorkItem::ActivityCompleted { instance, .. } |
+///     WorkItem::CancelInstance { instance, .. } => instance,
+///     WorkItem::SubOrchCompleted { parent_instance, .. } => parent_instance,
+///     _ => return Err("unexpected item type"),
+/// };
+/// ```
+///
+/// # Execution ID Tracking
+///
+/// WorkItems for activities, timers, and sub-orchestrations include `execution_id`.
+/// This allows providers to route completions to the correct execution when ContinueAsNew creates multiple executions.
+///
+/// **Critical:** Completions with mismatched execution_id should still be enqueued (the runtime filters them).
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub enum WorkItem {
+    /// Start a new orchestration instance
+    /// - Creates instance metadata (if doesn't exist)
+    /// - Should create execution with ID=1
+    /// - `version`: None means use provider default (e.g., "1.0.0")
     StartOrchestration {
         instance: String,
         orchestration: String,
@@ -37,6 +156,10 @@ pub enum WorkItem {
         parent_instance: Option<String>,
         parent_id: Option<u64>,
     },
+    
+    /// Execute an activity (goes to worker queue)
+    /// - `id`: event_id from ActivityScheduled (for correlation)
+    /// - Worker will enqueue ActivityCompleted or ActivityFailed
     ActivityExecute {
         instance: String,
         execution_id: u64,
@@ -44,51 +167,88 @@ pub enum WorkItem {
         name: String,
         input: String,
     },
+    
+    /// Activity completed successfully (goes to orchestrator queue)
+    /// - `id`: source_event_id referencing the ActivityScheduled event
+    /// - Triggers next orchestration turn
     ActivityCompleted {
         instance: String,
         execution_id: u64,
         id: u64,  // source_event_id referencing ActivityScheduled
         result: String,
     },
+    
+    /// Activity failed with error (goes to orchestrator queue)
+    /// - `id`: source_event_id referencing the ActivityScheduled event
+    /// - Triggers next orchestration turn
     ActivityFailed {
         instance: String,
         execution_id: u64,
         id: u64,  // source_event_id referencing ActivityScheduled
         error: String,
     },
+    
+    /// Schedule a timer (goes to timer queue)
+    /// - Provider with delayed_visibility should make this visible at `fire_at_ms`
+    /// - Otherwise, runtime uses in-process timer service
     TimerSchedule {
         instance: String,
         execution_id: u64,
         id: u64,  // scheduling_event_id from TimerCreated
-        fire_at_ms: u64,
+        fire_at_ms: u64,  // Absolute timestamp (millis since epoch)
     },
+    
+    /// Timer fired (goes to orchestrator queue)
+    /// - Enqueued by timer dispatcher when timer becomes ready
+    /// - `fire_at_ms`: same value from TimerSchedule (for reference)
     TimerFired {
         instance: String,
         execution_id: u64,
         id: u64,  // source_event_id referencing TimerCreated
         fire_at_ms: u64,
     },
+    
+    /// External event raised (goes to orchestrator queue)
+    /// - Matched by `name` to ExternalSubscribed events
+    /// - `data`: JSON payload from external system
     ExternalRaised {
         instance: String,
         name: String,
         data: String,
     },
+    
+    /// Sub-orchestration completed (goes to parent's orchestrator queue)
+    /// - Routes to `parent_instance`, not the child
+    /// - `parent_id`: event_id from parent's SubOrchestrationScheduled event
     SubOrchCompleted {
         parent_instance: String,
         parent_execution_id: u64,
         parent_id: u64,  // source_event_id referencing SubOrchestrationScheduled
         result: String,
     },
+    
+    /// Sub-orchestration failed (goes to parent's orchestrator queue)
+    /// - Routes to `parent_instance`, not the child
+    /// - `parent_id`: event_id from parent's SubOrchestrationScheduled event
     SubOrchFailed {
         parent_instance: String,
         parent_execution_id: u64,
         parent_id: u64,  // source_event_id referencing SubOrchestrationScheduled
         error: String,
     },
+    
+    /// Request orchestration cancellation (goes to orchestrator queue)
+    /// - Runtime will append OrchestrationCancelRequested event
+    /// - Eventually results in OrchestrationFailed with "canceled: {reason}"
     CancelInstance {
         instance: String,
         reason: String,
     },
+    
+    /// Continue orchestration as new execution (goes to orchestrator queue)
+    /// - Signals the end of current execution and start of next
+    /// - Runtime will create Event::OrchestrationStarted for next execution
+    /// - Provider should create new execution (see ExecutionMetadata.create_next_execution)
     ContinueAsNew {
         instance: String,
         orchestration: String,
@@ -99,47 +259,698 @@ pub enum WorkItem {
 
 /// Provider abstraction for durable orchestration execution (persistence + queues).
 ///
-/// Providers must implement the core atomic orchestration methods and basic queue operations.
-/// Multi-execution support is required for ContinueAsNew functionality.
-/// Management APIs are optional with default no-op implementations.
+/// # Overview
+///
+/// A Provider is responsible for:
+/// 1. **Persistence**: Storing orchestration history (append-only event log)
+/// 2. **Queueing**: Managing three work queues (orchestrator, worker, timer)
+/// 3. **Locking**: Implementing peek-lock semantics to prevent concurrent processing
+/// 4. **Atomicity**: Ensuring transactional consistency across operations
+///
+/// # Architecture: Three-Queue Model
+///
+/// ```text
+/// ┌─────────────────────────────────────────────────────────────┐
+/// │                     RUNTIME (3 Dispatchers)                 │
+/// ├─────────────────────────────────────────────────────────────┤
+/// │                                                             │
+/// │  [Orchestration Dispatcher]  ←─── fetch_orchestration_item │
+/// │           ↓                                                 │
+/// │      Process Turn                                           │
+/// │           ↓                                                 │
+/// │  ack_orchestration_item ────┬──► Orchestrator Queue        │
+/// │                             ├──► Worker Queue              │
+/// │                             └──► Timer Queue                │
+/// │                                                             │
+/// │  [Worker Dispatcher]  ←────────── dequeue_worker_peek_lock │
+/// │       Execute Activity                                      │
+/// │           ↓                                                 │
+/// │  Completion ────────────────────► Orchestrator Queue        │
+/// │                                                             │
+/// │  [Timer Dispatcher]  ←─────────── dequeue_timer_peek_lock  │
+/// │       Fire Timer                                            │
+/// │           ↓                                                 │
+/// │  TimerFired ────────────────────► Orchestrator Queue        │
+/// │                                                             │
+/// └─────────────────────────────────────────────────────────────┘
+///                           ↕
+///              ┌────────────────────────┐
+///              │   PROVIDER (Storage)   │
+///              │  ┌──────────────────┐  │
+///              │  │ History (Events) │  │
+///              │  ├──────────────────┤  │
+///              │  │ Orch Queue       │  │
+///              │  │ Worker Queue     │  │
+///              │  │ Timer Queue      │  │
+///              │  └──────────────────┘  │
+///              └────────────────────────┘
+/// ```
+///
+/// # Design Principles
+///
+/// **Providers should be storage abstractions, NOT orchestration engines:**
+/// - ✅ Store and retrieve events as opaque data (don't inspect Event contents)
+/// - ✅ Manage queues and locks (generic queue operations)
+/// - ✅ Provide ACID guarantees where possible
+/// - ❌ DON'T interpret orchestration semantics (use ExecutionMetadata from runtime)
+/// - ❌ DON'T create events (runtime creates all events)
+/// - ❌ DON'T make orchestration decisions (runtime decides control flow)
+///
+/// # Multi-Execution Support (ContinueAsNew)
+///
+/// Orchestration instances can have multiple executions (execution_id 1, 2, 3, ...):
+/// - Each execution has its own event history
+/// - `read()` should return the LATEST execution's history
+/// - Provider tracks current_execution_id to know which execution is active
+/// - When metadata.create_next_execution=true, create new execution row
+///
+/// **Example:**
+/// ```text
+/// Instance "order-123":
+///   Execution 1: [OrchestrationStarted, ActivityScheduled, OrchestrationContinuedAsNew]
+///   Execution 2: [OrchestrationStarted, ActivityScheduled, OrchestrationCompleted]
+///   
+///   read("order-123") → Returns Execution 2's events (latest)
+///   read_with_execution("order-123", 1) → Returns Execution 1's events
+///   latest_execution_id("order-123") → Returns Some(2)
+/// ```
+///
+/// # Concurrency Model
+///
+/// The runtime runs 3 background dispatchers polling your queues:
+/// 1. **Orchestration Dispatcher**: Polls fetch_orchestration_item() continuously
+/// 2. **Work Dispatcher**: Polls dequeue_worker_peek_lock() continuously
+/// 3. **Timer Dispatcher**: Polls dequeue_timer_peek_lock() (if supports_delayed_visibility=true)
+///
+/// **Your implementation must be thread-safe** and support concurrent access from multiple dispatchers.
+///
+/// # Peek-Lock Pattern (Critical)
+///
+/// All dequeue operations use peek-lock semantics:
+/// 1. **Peek**: Select and lock a message (message stays in queue)
+/// 2. **Process**: Runtime processes the locked message
+/// 3. **Ack**: Delete message from queue (success) OR
+/// 4. **Abandon**: Release lock for retry (failure)
+///
+/// Benefits:
+/// - At-least-once delivery (messages survive crashes)
+/// - Automatic retry on worker failure (lock expires)
+/// - Prevents duplicate processing (locked messages invisible to others)
+///
+/// # Transactional Guarantees
+///
+/// **`ack_orchestration_item()` is the atomic boundary:**
+/// - ALL operations in ack must succeed or fail together
+/// - History append + queue enqueues + lock release = atomic
+/// - If commit fails, entire turn is retried
+/// - This ensures exactly-once semantics for orchestration turns
+///
+/// # Queue Message Flow
+///
+/// **Orchestrator Queue:**
+/// - Inputs: StartOrchestration, ActivityCompleted/Failed, TimerFired, ExternalRaised, SubOrchCompleted/Failed, CancelInstance, ContinueAsNew
+/// - Output: Processed by orchestration dispatcher → ack_orchestration_item
+/// - Batching: All messages for an instance processed together
+///
+/// **Worker Queue:**
+/// - Inputs: ActivityExecute (from ack_orchestration_item)
+/// - Output: Processed by work dispatcher → ActivityCompleted/Failed to orch queue
+/// - Batching: One message at a time (activities executed independently)
+///
+/// **Timer Queue:**
+/// - Inputs: TimerSchedule (from ack_orchestration_item)
+/// - Output: Processed by timer dispatcher → TimerFired to orch queue
+/// - Visibility: Messages become visible at fire_at_ms (if supported)
+///
+/// # Instance Metadata Management
+///
+/// Providers typically maintain metadata about instances:
+/// - instance_id (primary key)
+/// - orchestration_name, orchestration_version
+/// - current_execution_id (for multi-execution support)
+/// - status, output (optional, for quick queries)
+/// - created_at, updated_at timestamps
+///
+/// This metadata is updated via:
+/// - `enqueue_orchestrator_work()` with StartOrchestration
+/// - `ack_orchestration_item()` with history changes
+/// - `ExecutionMetadata` for status/output updates
+///
+/// # Required vs Optional Methods
+///
+/// **REQUIRED** (must implement):
+/// - fetch_orchestration_item, ack_orchestration_item, abandon_orchestration_item
+/// - read, append_with_execution
+/// - enqueue_worker_work, dequeue_worker_peek_lock, ack_worker
+/// - enqueue_orchestrator_work
+///
+/// **OPTIONAL** (has defaults):
+/// - latest_execution_id, read_with_execution, create_new_execution
+/// - list_instances, list_executions
+/// - Timer queue methods (only if supports_delayed_visibility=true)
+///
+/// # Recommended Database Schema (SQL Example)
+///
+/// ```sql
+/// -- Instance metadata
+/// CREATE TABLE instances (
+///     instance_id TEXT PRIMARY KEY,
+///     orchestration_name TEXT NOT NULL,
+///     orchestration_version TEXT NOT NULL,
+///     current_execution_id INTEGER DEFAULT 1,
+///     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+/// );
+///
+/// -- Execution tracking
+/// CREATE TABLE executions (
+///     instance_id TEXT NOT NULL,
+///     execution_id INTEGER NOT NULL,
+///     status TEXT DEFAULT 'Running',
+///     output TEXT,
+///     started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+///     completed_at TIMESTAMP,
+///     PRIMARY KEY (instance_id, execution_id)
+/// );
+///
+/// -- Event history (append-only)
+/// CREATE TABLE history (
+///     instance_id TEXT NOT NULL,
+///     execution_id INTEGER NOT NULL,
+///     event_id INTEGER NOT NULL,
+///     event_type TEXT NOT NULL,
+///     event_data TEXT NOT NULL,  -- JSON serialized Event
+///     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+///     PRIMARY KEY (instance_id, execution_id, event_id)
+/// );
+///
+/// -- Orchestrator queue (peek-lock)
+/// CREATE TABLE orchestrator_queue (
+///     id INTEGER PRIMARY KEY AUTOINCREMENT,
+///     instance_id TEXT NOT NULL,
+///     work_item TEXT NOT NULL,  -- JSON serialized WorkItem
+///     visible_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+///     lock_token TEXT,
+///     locked_until TIMESTAMP,
+///     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+/// );
+///
+/// -- Worker queue (peek-lock)
+/// CREATE TABLE worker_queue (
+///     id INTEGER PRIMARY KEY AUTOINCREMENT,
+///     work_item TEXT NOT NULL,
+///     lock_token TEXT,
+///     locked_until TIMESTAMP,
+///     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+/// );
+///
+/// -- Timer queue (peek-lock with fire_at)
+/// CREATE TABLE timer_queue (
+///     id INTEGER PRIMARY KEY AUTOINCREMENT,
+///     work_item TEXT NOT NULL,
+///     fire_at TIMESTAMP NOT NULL,
+///     lock_token TEXT,
+///     locked_until TIMESTAMP,
+///     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+/// );
+/// ```
+///
+/// # Implementing a New Provider: Checklist
+///
+/// 1. ✅ **Storage Layer**: Choose backing store (PostgreSQL, Redis, DynamoDB, etc.)
+/// 2. ✅ **Serialization**: Use serde_json for Event and WorkItem (or compatible format)
+/// 3. ✅ **Locking**: Implement peek-lock with unique tokens and expiration
+/// 4. ✅ **Transactions**: Ensure `ack_orchestration_item` is atomic
+/// 5. ✅ **Indexes**: Add indexes on `instance_id`, `lock_token`, `visible_at`, `fire_at`
+/// 6. ✅ **Testing**: Use `tests/sqlite_provider_test.rs` as a template
+/// 7. ✅ **Multi-execution**: Support execution_id partitioning for ContinueAsNew
+/// 8. ⚠️ **DO NOT**: Inspect event contents (use ExecutionMetadata)
+/// 9. ⚠️ **DO NOT**: Create events (runtime owns event creation)
+/// 10. ⚠️ **DO NOT**: Make orchestration decisions (runtime owns logic)
+///
+/// # Example: Minimal Redis Provider Sketch
+///
+/// ```ignore
+/// struct RedisProvider {
+///     client: redis::Client,
+///     lock_timeout_ms: u64,
+/// }
+///
+/// impl Provider for RedisProvider {
+///     async fn fetch_orchestration_item(&self) -> Option<OrchestrationItem> {
+///         // 1. RPOPLPUSH from "orch_queue" to "orch_processing"
+///         let instance = self.client.rpoplpush("orch_queue", "orch_processing")?;
+///         
+///         // 2. Load history from "history:{instance}:{exec_id}" (sorted set)
+///         let exec_id = self.client.get(&format!("instance:{instance}:exec_id")).unwrap_or(1);
+///         let history = self.client.zrange(&format!("history:{instance}:{exec_id}"), 0, -1);
+///         
+///         // 3. Generate lock token and set expiration
+///         let lock_token = uuid::Uuid::new_v4().to_string();
+///         self.client.setex(&format!("lock:{lock_token}"), self.lock_timeout_ms, &instance);
+///         
+///         Some(OrchestrationItem { instance, history, lock_token, ... })
+///     }
+///     
+///     async fn ack_orchestration_item(..., metadata: ExecutionMetadata) -> Result<(), String> {
+///         let mut pipe = redis::pipe();
+///         pipe.atomic(); // Use Redis transaction
+///         
+///         // Append history (ZADD to sorted set with event_id as score)
+///         for event in history_delta {
+///             pipe.zadd(&format!("history:{instance}:{exec_id}"), event_json, event.event_id());
+///         }
+///         
+///         // Update metadata (HSET)
+///         if let Some(status) = &metadata.status {
+///             pipe.hset(&format!("exec:{instance}:{exec_id}"), "status", status);
+///             pipe.hset(&format!("exec:{instance}:{exec_id}"), "output", &metadata.output);
+///         }
+///         
+///         // Create next execution if needed
+///         if metadata.create_next_execution {
+///             pipe.incr(&format!("instance:{instance}:exec_id"), 1);
+///         }
+///         
+///         // Enqueue worker/timer/orch items
+///         for item in worker_items { pipe.lpush("worker_queue", serialize(item)); }
+///         for item in timer_items { pipe.zadd("timer_queue", serialize(item), item.fire_at_ms); }
+///         for item in orch_items { pipe.lpush("orch_queue", serialize(item)); }
+///         
+///         // Release lock
+///         pipe.del(&format!("lock:{lock_token}"));
+///         pipe.lrem("orch_processing", 1, instance);
+///         
+///         pipe.execute()?;
+///         Ok(())
+///     }
+/// }
+/// ```
+///
+/// # Design Principles
+///
+/// **Providers should be storage abstractions, NOT orchestration engines:**
+/// - ✅ Store and retrieve events as opaque data (don't inspect Event contents)
+/// - ✅ Manage queues and locks (generic queue operations)
+/// - ✅ Provide ACID guarantees where possible
+/// - ❌ DON'T interpret orchestration semantics (use ExecutionMetadata from runtime)
+/// - ❌ DON'T create events (runtime creates all events)
+/// - ❌ DON'T make orchestration decisions (runtime decides control flow)
+///
+/// # Multi-Execution Support (ContinueAsNew)
+///
+/// Orchestration instances can have multiple executions (execution_id 1, 2, 3, ...):
+/// - Each execution has its own event history
+/// - `read()` should return the LATEST execution's history
+/// - Provider tracks current_execution_id to know which execution is active
+/// - When metadata.create_next_execution=true, create new execution row
+///
+/// **Example:**
+/// ```text
+/// Instance "order-123":
+///   Execution 1: [OrchestrationStarted, ActivityScheduled, OrchestrationContinuedAsNew]
+///   Execution 2: [OrchestrationStarted, ActivityScheduled, OrchestrationCompleted]
+///   
+///   read("order-123") → Returns Execution 2's events (latest)
+///   read_with_execution("order-123", 1) → Returns Execution 1's events
+///   latest_execution_id("order-123") → Returns Some(2)
+///   list_executions("order-123") → Returns vec![1, 2]
+/// ```
+///
+/// # Concurrency Model
+///
+/// The runtime runs 3 background dispatchers polling your queues:
+/// 1. **Orchestration Dispatcher**: Polls fetch_orchestration_item() continuously
+/// 2. **Work Dispatcher**: Polls dequeue_worker_peek_lock() continuously
+/// 3. **Timer Dispatcher**: Polls dequeue_timer_peek_lock() (if supports_delayed_visibility=true)
+///
+/// **Your implementation must be thread-safe** and support concurrent access from multiple dispatchers.
+///
+/// # Peek-Lock Pattern (Critical)
+///
+/// All dequeue operations use peek-lock semantics:
+/// 1. **Peek**: Select and lock a message (message stays in queue)
+/// 2. **Process**: Runtime processes the locked message
+/// 3. **Ack**: Delete message from queue (success) OR
+/// 4. **Abandon**: Release lock for retry (failure)
+///
+/// Benefits:
+/// - At-least-once delivery (messages survive crashes)
+/// - Automatic retry on worker failure (lock expires)
+/// - Prevents duplicate processing (locked messages invisible to others)
+///
+/// # Transactional Guarantees
+///
+/// **`ack_orchestration_item()` is the atomic boundary:**
+/// - ALL operations in ack must succeed or fail together
+/// - History append + queue enqueues + lock release = atomic
+/// - If commit fails, entire turn is retried
+/// - This ensures exactly-once semantics for orchestration turns
+///
+/// # Queue Message Flow
+///
+/// **Orchestrator Queue:**
+/// - Inputs: StartOrchestration, ActivityCompleted/Failed, TimerFired, ExternalRaised, SubOrchCompleted/Failed, CancelInstance, ContinueAsNew
+/// - Output: Processed by orchestration dispatcher → ack_orchestration_item
+/// - Batching: All messages for an instance processed together
+/// - Ordering: FIFO per instance preferred
+///
+/// **Worker Queue:**
+/// - Inputs: ActivityExecute (from ack_orchestration_item)
+/// - Output: Processed by work dispatcher → ActivityCompleted/Failed to orch queue
+/// - Batching: One message at a time (activities executed independently)
+/// - Ordering: FIFO preferred but not required
+///
+/// **Timer Queue:**
+/// - Inputs: TimerSchedule (from ack_orchestration_item)
+/// - Output: Processed by timer dispatcher → TimerFired to orch queue
+/// - Visibility: Messages become visible at fire_at_ms (if supported)
+/// - Ordering: By fire_at_ms (earliest first)
+///
+/// # Instance Metadata Management
+///
+/// Providers typically maintain metadata about instances:
+/// - instance_id (primary key)
+/// - orchestration_name, orchestration_version (from StartOrchestration)
+/// - current_execution_id (for multi-execution support)
+/// - status, output (optional, from ExecutionMetadata)
+/// - created_at, updated_at timestamps
+///
+/// This metadata is updated via:
+/// - `enqueue_orchestrator_work()` with StartOrchestration (creates instance)
+/// - `ack_orchestration_item()` with ExecutionMetadata (updates status/output)
+/// - `ack_orchestration_item()` with metadata.create_next_execution (increments current_execution_id)
+///
+/// # Error Handling Philosophy
+///
+/// - **Transient errors** (busy, timeout): Return error, let runtime retry
+/// - **Invalid tokens**: Return Ok (idempotent - already processed)
+/// - **Corruption** (missing instance, invalid data): Return error
+/// - **Concurrency conflicts**: Handle via locks, return error if deadlock
+///
+/// # Required vs Optional Methods
+///
+/// **REQUIRED** (must implement):
+/// - fetch_orchestration_item, ack_orchestration_item, abandon_orchestration_item
+/// - read, append_with_execution
+/// - enqueue_worker_work, dequeue_worker_peek_lock, ack_worker
+/// - enqueue_orchestrator_work
+///
+/// **OPTIONAL** (has defaults):
+/// - latest_execution_id, read_with_execution, create_new_execution
+/// - list_instances, list_executions
+/// - Timer queue methods (only if supports_delayed_visibility=true)
+///
+/// # Testing Your Provider
+///
+/// See `tests/sqlite_provider_test.rs` for comprehensive provider tests:
+/// - Basic enqueue/dequeue operations
+/// - Transactional atomicity
+/// - Lock expiration and redelivery
+/// - Multi-execution support
+/// - Execution status and output persistence
+///
+/// All tests use the Provider trait directly (not runtime), so they're portable to new providers.
+///
 #[async_trait::async_trait]
 pub trait Provider: Send + Sync {
     // ===== Core Atomic Orchestration Methods (REQUIRED) =====
     // These three methods form the heart of reliable orchestration execution.
     
     /// Fetch the next orchestration work item atomically.
-    /// 
-    /// This method should:
-    /// 1. Dequeue a batch of messages for a single instance from the orchestrator queue
-    /// 2. Load the instance's history (or empty history for new instances)
-    /// 3. Lock the instance until ack or abandon is called
-    /// 
-    /// Returns None if no work is available.
-    /// 
-    /// Example implementation pattern:
+    ///
+    /// # What This Does
+    ///
+    /// 1. **Select an instance to process**: Find the next available message in orchestrator queue
+    /// 2. **Lock ALL messages** for that instance (batch processing)
+    /// 3. **Load history**: Get complete event history for the current execution
+    /// 4. **Load metadata**: Get orchestration_name, version, execution_id
+    /// 5. **Return locked batch**: Provider must prevent other processes from touching this instance
+    ///
+    /// # Peek-Lock Semantics
+    ///
+    /// - Messages remain in queue until `ack_orchestration_item()` is called
+    /// - Generate a unique `lock_token` (e.g., UUID)
+    /// - Set `locked_until` timestamp (e.g., now + 30 seconds)
+    /// - If lock expires before ack, messages become available again (automatic retry)
+    ///
+    /// # Visibility Filtering
+    ///
+    /// Only return messages where `visible_at <= now()`:
+    /// - Normal messages: visible immediately
+    /// - Delayed messages: `visible_at = now + delay_ms` (used for timer backpressure)
+    ///
+    /// # Instance Batching
+    ///
+    /// **CRITICAL:** All messages in the batch must belong to the SAME instance.
+    ///
+    /// SQLite implementation:
+    /// 1. Find first visible unlocked message: `SELECT instance_id FROM orchestrator_queue WHERE visible_at <= now ORDER BY id LIMIT 1`
+    /// 2. Lock ALL messages for that instance: `UPDATE orchestrator_queue SET lock_token = ? WHERE instance_id = ?`
+    /// 3. Fetch all locked messages: `SELECT * FROM orchestrator_queue WHERE lock_token = ?`
+    ///
+    /// # History Loading
+    ///
+    /// - For new instances (no history yet): return empty Vec
+    /// - For existing instances: return ALL events for current execution_id, ordered by event_id
+    /// - For multi-execution instances: return ONLY the LATEST execution's history
+    ///
+    /// SQLite example:
     /// ```ignore
-    /// let (messages, lock_token) = dequeue_orchestrator_messages()?;
-    /// let instance = extract_instance(&messages);
-    /// let history = read_instance_history(&instance);
-    /// Some(OrchestrationItem { instance, messages, history, lock_token, ... })
+    /// // Get current execution ID
+    /// let exec_id = SELECT current_execution_id FROM instances WHERE instance_id = ?
+    ///
+    /// // Load history for that execution
+    /// SELECT event_data FROM history
+    /// WHERE instance_id = ? AND execution_id = ?
+    /// ORDER BY event_id
+    /// ```
+    ///
+    /// # Return Value
+    ///
+    /// - `Some(OrchestrationItem)` - Work is available and locked
+    /// - `None` - No work available (dispatcher will sleep and retry)
+    ///
+    /// # Error Handling
+    ///
+    /// Don't panic on transient errors - return None and let dispatcher retry.
+    /// Only panic on unrecoverable errors (e.g., corrupted database schema).
+    ///
+    /// # Concurrency
+    ///
+    /// This method is called continuously by the orchestration dispatcher.
+    /// Must be thread-safe and handle concurrent calls gracefully.
+    ///
+    /// # Example Implementation Pattern
+    ///
+    /// ```ignore
+    /// async fn fetch_orchestration_item(&self) -> Option<OrchestrationItem> {
+    ///     let tx = begin_transaction()?;
+    ///     
+    ///     // Find next work
+    ///     let instance_id = SELECT instance_id FROM orch_queue
+    ///         WHERE visible_at <= now() AND lock_token IS NULL
+    ///         ORDER BY id LIMIT 1;
+    ///     
+    ///     if instance_id.is_none() { return None; }
+    ///     
+    ///     // Lock all messages for this instance
+    ///     let lock_token = generate_uuid();
+    ///     UPDATE orch_queue SET lock_token = ?, locked_until = now() + 30s
+    ///         WHERE instance_id = ?;
+    ///     
+    ///     // Fetch locked messages
+    ///     let messages = SELECT work_item FROM orch_queue WHERE lock_token = ?;
+    ///     
+    ///     // Load instance metadata
+    ///     let (name, version, exec_id) = SELECT ... FROM instances WHERE instance_id = ?;
+    ///     
+    ///     // Load history for current execution
+    ///     let history = SELECT event_data FROM history
+    ///         WHERE instance_id = ? AND execution_id = ?
+    ///         ORDER BY event_id;
+    ///     
+    ///     commit_transaction();
+    ///     Some(OrchestrationItem { instance, orchestration_name, execution_id, version, history, messages, lock_token })
+    /// }
     /// ```
     async fn fetch_orchestration_item(&self) -> Option<OrchestrationItem>;
 
     /// Acknowledge successful orchestration processing atomically.
-    /// 
-    /// This method MUST atomically:
-    /// 1. Append history_delta to the instance's history
-    /// 2. Update execution metadata (status, output) based on provided metadata
-    /// 3. Enqueue all worker_items to the worker queue
-    /// 4. Enqueue all timer_items to the timer queue
-    /// 5. Enqueue all orchestrator_items to the orchestrator queue
-    /// 6. Release the instance lock
-    /// 
-    /// The metadata parameter contains pre-computed execution state from the runtime.
-    /// Providers should store this metadata without inspecting event contents.
-    /// 
-    /// If any operation fails, the entire operation should be rolled back if possible.
-    /// For simple providers, best-effort atomicity is acceptable.
+    ///
+    /// This is the most critical method - it commits all changes from an orchestration turn atomically.
+    ///
+    /// # What This Does (ALL must be atomic)
+    ///
+    /// 1. **Append new events** to history for current execution
+    /// 2. **Update execution metadata** (status, output) using pre-computed metadata
+    /// 3. **Create new execution** if metadata.create_next_execution=true (ContinueAsNew)
+    /// 4. **Enqueue worker_items** to worker queue (activity executions)
+    /// 5. **Enqueue timer_items** to timer queue (timer schedules)
+    /// 6. **Enqueue orchestrator_items** to orchestrator queue (completions, new instances)
+    /// 7. **Delete acknowledged messages** from orchestrator queue (release lock)
+    ///
+    /// # Atomicity Requirements
+    ///
+    /// **CRITICAL:** All 7 operations above must succeed or fail together.
+    ///
+    /// - **If ANY operation fails**: Roll back the entire transaction
+    /// - **If commit succeeds**: All changes are durable and visible
+    ///
+    /// This prevents:
+    /// - Duplicate activity execution (history saved but worker item lost)
+    /// - Lost completions (worker item enqueued but history not saved)
+    /// - Orphaned locks (messages deleted but history append failed)
+    ///
+    /// # Parameters
+    ///
+    /// * `lock_token` - Token from fetch_orchestration_item() - identifies locked messages
+    /// * `history_delta` - New events to append (runtime assigns event_ids, provider stores as-is)
+    /// * `worker_items` - Activity executions to enqueue (WorkItem::ActivityExecute)
+    /// * `timer_items` - Timer schedules to enqueue (WorkItem::TimerSchedule)
+    /// * `orchestrator_items` - Orchestrator messages to enqueue (completions, starts, events)
+    /// * `metadata` - Pre-computed execution state (DO NOT inspect events yourself!)
+    ///
+    /// # Event Storage (history_delta)
+    ///
+    /// **Important:** Store events exactly as provided. DO NOT:
+    /// - Modify event_id (runtime assigns these)
+    /// - Inspect event contents to make decisions
+    /// - Filter or reorder events
+    ///
+    /// SQLite example:
+    /// ```ignore
+    /// for event in &history_delta {
+    ///     let event_json = serde_json::to_string(&event)?;
+    ///     let event_type = extract_discriminant_name(&event); // For indexing only
+    ///     INSERT INTO history (instance_id, execution_id, event_id, event_data, event_type)
+    ///     VALUES (?, ?, event.event_id(), event_json, event_type)
+    /// }
+    /// ```
+    ///
+    /// # Metadata Storage (ExecutionMetadata)
+    ///
+    /// **The runtime has ALREADY inspected events and computed metadata.**
+    /// Provider just stores it:
+    ///
+    /// ```ignore
+    /// // Update execution status/output from metadata
+    /// if let Some(status) = &metadata.status {
+    ///     UPDATE executions
+    ///     SET status = ?, output = ?, completed_at = CURRENT_TIMESTAMP
+    ///     WHERE instance_id = ? AND execution_id = ?
+    /// }
+    ///
+    /// // Create next execution if requested
+    /// if metadata.create_next_execution {
+    ///     if let Some(next_id) = metadata.next_execution_id {
+    ///         INSERT INTO executions (instance_id, execution_id, status)
+    ///         VALUES (?, next_id, 'Running')
+    ///         
+    ///         UPDATE instances SET current_execution_id = next_id
+    ///     }
+    /// }
+    /// ```
+    ///
+    /// # Queue Item Enqueuing
+    ///
+    /// Worker items, timer items, and orchestrator items must be enqueued within the same transaction:
+    ///
+    /// ```ignore
+    /// // Worker queue (no special handling)
+    /// for item in worker_items {
+    ///     INSERT INTO worker_queue (work_item) VALUES (serde_json::to_string(&item))
+    /// }
+    ///
+    /// // Timer queue (with delayed visibility if supported)
+    /// for item in timer_items {
+    ///     if let WorkItem::TimerSchedule { fire_at_ms, .. } = &item {
+    ///         INSERT INTO timer_queue (work_item, fire_at)
+    ///         VALUES (serde_json::to_string(&item), fire_at_ms)
+    ///     }
+    /// }
+    ///
+    /// // Orchestrator queue (may have delayed visibility)
+    /// for item in orchestrator_items {
+    ///     INSERT INTO orchestrator_queue (instance_id, work_item, visible_at)
+    ///     VALUES (extract_instance(&item), serde_json::to_string(&item), now())
+    /// }
+    /// ```
+    ///
+    /// # Lock Release
+    ///
+    /// Delete all messages with this lock_token:
+    /// ```ignore
+    /// DELETE FROM orchestrator_queue WHERE lock_token = ?
+    /// ```
+    ///
+    /// # Error Handling
+    ///
+    /// - Return `Ok(())` if all operations succeeded
+    /// - Return `Err(msg)` if any operation failed (transaction rolled back)
+    /// - On error, runtime will call `abandon_orchestration_item()` to release lock
+    ///
+    /// # Special Cases
+    ///
+    /// **StartOrchestration in orchestrator_items:**
+    /// - May need to create instance metadata row (INSERT OR IGNORE)
+    /// - Should create execution row with ID=1 if new instance
+    ///
+    /// **Empty history_delta:**
+    /// - Valid case (e.g., terminal instance being acked with no changes)
+    /// - Still process queues and release lock
+    ///
+    /// # SQLite Implementation Pattern
+    ///
+    /// ```ignore
+    /// async fn ack_orchestration_item(...) -> Result<(), String> {
+    ///     let tx = begin_transaction()?;
+    ///     
+    ///     // Get instance_id from lock_token
+    ///     let instance_id = SELECT instance_id FROM orch_queue WHERE lock_token = ?;
+    ///     
+    ///     // Get current execution_id
+    ///     let exec_id = SELECT current_execution_id FROM instances WHERE instance_id = ?;
+    ///     
+    ///     // Append history
+    ///     for event in history_delta {
+    ///         INSERT INTO history (...) VALUES (instance_id, exec_id, event.event_id(), ...)
+    ///     }
+    ///     
+    ///     // Store metadata (no event inspection!)
+    ///     if let Some(status) = &metadata.status {
+    ///         UPDATE executions SET status = ?, output = ?, completed_at = NOW()
+    ///         WHERE instance_id = ? AND execution_id = ?
+    ///     }
+    ///     
+    ///     // Create next execution if needed
+    ///     if metadata.create_next_execution {
+    ///         INSERT INTO executions (instance_id, execution_id, status) VALUES (?, next_id, 'Running')
+    ///         UPDATE instances SET current_execution_id = next_id
+    ///     }
+    ///     
+    ///     // Enqueue worker items
+    ///     for item in worker_items {
+    ///         INSERT INTO worker_queue (work_item) VALUES (serialize(item))
+    ///     }
+    ///     
+    ///     // Enqueue timer items
+    ///     for item in timer_items {
+    ///         INSERT INTO timer_queue (work_item, fire_at) VALUES (serialize(item), item.fire_at_ms)
+    ///     }
+    ///     
+    ///     // Enqueue orchestrator items
+    ///     for item in orchestrator_items {
+    ///         // May need to create instance for StartOrchestration
+    ///         INSERT INTO orch_queue (instance_id, work_item, visible_at) VALUES (...)
+    ///     }
+    ///     
+    ///     // Release lock
+    ///     DELETE FROM orch_queue WHERE lock_token = ?;
+    ///     
+    ///     commit_transaction()?;
+    ///     Ok(())
+    /// }
+    /// ```
     async fn ack_orchestration_item(
         &self,
         _lock_token: &str,
@@ -151,53 +962,301 @@ pub trait Provider: Send + Sync {
     ) -> Result<(), String>;
 
     /// Abandon orchestration processing (used for errors/retries).
-    /// 
-    /// This method should:
-    /// 1. Release the instance lock
-    /// 2. Make the messages available for reprocessing
-    /// 3. Optionally delay visibility by delay_ms milliseconds
-    /// 
-    /// Used when orchestration processing fails and needs to be retried.
+    ///
+    /// Called when orchestration processing fails (e.g., database busy, runtime crash).
+    /// The messages must be made available for reprocessing.
+    ///
+    /// # What This Does
+    ///
+    /// 1. **Clear lock_token** from messages (make available again)
+    /// 2. **Optionally delay** retry by setting visibility timestamp
+    /// 3. **Preserve message order** (don't reorder or modify messages)
+    ///
+    /// # Parameters
+    ///
+    /// * `lock_token` - Token from fetch_orchestration_item()
+    /// * `delay_ms` - Optional delay before messages become visible again
+    ///   - `None`: immediate retry (visible_at = now)
+    ///   - `Some(ms)`: delayed retry (visible_at = now + ms)
+    ///
+    /// # Implementation Pattern
+    ///
+    /// ```ignore
+    /// async fn abandon_orchestration_item(lock_token: &str, delay_ms: Option<u64>) -> Result<(), String> {
+    ///     let visible_at = if let Some(delay) = delay_ms {
+    ///         now() + delay
+    ///     } else {
+    ///         now()
+    ///     };
+    ///     
+    ///     UPDATE orchestrator_queue
+    ///     SET lock_token = NULL, locked_until = NULL, visible_at = ?
+    ///     WHERE lock_token = ?;
+    ///     
+    ///     Ok(())
+    /// }
+    /// ```
+    ///
+    /// # Use Cases
+    ///
+    /// - Database contention (SQLITE_BUSY) → delay_ms = Some(50) for backoff
+    /// - Orchestration turn failed → delay_ms = None for immediate retry
+    /// - Runtime shutdown during processing → messages auto-recover when lock expires
+    ///
+    /// # Error Handling
+    ///
+    /// Should not fail - if lock_token is invalid, just return Ok (idempotent).
     async fn abandon_orchestration_item(&self, _lock_token: &str, _delay_ms: Option<u64>) -> Result<(), String>;
 
     // ===== Basic History Access (REQUIRED) =====
     
     /// Read the full history for an instance.
-    /// Returns empty Vec if instance doesn't exist.
-    /// For multi-execution instances, returns the latest execution's history.
+    ///
+    /// # What This Does
+    ///
+    /// Returns ALL events for the LATEST execution of an instance, ordered by event_id.
+    ///
+    /// # Multi-Execution Behavior
+    ///
+    /// For instances with multiple executions (from ContinueAsNew):
+    /// - Find the latest execution_id (MAX(execution_id))
+    /// - Return events for ONLY that execution
+    /// - DO NOT return events from earlier executions
+    ///
+    /// # Return Value
+    ///
+    /// - Empty Vec if instance doesn't exist
+    /// - Empty Vec if instance exists but has no events (shouldn't happen normally)
+    /// - Vec of events ordered by event_id ascending (event_id 1, 2, 3, ...)
+    ///
+    /// # Implementation Pattern
+    ///
+    /// ```ignore
+    /// async fn read(&self, instance: &str) -> Vec<Event> {
+    ///     // Get latest execution ID
+    ///     let exec_id = SELECT COALESCE(MAX(execution_id), 1)
+    ///         FROM executions WHERE instance_id = ?;
+    ///     
+    ///     // Load events for that execution
+    ///     let rows = SELECT event_data FROM history
+    ///         WHERE instance_id = ? AND execution_id = ?
+    ///         ORDER BY event_id;
+    ///     
+    ///     rows.into_iter()
+    ///         .filter_map(|row| serde_json::from_str(&row.event_data).ok())
+    ///         .collect()
+    /// }
+    /// ```
+    ///
+    /// # Usage
+    ///
+    /// Called by:
+    /// - Client.get_orchestration_status() - to determine current state
+    /// - Tests and debugging tools
+    /// - NOT called in hot path (fetch_orchestration_item loads history internally)
     async fn read(&self, instance: &str) -> Vec<Event>;
 
     // ===== Worker Queue Operations (REQUIRED) =====
     // Worker queue processes activity executions.
     
     /// Enqueue an activity execution request.
+    ///
+    /// # What This Does
+    ///
+    /// Add a WorkItem::ActivityExecute to the worker queue for background processing.
+    ///
+    /// # Implementation
+    ///
+    /// ```ignore
+    /// async fn enqueue_worker_work(&self, item: WorkItem) -> Result<(), String> {
+    ///     INSERT INTO worker_queue (work_item)
+    ///     VALUES (serde_json::to_string(&item)?)
+    /// }
+    /// ```
+    ///
+    /// # Locking
+    ///
+    /// New messages should have lock_token = NULL (available for dequeue).
+    ///
+    /// # Ordering
+    ///
+    /// FIFO order preferred but not strictly required.
     async fn enqueue_worker_work(&self, _item: WorkItem) -> Result<(), String>;
 
     /// Dequeue a single work item with peek-lock semantics.
-    /// Returns the work item and a lock token that must be used to ack/abandon.
+    ///
+    /// # What This Does
+    ///
+    /// 1. Find next unlocked worker queue item
+    /// 2. Lock it with a unique token
+    /// 3. Return item + token (item stays in queue until ack)
+    ///
+    /// # Implementation Pattern
+    ///
+    /// ```ignore
+    /// async fn dequeue_worker_peek_lock(&self) -> Option<(WorkItem, String)> {
+    ///     let tx = begin_transaction()?;
+    ///     
+    ///     // Find next available item
+    ///     let row = SELECT id, work_item FROM worker_queue
+    ///         WHERE lock_token IS NULL OR locked_until <= now()
+    ///         ORDER BY id LIMIT 1;
+    ///     
+    ///     if row.is_none() { return None; }
+    ///     
+    ///     // Lock it
+    ///     let lock_token = generate_uuid();
+    ///     UPDATE worker_queue
+    ///     SET lock_token = ?, locked_until = now() + 30s
+    ///     WHERE id = ?;
+    ///     
+    ///     let item = serde_json::from_str(&row.work_item)?;
+    ///     commit_transaction();
+    ///     Some((item, lock_token))
+    /// }
+    /// ```
+    ///
+    /// # Return Value
+    ///
+    /// - `Some((WorkItem, String))` - Item is locked and ready to process
+    /// - `None` - No work available
+    ///
+    /// # Concurrency
+    ///
+    /// Called continuously by work dispatcher. Must prevent double-dequeue.
     async fn dequeue_worker_peek_lock(&self) -> Option<(WorkItem, String)>;
 
     /// Acknowledge successful processing of a work item.
+    ///
+    /// # What This Does
+    ///
+    /// Delete the worker queue item after successful processing.
+    ///
+    /// # Implementation
+    ///
+    /// ```ignore
+    /// async fn ack_worker(&self, token: &str) -> Result<(), String> {
+    ///     DELETE FROM worker_queue WHERE lock_token = ?
+    /// }
+    /// ```
+    ///
+    /// # Error Handling
+    ///
+    /// If token is invalid (already acked), return Ok (idempotent).
     async fn ack_worker(&self, _token: &str) -> Result<(), String>;
 
     // ===== Multi-Execution Support (REQUIRED for ContinueAsNew) =====
     // These methods enable orchestrations to continue with new input while maintaining history.
     
     /// Get the latest execution ID for an instance.
-    /// Returns None if instance doesn't exist, Some(id) where id >= 1 otherwise.
+    ///
+    /// # What This Does
+    ///
+    /// Returns the current (highest) execution_id for an instance.
+    ///
+    /// # Implementation
+    ///
+    /// ```ignore
+    /// async fn latest_execution_id(&self, instance: &str) -> Option<u64> {
+    ///     SELECT MAX(execution_id) FROM executions WHERE instance_id = ?
+    ///     // Returns None if no executions, Some(max_id) otherwise
+    /// }
+    /// ```
+    ///
+    /// # Default Implementation
+    ///
+    /// The default implementation uses `read()` and returns Some(1) if history exists.
+    /// Override for better performance if you track execution IDs separately.
+    ///
+    /// # Return Value
+    ///
+    /// - `None` if instance doesn't exist
+    /// - `Some(1)` for single-execution instances
+    /// - `Some(n)` where n > 1 for multi-execution instances
     async fn latest_execution_id(&self, instance: &str) -> Option<u64> {
         let h = self.read(instance).await;
         if h.is_empty() { None } else { Some(1) }
     }
     
     /// Read history for a specific execution.
-    /// Used primarily for debugging and testing specific executions.
+    ///
+    /// # What This Does
+    ///
+    /// Returns events for a specific execution_id, not just the latest.
+    ///
+    /// # Use Cases
+    ///
+    /// - Debugging: inspect execution 1 after ContinueAsNew created execution 2
+    /// - Testing: verify execution history isolation
+    /// - NOT used in normal runtime operation
+    ///
+    /// # Implementation
+    ///
+    /// ```ignore
+    /// async fn read_with_execution(&self, instance: &str, execution_id: u64) -> Vec<Event> {
+    ///     SELECT event_data FROM history
+    ///     WHERE instance_id = ? AND execution_id = ?
+    ///     ORDER BY event_id
+    /// }
+    /// ```
+    ///
+    /// # Default Implementation
+    ///
+    /// Falls back to `read()` (ignores execution_id parameter).
+    /// Override if you need execution-specific history access.
     async fn read_with_execution(&self, instance: &str, _execution_id: u64) -> Vec<Event> {
         self.read(instance).await
     }
     
     /// Append events to a specific execution.
-    /// This is typically called internally by ack_orchestration_item.
+    ///
+    /// # What This Does
+    ///
+    /// Add new events to the history log for a specific execution.
+    ///
+    /// # CRITICAL: Event ID Assignment
+    ///
+    /// **The runtime assigns event_ids BEFORE calling this method.**
+    /// - DO NOT modify event.event_id()
+    /// - DO NOT renumber events
+    /// - Store events exactly as provided
+    ///
+    /// # Duplicate Detection
+    ///
+    /// Events with duplicate (instance_id, execution_id, event_id) should:
+    /// - Either: Reject with error (let runtime handle)
+    /// - Or: IGNORE (idempotent append)
+    /// - NEVER: Overwrite existing event (corrupts history)
+    ///
+    /// # Implementation Pattern
+    ///
+    /// ```ignore
+    /// async fn append_with_execution(instance: &str, execution_id: u64, new_events: Vec<Event>) -> Result<(), String> {
+    ///     for event in &new_events {
+    ///         // Validate event_id was set
+    ///         if event.event_id() == 0 {
+    ///             return Err("event_id must be set by runtime");
+    ///         }
+    ///         
+    ///         let event_json = serde_json::to_string(&event)?;
+    ///         let event_type = discriminant_name(&event); // For indexing
+    ///         
+    ///         INSERT INTO history (instance_id, execution_id, event_id, event_data, event_type)
+    ///         VALUES (?, ?, event.event_id(), event_json, event_type)
+    ///         // Use PRIMARY KEY (instance_id, execution_id, event_id) to prevent duplicates
+    ///     }
+    ///     Ok(())
+    /// }
+    /// ```
+    ///
+    /// # Ordering
+    ///
+    /// Events must be retrievable in event_id order (use ORDER BY event_id in reads).
+    ///
+    /// # Concurrency
+    ///
+    /// Usually called within a transaction (from ack_orchestration_item).
+    /// If called standalone, must be thread-safe.
     async fn append_with_execution(
         &self,
         instance: &str,
@@ -206,12 +1265,60 @@ pub trait Provider: Send + Sync {
     ) -> Result<(), String>;
     
     /// Create a new execution for ContinueAsNew scenarios.
-    /// 
-    /// This should:
-    /// 1. Create a new execution with ID = latest + 1
-    /// 2. Write an OrchestrationStarted event with the provided parameters
-    /// 
-    /// Used when processing WorkItem::ContinueAsNew.
+    ///
+    /// # Deprecation Notice
+    ///
+    /// **This method may be removed in future versions.**
+    /// The runtime now handles execution creation via `ExecutionMetadata.create_next_execution`.
+    /// Providers should handle execution creation in `ack_orchestration_item` based on metadata.
+    ///
+    /// # What This Does
+    ///
+    /// 1. Create new execution row with ID = latest + 1
+    /// 2. Create and append Event::OrchestrationStarted for new execution
+    ///
+    /// # Implementation Pattern
+    ///
+    /// ```ignore
+    /// async fn create_new_execution(
+    ///     instance: &str,
+    ///     orchestration: &str,
+    ///     version: &str,
+    ///     input: &str,
+    ///     parent_instance: Option<&str>,
+    ///     parent_id: Option<u64>,
+    /// ) -> Result<u64, String> {
+    ///     let tx = begin_transaction()?;
+    ///     
+    ///     // Get next execution ID
+    ///     let next_id = SELECT COALESCE(MAX(execution_id), 0) + 1
+    ///         FROM executions WHERE instance_id = ?;
+    ///     
+    ///     // Create execution row
+    ///     INSERT INTO executions (instance_id, execution_id, status)
+    ///     VALUES (?, next_id, 'Running');
+    ///     
+    ///     // Create OrchestrationStarted event
+    ///     let start_event = Event::OrchestrationStarted {
+    ///         event_id: 1,  // First event of new execution
+    ///         name: orchestration.to_string(),
+    ///         version: version.to_string(),
+    ///         input: input.to_string(),
+    ///         parent_instance: parent_instance.map(|s| s.to_string()),
+    ///         parent_id,
+    ///     };
+    ///     
+    ///     // Append to history
+    ///     INSERT INTO history (...) VALUES (instance, next_id, 1, serialize(start_event), ...);
+    ///     
+    ///     commit_transaction()?;
+    ///     Ok(next_id)
+    /// }
+    /// ```
+    ///
+    /// # Note
+    ///
+    /// Prefer handling this in `ack_orchestration_item` via metadata instead of this method.
     async fn create_new_execution(
         &self,
         _instance: &str,
@@ -225,39 +1332,234 @@ pub trait Provider: Send + Sync {
     // ===== Timer Support (REQUIRED only if supports_delayed_visibility returns true) =====
     
     /// Whether this provider natively supports delayed message visibility.
-    /// If false (default), the runtime uses an in-process timer service.
-    /// If true, the provider must implement timer queue methods below.
+    ///
+    /// # Return Value
+    ///
+    /// - `true`: Provider can delay message visibility (e.g., via database-level visibility timeouts)
+    ///   - Runtime will use timer queue methods below
+    ///   - More efficient - leverages database features
+    ///   - Example: SQLite with `visible_at` timestamp column
+    ///
+    /// - `false`: Provider does NOT support delayed visibility (default)
+    ///   - Runtime uses in-process timer service instead
+    ///   - Simpler provider implementation
+    ///   - Works fine for most use cases
+    ///
+    /// # Implementation Guidance
+    ///
+    /// Return true if you can:
+    /// - Store messages with future `visible_at` timestamp
+    /// - Filter messages in dequeue based on `visible_at <= now()`
+    /// - Efficiently wake up when next timer becomes ready
+    ///
+    /// If unsure, return false (default). The runtime timer service works well.
     fn supports_delayed_visibility(&self) -> bool {
         false
     }
     
-    /// Enqueue a timer to fire at a specific time (only called if supports_delayed_visibility = true).
+    /// Enqueue a timer to fire at a specific time.
+    ///
+    /// **Only called if `supports_delayed_visibility() = true`**
+    ///
+    /// # What This Does
+    ///
+    /// Store WorkItem::TimerSchedule in timer queue, but make it invisible until `fire_at_ms`.
+    ///
+    /// # Implementation
+    ///
+    /// ```ignore
+    /// async fn enqueue_timer_work(&self, item: WorkItem) -> Result<(), String> {
+    ///     if let WorkItem::TimerSchedule { fire_at_ms, .. } = &item {
+    ///         INSERT INTO timer_queue (work_item, fire_at, lock_token, locked_until)
+    ///         VALUES (serialize(item), fire_at_ms, NULL, NULL)
+    ///     }
+    /// }
+    /// ```
+    ///
+    /// # Visibility
+    ///
+    /// `dequeue_timer_peek_lock()` should only return timers where `fire_at <= now()`.
     async fn enqueue_timer_work(&self, _item: WorkItem) -> Result<(), String>;
     
-    /// Dequeue a timer that's ready to fire (only called if supports_delayed_visibility = true).
+    /// Dequeue a timer that's ready to fire.
+    ///
+    /// **Only called if `supports_delayed_visibility() = true`**
+    ///
+    /// # What This Does
+    ///
+    /// Return the next timer where `fire_at_ms <= now()`, using peek-lock semantics.
+    ///
+    /// # Implementation
+    ///
+    /// ```ignore
+    /// async fn dequeue_timer_peek_lock(&self) -> Option<(WorkItem, String)> {
+    ///     let tx = begin_transaction()?;
+    ///     let now = current_timestamp_ms();
+    ///     
+    ///     // Find next ready timer
+    ///     let row = SELECT id, work_item FROM timer_queue
+    ///         WHERE fire_at <= ? AND (lock_token IS NULL OR locked_until <= ?)
+    ///         ORDER BY fire_at, id LIMIT 1;
+    ///     
+    ///     if row.is_none() { return None; }
+    ///     
+    ///     // Lock it
+    ///     let lock_token = generate_uuid();
+    ///     UPDATE timer_queue SET lock_token = ?, locked_until = now() + 30s
+    ///     WHERE id = ?;
+    ///     
+    ///     commit_transaction();
+    ///     Some((deserialize(row.work_item), lock_token))
+    /// }
+    /// ```
+    ///
+    /// # Ordering
+    ///
+    /// Should dequeue timers in fire_at order (earliest first).
     async fn dequeue_timer_peek_lock(&self) -> Option<(WorkItem, String)>;
     
-    /// Acknowledge a processed timer (only called if supports_delayed_visibility = true).
+    /// Acknowledge a processed timer.
+    ///
+    /// **Only called if `supports_delayed_visibility() = true`**
+    ///
+    /// # What This Does
+    ///
+    /// Delete the timer from queue after successful processing.
+    ///
+    /// # Implementation
+    ///
+    /// ```ignore
+    /// async fn ack_timer(&self, token: &str) -> Result<(), String> {
+    ///     DELETE FROM timer_queue WHERE lock_token = ?
+    /// }
+    /// ```
     async fn ack_timer(&self, _token: &str) -> Result<(), String>;
 
     // ===== Optional Management APIs =====
     // These have default implementations and are primarily used for testing/debugging.
     
     /// Enqueue a work item to the orchestrator queue.
-    /// Note: In normal operation, orchestrator items are enqueued via ack_orchestration_item.
-    /// This method is used by raise_event and cancel_instance operations.
-    /// 
-    /// `delay_ms`: Optional delay in milliseconds before the item becomes visible for processing.
-    /// None means immediate visibility. Providers that don't support delayed visibility will ignore the delay.
+    ///
+    /// # Purpose
+    ///
+    /// Used by runtime for:
+    /// - External events: `Client.raise_event()` → enqueues WorkItem::ExternalRaised
+    /// - Cancellation: `Client.cancel_instance()` → enqueues WorkItem::CancelInstance
+    /// - Testing: Direct queue manipulation
+    ///
+    /// **Note:** In normal operation, orchestrator items are enqueued via `ack_orchestration_item`.
+    ///
+    /// # Parameters
+    ///
+    /// * `item` - WorkItem to enqueue (usually ExternalRaised or CancelInstance)
+    /// * `delay_ms` - Optional visibility delay
+    ///   - `None`: Immediate visibility (common case)
+    ///   - `Some(ms)`: Delay visibility by ms milliseconds
+    ///   - Providers without delayed_visibility support can ignore this (treat as None)
+    ///
+    /// # Implementation Pattern
+    ///
+    /// ```ignore
+    /// async fn enqueue_orchestrator_work(&self, item: WorkItem, delay_ms: Option<u64>) -> Result<(), String> {
+    ///     let instance = extract_instance(&item);  // See WorkItem docs for extraction
+    ///     let work_json = serde_json::to_string(&item)?;
+    ///     
+    ///     let visible_at = if let Some(delay) = delay_ms {
+    ///         now() + delay
+    ///     } else {
+    ///         now()
+    ///     };
+    ///     
+    ///     // For StartOrchestration, may need to create instance first
+    ///     if let WorkItem::StartOrchestration { orchestration, version, .. } = &item {
+    ///         INSERT OR IGNORE INTO instances (instance_id, orchestration_name, orchestration_version)
+    ///         VALUES (instance, orchestration, version.unwrap_or("1.0.0"));
+    ///         
+    ///         INSERT OR IGNORE INTO executions (instance_id, execution_id, status)
+    ///         VALUES (instance, 1, 'Running');
+    ///     }
+    ///     
+    ///     INSERT INTO orchestrator_queue (instance_id, work_item, visible_at, lock_token, locked_until)
+    ///     VALUES (instance, work_json, visible_at, NULL, NULL);
+    ///     
+    ///     Ok(())
+    /// }
+    /// ```
+    ///
+    /// # Special Cases
+    ///
+    /// **StartOrchestration:**
+    /// - Must create instance metadata if doesn't exist
+    /// - Must create execution with ID=1
+    ///
+    /// **ExternalRaised:**
+    /// - Can arrive before instance is started (race condition)
+    /// - Should still enqueue - runtime will handle gracefully
+    ///
+    /// # Error Handling
+    ///
+    /// Return Err if storage fails. Return Ok if item was enqueued successfully.
     async fn enqueue_orchestrator_work(&self, _item: WorkItem, _delay_ms: Option<u64>) -> Result<(), String>;
     
     /// List all known instance IDs.
-    /// Default: empty list. Used primarily for testing and debugging.
-    async fn list_instances(&self) -> Vec<String>;
+    ///
+    /// # Purpose
+    ///
+    /// Used for:
+    /// - Testing: Find all instances created during a test
+    /// - Debugging: Inspect what instances exist
+    /// - Admin tools: Build dashboards
+    ///
+    /// # Implementation
+    ///
+    /// ```ignore
+    /// async fn list_instances(&self) -> Vec<String> {
+    ///     SELECT instance_id FROM instances ORDER BY created_at
+    /// }
+    /// ```
+    ///
+    /// # Default Implementation
+    ///
+    /// Returns empty Vec. Override if you want to support instance listing.
+    ///
+    /// # Not Required
+    ///
+    /// This is purely for observability - runtime doesn't call this.
+    async fn list_instances(&self) -> Vec<String> {
+        Vec::new()
+    }
     
     /// List all execution IDs for an instance.
-    /// Default: returns [1] if instance exists, empty otherwise.
-    async fn list_executions(&self, instance: &str) -> Vec<u64>;
+    ///
+    /// # Purpose
+    ///
+    /// Used for:
+    /// - Testing: Verify ContinueAsNew created multiple executions
+    /// - Debugging: See execution history for an instance
+    /// - NOT used by runtime in normal operation
+    ///
+    /// # Implementation
+    ///
+    /// ```ignore
+    /// async fn list_executions(&self, instance: &str) -> Vec<u64> {
+    ///     SELECT execution_id FROM executions
+    ///     WHERE instance_id = ?
+    ///     ORDER BY execution_id
+    /// }
+    /// ```
+    ///
+    /// # Default Implementation
+    ///
+    /// Returns [1] if instance exists (from read()), empty Vec otherwise.
+    /// Override for proper multi-execution support.
+    ///
+    /// # Return Value
+    ///
+    /// Vec of execution IDs in ascending order: [1], [1, 2], [1, 2, 3], etc.
+    async fn list_executions(&self, instance: &str) -> Vec<u64> {
+        let h = self.read(instance).await;
+        if h.is_empty() { Vec::new() } else { vec![1] }
+    }
     
     // - Add timeout parameter to dequeue_worker_peek_lock and dequeue_timer_peek_lock
     // - Add refresh_worker_lock(token, extend_ms) and refresh_timer_lock(token, extend_ms)

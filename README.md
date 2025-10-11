@@ -9,25 +9,25 @@ What you can build with this (inspired by .NET Durable Task/Durable Functions pa
 - Function chaining: model a multi-step process as sequential awaits where each step depends on prior results.
 - Fan-out/fan-in: schedule many activities in parallel and deterministically aggregate results.
 - Human interaction (external events): wait for out-of-band approvals, callbacks, or webhooks and then resume.
-- Durable timers and deadlines: sleep for minutes/hours/days without holding threads; resume exactly-once after timeouts. **Use `ctx.schedule_timer()` for orchestration delays. Activities can use any async operations including sleep.**
+- Durable timers and deadlines: sleep for minutes/hours/days without holding threads; resume exactly-once after timeouts. **Use `ctx.schedule_timer()` for orchestration-level delays. Activities can sleep/poll internally as part of their work (e.g., provisioning resources).**
 - Saga-style compensation: on failure, run compensating actions to roll back prior steps.
 
 These scenarios mirror the officially documented Durable Task/Durable Functions application patterns and are enabled here by deterministic replay, correlation IDs, durable timers, and external event handling.
 
 Getting started samples
-- **Start here**: See `examples/` directory for complete, runnable examples
+- **Start here**: See `docs/ORCHESTRATION-GUIDE.md` for complete guide to writing workflows
 - **Quick start**: Run `cargo run --example hello_world` to see Duroxide in action
 - **Advanced patterns**: Check `tests/e2e_samples.rs` for comprehensive usage patterns
-- **Quick reference**: See `QUICK_START.md` for a 5-minute overview
+- **Provider implementation**: See `docs/provider-implementation-guide.md` for building custom providers
 
 What it is
 - Deterministic orchestration core with correlated event IDs and replay safety
-- Message-driven runtime built on Tokio, with three dispatchers and an in-process router:
-  - OrchestrationDispatcher (orchestrator queue)
-  - WorkDispatcher (activities and child/detached starts, worker queue)
-  - TimerDispatcher (timers, timer queue)
-  - InstanceRouter (in-process delivery of completions to active instances)
-- Storage-agnostic via `Provider` (SQLite provider with in-memory and file-based modes)
+- Message-driven runtime built on Tokio, with three dispatchers:
+  - OrchestrationDispatcher (orchestrator queue) - processes workflow turns
+  - WorkDispatcher (worker queue) - executes activities
+  - TimerDispatcher (timer queue) - fires durable timers
+- Storage-agnostic via `Provider` trait (SQLite provider with in-memory and file-based modes)
+- Configurable polling frequency and runtime options
 
 How it works (brief)
 - The orchestrator runs turn-by-turn. Each turn it is polled once, may schedule actions, then the runtime waits for completions.

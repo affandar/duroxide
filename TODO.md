@@ -14,11 +14,8 @@
 - [ ] Parent-child cancellation cascading
 
 ### Other TODOs
-- drop the polling frequence for the dispatchers
 - review duplicate orch instance ids
 - perf pass over replay engine
-- implementing a provider requires the implementor to look deeply at the sqlite provider code
-- clean up leaky abstractions (provider should not have to compute the orchestration state and output e.g)
 - parallelize dispatcher loops
 - lock TTL for timer and worker queues and update lease
 - Reduce ornamental user code in orchestrations and acivities
@@ -44,6 +41,9 @@
 
 ## DONE
 
+- implementing a provider requires the implementor to look deeply at the sqlite provider code
+- clean up leaky abstractions (provider should not have to compute the orchestration state and output e.g)
+- drop the polling frequence for the dispatchers
 - Cleanup the docs before making public
 - write a real world orchestrations with versioning etc
 - fix up the tracing to not use activities [DONE - tracing is now host-side only]
