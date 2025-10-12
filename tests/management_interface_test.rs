@@ -235,7 +235,7 @@ async fn test_multi_execution_support() {
     // Add a small delay to ensure all processing is complete
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
-    // ContinueAsNew appears to reuse the same execution rather than creating new ones
+    // ContinueAsNew currently reuses the same execution rather than creating new ones
     let executions = client.list_executions("test-continue").await;
     
     // Should have exactly 1 execution (ContinueAsNew reuses the same execution)
