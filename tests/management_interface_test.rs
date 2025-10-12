@@ -171,7 +171,7 @@ async fn test_execution_info() {
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
     // List executions
-    let executions = client.list_executions("test-exec").await;
+    let executions = client.list_executions("test-exec").await.unwrap();
     assert_eq!(executions.len(), 1);
     assert_eq!(executions[0], 1);
 
@@ -235,23 +235,30 @@ async fn test_multi_execution_support() {
     // Add a small delay to ensure all processing is complete
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
-    // ContinueAsNew currently reuses the same execution rather than creating new ones
-    let executions = client.list_executions("test-continue").await;
+    // ContinueAsNew creates separate execution records now
+    let executions = client.list_executions("test-continue").await.unwrap();
     
-    // Should have exactly 1 execution (ContinueAsNew reuses the same execution)
-    assert_eq!(executions.len(), 1);
-    assert_eq!(executions[0], 1);
+    // Should have exactly 4 executions: exec_id=1 (count=0→1), exec_id=2 (count=1→2), 
+    // exec_id=3 (count=2→3), exec_id=4 (count=3, completes)
+    assert_eq!(executions.len(), 4);
+    assert_eq!(executions, vec![1, 2, 3, 4]);
 
-    // Get info for the execution
-    let exec_info = client.get_execution_info("test-continue", 1).await.unwrap();
-    assert_eq!(exec_info.execution_id, 1);
-    
-    // The execution should be ContinuedAsNew (since it called continue_as_new)
-    assert_eq!(exec_info.status, "ContinuedAsNew");
+    // Get info for each execution
+    for exec_id in &executions {
+        let exec_info = client.get_execution_info("test-continue", *exec_id).await.unwrap();
+        assert_eq!(exec_info.execution_id, *exec_id);
+        
+        // First 3 executions should be ContinuedAsNew, last one should be Completed
+        if *exec_id == 4 {
+            assert_eq!(exec_info.status, "Completed");
+        } else {
+            assert_eq!(exec_info.status, "ContinuedAsNew");
+        }
+    }
 
-    // Instance info should show the execution
+    // Instance info should show the latest execution
     let instance_info = client.get_instance_info("test-continue").await.unwrap();
-    assert_eq!(instance_info.current_execution_id, 4); // Should be 4 (ContinueAsNew increments this)
+    assert_eq!(instance_info.current_execution_id, 4); // Should be 4 (the final execution)
     assert_eq!(instance_info.status, "Completed"); // Instance status is Completed
 }
 
@@ -401,7 +408,7 @@ async fn test_error_handling() {
     assert!(result.is_ok());
     assert!(result.unwrap().is_empty());
 
-    let executions = client.list_executions("nonexistent").await;
+    let executions = client.list_executions("nonexistent").await.unwrap();
     assert!(executions.is_empty());
 
     // Test status filtering with non-existent status
@@ -485,7 +492,7 @@ async fn test_complex_workflow_management() {
         assert_eq!(info.status, "Completed");
         assert!(info.output.is_some());
 
-        let executions = client.list_executions(order).await;
+        let executions = client.list_executions(order).await.unwrap();
         assert_eq!(executions.len(), 1);
         assert_eq!(executions[0], 1);
 

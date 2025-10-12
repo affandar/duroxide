@@ -70,44 +70,34 @@ pub struct OrchestrationItem {
 /// * `output` - The terminal value to store (depends on status):
 ///   - `Completed`: The orchestration's successful result
 ///   - `Failed`: The error message
-///   - `ContinuedAsNew`: The input for the next execution
+///   - `ContinuedAsNew`: The input that was passed to continue_as_new()
 ///   - `None`: No output (execution still running)
-///
-/// * `create_next_execution` - Whether to create a new execution row
-///   - `true`: ContinueAsNew occurred, create execution with `next_execution_id`
-///   - `false`: Normal completion or still running
-///
-/// * `next_execution_id` - The ID for the new execution (only valid if `create_next_execution = true`)
-///   - Provider should: INSERT INTO executions (instance_id, execution_id, status) VALUES (?, next_execution_id, 'Running')
-///   - Provider should: UPDATE instances SET current_execution_id = next_execution_id
 ///
 /// # Example Usage in Provider
 ///
-/// ```ignore
+/// ```text
 /// async fn ack_orchestration_item(..., metadata: ExecutionMetadata) {
 ///     // Store metadata without understanding what it means
 ///     if let Some(status) = &metadata.status {
 ///         UPDATE executions SET status = ?, output = ? WHERE instance_id = ? AND execution_id = ?
 ///     }
-///     
-///     if metadata.create_next_execution {
-///         if let Some(next_id) = metadata.next_execution_id {
-///             INSERT INTO executions (instance_id, execution_id, status) VALUES (?, next_id, 'Running')
-///             UPDATE instances SET current_execution_id = next_id
-///         }
-///     }
 /// }
 /// ```
+///
+/// # ContinueAsNew Handling
+///
+/// Note: ContinueAsNew execution creation is NOT handled via ExecutionMetadata.
+/// Instead, the provider detects `WorkItem::ContinueAsNew` in `fetch_orchestration_item`:
+/// - Increments `current_execution_id`
+/// - Creates new execution record
+/// - Returns empty history for the new execution
+/// - The runtime then processes it like `StartOrchestration`
 #[derive(Debug, Clone, Default)]
 pub struct ExecutionMetadata {
     /// New status for the execution ('Completed', 'Failed', 'ContinuedAsNew', or None to keep current)
     pub status: Option<String>,
     /// Output/error/input to store (for Completed/Failed/ContinuedAsNew)
     pub output: Option<String>,
-    /// Whether a new execution should be created (for ContinueAsNew)
-    pub create_next_execution: bool,
-    /// The next execution ID if create_next_execution is true
-    pub next_execution_id: Option<u64>,
 }
 
 /// Provider-backed work queue items the runtime consumes continually.

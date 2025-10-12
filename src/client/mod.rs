@@ -503,17 +503,6 @@ impl Client {
             _ => unreachable!("wait_for_orchestration returns only terminal or timeout"),
         }
     }
-
-    /// List all execution ids for an instance.
-    pub async fn list_executions(&self, instance: &str) -> Vec<u64> {
-        let hist = self.store.read(instance).await;
-        if hist.is_empty() { Vec::new() } else { vec![1] }
-    }
-
-    /// Return execution history for a specific execution id.
-    pub async fn get_execution_history(&self, instance: &str, _execution_id: u64) -> Vec<crate::Event> {
-        self.store.read(instance).await
-    }
     
     // ===== Capability Discovery =====
     
@@ -661,12 +650,48 @@ impl Client {
         self.discover_management()?.get_execution_info(instance, execution_id).await
     }
     
-    /// Read the full event history for a specific execution within an instance.
+    /// List all execution IDs for an instance.
+    ///
+    /// Returns execution IDs in ascending order: [1], [1, 2], [1, 2, 3], etc.
+    /// Each execution represents either the initial run or a continuation via ContinueAsNew.
     ///
     /// # Parameters
     ///
-    /// * `instance` - The ID of the orchestration instance.
-    /// * `execution_id` - The specific execution ID to read history for.
+    /// * `instance` - The instance ID to query
+    ///
+    /// # Returns
+    ///
+    /// Vector of execution IDs in ascending order.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The provider doesn't support management capabilities
+    /// - The database query fails
+    ///
+    /// # Usage
+    ///
+    /// ```ignore
+    /// let client = Client::new(provider);
+    /// if client.has_management_capability() {
+    ///     let executions = client.list_executions("order-123").await?;
+    ///     println!("Instance has {} executions", executions.len()); // [1, 2, 3]
+    /// }
+    /// ```
+    pub async fn list_executions(&self, instance: &str) -> Result<Vec<u64>, String> {
+        let mgmt = self.discover_management()?;
+        mgmt.list_executions(instance).await
+    }
+
+    /// Read the full event history for a specific execution within an instance.
+    ///
+    /// Returns all events for the specified execution in chronological order.
+    /// Each execution has its own independent history starting from OrchestrationStarted.
+    ///
+    /// # Parameters
+    ///
+    /// * `instance` - The instance ID
+    /// * `execution_id` - The specific execution ID (starts at 1)
     ///
     /// # Returns
     ///
@@ -674,7 +699,10 @@ impl Client {
     ///
     /// # Errors
     ///
-    /// Returns `Err("Management features not available")` if the provider doesn't implement `ManagementCapability`.
+    /// Returns an error if:
+    /// - The provider doesn't support management capabilities
+    /// - The instance or execution doesn't exist
+    /// - The database query fails
     ///
     /// # Usage
     ///
@@ -682,11 +710,14 @@ impl Client {
     /// let client = Client::new(provider);
     /// if client.has_management_capability() {
     ///     let history = client.read_execution_history("order-123", 1).await?;
-    ///     println!("Execution has {} events", history.len());
+    ///     for event in history {
+    ///         println!("Event: {:?}", event);
+    ///     }
     /// }
     /// ```
-    pub async fn read_execution_history(&self, instance: &str, execution_id: u64) -> Result<Vec<Event>, String> {
-        self.discover_management()?.read_execution(instance, execution_id).await
+    pub async fn read_execution_history(&self, instance: &str, execution_id: u64) -> Result<Vec<crate::Event>, String> {
+        let mgmt = self.discover_management()?;
+        mgmt.read_execution(instance, execution_id).await
     }
     
     /// Get system-wide metrics for the orchestration engine.

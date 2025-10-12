@@ -32,7 +32,7 @@ async fn unknown_orchestration_fails_gracefully() {
     };
     assert_eq!(error, "unregistered:DoesNotExist");
 
-    let hist = client.get_execution_history("inst-unknown-1", 1).await;
+    let hist = client.read_execution_history("inst-unknown-1", 1).await.unwrap();
     assert!(
         hist.iter()
             .any(|e| matches!(e, Event::OrchestrationFailed { error, .. } if error == "unregistered:DoesNotExist"))

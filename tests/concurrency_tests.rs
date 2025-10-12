@@ -142,8 +142,8 @@ async fn concurrent_orchestrations_different_activities_with(store: StdArc<dyn P
     );
 
     // Check histories
-    let hist1 = client.get_execution_history("inst-multi-1", 1).await;
-    let hist2 = client.get_execution_history("inst-multi-2", 1).await;
+    let hist1 = client.read_execution_history("inst-multi-1", 1).await.unwrap();
+    let hist2 = client.read_execution_history("inst-multi-2", 1).await.unwrap();
 
     assert!(
         hist1
@@ -294,8 +294,8 @@ async fn concurrent_orchestrations_same_activities_with(store: StdArc<dyn Provid
     }
 
     // Check histories
-    let hist1 = client.get_execution_history("inst-same-acts-1", 1).await;
-    let hist2 = client.get_execution_history("inst-same-acts-2", 1).await;
+    let hist1 = client.read_execution_history("inst-same-acts-1", 1).await.unwrap();
+    let hist2 = client.read_execution_history("inst-same-acts-2", 1).await.unwrap();
 
     assert!(
         hist1

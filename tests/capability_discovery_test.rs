@@ -67,7 +67,7 @@ async fn test_management_features_with_workflow() {
     assert_eq!(info.orchestration_version, "1.0.0");
     assert_eq!(info.current_execution_id, 1);
 
-    let executions = client.list_executions("test-instance").await;
+    let executions = client.list_executions("test-instance").await.unwrap();
     assert_eq!(executions.len(), 1);
     assert_eq!(executions[0], 1);
 

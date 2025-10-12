@@ -313,8 +313,6 @@ async fn test_execution_status_completed() {
     let metadata = ExecutionMetadata {
         status: Some("Completed".to_string()),
         output: Some("success".to_string()),
-        create_next_execution: false,
-        next_execution_id: None,
     };
     
     store.ack_orchestration_item(&item.lock_token, history_delta, vec![], vec![], vec![], metadata)
@@ -388,8 +386,6 @@ async fn test_execution_status_failed() {
     let metadata = ExecutionMetadata {
         status: Some("Failed".to_string()),
         output: Some("something went wrong".to_string()),
-        create_next_execution: false,
-        next_execution_id: None,
     };
     
     store.ack_orchestration_item(&item.lock_token, history_delta, vec![], vec![], vec![], metadata)
@@ -472,8 +468,6 @@ async fn test_execution_status_continued_as_new() {
     let metadata = ExecutionMetadata {
         status: Some("ContinuedAsNew".to_string()),
         output: Some("1".to_string()),
-        create_next_execution: true,
-        next_execution_id: Some(2),
     };
     
     store.ack_orchestration_item(
@@ -501,16 +495,17 @@ async fn test_execution_status_continued_as_new() {
     
     assert_eq!(status1, "ContinuedAsNew", "Execution 1 status should be ContinuedAsNew");
     
-    // Check that second execution was created with Running status
-    let status2: String = sqlx::query_scalar(
-        "SELECT status FROM executions WHERE instance_id = ? AND execution_id = 2"
+    // With the new approach, execution 2 is NOT created yet in ack_orchestration_item
+    // It will be created when fetch_orchestration_item processes the WorkItem::ContinueAsNew
+    let exec2_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM executions WHERE instance_id = ? AND execution_id = 2"
     )
     .bind(instance)
     .fetch_one(pool)
     .await
-    .expect("Should find execution 2");
+    .unwrap();
     
-    assert_eq!(status2, "Running", "Execution 2 status should be Running");
+    assert_eq!(exec2_count, 0, "Execution 2 should not exist yet (created when ContinueAsNew work item is fetched)");
     
     // Verify completed_at is set for first execution
     let completed_at1: Option<String> = sqlx::query_scalar(
@@ -523,9 +518,20 @@ async fn test_execution_status_continued_as_new() {
     
     assert!(completed_at1.is_some(), "completed_at should be set for first execution");
     
-    // Now complete the second execution
+    // Now fetch the ContinueAsNew work item - this will create execution 2
     let item2 = store.fetch_orchestration_item().await.unwrap();
     assert_eq!(item2.execution_id, 2);
+    
+    // Verify execution 2 was created with Running status
+    let status2: String = sqlx::query_scalar(
+        "SELECT status FROM executions WHERE instance_id = ? AND execution_id = 2"
+    )
+    .bind(instance)
+    .fetch_one(pool)
+    .await
+    .expect("Should find execution 2 after fetch");
+    
+    assert_eq!(status2, "Running", "Execution 2 status should be Running");
     
     let history_delta2 = vec![
         Event::OrchestrationStarted {
@@ -545,8 +551,6 @@ async fn test_execution_status_continued_as_new() {
     let metadata2 = ExecutionMetadata {
         status: Some("Completed".to_string()),
         output: Some("done".to_string()),
-        create_next_execution: false,
-        next_execution_id: None,
     };
     
     store.ack_orchestration_item(&item2.lock_token, history_delta2, vec![], vec![], vec![], metadata2)
@@ -685,8 +689,6 @@ async fn test_execution_output_captured_on_completion() {
     let metadata = ExecutionMetadata {
         status: Some("Completed".to_string()),
         output: Some(expected_output.to_string()),
-        create_next_execution: false,
-        next_execution_id: None,
     };
     
     store.ack_orchestration_item(&item.lock_token, history_delta, vec![], vec![], vec![], metadata)
@@ -749,8 +751,6 @@ async fn test_execution_output_captured_on_failure() {
     let metadata = ExecutionMetadata {
         status: Some("Failed".to_string()),
         output: Some(expected_error.to_string()),
-        create_next_execution: false,
-        next_execution_id: None,
     };
     
     store.ack_orchestration_item(&item.lock_token, history_delta, vec![], vec![], vec![], metadata)
@@ -820,8 +820,6 @@ async fn test_execution_output_captured_on_continue_as_new() {
     let metadata = ExecutionMetadata {
         status: Some("ContinuedAsNew".to_string()),
         output: Some(next_input.to_string()),
-        create_next_execution: true,
-        next_execution_id: Some(2),
     };
     
     store.ack_orchestration_item(
@@ -958,8 +956,6 @@ async fn test_execution_output_complex_json() {
     let metadata = ExecutionMetadata {
         status: Some("Completed".to_string()),
         output: Some(complex_output.to_string()),
-        create_next_execution: false,
-        next_execution_id: None,
     };
     
     store.ack_orchestration_item(&item.lock_token, history_delta, vec![], vec![], vec![], metadata)

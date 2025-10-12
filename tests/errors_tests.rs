@@ -426,7 +426,7 @@ async fn orchestration_immediate_fail_fs() {
     }
 
     // Check history for failure event
-    let hist = client.get_execution_history("inst-fail-imm", 1).await;
+    let hist = client.read_execution_history("inst-fail-imm", 1).await.unwrap();
     // Expect OrchestrationStarted + OrchestrationFailed
     assert_eq!(hist.len(), 2);
     assert!(matches!(
@@ -475,7 +475,7 @@ async fn orchestration_propagates_activity_failure_fs() {
     }
 
     // Check history for failure event
-    let hist = client.get_execution_history("inst-fail-prop", 1).await;
+    let hist = client.read_execution_history("inst-fail-prop", 1).await.unwrap();
     assert!(matches!(
         hist.last().unwrap(),
         duroxide::Event::OrchestrationFailed { .. }

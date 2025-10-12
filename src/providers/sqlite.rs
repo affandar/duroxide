@@ -595,6 +595,10 @@ impl Provider for SqliteProvider {
             })
             .collect();
         
+        // Check if this batch contains StartOrchestration or ContinueAsNew
+        let has_start = work_items.iter().any(|wi| matches!(wi, WorkItem::StartOrchestration { .. }));
+        let has_continue_as_new = work_items.iter().any(|wi| matches!(wi, WorkItem::ContinueAsNew { .. }));
+        
         // Get instance metadata
         let instance_info = sqlx::query(
             r#"
@@ -613,8 +617,53 @@ impl Provider for SqliteProvider {
             let name: String = info.try_get("orchestration_name").ok()?;
             let version: String = info.try_get("orchestration_version").ok()?;
             let exec_id: i64 = info.try_get("current_execution_id").ok()?;
-            let hist = self.read_history_in_tx(&mut tx, &instance_id, None).await.ok()?;
-            (name, version, exec_id as u64, hist)
+            
+            // If this is a ContinueAsNew, increment execution_id and return empty history
+            if has_continue_as_new {
+                let next_exec_id = exec_id as u64 + 1;
+                
+                // Update current_execution_id atomically
+                sqlx::query(
+                    r#"
+                    UPDATE instances 
+                    SET current_execution_id = ?
+                    WHERE instance_id = ?
+                    "#
+                )
+                .bind(next_exec_id as i64)
+                .bind(&instance_id)
+                .execute(&mut *tx)
+                .await
+                .ok()?;
+                
+                // Create the new execution record
+                sqlx::query(
+                    r#"
+                    INSERT OR IGNORE INTO executions (instance_id, execution_id, status)
+                    VALUES (?, ?, 'Running')
+                    "#
+                )
+                .bind(&instance_id)
+                .bind(next_exec_id as i64)
+                .execute(&mut *tx)
+                .await
+                .ok()?;
+                
+                tracing::debug!(
+                    target="duroxide::providers::sqlite",
+                    instance=%instance_id,
+                    prev_exec=%exec_id,
+                    next_exec=%next_exec_id,
+                    "ContinueAsNew: incremented execution_id and created new execution"
+                );
+                
+                // Return empty history for the new execution
+                (name, version, next_exec_id, Vec::new())
+            } else {
+                // Normal case: read history for current execution
+                let hist = self.read_history_in_tx(&mut tx, &instance_id, Some(exec_id as u64)).await.ok()?;
+                (name, version, exec_id as u64, hist)
+            }
         } else {
             // Fallback: try to derive from history (e.g., ActivityCompleted arriving before we see instance row)
             let hist = self.read_history_in_tx(&mut tx, &instance_id, None).await.unwrap_or_default();
@@ -623,14 +672,21 @@ impl Provider for SqliteProvider {
             }) {
                 let (name, version) = first_started;
                 (name, version, 1u64, hist)
-            } else if let Some(WorkItem::StartOrchestration { orchestration, version, .. }) = work_items.first() {
+            } else if has_start || has_continue_as_new {
                 // Brand new instance - use work item
-                (
-                    orchestration.clone(),
-                    version.clone().unwrap_or_else(|| "1.0.0".to_string()),
-                    1u64,
-                    Vec::new()
-                )
+                if let Some(WorkItem::StartOrchestration { orchestration, version, .. }) 
+                    | Some(WorkItem::ContinueAsNew { orchestration, version, .. }) = work_items.first() {
+                    (
+                        orchestration.clone(),
+                        version.clone().unwrap_or_else(|| "1.0.0".to_string()),
+                        1u64,
+                        Vec::new()
+                    )
+                } else {
+                    tracing::debug!(target="duroxide::providers::sqlite", instance=%instance_id, "No instance info or history; cannot build orchestration item");
+                    tx.rollback().await.ok();
+                    return None;
+                }
             } else {
                 tracing::debug!(target="duroxide::providers::sqlite", instance=%instance_id, "No instance info or history; cannot build orchestration item");
                 tx.rollback().await.ok();
@@ -775,44 +831,9 @@ impl Provider for SqliteProvider {
             }
         }
         
-        // Handle execution creation from pre-computed metadata (no WorkItem inspection!)
-        if metadata.create_next_execution {
-            if let Some(next_exec_id) = metadata.next_execution_id {
-                // Create next execution
-                sqlx::query(
-                    r#"
-                    INSERT OR IGNORE INTO executions (instance_id, execution_id, status)
-                    VALUES (?, ?, 'Running')
-                    "#
-                )
-                .bind(&instance_id)
-                .bind(next_exec_id as i64)
-                .execute(&mut *tx)
-                .await
-                .map_err(|e| e.to_string())?;
-                
-                // Update instances.current_execution_id to point to the new execution
-                sqlx::query(
-                    r#"
-                    UPDATE instances 
-                    SET current_execution_id = ?
-                    WHERE instance_id = ?
-                    "#
-                )
-                .bind(next_exec_id as i64)
-                .bind(&instance_id)
-                .execute(&mut *tx)
-                .await
-                .map_err(|e| e.to_string())?;
-                
-                debug!(
-                    instance = %instance_id,
-                    next_exec_id = %next_exec_id,
-                    "Created execution {} from metadata and updated current_execution_id",
-                    next_exec_id
-                );
-            }
-        }
+        // Note: Execution creation for ContinueAsNew is now handled in fetch_orchestration_item,
+        // not here. The provider increments execution_id when it sees WorkItem::ContinueAsNew
+        // in the batch and returns empty history for the new execution.
         
         // Enqueue worker items
         debug!(
