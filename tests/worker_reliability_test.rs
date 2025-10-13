@@ -16,6 +16,11 @@ mod common;
 #[tokio::test]
 async fn activity_reliability_after_crash_before_completion_enqueue() {
     // Use SQLite store for persistence across "crash"
+    // Shorten worker lock lease so redelivery happens quickly after restart
+    // Safety: setting environment variables in tests is process-wide; we set it before creating the store
+    // and use a deterministic value to control lease duration. We restore it at the end of the test.
+    let prev_lease = std::env::var("DUROXIDE_SQLITE_LOCK_TIMEOUT_MS").ok();
+    unsafe { std::env::set_var("DUROXIDE_SQLITE_LOCK_TIMEOUT_MS", "1000"); }
     let (store, _temp_dir) = common::create_sqlite_store_disk().await;
 
     // Simple orchestration that schedules an activity and waits for completion
@@ -143,6 +148,12 @@ async fn activity_reliability_after_crash_before_completion_enqueue() {
 
     println!("✅ Activity reliability test passed - activity completed correctly after restart");
     rt2.shutdown().await;
+
+    // Restore environment
+    match prev_lease {
+        Some(v) => unsafe { std::env::set_var("DUROXIDE_SQLITE_LOCK_TIMEOUT_MS", v); },
+        None => unsafe { std::env::remove_var("DUROXIDE_SQLITE_LOCK_TIMEOUT_MS"); },
+    }
 }
 
 /// Test multiple activities with crash/recovery
@@ -159,6 +170,10 @@ async fn activity_reliability_after_crash_before_completion_enqueue() {
 #[tokio::test]
 async fn multiple_activities_reliability_after_crash() {
     // Use SQLite store for persistence across "crash" - SQLite provides atomicity
+    // Shorten worker lock lease so redelivery happens quickly after restart
+    // Safety: see note above. We restore it at the end of the test.
+    let prev_lease = std::env::var("DUROXIDE_SQLITE_LOCK_TIMEOUT_MS").ok();
+    unsafe { std::env::set_var("DUROXIDE_SQLITE_LOCK_TIMEOUT_MS", "1000"); }
     let (store, _temp_dir) = common::create_sqlite_store_disk().await;
 
     // Orchestration with multiple activities
@@ -276,4 +291,10 @@ async fn multiple_activities_reliability_after_crash() {
     assert_eq!(test_activity_completed_count, 3, "All 3 TestActivity activities should have completed");
 
     rt2.shutdown().await;
+
+    // Restore environment
+    match prev_lease {
+        Some(v) => unsafe { std::env::set_var("DUROXIDE_SQLITE_LOCK_TIMEOUT_MS", v); },
+        None => unsafe { std::env::remove_var("DUROXIDE_SQLITE_LOCK_TIMEOUT_MS"); },
+    }
 }

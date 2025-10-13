@@ -216,7 +216,7 @@ async fn start_uses_latest_version() {
     }
 
     // Check history for completion event
-    let hist = client.get_execution_history("inst-vlatest", 1).await;
+    let hist = client.read_execution_history("inst-vlatest", 1).await.unwrap();
     assert!(matches!(hist.last().unwrap(), Event::OrchestrationCompleted { .. }));
     rt.shutdown().await;
 }
@@ -355,7 +355,7 @@ async fn parent_calls_child_upgrade_child_and_verify_latest_used() {
     }
 
     // Check history for completion event
-    let hist = client.get_execution_history("inst-parent-child-upgrade", 1).await;
+    let hist = client.read_execution_history("inst-parent-child-upgrade", 1).await.unwrap();
     assert!(matches!(hist.last().unwrap(), Event::OrchestrationCompleted { .. }));
     // History should include SubOrchestrationCompleted
     assert!(
@@ -402,7 +402,7 @@ async fn continue_as_new_upgrades_version_deterministically() {
     }
 
     // History contains the final execution's events
-    let hist = client.get_execution_history("inst-can-upgrade", 1).await;
+    let hist = client.read_execution_history("inst-can-upgrade", 1).await.unwrap();
     assert!(!hist.is_empty(), "Expected non-empty history");
 
     // Verify terminal status is also correct

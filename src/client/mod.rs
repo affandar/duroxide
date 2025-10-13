@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
-use crate::providers::{Provider, WorkItem};
+use crate::providers::{Provider, WorkItem, ManagementCapability, InstanceInfo, ExecutionInfo, SystemMetrics, QueueDepths};
 use crate::{Event, OrchestrationStatus};
 use crate::_typed_codec::{Json, Codec};
 use serde::Serialize;
 
-/// Thin client for control-plane operations.
+/// Client for orchestration control-plane operations with automatic capability discovery.
 ///
 /// The Client provides APIs for managing orchestration instances:
 /// - Starting orchestrations
@@ -13,6 +13,27 @@ use serde::Serialize;
 /// - Cancelling instances
 /// - Checking status
 /// - Waiting for completion
+/// - Rich management features (when available)
+///
+/// # Automatic Capability Discovery
+///
+/// The Client automatically discovers provider capabilities through the `Provider::as_management_capability()` method.
+/// When a provider implements `ManagementCapability`, rich management features become available:
+///
+/// ```ignore
+/// let client = Client::new(provider);
+/// 
+/// // Control plane (always available)
+/// client.start_orchestration("order-1", "ProcessOrder", "{}").await?;
+/// 
+/// // Management (automatically discovered)
+/// if client.has_management_capability() {
+///     let instances = client.list_all_instances().await?;
+///     let metrics = client.get_system_metrics().await?;
+/// } else {
+///     println!("Management features not available");
+/// }
+/// ```
 ///
 /// # Design
 ///
@@ -482,15 +503,268 @@ impl Client {
             _ => unreachable!("wait_for_orchestration returns only terminal or timeout"),
         }
     }
-
-    /// List all execution ids for an instance.
-    pub async fn list_executions(&self, instance: &str) -> Vec<u64> {
-        let hist = self.store.read(instance).await;
-        if hist.is_empty() { Vec::new() } else { vec![1] }
+    
+    // ===== Capability Discovery =====
+    
+    /// Check if management capabilities are available.
+    ///
+    /// # Returns
+    ///
+    /// `true` if the provider implements `ManagementCapability`, `false` otherwise.
+    ///
+    /// # Usage
+    ///
+    /// ```ignore
+    /// let client = Client::new(provider);
+    /// if client.has_management_capability() {
+    ///     let instances = client.list_all_instances().await?;
+    /// } else {
+    ///     println!("Management features not available");
+    /// }
+    /// ```
+    pub fn has_management_capability(&self) -> bool {
+        self.discover_management().is_ok()
+    }
+    
+    /// Automatically discover management capabilities from the provider.
+    ///
+    /// # Returns
+    ///
+    /// `Ok(&dyn ManagementCapability)` if available, `Err(String)` if not.
+    ///
+    /// # Internal Use
+    ///
+    /// This method is used internally by management methods to access capabilities.
+    fn discover_management(&self) -> Result<&dyn ManagementCapability, String> {
+        self.store.as_management_capability()
+            .ok_or_else(|| "Management features not available - provider doesn't implement ManagementCapability".to_string())
+    }
+    
+    // ===== Rich Management Methods =====
+    
+    /// List all orchestration instances.
+    ///
+    /// # Returns
+    ///
+    /// Vector of instance IDs, typically sorted by creation time (newest first).
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err("Management features not available")` if the provider doesn't implement `ManagementCapability`.
+    ///
+    /// # Usage
+    ///
+    /// ```ignore
+    /// let client = Client::new(provider);
+    /// if client.has_management_capability() {
+    ///     let instances = client.list_all_instances().await?;
+    ///     for instance in instances {
+    ///         println!("Instance: {}", instance);
+    ///     }
+    /// }
+    /// ```
+    pub async fn list_all_instances(&self) -> Result<Vec<String>, String> {
+        self.discover_management()?.list_instances().await
+    }
+    
+    /// List instances matching a status filter.
+    ///
+    /// # Parameters
+    ///
+    /// * `status` - Filter by execution status: "Running", "Completed", "Failed", "ContinuedAsNew"
+    ///
+    /// # Returns
+    ///
+    /// Vector of instance IDs with the specified status.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err("Management features not available")` if the provider doesn't implement `ManagementCapability`.
+    ///
+    /// # Usage
+    ///
+    /// ```ignore
+    /// let client = Client::new(provider);
+    /// if client.has_management_capability() {
+    ///     let running = client.list_instances_by_status("Running").await?;
+    ///     let completed = client.list_instances_by_status("Completed").await?;
+    ///     println!("Running: {}, Completed: {}", running.len(), completed.len());
+    /// }
+    /// ```
+    pub async fn list_instances_by_status(&self, status: &str) -> Result<Vec<String>, String> {
+        self.discover_management()?.list_instances_by_status(status).await
+    }
+    
+    /// Get comprehensive information about an instance.
+    ///
+    /// # Parameters
+    ///
+    /// * `instance` - The ID of the orchestration instance.
+    ///
+    /// # Returns
+    ///
+    /// Detailed instance information including status, output, and metadata.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err("Management features not available")` if the provider doesn't implement `ManagementCapability`.
+    ///
+    /// # Usage
+    ///
+    /// ```ignore
+    /// let client = Client::new(provider);
+    /// if client.has_management_capability() {
+    ///     let info = client.get_instance_info("order-123").await?;
+    ///     println!("Instance {}: {} ({})", info.instance_id, info.orchestration_name, info.status);
+    /// }
+    /// ```
+    pub async fn get_instance_info(&self, instance: &str) -> Result<InstanceInfo, String> {
+        self.discover_management()?.get_instance_info(instance).await
+    }
+    
+    /// Get detailed information about a specific execution.
+    ///
+    /// # Parameters
+    ///
+    /// * `instance` - The ID of the orchestration instance.
+    /// * `execution_id` - The specific execution ID.
+    ///
+    /// # Returns
+    ///
+    /// Detailed execution information including status, output, and event count.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err("Management features not available")` if the provider doesn't implement `ManagementCapability`.
+    ///
+    /// # Usage
+    ///
+    /// ```ignore
+    /// let client = Client::new(provider);
+    /// if client.has_management_capability() {
+    ///     let info = client.get_execution_info("order-123", 1).await?;
+    ///     println!("Execution {}: {} events, status: {}", info.execution_id, info.event_count, info.status);
+    /// }
+    /// ```
+    pub async fn get_execution_info(&self, instance: &str, execution_id: u64) -> Result<ExecutionInfo, String> {
+        self.discover_management()?.get_execution_info(instance, execution_id).await
+    }
+    
+    /// List all execution IDs for an instance.
+    ///
+    /// Returns execution IDs in ascending order: [1], [1, 2], [1, 2, 3], etc.
+    /// Each execution represents either the initial run or a continuation via ContinueAsNew.
+    ///
+    /// # Parameters
+    ///
+    /// * `instance` - The instance ID to query
+    ///
+    /// # Returns
+    ///
+    /// Vector of execution IDs in ascending order.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The provider doesn't support management capabilities
+    /// - The database query fails
+    ///
+    /// # Usage
+    ///
+    /// ```ignore
+    /// let client = Client::new(provider);
+    /// if client.has_management_capability() {
+    ///     let executions = client.list_executions("order-123").await?;
+    ///     println!("Instance has {} executions", executions.len()); // [1, 2, 3]
+    /// }
+    /// ```
+    pub async fn list_executions(&self, instance: &str) -> Result<Vec<u64>, String> {
+        let mgmt = self.discover_management()?;
+        mgmt.list_executions(instance).await
     }
 
-    /// Return execution history for a specific execution id.
-    pub async fn get_execution_history(&self, instance: &str, _execution_id: u64) -> Vec<crate::Event> {
-        self.store.read(instance).await
+    /// Read the full event history for a specific execution within an instance.
+    ///
+    /// Returns all events for the specified execution in chronological order.
+    /// Each execution has its own independent history starting from OrchestrationStarted.
+    ///
+    /// # Parameters
+    ///
+    /// * `instance` - The instance ID
+    /// * `execution_id` - The specific execution ID (starts at 1)
+    ///
+    /// # Returns
+    ///
+    /// Vector of events in chronological order (oldest first).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The provider doesn't support management capabilities
+    /// - The instance or execution doesn't exist
+    /// - The database query fails
+    ///
+    /// # Usage
+    ///
+    /// ```ignore
+    /// let client = Client::new(provider);
+    /// if client.has_management_capability() {
+    ///     let history = client.read_execution_history("order-123", 1).await?;
+    ///     for event in history {
+    ///         println!("Event: {:?}", event);
+    ///     }
+    /// }
+    /// ```
+    pub async fn read_execution_history(&self, instance: &str, execution_id: u64) -> Result<Vec<crate::Event>, String> {
+        let mgmt = self.discover_management()?;
+        mgmt.read_execution(instance, execution_id).await
+    }
+    
+    /// Get system-wide metrics for the orchestration engine.
+    ///
+    /// # Returns
+    ///
+    /// System metrics including instance counts, execution counts, and status breakdown.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err("Management features not available")` if the provider doesn't implement `ManagementCapability`.
+    ///
+    /// # Usage
+    ///
+    /// ```ignore
+    /// let client = Client::new(provider);
+    /// if client.has_management_capability() {
+    ///     let metrics = client.get_system_metrics().await?;
+    ///     println!("System health: {} running, {} completed, {} failed", 
+    ///         metrics.running_instances, metrics.completed_instances, metrics.failed_instances);
+    /// }
+    /// ```
+    pub async fn get_system_metrics(&self) -> Result<SystemMetrics, String> {
+        self.discover_management()?.get_system_metrics().await
+    }
+    
+    /// Get the current depths of the internal work queues.
+    ///
+    /// # Returns
+    ///
+    /// Queue depths for orchestrator, worker, and timer queues.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err("Management features not available")` if the provider doesn't implement `ManagementCapability`.
+    ///
+    /// # Usage
+    ///
+    /// ```ignore
+    /// let client = Client::new(provider);
+    /// if client.has_management_capability() {
+    ///     let queues = client.get_queue_depths().await?;
+    ///     println!("Queue depths - Orchestrator: {}, Worker: {}, Timer: {}", 
+    ///         queues.orchestrator_queue, queues.worker_queue, queues.timer_queue);
+    /// }
+    /// ```
+    pub async fn get_queue_depths(&self) -> Result<QueueDepths, String> {
+        self.discover_management()?.get_queue_depths().await
     }
 }

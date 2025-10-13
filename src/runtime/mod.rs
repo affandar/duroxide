@@ -122,8 +122,8 @@ impl Runtime {
     /// as pre-computed metadata, preventing the provider from needing orchestration knowledge.
     fn compute_execution_metadata(
         history_delta: &[Event],
-        orchestrator_items: &[WorkItem],
-        current_execution_id: u64,
+        _orchestrator_items: &[WorkItem],
+        _current_execution_id: u64,
     ) -> ExecutionMetadata {
         let mut metadata = ExecutionMetadata::default();
         
@@ -143,21 +143,11 @@ impl Runtime {
                 Event::OrchestrationContinuedAsNew { input, .. } => {
                     metadata.status = Some("ContinuedAsNew".to_string());
                     metadata.output = Some(input.clone());
-                    metadata.create_next_execution = true;
-                    metadata.next_execution_id = Some(current_execution_id + 1);
+                    // Don't set create_next_execution - the new execution will be started
+                    // by WorkItem::ContinueAsNew being processed like StartOrchestration
                     break;
                 }
                 _ => {}
-            }
-        }
-        
-        // Double-check with orchestrator_items for ContinueAsNew
-        if orchestrator_items.iter().any(|item| matches!(item, WorkItem::ContinueAsNew { .. })) {
-            if !metadata.create_next_execution {
-                // ContinueAsNew work item without ContinuedAsNew event shouldn't happen,
-                // but be defensive
-                metadata.create_next_execution = true;
-                metadata.next_execution_id = Some(current_execution_id + 1);
             }
         }
         
@@ -385,27 +375,33 @@ impl Runtime {
         let instance = &item.instance;
         let lock_token = &item.lock_token;
 
-        // Check if instance is already terminal
-        let is_terminal = item.history.iter().rev().any(|e| {
-            matches!(
-                e,
-                Event::OrchestrationCompleted { .. }
-                    | Event::OrchestrationFailed { .. }
-                    | Event::OrchestrationContinuedAsNew { .. }
-            )
-        });
+        // Determine terminal state from history and whether batch contains CAN
+        let mut has_completed = false;
+        let mut has_failed = false;
+        let mut has_continued_as_new = false;
+        for e in item.history.iter().rev() {
+            match e {
+                Event::OrchestrationCompleted { .. } => { has_completed = true; break; }
+                Event::OrchestrationFailed { .. } => { has_failed = true; break; }
+                Event::OrchestrationContinuedAsNew { .. } => { has_continued_as_new = true; break; }
+                _ => {}
+            }
+        }
+        let has_can_msg = item.messages.iter().any(|w| matches!(w, WorkItem::ContinueAsNew { .. }));
 
-        if is_terminal {
-            warn!(instance = %instance, "Instance is terminal, acking batch without processing");
+        // Bail on truly terminal histories (Completed/Failed), or ContinuedAsNew without a CAN start message
+        if has_completed || has_failed || (has_continued_as_new && !has_can_msg) {
+            warn!(instance = %instance, "Instance is terminal (completed/failed or CAN without start), acking batch without processing");
             let _ = self
                 .history_store
                 .ack_orchestration_item(
                     lock_token,
+                    item.execution_id,
                     vec![], // No history changes
                     vec![], // No worker items
                     vec![], // No timer items
                     vec![], // No orchestrator items
-                    ExecutionMetadata::default(), // No metadata changes
+                    ExecutionMetadata::default(),
                 )
                 .await;
             return;
@@ -435,9 +431,12 @@ impl Runtime {
         }
 
         // Process the execution
-        let (history_delta, worker_items, timer_items, orchestrator_items) = if let Some(start_item) = start_or_continue
+        let (history_delta, worker_items, timer_items, orchestrator_items, execution_id_for_ack) = if let Some(start_item) = start_or_continue
         {
-            match start_item {
+            // Both StartOrchestration and ContinueAsNew are handled identically.
+            // For ContinueAsNew, we start a fresh execution with empty history and execution_id = current + 1.
+            let (orchestration, input, version, parent_instance, parent_id, is_can) = match &start_item {
+                // TODO : CR : Workitem::StartOrchestrationDetached must carry the execution_id as well, which should be provided at enqueue time.
                 WorkItem::StartOrchestration {
                     orchestration,
                     input,
@@ -445,55 +444,74 @@ impl Runtime {
                     parent_instance,
                     parent_id,
                     ..
-                } => {
-                    self.handle_start_orchestration_atomic(
-                        instance,
-                        &orchestration,
-                        &input,
-                        version.as_deref(),
-                        parent_instance.as_deref(),
-                        parent_id,
-                        completion_messages,
-                        &item.history,
-                        item.execution_id,
-                        lock_token,
-                    )
-                    .await
-                }
+                } => (
+                    orchestration.as_str(),
+                    input.as_str(),
+                    version.as_deref(),
+                    parent_instance.as_deref(),
+                    *parent_id,
+                    false,
+                ),
                 WorkItem::ContinueAsNew {
                     orchestration,
                     input,
                     version,
                     ..
-                } => {
-                    debug!(instance, "Handling ContinueAsNew with input: {}", input);
-                    self.handle_continue_as_new_atomic(
-                        instance,
-                        &orchestration,
-                        &input,
-                        version.as_deref(),
-                        completion_messages,
-                        &item.history,
-                        item.execution_id,
-                        lock_token,
-                    )
-                    .await
-                }
+                } => (
+                    orchestration.as_str(),
+                    input.as_str(),
+                    version.as_deref(),
+                    None,
+                    None,
+                    true,
+                ),
                 _ => unreachable!(),
-            }
+            };
+
+            // Decide execution id and history to use
+            let (execution_id_to_use, history_to_use) = if is_can {
+                (item.execution_id + 1, Vec::new())
+            } else {
+                (item.execution_id, item.history.clone())
+            };
+
+            debug!(
+                instance,
+                orchestration = %orchestration,
+                execution_id = %execution_id_to_use,
+                is_continue_as_new = is_can,
+                "Starting execution"
+            );
+
+            let (hd, wi, ti, oi) = self.handle_start_orchestration_atomic(
+                instance,
+                orchestration,
+                input,
+                version,
+                parent_instance,
+                parent_id,
+                completion_messages,
+                &history_to_use,
+                execution_id_to_use,
+                lock_token,
+            )
+            .await;
+
+            (hd, wi, ti, oi, execution_id_to_use)
         } else if !completion_messages.is_empty() {
             // Only completion messages - process them
-            self.handle_completion_batch_atomic(
+            let (hd, wi, ti, oi) = self.handle_completion_batch_atomic(
                 instance,
                 completion_messages,
                 &item.history,
                 item.execution_id,
                 lock_token,
             )
-            .await
+            .await;
+            (hd, wi, ti, oi, item.execution_id)
         } else {
             // Empty effective batch - just ack
-            (vec![], vec![], vec![], vec![])
+            (vec![], vec![], vec![], vec![], item.execution_id)
         };
 
         // Atomically commit all changes
@@ -521,6 +539,7 @@ impl Runtime {
                 .history_store
                 .ack_orchestration_item(
                     lock_token,
+                    execution_id_for_ack,
                     history_delta.clone(),
                     worker_items.clone(),
                     timer_items.clone(),
@@ -535,6 +554,7 @@ impl Runtime {
                 }
                 Err(e) => {
                     let emsg = e.to_lowercase();
+                    // TODO : CR : this is very sqlite specific. We should just retry on any error unless the message indicates it is unretriable. 
                     if (emsg.contains("database is locked") || emsg.contains("busy")) && attempts < max_attempts {
                         let backoff_ms = 10u64.saturating_mul(1 << attempts);
                         warn!(instance, attempts, backoff_ms, error = %e, "Ack failed due to lock; retrying");
@@ -609,76 +629,6 @@ impl Runtime {
                 orchestration,
                 full_history.clone(),
                 execution_id,
-                completion_messages,
-            )
-            .await;
-
-        // Combine all changes
-        history_delta.extend(exec_history_delta);
-        worker_items.extend(exec_worker_items);
-        timer_items.extend(exec_timer_items);
-        orchestrator_items.extend(exec_orchestrator_items);
-
-        (history_delta, worker_items, timer_items, orchestrator_items)
-    }
-
-    async fn handle_continue_as_new_atomic(
-        self: &Arc<Self>,
-        instance: &str,
-        orchestration: &str,
-        input: &str,
-        version: Option<&str>,
-        completion_messages: Vec<OrchestratorMsg>,
-        _existing_history: &[Event],
-        execution_id: u64,
-        _lock_token: &str,
-    ) -> (Vec<Event>, Vec<WorkItem>, Vec<WorkItem>, Vec<WorkItem>) {
-        let mut history_delta = Vec::new();
-        let mut worker_items = Vec::new();
-        let mut timer_items = Vec::new();
-        let mut orchestrator_items = Vec::new();
-
-        // For ContinueAsNew, we're starting a new execution
-        // Resolve version using registry policy if not explicitly provided
-        let (resolved_version, should_pin) = if let Some(v) = version {
-            (v.to_string(), true)
-        } else if let Some((v, _handler)) = self.orchestration_registry.resolve_for_start(orchestration).await {
-            (v.to_string(), true)
-        } else {
-            // Use 0.0.0 for unregistered orchestrations (won't be pinned)
-            ("0.0.0".to_string(), false)
-        };
-
-        // Pin the resolved version for the new execution only if we found a valid orchestration
-        if should_pin {
-            if let Ok(v) = semver::Version::parse(&resolved_version) {
-                self.pinned_versions.lock().await.insert(instance.to_string(), v);
-            }
-        }
-
-        // Add the OrchestrationStarted event for the new execution
-        history_delta.push(Event::OrchestrationStarted {
-            event_id: 1,  // First event of new execution always has event_id=1
-            name: orchestration.to_string(),
-            version: resolved_version,
-            input: input.to_string(),
-            parent_instance: None,
-            parent_id: None,
-        });
-
-        debug!(instance, "ContinueAsNew creating new execution with input: {}", input);
-        debug!(instance, "Initial history for new execution: {:?}", history_delta);
-        debug!(instance, "First event in history_delta: {:?}", history_delta.first());
-
-        // Run the new execution with just the OrchestrationStarted event
-        let initial_history = history_delta.clone();
-        let (exec_history_delta, exec_worker_items, exec_timer_items, exec_orchestrator_items, _result) = self
-            .clone()
-            .run_single_execution_atomic(
-                instance,
-                orchestration,
-                initial_history.clone(),
-                execution_id, // Use current execution ID for now
                 completion_messages,
             )
             .await;

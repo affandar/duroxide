@@ -43,7 +43,7 @@ async fn wait_external_completes_with(store: StdArc<dyn Provider>) {
     }
 
     // Check history for expected events
-    let final_history = client.get_execution_history("inst-wait-1", 1).await;
+    let final_history = client.read_execution_history("inst-wait-1", 1).await.unwrap();
     // First event is OrchestrationStarted; then subscription, event, and terminal completion
     assert!(matches!(final_history[0], Event::OrchestrationStarted { .. }));
     assert!(matches!(final_history[1], Event::ExternalSubscribed { .. }));
@@ -104,7 +104,7 @@ async fn race_external_vs_timer_ordering_with(store: StdArc<dyn Provider>) {
     }
 
     // Check history for expected events
-    let final_history = client.get_execution_history("inst-race-order-1", 1).await;
+    let final_history = client.read_execution_history("inst-race-order-1", 1).await.unwrap();
     let idx_t = final_history
         .iter()
         .position(|e| matches!(e, Event::TimerFired { .. }))
@@ -173,7 +173,7 @@ async fn race_event_vs_timer_event_wins_with(store: StdArc<dyn Provider>) {
     assert_eq!(output, "ok");
 
     // Check history for expected events
-    let final_history = client.get_execution_history("inst-race-order-2", 1).await;
+    let final_history = client.read_execution_history("inst-race-order-2", 1).await.unwrap();
     let idx_e = final_history
         .iter()
         .position(|e| matches!(e, Event::ExternalEvent { .. }))

@@ -173,7 +173,7 @@ mod tests {
             fn supports_delayed_visibility(&self) -> bool { self.inner.supports_delayed_visibility() }
 
             async fn fetch_orchestration_item(&self) -> Option<crate::providers::OrchestrationItem> { self.inner.fetch_orchestration_item().await }
-            async fn ack_orchestration_item(&self, lock_token: &str, history_delta: Vec<Event>, worker_items: Vec<WorkItem>, timer_items: Vec<WorkItem>, orchestrator_items: Vec<WorkItem>, metadata: crate::providers::ExecutionMetadata) -> Result<(), String> { self.inner.ack_orchestration_item(lock_token, history_delta, worker_items, timer_items, orchestrator_items, metadata).await }
+            async fn ack_orchestration_item(&self, lock_token: &str, execution_id: u64, history_delta: Vec<Event>, worker_items: Vec<WorkItem>, timer_items: Vec<WorkItem>, orchestrator_items: Vec<WorkItem>, metadata: crate::providers::ExecutionMetadata) -> Result<(), String> { self.inner.ack_orchestration_item(lock_token, execution_id, history_delta, worker_items, timer_items, orchestrator_items, metadata).await }
             async fn abandon_orchestration_item(&self, lock_token: &str, delay_ms: Option<u64>) -> Result<(), String> { self.inner.abandon_orchestration_item(lock_token, delay_ms).await }
         }
 

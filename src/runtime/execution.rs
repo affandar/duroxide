@@ -266,8 +266,12 @@ impl Runtime {
 
                 Ok(String::new())
             }
+            // TODO : CR : the code for processing completed vs failed is almost identical, except for the fact that event type to be written, note that 
+            //  for failed, we also want to take the detached orchestration action.
             TurnResult::Completed(output) => {
                 // Process any pending actions before completing
+                // TODO : CR: the only action here that makes sense to schedule is StartOrchestrationDetached, not sure why we need to spin up the other ones.
+                //  basically the remaining should be assumed cancelled
                 for action in turn.pending_actions() {
                     match action {
                         crate::Action::CallActivity { scheduling_event_id, name, input } => {
@@ -399,6 +403,8 @@ impl Runtime {
 
                 Ok("continued as new".to_string())
             }
+            // TODO : CR : the code for processing cancelled is almost identical to the code for processing failed, except for the fact that event type to be written is different and 
+            // for canclled we don't want to take even the detached orchestration action. We also need to propagate cancellation to the children. But this is all very refactorable. 
             TurnResult::Cancelled(reason) => {
                 // Add cancellation as failure event
                 let error = format!("canceled: {}", reason);
