@@ -375,28 +375,33 @@ impl Runtime {
         let instance = &item.instance;
         let lock_token = &item.lock_token;
 
-        // Check if instance is already terminal
-        let is_terminal = item.history.iter().rev().any(|e| {
-            matches!(
-                e,
-                Event::OrchestrationCompleted { .. }
-                    | Event::OrchestrationFailed { .. }
-                    | Event::OrchestrationContinuedAsNew { .. }
-            )
-        });
+        // Determine terminal state from history and whether batch contains CAN
+        let mut has_completed = false;
+        let mut has_failed = false;
+        let mut has_continued_as_new = false;
+        for e in item.history.iter().rev() {
+            match e {
+                Event::OrchestrationCompleted { .. } => { has_completed = true; break; }
+                Event::OrchestrationFailed { .. } => { has_failed = true; break; }
+                Event::OrchestrationContinuedAsNew { .. } => { has_continued_as_new = true; break; }
+                _ => {}
+            }
+        }
+        let has_can_msg = item.messages.iter().any(|w| matches!(w, WorkItem::ContinueAsNew { .. }));
 
-        if is_terminal {
-            warn!(instance = %instance, "Instance is terminal, acking batch without processing");
+        // Bail on truly terminal histories (Completed/Failed), or ContinuedAsNew without a CAN start message
+        if has_completed || has_failed || (has_continued_as_new && !has_can_msg) {
+            warn!(instance = %instance, "Instance is terminal (completed/failed or CAN without start), acking batch without processing");
             let _ = self
                 .history_store
                 .ack_orchestration_item(
                     lock_token,
-                    item.execution_id,  // Even for terminal instances, use the execution_id
+                    item.execution_id,
                     vec![], // No history changes
                     vec![], // No worker items
                     vec![], // No timer items
                     vec![], // No orchestrator items
-                    ExecutionMetadata::default(), // No metadata changes
+                    ExecutionMetadata::default(),
                 )
                 .await;
             return;
@@ -426,11 +431,11 @@ impl Runtime {
         }
 
         // Process the execution
-        let (history_delta, worker_items, timer_items, orchestrator_items) = if let Some(start_item) = start_or_continue
+        let (history_delta, worker_items, timer_items, orchestrator_items, execution_id_for_ack) = if let Some(start_item) = start_or_continue
         {
-            // Both StartOrchestration and ContinueAsNew are handled identically:
-            // Provider gives us the right execution_id and history (empty for new executions)
-            let (orchestration, input, version, parent_instance, parent_id) = match &start_item {
+            // Both StartOrchestration and ContinueAsNew are handled identically.
+            // For ContinueAsNew, we start a fresh execution with empty history and execution_id = current + 1.
+            let (orchestration, input, version, parent_instance, parent_id, is_can) = match &start_item {
                 // TODO : CR : Workitem::StartOrchestrationDetached must carry the execution_id as well, which should be provided at enqueue time.
                 WorkItem::StartOrchestration {
                     orchestration,
@@ -445,6 +450,7 @@ impl Runtime {
                     version.as_deref(),
                     parent_instance.as_deref(),
                     *parent_id,
+                    false,
                 ),
                 WorkItem::ContinueAsNew {
                     orchestration,
@@ -457,18 +463,27 @@ impl Runtime {
                     version.as_deref(),
                     None,
                     None,
+                    true,
                 ),
                 _ => unreachable!(),
+            };
+
+            // Decide execution id and history to use
+            let (execution_id_to_use, history_to_use) = if is_can {
+                (item.execution_id + 1, Vec::new())
+            } else {
+                (item.execution_id, item.history.clone())
             };
 
             debug!(
                 instance,
                 orchestration = %orchestration,
-                execution_id = %item.execution_id,
-                "Starting execution (provider already set correct execution_id)"
+                execution_id = %execution_id_to_use,
+                is_continue_as_new = is_can,
+                "Starting execution"
             );
 
-            self.handle_start_orchestration_atomic(
+            let (hd, wi, ti, oi) = self.handle_start_orchestration_atomic(
                 instance,
                 orchestration,
                 input,
@@ -476,24 +491,27 @@ impl Runtime {
                 parent_instance,
                 parent_id,
                 completion_messages,
-                &item.history,  // Provider gives us empty history for new executions
-                item.execution_id,  // Provider gives us incremented execution_id for ContinueAsNew
+                &history_to_use,
+                execution_id_to_use,
                 lock_token,
             )
-            .await
+            .await;
+
+            (hd, wi, ti, oi, execution_id_to_use)
         } else if !completion_messages.is_empty() {
             // Only completion messages - process them
-            self.handle_completion_batch_atomic(
+            let (hd, wi, ti, oi) = self.handle_completion_batch_atomic(
                 instance,
                 completion_messages,
                 &item.history,
                 item.execution_id,
                 lock_token,
             )
-            .await
+            .await;
+            (hd, wi, ti, oi, item.execution_id)
         } else {
             // Empty effective batch - just ack
-            (vec![], vec![], vec![], vec![])
+            (vec![], vec![], vec![], vec![], item.execution_id)
         };
 
         // Atomically commit all changes
@@ -521,7 +539,7 @@ impl Runtime {
                 .history_store
                 .ack_orchestration_item(
                     lock_token,
-                    item.execution_id,  // Provider already gave us the correct execution_id
+                    execution_id_for_ack,
                     history_delta.clone(),
                     worker_items.clone(),
                     timer_items.clone(),

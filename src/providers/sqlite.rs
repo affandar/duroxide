@@ -614,46 +614,9 @@ impl Provider for SqliteProvider {
             let version: String = info.try_get("orchestration_version").ok()?;
             let exec_id: i64 = info.try_get("current_execution_id").ok()?;
             
-            // Check if this batch contains ContinueAsNew AND the current execution is terminal
-            let has_continue_as_new = work_items.iter().any(|wi| matches!(wi, WorkItem::ContinueAsNew { .. }));
-            
-            if has_continue_as_new {
-                // Check if current execution is terminal
-                let is_terminal: bool = sqlx::query_scalar(
-                    r#"
-                    SELECT COUNT(*) > 0 
-                    FROM executions 
-                    WHERE instance_id = ? AND execution_id = ? 
-                    AND status IN ('Completed', 'Failed', 'ContinuedAsNew')
-                    "#
-                )
-                .bind(&instance_id)
-                .bind(exec_id)
-                .fetch_one(&mut *tx)
-                .await
-                .unwrap_or(false);
-                
-                if is_terminal {
-                    // Current execution is terminal, return NEXT execution_id with empty history
-                    let next_exec_id = exec_id + 1;
-                    tracing::debug!(
-                        target="duroxide::providers::sqlite",
-                        instance=%instance_id,
-                        current_exec=%exec_id,
-                        next_exec=%next_exec_id,
-                        "ContinueAsNew: current execution is terminal, using next execution_id"
-                    );
-                    (name, version, next_exec_id as u64, Vec::new())
-                } else {
-                    // Current execution not terminal yet, return current
-                    let hist = self.read_history_in_tx(&mut tx, &instance_id, Some(exec_id as u64)).await.ok()?;
-                    (name, version, exec_id as u64, hist)
-                }
-            } else {
-                // Normal case: read history for current execution
-                let hist = self.read_history_in_tx(&mut tx, &instance_id, Some(exec_id as u64)).await.ok()?;
-                (name, version, exec_id as u64, hist)
-            }
+            // Normal case: always read history for current execution; runtime decides CAN semantics
+            let hist = self.read_history_in_tx(&mut tx, &instance_id, Some(exec_id as u64)).await.ok()?;
+            (name, version, exec_id as u64, hist)
         } else {
             // Fallback: try to derive from history (e.g., ActivityCompleted arriving before we see instance row)
             let hist = self.read_history_in_tx(&mut tx, &instance_id, None).await.unwrap_or_default();

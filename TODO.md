@@ -14,8 +14,11 @@
 - [ ] Parent-child cancellation cascading
 
 ### Other TODOs
-- Proper lock / visibility timeouts
 - search for TODO : CR and factor code.
+- Drop crates/dependencies that aren't needed
+- Add orchestrator functions
+- Macros for syntactic sugar
+- Proper lock / visibility timeouts
 - updated to sqlx 0.8
 - review duplicate orch instance ids
 - perf pass over replay engine

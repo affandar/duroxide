@@ -3,6 +3,72 @@ use duroxide::providers::sqlite::SqliteProvider;
 use duroxide::providers::{Provider, WorkItem, ExecutionMetadata};
 use std::sync::Arc;
 
+/// Verify provider ignores work items after a terminal event by just acking
+#[tokio::test]
+async fn test_ignore_work_after_terminal_event() {
+    let td = tempfile::tempdir().unwrap();
+    let db_path = td.path().join("test.db");
+    std::fs::File::create(&db_path).unwrap();
+    let db_url = format!("sqlite:{}", db_path.display());
+    let store: Arc<dyn Provider> = Arc::new(SqliteProvider::new(&db_url).await.unwrap());
+
+    let instance = "inst-terminal";
+
+    // Seed terminal history: OrchestrationCompleted (assume OrchestrationStarted already exists from create_new_execution)
+    let _ = Provider::create_new_execution(
+        store.as_ref(),
+        instance,
+        "TermOrch",
+        "1.0.0",
+        "seed",
+        None,
+        None,
+    ).await.unwrap();
+    // Use event_id=1 (first event)
+    Provider::append_with_execution(
+        store.as_ref(),
+        instance,
+        1,
+        vec![
+            Event::OrchestrationCompleted { event_id: 2, output: "done".to_string() },
+        ],
+    ).await.unwrap();
+
+    // Enqueue arbitrary work item that should be ignored by runtime
+    store.enqueue_orchestrator_work(
+        WorkItem::ExternalRaised {
+            instance: instance.to_string(),
+            name: "Ignored".to_string(),
+            data: "x".to_string(),
+        },
+        None,
+    ).await.unwrap();
+
+    // Fetch orchestration item - runtime would bail and just ack
+    let item = store.fetch_orchestration_item().await.unwrap();
+    assert_eq!(item.instance, instance);
+    assert_eq!(item.messages.len(), 1);
+
+    // Simulate runtime acking empty because it's terminal
+    Provider::ack_orchestration_item(
+        store.as_ref(),
+        &item.lock_token,
+        1,
+        vec![],
+        vec![],
+        vec![],
+        vec![],
+        ExecutionMetadata::default(),
+    ).await.unwrap();
+
+    // Queue should now be empty
+    assert!(store.fetch_orchestration_item().await.is_none());
+
+    // History should remain unchanged (no new events)
+    let hist = store.read(instance).await;
+    assert!(hist.iter().any(|e| matches!(e, Event::OrchestrationCompleted { .. })));
+}
+
 #[tokio::test]
 async fn test_fetch_orchestration_item_new_instance() {
     let td = tempfile::tempdir().unwrap();

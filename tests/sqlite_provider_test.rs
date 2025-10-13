@@ -522,10 +522,11 @@ async fn test_execution_status_continued_as_new() {
     
     assert!(completed_at1.is_some(), "completed_at should be set for first execution");
     
-    // Now fetch the ContinueAsNew work item - provider returns execution_id=2 with empty history
+    // Now fetch the ContinueAsNew work item - runtime will handle creating exec 2
     let item2 = store.fetch_orchestration_item().await.unwrap();
-    assert_eq!(item2.execution_id, 2);
-    assert!(item2.history.is_empty(), "New execution should have empty history");
+    assert_eq!(item2.execution_id, 1);
+    // History should remain the same for execution 1
+    assert!(!item2.history.is_empty(), "Existing execution should still have history");
     
     // Execution 2 record will be created when we ack (idempotent INSERT OR IGNORE)
     
