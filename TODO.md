@@ -6,6 +6,7 @@
 
 ### Reliability & Provider API
 
+- convert execution, instance statuses to enums
 - Introduce a provider error type with Retryable/NonRetryable classification; update runtime to use it for retries across all provider ops (not just ack_orchestration_item)
 - Proper lock / visibility timeouts
 - review duplicate orch instance ids
@@ -35,6 +36,7 @@
 
 ## DONE
 
+- sqlite instance table should not have a status, it should only be in the execution table
 - updated to sqlx 0.8
 - remove unused crate dependencies
 - Update all provider and API docs, get ready to push crate

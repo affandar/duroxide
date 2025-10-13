@@ -258,7 +258,6 @@ impl SqliteProvider {
                 orchestration_name TEXT NOT NULL,
                 orchestration_version TEXT NOT NULL,
                 current_execution_id INTEGER NOT NULL DEFAULT 1,
-                status TEXT NOT NULL DEFAULT 'Running',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
