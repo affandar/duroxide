@@ -1,3 +1,4 @@
+Cargo.lock
 dtf-data/
 apps/*/dtf-data/
 # Build artifacts

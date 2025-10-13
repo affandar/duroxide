@@ -8,7 +8,6 @@
 
 - Introduce a provider error type with Retryable/NonRetryable classification; update runtime to use it for retries across all provider ops (not just ack_orchestration_item)
 - Proper lock / visibility timeouts
-- updated to sqlx 0.8
 - review duplicate orch instance ids
 - perf pass over replay engine
 - parallelize dispatcher loops
@@ -36,6 +35,8 @@
 
 ## DONE
 
+- updated to sqlx 0.8
+- remove unused crate dependencies
 - Update all provider and API docs, get ready to push crate
 - implementing a provider requires the implementor to look deeply at the sqlite provider code
 - clean up leaky abstractions (provider should not have to compute the orchestration state and output e.g)
