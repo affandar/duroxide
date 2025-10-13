@@ -165,7 +165,7 @@ async fn test_ack_orchestration_item_atomic() {
 
     // Ack with updates
     store
-        .ack_orchestration_item(&lock_token, history_delta, worker_items, vec![], vec![], ExecutionMetadata::default())
+        .ack_orchestration_item(&lock_token, 1, history_delta, worker_items, vec![], vec![], ExecutionMetadata::default())
         .await
         .unwrap();
 
@@ -193,7 +193,7 @@ async fn test_ack_orchestration_item_error_handling() {
 
     // Try to ack with invalid token
     let result = store
-        .ack_orchestration_item("invalid-token", vec![], vec![], vec![], vec![], ExecutionMetadata::default())
+        .ack_orchestration_item("invalid-token", 1, vec![], vec![], vec![], vec![], ExecutionMetadata::default())
         .await;
 
     assert!(result.is_err());
@@ -321,7 +321,7 @@ async fn test_in_memory_provider_atomic_operations() {
     }];
 
     store
-        .ack_orchestration_item(&lock_token, history_delta, vec![], vec![], vec![], ExecutionMetadata::default())
+        .ack_orchestration_item(&lock_token, 1, history_delta, vec![], vec![], vec![], ExecutionMetadata::default())
         .await
         .unwrap();
 

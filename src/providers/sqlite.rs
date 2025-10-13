@@ -595,10 +595,6 @@ impl Provider for SqliteProvider {
             })
             .collect();
         
-        // Check if this batch contains StartOrchestration or ContinueAsNew
-        let has_start = work_items.iter().any(|wi| matches!(wi, WorkItem::StartOrchestration { .. }));
-        let has_continue_as_new = work_items.iter().any(|wi| matches!(wi, WorkItem::ContinueAsNew { .. }));
-        
         // Get instance metadata
         let instance_info = sqlx::query(
             r#"
@@ -613,52 +609,46 @@ impl Provider for SqliteProvider {
         .ok()?;
         
         let (orchestration_name, orchestration_version, current_execution_id, history) = if let Some(info) = instance_info {
-            // Instance exists - get metadata and history
+            // Instance exists - get metadata and history for current execution
             let name: String = info.try_get("orchestration_name").ok()?;
             let version: String = info.try_get("orchestration_version").ok()?;
             let exec_id: i64 = info.try_get("current_execution_id").ok()?;
             
-            // If this is a ContinueAsNew, increment execution_id and return empty history
+            // Check if this batch contains ContinueAsNew AND the current execution is terminal
+            let has_continue_as_new = work_items.iter().any(|wi| matches!(wi, WorkItem::ContinueAsNew { .. }));
+            
             if has_continue_as_new {
-                let next_exec_id = exec_id as u64 + 1;
-                
-                // Update current_execution_id atomically
-                sqlx::query(
+                // Check if current execution is terminal
+                let is_terminal: bool = sqlx::query_scalar(
                     r#"
-                    UPDATE instances 
-                    SET current_execution_id = ?
-                    WHERE instance_id = ?
-                    "#
-                )
-                .bind(next_exec_id as i64)
-                .bind(&instance_id)
-                .execute(&mut *tx)
-                .await
-                .ok()?;
-                
-                // Create the new execution record
-                sqlx::query(
-                    r#"
-                    INSERT OR IGNORE INTO executions (instance_id, execution_id, status)
-                    VALUES (?, ?, 'Running')
+                    SELECT COUNT(*) > 0 
+                    FROM executions 
+                    WHERE instance_id = ? AND execution_id = ? 
+                    AND status IN ('Completed', 'Failed', 'ContinuedAsNew')
                     "#
                 )
                 .bind(&instance_id)
-                .bind(next_exec_id as i64)
-                .execute(&mut *tx)
+                .bind(exec_id)
+                .fetch_one(&mut *tx)
                 .await
-                .ok()?;
+                .unwrap_or(false);
                 
-                tracing::debug!(
-                    target="duroxide::providers::sqlite",
-                    instance=%instance_id,
-                    prev_exec=%exec_id,
-                    next_exec=%next_exec_id,
-                    "ContinueAsNew: incremented execution_id and created new execution"
-                );
-                
-                // Return empty history for the new execution
-                (name, version, next_exec_id, Vec::new())
+                if is_terminal {
+                    // Current execution is terminal, return NEXT execution_id with empty history
+                    let next_exec_id = exec_id + 1;
+                    tracing::debug!(
+                        target="duroxide::providers::sqlite",
+                        instance=%instance_id,
+                        current_exec=%exec_id,
+                        next_exec=%next_exec_id,
+                        "ContinueAsNew: current execution is terminal, using next execution_id"
+                    );
+                    (name, version, next_exec_id as u64, Vec::new())
+                } else {
+                    // Current execution not terminal yet, return current
+                    let hist = self.read_history_in_tx(&mut tx, &instance_id, Some(exec_id as u64)).await.ok()?;
+                    (name, version, exec_id as u64, hist)
+                }
             } else {
                 // Normal case: read history for current execution
                 let hist = self.read_history_in_tx(&mut tx, &instance_id, Some(exec_id as u64)).await.ok()?;
@@ -672,21 +662,15 @@ impl Provider for SqliteProvider {
             }) {
                 let (name, version) = first_started;
                 (name, version, 1u64, hist)
-            } else if has_start || has_continue_as_new {
-                // Brand new instance - use work item
-                if let Some(WorkItem::StartOrchestration { orchestration, version, .. }) 
+            } else if let Some(WorkItem::StartOrchestration { orchestration, version, .. }) 
                     | Some(WorkItem::ContinueAsNew { orchestration, version, .. }) = work_items.first() {
-                    (
-                        orchestration.clone(),
-                        version.clone().unwrap_or_else(|| "1.0.0".to_string()),
-                        1u64,
-                        Vec::new()
-                    )
-                } else {
-                    tracing::debug!(target="duroxide::providers::sqlite", instance=%instance_id, "No instance info or history; cannot build orchestration item");
-                    tx.rollback().await.ok();
-                    return None;
-                }
+                // Brand new instance - use work item
+                (
+                    orchestration.clone(),
+                    version.clone().unwrap_or_else(|| "1.0.0".to_string()),
+                    1u64,
+                    Vec::new()
+                )
             } else {
                 tracing::debug!(target="duroxide::providers::sqlite", instance=%instance_id, "No instance info or history; cannot build orchestration item");
                 tx.rollback().await.ok();
@@ -717,6 +701,7 @@ impl Provider for SqliteProvider {
     async fn ack_orchestration_item(
         &self,
         lock_token: &str,
+        execution_id: u64,
         history_delta: Vec<Event>,
         worker_items: Vec<WorkItem>,
         timer_items: Vec<WorkItem>,
@@ -744,20 +729,11 @@ impl Provider for SqliteProvider {
             .await
             .map_err(|e| e.to_string())?;
         
-        // Get current execution ID
-        let execution_id: i64 = sqlx::query_scalar(
-            "SELECT COALESCE(MAX(execution_id), 1) FROM executions WHERE instance_id = ?"
-        )
-        .bind(&instance_id)
-        .fetch_one(&mut *tx)
-        .await
-        .map_err(|e| e.to_string())?;
-        
         debug!(
             instance = %instance_id,
             execution_id = %execution_id,
             history_delta_len = %history_delta.len(),
-            "Using execution ID for ack"
+            "Acking with explicit execution_id"
         );
         
         // For new instances from StartOrchestration, we need to get the orchestration info
@@ -781,6 +757,7 @@ impl Provider for SqliteProvider {
             }
         }
         
+        // Create execution record if it doesn't exist (idempotent)
         sqlx::query(
             r#"
             INSERT OR IGNORE INTO executions (instance_id, execution_id, status)
@@ -788,12 +765,26 @@ impl Provider for SqliteProvider {
             "#
         )
         .bind(&instance_id)
-        .bind(execution_id)
+        .bind(execution_id as i64)
         .execute(&mut *tx)
         .await
         .map_err(|e| e.to_string())?;
         
-        // Always append history_delta to current execution first
+        // Update instances.current_execution_id if this is a newer execution
+        sqlx::query(
+            r#"
+            UPDATE instances 
+            SET current_execution_id = MAX(current_execution_id, ?)
+            WHERE instance_id = ?
+            "#
+        )
+        .bind(execution_id as i64)
+        .bind(&instance_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+        
+        // Always append history_delta to the specified execution
         if !history_delta.is_empty() {
             debug!(
                 instance = %instance_id,
@@ -801,7 +792,7 @@ impl Provider for SqliteProvider {
                 first_event = ?history_delta.first().map(|e| std::mem::discriminant(e)),
                 "Appending history delta"
             );
-            self.append_history_in_tx(&mut tx, &instance_id, execution_id as u64, history_delta.clone())
+            self.append_history_in_tx(&mut tx, &instance_id, execution_id, history_delta.clone())
                 .await
                 .map_err(|e| format!("Failed to append history: {}", e))?;
             
@@ -817,7 +808,7 @@ impl Provider for SqliteProvider {
                 .bind(status)
                 .bind(&metadata.output)
                 .bind(&instance_id)
-                .bind(execution_id)
+                .bind(execution_id as i64)
                 .execute(&mut *tx)
                 .await
                 .map_err(|e| e.to_string())?;
@@ -831,9 +822,6 @@ impl Provider for SqliteProvider {
             }
         }
         
-        // Note: Execution creation for ContinueAsNew is now handled in fetch_orchestration_item,
-        // not here. The provider increments execution_id when it sees WorkItem::ContinueAsNew
-        // in the batch and returns empty history for the new execution.
         
         // Enqueue worker items
         debug!(
@@ -1671,6 +1659,7 @@ mod tests {
         
         store.ack_orchestration_item(
             &orch_item.lock_token,
+            1,  // execution_id
             history_delta,
             vec![],
             vec![],
@@ -1747,6 +1736,7 @@ mod tests {
         
         store.ack_orchestration_item(
             &orch_item.lock_token,
+            1,  // execution_id
             history_delta,
             worker_items,
             vec![],
@@ -1816,6 +1806,7 @@ mod tests {
         // Ack the redelivered item
         store.ack_orchestration_item(
             &redelivered.lock_token,
+            1,  // execution_id
             vec![],
             vec![],
             vec![],
@@ -1826,6 +1817,7 @@ mod tests {
         // Original ack should fail
         assert!(store.ack_orchestration_item(
             &lock_token,
+            1,  // execution_id
             vec![],
             vec![],
             vec![],
@@ -2015,6 +2007,7 @@ mod tests {
         // Ack it
         store.ack_orchestration_item(
             &item.lock_token,
+            1,  // execution_id
             vec![],
             vec![],
             vec![],
@@ -2037,6 +2030,7 @@ mod tests {
         let orch_item = store.fetch_orchestration_item().await.unwrap();
         store.ack_orchestration_item(
             &orch_item.lock_token,
+            1,  // execution_id
             vec![],
             vec![],
             vec![],

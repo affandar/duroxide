@@ -391,6 +391,7 @@ impl Runtime {
                 .history_store
                 .ack_orchestration_item(
                     lock_token,
+                    item.execution_id,  // Even for terminal instances, use the execution_id
                     vec![], // No history changes
                     vec![], // No worker items
                     vec![], // No timer items
@@ -428,10 +429,9 @@ impl Runtime {
         let (history_delta, worker_items, timer_items, orchestrator_items) = if let Some(start_item) = start_or_continue
         {
             // Both StartOrchestration and ContinueAsNew are handled identically:
-            // - Provider increments execution_id and returns empty history for new executions
-            // - handle_start_orchestration_atomic adds OrchestrationStarted if history is empty
-            // - Orchestration function runs from the beginning
+            // Provider gives us the right execution_id and history (empty for new executions)
             let (orchestration, input, version, parent_instance, parent_id) = match &start_item {
+                // TODO : CR : Workitem::StartOrchestrationDetached must carry the execution_id as well, which should be provided at enqueue time.
                 WorkItem::StartOrchestration {
                     orchestration,
                     input,
@@ -465,7 +465,7 @@ impl Runtime {
                 instance,
                 orchestration = %orchestration,
                 execution_id = %item.execution_id,
-                "Starting execution (StartOrchestration or ContinueAsNew)"
+                "Starting execution (provider already set correct execution_id)"
             );
 
             self.handle_start_orchestration_atomic(
@@ -476,8 +476,8 @@ impl Runtime {
                 parent_instance,
                 parent_id,
                 completion_messages,
-                &item.history,
-                item.execution_id,
+                &item.history,  // Provider gives us empty history for new executions
+                item.execution_id,  // Provider gives us incremented execution_id for ContinueAsNew
                 lock_token,
             )
             .await
@@ -521,6 +521,7 @@ impl Runtime {
                 .history_store
                 .ack_orchestration_item(
                     lock_token,
+                    item.execution_id,  // Provider already gave us the correct execution_id
                     history_delta.clone(),
                     worker_items.clone(),
                     timer_items.clone(),
@@ -535,6 +536,7 @@ impl Runtime {
                 }
                 Err(e) => {
                     let emsg = e.to_lowercase();
+                    // TODO : CR : this is very sqlite specific. We should just retry on any error unless the message indicates it is unretriable. 
                     if (emsg.contains("database is locked") || emsg.contains("busy")) && attempts < max_attempts {
                         let backoff_ms = 10u64.saturating_mul(1 << attempts);
                         warn!(instance, attempts, backoff_ms, error = %e, "Ack failed due to lock; retrying");

@@ -68,6 +68,7 @@ async fn test_sqlite_provider_basic() {
     
     store.ack_orchestration_item(
         &item.lock_token,
+        1,  // execution_id
         history_delta,
         worker_items,
         vec![],  // No timers
@@ -187,6 +188,7 @@ async fn test_sqlite_provider_transactional() {
     // All operations should be atomic
     store.ack_orchestration_item(
         &item.lock_token,
+        1,  // execution_id
         history_delta,
         worker_items,
         vec![],
@@ -250,6 +252,7 @@ async fn test_sqlite_provider_timer_queue() {
     
     store.ack_orchestration_item(
         &item.lock_token,
+        1,  // execution_id
         vec![Event::OrchestrationStarted {
             event_id: 1,
             name: "TimerTest".to_string(),
@@ -315,7 +318,7 @@ async fn test_execution_status_completed() {
         output: Some("success".to_string()),
     };
     
-    store.ack_orchestration_item(&item.lock_token, history_delta, vec![], vec![], vec![], metadata)
+    store.ack_orchestration_item(&item.lock_token, 1, history_delta, vec![], vec![], vec![], metadata)
         .await
         .unwrap();
     
@@ -388,7 +391,7 @@ async fn test_execution_status_failed() {
         output: Some("something went wrong".to_string()),
     };
     
-    store.ack_orchestration_item(&item.lock_token, history_delta, vec![], vec![], vec![], metadata)
+    store.ack_orchestration_item(&item.lock_token, 1, history_delta, vec![], vec![], vec![], metadata)
         .await
         .unwrap();
     
@@ -471,10 +474,11 @@ async fn test_execution_status_continued_as_new() {
     };
     
     store.ack_orchestration_item(
-        &item.lock_token, 
-        history_delta, 
-        vec![], 
-        vec![], 
+        &item.lock_token,
+        1,  // execution_id
+        history_delta,
+        vec![],
+        vec![],
         vec![continue_work],
         metadata,
     )
@@ -518,20 +522,12 @@ async fn test_execution_status_continued_as_new() {
     
     assert!(completed_at1.is_some(), "completed_at should be set for first execution");
     
-    // Now fetch the ContinueAsNew work item - this will create execution 2
+    // Now fetch the ContinueAsNew work item - provider returns execution_id=2 with empty history
     let item2 = store.fetch_orchestration_item().await.unwrap();
     assert_eq!(item2.execution_id, 2);
+    assert!(item2.history.is_empty(), "New execution should have empty history");
     
-    // Verify execution 2 was created with Running status
-    let status2: String = sqlx::query_scalar(
-        "SELECT status FROM executions WHERE instance_id = ? AND execution_id = 2"
-    )
-    .bind(instance)
-    .fetch_one(pool)
-    .await
-    .expect("Should find execution 2 after fetch");
-    
-    assert_eq!(status2, "Running", "Execution 2 status should be Running");
+    // Execution 2 record will be created when we ack (idempotent INSERT OR IGNORE)
     
     let history_delta2 = vec![
         Event::OrchestrationStarted {
@@ -553,7 +549,7 @@ async fn test_execution_status_continued_as_new() {
         output: Some("done".to_string()),
     };
     
-    store.ack_orchestration_item(&item2.lock_token, history_delta2, vec![], vec![], vec![], metadata2)
+    store.ack_orchestration_item(&item2.lock_token, 2, history_delta2, vec![], vec![], vec![], metadata2)
         .await
         .unwrap();
     
@@ -619,7 +615,7 @@ async fn test_execution_status_running() {
         input: "input".to_string(),
     };
     
-    store.ack_orchestration_item(&item.lock_token, history_delta, vec![activity_work], vec![], vec![], ExecutionMetadata::default())
+    store.ack_orchestration_item(&item.lock_token, 1, history_delta, vec![activity_work], vec![], vec![], ExecutionMetadata::default())
         .await
         .unwrap();
     
@@ -691,7 +687,7 @@ async fn test_execution_output_captured_on_completion() {
         output: Some(expected_output.to_string()),
     };
     
-    store.ack_orchestration_item(&item.lock_token, history_delta, vec![], vec![], vec![], metadata)
+    store.ack_orchestration_item(&item.lock_token, 1, history_delta, vec![], vec![], vec![], metadata)
         .await
         .unwrap();
     
@@ -753,7 +749,7 @@ async fn test_execution_output_captured_on_failure() {
         output: Some(expected_error.to_string()),
     };
     
-    store.ack_orchestration_item(&item.lock_token, history_delta, vec![], vec![], vec![], metadata)
+    store.ack_orchestration_item(&item.lock_token, 1, history_delta, vec![], vec![], vec![], metadata)
         .await
         .unwrap();
     
@@ -824,6 +820,7 @@ async fn test_execution_output_captured_on_continue_as_new() {
     
     store.ack_orchestration_item(
         &item.lock_token,
+        1,  // execution_id
         history_delta,
         vec![],
         vec![],
@@ -895,7 +892,7 @@ async fn test_execution_output_null_when_running() {
         input: "activity-input".to_string(),
     };
     
-    store.ack_orchestration_item(&item.lock_token, history_delta, vec![activity_work], vec![], vec![], ExecutionMetadata::default())
+    store.ack_orchestration_item(&item.lock_token, 1, history_delta, vec![activity_work], vec![], vec![], ExecutionMetadata::default())
         .await
         .unwrap();
     
@@ -958,7 +955,7 @@ async fn test_execution_output_complex_json() {
         output: Some(complex_output.to_string()),
     };
     
-    store.ack_orchestration_item(&item.lock_token, history_delta, vec![], vec![], vec![], metadata)
+    store.ack_orchestration_item(&item.lock_token, 1, history_delta, vec![], vec![], vec![], metadata)
         .await
         .unwrap();
     

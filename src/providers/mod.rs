@@ -967,53 +967,60 @@ pub trait Provider: Any + Send + Sync {
     /// - Valid case (e.g., terminal instance being acked with no changes)
     /// - Still process queues and release lock
     ///
+    /// # Parameters
+    ///
+    /// * `lock_token` - Token from `fetch_orchestration_item` identifying the batch
+    /// * `execution_id` - **The execution ID this history belongs to** (runtime decides this)
+    /// * `history_delta` - Events to append to the specified execution
+    /// * `worker_items` - Activity work items to enqueue
+    /// * `timer_items` - Timer work items to enqueue
+    /// * `orchestrator_items` - Orchestration work items to enqueue (StartOrchestration, ContinueAsNew, etc.)
+    /// * `metadata` - Pre-computed execution metadata (status, output)
+    ///
+    /// # execution_id Parameter
+    ///
+    /// The `execution_id` parameter tells the provider **which execution this history belongs to**.
+    /// The runtime is responsible for:
+    /// - Deciding when to create new executions (e.g., for ContinueAsNew)
+    /// - Managing execution ID sequencing
+    /// - Ensuring each execution has its own isolated history
+    ///
+    /// The provider should:
+    /// - **Create the execution record if it doesn't exist** (idempotent INSERT OR IGNORE)
+    /// - Append `history_delta` to the specified `execution_id`
+    /// - Update `instances.current_execution_id` if this execution_id is newer
+    /// - NOT inspect WorkItems to decide execution IDs
+    ///
     /// # SQLite Implementation Pattern
     ///
-    /// ```ignore
-    /// async fn ack_orchestration_item(...) -> Result<(), String> {
+    /// ```text
+    /// async fn ack_orchestration_item(execution_id, ...) -> Result<(), String> {
     ///     let tx = begin_transaction()?;
     ///     
     ///     // Get instance_id from lock_token
     ///     let instance_id = SELECT instance_id FROM orch_queue WHERE lock_token = ?;
     ///     
-    ///     // Get current execution_id
-    ///     let exec_id = SELECT current_execution_id FROM instances WHERE instance_id = ?;
+    ///     // Create execution record if it doesn't exist (idempotent)
+    ///     INSERT OR IGNORE INTO executions (instance_id, execution_id, status)
+    ///     VALUES (?, ?, 'Running');
     ///     
-    ///     // Append history
+    ///     // Append history to the SPECIFIED execution_id
     ///     for event in history_delta {
-    ///         INSERT INTO history (...) VALUES (instance_id, exec_id, event.event_id(), ...)
+    ///         INSERT INTO history (...) VALUES (instance_id, execution_id, event.event_id(), ...)
     ///     }
     ///     
-    ///     // Store metadata (no event inspection!)
+    ///     // Update execution metadata (no event inspection!)
     ///     if let Some(status) = &metadata.status {
     ///         UPDATE executions SET status = ?, output = ?, completed_at = NOW()
     ///         WHERE instance_id = ? AND execution_id = ?
     ///     }
     ///     
-    ///     // Create next execution if needed
-    ///     if metadata.create_next_execution {
-    ///         INSERT INTO executions (instance_id, execution_id, status) VALUES (?, next_id, 'Running')
-    ///         UPDATE instances SET current_execution_id = next_id
-    ///     }
+    ///     // Update current_execution_id if this is a newer execution
+    ///     UPDATE instances SET current_execution_id = GREATEST(current_execution_id, ?)
+    ///     WHERE instance_id = ?;
     ///     
-    ///     // Enqueue worker items
-    ///     for item in worker_items {
-    ///         INSERT INTO worker_queue (work_item) VALUES (serialize(item))
-    ///     }
-    ///     
-    ///     // Enqueue timer items
-    ///     for item in timer_items {
-    ///         INSERT INTO timer_queue (work_item, fire_at) VALUES (serialize(item), item.fire_at_ms)
-    ///     }
-    ///     
-    ///     // Enqueue orchestrator items
-    ///     for item in orchestrator_items {
-    ///         // May need to create instance for StartOrchestration
-    ///         INSERT INTO orch_queue (instance_id, work_item, visible_at) VALUES (...)
-    ///     }
-    ///     
-    ///     // Release lock
-    ///     DELETE FROM orch_queue WHERE lock_token = ?;
+    ///     // Enqueue worker/timer/orchestrator items...
+    ///     // Release lock: DELETE FROM orch_queue WHERE lock_token = ?;
     ///     
     ///     commit_transaction()?;
     ///     Ok(())
@@ -1022,6 +1029,7 @@ pub trait Provider: Any + Send + Sync {
     async fn ack_orchestration_item(
         &self,
         _lock_token: &str,
+        _execution_id: u64,
         _history_delta: Vec<Event>,
         _worker_items: Vec<WorkItem>,
         _timer_items: Vec<WorkItem>,
