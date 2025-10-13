@@ -48,7 +48,6 @@ impl OrchestrationRegistry {
         }
     }
 
-
     pub fn resolve_exact(&self, name: &str, v: &Version) -> Option<Arc<dyn OrchestrationHandler>> {
         self.inner.get(name)?.get(v).cloned()
     }

@@ -9,7 +9,7 @@
 use duroxide::providers::sqlite::SqliteProvider;
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
-use duroxide::{OrchestrationContext, OrchestrationRegistry, DurableOutput, Client};
+use duroxide::{Client, DurableOutput, OrchestrationContext, OrchestrationRegistry};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -39,22 +39,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Register activities for user processing
     let activities = ActivityRegistry::builder()
         .register("FetchUserProfile", |user_json: String| async move {
-            let user: User = serde_json::from_str(&user_json)
-                .map_err(|e| format!("JSON parse error: {}", e))?;
+            let user: User = serde_json::from_str(&user_json).map_err(|e| format!("JSON parse error: {}", e))?;
             // Simulate API call delay
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-            
+
             let profile = UserProfile {
                 user_id: user.id,
                 email: format!("{}@example.com", user.name.to_lowercase()),
                 preferences: vec!["notifications".to_string(), "dark_mode".to_string()],
             };
-            Ok(serde_json::to_string(&profile)
-                .map_err(|e| format!("JSON serialize error: {}", e))?)
+            Ok(serde_json::to_string(&profile).map_err(|e| format!("JSON serialize error: {}", e))?)
         })
         .register("SendWelcomeEmail", |profile_json: String| async move {
-            let profile: UserProfile = serde_json::from_str(&profile_json)
-                .map_err(|e| format!("JSON parse error: {}", e))?;
+            let profile: UserProfile =
+                serde_json::from_str(&profile_json).map_err(|e| format!("JSON parse error: {}", e))?;
             // Simulate email sending
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
             Ok(format!("Welcome email sent to {}", profile.email))
@@ -64,10 +62,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Fan-out/fan-in orchestration
     let orchestration = |ctx: OrchestrationContext, users_json: String| async move {
         ctx.trace_info("Starting fan-out/fan-in orchestration");
-        
+
         // Parse input users
-        let users: Vec<User> = serde_json::from_str(&users_json)
-            .map_err(|e| format!("JSON parse error: {}", e))?;
+        let users: Vec<User> = serde_json::from_str(&users_json).map_err(|e| format!("JSON parse error: {}", e))?;
         ctx.trace_info(format!("Processing {} users in parallel", users.len()));
 
         // Fan-out: Schedule all user profile fetches in parallel
@@ -81,16 +78,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // Fan-in: Wait for all profiles to complete (deterministic order)
         let profile_results = ctx.join(profile_futures).await;
-        
+
         // Process results and send welcome emails
         let mut email_results = Vec::new();
         for result in profile_results {
             match result {
                 DurableOutput::Activity(Ok(profile_json)) => {
-                    let profile: UserProfile = serde_json::from_str(&profile_json)
-                        .map_err(|e| format!("JSON parse error: {}", e))?;
+                    let profile: UserProfile =
+                        serde_json::from_str(&profile_json).map_err(|e| format!("JSON parse error: {}", e))?;
                     ctx.trace_info(format!("Fetched profile for user {}", profile.user_id));
-                    
+
                     // Schedule welcome email
                     let email_future = ctx.schedule_activity("SendWelcomeEmail", profile_json);
                     email_results.push(email_future);
@@ -106,7 +103,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Wait for all emails to be sent
         let email_completions = ctx.join(email_results).await;
         let mut success_count = 0;
-        
+
         for result in email_completions {
             match result {
                 DurableOutput::Activity(Ok(message)) => {
@@ -127,23 +124,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .register("FanOutFanIn", orchestration)
         .build();
 
-    let rt = runtime::Runtime::start_with_store(
-        store.clone(),
-        Arc::new(activities),
-        orchestrations,
-    ).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activities), orchestrations).await;
 
     // Test data: multiple users to process
     let users = vec![
-        User { id: 1, name: "Alice".to_string() },
-        User { id: 2, name: "Bob".to_string() },
-        User { id: 3, name: "Charlie".to_string() },
+        User {
+            id: 1,
+            name: "Alice".to_string(),
+        },
+        User {
+            id: 2,
+            name: "Bob".to_string(),
+        },
+        User {
+            id: 3,
+            name: "Charlie".to_string(),
+        },
     ];
     let users_json = serde_json::to_string(&users)?;
 
     let instance_id = "fan-out-instance-1";
     let client = Client::new(store);
-    client.start_orchestration(instance_id, "FanOutFanIn", users_json).await?;
+    client
+        .start_orchestration(instance_id, "FanOutFanIn", users_json)
+        .await?;
 
     match client
         .wait_for_orchestration(instance_id, std::time::Duration::from_secs(10))

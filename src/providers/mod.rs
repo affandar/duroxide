@@ -160,58 +160,58 @@ pub enum WorkItem {
         parent_instance: Option<String>,
         parent_id: Option<u64>,
     },
-    
+
     /// Execute an activity (goes to worker queue)
     /// - `id`: event_id from ActivityScheduled (for correlation)
     /// - Worker will enqueue ActivityCompleted or ActivityFailed
     ActivityExecute {
         instance: String,
         execution_id: u64,
-        id: u64,  // scheduling_event_id from ActivityScheduled
+        id: u64, // scheduling_event_id from ActivityScheduled
         name: String,
         input: String,
     },
-    
+
     /// Activity completed successfully (goes to orchestrator queue)
     /// - `id`: source_event_id referencing the ActivityScheduled event
     /// - Triggers next orchestration turn
     ActivityCompleted {
         instance: String,
         execution_id: u64,
-        id: u64,  // source_event_id referencing ActivityScheduled
+        id: u64, // source_event_id referencing ActivityScheduled
         result: String,
     },
-    
+
     /// Activity failed with error (goes to orchestrator queue)
     /// - `id`: source_event_id referencing the ActivityScheduled event
     /// - Triggers next orchestration turn
     ActivityFailed {
         instance: String,
         execution_id: u64,
-        id: u64,  // source_event_id referencing ActivityScheduled
+        id: u64, // source_event_id referencing ActivityScheduled
         error: String,
     },
-    
+
     /// Schedule a timer (goes to timer queue)
     /// - Provider with delayed_visibility should make this visible at `fire_at_ms`
     /// - Otherwise, runtime uses in-process timer service
     TimerSchedule {
         instance: String,
         execution_id: u64,
-        id: u64,  // scheduling_event_id from TimerCreated
-        fire_at_ms: u64,  // Absolute timestamp (millis since epoch)
+        id: u64,         // scheduling_event_id from TimerCreated
+        fire_at_ms: u64, // Absolute timestamp (millis since epoch)
     },
-    
+
     /// Timer fired (goes to orchestrator queue)
     /// - Enqueued by timer dispatcher when timer becomes ready
     /// - `fire_at_ms`: same value from TimerSchedule (for reference)
     TimerFired {
         instance: String,
         execution_id: u64,
-        id: u64,  // source_event_id referencing TimerCreated
+        id: u64, // source_event_id referencing TimerCreated
         fire_at_ms: u64,
     },
-    
+
     /// External event raised (goes to orchestrator queue)
     /// - Matched by `name` to ExternalSubscribed events
     /// - `data`: JSON payload from external system
@@ -220,35 +220,32 @@ pub enum WorkItem {
         name: String,
         data: String,
     },
-    
+
     /// Sub-orchestration completed (goes to parent's orchestrator queue)
     /// - Routes to `parent_instance`, not the child
     /// - `parent_id`: event_id from parent's SubOrchestrationScheduled event
     SubOrchCompleted {
         parent_instance: String,
         parent_execution_id: u64,
-        parent_id: u64,  // source_event_id referencing SubOrchestrationScheduled
+        parent_id: u64, // source_event_id referencing SubOrchestrationScheduled
         result: String,
     },
-    
+
     /// Sub-orchestration failed (goes to parent's orchestrator queue)
     /// - Routes to `parent_instance`, not the child
     /// - `parent_id`: event_id from parent's SubOrchestrationScheduled event
     SubOrchFailed {
         parent_instance: String,
         parent_execution_id: u64,
-        parent_id: u64,  // source_event_id referencing SubOrchestrationScheduled
+        parent_id: u64, // source_event_id referencing SubOrchestrationScheduled
         error: String,
     },
-    
+
     /// Request orchestration cancellation (goes to orchestrator queue)
     /// - Runtime will append OrchestrationCancelRequested event
     /// - Eventually results in OrchestrationFailed with "canceled: {reason}"
-    CancelInstance {
-        instance: String,
-        reason: String,
-    },
-    
+    CancelInstance { instance: String, reason: String },
+
     /// Continue orchestration as new execution (goes to orchestrator queue)
     /// - Signals the end of current execution and start of next
     /// - Runtime will create Event::OrchestrationStarted for next execution
@@ -756,7 +753,7 @@ pub enum WorkItem {
 pub trait Provider: Any + Send + Sync {
     // ===== Core Atomic Orchestration Methods (REQUIRED) =====
     // These three methods form the heart of reliable orchestration execution.
-    
+
     /// Fetch the next orchestration work item atomically.
     ///
     /// # What This Does
@@ -1098,7 +1095,7 @@ pub trait Provider: Any + Send + Sync {
     async fn abandon_orchestration_item(&self, _lock_token: &str, _delay_ms: Option<u64>) -> Result<(), String>;
 
     // ===== Basic History Access (REQUIRED) =====
-    
+
     /// Read the full history for an instance.
     ///
     /// # What This Does
@@ -1147,7 +1144,7 @@ pub trait Provider: Any + Send + Sync {
 
     // ===== Worker Queue Operations (REQUIRED) =====
     // Worker queue processes activity executions.
-    
+
     /// Enqueue an activity execution request.
     ///
     /// # What This Does
@@ -1236,7 +1233,7 @@ pub trait Provider: Any + Send + Sync {
 
     // ===== Multi-Execution Support (REQUIRED for ContinueAsNew) =====
     // These methods enable orchestrations to continue with new input while maintaining history.
-    
+
     /// Get the latest execution ID for an instance.
     ///
     /// # What This Does
@@ -1266,7 +1263,7 @@ pub trait Provider: Any + Send + Sync {
         let h = self.read(instance).await;
         if h.is_empty() { None } else { Some(1) }
     }
-    
+
     /// Read history for a specific execution.
     ///
     /// # What This Does
@@ -1296,7 +1293,7 @@ pub trait Provider: Any + Send + Sync {
     async fn read_with_execution(&self, instance: &str, _execution_id: u64) -> Vec<Event> {
         self.read(instance).await
     }
-    
+
     /// Append events to a specific execution.
     ///
     /// # What This Does
@@ -1352,7 +1349,7 @@ pub trait Provider: Any + Send + Sync {
         _execution_id: u64,
         new_events: Vec<Event>,
     ) -> Result<(), String>;
-    
+
     /// Create a new execution for ContinueAsNew scenarios.
     ///
     /// # Deprecation Notice
@@ -1419,7 +1416,7 @@ pub trait Provider: Any + Send + Sync {
     ) -> Result<u64, String>;
 
     // ===== Timer Support (REQUIRED only if supports_delayed_visibility returns true) =====
-    
+
     /// Whether this provider natively supports delayed message visibility.
     ///
     /// # Return Value
@@ -1445,7 +1442,7 @@ pub trait Provider: Any + Send + Sync {
     fn supports_delayed_visibility(&self) -> bool {
         false
     }
-    
+
     /// Enqueue a timer to fire at a specific time.
     ///
     /// **Only called if `supports_delayed_visibility() = true`**
@@ -1469,7 +1466,7 @@ pub trait Provider: Any + Send + Sync {
     ///
     /// `dequeue_timer_peek_lock()` should only return timers where `fire_at <= now()`.
     async fn enqueue_timer_work(&self, _item: WorkItem) -> Result<(), String>;
-    
+
     /// Dequeue a timer that's ready to fire.
     ///
     /// **Only called if `supports_delayed_visibility() = true`**
@@ -1506,7 +1503,7 @@ pub trait Provider: Any + Send + Sync {
     ///
     /// Should dequeue timers in fire_at order (earliest first).
     async fn dequeue_timer_peek_lock(&self) -> Option<(WorkItem, String)>;
-    
+
     /// Acknowledge a processed timer.
     ///
     /// **Only called if `supports_delayed_visibility() = true`**
@@ -1526,7 +1523,7 @@ pub trait Provider: Any + Send + Sync {
 
     // ===== Optional Management APIs =====
     // These have default implementations and are primarily used for testing/debugging.
-    
+
     /// Enqueue a work item to the orchestrator queue.
     ///
     /// # Purpose
@@ -1589,7 +1586,7 @@ pub trait Provider: Any + Send + Sync {
     ///
     /// Return Err if storage fails. Return Ok if item was enqueued successfully.
     async fn enqueue_orchestrator_work(&self, _item: WorkItem, _delay_ms: Option<u64>) -> Result<(), String>;
-    
+
     /// List all known instance IDs.
     ///
     /// # Purpose
@@ -1617,7 +1614,7 @@ pub trait Provider: Any + Send + Sync {
     async fn list_instances(&self) -> Vec<String> {
         Vec::new()
     }
-    
+
     /// List all execution IDs for an instance.
     ///
     /// # Purpose
@@ -1649,14 +1646,14 @@ pub trait Provider: Any + Send + Sync {
         let h = self.read(instance).await;
         if h.is_empty() { Vec::new() } else { vec![1] }
     }
-    
+
     // - Add timeout parameter to dequeue_worker_peek_lock and dequeue_timer_peek_lock
     // - Add refresh_worker_lock(token, extend_ms) and refresh_timer_lock(token, extend_ms)
     // - Provider should auto-abandon messages if lock expires without ack
     // This would enable graceful handling of worker crashes and long-running activities
-    
+
     // ===== Capability Discovery =====
-    
+
     /// Check if this provider implements management capabilities.
     ///
     /// # Purpose
@@ -1699,7 +1696,7 @@ pub mod management;
 pub mod sqlite;
 
 // Re-export management types for convenience
-pub use management::{ManagementProvider, InstanceInfo, ExecutionInfo, SystemMetrics, QueueDepths};
+pub use management::{ExecutionInfo, InstanceInfo, ManagementProvider, QueueDepths, SystemMetrics};
 
 /// Management capability trait for observability and administrative operations.
 ///
@@ -1779,7 +1776,7 @@ pub use management::{ManagementProvider, InstanceInfo, ExecutionInfo, SystemMetr
 ///
 /// ```ignore
 /// let client = Client::new(provider);
-/// 
+///
 /// // Check if management features are available
 /// if client.has_management_capability() {
 ///     let instances = client.list_all_instances().await?;
@@ -1792,7 +1789,7 @@ pub use management::{ManagementProvider, InstanceInfo, ExecutionInfo, SystemMetr
 #[async_trait::async_trait]
 pub trait ManagementCapability: Any + Send + Sync {
     // ===== Instance Discovery =====
-    
+
     /// List all known instance IDs.
     ///
     /// # Returns
@@ -1819,7 +1816,7 @@ pub trait ManagementCapability: Any + Send + Sync {
     async fn list_instances(&self) -> Result<Vec<String>, String> {
         Ok(Vec::new())
     }
-    
+
     /// List instances matching a status filter.
     ///
     /// # Parameters
@@ -1847,9 +1844,9 @@ pub trait ManagementCapability: Any + Send + Sync {
     async fn list_instances_by_status(&self, _status: &str) -> Result<Vec<String>, String> {
         Ok(Vec::new())
     }
-    
+
     // ===== Execution Inspection =====
-    
+
     /// List all execution IDs for an instance.
     ///
     /// # Returns
@@ -1885,7 +1882,7 @@ pub trait ManagementCapability: Any + Send + Sync {
             Ok(Vec::new())
         }
     }
-    
+
     /// Read the full event history for a specific execution within an instance.
     ///
     /// # Parameters
@@ -1913,7 +1910,7 @@ pub trait ManagementCapability: Any + Send + Sync {
     async fn read_execution(&self, _instance: &str, _execution_id: u64) -> Result<Vec<Event>, String> {
         Ok(Vec::new())
     }
-    
+
     /// Get the latest (current) execution ID for an instance.
     ///
     /// # Parameters
@@ -1934,9 +1931,9 @@ pub trait ManagementCapability: Any + Send + Sync {
     async fn latest_execution_id(&self, _instance: &str) -> Result<u64, String> {
         Ok(1)
     }
-    
+
     // ===== Instance Metadata =====
-    
+
     /// Get comprehensive information about an instance.
     ///
     /// # Parameters
@@ -1964,7 +1961,7 @@ pub trait ManagementCapability: Any + Send + Sync {
     async fn get_instance_info(&self, instance: &str) -> Result<InstanceInfo, String> {
         Err(format!("get_instance_info not implemented for instance {}", instance))
     }
-    
+
     /// Get detailed information about a specific execution.
     ///
     /// # Parameters
@@ -1994,9 +1991,9 @@ pub trait ManagementCapability: Any + Send + Sync {
     async fn get_execution_info(&self, _instance: &str, _execution_id: u64) -> Result<ExecutionInfo, String> {
         Err("get_execution_info not implemented".to_string())
     }
-    
+
     // ===== System Metrics =====
-    
+
     /// Get system-wide metrics for the orchestration engine.
     ///
     /// # Returns
@@ -2007,7 +2004,7 @@ pub trait ManagementCapability: Any + Send + Sync {
     ///
     /// ```ignore
     /// async fn get_system_metrics(&self) -> Result<SystemMetrics, String> {
-    ///     SELECT 
+    ///     SELECT
     ///         COUNT(*) as total_instances,
     ///         SUM(CASE WHEN e.status = 'Running' THEN 1 ELSE 0 END) as running_instances,
     ///         SUM(CASE WHEN e.status = 'Completed' THEN 1 ELSE 0 END) as completed_instances,
@@ -2023,7 +2020,7 @@ pub trait ManagementCapability: Any + Send + Sync {
     async fn get_system_metrics(&self) -> Result<SystemMetrics, String> {
         Ok(SystemMetrics::default())
     }
-    
+
     /// Get the current depths of the internal work queues.
     ///
     /// # Returns
@@ -2034,7 +2031,7 @@ pub trait ManagementCapability: Any + Send + Sync {
     ///
     /// ```ignore
     /// async fn get_queue_depths(&self) -> Result<QueueDepths, String> {
-    ///     SELECT 
+    ///     SELECT
     ///         (SELECT COUNT(*) FROM orchestrator_queue WHERE lock_token IS NULL) as orchestrator_queue,
     ///         (SELECT COUNT(*) FROM worker_queue WHERE lock_token IS NULL) as worker_queue,
     ///         (SELECT COUNT(*) FROM timer_queue WHERE lock_token IS NULL) as timer_queue

@@ -70,14 +70,17 @@ impl TimerService {
                 // First enqueue the TimerFired event
                 let enqueue_result = self
                     .store
-                    .enqueue_orchestrator_work(WorkItem::TimerFired {
-                        instance,
-                        execution_id,
-                        id,
-                        fire_at_ms,
-                    }, None)
+                    .enqueue_orchestrator_work(
+                        WorkItem::TimerFired {
+                            instance,
+                            execution_id,
+                            id,
+                            fire_at_ms,
+                        },
+                        None,
+                    )
                     .await;
-                
+
                 // Only acknowledge the timer after successful enqueue
                 if enqueue_result.is_ok() {
                     let _ = self.store.ack_timer(&ack_token).await;
@@ -118,7 +121,8 @@ impl TimerService {
             let key = format!("{}|{}|{}|{}", instance, execution_id, id, fire_at_ms);
             if self.keys.insert(key.clone()) {
                 self.min_heap.push(Reverse((fire_at_ms, key.clone())));
-                self.items.insert(key, (instance, execution_id, id, timer_with_token.ack_token));
+                self.items
+                    .insert(key, (instance, execution_id, id, timer_with_token.ack_token));
             }
         }
     }
@@ -149,37 +153,110 @@ mod tests {
         }
         #[async_trait::async_trait]
         impl Provider for CaptureStore {
-            async fn read(&self, instance: &str) -> Vec<Event> { self.inner.read(instance).await }
-            async fn list_instances(&self) -> Vec<String> { self.inner.list_instances().await }
+            async fn read(&self, instance: &str) -> Vec<Event> {
+                self.inner.read(instance).await
+            }
+            async fn list_instances(&self) -> Vec<String> {
+                self.inner.list_instances().await
+            }
 
             async fn enqueue_orchestrator_work(&self, item: WorkItem, _delay_ms: Option<u64>) -> Result<(), String> {
                 self.captured.lock().await.push(item);
                 Ok(())
             }
 
-            async fn enqueue_worker_work(&self, item: WorkItem) -> Result<(), String> { self.inner.enqueue_worker_work(item).await }
-            async fn dequeue_worker_peek_lock(&self) -> Option<(WorkItem, String)> { self.inner.dequeue_worker_peek_lock().await }
-            async fn ack_worker(&self, token: &str) -> Result<(), String> { self.inner.ack_worker(token).await }
+            async fn enqueue_worker_work(&self, item: WorkItem) -> Result<(), String> {
+                self.inner.enqueue_worker_work(item).await
+            }
+            async fn dequeue_worker_peek_lock(&self) -> Option<(WorkItem, String)> {
+                self.inner.dequeue_worker_peek_lock().await
+            }
+            async fn ack_worker(&self, token: &str) -> Result<(), String> {
+                self.inner.ack_worker(token).await
+            }
 
-            async fn enqueue_timer_work(&self, item: WorkItem) -> Result<(), String> { self.inner.enqueue_timer_work(item).await }
-            async fn dequeue_timer_peek_lock(&self) -> Option<(WorkItem, String)> { self.inner.dequeue_timer_peek_lock().await }
-            async fn ack_timer(&self, token: &str) -> Result<(), String> { self.inner.ack_timer(token).await }
+            async fn enqueue_timer_work(&self, item: WorkItem) -> Result<(), String> {
+                self.inner.enqueue_timer_work(item).await
+            }
+            async fn dequeue_timer_peek_lock(&self) -> Option<(WorkItem, String)> {
+                self.inner.dequeue_timer_peek_lock().await
+            }
+            async fn ack_timer(&self, token: &str) -> Result<(), String> {
+                self.inner.ack_timer(token).await
+            }
 
-            async fn latest_execution_id(&self, instance: &str) -> Option<u64> { self.inner.latest_execution_id(instance).await }
-            async fn list_executions(&self, instance: &str) -> Vec<u64> { self.inner.list_executions(instance).await }
-            async fn read_with_execution(&self, instance: &str, execution_id: u64) -> Vec<Event> { self.inner.read_with_execution(instance, execution_id).await }
-            async fn append_with_execution(&self, instance: &str, execution_id: u64, new_events: Vec<Event>) -> Result<(), String> { self.inner.append_with_execution(instance, execution_id, new_events).await }
-            async fn create_new_execution(&self, instance: &str, orchestration: &str, version: &str, input: &str, parent_instance: Option<&str>, parent_id: Option<u64>) -> Result<u64, String> { self.inner.create_new_execution(instance, orchestration, version, input, parent_instance, parent_id).await }
-            fn supports_delayed_visibility(&self) -> bool { self.inner.supports_delayed_visibility() }
+            async fn latest_execution_id(&self, instance: &str) -> Option<u64> {
+                self.inner.latest_execution_id(instance).await
+            }
+            async fn list_executions(&self, instance: &str) -> Vec<u64> {
+                self.inner.list_executions(instance).await
+            }
+            async fn read_with_execution(&self, instance: &str, execution_id: u64) -> Vec<Event> {
+                self.inner.read_with_execution(instance, execution_id).await
+            }
+            async fn append_with_execution(
+                &self,
+                instance: &str,
+                execution_id: u64,
+                new_events: Vec<Event>,
+            ) -> Result<(), String> {
+                self.inner
+                    .append_with_execution(instance, execution_id, new_events)
+                    .await
+            }
+            async fn create_new_execution(
+                &self,
+                instance: &str,
+                orchestration: &str,
+                version: &str,
+                input: &str,
+                parent_instance: Option<&str>,
+                parent_id: Option<u64>,
+            ) -> Result<u64, String> {
+                self.inner
+                    .create_new_execution(instance, orchestration, version, input, parent_instance, parent_id)
+                    .await
+            }
+            fn supports_delayed_visibility(&self) -> bool {
+                self.inner.supports_delayed_visibility()
+            }
 
-            async fn fetch_orchestration_item(&self) -> Option<crate::providers::OrchestrationItem> { self.inner.fetch_orchestration_item().await }
-            async fn ack_orchestration_item(&self, lock_token: &str, execution_id: u64, history_delta: Vec<Event>, worker_items: Vec<WorkItem>, timer_items: Vec<WorkItem>, orchestrator_items: Vec<WorkItem>, metadata: crate::providers::ExecutionMetadata) -> Result<(), String> { self.inner.ack_orchestration_item(lock_token, execution_id, history_delta, worker_items, timer_items, orchestrator_items, metadata).await }
-            async fn abandon_orchestration_item(&self, lock_token: &str, delay_ms: Option<u64>) -> Result<(), String> { self.inner.abandon_orchestration_item(lock_token, delay_ms).await }
+            async fn fetch_orchestration_item(&self) -> Option<crate::providers::OrchestrationItem> {
+                self.inner.fetch_orchestration_item().await
+            }
+            async fn ack_orchestration_item(
+                &self,
+                lock_token: &str,
+                execution_id: u64,
+                history_delta: Vec<Event>,
+                worker_items: Vec<WorkItem>,
+                timer_items: Vec<WorkItem>,
+                orchestrator_items: Vec<WorkItem>,
+                metadata: crate::providers::ExecutionMetadata,
+            ) -> Result<(), String> {
+                self.inner
+                    .ack_orchestration_item(
+                        lock_token,
+                        execution_id,
+                        history_delta,
+                        worker_items,
+                        timer_items,
+                        orchestrator_items,
+                        metadata,
+                    )
+                    .await
+            }
+            async fn abandon_orchestration_item(&self, lock_token: &str, delay_ms: Option<u64>) -> Result<(), String> {
+                self.inner.abandon_orchestration_item(lock_token, delay_ms).await
+            }
         }
 
         let base = Arc::new(SqliteProvider::new_in_memory().await.unwrap());
         let captured: Arc<TokioMutex<Vec<WorkItem>>> = Arc::new(TokioMutex::new(Vec::new()));
-        let store: Arc<dyn Provider> = Arc::new(CaptureStore { inner: base, captured: captured.clone() });
+        let store: Arc<dyn Provider> = Arc::new(CaptureStore {
+            inner: base,
+            captured: captured.clone(),
+        });
         let (_jh, tx) = TimerService::start(store.clone(), 5);
         // schedule three timers: immediate, +10ms, +5ms
         let now = now_ms();

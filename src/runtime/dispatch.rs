@@ -38,7 +38,13 @@ pub async fn dispatch_call_activity(
     }
 }
 
-pub async fn dispatch_create_timer(rt: &Arc<Runtime>, instance: &str, history: &[Event], scheduling_event_id: u64, delay_ms: u64) {
+pub async fn dispatch_create_timer(
+    rt: &Arc<Runtime>,
+    instance: &str,
+    history: &[Event],
+    scheduling_event_id: u64,
+    delay_ms: u64,
+) {
     let already_fired = history
         .iter()
         .rev()
@@ -73,7 +79,13 @@ pub async fn dispatch_create_timer(rt: &Arc<Runtime>, instance: &str, history: &
         .await;
 }
 
-pub async fn dispatch_wait_external(_rt: &Arc<Runtime>, instance: &str, _history: &[Event], scheduling_event_id: u64, name: String) {
+pub async fn dispatch_wait_external(
+    _rt: &Arc<Runtime>,
+    instance: &str,
+    _history: &[Event],
+    scheduling_event_id: u64,
+    name: String,
+) {
     debug!(instance, scheduling_event_id, name=%name, "subscribe external");
 }
 
@@ -169,12 +181,15 @@ pub async fn dispatch_start_sub_orchestration(
             let parent_execution_id = rt.get_execution_id_for_instance(parent_instance).await;
             let _ = rt
                 .history_store
-                .enqueue_orchestrator_work(WorkItem::SubOrchFailed {
-                    parent_instance: parent_inst,
-                    parent_execution_id,
-                    parent_id: scheduling_event_id,
-                    error: e,
-                }, None)
+                .enqueue_orchestrator_work(
+                    WorkItem::SubOrchFailed {
+                        parent_instance: parent_inst,
+                        parent_execution_id,
+                        parent_id: scheduling_event_id,
+                        error: e,
+                    },
+                    None,
+                )
                 .await;
         }
     }

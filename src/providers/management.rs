@@ -37,7 +37,7 @@ use crate::Event;
 #[async_trait::async_trait]
 pub trait ManagementProvider: Send + Sync {
     // ===== Instance Discovery =====
-    
+
     /// List all known instance IDs.
     ///
     /// # Returns
@@ -64,7 +64,7 @@ pub trait ManagementProvider: Send + Sync {
     async fn list_instances(&self) -> Result<Vec<String>, String> {
         Ok(Vec::new())
     }
-    
+
     /// List instances matching a status filter.
     ///
     /// # Parameters
@@ -92,9 +92,9 @@ pub trait ManagementProvider: Send + Sync {
     async fn list_instances_by_status(&self, _status: &str) -> Result<Vec<String>, String> {
         Ok(Vec::new())
     }
-    
+
     // ===== Execution Inspection =====
-    
+
     /// List all execution IDs for an instance.
     ///
     /// # Returns
@@ -131,7 +131,7 @@ pub trait ManagementProvider: Send + Sync {
         // Default: assume single execution
         Ok(vec![1])
     }
-    
+
     /// Read history for a specific execution.
     ///
     /// # Parameters
@@ -170,7 +170,7 @@ pub trait ManagementProvider: Send + Sync {
     async fn read_execution(&self, instance: &str, _execution_id: u64) -> Result<Vec<Event>, String> {
         Err(format!("read_execution not supported for instance: {}", instance))
     }
-    
+
     /// Get the latest (current) execution ID for an instance.
     ///
     /// # Returns
@@ -198,9 +198,9 @@ pub trait ManagementProvider: Send + Sync {
     async fn latest_execution_id(&self, _instance: &str) -> Result<u64, String> {
         Ok(1)
     }
-    
+
     // ===== Instance Metadata =====
-    
+
     /// Get comprehensive information about an instance.
     ///
     /// # Returns
@@ -220,7 +220,7 @@ pub trait ManagementProvider: Send + Sync {
     ///     SELECT i.orchestration_name, i.orchestration_version, i.current_execution_id,
     ///            e.status, e.output, i.created_at, e.completed_at
     ///     FROM instances i
-    ///     LEFT JOIN executions e ON i.instance_id = e.instance_id 
+    ///     LEFT JOIN executions e ON i.instance_id = e.instance_id
     ///         AND i.current_execution_id = e.execution_id
     ///     WHERE i.instance_id = ?
     /// }
@@ -232,7 +232,7 @@ pub trait ManagementProvider: Send + Sync {
     async fn get_instance_info(&self, instance: &str) -> Result<InstanceInfo, String> {
         Err(format!("get_instance_info not supported for instance: {}", instance))
     }
-    
+
     /// Get detailed metadata for a specific execution.
     ///
     /// # Returns
@@ -262,9 +262,9 @@ pub trait ManagementProvider: Send + Sync {
     async fn get_execution_info(&self, instance: &str, _execution_id: u64) -> Result<ExecutionInfo, String> {
         Err(format!("get_execution_info not supported for instance: {}", instance))
     }
-    
+
     // ===== System Metrics =====
-    
+
     /// Get system-wide orchestration metrics.
     ///
     /// # Returns
@@ -281,7 +281,7 @@ pub trait ManagementProvider: Send + Sync {
     ///
     /// ```ignore
     /// async fn get_system_metrics(&self) -> Result<SystemMetrics, String> {
-    ///     SELECT 
+    ///     SELECT
     ///         COUNT(DISTINCT i.instance_id) as total_instances,
     ///         COUNT(DISTINCT e.execution_id) as total_executions,
     ///         SUM(CASE WHEN e.status = 'Running' THEN 1 ELSE 0 END) as running,
@@ -298,7 +298,7 @@ pub trait ManagementProvider: Send + Sync {
     async fn get_system_metrics(&self) -> Result<SystemMetrics, String> {
         Ok(SystemMetrics::default())
     }
-    
+
     /// Get current queue depths.
     ///
     /// # Returns
@@ -315,7 +315,7 @@ pub trait ManagementProvider: Send + Sync {
     ///
     /// ```ignore
     /// async fn get_queue_depths(&self) -> Result<QueueDepths, String> {
-    ///     SELECT 
+    ///     SELECT
     ///         (SELECT COUNT(*) FROM orchestrator_queue WHERE lock_token IS NULL) as orch,
     ///         (SELECT COUNT(*) FROM worker_queue WHERE lock_token IS NULL) as worker,
     ///         (SELECT COUNT(*) FROM timer_queue WHERE lock_token IS NULL) as timer
@@ -339,9 +339,9 @@ pub struct InstanceInfo {
     pub orchestration_name: String,
     pub orchestration_version: String,
     pub current_execution_id: u64,
-    pub status: String,                // "Running", "Completed", "Failed", "ContinuedAsNew"
-    pub output: Option<String>,        // Terminal output or error
-    pub created_at: u64,               // Milliseconds since epoch
+    pub status: String,         // "Running", "Completed", "Failed", "ContinuedAsNew"
+    pub output: Option<String>, // Terminal output or error
+    pub created_at: u64,        // Milliseconds since epoch
     pub updated_at: u64,
 }
 
@@ -349,11 +349,11 @@ pub struct InstanceInfo {
 #[derive(Debug, Clone)]
 pub struct ExecutionInfo {
     pub execution_id: u64,
-    pub status: String,                // "Running", "Completed", "Failed", "ContinuedAsNew"
-    pub output: Option<String>,        // Terminal output, error, or next input
-    pub started_at: u64,               // Milliseconds since epoch
-    pub completed_at: Option<u64>,    // None if still running
-    pub event_count: usize,            // Number of events in this execution
+    pub status: String,            // "Running", "Completed", "Failed", "ContinuedAsNew"
+    pub output: Option<String>,    // Terminal output, error, or next input
+    pub started_at: u64,           // Milliseconds since epoch
+    pub completed_at: Option<u64>, // None if still running
+    pub event_count: usize,        // Number of events in this execution
 }
 
 /// System-wide orchestration metrics.
@@ -370,8 +370,7 @@ pub struct SystemMetrics {
 /// Queue depth information.
 #[derive(Debug, Clone, Default)]
 pub struct QueueDepths {
-    pub orchestrator_queue: usize,     // Unlocked orchestrator messages
-    pub worker_queue: usize,           // Unlocked worker messages
-    pub timer_queue: usize,            // Unlocked timer messages
+    pub orchestrator_queue: usize, // Unlocked orchestrator messages
+    pub worker_queue: usize,       // Unlocked worker messages
+    pub timer_queue: usize,        // Unlocked timer messages
 }
-

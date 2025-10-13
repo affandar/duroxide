@@ -1,6 +1,6 @@
 use duroxide::Event;
 use duroxide::providers::sqlite::SqliteProvider;
-use duroxide::providers::{Provider, WorkItem, ExecutionMetadata};
+use duroxide::providers::{ExecutionMetadata, Provider, WorkItem};
 use std::sync::Arc;
 
 /// Verify provider ignores work items after a terminal event by just acking
@@ -15,34 +15,34 @@ async fn test_ignore_work_after_terminal_event() {
     let instance = "inst-terminal";
 
     // Seed terminal history: OrchestrationCompleted (assume OrchestrationStarted already exists from create_new_execution)
-    let _ = Provider::create_new_execution(
-        store.as_ref(),
-        instance,
-        "TermOrch",
-        "1.0.0",
-        "seed",
-        None,
-        None,
-    ).await.unwrap();
+    let _ = Provider::create_new_execution(store.as_ref(), instance, "TermOrch", "1.0.0", "seed", None, None)
+        .await
+        .unwrap();
     // Use event_id=1 (first event)
     Provider::append_with_execution(
         store.as_ref(),
         instance,
         1,
-        vec![
-            Event::OrchestrationCompleted { event_id: 2, output: "done".to_string() },
-        ],
-    ).await.unwrap();
+        vec![Event::OrchestrationCompleted {
+            event_id: 2,
+            output: "done".to_string(),
+        }],
+    )
+    .await
+    .unwrap();
 
     // Enqueue arbitrary work item that should be ignored by runtime
-    store.enqueue_orchestrator_work(
-        WorkItem::ExternalRaised {
-            instance: instance.to_string(),
-            name: "Ignored".to_string(),
-            data: "x".to_string(),
-        },
-        None,
-    ).await.unwrap();
+    store
+        .enqueue_orchestrator_work(
+            WorkItem::ExternalRaised {
+                instance: instance.to_string(),
+                name: "Ignored".to_string(),
+                data: "x".to_string(),
+            },
+            None,
+        )
+        .await
+        .unwrap();
 
     // Fetch orchestration item - runtime would bail and just ack
     let item = store.fetch_orchestration_item().await.unwrap();
@@ -59,7 +59,9 @@ async fn test_ignore_work_after_terminal_event() {
         vec![],
         vec![],
         ExecutionMetadata::default(),
-    ).await.unwrap();
+    )
+    .await
+    .unwrap();
 
     // Queue should now be empty
     assert!(store.fetch_orchestration_item().await.is_none());
@@ -79,14 +81,17 @@ async fn test_fetch_orchestration_item_new_instance() {
 
     // Enqueue start work (provider will create instance lazily on fetch)
     store
-        .enqueue_orchestrator_work(WorkItem::StartOrchestration {
-            instance: "test-instance".to_string(),
-            orchestration: "TestOrch".to_string(),
-            input: "test-input".to_string(),
-            version: Some("1.0.0".to_string()),
-            parent_instance: None,
-            parent_id: None,
-        }, None)
+        .enqueue_orchestrator_work(
+            WorkItem::StartOrchestration {
+                instance: "test-instance".to_string(),
+                orchestration: "TestOrch".to_string(),
+                input: "test-input".to_string(),
+                version: Some("1.0.0".to_string()),
+                parent_instance: None,
+                parent_id: None,
+            },
+            None,
+        )
         .await
         .unwrap();
 
@@ -141,12 +146,15 @@ async fn test_fetch_orchestration_item_existing_instance() {
 
     // Enqueue completion
     store
-        .enqueue_orchestrator_work(WorkItem::ActivityCompleted {
-            instance: "test-instance".to_string(),
-            execution_id: 1,
-            id: 1,
-            result: "activity-result".to_string(),
-        }, None)
+        .enqueue_orchestrator_work(
+            WorkItem::ActivityCompleted {
+                instance: "test-instance".to_string(),
+                execution_id: 1,
+                id: 1,
+                result: "activity-result".to_string(),
+            },
+            None,
+        )
         .await
         .unwrap();
 
@@ -188,14 +196,17 @@ async fn test_ack_orchestration_item_atomic() {
 
     // Setup: enqueue start work; provider will create instance lazily
     store
-        .enqueue_orchestrator_work(WorkItem::StartOrchestration {
-            instance: "test-instance".to_string(),
-            orchestration: "TestOrch".to_string(),
-            input: "test-input".to_string(),
-            version: Some("1.0.0".to_string()),
-            parent_instance: None,
-            parent_id: None,
-        }, None)
+        .enqueue_orchestrator_work(
+            WorkItem::StartOrchestration {
+                instance: "test-instance".to_string(),
+                orchestration: "TestOrch".to_string(),
+                input: "test-input".to_string(),
+                version: Some("1.0.0".to_string()),
+                parent_instance: None,
+                parent_id: None,
+            },
+            None,
+        )
         .await
         .unwrap();
 
@@ -231,7 +242,15 @@ async fn test_ack_orchestration_item_atomic() {
 
     // Ack with updates
     store
-        .ack_orchestration_item(&lock_token, 1, history_delta, worker_items, vec![], vec![], ExecutionMetadata::default())
+        .ack_orchestration_item(
+            &lock_token,
+            1,
+            history_delta,
+            worker_items,
+            vec![],
+            vec![],
+            ExecutionMetadata::default(),
+        )
         .await
         .unwrap();
 
@@ -259,7 +278,15 @@ async fn test_ack_orchestration_item_error_handling() {
 
     // Try to ack with invalid token
     let result = store
-        .ack_orchestration_item("invalid-token", 1, vec![], vec![], vec![], vec![], ExecutionMetadata::default())
+        .ack_orchestration_item(
+            "invalid-token",
+            1,
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+            ExecutionMetadata::default(),
+        )
         .await;
 
     assert!(result.is_err());
@@ -276,14 +303,17 @@ async fn test_abandon_orchestration_item() {
 
     // Setup: enqueue start work; provider will create instance lazily
     store
-        .enqueue_orchestrator_work(WorkItem::StartOrchestration {
-            instance: "test-instance".to_string(),
-            orchestration: "TestOrch".to_string(),
-            input: "test-input".to_string(),
-            version: Some("1.0.0".to_string()),
-            parent_instance: None,
-            parent_id: None,
-        }, None)
+        .enqueue_orchestrator_work(
+            WorkItem::StartOrchestration {
+                instance: "test-instance".to_string(),
+                orchestration: "TestOrch".to_string(),
+                input: "test-input".to_string(),
+                version: Some("1.0.0".to_string()),
+                parent_instance: None,
+                parent_id: None,
+            },
+            None,
+        )
         .await
         .unwrap();
 
@@ -313,14 +343,17 @@ async fn test_abandon_orchestration_item_with_delay() {
 
     // Setup: enqueue start work; provider will create instance lazily
     store
-        .enqueue_orchestrator_work(WorkItem::StartOrchestration {
-            instance: "test-instance".to_string(),
-            orchestration: "TestOrch".to_string(),
-            input: "test-input".to_string(),
-            version: Some("1.0.0".to_string()),
-            parent_instance: None,
-            parent_id: None,
-        }, None)
+        .enqueue_orchestrator_work(
+            WorkItem::StartOrchestration {
+                instance: "test-instance".to_string(),
+                orchestration: "TestOrch".to_string(),
+                input: "test-input".to_string(),
+                version: Some("1.0.0".to_string()),
+                parent_instance: None,
+                parent_id: None,
+            },
+            None,
+        )
         .await
         .unwrap();
 
@@ -359,14 +392,17 @@ async fn test_in_memory_provider_atomic_operations() {
 
     // Enqueue work (in-memory will lazily create instance on fetch)
     store
-        .enqueue_orchestrator_work(WorkItem::StartOrchestration {
-            instance: "test-instance".to_string(),
-            orchestration: "TestOrch".to_string(),
-            input: "test-input".to_string(),
-            version: Some("1.0.0".to_string()),
-            parent_instance: None,
-            parent_id: None,
-        }, None)
+        .enqueue_orchestrator_work(
+            WorkItem::StartOrchestration {
+                instance: "test-instance".to_string(),
+                orchestration: "TestOrch".to_string(),
+                input: "test-input".to_string(),
+                version: Some("1.0.0".to_string()),
+                parent_instance: None,
+                parent_id: None,
+            },
+            None,
+        )
         .await
         .unwrap();
 
@@ -387,7 +423,15 @@ async fn test_in_memory_provider_atomic_operations() {
     }];
 
     store
-        .ack_orchestration_item(&lock_token, 1, history_delta, vec![], vec![], vec![], ExecutionMetadata::default())
+        .ack_orchestration_item(
+            &lock_token,
+            1,
+            history_delta,
+            vec![],
+            vec![],
+            vec![],
+            ExecutionMetadata::default(),
+        )
         .await
         .unwrap();
 
@@ -398,12 +442,15 @@ async fn test_in_memory_provider_atomic_operations() {
 
     // Test abandon
     store
-        .enqueue_orchestrator_work(WorkItem::ActivityCompleted {
-            instance: "test-instance".to_string(),
-            execution_id: 1,
-            id: 1,
-            result: "result".to_string(),
-        }, None)
+        .enqueue_orchestrator_work(
+            WorkItem::ActivityCompleted {
+                instance: "test-instance".to_string(),
+                execution_id: 1,
+                id: 1,
+                result: "result".to_string(),
+            },
+            None,
+        )
         .await
         .unwrap();
 

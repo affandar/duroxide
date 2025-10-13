@@ -187,7 +187,8 @@ async fn sequential_activity_chain_completes_with(store: StdArc<dyn Provider>) {
         .register("SequentialOrchestration", orchestrator)
         .build();
 
-    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+    let rt =
+        runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
     let client = duroxide::Client::new(store.clone());
     let _handle = client
         .start_orchestration("inst-seq-1", "SequentialOrchestration", "")

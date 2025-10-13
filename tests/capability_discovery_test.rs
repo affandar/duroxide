@@ -1,7 +1,7 @@
 use duroxide::providers::sqlite::SqliteProvider;
-use duroxide::{Client, OrchestrationContext, OrchestrationRegistry};
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
+use duroxide::{Client, OrchestrationContext, OrchestrationRegistry};
 use std::sync::Arc;
 
 #[tokio::test]
@@ -37,19 +37,24 @@ async fn test_management_features_with_workflow() {
 
     // Set up runtime with orchestrations
     let orchestrations = OrchestrationRegistry::builder()
-        .register("TestOrchestration", |_ctx: OrchestrationContext, _input: String| async move {
-            Ok("completed".to_string())
-        })
+        .register(
+            "TestOrchestration",
+            |_ctx: OrchestrationContext, _input: String| async move { Ok("completed".to_string()) },
+        )
         .build();
 
     let _rt = runtime::Runtime::start_with_store(
         store.clone(),
         Arc::new(ActivityRegistry::builder().build()),
-        orchestrations
-    ).await;
+        orchestrations,
+    )
+    .await;
 
     // Start an orchestration
-    client.start_orchestration("test-instance", "TestOrchestration", "{}").await.unwrap();
+    client
+        .start_orchestration("test-instance", "TestOrchestration", "{}")
+        .await
+        .unwrap();
 
     // Wait a bit for processing
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;

@@ -50,8 +50,18 @@ mod tests {
     fn test_prep_completions() {
         // Provide matching schedules for injected completions
         let baseline = vec![
-            Event::ActivityScheduled { event_id: 1, name: "a1".to_string(), input: "i1".to_string(), execution_id: 1 },
-            Event::ActivityScheduled { event_id: 2, name: "a2".to_string(), input: "i2".to_string(), execution_id: 1 },
+            Event::ActivityScheduled {
+                event_id: 1,
+                name: "a1".to_string(),
+                input: "i1".to_string(),
+                execution_id: 1,
+            },
+            Event::ActivityScheduled {
+                event_id: 2,
+                name: "a2".to_string(),
+                input: "i2".to_string(),
+                execution_id: 1,
+            },
         ];
         let mut turn = OrchestrationTurn::new("test-instance".to_string(), 1, 1, baseline);
 
@@ -166,7 +176,7 @@ mod tests {
                 result: "first-result".to_string(),
             },
         ];
-        
+
         let _tokens = turn.prep_completions(messages);
 
         // Should have zero events (both duplicates were filtered)
@@ -256,20 +266,23 @@ mod tests {
         );
 
         // Add completion that won't be consumed by the handler but has a matching schedule
-        let messages = vec![
-            (
-                OrchestratorMsg::ActivityCompleted {
-                    instance: "test-instance".to_string(),
-                    execution_id: 1,
-                    id: 999, // Scheduled below, not consumed by the mock handler
-                    result: "unused-result".to_string(),
-                    ack_token: Some("unused-token".to_string()),
-                },
-                "unused-token".to_string(),
-            ),
-        ];
+        let messages = vec![(
+            OrchestratorMsg::ActivityCompleted {
+                instance: "test-instance".to_string(),
+                execution_id: 1,
+                id: 999, // Scheduled below, not consumed by the mock handler
+                result: "unused-result".to_string(),
+                ack_token: Some("unused-token".to_string()),
+            },
+            "unused-token".to_string(),
+        )];
         // Provide matching schedule for id=999
-        turn.baseline_history.push(Event::ActivityScheduled { event_id: 999, name: "unused".to_string(), input: "unused".to_string(), execution_id: 1 });
+        turn.baseline_history.push(Event::ActivityScheduled {
+            event_id: 999,
+            name: "unused".to_string(),
+            input: "unused".to_string(),
+            execution_id: 1,
+        });
         turn.prep_completions(messages);
 
         let handler = Arc::new(MockHandler {
@@ -331,24 +344,32 @@ mod tests {
 
     #[test]
     fn test_made_progress() {
-        let mut turn = OrchestrationTurn::new("test-instance".to_string(), 1, 1, vec![Event::ActivityScheduled { event_id: 1, name: "test".to_string(), input: "input".to_string(), execution_id: 1 }]);
+        let mut turn = OrchestrationTurn::new(
+            "test-instance".to_string(),
+            1,
+            1,
+            vec![Event::ActivityScheduled {
+                event_id: 1,
+                name: "test".to_string(),
+                input: "input".to_string(),
+                execution_id: 1,
+            }],
+        );
 
         // Initially no progress
         assert!(!turn.made_progress());
 
         // Add completion - should show progress
-        let messages = vec![
-            (
-                OrchestratorMsg::ActivityCompleted {
-                    instance: "test-instance".to_string(),
-                    execution_id: 1,
-                    id: 1,
-                    result: "result".to_string(),
-                    ack_token: Some("token".to_string()),
-                },
-                "token".to_string(),
-            ),
-        ];
+        let messages = vec![(
+            OrchestratorMsg::ActivityCompleted {
+                instance: "test-instance".to_string(),
+                execution_id: 1,
+                id: 1,
+                result: "result".to_string(),
+                ack_token: Some("token".to_string()),
+            },
+            "token".to_string(),
+        )];
 
         let _tokens = turn.prep_completions(messages);
         assert!(turn.made_progress());

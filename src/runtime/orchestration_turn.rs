@@ -4,9 +4,9 @@ use crate::{
     Event,
     runtime::{OrchestrationHandler, router::OrchestratorMsg},
 };
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
 use tracing::{debug, warn};
-use std::panic::{catch_unwind, AssertUnwindSafe};
 
 /// Result of executing an orchestration turn
 #[derive(Debug)]
@@ -47,11 +47,8 @@ pub struct OrchestrationTurn {
 impl OrchestrationTurn {
     /// Create a new orchestration turn
     pub fn new(instance: String, turn_index: u64, execution_id: u64, baseline_history: Vec<Event>) -> Self {
-        let next_event_id = baseline_history
-            .last()
-            .map(|e| e.event_id() + 1)
-            .unwrap_or(1);
-        
+        let next_event_id = baseline_history.last().map(|e| e.event_id() + 1).unwrap_or(1);
+
         Self {
             instance,
             turn_index,
@@ -102,9 +99,10 @@ impl OrchestrationTurn {
                         _ => false,
                     })
                 }
-                OrchestratorMsg::TimerFired { id, .. } => {
-                    self.history_delta.iter().any(|e| matches!(e, Event::TimerFired { source_event_id, .. } if source_event_id == id))
-                }
+                OrchestratorMsg::TimerFired { id, .. } => self
+                    .history_delta
+                    .iter()
+                    .any(|e| matches!(e, Event::TimerFired { source_event_id, .. } if source_event_id == id)),
                 OrchestratorMsg::SubOrchCompleted { id, .. } | OrchestratorMsg::SubOrchFailed { id, .. } => {
                     self.history_delta.iter().any(|e| match e {
                         Event::SubOrchestrationCompleted { source_event_id, .. } if source_event_id == id => true,
@@ -112,9 +110,10 @@ impl OrchestrationTurn {
                         _ => false,
                     })
                 }
-                OrchestratorMsg::ExternalByName { name, data, .. } => {
-                    self.history_delta.iter().any(|e| matches!(e, Event::ExternalEvent { name: n, data: d, .. } if n == name && d == data))
-                }
+                OrchestratorMsg::ExternalByName { name, data, .. } => self
+                    .history_delta
+                    .iter()
+                    .any(|e| matches!(e, Event::ExternalEvent { name: n, data: d, .. } if n == name && d == data)),
                 OrchestratorMsg::CancelRequested { .. } => false,
             };
             if already_in_delta {
@@ -129,7 +128,9 @@ impl OrchestrationTurn {
                     match e {
                         Event::ActivityScheduled { event_id, .. } if event_id == id => return Some("activity"),
                         Event::TimerCreated { event_id, .. } if event_id == id => return Some("timer"),
-                        Event::SubOrchestrationScheduled { event_id, .. } if event_id == id => return Some("suborchestration"),
+                        Event::SubOrchestrationScheduled { event_id, .. } if event_id == id => {
+                            return Some("suborchestration");
+                        }
                         _ => {}
                     }
                 }
@@ -140,30 +141,47 @@ impl OrchestrationTurn {
                 OrchestratorMsg::ActivityCompleted { id, .. } | OrchestratorMsg::ActivityFailed { id, .. } => {
                     match schedule_kind(id) {
                         Some("activity") => {}
-                        Some(other) => nd_err = Some(format!(
-                            "nondeterministic: completion kind mismatch for id={}, expected '{}', got 'activity'",
-                            id, other
-                        )),
-                        None => nd_err = Some(format!("nondeterministic: no matching schedule for completion id={}", id)),
+                        Some(other) => {
+                            nd_err = Some(format!(
+                                "nondeterministic: completion kind mismatch for id={}, expected '{}', got 'activity'",
+                                id, other
+                            ))
+                        }
+                        None => {
+                            nd_err = Some(format!(
+                                "nondeterministic: no matching schedule for completion id={}",
+                                id
+                            ))
+                        }
                     }
                 }
                 OrchestratorMsg::TimerFired { id, .. } => match schedule_kind(id) {
                     Some("timer") => {}
-                    Some(other) => nd_err = Some(format!(
-                        "nondeterministic: completion kind mismatch for id={}, expected '{}', got 'timer'",
-                        id, other
-                    )),
+                    Some(other) => {
+                        nd_err = Some(format!(
+                            "nondeterministic: completion kind mismatch for id={}, expected '{}', got 'timer'",
+                            id, other
+                        ))
+                    }
                     None => nd_err = Some(format!("nondeterministic: no matching schedule for timer id={}", id)),
                 },
-                OrchestratorMsg::SubOrchCompleted { id, .. } | OrchestratorMsg::SubOrchFailed { id, .. } =>
+                OrchestratorMsg::SubOrchCompleted { id, .. } | OrchestratorMsg::SubOrchFailed { id, .. } => {
                     match schedule_kind(id) {
                         Some("suborchestration") => {}
-                        Some(other) => nd_err = Some(format!(
-                            "nondeterministic: completion kind mismatch for id={}, expected '{}', got 'suborchestration'",
-                            id, other
-                        )),
-                        None => nd_err = Some(format!("nondeterministic: no matching schedule for sub-orchestration id={}", id)),
-                    },
+                        Some(other) => {
+                            nd_err = Some(format!(
+                                "nondeterministic: completion kind mismatch for id={}, expected '{}', got 'suborchestration'",
+                                id, other
+                            ))
+                        }
+                        None => {
+                            nd_err = Some(format!(
+                                "nondeterministic: no matching schedule for sub-orchestration id={}",
+                                id
+                            ))
+                        }
+                    }
+                }
                 OrchestratorMsg::ExternalByName { .. } | OrchestratorMsg::CancelRequested { .. } => {}
             }
             if let Some(err) = nd_err {
@@ -177,33 +195,30 @@ impl OrchestrationTurn {
             let event_opt = match msg {
                 OrchestratorMsg::ActivityCompleted { id, result, .. } => {
                     Some(Event::ActivityCompleted {
-                        event_id: 0,  // Will be assigned
+                        event_id: 0, // Will be assigned
                         source_event_id: id,
                         result,
                     })
                 }
-                OrchestratorMsg::ActivityFailed { id, error, .. } => {
-                    Some(Event::ActivityFailed {
-                        event_id: 0,
-                        source_event_id: id,
-                        error,
-                    })
-                }
-                OrchestratorMsg::TimerFired { id, fire_at_ms, .. } => {
-                    Some(Event::TimerFired {
-                        event_id: 0,
-                        source_event_id: id,
-                        fire_at_ms,
-                    })
-                }
+                OrchestratorMsg::ActivityFailed { id, error, .. } => Some(Event::ActivityFailed {
+                    event_id: 0,
+                    source_event_id: id,
+                    error,
+                }),
+                OrchestratorMsg::TimerFired { id, fire_at_ms, .. } => Some(Event::TimerFired {
+                    event_id: 0,
+                    source_event_id: id,
+                    fire_at_ms,
+                }),
                 OrchestratorMsg::ExternalByName { name, data, .. } => {
                     // Only materialize ExternalEvent if a subscription exists in this execution
-                    let subscribed = self.baseline_history.iter().any(|e| {
-                        matches!(e, Event::ExternalSubscribed { name: hist_name, .. } if hist_name == &name)
-                    });
+                    let subscribed = self
+                        .baseline_history
+                        .iter()
+                        .any(|e| matches!(e, Event::ExternalSubscribed { name: hist_name, .. } if hist_name == &name));
                     if subscribed {
                         Some(Event::ExternalEvent {
-                            event_id: 0,  // Will be assigned
+                            event_id: 0, // Will be assigned
                             name,
                             data,
                         })
@@ -212,33 +227,31 @@ impl OrchestrationTurn {
                         None
                     }
                 }
-                OrchestratorMsg::SubOrchCompleted { id, result, .. } => {
-                    Some(Event::SubOrchestrationCompleted {
-                        event_id: 0,
-                        source_event_id: id,
-                        result,
-                    })
-                }
-                OrchestratorMsg::SubOrchFailed { id, error, .. } => {
-                    Some(Event::SubOrchestrationFailed {
-                        event_id: 0,
-                        source_event_id: id,
-                        error,
-                    })
-                }
+                OrchestratorMsg::SubOrchCompleted { id, result, .. } => Some(Event::SubOrchestrationCompleted {
+                    event_id: 0,
+                    source_event_id: id,
+                    result,
+                }),
+                OrchestratorMsg::SubOrchFailed { id, error, .. } => Some(Event::SubOrchestrationFailed {
+                    event_id: 0,
+                    source_event_id: id,
+                    error,
+                }),
                 OrchestratorMsg::CancelRequested { reason, .. } => {
                     let already_terminated = self.baseline_history.iter().any(|e| {
-                        matches!(e, Event::OrchestrationCompleted { .. } | Event::OrchestrationFailed { .. })
+                        matches!(
+                            e,
+                            Event::OrchestrationCompleted { .. } | Event::OrchestrationFailed { .. }
+                        )
                     });
-                    let already_cancelled = self.baseline_history.iter()
+                    let already_cancelled = self
+                        .baseline_history
+                        .iter()
                         .chain(self.history_delta.iter())
                         .any(|e| matches!(e, Event::OrchestrationCancelRequested { .. }));
-                    
+
                     if !already_terminated && !already_cancelled {
-                        Some(Event::OrchestrationCancelRequested {
-                            event_id: 0,
-                            reason,
-                        })
+                        Some(Event::OrchestrationCancelRequested { event_id: 0, reason })
                     } else {
                         None
                     }
@@ -260,7 +273,7 @@ impl OrchestrationTurn {
             event_count = self.history_delta.len(),
             "completion events created"
         );
-        
+
         ack_tokens
     }
 
@@ -294,10 +307,9 @@ impl OrchestrationTurn {
                 .baseline_history
                 .iter()
                 .any(|e| matches!(e, Event::TimerFired { source_event_id, .. } if *source_event_id == *id)),
-            OrchestratorMsg::SubOrchCompleted { id, .. } => self
-                .baseline_history
-                .iter()
-                .any(|e| matches!(e, Event::SubOrchestrationCompleted { source_event_id, .. } if *source_event_id == *id)),
+            OrchestratorMsg::SubOrchCompleted { id, .. } => self.baseline_history.iter().any(
+                |e| matches!(e, Event::SubOrchestrationCompleted { source_event_id, .. } if *source_event_id == *id),
+            ),
             OrchestratorMsg::SubOrchFailed { id, .. } => self
                 .baseline_history
                 .iter()
@@ -337,16 +349,11 @@ impl OrchestrationTurn {
         // Run orchestration with unified cursor model
         let execution_id = self.get_current_execution_id();
         let run_result = catch_unwind(AssertUnwindSafe(|| {
-            crate::run_turn_with_status(
-                working_history,
-                self.turn_index,
-                execution_id,
-                move |ctx| {
-                    let h = handler.clone();
-                    let inp = input.clone();
-                    async move { h.invoke(ctx, inp).await }
-                },
-            )
+            crate::run_turn_with_status(working_history, self.turn_index, execution_id, move |ctx| {
+                let h = handler.clone();
+                let inp = input.clone();
+                async move { h.invoke(ctx, inp).await }
+            })
         }));
 
         let (updated_history, decisions, output_opt, nondet_flag) = match run_result {
@@ -525,7 +532,12 @@ mod tests {
     #[test]
     fn test_prep_completions_creates_events() {
         // Provide matching schedule for the injected completion
-        let baseline = vec![Event::ActivityScheduled { event_id: 1, name: "x".to_string(), input: "y".to_string(), execution_id: 1 }];
+        let baseline = vec![Event::ActivityScheduled {
+            event_id: 1,
+            name: "x".to_string(),
+            input: "y".to_string(),
+            execution_id: 1,
+        }];
         let mut turn = OrchestrationTurn::new("test-instance".to_string(), 1, 1, baseline);
 
         let messages = vec![(
@@ -540,7 +552,7 @@ mod tests {
         )];
 
         let ack_tokens = turn.prep_completions(messages);
-        
+
         // Should have converted message to event
         assert_eq!(ack_tokens.len(), 1);
         assert_eq!(turn.history_delta.len(), 1);

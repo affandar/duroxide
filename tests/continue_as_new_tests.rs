@@ -33,10 +33,7 @@ async fn continue_as_new_multiexec() {
     let client = duroxide::Client::new(store.clone());
 
     // The initial start handle will resolve when the first execution continues-as-new.
-    let _h = client
-        .start_orchestration("inst-can-1", "Counter", "0")
-        .await
-        .unwrap();
+    let _h = client.start_orchestration("inst-can-1", "Counter", "0").await.unwrap();
 
     match client
         .wait_for_orchestration("inst-can-1", std::time::Duration::from_secs(5))
@@ -412,12 +409,15 @@ async fn old_execution_completions_are_ignored() {
 
     // Inject a completion with OLD execution ID (execution_id=0, but current should be 1)
     let _ = store
-        .enqueue_orchestrator_work(WorkItem::ActivityCompleted {
-            instance: "inst-exec-test".to_string(),
-            execution_id: 0, // Old execution ID (current is 1)
-            id: 999,         // Some activity ID
-            result: "old_execution_result".to_string(),
-        }, None)
+        .enqueue_orchestrator_work(
+            WorkItem::ActivityCompleted {
+                instance: "inst-exec-test".to_string(),
+                execution_id: 0, // Old execution ID (current is 1)
+                id: 999,         // Some activity ID
+                result: "old_execution_result".to_string(),
+            },
+            None,
+        )
         .await;
 
     // Give time for the completion to be processed (and ignored)
@@ -467,12 +467,15 @@ async fn future_execution_completions_are_ignored() {
 
     // Inject a completion with a future execution ID (should never happen in practice)
     let _ = store
-        .enqueue_orchestrator_work(WorkItem::ActivityCompleted {
-            instance: "inst-future".to_string(),
-            execution_id: 999, // Future execution ID
-            id: 1,
-            result: "future_completion".to_string(),
-        }, None)
+        .enqueue_orchestrator_work(
+            WorkItem::ActivityCompleted {
+                instance: "inst-future".to_string(),
+                execution_id: 999, // Future execution ID
+                id: 1,
+                result: "future_completion".to_string(),
+            },
+            None,
+        )
         .await;
 
     // Give some time for processing

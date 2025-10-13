@@ -5,7 +5,7 @@ use duroxide::providers::WorkItem;
 // Use SQLite provider via common helper
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
-use duroxide::{Event, OrchestrationContext, OrchestrationRegistry, OrchestrationStatus, Client};
+use duroxide::{Client, Event, OrchestrationContext, OrchestrationRegistry, OrchestrationStatus};
 use std::sync::Arc as StdArc;
 mod common;
 
@@ -141,12 +141,15 @@ async fn completion_kind_mismatch_triggers_nondeterminism() {
 
     // Inject a completion with the WRONG kind - send ActivityCompleted for a timer ID
     let _ = store
-        .enqueue_orchestrator_work(WorkItem::ActivityCompleted {
-            instance: "inst-mismatch".to_string(),
-            execution_id: 1,
-            id: timer_id, // This is a timer ID, but we're sending ActivityCompleted!
-            result: "wrong_kind_result".to_string(),
-        }, None)
+        .enqueue_orchestrator_work(
+            WorkItem::ActivityCompleted {
+                instance: "inst-mismatch".to_string(),
+                execution_id: 1,
+                id: timer_id, // This is a timer ID, but we're sending ActivityCompleted!
+                result: "wrong_kind_result".to_string(),
+            },
+            None,
+        )
         .await;
 
     // The orchestration should fail with nondeterminism error about kind mismatch
@@ -202,12 +205,15 @@ async fn unexpected_completion_id_triggers_nondeterminism() {
 
     // Inject a completion for an ID that was never scheduled (999)
     let _ = store
-        .enqueue_orchestrator_work(WorkItem::ActivityCompleted {
-            instance: "inst-unexpected".to_string(),
-            execution_id: 1,
-            id: 999, // This ID was never scheduled by the orchestration
-            result: "unexpected_result".to_string(),
-        }, None)
+        .enqueue_orchestrator_work(
+            WorkItem::ActivityCompleted {
+                instance: "inst-unexpected".to_string(),
+                execution_id: 1,
+                id: 999, // This ID was never scheduled by the orchestration
+                result: "unexpected_result".to_string(),
+            },
+            None,
+        )
         .await;
 
     // The orchestration should fail with nondeterminism error about unexpected completion
@@ -245,22 +251,22 @@ async fn unexpected_timer_completion_triggers_nondeterminism() {
     let client = Client::new(store.clone());
 
     // Start the orchestration
-    let _h = client
-        .start_orchestration("inst-timer", "TimerTest", "")
-        .await
-        .unwrap();
+    let _h = client.start_orchestration("inst-timer", "TimerTest", "").await.unwrap();
 
     // Wait for the orchestration to be waiting for external events
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
     // Inject an unexpected timer completion (timer ID 123 was never scheduled)
     let _ = store
-        .enqueue_orchestrator_work(WorkItem::TimerFired {
-            instance: "inst-timer".to_string(),
-            execution_id: 1,
-            id: 123,
-            fire_at_ms: 0,
-        }, None)
+        .enqueue_orchestrator_work(
+            WorkItem::TimerFired {
+                instance: "inst-timer".to_string(),
+                execution_id: 1,
+                id: 123,
+                fire_at_ms: 0,
+            },
+            None,
+        )
         .await;
 
     // The orchestration should fail with nondeterminism error
@@ -429,12 +435,15 @@ async fn execution_id_filtering_without_continue_as_new_triggers_nondeterminism(
     // Manually inject a completion from a different execution ID
     // This simulates what would happen if there was a bug in execution ID handling
     store
-        .enqueue_orchestrator_work(WorkItem::ActivityCompleted {
-            instance: "inst-exec-id-no-can".to_string(),
-            id: 1,
-            result: "different execution result".to_string(),
-            execution_id: 999, // Different execution ID
-        }, None)
+        .enqueue_orchestrator_work(
+            WorkItem::ActivityCompleted {
+                instance: "inst-exec-id-no-can".to_string(),
+                id: 1,
+                result: "different execution result".to_string(),
+                execution_id: 999, // Different execution ID
+            },
+            None,
+        )
         .await
         .unwrap();
 
@@ -490,8 +499,12 @@ async fn duplicate_external_events_are_handled_gracefully() {
     let _ = common::wait_for_subscription(store.clone(), "inst-duplicate-external", "test_signal", 2_000).await;
 
     // Send the same external event twice
-    let _ = client.raise_event("inst-duplicate-external", "test_signal", "first").await;
-    let _ = client.raise_event("inst-duplicate-external", "test_signal", "first").await; // Duplicate
+    let _ = client
+        .raise_event("inst-duplicate-external", "test_signal", "first")
+        .await;
+    let _ = client
+        .raise_event("inst-duplicate-external", "test_signal", "first")
+        .await; // Duplicate
 
     // Wait for orchestration to complete
     match client

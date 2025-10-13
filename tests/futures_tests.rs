@@ -28,10 +28,7 @@ async fn select2_two_externals_history_order_wins() {
     let rt1 = runtime::Runtime::start_with_store(store.clone(), StdArc::new(acts), reg).await;
     let client = duroxide::Client::new(store.clone());
 
-    let _h = client
-        .start_orchestration("inst-ab2", "ABSelect2", "")
-        .await
-        .unwrap();
+    let _h = client.start_orchestration("inst-ab2", "ABSelect2", "").await.unwrap();
 
     assert!(
         common::wait_for_history(
@@ -145,10 +142,7 @@ async fn select_two_externals_history_order_wins() {
     let rt1 = runtime::Runtime::start_with_store(store.clone(), StdArc::new(acts), reg).await;
     let client = duroxide::Client::new(store.clone());
 
-    let _h = client
-        .start_orchestration("inst-ab", "ABSelect", "")
-        .await
-        .unwrap();
+    let _h = client.start_orchestration("inst-ab", "ABSelect", "").await.unwrap();
 
     assert!(
         common::wait_for_history(
@@ -265,10 +259,7 @@ async fn select_three_mixed_history_winner() {
     let rt1 = runtime::Runtime::start_with_store(store.clone(), StdArc::new(acts), reg).await;
     let client = duroxide::Client::new(store.clone());
 
-    let _h = client
-        .start_orchestration("inst-atb", "ATBSelect", "")
-        .await
-        .unwrap();
+    let _h = client.start_orchestration("inst-atb", "ATBSelect", "").await.unwrap();
     assert!(
         common::wait_for_history(
             store.clone(),
@@ -384,10 +375,7 @@ async fn join_returns_history_order() {
     let rt1 = runtime::Runtime::start_with_store(store.clone(), StdArc::new(acts), reg).await;
     let client = duroxide::Client::new(store.clone());
 
-    let _h = client
-        .start_orchestration("inst-join", "JoinAB", "")
-        .await
-        .unwrap();
+    let _h = client.start_orchestration("inst-join", "JoinAB", "").await.unwrap();
     assert!(
         common::wait_for_history(
             store.clone(),

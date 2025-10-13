@@ -1,5 +1,5 @@
 //
-use crate::providers::{Provider, WorkItem, ExecutionMetadata};
+use crate::providers::{ExecutionMetadata, Provider, WorkItem};
 use crate::{Event, OrchestrationContext};
 use semver::Version;
 use std::collections::HashMap;
@@ -102,7 +102,6 @@ pub struct Runtime {
     /// Track the current execution ID for each active instance
     current_execution_ids: Mutex<HashMap<String, u64>>,
     // StartRequest layer removed; instances are activated directly
-    
     /// Runtime configuration options
     options: RuntimeOptions,
 }
@@ -126,7 +125,7 @@ impl Runtime {
         _current_execution_id: u64,
     ) -> ExecutionMetadata {
         let mut metadata = ExecutionMetadata::default();
-        
+
         // Scan history_delta for terminal events
         for event in history_delta {
             match event {
@@ -150,10 +149,10 @@ impl Runtime {
                 _ => {}
             }
         }
-        
+
         metadata
     }
-    
+
     // Execution engine: consumes provider queues and persists history atomically.
     /// Internal: apply pure decisions by appending necessary history and dispatching work.
     async fn apply_decisions(self: &Arc<Self>, instance: &str, history: &Vec<Event>, decisions: Vec<crate::Action>) {
@@ -161,13 +160,23 @@ impl Runtime {
         for d in decisions {
             match d {
                 crate::Action::ContinueAsNew { .. } => { /* handled by caller */ }
-                crate::Action::CallActivity { scheduling_event_id, name, input } => {
+                crate::Action::CallActivity {
+                    scheduling_event_id,
+                    name,
+                    input,
+                } => {
                     dispatch::dispatch_call_activity(self, instance, history, scheduling_event_id, name, input).await;
                 }
-                crate::Action::CreateTimer { scheduling_event_id, delay_ms } => {
+                crate::Action::CreateTimer {
+                    scheduling_event_id,
+                    delay_ms,
+                } => {
                     dispatch::dispatch_create_timer(self, instance, history, scheduling_event_id, delay_ms).await;
                 }
-                crate::Action::WaitExternal { scheduling_event_id, name } => {
+                crate::Action::WaitExternal {
+                    scheduling_event_id,
+                    name,
+                } => {
                     dispatch::dispatch_wait_external(self, instance, history, scheduling_event_id, name).await;
                 }
                 crate::Action::StartOrchestrationDetached {
@@ -177,7 +186,16 @@ impl Runtime {
                     instance: child_inst,
                     input,
                 } => {
-                    dispatch::dispatch_start_detached(self, instance, scheduling_event_id, name, version, child_inst, input).await;
+                    dispatch::dispatch_start_detached(
+                        self,
+                        instance,
+                        scheduling_event_id,
+                        name,
+                        version,
+                        child_inst,
+                        input,
+                    )
+                    .await;
                 }
                 crate::Action::StartSubOrchestration {
                     scheduling_event_id,
@@ -255,7 +273,11 @@ impl Runtime {
             parent_id,
         };
 
-        if let Err(e) = self.history_store.enqueue_orchestrator_work(start_work_item, None).await {
+        if let Err(e) = self
+            .history_store
+            .enqueue_orchestrator_work(start_work_item, None)
+            .await
+        {
             return Err(format!("failed to enqueue StartOrchestration work item: {}", e));
         }
 
@@ -295,13 +317,13 @@ impl Runtime {
             .await
     }
 
-    
     /// Start a new runtime using the in-memory SQLite provider.
     pub async fn start(
         activity_registry: Arc<registry::ActivityRegistry>,
         orchestration_registry: OrchestrationRegistry,
     ) -> Arc<Self> {
-        let history_store: Arc<dyn Provider> = Arc::new(crate::providers::sqlite::SqliteProvider::new_in_memory().await.unwrap());
+        let history_store: Arc<dyn Provider> =
+            Arc::new(crate::providers::sqlite::SqliteProvider::new_in_memory().await.unwrap());
         Self::start_with_store(history_store, activity_registry, orchestration_registry).await
     }
 
@@ -311,7 +333,13 @@ impl Runtime {
         activity_registry: Arc<registry::ActivityRegistry>,
         orchestration_registry: OrchestrationRegistry,
     ) -> Arc<Self> {
-        Self::start_with_options(history_store, activity_registry, orchestration_registry, RuntimeOptions::default()).await
+        Self::start_with_options(
+            history_store,
+            activity_registry,
+            orchestration_registry,
+            RuntimeOptions::default(),
+        )
+        .await
     }
 
     /// Start a new runtime with custom options.
@@ -336,7 +364,7 @@ impl Runtime {
             orchestration_registry,
             pinned_versions: Mutex::new(HashMap::new()),
             current_execution_ids: Mutex::new(HashMap::new()),
-            
+
             options,
         });
 
@@ -381,13 +409,25 @@ impl Runtime {
         let mut has_continued_as_new = false;
         for e in item.history.iter().rev() {
             match e {
-                Event::OrchestrationCompleted { .. } => { has_completed = true; break; }
-                Event::OrchestrationFailed { .. } => { has_failed = true; break; }
-                Event::OrchestrationContinuedAsNew { .. } => { has_continued_as_new = true; break; }
+                Event::OrchestrationCompleted { .. } => {
+                    has_completed = true;
+                    break;
+                }
+                Event::OrchestrationFailed { .. } => {
+                    has_failed = true;
+                    break;
+                }
+                Event::OrchestrationContinuedAsNew { .. } => {
+                    has_continued_as_new = true;
+                    break;
+                }
                 _ => {}
             }
         }
-        let has_can_msg = item.messages.iter().any(|w| matches!(w, WorkItem::ContinueAsNew { .. }));
+        let has_can_msg = item
+            .messages
+            .iter()
+            .any(|w| matches!(w, WorkItem::ContinueAsNew { .. }));
 
         // Bail on truly terminal histories (Completed/Failed), or ContinuedAsNew without a CAN start message
         if has_completed || has_failed || (has_continued_as_new && !has_can_msg) {
@@ -431,88 +471,90 @@ impl Runtime {
         }
 
         // Process the execution
-        let (history_delta, worker_items, timer_items, orchestrator_items, execution_id_for_ack) = if let Some(start_item) = start_or_continue
-        {
-            // Both StartOrchestration and ContinueAsNew are handled identically.
-            // For ContinueAsNew, we start a fresh execution with empty history and execution_id = current + 1.
-            let (orchestration, input, version, parent_instance, parent_id, is_can) = match &start_item {
-                // TODO : CR : Workitem::StartOrchestrationDetached must carry the execution_id as well, which should be provided at enqueue time.
-                WorkItem::StartOrchestration {
-                    orchestration,
-                    input,
-                    version,
-                    parent_instance,
-                    parent_id,
-                    ..
-                } => (
-                    orchestration.as_str(),
-                    input.as_str(),
-                    version.as_deref(),
-                    parent_instance.as_deref(),
-                    *parent_id,
-                    false,
-                ),
-                WorkItem::ContinueAsNew {
-                    orchestration,
-                    input,
-                    version,
-                    ..
-                } => (
-                    orchestration.as_str(),
-                    input.as_str(),
-                    version.as_deref(),
-                    None,
-                    None,
-                    true,
-                ),
-                _ => unreachable!(),
-            };
+        let (history_delta, worker_items, timer_items, orchestrator_items, execution_id_for_ack) =
+            if let Some(start_item) = start_or_continue {
+                // Both StartOrchestration and ContinueAsNew are handled identically.
+                // For ContinueAsNew, we start a fresh execution with empty history and execution_id = current + 1.
+                let (orchestration, input, version, parent_instance, parent_id, is_can) = match &start_item {
+                    // TODO : CR : Workitem::StartOrchestrationDetached must carry the execution_id as well, which should be provided at enqueue time.
+                    WorkItem::StartOrchestration {
+                        orchestration,
+                        input,
+                        version,
+                        parent_instance,
+                        parent_id,
+                        ..
+                    } => (
+                        orchestration.as_str(),
+                        input.as_str(),
+                        version.as_deref(),
+                        parent_instance.as_deref(),
+                        *parent_id,
+                        false,
+                    ),
+                    WorkItem::ContinueAsNew {
+                        orchestration,
+                        input,
+                        version,
+                        ..
+                    } => (
+                        orchestration.as_str(),
+                        input.as_str(),
+                        version.as_deref(),
+                        None,
+                        None,
+                        true,
+                    ),
+                    _ => unreachable!(),
+                };
 
-            // Decide execution id and history to use
-            let (execution_id_to_use, history_to_use) = if is_can {
-                (item.execution_id + 1, Vec::new())
+                // Decide execution id and history to use
+                let (execution_id_to_use, history_to_use) = if is_can {
+                    (item.execution_id + 1, Vec::new())
+                } else {
+                    (item.execution_id, item.history.clone())
+                };
+
+                debug!(
+                    instance,
+                    orchestration = %orchestration,
+                    execution_id = %execution_id_to_use,
+                    is_continue_as_new = is_can,
+                    "Starting execution"
+                );
+
+                let (hd, wi, ti, oi) = self
+                    .handle_start_orchestration_atomic(
+                        instance,
+                        orchestration,
+                        input,
+                        version,
+                        parent_instance,
+                        parent_id,
+                        completion_messages,
+                        &history_to_use,
+                        execution_id_to_use,
+                        lock_token,
+                    )
+                    .await;
+
+                (hd, wi, ti, oi, execution_id_to_use)
+            } else if !completion_messages.is_empty() {
+                // Only completion messages - process them
+                let (hd, wi, ti, oi) = self
+                    .handle_completion_batch_atomic(
+                        instance,
+                        completion_messages,
+                        &item.history,
+                        item.execution_id,
+                        lock_token,
+                    )
+                    .await;
+                (hd, wi, ti, oi, item.execution_id)
             } else {
-                (item.execution_id, item.history.clone())
+                // Empty effective batch - just ack
+                (vec![], vec![], vec![], vec![], item.execution_id)
             };
-
-            debug!(
-                instance,
-                orchestration = %orchestration,
-                execution_id = %execution_id_to_use,
-                is_continue_as_new = is_can,
-                "Starting execution"
-            );
-
-            let (hd, wi, ti, oi) = self.handle_start_orchestration_atomic(
-                instance,
-                orchestration,
-                input,
-                version,
-                parent_instance,
-                parent_id,
-                completion_messages,
-                &history_to_use,
-                execution_id_to_use,
-                lock_token,
-            )
-            .await;
-
-            (hd, wi, ti, oi, execution_id_to_use)
-        } else if !completion_messages.is_empty() {
-            // Only completion messages - process them
-            let (hd, wi, ti, oi) = self.handle_completion_batch_atomic(
-                instance,
-                completion_messages,
-                &item.history,
-                item.execution_id,
-                lock_token,
-            )
-            .await;
-            (hd, wi, ti, oi, item.execution_id)
-        } else {
-            // Empty effective batch - just ack
-            (vec![], vec![], vec![], vec![], item.execution_id)
-        };
 
         // Atomically commit all changes
         debug!(
@@ -523,15 +565,11 @@ impl Runtime {
             timer_items.len(),
             orchestrator_items.len()
         );
-        
+
         // Compute execution metadata from history_delta (runtime responsibility)
-        let metadata = Runtime::compute_execution_metadata(
-            &history_delta,
-            &orchestrator_items,
-            item.execution_id,
-        );
-        
-        // Robust ack with basic retry on SQLITE_BUSY (database is locked)
+        let metadata = Runtime::compute_execution_metadata(&history_delta, &orchestrator_items, item.execution_id);
+
+        // Robust ack with basic retry on any provider error
         let mut attempts: u32 = 0;
         let max_attempts: u32 = 5;
         loop {
@@ -553,18 +591,19 @@ impl Runtime {
                     break;
                 }
                 Err(e) => {
-                    let emsg = e.to_lowercase();
-                    // TODO : CR : this is very sqlite specific. We should just retry on any error unless the message indicates it is unretriable. 
-                    if (emsg.contains("database is locked") || emsg.contains("busy")) && attempts < max_attempts {
+                    if attempts < max_attempts {
                         let backoff_ms = 10u64.saturating_mul(1 << attempts);
-                        warn!(instance, attempts, backoff_ms, error = %e, "Ack failed due to lock; retrying");
+                        warn!(instance, attempts, backoff_ms, error = %e, "Ack failed; retrying");
                         tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
                         attempts += 1;
                         continue;
                     } else {
                         warn!(instance, attempts, error = %e, "Failed to ack orchestration item");
                         // Best-effort: abandon so it can be retried later
-                        let _ = self.history_store.abandon_orchestration_item(lock_token, Some(50)).await;
+                        let _ = self
+                            .history_store
+                            .abandon_orchestration_item(lock_token, Some(50))
+                            .await;
                         break;
                     }
                 }
@@ -611,7 +650,7 @@ impl Runtime {
             }
 
             history_delta.push(Event::OrchestrationStarted {
-                event_id: 1,  // First event always has event_id=1
+                event_id: 1, // First event always has event_id=1
                 name: orchestration.to_string(),
                 version: resolved_version,
                 input: input.to_string(),
@@ -668,7 +707,10 @@ impl Runtime {
                 );
                 return (vec![], vec![], vec![], vec![]);
             } else {
-                debug!(instance, "completion-only batch: detected newly-started instance after re-read");
+                debug!(
+                    instance,
+                    "completion-only batch: detected newly-started instance after re-read"
+                );
                 // Use the latest history instead of the empty snapshot
                 let initial_history = latest;
                 let (history_delta, worker_items, timer_items, orchestrator_items, _result) = self
@@ -678,7 +720,10 @@ impl Runtime {
                         &initial_history
                             .iter()
                             .rev()
-                            .find_map(|e| match e { Event::OrchestrationStarted { name, .. } => Some(name.clone()), _ => None })
+                            .find_map(|e| match e {
+                                Event::OrchestrationStarted { name, .. } => Some(name.clone()),
+                                _ => None,
+                            })
                             .unwrap_or_else(|| "Unknown".to_string()),
                         initial_history.clone(),
                         execution_id,
@@ -732,36 +777,45 @@ impl Runtime {
                                 match handler.invoke(input).await {
                                     Ok(result) => {
                                         self.history_store
-                                            .enqueue_orchestrator_work(WorkItem::ActivityCompleted {
-                                                instance: instance.clone(),
-                                                execution_id,
-                                                id,
-                                                result,
-                                            }, None)
+                                            .enqueue_orchestrator_work(
+                                                WorkItem::ActivityCompleted {
+                                                    instance: instance.clone(),
+                                                    execution_id,
+                                                    id,
+                                                    result,
+                                                },
+                                                None,
+                                            )
                                             .await
                                     }
                                     Err(error) => {
                                         self.history_store
-                                            .enqueue_orchestrator_work(WorkItem::ActivityFailed {
-                                                instance: instance.clone(),
-                                                execution_id,
-                                                id,
-                                                error,
-                                            }, None)
+                                            .enqueue_orchestrator_work(
+                                                WorkItem::ActivityFailed {
+                                                    instance: instance.clone(),
+                                                    execution_id,
+                                                    id,
+                                                    error,
+                                                },
+                                                None,
+                                            )
                                             .await
                                     }
                                 }
                             } else {
                                 self.history_store
-                                    .enqueue_orchestrator_work(WorkItem::ActivityFailed {
-                                        instance: instance.clone(),
-                                        execution_id,
-                                        id,
-                                        error: format!("unregistered:{}", name),
-                                    }, None)
+                                    .enqueue_orchestrator_work(
+                                        WorkItem::ActivityFailed {
+                                            instance: instance.clone(),
+                                            execution_id,
+                                            id,
+                                            error: format!("unregistered:{}", name),
+                                        },
+                                        None,
+                                    )
                                     .await
                             };
-                            
+
                             // Only acknowledge after successful enqueue
                             if enqueue_result.is_ok() {
                                 let _ = self.history_store.ack_worker(&token).await;
@@ -802,7 +856,7 @@ impl Runtime {
                                     .unwrap()
                                     .as_millis() as u64;
                                 let delay_ms = fire_at_ms.saturating_sub(current_time_ms);
-                                
+
                                 // Enqueue TimerFired with visibility delay
                                 let timer_fired = WorkItem::TimerFired {
                                     instance,
@@ -810,10 +864,13 @@ impl Runtime {
                                     id,
                                     fire_at_ms,
                                 };
-                                
+
                                 // Use the provider's delayed visibility support
-                                let _ = self.history_store.enqueue_orchestrator_work(timer_fired, Some(delay_ms)).await;
-                                
+                                let _ = self
+                                    .history_store
+                                    .enqueue_orchestrator_work(timer_fired, Some(delay_ms))
+                                    .await;
+
                                 let _ = self.history_store.ack_timer(&token).await;
                             }
                             other => {
@@ -822,7 +879,8 @@ impl Runtime {
                             }
                         }
                     } else {
-                        tokio::time::sleep(std::time::Duration::from_millis(self.options.dispatcher_idle_sleep_ms)).await;
+                        tokio::time::sleep(std::time::Duration::from_millis(self.options.dispatcher_idle_sleep_ms))
+                            .await;
                     }
                 }
             });

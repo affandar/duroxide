@@ -43,7 +43,10 @@ impl Runtime {
         let handler_opt = if let Some(v) = pinned_version.clone() {
             self.orchestration_registry.resolve_exact(orchestration_name, &v)
         } else {
-            self.orchestration_registry.resolve_for_start(orchestration_name).await.map(|(_v, h)| h)
+            self.orchestration_registry
+                .resolve_for_start(orchestration_name)
+                .await
+                .map(|(_v, h)| h)
         };
 
         handler_opt.ok_or_else(|| {
@@ -138,6 +141,40 @@ impl Runtime {
         let mut timer_items = Vec::new();
         let mut orchestrator_items = Vec::new();
 
+        // Helper: compute the next event id based on existing and delta history
+        let calc_next_event_id = |existing: &Vec<Event>, delta: &Vec<Event>| -> u64 {
+            existing
+                .iter()
+                .chain(delta.iter())
+                .map(|e| e.event_id())
+                .max()
+                .unwrap_or(0)
+                + 1
+        };
+
+        // Helper: only honor detached starts at terminal; ignore all other pending actions
+        let mut enqueue_detached_from_pending = |pending: &[_]| {
+            for action in pending {
+                if let crate::Action::StartOrchestrationDetached {
+                    name,
+                    version,
+                    instance: sub_instance,
+                    input,
+                    ..
+                } = action
+                {
+                    orchestrator_items.push(WorkItem::StartOrchestration {
+                        instance: sub_instance.clone(),
+                        orchestration: name.clone(),
+                        input: input.clone(),
+                        version: version.clone(),
+                        parent_instance: None,
+                        parent_id: None,
+                    });
+                }
+            }
+        };
+
         // Use provided history directly
         let history = initial_history.clone();
 
@@ -151,7 +188,10 @@ impl Runtime {
                 // Handle unregistered orchestration
                 let max_existing = history.iter().map(|e| e.event_id()).max().unwrap_or(0);
                 let next_id = max_existing + 1;
-                let terminal_event = Event::OrchestrationFailed { event_id: next_id, error: error.clone() };
+                let terminal_event = Event::OrchestrationFailed {
+                    event_id: next_id,
+                    error: error.clone(),
+                };
                 history_delta.push(terminal_event);
                 return (history_delta, worker_items, timer_items, orchestrator_items, Err(error));
             }
@@ -206,7 +246,11 @@ impl Runtime {
                 // Collect work items from pending actions
                 for action in turn.pending_actions() {
                     match action {
-                        crate::Action::CallActivity { scheduling_event_id, name, input } => {
+                        crate::Action::CallActivity {
+                            scheduling_event_id,
+                            name,
+                            input,
+                        } => {
                             let execution_id = self.get_execution_id_for_instance(instance).await;
                             worker_items.push(WorkItem::ActivityExecute {
                                 instance: instance.to_string(),
@@ -216,7 +260,10 @@ impl Runtime {
                                 input: input.clone(),
                             });
                         }
-                        crate::Action::CreateTimer { scheduling_event_id, delay_ms } => {
+                        crate::Action::CreateTimer {
+                            scheduling_event_id,
+                            delay_ms,
+                        } => {
                             let execution_id = self.get_execution_id_for_instance(instance).await;
                             let fire_at_ms = Self::calculate_timer_fire_time(&turn.final_history(), *delay_ms);
                             timer_items.push(WorkItem::TimerSchedule {
@@ -266,81 +313,18 @@ impl Runtime {
 
                 Ok(String::new())
             }
-            // TODO : CR : the code for processing completed vs failed is almost identical, except for the fact that event type to be written, note that 
+            // TODO : CR : the code for processing completed vs failed is almost identical, except for the fact that event type to be written, note that
             //  for failed, we also want to take the detached orchestration action.
             TurnResult::Completed(output) => {
-                // Process any pending actions before completing
-                // TODO : CR: the only action here that makes sense to schedule is StartOrchestrationDetached, not sure why we need to spin up the other ones.
-                //  basically the remaining should be assumed cancelled
-                for action in turn.pending_actions() {
-                    match action {
-                        crate::Action::CallActivity { scheduling_event_id, name, input } => {
-                            let execution_id = self.get_execution_id_for_instance(instance).await;
-                            worker_items.push(WorkItem::ActivityExecute {
-                                instance: instance.to_string(),
-                                execution_id,
-                                id: *scheduling_event_id,
-                                name: name.clone(),
-                                input: input.clone(),
-                            });
-                        }
-                        crate::Action::CreateTimer { scheduling_event_id, delay_ms } => {
-                            let execution_id = self.get_execution_id_for_instance(instance).await;
-                            let fire_at_ms = Self::calculate_timer_fire_time(&history, *delay_ms);
-                            timer_items.push(WorkItem::TimerSchedule {
-                                instance: instance.to_string(),
-                                execution_id,
-                                id: *scheduling_event_id,
-                                fire_at_ms,
-                            });
-                        }
-                        crate::Action::StartSubOrchestration {
-                            scheduling_event_id,
-                            name,
-                            version,
-                            instance: sub_instance,
-                            input,
-                        } => {
-                            // Construct the full child instance name with parent prefix
-                            let child_full = format!("{}::{}", instance, sub_instance);
-                            orchestrator_items.push(WorkItem::StartOrchestration {
-                                instance: child_full,
-                                orchestration: name.clone(),
-                                input: input.clone(),
-                                version: version.clone(),
-                                parent_instance: Some(instance.to_string()),
-                                parent_id: Some(*scheduling_event_id),
-                            });
-                        }
-                        crate::Action::StartOrchestrationDetached {
-                            scheduling_event_id: _,
-                            name,
-                            version,
-                            instance: sub_instance,
-                            input,
-                        } => {
-                            orchestrator_items.push(WorkItem::StartOrchestration {
-                                instance: sub_instance.clone(),
-                                orchestration: name.clone(),
-                                input: input.clone(),
-                                version: version.clone(),
-                                parent_instance: None,
-                                parent_id: None,
-                            });
-                        }
-                        _ => {} // Other actions don't generate work items
-                    }
-                }
+                // At terminal, only detached orchestration actions should be honored; other pending actions are ignored.
+                enqueue_detached_from_pending(turn.pending_actions());
 
                 // Add completion event with next event_id
-                let max_history = history
-                    .iter()
-                    .chain(history_delta.iter())
-                    .map(|e| e.event_id())
-                    .max()
-                    .unwrap_or(0);
-                let next_id = max_history + 1;
-                let terminal_event = Event::OrchestrationCompleted { event_id: next_id, output: output.clone() };
+                let next_id = calc_next_event_id(&history, &history_delta);
+                let terminal_event = Event::OrchestrationCompleted {
+                    event_id: next_id,
+                    output: output.clone(),
+                };
                 history_delta.push(terminal_event);
 
                 // Notify parent if this is a sub-orchestration
@@ -357,15 +341,15 @@ impl Runtime {
                 Ok(output)
             }
             TurnResult::Failed(error) => {
+                // At terminal, only detached orchestration actions should be honored; other pending actions are ignored.
+                enqueue_detached_from_pending(turn.pending_actions());
+
                 // Add failure event
-                let max_history = history
-                    .iter()
-                    .chain(history_delta.iter())
-                    .map(|e| e.event_id())
-                    .max()
-                    .unwrap_or(0);
-                let next_id = max_history + 1;
-                let terminal_event = Event::OrchestrationFailed { event_id: next_id, error: error.clone() };
+                let next_id = calc_next_event_id(&history, &history_delta);
+                let terminal_event = Event::OrchestrationFailed {
+                    event_id: next_id,
+                    error: error.clone(),
+                };
                 history_delta.push(terminal_event);
 
                 // Notify parent if this is a sub-orchestration
@@ -383,14 +367,11 @@ impl Runtime {
             }
             TurnResult::ContinueAsNew { input, version } => {
                 // Add ContinuedAsNew terminal event to history
-                let max_history = history
-                    .iter()
-                    .chain(history_delta.iter())
-                    .map(|e| e.event_id())
-                    .max()
-                    .unwrap_or(0);
-                let next_id = max_history + 1;
-                let terminal_event = Event::OrchestrationContinuedAsNew { event_id: next_id, input: input.clone() };
+                let next_id = calc_next_event_id(&history, &history_delta);
+                let terminal_event = Event::OrchestrationContinuedAsNew {
+                    event_id: next_id,
+                    input: input.clone(),
+                };
                 history_delta.push(terminal_event);
 
                 // Enqueue continue as new work item
@@ -403,19 +384,14 @@ impl Runtime {
 
                 Ok("continued as new".to_string())
             }
-            // TODO : CR : the code for processing cancelled is almost identical to the code for processing failed, except for the fact that event type to be written is different and 
-            // for canclled we don't want to take even the detached orchestration action. We also need to propagate cancellation to the children. But this is all very refactorable. 
             TurnResult::Cancelled(reason) => {
-                // Add cancellation as failure event
+                // Cancellation is currently recorded as a failure with a specific message.
                 let error = format!("canceled: {}", reason);
-                let max_history = history
-                    .iter()
-                    .chain(history_delta.iter())
-                    .map(|e| e.event_id())
-                    .max()
-                    .unwrap_or(0);
-                let next_id = max_history + 1;
-                let terminal_event = Event::OrchestrationFailed { event_id: next_id, error: error.clone() };
+                let next_id = calc_next_event_id(&history, &history_delta);
+                let terminal_event = Event::OrchestrationFailed {
+                    event_id: next_id,
+                    error: error.clone(),
+                };
                 history_delta.push(terminal_event);
 
                 // Propagate cancellation to children
@@ -459,7 +435,9 @@ impl Runtime {
             .iter()
             .filter_map(|e| match e {
                 Event::SubOrchestrationScheduled {
-                    event_id, instance: child, ..
+                    event_id,
+                    instance: child,
+                    ..
                 } => Some((*event_id, child.clone())),
                 _ => None,
             })
@@ -469,7 +447,7 @@ impl Runtime {
         let completed_ids: std::collections::HashSet<u64> = history
             .iter()
             .filter_map(|e| match e {
-                Event::SubOrchestrationCompleted { source_event_id, .. } 
+                Event::SubOrchestrationCompleted { source_event_id, .. }
                 | Event::SubOrchestrationFailed { source_event_id, .. } => Some(*source_event_id),
                 _ => None,
             })

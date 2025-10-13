@@ -32,13 +32,13 @@ pub(crate) enum Kind {
     External {
         name: String,
         claimed_event_id: Cell<Option<u64>>,
-        result: RefCell<Option<String>>,  // Cache result once found
+        result: RefCell<Option<String>>, // Cache result once found
         ctx: OrchestrationContext,
     },
     SubOrch {
         name: String,
         version: Option<String>,
-        instance: RefCell<String>,  // Updated once event_id is known
+        instance: RefCell<String>, // Updated once event_id is known
         input: String,
         claimed_event_id: Cell<Option<u64>>,
         ctx: OrchestrationContext,
@@ -67,15 +67,19 @@ impl Future for DurableFuture {
                 ctx,
             } => {
                 let mut inner = ctx.inner.lock().unwrap();
-                
+
                 // Step 1: Claim scheduling event_id if not already claimed
                 if claimed_event_id.get().is_none() {
                     // Find next unclaimed SCHEDULING event in history (global order enforcement)
                     let mut found_event_id = None;
                     for event in &inner.history {
                         match event {
-                            Event::ActivityScheduled { event_id, name: n, input: inp, .. }
-                                if !inner.claimed_scheduling_events.contains(event_id) => {
+                            Event::ActivityScheduled {
+                                event_id,
+                                name: n,
+                                input: inp,
+                                ..
+                            } if !inner.claimed_scheduling_events.contains(event_id) => {
                                 // MUST be our schedule next
                                 if n != name || inp != input {
                                     // Record nondeterminism gracefully
@@ -89,7 +93,8 @@ impl Future for DurableFuture {
                                 break;
                             }
                             Event::TimerCreated { event_id, .. }
-                                if !inner.claimed_scheduling_events.contains(event_id) => {
+                                if !inner.claimed_scheduling_events.contains(event_id) =>
+                            {
                                 inner.nondeterminism_error = Some(format!(
                                     "nondeterministic: schedule order mismatch: next is TimerCreated but expected ActivityScheduled('{}','{}')",
                                     name, input
@@ -97,15 +102,20 @@ impl Future for DurableFuture {
                                 return Poll::Pending;
                             }
                             Event::ExternalSubscribed { event_id, name: en }
-                                if !inner.claimed_scheduling_events.contains(event_id) => {
+                                if !inner.claimed_scheduling_events.contains(event_id) =>
+                            {
                                 inner.nondeterminism_error = Some(format!(
                                     "nondeterministic: schedule order mismatch: next is ExternalSubscribed('{}') but expected ActivityScheduled('{}','{}')",
                                     en, name, input
                                 ));
                                 return Poll::Pending;
                             }
-                            Event::SubOrchestrationScheduled { event_id, name: sn, input: sin, .. }
-                                if !inner.claimed_scheduling_events.contains(event_id) => {
+                            Event::SubOrchestrationScheduled {
+                                event_id,
+                                name: sn,
+                                input: sin,
+                                ..
+                            } if !inner.claimed_scheduling_events.contains(event_id) => {
                                 inner.nondeterminism_error = Some(format!(
                                     "nondeterministic: schedule order mismatch: next is SubOrchestrationScheduled('{}','{}') but expected ActivityScheduled('{}','{}')",
                                     sn, sin, name, input
@@ -141,25 +151,27 @@ impl Future for DurableFuture {
                     inner.claimed_scheduling_events.insert(event_id);
                     claimed_event_id.set(Some(event_id));
                 }
-                
+
                 let our_event_id = claimed_event_id.get().unwrap();
-                
+
                 // Step 2: Look for our completion - FIFO enforcement
                 // Find our completion in history
-                let our_completion = inner.history.iter().find_map(|e| {
-                    match e {
-                        Event::ActivityCompleted { event_id, source_event_id, result, .. }
-                            if *source_event_id == our_event_id => {
-                            Some((*event_id, Ok(result.clone())))
-                        }
-                        Event::ActivityFailed { event_id, source_event_id, error, .. }
-                            if *source_event_id == our_event_id => {
-                            Some((*event_id, Err(error.clone())))
-                        }
-                        _ => None,
-                    }
+                let our_completion = inner.history.iter().find_map(|e| match e {
+                    Event::ActivityCompleted {
+                        event_id,
+                        source_event_id,
+                        result,
+                        ..
+                    } if *source_event_id == our_event_id => Some((*event_id, Ok(result.clone()))),
+                    Event::ActivityFailed {
+                        event_id,
+                        source_event_id,
+                        error,
+                        ..
+                    } if *source_event_id == our_event_id => Some((*event_id, Err(error.clone()))),
+                    _ => None,
                 });
-                
+
                 if let Some((completion_event_id, result)) = our_completion {
                     // Check: Are all completion events BEFORE ours consumed?
                     let can_consume = inner.history.iter().all(|e| {
@@ -173,16 +185,16 @@ impl Future for DurableFuture {
                                 // If this completion is before ours, it must be consumed
                                 *event_id >= completion_event_id || inner.consumed_completions.contains(event_id)
                             }
-                            _ => true,  // Non-completions don't matter
+                            _ => true, // Non-completions don't matter
                         }
                     });
-                    
+
                     if can_consume {
                         inner.consumed_completions.insert(completion_event_id);
                         return Poll::Ready(DurableOutput::Activity(result));
                     }
                 }
-                
+
                 Poll::Pending
             }
             Kind::Timer {
@@ -191,19 +203,25 @@ impl Future for DurableFuture {
                 ctx,
             } => {
                 let mut inner = ctx.inner.lock().unwrap();
-                
+
                 // Step 1: Claim scheduling event_id
                 if claimed_event_id.get().is_none() {
                     // Enforce global scheduling order
                     let mut found_event_id = None;
                     for event in &inner.history {
                         match event {
-                            Event::TimerCreated { event_id, .. } if !inner.claimed_scheduling_events.contains(event_id) => {
+                            Event::TimerCreated { event_id, .. }
+                                if !inner.claimed_scheduling_events.contains(event_id) =>
+                            {
                                 found_event_id = Some(*event_id);
                                 break;
                             }
-                            Event::ActivityScheduled { event_id, name: n, input: inp, .. }
-                                if !inner.claimed_scheduling_events.contains(event_id) => {
+                            Event::ActivityScheduled {
+                                event_id,
+                                name: n,
+                                input: inp,
+                                ..
+                            } if !inner.claimed_scheduling_events.contains(event_id) => {
                                 inner.nondeterminism_error = Some(format!(
                                     "nondeterministic: schedule order mismatch: next is ActivityScheduled('{}','{}') but expected TimerCreated",
                                     n, inp
@@ -211,15 +229,20 @@ impl Future for DurableFuture {
                                 return Poll::Pending;
                             }
                             Event::ExternalSubscribed { event_id, name: en }
-                                if !inner.claimed_scheduling_events.contains(event_id) => {
+                                if !inner.claimed_scheduling_events.contains(event_id) =>
+                            {
                                 inner.nondeterminism_error = Some(format!(
                                     "nondeterministic: schedule order mismatch: next is ExternalSubscribed('{}') but expected TimerCreated",
                                     en
                                 ));
                                 return Poll::Pending;
                             }
-                            Event::SubOrchestrationScheduled { event_id, name: sn, input: sin, .. }
-                                if !inner.claimed_scheduling_events.contains(event_id) => {
+                            Event::SubOrchestrationScheduled {
+                                event_id,
+                                name: sn,
+                                input: sin,
+                                ..
+                            } if !inner.claimed_scheduling_events.contains(event_id) => {
                                 inner.nondeterminism_error = Some(format!(
                                     "nondeterministic: schedule order mismatch: next is SubOrchestrationScheduled('{}','{}') but expected TimerCreated",
                                     sn, sin
@@ -255,41 +278,44 @@ impl Future for DurableFuture {
                     inner.claimed_scheduling_events.insert(event_id);
                     claimed_event_id.set(Some(event_id));
                 }
-                
+
                 let our_event_id = claimed_event_id.get().unwrap();
-                
+
                 // Step 2: Look for TimerFired - FIFO enforcement
                 let our_completion = inner.history.iter().find_map(|e| {
-                    if let Event::TimerFired { event_id, source_event_id, .. } = e {
+                    if let Event::TimerFired {
+                        event_id,
+                        source_event_id,
+                        ..
+                    } = e
+                    {
                         if *source_event_id == our_event_id {
                             return Some(*event_id);
                         }
                     }
                     None
                 });
-                
+
                 if let Some(completion_event_id) = our_completion {
                     // Check: Are all completion events BEFORE ours consumed?
-                    let can_consume = inner.history.iter().all(|e| {
-                        match e {
-                            Event::ActivityCompleted { event_id, .. }
-                            | Event::ActivityFailed { event_id, .. }
-                            | Event::TimerFired { event_id, .. }
-                            | Event::SubOrchestrationCompleted { event_id, .. }
-                            | Event::SubOrchestrationFailed { event_id, .. }
-                            | Event::ExternalEvent { event_id, .. } => {
-                                *event_id >= completion_event_id || inner.consumed_completions.contains(event_id)
-                            }
-                            _ => true,
+                    let can_consume = inner.history.iter().all(|e| match e {
+                        Event::ActivityCompleted { event_id, .. }
+                        | Event::ActivityFailed { event_id, .. }
+                        | Event::TimerFired { event_id, .. }
+                        | Event::SubOrchestrationCompleted { event_id, .. }
+                        | Event::SubOrchestrationFailed { event_id, .. }
+                        | Event::ExternalEvent { event_id, .. } => {
+                            *event_id >= completion_event_id || inner.consumed_completions.contains(event_id)
                         }
+                        _ => true,
                     });
-                    
+
                     if can_consume {
                         inner.consumed_completions.insert(completion_event_id);
                         return Poll::Ready(DurableOutput::Timer);
                     }
                 }
-                
+
                 Poll::Pending
             }
             Kind::External {
@@ -302,16 +328,18 @@ impl Future for DurableFuture {
                 if let Some(cached) = result.borrow().clone() {
                     return Poll::Ready(DurableOutput::External(cached));
                 }
-                
+
                 let mut inner = ctx.inner.lock().unwrap();
-                
+
                 // Step 1: Claim ExternalSubscribed event_id
                 if claimed_event_id.get().is_none() {
                     // Enforce global scheduling order
                     let mut found_event_id = None;
                     for event in &inner.history {
                         match event {
-                            Event::ExternalSubscribed { event_id, name: n } if !inner.claimed_scheduling_events.contains(event_id) => {
+                            Event::ExternalSubscribed { event_id, name: n }
+                                if !inner.claimed_scheduling_events.contains(event_id) =>
+                            {
                                 if n != name {
                                     inner.nondeterminism_error = Some(format!(
                                         "nondeterministic: schedule order mismatch: next is ExternalSubscribed('{}') but expected ExternalSubscribed('{}')",
@@ -322,23 +350,33 @@ impl Future for DurableFuture {
                                 found_event_id = Some(*event_id);
                                 break;
                             }
-                            Event::ActivityScheduled { event_id, name: an, input: ainp, .. }
-                                if !inner.claimed_scheduling_events.contains(event_id) => {
+                            Event::ActivityScheduled {
+                                event_id,
+                                name: an,
+                                input: ainp,
+                                ..
+                            } if !inner.claimed_scheduling_events.contains(event_id) => {
                                 inner.nondeterminism_error = Some(format!(
                                     "nondeterministic: schedule order mismatch: next is ActivityScheduled('{}','{}') but expected ExternalSubscribed('{}')",
                                     an, ainp, name
                                 ));
                                 return Poll::Pending;
                             }
-                            Event::TimerCreated { event_id, .. } if !inner.claimed_scheduling_events.contains(event_id) => {
+                            Event::TimerCreated { event_id, .. }
+                                if !inner.claimed_scheduling_events.contains(event_id) =>
+                            {
                                 inner.nondeterminism_error = Some(format!(
                                     "nondeterministic: schedule order mismatch: next is TimerCreated but expected ExternalSubscribed('{}')",
                                     name
                                 ));
                                 return Poll::Pending;
                             }
-                            Event::SubOrchestrationScheduled { event_id, name: sn, input: sin, .. }
-                                if !inner.claimed_scheduling_events.contains(event_id) => {
+                            Event::SubOrchestrationScheduled {
+                                event_id,
+                                name: sn,
+                                input: sin,
+                                ..
+                            } if !inner.claimed_scheduling_events.contains(event_id) => {
                                 inner.nondeterminism_error = Some(format!(
                                     "nondeterministic: schedule order mismatch: next is SubOrchestrationScheduled('{}','{}') but expected ExternalSubscribed('{}')",
                                     sn, sin, name
@@ -370,14 +408,20 @@ impl Future for DurableFuture {
                     inner.claimed_scheduling_events.insert(event_id);
                     claimed_event_id.set(Some(event_id));
                 }
-                
+
                 let _our_event_id = claimed_event_id.get().unwrap();
-                
+
                 // Step 2: Look for ExternalEvent (special case - search by name)
                 // External events can arrive in any order
                 if !inner.consumed_external_events.contains(name) {
                     if let Some((event_id, data)) = inner.history.iter().find_map(|e| {
-                        if let Event::ExternalEvent { event_id, name: ext_name, data, .. } = e {
+                        if let Event::ExternalEvent {
+                            event_id,
+                            name: ext_name,
+                            data,
+                            ..
+                        } = e
+                        {
                             if ext_name == name {
                                 return Some((*event_id, data.clone()));
                             }
@@ -385,20 +429,18 @@ impl Future for DurableFuture {
                         None
                     }) {
                         // Check: Are all completions BEFORE ours consumed?
-                        let can_consume = inner.history.iter().all(|e| {
-                            match e {
-                                Event::ActivityCompleted { event_id: eid, .. }
-                                | Event::ActivityFailed { event_id: eid, .. }
-                                | Event::TimerFired { event_id: eid, .. }
-                                | Event::SubOrchestrationCompleted { event_id: eid, .. }
-                                | Event::SubOrchestrationFailed { event_id: eid, .. }
-                                | Event::ExternalEvent { event_id: eid, .. } => {
-                                    *eid >= event_id || inner.consumed_completions.contains(eid)
-                                }
-                                _ => true,
+                        let can_consume = inner.history.iter().all(|e| match e {
+                            Event::ActivityCompleted { event_id: eid, .. }
+                            | Event::ActivityFailed { event_id: eid, .. }
+                            | Event::TimerFired { event_id: eid, .. }
+                            | Event::SubOrchestrationCompleted { event_id: eid, .. }
+                            | Event::SubOrchestrationFailed { event_id: eid, .. }
+                            | Event::ExternalEvent { event_id: eid, .. } => {
+                                *eid >= event_id || inner.consumed_completions.contains(eid)
                             }
+                            _ => true,
                         });
-                        
+
                         if can_consume {
                             inner.consumed_completions.insert(event_id);
                             inner.consumed_external_events.insert(name.clone());
@@ -407,7 +449,7 @@ impl Future for DurableFuture {
                         }
                     }
                 }
-                
+
                 Poll::Pending
             }
             Kind::SubOrch {
@@ -419,15 +461,20 @@ impl Future for DurableFuture {
                 ctx,
             } => {
                 let mut inner = ctx.inner.lock().unwrap();
-                
+
                 // Step 1: Claim SubOrchestrationScheduled event_id
                 if claimed_event_id.get().is_none() {
                     // Enforce global scheduling order
                     let mut found_event_id = None;
                     for event in &inner.history {
                         match event {
-                            Event::SubOrchestrationScheduled { event_id, name: n, input: inp, instance: inst, .. }
-                                if !inner.claimed_scheduling_events.contains(event_id) => {
+                            Event::SubOrchestrationScheduled {
+                                event_id,
+                                name: n,
+                                input: inp,
+                                instance: inst,
+                                ..
+                            } if !inner.claimed_scheduling_events.contains(event_id) => {
                                 if n != name || inp != input {
                                     inner.nondeterminism_error = Some(format!(
                                         "nondeterministic: schedule order mismatch: next is SubOrchestrationScheduled('{}','{}') but expected SubOrchestrationScheduled('{}','{}')",
@@ -439,15 +486,21 @@ impl Future for DurableFuture {
                                 found_event_id = Some(*event_id);
                                 break;
                             }
-                            Event::ActivityScheduled { event_id, name: an, input: ainp, .. }
-                                if !inner.claimed_scheduling_events.contains(event_id) => {
+                            Event::ActivityScheduled {
+                                event_id,
+                                name: an,
+                                input: ainp,
+                                ..
+                            } if !inner.claimed_scheduling_events.contains(event_id) => {
                                 inner.nondeterminism_error = Some(format!(
                                     "nondeterministic: schedule order mismatch: next is ActivityScheduled('{}','{}') but expected SubOrchestrationScheduled('{}','{}')",
                                     an, ainp, name, input
                                 ));
                                 return Poll::Pending;
                             }
-                            Event::TimerCreated { event_id, .. } if !inner.claimed_scheduling_events.contains(event_id) => {
+                            Event::TimerCreated { event_id, .. }
+                                if !inner.claimed_scheduling_events.contains(event_id) =>
+                            {
                                 inner.nondeterminism_error = Some(format!(
                                     "nondeterministic: schedule order mismatch: next is TimerCreated but expected SubOrchestrationScheduled('{}','{}')",
                                     name, input
@@ -455,7 +508,8 @@ impl Future for DurableFuture {
                                 return Poll::Pending;
                             }
                             Event::ExternalSubscribed { event_id, name: en }
-                                if !inner.claimed_scheduling_events.contains(event_id) => {
+                                if !inner.claimed_scheduling_events.contains(event_id) =>
+                            {
                                 inner.nondeterminism_error = Some(format!(
                                     "nondeterministic: schedule order mismatch: next is ExternalSubscribed('{}') but expected SubOrchestrationScheduled('{}','{}')",
                                     en, name, input
@@ -496,46 +550,46 @@ impl Future for DurableFuture {
                     inner.claimed_scheduling_events.insert(event_id);
                     claimed_event_id.set(Some(event_id));
                 }
-                
+
                 let our_event_id = claimed_event_id.get().unwrap();
-                
+
                 // Step 2: Look for SubOrch completion - FIFO enforcement
-                let our_completion = inner.history.iter().find_map(|e| {
-                    match e {
-                        Event::SubOrchestrationCompleted { event_id, source_event_id, result, .. }
-                            if *source_event_id == our_event_id => {
-                            Some((*event_id, Ok(result.clone())))
-                        }
-                        Event::SubOrchestrationFailed { event_id, source_event_id, error, .. }
-                            if *source_event_id == our_event_id => {
-                            Some((*event_id, Err(error.clone())))
-                        }
-                        _ => None,
-                    }
+                let our_completion = inner.history.iter().find_map(|e| match e {
+                    Event::SubOrchestrationCompleted {
+                        event_id,
+                        source_event_id,
+                        result,
+                        ..
+                    } if *source_event_id == our_event_id => Some((*event_id, Ok(result.clone()))),
+                    Event::SubOrchestrationFailed {
+                        event_id,
+                        source_event_id,
+                        error,
+                        ..
+                    } if *source_event_id == our_event_id => Some((*event_id, Err(error.clone()))),
+                    _ => None,
                 });
-                
+
                 if let Some((completion_event_id, result)) = our_completion {
                     // Check: Are all completions BEFORE ours consumed?
-                    let can_consume = inner.history.iter().all(|e| {
-                        match e {
-                            Event::ActivityCompleted { event_id, .. }
-                            | Event::ActivityFailed { event_id, .. }
-                            | Event::TimerFired { event_id, .. }
-                            | Event::SubOrchestrationCompleted { event_id, .. }
-                            | Event::SubOrchestrationFailed { event_id, .. }
-                            | Event::ExternalEvent { event_id, .. } => {
-                                *event_id >= completion_event_id || inner.consumed_completions.contains(event_id)
-                            }
-                            _ => true,
+                    let can_consume = inner.history.iter().all(|e| match e {
+                        Event::ActivityCompleted { event_id, .. }
+                        | Event::ActivityFailed { event_id, .. }
+                        | Event::TimerFired { event_id, .. }
+                        | Event::SubOrchestrationCompleted { event_id, .. }
+                        | Event::SubOrchestrationFailed { event_id, .. }
+                        | Event::ExternalEvent { event_id, .. } => {
+                            *event_id >= completion_event_id || inner.consumed_completions.contains(event_id)
                         }
+                        _ => true,
                     });
-                    
+
                     if can_consume {
                         inner.consumed_completions.insert(completion_event_id);
                         return Poll::Ready(DurableOutput::SubOrchestration(result));
                     }
                 }
-                
+
                 Poll::Pending
             }
             Kind::System {
@@ -555,14 +609,20 @@ impl Future for DurableFuture {
                 if claimed_event_id.get().is_none() {
                     // Look for matching SystemCall event in history
                     let found = inner.history.iter().find_map(|e| {
-                        if let Event::SystemCall { event_id, op: hist_op, value: hist_value, .. } = e {
+                        if let Event::SystemCall {
+                            event_id,
+                            op: hist_op,
+                            value: hist_value,
+                            ..
+                        } = e
+                        {
                             if hist_op == op && !inner.claimed_scheduling_events.contains(event_id) {
                                 return Some((*event_id, hist_value.clone()));
                             }
                         }
                         None
                     });
-                    
+
                     if let Some((found_event_id, found_value)) = found {
                         // Found our system call in history - adopt it
                         inner.claimed_scheduling_events.insert(found_event_id);
@@ -634,12 +694,12 @@ impl Future for DurableFuture {
 // Helper function to generate deterministic GUIDs
 fn generate_guid() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
-    
+
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
-    
+
     // Thread-local counter for uniqueness within the same timestamp
     thread_local! {
         static COUNTER: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
@@ -649,7 +709,7 @@ fn generate_guid() -> String {
         c.set(val.wrapping_add(1));
         val
     });
-    
+
     // Format as UUID-like string
     format!(
         "{:08x}-{:04x}-{:04x}-{:04x}-{:012x}",
@@ -709,7 +769,10 @@ impl Future for AggregateDurableFuture {
                 // Single-pass: return the first child that becomes ready
                 for (i, child) in this.children.iter_mut().enumerate() {
                     if let Poll::Ready(output) = Pin::new(child).poll(cx) {
-                        return Poll::Ready(AggregateOutput::Select { winner_index: i, output });
+                        return Poll::Ready(AggregateOutput::Select {
+                            winner_index: i,
+                            output,
+                        });
                     }
                 }
                 Poll::Pending
@@ -741,33 +804,71 @@ impl Future for AggregateDurableFuture {
                                 match &this.children[i].0 {
                                     Kind::Activity { claimed_event_id, .. } => {
                                         let sid = claimed_event_id.get().expect("activity must claim id");
-                                        inner.history.iter().find_map(|e| match e {
-                                            Event::ActivityCompleted { event_id, source_event_id, .. } if *source_event_id == sid => Some(*event_id),
-                                            Event::ActivityFailed { event_id, source_event_id, .. } if *source_event_id == sid => Some(*event_id),
-                                            _ => None,
-                                        }).unwrap_or(u64::MAX)
+                                        inner
+                                            .history
+                                            .iter()
+                                            .find_map(|e| match e {
+                                                Event::ActivityCompleted {
+                                                    event_id,
+                                                    source_event_id,
+                                                    ..
+                                                } if *source_event_id == sid => Some(*event_id),
+                                                Event::ActivityFailed {
+                                                    event_id,
+                                                    source_event_id,
+                                                    ..
+                                                } if *source_event_id == sid => Some(*event_id),
+                                                _ => None,
+                                            })
+                                            .unwrap_or(u64::MAX)
                                     }
                                     Kind::Timer { claimed_event_id, .. } => {
                                         let sid = claimed_event_id.get().expect("timer must claim id");
-                                        inner.history.iter().find_map(|e| match e {
-                                            Event::TimerFired { event_id, source_event_id, .. } if *source_event_id == sid => Some(*event_id),
-                                            _ => None,
-                                        }).unwrap_or(u64::MAX)
+                                        inner
+                                            .history
+                                            .iter()
+                                            .find_map(|e| match e {
+                                                Event::TimerFired {
+                                                    event_id,
+                                                    source_event_id,
+                                                    ..
+                                                } if *source_event_id == sid => Some(*event_id),
+                                                _ => None,
+                                            })
+                                            .unwrap_or(u64::MAX)
                                     }
                                     Kind::External { name, .. } => {
                                         let n = name.clone();
-                                        inner.history.iter().find_map(|e| match e {
-                                            Event::ExternalEvent { event_id, name: en, .. } if *en == n => Some(*event_id),
-                                            _ => None,
-                                        }).unwrap_or(u64::MAX)
+                                        inner
+                                            .history
+                                            .iter()
+                                            .find_map(|e| match e {
+                                                Event::ExternalEvent { event_id, name: en, .. } if *en == n => {
+                                                    Some(*event_id)
+                                                }
+                                                _ => None,
+                                            })
+                                            .unwrap_or(u64::MAX)
                                     }
                                     Kind::SubOrch { claimed_event_id, .. } => {
                                         let sid = claimed_event_id.get().expect("suborch must claim id");
-                                        inner.history.iter().find_map(|e| match e {
-                                            Event::SubOrchestrationCompleted { event_id, source_event_id, .. } if *source_event_id == sid => Some(*event_id),
-                                            Event::SubOrchestrationFailed { event_id, source_event_id, .. } if *source_event_id == sid => Some(*event_id),
-                                            _ => None,
-                                        }).unwrap_or(u64::MAX)
+                                        inner
+                                            .history
+                                            .iter()
+                                            .find_map(|e| match e {
+                                                Event::SubOrchestrationCompleted {
+                                                    event_id,
+                                                    source_event_id,
+                                                    ..
+                                                } if *source_event_id == sid => Some(*event_id),
+                                                Event::SubOrchestrationFailed {
+                                                    event_id,
+                                                    source_event_id,
+                                                    ..
+                                                } if *source_event_id == sid => Some(*event_id),
+                                                _ => None,
+                                            })
+                                            .unwrap_or(u64::MAX)
                                     }
                                     Kind::System { claimed_event_id, .. } => {
                                         // For system calls, the event itself is the completion
@@ -817,4 +918,3 @@ impl Future for JoinFuture {
         }
     }
 }
-

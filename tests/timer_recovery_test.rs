@@ -19,7 +19,7 @@ async fn create_sqlite_store(name: &str) -> (StdArc<dyn Provider>, TempDir, Stri
 }
 
 /// Test that verifies timer recovery after crash between dequeue and fire
-/// 
+///
 /// Scenario:
 /// 1. Orchestration schedules a timer
 /// 2. Timer is dequeued from the timer queue  
@@ -31,12 +31,12 @@ async fn timer_recovery_after_crash_before_fire() {
     let (store1, _td, db_url) = create_sqlite_store("timer_recovery").await;
 
     const TIMER_MS: u64 = 500;
-    
+
     // Simple orchestration that schedules a timer and then completes
     let orch = |ctx: OrchestrationContext, _input: String| async move {
         // Schedule a timer with enough delay that we can "crash" before it fires
         ctx.schedule_timer(TIMER_MS).into_timer().await;
-        
+
         // Do something after timer to prove it fired
         let result = ctx.schedule_activity("PostTimer", "done").into_activity().await?;
         Ok(result)
@@ -62,7 +62,10 @@ async fn timer_recovery_after_crash_before_fire() {
 
     let instance = "inst-timer-recovery";
     let client1 = duroxide::Client::new(store1.clone());
-    let _ = client1.start_orchestration(instance, "TimerRecoveryTest", "").await.unwrap();
+    let _ = client1
+        .start_orchestration(instance, "TimerRecoveryTest", "")
+        .await
+        .unwrap();
 
     // Wait for timer to be created
     assert!(
@@ -82,12 +85,14 @@ async fn timer_recovery_after_crash_before_fire() {
         !hist_before.iter().any(|e| matches!(e, Event::TimerFired { .. })),
         "Timer should not have fired yet"
     );
-    
+
     // Extract timer details for verification
     let (timer_id, fire_at_ms) = hist_before
         .iter()
         .find_map(|e| match e {
-            Event::TimerCreated { event_id, fire_at_ms, .. } => Some((*event_id, *fire_at_ms)),
+            Event::TimerCreated {
+                event_id, fire_at_ms, ..
+            } => Some((*event_id, *fire_at_ms)),
             _ => None,
         })
         .expect("Timer created event should exist");
@@ -102,30 +107,30 @@ async fn timer_recovery_after_crash_before_fire() {
     // Phase 2: "Restart" system with new runtime but same store
     println!("Restarting system...");
     let store2 = StdArc::new(SqliteProvider::new(&db_url).await.unwrap()) as StdArc<dyn Provider>;
-    let rt2 = runtime::Runtime::start_with_store(
-        store2.clone(),
-        StdArc::new(activity_registry),
-        orchestration_registry,
-    )
-    .await;
+    let rt2 =
+        runtime::Runtime::start_with_store(store2.clone(), StdArc::new(activity_registry), orchestration_registry)
+            .await;
 
     // The runtime should automatically resume the orchestration and reprocess pending timers
-    
+
     // Wait for timer to be processed - may take a moment for timer dispatcher to start
     // First wait for the timer to fire
     let timer_fired = common::wait_for_history(
         store2.clone(),
         instance,
-        |h| h.iter().any(|e| matches!(e, Event::TimerFired { source_event_id, .. } if *source_event_id == timer_id)),
-        3_000  // Give timer dispatcher a few seconds to process
+        |h| {
+            h.iter()
+                .any(|e| matches!(e, Event::TimerFired { source_event_id, .. } if *source_event_id == timer_id))
+        },
+        3_000, // Give timer dispatcher a few seconds to process
     )
     .await;
-    
+
     if !timer_fired {
         // If timer hasn't fired yet, give it more time
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
     }
-    
+
     // Now wait for orchestration to complete
     let client2 = duroxide::Client::new(store2.clone());
     match client2
@@ -146,19 +151,23 @@ async fn timer_recovery_after_crash_before_fire() {
     }
 
     // Verify the timer actually fired
-    // Sometimes there's a race where the orchestration completes before the TimerFired 
+    // Sometimes there's a race where the orchestration completes before the TimerFired
     // event is written to history, so give it a moment
     let timer_in_history = common::wait_for_history(
         store2.clone(),
         instance,
-        |h| h.iter().any(|e| matches!(e, Event::TimerFired { source_event_id, .. } 
-                                    if *source_event_id == timer_id)),
-        3_000  // Wait a few seconds for the event to be written
+        |h| {
+            h.iter().any(|e| {
+                matches!(e, Event::TimerFired { source_event_id, .. } 
+                                    if *source_event_id == timer_id)
+            })
+        },
+        3_000, // Wait a few seconds for the event to be written
     )
     .await;
-    
+
     let hist_after = store2.read(instance).await;
-    
+
     // Should have exactly one TimerCreated and one TimerFired
     let timer_created_count = hist_after
         .iter()
@@ -166,10 +175,12 @@ async fn timer_recovery_after_crash_before_fire() {
         .count();
     let timer_fired_count = hist_after
         .iter()
-        .filter(|e| matches!(e, Event::TimerFired { source_event_id, .. } 
-                           if *source_event_id == timer_id))
+        .filter(|e| {
+            matches!(e, Event::TimerFired { source_event_id, .. } 
+                           if *source_event_id == timer_id)
+        })
         .count();
-    
+
     // Debug output if timer didn't fire
     if timer_fired_count == 0 {
         println!("Timer did not fire. History events:");
@@ -179,10 +190,10 @@ async fn timer_recovery_after_crash_before_fire() {
         println!("Expected timer_id: {}, fire_at_ms: {}", timer_id, fire_at_ms);
         println!("Timer wait result: {}", timer_in_history);
     }
-    
+
     assert_eq!(timer_created_count, 1, "Should have exactly one TimerCreated event");
     assert_eq!(timer_fired_count, 1, "Should have exactly one TimerFired event");
-    
+
     // Should have the activity that runs after timer
     assert!(
         hist_after
@@ -197,24 +208,24 @@ async fn timer_recovery_after_crash_before_fire() {
 }
 
 /// Test multiple timers with crash/recovery
-#[tokio::test] 
+#[tokio::test]
 async fn multiple_timers_recovery_after_crash() {
     let (store1, _td, db_url) = create_sqlite_store("multi_timer_recovery").await;
 
     const TIMER1_MS: u64 = 300;
     const TIMER2_MS: u64 = 600;
     const TIMER3_MS: u64 = 900;
-    
+
     // Orchestration with multiple timers of different delays
     let orch = |ctx: OrchestrationContext, _input: String| async move {
         // Schedule three timers with different delays
         let t1 = ctx.schedule_timer(TIMER1_MS);
         let t2 = ctx.schedule_timer(TIMER2_MS);
         let t3 = ctx.schedule_timer(TIMER3_MS);
-        
+
         // Wait for all timers
         ctx.join(vec![t1, t2, t3]).await;
-        
+
         Ok("All timers fired".to_string())
     };
 
@@ -234,7 +245,10 @@ async fn multiple_timers_recovery_after_crash() {
 
     let instance = "inst-multi-timer-recovery";
     let client1 = duroxide::Client::new(store1.clone());
-    let _ = client1.start_orchestration(instance, "MultiTimerTest", "").await.unwrap();
+    let _ = client1
+        .start_orchestration(instance, "MultiTimerTest", "")
+        .await
+        .unwrap();
 
     // Wait for all 3 timers to be created
     assert!(
@@ -266,12 +280,9 @@ async fn multiple_timers_recovery_after_crash() {
     // Phase 2: Restart and verify all timers fire
     println!("Restarting...");
     let store2 = StdArc::new(SqliteProvider::new(&db_url).await.unwrap()) as StdArc<dyn Provider>;
-    let rt2 = runtime::Runtime::start_with_store(
-        store2.clone(),
-        StdArc::new(activity_registry),
-        orchestration_registry,
-    )
-    .await;
+    let rt2 =
+        runtime::Runtime::start_with_store(store2.clone(), StdArc::new(activity_registry), orchestration_registry)
+            .await;
 
     // Wait for completion
     let client2 = duroxide::Client::new(store2.clone());
@@ -298,7 +309,7 @@ async fn multiple_timers_recovery_after_crash() {
         .iter()
         .filter(|e| matches!(e, Event::TimerFired { .. }))
         .count();
-    
+
     assert_eq!(timer_fired_count, 3, "All 3 timers should have fired");
 
     rt2.shutdown().await;

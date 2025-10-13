@@ -3,7 +3,7 @@ use duroxide::providers::Provider;
 use duroxide::providers::sqlite::SqliteProvider;
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
-use duroxide::{Event, OrchestrationContext, OrchestrationRegistry, Client};
+use duroxide::{Client, Event, OrchestrationContext, OrchestrationRegistry};
 use std::sync::Arc;
 use std::sync::Arc as StdArc;
 mod common;
@@ -74,7 +74,7 @@ where
         let client = Client::new(store2_for_client.clone());
         let _ = client.raise_event(&instance_for_spawn, "Resume", "go").await;
     });
-    
+
     // Start the orchestration fresh - this simulates recovery where the instance
     // doesn't exist yet in the new environment
     let client2 = Client::new(store2.clone());
@@ -332,7 +332,8 @@ async fn recovery_multiple_orchestrations_sqlite_provider() {
     let store2 = StdArc::new(SqliteProvider::new(&url1).await.unwrap()) as StdArc<dyn Provider>;
     let store2_for_wait = store2.clone();
     let store2_for_client = store2.clone();
-    let rt2 = runtime::Runtime::start_with_store(store2.clone(), Arc::new(activity_registry), orchestration_registry).await;
+    let rt2 =
+        runtime::Runtime::start_with_store(store2.clone(), Arc::new(activity_registry), orchestration_registry).await;
 
     // Raise external event for the WaitEvent orchestration after restart
     tokio::spawn(async move {

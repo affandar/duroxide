@@ -1,8 +1,10 @@
 use std::sync::Arc;
 
-use crate::providers::{Provider, WorkItem, ManagementCapability, InstanceInfo, ExecutionInfo, SystemMetrics, QueueDepths};
+use crate::_typed_codec::{Codec, Json};
+use crate::providers::{
+    ExecutionInfo, InstanceInfo, ManagementCapability, Provider, QueueDepths, SystemMetrics, WorkItem,
+};
 use crate::{Event, OrchestrationStatus};
-use crate::_typed_codec::{Json, Codec};
 use serde::Serialize;
 
 /// Client for orchestration control-plane operations with automatic capability discovery.
@@ -22,10 +24,10 @@ use serde::Serialize;
 ///
 /// ```ignore
 /// let client = Client::new(provider);
-/// 
+///
 /// // Control plane (always available)
 /// client.start_orchestration("order-1", "ProcessOrder", "{}").await?;
-/// 
+///
 /// // Management (automatically discovered)
 /// if client.has_management_capability() {
 ///     let instances = client.list_all_instances().await?;
@@ -190,7 +192,8 @@ impl Client {
         input: In,
     ) -> Result<(), String> {
         let payload = Json::encode(&input).map_err(|e| format!("encode: {e}"))?;
-        self.start_orchestration_versioned(instance, orchestration, version, payload).await
+        self.start_orchestration_versioned(instance, orchestration, version, payload)
+            .await
     }
 
     /// Raise an external event into a running orchestration instance.
@@ -306,11 +309,7 @@ impl Client {
     ///
     /// - Instance already completed: Cancellation is no-op
     /// - Instance doesn't exist: Cancellation is no-op
-    pub async fn cancel_instance(
-        &self,
-        instance: &str,
-        reason: impl Into<String>,
-    ) -> Result<(), String> {
+    pub async fn cancel_instance(&self, instance: &str, reason: impl Into<String>) -> Result<(), String> {
         let item = WorkItem::CancelInstance {
             instance: instance.to_string(),
             reason: reason.into(),
@@ -367,10 +366,10 @@ impl Client {
         for e in hist.iter().rev() {
             match e {
                 Event::OrchestrationCompleted { output, .. } => {
-                    return OrchestrationStatus::Completed { output: output.clone() }
+                    return OrchestrationStatus::Completed { output: output.clone() };
                 }
                 Event::OrchestrationFailed { error, .. } => {
-                    return OrchestrationStatus::Failed { error: error.clone() }
+                    return OrchestrationStatus::Failed { error: error.clone() };
                 }
                 _ => {}
             }
@@ -465,20 +464,16 @@ impl Client {
         let deadline = std::time::Instant::now() + timeout;
         // quick path
         match self.get_orchestration_status(instance).await {
-            OrchestrationStatus::Completed { output } =>
-                return Ok(OrchestrationStatus::Completed { output }),
-            OrchestrationStatus::Failed { error } =>
-                return Ok(OrchestrationStatus::Failed { error }),
+            OrchestrationStatus::Completed { output } => return Ok(OrchestrationStatus::Completed { output }),
+            OrchestrationStatus::Failed { error } => return Ok(OrchestrationStatus::Failed { error }),
             _ => {}
         }
         // poll with backoff
         let mut delay_ms: u64 = 5;
         while std::time::Instant::now() < deadline {
             match self.get_orchestration_status(instance).await {
-                OrchestrationStatus::Completed { output } =>
-                    return Ok(OrchestrationStatus::Completed { output }),
-                OrchestrationStatus::Failed { error } =>
-                    return Ok(OrchestrationStatus::Failed { error }),
+                OrchestrationStatus::Completed { output } => return Ok(OrchestrationStatus::Completed { output }),
+                OrchestrationStatus::Failed { error } => return Ok(OrchestrationStatus::Failed { error }),
                 _ => {
                     tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
                     delay_ms = (delay_ms.saturating_mul(2)).min(100);
@@ -503,9 +498,9 @@ impl Client {
             _ => unreachable!("wait_for_orchestration returns only terminal or timeout"),
         }
     }
-    
+
     // ===== Capability Discovery =====
-    
+
     /// Check if management capabilities are available.
     ///
     /// # Returns
@@ -525,7 +520,7 @@ impl Client {
     pub fn has_management_capability(&self) -> bool {
         self.discover_management().is_ok()
     }
-    
+
     /// Automatically discover management capabilities from the provider.
     ///
     /// # Returns
@@ -536,12 +531,13 @@ impl Client {
     ///
     /// This method is used internally by management methods to access capabilities.
     fn discover_management(&self) -> Result<&dyn ManagementCapability, String> {
-        self.store.as_management_capability()
-            .ok_or_else(|| "Management features not available - provider doesn't implement ManagementCapability".to_string())
+        self.store.as_management_capability().ok_or_else(|| {
+            "Management features not available - provider doesn't implement ManagementCapability".to_string()
+        })
     }
-    
+
     // ===== Rich Management Methods =====
-    
+
     /// List all orchestration instances.
     ///
     /// # Returns
@@ -566,7 +562,7 @@ impl Client {
     pub async fn list_all_instances(&self) -> Result<Vec<String>, String> {
         self.discover_management()?.list_instances().await
     }
-    
+
     /// List instances matching a status filter.
     ///
     /// # Parameters
@@ -594,7 +590,7 @@ impl Client {
     pub async fn list_instances_by_status(&self, status: &str) -> Result<Vec<String>, String> {
         self.discover_management()?.list_instances_by_status(status).await
     }
-    
+
     /// Get comprehensive information about an instance.
     ///
     /// # Parameters
@@ -621,7 +617,7 @@ impl Client {
     pub async fn get_instance_info(&self, instance: &str) -> Result<InstanceInfo, String> {
         self.discover_management()?.get_instance_info(instance).await
     }
-    
+
     /// Get detailed information about a specific execution.
     ///
     /// # Parameters
@@ -647,9 +643,11 @@ impl Client {
     /// }
     /// ```
     pub async fn get_execution_info(&self, instance: &str, execution_id: u64) -> Result<ExecutionInfo, String> {
-        self.discover_management()?.get_execution_info(instance, execution_id).await
+        self.discover_management()?
+            .get_execution_info(instance, execution_id)
+            .await
     }
-    
+
     /// List all execution IDs for an instance.
     ///
     /// Returns execution IDs in ascending order: [1], [1, 2], [1, 2, 3], etc.
@@ -719,7 +717,7 @@ impl Client {
         let mgmt = self.discover_management()?;
         mgmt.read_execution(instance, execution_id).await
     }
-    
+
     /// Get system-wide metrics for the orchestration engine.
     ///
     /// # Returns
@@ -736,14 +734,14 @@ impl Client {
     /// let client = Client::new(provider);
     /// if client.has_management_capability() {
     ///     let metrics = client.get_system_metrics().await?;
-    ///     println!("System health: {} running, {} completed, {} failed", 
+    ///     println!("System health: {} running, {} completed, {} failed",
     ///         metrics.running_instances, metrics.completed_instances, metrics.failed_instances);
     /// }
     /// ```
     pub async fn get_system_metrics(&self) -> Result<SystemMetrics, String> {
         self.discover_management()?.get_system_metrics().await
     }
-    
+
     /// Get the current depths of the internal work queues.
     ///
     /// # Returns
@@ -760,7 +758,7 @@ impl Client {
     /// let client = Client::new(provider);
     /// if client.has_management_capability() {
     ///     let queues = client.get_queue_depths().await?;
-    ///     println!("Queue depths - Orchestrator: {}, Worker: {}, Timer: {}", 
+    ///     println!("Queue depths - Orchestrator: {}, Worker: {}, Timer: {}",
     ///         queues.orchestrator_queue, queues.worker_queue, queues.timer_queue);
     /// }
     /// ```

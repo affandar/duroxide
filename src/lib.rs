@@ -239,19 +239,21 @@ use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
 
 // Public orchestration primitives and executor
 
+pub mod client;
 pub mod futures;
 pub mod runtime;
-pub mod client;
 // Re-export descriptor type for public API ergonomics
 pub use runtime::OrchestrationDescriptor;
 pub mod providers;
 
 // Re-export key runtime types for convenience
-pub use runtime::{OrchestrationHandler, OrchestrationRegistry, OrchestrationRegistryBuilder, OrchestrationStatus, RuntimeOptions};
 pub use client::Client;
+pub use runtime::{
+    OrchestrationHandler, OrchestrationRegistry, OrchestrationRegistryBuilder, OrchestrationStatus, RuntimeOptions,
+};
 
 // Re-export management types for convenience
-pub use providers::{ManagementCapability, InstanceInfo, ExecutionInfo, SystemMetrics, QueueDepths};
+pub use providers::{ExecutionInfo, InstanceInfo, ManagementCapability, QueueDepths, SystemMetrics};
 
 // System call operation constants
 pub(crate) const SYSCALL_OP_GUID: &str = "guid";
@@ -312,15 +314,9 @@ pub enum Event {
         parent_id: Option<u64>,
     },
     /// Orchestration completed with a final result.
-    OrchestrationCompleted {
-        event_id: u64,
-        output: String,
-    },
+    OrchestrationCompleted { event_id: u64, output: String },
     /// Orchestration failed with a final error.
-    OrchestrationFailed {
-        event_id: u64,
-        error: String,
-    },
+    OrchestrationFailed { event_id: u64, error: String },
     /// Activity was scheduled. event_id is THE id for this operation.
     ActivityScheduled {
         event_id: u64,
@@ -355,16 +351,9 @@ pub enum Event {
     },
 
     /// Subscription to an external event by name was recorded.
-    ExternalSubscribed {
-        event_id: u64,
-        name: String,
-    },
+    ExternalSubscribed { event_id: u64, name: String },
     /// An external event was raised. No source_event_id - matched by name.
-    ExternalEvent {
-        event_id: u64,
-        name: String,
-        data: String,
-    },
+    ExternalEvent { event_id: u64, name: String, data: String },
 
     /// Fire-and-forget orchestration scheduling (detached).
     OrchestrationChained {
@@ -396,16 +385,10 @@ pub enum Event {
     },
 
     /// Orchestration continued as new with fresh input (terminal for this execution).
-    OrchestrationContinuedAsNew {
-        event_id: u64,
-        input: String,
-    },
+    OrchestrationContinuedAsNew { event_id: u64, input: String },
 
     /// Cancellation has been requested for the orchestration (terminal will follow deterministically).
-    OrchestrationCancelRequested {
-        event_id: u64,
-        reason: String,
-    },
+    OrchestrationCancelRequested { event_id: u64, reason: String },
 
     /// System call executed synchronously during orchestration turn (single event for schedule+completion).
     SystemCall {
@@ -418,7 +401,6 @@ pub enum Event {
 
 // Event type name for SystemCall (used by providers for persistence)
 pub(crate) const EVENT_TYPE_SYSTEM_CALL: &str = "SystemCall";
-
 
 impl Event {
     /// Get the event_id (position in history) for any event.
@@ -501,15 +483,9 @@ pub enum Action {
         input: String,
     },
     /// Create a timer that will fire after the requested delay. scheduling_event_id is the event_id of the TimerCreated event.
-    CreateTimer {
-        scheduling_event_id: u64,
-        delay_ms: u64,
-    },
+    CreateTimer { scheduling_event_id: u64, delay_ms: u64 },
     /// Subscribe to an external event by name. scheduling_event_id is the event_id of the ExternalSubscribed event.
-    WaitExternal {
-        scheduling_event_id: u64,
-        name: String,
-    },
+    WaitExternal { scheduling_event_id: u64, name: String },
     /// Start a detached orchestration (no result routing back to parent).
     StartOrchestrationDetached {
         scheduling_event_id: u64,
@@ -537,7 +513,6 @@ pub enum Action {
         op: String,
         value: String,
     },
-
 }
 
 #[derive(Debug)]
@@ -547,10 +522,10 @@ struct CtxInner {
 
     // Event ID generation
     next_event_id: u64,
-    
+
     // Track claimed scheduling events (to prevent collision)
     claimed_scheduling_events: std::collections::HashSet<u64>,
-    
+
     // Track consumed completions by event_id (FIFO enforcement)
     consumed_completions: std::collections::HashSet<u64>,
 
@@ -655,7 +630,7 @@ impl OrchestrationContext {
     pub fn trace(&self, level: impl Into<String>, message: impl Into<String>) {
         let level_str = level.into();
         let msg = message.into();
-        
+
         // Schedule and poll system call synchronously for deterministic replay
         // Format: "trace:{level}:{message}"
         // Note: Actual logging happens inside the System future during first execution only
@@ -681,7 +656,6 @@ impl OrchestrationContext {
     pub fn trace_debug(&self, message: impl Into<String>) {
         self.trace("DEBUG", message.into())
     }
-
 
     /// Schedule a system call operation (internal helper).
     pub(crate) fn schedule_system_call(&self, op: &str) -> DurableFuture {
@@ -890,25 +864,25 @@ impl DurableFuture {
 
 impl OrchestrationContext {
     /// Schedule an activity and return a `DurableFuture` correlated to it.
-    /// 
+    ///
     /// **Activities should be single-purpose execution units.**
     /// Pull multi-step logic and control flow into orchestrations.
-    /// 
+    ///
     /// ⚠️ **IMPORTANT**: You MUST call `.into_activity().await`, not just `.await`!
-    /// 
+    ///
     /// # Examples
     /// ```rust,no_run
     /// # use duroxide::OrchestrationContext;
     /// # async fn example(ctx: OrchestrationContext) -> Result<(), String> {
     /// // ✅ CORRECT: Schedule and await activity
     /// let result = ctx.schedule_activity("ProcessData", "input").into_activity().await?;
-    /// 
+    ///
     /// // ❌ WRONG: This won't compile!
     /// // let result = ctx.schedule_activity("ProcessData", "input").await;  // Missing .into_activity()!
     /// # Ok(())
     /// # }
     /// ```
-    /// 
+    ///
     /// # Good Activity Examples
     /// - Database queries
     /// - HTTP API calls (can include retries)
@@ -916,15 +890,15 @@ impl OrchestrationContext {
     /// - Data transformations
     /// - VM provisioning (can poll for readiness internally)
     /// - Any single-purpose work unit
-    /// 
+    ///
     /// # What NOT to put in activities
     /// - Multi-step business logic (pull into orchestration)
     /// - Control flow decisions (if/match on business rules)
     /// - Pure delays with no work (use `schedule_timer()` instead)
     /// - Timeouts for orchestration coordination (use `select2` with timers)
-    /// 
+    ///
     /// # Note on Sleep/Polling in Activities
-    /// 
+    ///
     /// Activities **CAN** sleep or poll as part of their work:
     /// - ✅ Provisioning a resource and polling for readiness
     /// - ✅ Retrying an external API with backoff
@@ -951,21 +925,21 @@ impl OrchestrationContext {
     }
 
     /// Schedule a timer for delays, timeouts, and scheduled execution.
-    /// 
+    ///
     /// **Use this for any time-based waiting, NOT activities with sleep!**
-    /// 
+    ///
     /// ⚠️ **IMPORTANT**: You MUST call `.into_timer().await`, not just `.await`!
-    /// 
+    ///
     /// # Examples
     /// ```rust,no_run
     /// # use duroxide::OrchestrationContext;
     /// # async fn example(ctx: OrchestrationContext) -> Result<(), String> {
     /// // ✅ CORRECT: Wait 5 seconds
     /// ctx.schedule_timer(5000).into_timer().await;
-    /// 
+    ///
     /// // ❌ WRONG: This won't compile!
     /// // ctx.schedule_timer(5000).await;  // Missing .into_timer()!
-    /// 
+    ///
     /// // Timeout pattern
     /// let work = ctx.schedule_activity("LongTask", "input");
     /// let timeout = ctx.schedule_timer(30000); // 30 second timeout
@@ -1008,11 +982,11 @@ impl OrchestrationContext {
     pub fn schedule_sub_orchestration(&self, name: impl Into<String>, input: impl Into<String>) -> DurableFuture {
         let name: String = name.into();
         let input: String = input.into();
-        
+
         // Instance will be determined during polling based on event_id
         // Use a placeholder for now
         let child_instance = RefCell::new(String::from("sub::pending"));
-        
+
         DurableFuture(Kind::SubOrch {
             name,
             version: None,
@@ -1040,7 +1014,7 @@ impl OrchestrationContext {
         input: impl Into<String>,
     ) -> DurableFuture {
         let child_instance = RefCell::new(String::from("sub::pending"));
-        
+
         DurableFuture(Kind::SubOrch {
             name: name.into(),
             version,
@@ -1074,11 +1048,11 @@ impl OrchestrationContext {
         let instance: String = instance.into();
         let input: String = input.into();
         let mut inner = self.inner.lock().unwrap();
-        
+
         // Assign event_id for the chained orchestration event
         let event_id = inner.next_event_id;
         inner.next_event_id += 1;
-        
+
         inner.history.push(Event::OrchestrationChained {
             event_id,
             name: name.clone(),
@@ -1116,17 +1090,17 @@ impl OrchestrationContext {
         let instance: String = instance.into();
         let input: String = input.into();
         let mut inner = self.inner.lock().unwrap();
-        
+
         let event_id = inner.next_event_id;
         inner.next_event_id += 1;
-        
+
         inner.history.push(Event::OrchestrationChained {
             event_id,
             name: name.clone(),
             instance: instance.clone(),
             input: input.clone(),
         });
-        
+
         inner.record_action(Action::StartOrchestrationDetached {
             scheduling_event_id: event_id,
             name,
@@ -1198,11 +1172,7 @@ pub fn run_turn_with<O, F>(
     turn_index: u64,
     execution_id: u64,
     orchestrator: impl Fn(OrchestrationContext) -> F,
-) -> (
-    Vec<Event>,
-    Vec<Action>,
-    Option<O>,
-)
+) -> (Vec<Event>, Vec<Action>, Option<O>)
 where
     F: Future<Output = O>,
 {
@@ -1233,12 +1203,7 @@ pub fn run_turn_with_status<O, F>(
     turn_index: u64,
     execution_id: u64,
     orchestrator: impl Fn(OrchestrationContext) -> F,
-) -> (
-    Vec<Event>,
-    Vec<Action>,
-    Option<O>,
-    Option<String>,
-)
+) -> (Vec<Event>, Vec<Action>, Option<O>, Option<String>)
 where
     F: Future<Output = O>,
 {

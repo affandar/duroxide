@@ -1,17 +1,17 @@
-use duroxide::*;
-use duroxide::providers::sqlite::SqliteProvider;
-use duroxide::runtime::registry::{ActivityRegistry, OrchestrationRegistry};
-use duroxide::runtime;
 use duroxide::Client;
+use duroxide::providers::sqlite::SqliteProvider;
+use duroxide::runtime;
+use duroxide::runtime::registry::{ActivityRegistry, OrchestrationRegistry};
+use duroxide::*;
 use std::sync::Arc;
 
 /// This example demonstrates the CORRECT way to handle delays and timeouts.
-/// 
+///
 /// ⚠️ CRITICAL MISTAKES TO AVOID:
 /// 1. Using activities for orchestration delays (use timers instead)
 /// 2. Calling .await directly on schedule methods (missing .into_*())
 /// 3. Using non-deterministic operations in orchestrations
-/// 
+///
 /// This example shows:
 /// 1. ✅ CORRECT: Using timers for orchestration delays with .into_timer().await
 /// 2. ✅ CORRECT: Using timers for timeouts with select2
@@ -25,7 +25,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     std::fs::File::create(&db_path)?;
     let db_url = format!("sqlite:{}", db_path.to_str().unwrap());
     let store = Arc::new(SqliteProvider::new(&db_url).await?);
-    
+
     // Register activities - these can do any async operations including delays
     let activities = ActivityRegistry::builder()
         .register("ProcessData", |input: String| async move {
@@ -45,19 +45,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Orchestration showing CORRECT timer usage
     let delay_orchestration = |ctx: OrchestrationContext, input: String| async move {
         ctx.trace_info("Starting delay example orchestration");
-        
+
         // ✅ CORRECT: Use timer for delay
         ctx.trace_info("Waiting 2 seconds...");
-        ctx.schedule_timer(2000).into_timer().await;  // MUST use .into_timer().await!
+        ctx.schedule_timer(2000).into_timer().await; // MUST use .into_timer().await!
         // ❌ WRONG: ctx.schedule_timer(2000).await;  // Missing .into_timer()!
         ctx.trace_info("Timer fired! Processing data...");
-        
+
         // Process some data after the delay
-        let result = ctx.schedule_activity("ProcessData", input)
-            .into_activity()  // MUST use .into_activity().await!
+        let result = ctx
+            .schedule_activity("ProcessData", input)
+            .into_activity() // MUST use .into_activity().await!
             .await?;
         // ❌ WRONG: ctx.schedule_activity("ProcessData", input).await;  // Missing .into_activity()!
-        
+
         ctx.trace_info("Processing complete!");
         Ok(format!("Delayed result: {}", result))
     };
@@ -65,14 +66,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Orchestration showing CORRECT timeout usage
     let timeout_orchestration = |ctx: OrchestrationContext, input: String| async move {
         ctx.trace_info("Starting timeout example orchestration");
-        
+
         // ✅ CORRECT: Use timer for timeout with select2
         let work = ctx.schedule_activity("SlowOperation", input.clone());
         let timeout = ctx.schedule_timer(5000); // 5 second timeout
-        
+
         ctx.trace_info("Racing work against timeout...");
         let (winner_index, result) = ctx.select2(work, timeout).await;
-        
+
         match winner_index {
             0 => {
                 // Work completed first
@@ -102,20 +103,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .register("TimeoutExample", timeout_orchestration)
         .build();
 
-    let rt = runtime::Runtime::start_with_store(
-        store.clone(),
-        Arc::new(activities),
-        orchestrations,
-    ).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activities), orchestrations).await;
 
     let client = Client::new(store.clone());
 
     println!("🚀 Running delay example...");
-    
+
     // Run the delay example
-    let delay_instance = format!("delay-{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis());
-    client.start_orchestration(&delay_instance, "DelayExample", "test data").await?;
-    match client.wait_for_orchestration(&delay_instance, std::time::Duration::from_secs(15)).await
+    let delay_instance = format!(
+        "delay-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis()
+    );
+    client
+        .start_orchestration(&delay_instance, "DelayExample", "test data")
+        .await?;
+    match client
+        .wait_for_orchestration(&delay_instance, std::time::Duration::from_secs(15))
+        .await
         .map_err(|e| format!("Wait error: {:?}", e))?
     {
         OrchestrationStatus::Completed { output } => {
@@ -128,11 +135,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     println!("\n🚀 Running timeout example...");
-    
-    // Run the timeout example  
-    let timeout_instance = format!("timeout-{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis());
-    client.start_orchestration(&timeout_instance, "TimeoutExample", "test data").await?;
-    match client.wait_for_orchestration(&timeout_instance, std::time::Duration::from_secs(15)).await
+
+    // Run the timeout example
+    let timeout_instance = format!(
+        "timeout-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis()
+    );
+    client
+        .start_orchestration(&timeout_instance, "TimeoutExample", "test data")
+        .await?;
+    match client
+        .wait_for_orchestration(&timeout_instance, std::time::Duration::from_secs(15))
+        .await
         .map_err(|e| format!("Wait error: {:?}", e))?
     {
         OrchestrationStatus::Completed { output } => {
@@ -145,7 +162,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     rt.shutdown().await;
-    
+
     println!("\n📚 Key Takeaways:");
     println!("✅ Use ctx.schedule_timer(ms).into_timer().await for orchestration delays");
     println!("✅ Use ctx.schedule_activity(name, input).into_activity().await for work");
@@ -153,6 +170,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("✅ Activities can use tokio::time::sleep(), HTTP calls, database queries, etc.");
     println!("❌ Never call .await directly on schedule methods (missing .into_*()!)");
     println!("❌ Never use non-deterministic operations in orchestrations");
-    
+
     Ok(())
 }

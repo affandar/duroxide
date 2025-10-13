@@ -10,7 +10,7 @@
 use duroxide::providers::sqlite::SqliteProvider;
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
-use duroxide::{OrchestrationContext, OrchestrationRegistry, Client};
+use duroxide::{Client, OrchestrationContext, OrchestrationRegistry};
 use std::sync::Arc;
 
 #[tokio::main]
@@ -27,21 +27,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Register a simple activity that greets users
     let activities = ActivityRegistry::builder()
-        .register("Greet", |name: String| async move {
-            Ok(format!("Hello, {}!", name))
-        })
+        .register("Greet", |name: String| async move { Ok(format!("Hello, {}!", name)) })
         .build();
 
     // Define our orchestration
     let orchestration = |ctx: OrchestrationContext, name: String| async move {
         ctx.trace_info("Starting greeting orchestration");
-        
+
         // Schedule and await the greeting activity
-        let greeting = ctx
-            .schedule_activity("Greet", name)
-            .into_activity()
-            .await?;
-        
+        let greeting = ctx.schedule_activity("Greet", name).into_activity().await?;
+
         ctx.trace_info(format!("Greeting completed: {}", greeting));
         Ok(greeting)
     };
@@ -52,18 +47,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .build();
 
     // Start the runtime
-    let rt = runtime::Runtime::start_with_store(
-        store.clone(),
-        Arc::new(activities),
-        orchestrations,
-    ).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activities), orchestrations).await;
 
     // Create a client bound to the same provider
     let client = Client::new(store);
 
     // Start an orchestration instance
     let instance_id = "hello-instance-1";
-    client.start_orchestration(instance_id, "HelloWorld", "Rust Developer").await?;
+    client
+        .start_orchestration(instance_id, "HelloWorld", "Rust Developer")
+        .await?;
 
     // Wait for completion
     match client

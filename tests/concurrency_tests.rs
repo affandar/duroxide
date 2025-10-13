@@ -1,9 +1,9 @@
-use std::sync::Arc;
 use duroxide::providers::Provider;
+use std::sync::Arc;
 mod common;
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
-use duroxide::{Event, OrchestrationContext, OrchestrationRegistry, Client};
+use duroxide::{Client, Event, OrchestrationContext, OrchestrationRegistry};
 use std::sync::Arc as StdArc;
 
 async fn concurrent_orchestrations_different_activities_with(store: StdArc<dyn Provider>) {
@@ -79,7 +79,9 @@ async fn concurrent_orchestrations_different_activities_with(store: StdArc<dyn P
         runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
     let client = Client::new(store.clone());
     let _ = client.start_orchestration("inst-multi-1", "AddOrchestration", "").await;
-    let _ = client.start_orchestration("inst-multi-2", "UpperOrchestration", "").await;
+    let _ = client
+        .start_orchestration("inst-multi-2", "UpperOrchestration", "")
+        .await;
 
     let store_for_wait1 = store.clone();
     tokio::spawn(async move {
@@ -99,7 +101,7 @@ async fn concurrent_orchestrations_different_activities_with(store: StdArc<dyn P
     let out1_result = Client::new(store.clone())
         .wait_for_orchestration("inst-multi-1", std::time::Duration::from_secs(10))
         .await;
-    
+
     if out1_result.is_err() {
         let hist1 = store.read("inst-multi-1").await;
         println!("inst-multi-1 history ({} events):", hist1.len());
@@ -107,7 +109,7 @@ async fn concurrent_orchestrations_different_activities_with(store: StdArc<dyn P
             println!("  {}: {:?}", i, e);
         }
     }
-    
+
     let out1 = match out1_result.unwrap() {
         duroxide::OrchestrationStatus::Completed { output } => Ok(output),
         duroxide::OrchestrationStatus::Failed { error } => Err(error),
@@ -117,7 +119,7 @@ async fn concurrent_orchestrations_different_activities_with(store: StdArc<dyn P
     let out2_result = Client::new(store.clone())
         .wait_for_orchestration("inst-multi-2", std::time::Duration::from_secs(10))
         .await;
-    
+
     if out2_result.is_err() {
         let hist2 = store.read("inst-multi-2").await;
         println!("inst-multi-2 history ({} events):", hist2.len());
@@ -125,7 +127,7 @@ async fn concurrent_orchestrations_different_activities_with(store: StdArc<dyn P
             println!("  {}: {:?}", i, e);
         }
     }
-    
+
     let out2 = match out2_result.unwrap() {
         duroxide::OrchestrationStatus::Completed { output } => Ok(output),
         duroxide::OrchestrationStatus::Failed { error } => Err(error),
@@ -165,16 +167,8 @@ async fn concurrent_orchestrations_different_activities_with(store: StdArc<dyn P
             .iter()
             .any(|e| matches!(e, Event::ExternalEvent { data, .. } if data == "E2"))
     );
-    assert!(
-        hist1
-            .iter()
-            .any(|e| matches!(e, Event::TimerFired { .. }))
-    );
-    assert!(
-        hist2
-            .iter()
-            .any(|e| matches!(e, Event::TimerFired { .. }))
-    );
+    assert!(hist1.iter().any(|e| matches!(e, Event::TimerFired { .. })));
+    assert!(hist2.iter().any(|e| matches!(e, Event::TimerFired { .. })));
 
     rt.shutdown().await;
 }
@@ -255,8 +249,12 @@ async fn concurrent_orchestrations_same_activities_with(store: StdArc<dyn Provid
     let rt =
         runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
     let client = Client::new(store.clone());
-    let _ = client.start_orchestration("inst-same-acts-1", "ProcOrchestration1", "").await;
-    let _ = client.start_orchestration("inst-same-acts-2", "ProcOrchestration2", "").await;
+    let _ = client
+        .start_orchestration("inst-same-acts-1", "ProcOrchestration1", "")
+        .await;
+    let _ = client
+        .start_orchestration("inst-same-acts-2", "ProcOrchestration2", "")
+        .await;
 
     let store_for_wait3 = store.clone();
     tokio::spawn(async move {
@@ -319,16 +317,8 @@ async fn concurrent_orchestrations_same_activities_with(store: StdArc<dyn Provid
             .iter()
             .any(|e| matches!(e, Event::ExternalEvent { data, .. } if data == "P2"))
     );
-    assert!(
-        hist1
-            .iter()
-            .any(|e| matches!(e, Event::TimerFired { .. }))
-    );
-    assert!(
-        hist2
-            .iter()
-            .any(|e| matches!(e, Event::TimerFired { .. }))
-    );
+    assert!(hist1.iter().any(|e| matches!(e, Event::TimerFired { .. })));
+    assert!(hist2.iter().any(|e| matches!(e, Event::TimerFired { .. })));
 
     rt.shutdown().await;
 }
@@ -342,7 +332,7 @@ async fn concurrent_orchestrations_same_activities_fs() {
 #[tokio::test]
 async fn single_orchestration_with_join_test() {
     let (store, _temp_dir) = common::create_sqlite_store_disk().await;
-    
+
     // Just run ONE orchestration (same as o1 from the concurrent test)
     let o1 = |ctx: OrchestrationContext, _input: String| async move {
         let f_a = ctx.schedule_activity("Proc", "10");
@@ -380,11 +370,14 @@ async fn single_orchestration_with_join_test() {
         .register("ProcOrchestration1", o1)
         .build();
 
-    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+    let rt =
+        runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
     let client = Client::new(store.clone());
-    
+
     // Start only ONE orchestration
-    let _ = client.start_orchestration("inst-single", "ProcOrchestration1", "").await;
+    let _ = client
+        .start_orchestration("inst-single", "ProcOrchestration1", "")
+        .await;
 
     // Raise event
     let store_for_wait = store.clone();
@@ -395,8 +388,10 @@ async fn single_orchestration_with_join_test() {
     });
 
     // Wait for completion
-    let result = client.wait_for_orchestration("inst-single", std::time::Duration::from_secs(10)).await;
-    
+    let result = client
+        .wait_for_orchestration("inst-single", std::time::Duration::from_secs(10))
+        .await;
+
     if result.is_err() {
         let hist = store.read("inst-single").await;
         println!("❌ Timeout! History ({} events):", hist.len());
@@ -404,12 +399,12 @@ async fn single_orchestration_with_join_test() {
             println!("  {}: {:?}", i, e);
         }
     }
-    
+
     match result.unwrap() {
         duroxide::OrchestrationStatus::Completed { output } => {
             println!("✅ Single orch completed: {}", output);
             assert_eq!(output, "o1:a=11;evt=P1");
-        },
+        }
         duroxide::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
         _ => panic!("unexpected orchestration status"),
     }

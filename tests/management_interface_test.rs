@@ -1,9 +1,9 @@
 //! Comprehensive tests for the management interface including metrics
 
 use duroxide::providers::sqlite::SqliteProvider;
-use duroxide::{Client, OrchestrationContext, OrchestrationRegistry};
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
+use duroxide::{Client, OrchestrationContext, OrchestrationRegistry};
 use std::sync::Arc;
 
 mod common;
@@ -53,23 +53,30 @@ async fn test_instance_discovery() {
         .build();
 
     let orchestrations = OrchestrationRegistry::builder()
-        .register("TestOrchestration", |ctx: OrchestrationContext, input: String| async move {
-            let result = ctx.schedule_activity("TestActivity", input)
-                .into_activity().await?;
-            Ok(result)
-        })
+        .register(
+            "TestOrchestration",
+            |ctx: OrchestrationContext, input: String| async move {
+                let result = ctx.schedule_activity("TestActivity", input).into_activity().await?;
+                Ok(result)
+            },
+        )
         .build();
 
-    let _rt = runtime::Runtime::start_with_store(
-        store.clone(),
-        Arc::new(activities),
-        orchestrations
-    ).await;
+    let _rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activities), orchestrations).await;
 
     // Start multiple orchestrations
-    client.start_orchestration("instance-1", "TestOrchestration", "input-1").await.unwrap();
-    client.start_orchestration("instance-2", "TestOrchestration", "input-2").await.unwrap();
-    client.start_orchestration("instance-3", "TestOrchestration", "input-3").await.unwrap();
+    client
+        .start_orchestration("instance-1", "TestOrchestration", "input-1")
+        .await
+        .unwrap();
+    client
+        .start_orchestration("instance-2", "TestOrchestration", "input-2")
+        .await
+        .unwrap();
+    client
+        .start_orchestration("instance-3", "TestOrchestration", "input-3")
+        .await
+        .unwrap();
 
     // Wait for completion
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -102,21 +109,22 @@ async fn test_instance_info() {
         .build();
 
     let orchestrations = OrchestrationRegistry::builder()
-        .register("TestOrchestration", |ctx: OrchestrationContext, input: String| async move {
-            let result = ctx.schedule_activity("TestActivity", input)
-                .into_activity().await?;
-            Ok(result)
-        })
+        .register(
+            "TestOrchestration",
+            |ctx: OrchestrationContext, input: String| async move {
+                let result = ctx.schedule_activity("TestActivity", input).into_activity().await?;
+                Ok(result)
+            },
+        )
         .build();
 
-    let _rt = runtime::Runtime::start_with_store(
-        store.clone(),
-        Arc::new(activities),
-        orchestrations
-    ).await;
+    let _rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activities), orchestrations).await;
 
     // Start orchestration
-    client.start_orchestration("test-instance", "TestOrchestration", "test-input").await.unwrap();
+    client
+        .start_orchestration("test-instance", "TestOrchestration", "test-input")
+        .await
+        .unwrap();
 
     // Wait for completion
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -151,21 +159,22 @@ async fn test_execution_info() {
         .build();
 
     let orchestrations = OrchestrationRegistry::builder()
-        .register("TestOrchestration", |ctx: OrchestrationContext, input: String| async move {
-            let result = ctx.schedule_activity("TestActivity", input)
-                .into_activity().await?;
-            Ok(result)
-        })
+        .register(
+            "TestOrchestration",
+            |ctx: OrchestrationContext, input: String| async move {
+                let result = ctx.schedule_activity("TestActivity", input).into_activity().await?;
+                Ok(result)
+            },
+        )
         .build();
 
-    let _rt = runtime::Runtime::start_with_store(
-        store.clone(),
-        Arc::new(activities),
-        orchestrations
-    ).await;
+    let _rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activities), orchestrations).await;
 
     // Start orchestration
-    client.start_orchestration("test-exec", "TestOrchestration", "test-input").await.unwrap();
+    client
+        .start_orchestration("test-exec", "TestOrchestration", "test-input")
+        .await
+        .unwrap();
 
     // Wait for completion
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -187,10 +196,14 @@ async fn test_execution_info() {
     // Read execution history
     let history = client.read_execution_history("test-exec", 1).await.unwrap();
     assert!(history.len() > 0);
-    
+
     // Should contain at least OrchestrationStarted and OrchestrationCompleted events
-    let has_started = history.iter().any(|e| matches!(e, duroxide::Event::OrchestrationStarted { .. }));
-    let has_completed = history.iter().any(|e| matches!(e, duroxide::Event::OrchestrationCompleted { .. }));
+    let has_started = history
+        .iter()
+        .any(|e| matches!(e, duroxide::Event::OrchestrationStarted { .. }));
+    let has_completed = history
+        .iter()
+        .any(|e| matches!(e, duroxide::Event::OrchestrationCompleted { .. }));
     assert!(has_started);
     assert!(has_completed);
 
@@ -206,28 +219,38 @@ async fn test_multi_execution_support() {
     let client = Client::new(store.clone());
 
     let orchestrations = OrchestrationRegistry::builder()
-        .register("ContinueAsNewTest", |ctx: OrchestrationContext, count_str: String| async move {
-            let count: u32 = count_str.parse().unwrap_or(0);
-            if count < 3 {
-                ctx.continue_as_new((count + 1).to_string());
-                Ok(format!("Continued: {}", count))
-            } else {
-                Ok(format!("Final: {}", count))
-            }
-        })
+        .register(
+            "ContinueAsNewTest",
+            |ctx: OrchestrationContext, count_str: String| async move {
+                let count: u32 = count_str.parse().unwrap_or(0);
+                if count < 3 {
+                    ctx.continue_as_new((count + 1).to_string());
+                    Ok(format!("Continued: {}", count))
+                } else {
+                    Ok(format!("Final: {}", count))
+                }
+            },
+        )
         .build();
 
     let _rt = runtime::Runtime::start_with_store(
         store.clone(),
         Arc::new(ActivityRegistry::builder().build()),
-        orchestrations
-    ).await;
+        orchestrations,
+    )
+    .await;
 
     // Start orchestration that will ContinueAsNew
-    client.start_orchestration("test-continue", "ContinueAsNewTest", "0").await.unwrap();
+    client
+        .start_orchestration("test-continue", "ContinueAsNewTest", "0")
+        .await
+        .unwrap();
 
     // Wait for completion using wait_for_orchestration instead of sleep
-    match client.wait_for_orchestration("test-continue", std::time::Duration::from_secs(5)).await {
+    match client
+        .wait_for_orchestration("test-continue", std::time::Duration::from_secs(5))
+        .await
+    {
         Ok(status) => println!("Orchestration completed with status: {:?}", status),
         Err(e) => println!("Orchestration failed: {:?}", e),
     }
@@ -237,8 +260,8 @@ async fn test_multi_execution_support() {
 
     // ContinueAsNew creates separate execution records now
     let executions = client.list_executions("test-continue").await.unwrap();
-    
-    // Should have exactly 4 executions: exec_id=1 (count=0→1), exec_id=2 (count=1→2), 
+
+    // Should have exactly 4 executions: exec_id=1 (count=0→1), exec_id=2 (count=1→2),
     // exec_id=3 (count=2→3), exec_id=4 (count=3, completes)
     assert_eq!(executions.len(), 4);
     assert_eq!(executions, vec![1, 2, 3, 4]);
@@ -247,7 +270,7 @@ async fn test_multi_execution_support() {
     for exec_id in &executions {
         let exec_info = client.get_execution_info("test-continue", *exec_id).await.unwrap();
         assert_eq!(exec_info.execution_id, *exec_id);
-        
+
         // First 3 executions should be ContinuedAsNew, last one should be Completed
         if *exec_id == 4 {
             assert_eq!(exec_info.status, "Completed");
@@ -278,41 +301,56 @@ async fn test_system_metrics() {
         .build();
 
     let orchestrations = OrchestrationRegistry::builder()
-        .register("SuccessOrchestration", |ctx: OrchestrationContext, input: String| async move {
-            let result = ctx.schedule_activity("TestActivity", input)
-                .into_activity().await?;
-            Ok(result)
-        })
-        .register("FailureOrchestration", |ctx: OrchestrationContext, input: String| async move {
-            let _result = ctx.schedule_activity("FailingActivity", input)
-                .into_activity().await?;
-            Ok("Should not reach here".to_string())
-        })
-        .register("RunningOrchestration", |ctx: OrchestrationContext, _input: String| async move {
-            // Wait for external event (never comes)
-            let _event = ctx.schedule_wait("NeverComes").into_event().await;
-            Ok("Should not reach here".to_string())
-        })
+        .register(
+            "SuccessOrchestration",
+            |ctx: OrchestrationContext, input: String| async move {
+                let result = ctx.schedule_activity("TestActivity", input).into_activity().await?;
+                Ok(result)
+            },
+        )
+        .register(
+            "FailureOrchestration",
+            |ctx: OrchestrationContext, input: String| async move {
+                let _result = ctx.schedule_activity("FailingActivity", input).into_activity().await?;
+                Ok("Should not reach here".to_string())
+            },
+        )
+        .register(
+            "RunningOrchestration",
+            |ctx: OrchestrationContext, _input: String| async move {
+                // Wait for external event (never comes)
+                let _event = ctx.schedule_wait("NeverComes").into_event().await;
+                Ok("Should not reach here".to_string())
+            },
+        )
         .build();
 
-    let _rt = runtime::Runtime::start_with_store(
-        store.clone(),
-        Arc::new(activities),
-        orchestrations
-    ).await;
+    let _rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activities), orchestrations).await;
 
     // Start orchestrations with different outcomes
-    client.start_orchestration("success-1", "SuccessOrchestration", "input-1").await.unwrap();
-    client.start_orchestration("success-2", "SuccessOrchestration", "input-2").await.unwrap();
-    client.start_orchestration("failure-1", "FailureOrchestration", "input-1").await.unwrap();
-    client.start_orchestration("running-1", "RunningOrchestration", "input-1").await.unwrap();
+    client
+        .start_orchestration("success-1", "SuccessOrchestration", "input-1")
+        .await
+        .unwrap();
+    client
+        .start_orchestration("success-2", "SuccessOrchestration", "input-2")
+        .await
+        .unwrap();
+    client
+        .start_orchestration("failure-1", "FailureOrchestration", "input-1")
+        .await
+        .unwrap();
+    client
+        .start_orchestration("running-1", "RunningOrchestration", "input-1")
+        .await
+        .unwrap();
 
     // Wait for processing
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
     // Get system metrics
     let metrics = client.get_system_metrics().await.unwrap();
-    
+
     assert_eq!(metrics.total_instances, 4);
     assert_eq!(metrics.total_executions, 4);
     assert_eq!(metrics.running_instances, 1); // running-1
@@ -350,31 +388,32 @@ async fn test_queue_depths() {
         .build();
 
     let orchestrations = OrchestrationRegistry::builder()
-        .register("QueueTestOrchestration", |ctx: OrchestrationContext, input: String| async move {
-            let result = ctx.schedule_activity("SlowActivity", input)
-                .into_activity().await?;
-            Ok(result)
-        })
+        .register(
+            "QueueTestOrchestration",
+            |ctx: OrchestrationContext, input: String| async move {
+                let result = ctx.schedule_activity("SlowActivity", input).into_activity().await?;
+                Ok(result)
+            },
+        )
         .build();
 
-    let _rt = runtime::Runtime::start_with_store(
-        store.clone(),
-        Arc::new(activities),
-        orchestrations
-    ).await;
+    let _rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activities), orchestrations).await;
 
     // Start multiple orchestrations quickly
     for i in 1..=5 {
-        client.start_orchestration(
-            &format!("queue-test-{}", i),
-            "QueueTestOrchestration",
-            &format!("input-{}", i)
-        ).await.unwrap();
+        client
+            .start_orchestration(
+                &format!("queue-test-{}", i),
+                "QueueTestOrchestration",
+                &format!("input-{}", i),
+            )
+            .await
+            .unwrap();
     }
 
     // Check queue depths immediately (should have pending work)
     let _queues = client.get_queue_depths().await.unwrap();
-    
+
     // Should have some pending work in queues (counts are always >= 0)
     // Note: Queue depths are always non-negative, so these assertions are redundant
 
@@ -436,33 +475,38 @@ async fn test_complex_workflow_management() {
         .build();
 
     let orchestrations = OrchestrationRegistry::builder()
-        .register("OrderProcessing", |ctx: OrchestrationContext, order: String| async move {
-            // Process order
-            let result = ctx.schedule_activity("ProcessOrder", order.clone())
-                .into_activity().await?;
-            
-            // Send confirmation email
-            let _email = ctx.schedule_activity("SendEmail", format!("Order processed: {}", result))
-                .into_activity().await?;
-            
-            // Update inventory
-            let _inventory = ctx.schedule_activity("UpdateInventory", order)
-                .into_activity().await?;
-            
-            Ok(result)
-        })
+        .register(
+            "OrderProcessing",
+            |ctx: OrchestrationContext, order: String| async move {
+                // Process order
+                let result = ctx
+                    .schedule_activity("ProcessOrder", order.clone())
+                    .into_activity()
+                    .await?;
+
+                // Send confirmation email
+                let _email = ctx
+                    .schedule_activity("SendEmail", format!("Order processed: {}", result))
+                    .into_activity()
+                    .await?;
+
+                // Update inventory
+                let _inventory = ctx.schedule_activity("UpdateInventory", order).into_activity().await?;
+
+                Ok(result)
+            },
+        )
         .build();
 
-    let _rt = runtime::Runtime::start_with_store(
-        store.clone(),
-        Arc::new(activities),
-        orchestrations
-    ).await;
+    let _rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activities), orchestrations).await;
 
     // Start multiple order processing workflows
     let orders = vec!["order-1", "order-2", "order-3", "order-4", "order-5"];
     for order in &orders {
-        client.start_orchestration(order, "OrderProcessing", *order).await.unwrap();
+        client
+            .start_orchestration(order, "OrderProcessing", *order)
+            .await
+            .unwrap();
     }
 
     // Wait for completion
@@ -504,12 +548,18 @@ async fn test_complex_workflow_management() {
 
         let history = client.read_execution_history(order, 1).await.unwrap();
         assert!(history.len() > 0);
-        
+
         // Should contain OrchestrationStarted, ActivityCompleted, and OrchestrationCompleted events
-        let has_started = history.iter().any(|e| matches!(e, duroxide::Event::OrchestrationStarted { .. }));
-        let has_completed = history.iter().any(|e| matches!(e, duroxide::Event::OrchestrationCompleted { .. }));
-        let has_activity = history.iter().any(|e| matches!(e, duroxide::Event::ActivityCompleted { .. }));
-        
+        let has_started = history
+            .iter()
+            .any(|e| matches!(e, duroxide::Event::OrchestrationStarted { .. }));
+        let has_completed = history
+            .iter()
+            .any(|e| matches!(e, duroxide::Event::OrchestrationCompleted { .. }));
+        let has_activity = history
+            .iter()
+            .any(|e| matches!(e, duroxide::Event::ActivityCompleted { .. }));
+
         assert!(has_started);
         assert!(has_completed);
         assert!(has_activity);
