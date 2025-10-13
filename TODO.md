@@ -1,20 +1,5 @@
 ## Durable Task Rust Core – TODOs
 
-### High Priority - In Progress
-- [ ] Implement "Deterministic System Calls with Auto-completion" RFC (docs/rfcs/2025-09-system-calls-deterministic-autocomplete.md)
-  - Replace system activities (GUID, time) with deterministic auto-completed calls
-  - Eliminate worker round-trips for system operations
-
-### Unimplemented Features (from ignored tests)
-- [ ] Detached/fire-and-forget orchestrations
-- [ ] Advanced versioning features:
-  - Version-specific orchestration start
-  - Sub-orchestration version policies
-  - Versioned continue-as-new
-- [ ] Parent-child cancellation cascading
-
-### Other TODOs
-- Update all provider and API docs, get ready to push crate
 - search for TODO : CR and factor code.
 - Drop crates/dependencies that aren't needed
 - Add orchestrator functions
@@ -48,6 +33,7 @@
 
 ## DONE
 
+- Update all provider and API docs, get ready to push crate
 - implementing a provider requires the implementor to look deeply at the sqlite provider code
 - clean up leaky abstractions (provider should not have to compute the orchestration state and output e.g)
 - drop the polling frequence for the dispatchers

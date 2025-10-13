@@ -56,6 +56,9 @@
 //! - **Timers**: Use `ctx.schedule_timer(ms)` for orchestration-level delays and timeouts
 //! - **Deterministic Replay**: Orchestrations are replayed from history to ensure consistency
 //! - **Durable Futures**: Composable futures for activities, timers, and external events
+//! - **ContinueAsNew (Multi-Execution)**: An orchestration can end the current execution and
+//!   immediately start a new one with fresh input. Each execution has its own isolated history
+//!   that starts with `OrchestrationStarted { event_id: 1 }`.
 //!
 //! ## ⚠️ Important: Orchestrations vs Activities
 //!
@@ -98,6 +101,48 @@
 //! - Error handling and compensation
 //! - Timeouts and deadlines (use timers)
 //! - Waiting for external events
+//!
+//! ## ContinueAsNew (Multi-Execution) Semantics
+//!
+//! ContinueAsNew (CAN) allows an orchestration to end its current execution and start a new
+//! one with fresh input (useful for loops, pagination, long-running workflows).
+//!
+//! - Orchestration calls `ctx.continue_as_new(new_input)`
+//! - Runtime stamps `OrchestrationContinuedAsNew` in the CURRENT execution's history
+//! - Runtime enqueues a `WorkItem::ContinueAsNew`
+//! - When processing that work item, the runtime starts a NEW execution with:
+//!   - `execution_id = previous_execution_id + 1`
+//!   - `existing_history = []` (fresh history)
+//!   - `OrchestrationStarted { event_id: 1, input = new_input }` is stamped automatically
+//! - Each execution's history is independent; `duroxide::Client::read_execution_history(instance, id)`
+//!   returns events for that execution only
+//!
+//! Provider responsibilities are strictly storage-level (see below). The runtime owns all
+//! orchestration semantics, including execution boundaries and starting the new execution.
+//!
+//! ## Provider Responsibilities (At a Glance)
+//!
+//! Providers are pure storage abstractions. The runtime computes orchestration semantics
+//! and passes explicit instructions to the provider.
+//!
+//! - `fetch_orchestration_item()`
+//!   - Return a locked batch of work for ONE instance
+//!   - Include full history for the CURRENT `execution_id`
+//!   - Do NOT create/synthesize new executions here (even for ContinueAsNew)
+//!
+//! - `ack_orchestration_item(lock_token, execution_id, history_delta, ..., metadata)`
+//!   - Atomic commit of one orchestration turn
+//!   - Idempotently `INSERT OR IGNORE` execution row for the explicit `execution_id`
+//!   - `UPDATE instances.current_execution_id = MAX(current_execution_id, execution_id)`
+//!   - Append `history_delta` to the specified execution
+//!   - Update `executions.status` and `executions.output` from `metadata` (no event inspection)
+//!
+//! - Worker/Timer queues
+//!   - Peek-lock semantics (dequeue with lock token; ack by deleting)
+//!   - Orchestrator, Worker, Timer queues are independent but committed atomically with history
+//!
+//! See `docs/provider-implementation-guide.md` and `src/providers/sqlite.rs` for a complete,
+//! production-grade provider implementation.
 //!
 //! ## ⚠️ Critical: DurableFuture Conversion Pattern
 //!

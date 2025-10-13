@@ -86,12 +86,25 @@ pub struct OrchestrationItem {
 ///
 /// # ContinueAsNew Handling
 ///
-/// Note: ContinueAsNew execution creation is NOT handled via ExecutionMetadata.
-/// Instead, the provider detects `WorkItem::ContinueAsNew` in `fetch_orchestration_item`:
-/// - Increments `current_execution_id`
-/// - Creates new execution record
-/// - Returns empty history for the new execution
-/// - The runtime then processes it like `StartOrchestration`
+/// ContinueAsNew is handled entirely by the runtime. Providers must NOT try to
+/// synthesize new executions in `fetch_orchestration_item`.
+///
+/// Runtime behavior:
+/// - When an orchestration calls `continue_as_new(input)`, the runtime stamps
+///   `OrchestrationContinuedAsNew` into the current execution's history and enqueues
+///   a `WorkItem::ContinueAsNew`.
+/// - When processing that work item, the runtime starts a fresh execution with
+///   `execution_id = current + 1`, passes an empty `existing_history`, and stamps an
+///   `OrchestrationStarted { event_id: 1, .. }` event for the new execution.
+/// - The runtime then calls `ack_orchestration_item(lock_token, execution_id, ...)` with
+///   the explicit execution id to persist history and queue operations.
+///
+/// Provider responsibilities:
+/// - Use the explicit `execution_id` given to `ack_orchestration_item`.
+/// - Idempotently create the execution row (`INSERT OR IGNORE`).
+/// - Update `instances.current_execution_id = MAX(current_execution_id, execution_id)`.
+/// - Append all `history_delta` events to the specified `execution_id`.
+/// - Update `executions.status, executions.output` from `ExecutionMetadata` when provided.
 #[derive(Debug, Clone, Default)]
 pub struct ExecutionMetadata {
     /// New status for the execution ('Completed', 'Failed', 'ContinuedAsNew', or None to keep current)

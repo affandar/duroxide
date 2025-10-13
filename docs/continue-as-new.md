@@ -4,15 +4,15 @@ ContinueAsNew (CAN) terminates the current execution and starts a new execution 
 
 Key points
 - Terminal for current execution: the current execution appends `OrchestrationContinuedAsNew { input }` and stops.
-- New execution history: the provider creates a new execution (incremented execution id) and appends a fresh `OrchestrationStarted` with the provided input.
+- New execution history: the runtime creates a new execution (incremented execution id) and stamps a fresh `OrchestrationStarted` with the provided input. The provider simply persists what the runtime sends.
 - Event targeting: activity/timer/external events always target the currently active execution. After CAN, the next execution must resubscribe/re-arm as needed.
 - Result propagation: the initial start handle resolves with an empty output when the first execution continues-as-new; the runtime then automatically starts the next execution.
 
 Flow
 1. Orchestrator calls `ctx.continue_as_new(new_input)`.
 2. Runtime appends terminal `OrchestrationContinuedAsNew` to the current execution.
-3. Provider resets to a new execution file and appends `OrchestrationStarted { name, version, input: new_input, parent_instance?, parent_id? }`.
-4. Runtime enqueues a new start for the instance and drives the new execution.
+3. Runtime enqueues a `WorkItem::ContinueAsNew` and later processes it as a new execution with empty history, stamping `OrchestrationStarted { name, version, input: new_input, parent_instance?, parent_id? }`.
+4. Provider receives `ack_orchestration_item(lock_token, execution_id = prev + 1, ...)` and atomically persists the new execution row, updates `instances.current_execution_id = MAX(..., execution_id)`, and appends events.
 
 Practical tips
 - Re-create subscriptions and timers in the new execution; carry forward any needed state via the new input.

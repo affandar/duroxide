@@ -401,6 +401,8 @@ async fn pagination(ctx: OrchestrationContext, cursor: String) -> Result<(), Str
 }
 ```
 
+Note: Each Continue As New starts a new execution with an empty history. The runtime stamps a fresh `OrchestrationStarted { event_id: 1 }` for the new execution; activities, timers, and external events always target the currently active execution only.
+
 #### Logging (Replay-Safe)
 
 ```rust
@@ -1347,9 +1349,9 @@ async fn debuggable_orch(ctx: OrchestrationContext, input: String) -> Result<Str
 ### 2. Inspect History
 
 ```rust
-// Get orchestration history
+// Get orchestration history (requires management capability)
 let client = Client::new(store);
-let history = client.get_execution_history("my-instance", 1).await;
+let history = client.read_execution_history("my-instance", 1).await.unwrap();
 
 for event in history {
     println!("{:?}", event);
@@ -1584,7 +1586,7 @@ let result = ctx.schedule_activity("Task", "input").into_activity().await?;
 - **Examples**: `examples/` directory - runnable samples
 - **Tests**: `tests/e2e_samples.rs` - comprehensive patterns
 - **API Docs**: Run `cargo doc --open`
-- **Replay Debugging**: Check history with `client.get_execution_history()`
+- **Replay Debugging**: Check history with `client.read_execution_history()` (management capability required)
 
 ---
 

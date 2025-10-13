@@ -48,6 +48,7 @@ impl Provider for MyProvider {
     async fn ack_orchestration_item(
         &self,
         lock_token: &str,
+        execution_id: u64,
         history_delta: Vec<Event>,
         worker_items: Vec<WorkItem>,
         timer_items: Vec<WorkItem>,
@@ -55,13 +56,14 @@ impl Provider for MyProvider {
         metadata: ExecutionMetadata,
     ) -> Result<(), String> {
         // ALL operations must be atomic (single transaction):
-        // 1. Append history_delta to event log
-        // 2. Update execution status/output from metadata (DON'T inspect events!)
-        // 3. Create next execution if metadata.create_next_execution=true
-        // 4. Enqueue worker_items to worker queue
-        // 5. Enqueue timer_items to timer queue
-        // 6. Enqueue orchestrator_items to orchestrator queue
-        // 7. Delete locked messages (release lock)
+        // 1. Idempotently create execution row for the explicit execution_id (INSERT OR IGNORE)
+        // 2. Update instances.current_execution_id = MAX(current_execution_id, execution_id)
+        // 3. Append history_delta to the event log for that execution_id
+        // 4. Update execution status/output from metadata (DON'T inspect events!)
+        // 5. Enqueue worker_items to worker queue
+        // 6. Enqueue timer_items to timer queue
+        // 7. Enqueue orchestrator_items to orchestrator queue
+        // 8. Delete locked messages (release lock)
         
         todo!("See detailed docs below")
     }
@@ -132,31 +134,20 @@ impl Provider for MyProvider {
     // === OPTIONAL: Multi-Execution Support ===
     
     async fn latest_execution_id(&self, instance: &str) -> Option<u64> {
-        // Return MAX(execution_id) for instance
-        // Default implementation uses read() - override for performance
-        
-        let h = self.read(instance).await;
-        if h.is_empty() { None } else { Some(1) }
+        // Return MAX(execution_id) for instance. Override for performance.
+        None
     }
     
-    async fn read_with_execution(&self, instance: &str, execution_id: u64) -> Vec<Event> {
-        // Return events for specific execution_id (not just latest)
-        // Used for debugging/testing only
-        
-        self.read(instance).await  // Default ignores execution_id
+    async fn read_with_execution(&self, instance: &str, _execution_id: u64) -> Vec<Event> {
+        // Return events for specific execution_id (not just latest). Used for debugging/testing.
+        // Default can delegate to read(); production providers should override.
+        self.read(instance).await
     }
     
-    async fn create_new_execution(
-        &self,
-        instance: &str,
-        orchestration: &str,
-        version: &str,
-        input: &str,
-        parent_instance: Option<&str>,
-        parent_id: Option<u64>,
-    ) -> Result<u64, String> {
-        // DEPRECATED: Handle in ack_orchestration_item via metadata instead
-        todo!("Implement only if needed for backward compat")
+    async fn create_new_execution(...) -> Result<u64, String> {
+        // Optional convenience used by tests/management. Runtime path uses ack_orchestration_item
+        // with explicit execution_id for ContinueAsNew.
+        todo!()
     }
     
     // === OPTIONAL: Timer Queue (only if supports_delayed_visibility=true) ===
@@ -304,12 +295,18 @@ IF instance_id IS NULL:
     ROLLBACK
     RETURN Err("Invalid lock token")
 
-// Get current execution_id
-execution_id = SELECT current_execution_id FROM instances
-               WHERE instance_id = instance_id
-               DEFAULT 1
+// Use the explicit execution_id provided by the runtime
 
-// 1. Append history_delta (DO NOT inspect events!)
+// 1. Idempotently create execution row and update instance pointer
+INSERT INTO executions (instance_id, execution_id, status, started_at)
+VALUES (instance_id, execution_id, 'Running', CURRENT_TIMESTAMP)
+ON CONFLICT DO NOTHING;
+
+UPDATE instances
+SET current_execution_id = MAX(current_execution_id, execution_id)
+WHERE instance_id = instance_id;
+
+// 2. Append history_delta (DO NOT inspect events!)
 FOR event IN history_delta:
     // Validate event_id was set by runtime
     IF event.event_id() == 0:
@@ -322,7 +319,7 @@ FOR event IN history_delta:
     VALUES (instance_id, execution_id, event.event_id(), event_type, event_json, NOW())
     ON CONFLICT DO NOTHING  // Idempotent
 
-// 2. Update execution metadata (NO event inspection!)
+// 3. Update execution metadata (NO event inspection!)
 IF metadata.status IS NOT NULL:
     UPDATE executions
     SET status = metadata.status,
@@ -331,17 +328,7 @@ IF metadata.status IS NOT NULL:
     WHERE instance_id = instance_id
       AND execution_id = execution_id
 
-// 3. Create next execution if requested
-IF metadata.create_next_execution AND metadata.next_execution_id IS NOT NULL:
-    next_id = metadata.next_execution_id
-    
-    INSERT INTO executions (instance_id, execution_id, status, started_at)
-    VALUES (instance_id, next_id, 'Running', CURRENT_TIMESTAMP)
-    ON CONFLICT DO NOTHING
-    
-    UPDATE instances
-    SET current_execution_id = next_id
-    WHERE instance_id = instance_id
+// (No implicit next-execution creation here; runtime controls execution_id explicitly)
 
 // 4. Enqueue worker items
 FOR item IN worker_items:
@@ -596,9 +583,8 @@ Use `tests/sqlite_provider_test.rs` as a template. Key tests:
    - Test Completed, Failed, ContinuedAsNew states
 
 5. **Multi-execution** (test_execution_status_continued_as_new)
-   - ContinueAsNew creates execution 2
-   - Verify current_execution_id updated
-   - Complete execution 2, verify status
+   - ContinueAsNew is runtime-owned; provider persists explicit execution_id on ack
+   - Verify `current_execution_id` and statuses updated via metadata
 
 ---
 
