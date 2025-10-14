@@ -301,3 +301,78 @@ async fn deterministic_replay_activity_only() {
         assert_eq!(output, "A(2)");
     }
 }
+
+#[tokio::test]
+async fn test_trace_fire_and_forget() {
+    let activities = ActivityRegistry::builder()
+        .register("DoWork", |_: String| async move {
+            tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+            Ok("done".to_string())
+        })
+        .build();
+
+    let orch = |ctx: OrchestrationContext, _: String| async move {
+        // Traces should not block execution
+        ctx.trace_info("Starting work");
+        let future1 = ctx.schedule_activity("DoWork", "1");
+        ctx.trace_info("Scheduled first activity");
+        let future2 = ctx.schedule_activity("DoWork", "2");
+        ctx.trace_info("Scheduled second activity");
+        
+        // Wait for both activities
+        let result1 = future1.into_activity().await?;
+        let result2 = future2.into_activity().await?;
+        
+        ctx.trace_info("Both activities completed");
+        Ok(format!("{} {}", result1, result2))
+    };
+
+    let history_store = Arc::new(
+        duroxide::providers::sqlite::SqliteProvider::new_in_memory()
+            .await
+            .unwrap(),
+    );
+    let orchestration_registry = OrchestrationRegistry::builder().register("test_trace_fire_and_forget", orch).build();
+    let rt =
+        runtime::Runtime::start_with_store(history_store.clone(), Arc::new(activities), orchestration_registry).await;
+    let client = duroxide::Client::new(history_store.clone());
+
+    // Start orchestration
+    client.start_orchestration("instance-trace-fire-and-forget", "test_trace_fire_and_forget", "").await.unwrap();
+
+    // Wait for completion
+    let status = client
+        .wait_for_orchestration("instance-trace-fire-and-forget", std::time::Duration::from_millis(2000))
+        .await
+        .unwrap();
+    assert!(matches!(status, duroxide::runtime::OrchestrationStatus::Completed { .. }));
+
+    // Check history contains trace system calls
+    let history = history_store.read("instance-trace-fire-and-forget").await;
+    let trace_events: Vec<_> = history
+        .iter()
+        .filter(|e| matches!(e, duroxide::Event::SystemCall { op, .. } if op.starts_with("trace:")))
+        .collect();
+
+    assert_eq!(
+        trace_events.len(),
+        4,
+        "Expected 4 trace events (3 info traces + potentially others)"
+    );
+
+    // Verify trace events are in correct order
+    let trace_ops: Vec<&str> = trace_events
+        .iter()
+        .map(|e| match e {
+            duroxide::Event::SystemCall { op, .. } => op.as_str(),
+            _ => unreachable!(),
+        })
+        .collect();
+
+    assert!(trace_ops.contains(&"trace:INFO:Starting work"));
+    assert!(trace_ops.contains(&"trace:INFO:Scheduled first activity"));
+    assert!(trace_ops.contains(&"trace:INFO:Scheduled second activity"));
+    assert!(trace_ops.contains(&"trace:INFO:Both activities completed"));
+
+    drop(rt);
+}

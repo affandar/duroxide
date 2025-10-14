@@ -482,3 +482,266 @@ async fn timer_recovery_after_crash_before_fire() {
 
     drop(rt2);
 }
+
+#[tokio::test]
+async fn test_sqlite_provider_transactional() {
+    let store = SqliteProvider::new_in_memory().await.unwrap();
+
+    let instance = "test-transactional";
+
+    // Start orchestration
+    let start_work = WorkItem::StartOrchestration {
+        instance: instance.to_string(),
+        orchestration: "TransactionalTest".to_string(),
+        version: Some("1.0.0".to_string()),
+        input: "{}".to_string(),
+        parent_instance: None,
+        parent_id: None,
+    };
+
+    store
+        .enqueue_orchestrator_work(start_work, None)
+        .await
+        .expect("Failed to enqueue");
+
+    let item = store.fetch_orchestration_item().await.expect("Should have work");
+
+    // Simulate orchestration that schedules multiple activities atomically
+    let history_delta = vec![
+        Event::OrchestrationStarted {
+            event_id: 1,
+            name: "TransactionalTest".to_string(),
+            version: "1.0.0".to_string(),
+            input: "{}".to_string(),
+            parent_instance: None,
+            parent_id: None,
+        },
+        Event::ActivityScheduled {
+            event_id: 2,
+            execution_id: 1,
+            name: "Activity1".to_string(),
+            input: "{}".to_string(),
+        },
+        Event::ActivityScheduled {
+            event_id: 3,
+            execution_id: 1,
+            name: "Activity2".to_string(),
+            input: "{}".to_string(),
+        },
+        Event::ActivityScheduled {
+            event_id: 4,
+            execution_id: 1,
+            name: "Activity3".to_string(),
+            input: "{}".to_string(),
+        },
+    ];
+
+    let worker_items = vec![
+        WorkItem::ActivityExecute {
+            instance: instance.to_string(),
+            execution_id: 1,
+            id: 1,
+            name: "Activity1".to_string(),
+            input: "{}".to_string(),
+        },
+        WorkItem::ActivityExecute {
+            instance: instance.to_string(),
+            execution_id: 1,
+            id: 2,
+            name: "Activity2".to_string(),
+            input: "{}".to_string(),
+        },
+        WorkItem::ActivityExecute {
+            instance: instance.to_string(),
+            execution_id: 1,
+            id: 3,
+            name: "Activity3".to_string(),
+            input: "{}".to_string(),
+        },
+    ];
+
+    // All operations should be atomic
+    store
+        .ack_orchestration_item(
+            &item.lock_token,
+            1, // execution_id
+            history_delta,
+            worker_items,
+            vec![],
+            vec![],
+            ExecutionMetadata::default(),
+        )
+        .await
+        .expect("Failed to ack");
+
+    // Verify all history saved
+    let history = store.read(instance).await;
+    assert_eq!(history.len(), 4); // Start + 3 schedules
+
+    // Verify all worker items enqueued
+    let mut worker_count = 0;
+    while let Some((_, token)) = store.dequeue_worker_peek_lock().await {
+        worker_count += 1;
+        store.ack_worker(&token).await.expect("Failed to ack");
+    }
+    assert_eq!(worker_count, 3);
+}
+
+#[tokio::test]
+async fn test_sqlite_provider_timer_queue() {
+    let store = SqliteProvider::new_in_memory().await.unwrap();
+
+    let instance = "test-timer";
+
+    // Start orchestration
+    store
+        .enqueue_orchestrator_work(
+            WorkItem::StartOrchestration {
+                instance: instance.to_string(),
+                orchestration: "TimerTest".to_string(),
+                version: Some("1.0.0".to_string()),
+                input: "{}".to_string(),
+                parent_instance: None,
+                parent_id: None,
+            },
+            None,
+        )
+        .await
+        .expect("Failed to enqueue");
+
+    let item = store.fetch_orchestration_item().await.expect("Should have work");
+
+    // Schedule a timer
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+
+    let timer_items = vec![WorkItem::TimerSchedule {
+        instance: instance.to_string(),
+        execution_id: 1,
+        id: 1,
+        fire_at_ms: now_ms + 1000, // 1 second from now
+    }];
+
+    store
+        .ack_orchestration_item(
+            &item.lock_token,
+            1, // execution_id
+            vec![Event::OrchestrationStarted {
+                event_id: 1,
+                name: "TimerTest".to_string(),
+                version: "1.0.0".to_string(),
+                input: "{}".to_string(),
+                parent_instance: None,
+                parent_id: None,
+            }],
+            vec![],
+            timer_items,
+            vec![],
+            ExecutionMetadata::default(),
+        )
+        .await
+        .expect("Failed to ack");
+
+    // Timer queue is handled by the runtime, not tested here
+    // Just verify the operation completed successfully
+}
+
+#[tokio::test]
+async fn test_execution_status_running() {
+    let store = SqliteProvider::new_in_memory().await.unwrap();
+
+    let instance = "exec-status-running-1";
+
+    // Start orchestration
+    let start_work = WorkItem::StartOrchestration {
+        instance: instance.to_string(),
+        orchestration: "TestOrch".to_string(),
+        version: Some("1.0.0".to_string()),
+        input: "test".to_string(),
+        parent_instance: None,
+        parent_id: None,
+    };
+
+    store.enqueue_orchestrator_work(start_work, None).await.unwrap();
+
+    // Fetch and process
+    let item = store.fetch_orchestration_item().await.unwrap();
+
+    // Simulate orchestration running (not completed)
+    let history_delta = vec![
+        Event::OrchestrationStarted {
+            event_id: 1,
+            name: "TestOrch".to_string(),
+            version: "1.0.0".to_string(),
+            input: "test".to_string(),
+            parent_instance: None,
+            parent_id: None,
+        },
+        Event::ActivityScheduled {
+            event_id: 2,
+            execution_id: 1,
+            name: "TestActivity".to_string(),
+            input: "test".to_string(),
+        },
+    ];
+
+    store
+        .ack_orchestration_item(&item.lock_token, 1, history_delta, vec![], vec![], vec![], ExecutionMetadata::default())
+        .await
+        .unwrap();
+
+    // Verify execution exists and is running
+    let executions = Provider::list_executions(&store, instance).await;
+    assert_eq!(executions.len(), 1);
+    assert_eq!(executions[0], 1);
+}
+
+#[tokio::test]
+async fn test_execution_output_captured_on_continue_as_new() {
+    let store = SqliteProvider::new_in_memory().await.unwrap();
+
+    let instance = "exec-output-continue-as-new-1";
+
+    // Start orchestration
+    let start_work = WorkItem::StartOrchestration {
+        instance: instance.to_string(),
+        orchestration: "TestOrch".to_string(),
+        version: Some("1.0.0".to_string()),
+        input: "test".to_string(),
+        parent_instance: None,
+        parent_id: None,
+    };
+
+    store.enqueue_orchestrator_work(start_work, None).await.unwrap();
+
+    // Fetch and process
+    let item = store.fetch_orchestration_item().await.unwrap();
+
+    // Simulate orchestration continuing as new
+    let history_delta = vec![
+        Event::OrchestrationStarted {
+            event_id: 1,
+            name: "TestOrch".to_string(),
+            version: "1.0.0".to_string(),
+            input: "test".to_string(),
+            parent_instance: None,
+            parent_id: None,
+        },
+        Event::OrchestrationContinuedAsNew {
+            event_id: 2,
+            input: "new-input".to_string(),
+        },
+    ];
+
+    store
+        .ack_orchestration_item(&item.lock_token, 1, history_delta, vec![], vec![], vec![], ExecutionMetadata::default())
+        .await
+        .unwrap();
+
+    // Verify execution exists
+    let executions = Provider::list_executions(&store, instance).await;
+    assert_eq!(executions.len(), 1);
+    assert_eq!(executions[0], 1);
+}

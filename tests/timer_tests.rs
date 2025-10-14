@@ -398,3 +398,92 @@ async fn timer_cancellation() {
 
     drop(rt);
 }
+
+#[tokio::test]
+async fn multiple_timers_recovery_after_crash() {
+    let (store1, _td, _db_url) = create_sqlite_store_named("multiple_timers_recovery").await;
+
+    const TIMER_MS: u64 = 100;
+
+    // Simple orchestration that schedules multiple timers
+    let orch = |ctx: OrchestrationContext, _input: String| async move {
+        // Schedule multiple timers
+        let timer1 = ctx.schedule_timer(TIMER_MS);
+        let timer2 = ctx.schedule_timer(TIMER_MS + 50);
+        let timer3 = ctx.schedule_timer(TIMER_MS + 100);
+
+        // Wait for all timers
+        timer1.into_timer().await;
+        timer2.into_timer().await;
+        timer3.into_timer().await;
+
+        Ok("all-timers-fired".to_string())
+    };
+
+    let orchestration_registry = OrchestrationRegistry::builder()
+        .register("MultipleTimersRecoveryTest", orch)
+        .build();
+
+    let rt = runtime::Runtime::start_with_store(
+        store1.clone(),
+        StdArc::new(ActivityRegistry::builder().build()),
+        orchestration_registry,
+    )
+    .await;
+
+    let client = duroxide::Client::new(store1.clone());
+
+    // Start orchestration
+    client
+        .start_orchestration("multiple-timers-recovery-instance", "MultipleTimersRecoveryTest", "")
+        .await
+        .unwrap();
+
+    // Wait a bit to ensure timers are scheduled
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    // "Crash" the runtime
+    drop(rt);
+
+    // Restart runtime
+    let orch2 = |ctx: OrchestrationContext, _input: String| async move {
+        let timer1 = ctx.schedule_timer(TIMER_MS);
+        let timer2 = ctx.schedule_timer(TIMER_MS + 50);
+        let timer3 = ctx.schedule_timer(TIMER_MS + 100);
+
+        timer1.into_timer().await;
+        timer2.into_timer().await;
+        timer3.into_timer().await;
+
+        Ok("all-timers-fired".to_string())
+    };
+
+    let orchestration_registry2 = OrchestrationRegistry::builder()
+        .register("MultipleTimersRecoveryTest", orch2)
+        .build();
+
+    let rt2 = runtime::Runtime::start_with_store(
+        store1.clone(),
+        StdArc::new(ActivityRegistry::builder().build()),
+        orchestration_registry2,
+    )
+    .await;
+
+    // Wait for orchestration to complete
+    let status = client
+        .wait_for_orchestration(
+            "multiple-timers-recovery-instance",
+            std::time::Duration::from_secs(10),
+        )
+        .await
+        .unwrap();
+
+    assert!(matches!(status, duroxide::runtime::OrchestrationStatus::Completed { .. }));
+
+    // Verify the result
+    if let duroxide::runtime::OrchestrationStatus::Completed { output } = status {
+        assert_eq!(output, "all-timers-fired");
+    }
+
+    drop(rt2);
+}
