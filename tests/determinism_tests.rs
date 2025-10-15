@@ -40,21 +40,15 @@ async fn orchestration_completes_and_replays_deterministically_with(store: StdAr
         .register("A", |input: String| async move {
             Ok(input.parse::<i32>().unwrap_or(0).saturating_add(1).to_string())
         })
-        .register("B", |input: String| async move {
-            Ok(format!("B({})", input))
-        })
+        .register("B", |input: String| async move { Ok(format!("B({})", input)) })
         .build();
 
     let orchestration_registry = OrchestrationRegistry::builder()
         .register("DeterministicTest", orchestration)
         .build();
 
-    let rt = runtime::Runtime::start_with_store(
-        store.clone(),
-        StdArc::new(activity_registry),
-        orchestration_registry,
-    )
-    .await;
+    let rt =
+        runtime::Runtime::start_with_store(store.clone(), StdArc::new(activity_registry), orchestration_registry).await;
 
     let client = duroxide::Client::new(store.clone());
 
@@ -70,7 +64,10 @@ async fn orchestration_completes_and_replays_deterministically_with(store: StdAr
         .await
         .unwrap();
 
-    assert!(matches!(status, duroxide::runtime::OrchestrationStatus::Completed { .. }));
+    assert!(matches!(
+        status,
+        duroxide::runtime::OrchestrationStatus::Completed { .. }
+    ));
 
     // Get the result
     let result = match status {
@@ -114,21 +111,16 @@ async fn orchestration_completes_and_replays_deterministically_with(store: StdAr
         .register("A", |input: String| async move {
             Ok(input.parse::<i32>().unwrap_or(0).saturating_add(1).to_string())
         })
-        .register("B", |input: String| async move {
-            Ok(format!("B({})", input))
-        })
+        .register("B", |input: String| async move { Ok(format!("B({})", input)) })
         .build();
 
     let orchestration_registry2 = OrchestrationRegistry::builder()
         .register("DeterministicTest", orchestration2)
         .build();
 
-    let rt2 = runtime::Runtime::start_with_store(
-        store.clone(),
-        StdArc::new(activity_registry2),
-        orchestration_registry2,
-    )
-    .await;
+    let rt2 =
+        runtime::Runtime::start_with_store(store.clone(), StdArc::new(activity_registry2), orchestration_registry2)
+            .await;
 
     let client2 = duroxide::Client::new(store.clone());
 
@@ -144,7 +136,10 @@ async fn orchestration_completes_and_replays_deterministically_with(store: StdAr
         .await
         .unwrap();
 
-    assert!(matches!(status2, duroxide::runtime::OrchestrationStatus::Completed { .. }));
+    assert!(matches!(
+        status2,
+        duroxide::runtime::OrchestrationStatus::Completed { .. }
+    ));
 
     // Verify same result
     let result2 = match status2 {
@@ -197,7 +192,10 @@ async fn test_trace_deterministic_in_history() {
         .wait_for_orchestration("instance-2", std::time::Duration::from_millis(1000))
         .await
         .unwrap();
-    assert!(matches!(status, duroxide::runtime::OrchestrationStatus::Completed { .. }));
+    assert!(matches!(
+        status,
+        duroxide::runtime::OrchestrationStatus::Completed { .. }
+    ));
 
     // Check history contains trace system calls
     let history = history_store.read("instance-2").await;
@@ -206,11 +204,7 @@ async fn test_trace_deterministic_in_history() {
         .filter(|e| matches!(e, duroxide::Event::SystemCall { op, .. } if op.starts_with("trace:")))
         .collect();
 
-    assert_eq!(
-        trace_events.len(),
-        3,
-        "Expected 3 trace events (info, warn, error)"
-    );
+    assert_eq!(trace_events.len(), 3, "Expected 3 trace events (info, warn, error)");
 
     // Verify trace events are in correct order
     let trace_ops: Vec<&str> = trace_events
@@ -221,7 +215,14 @@ async fn test_trace_deterministic_in_history() {
         })
         .collect();
 
-    assert_eq!(trace_ops, vec!["trace:INFO:Test trace message", "trace:WARN:Warning message", "trace:ERROR:Error message"]);
+    assert_eq!(
+        trace_ops,
+        vec![
+            "trace:INFO:Test trace message",
+            "trace:WARN:Warning message",
+            "trace:ERROR:Error message"
+        ]
+    );
 }
 
 // ============================================================================
@@ -259,9 +260,7 @@ async fn deterministic_replay_activity_only() {
     };
 
     let activity_registry = ActivityRegistry::builder()
-        .register("A", |input: String| async move {
-            Ok(format!("A({})", input))
-        })
+        .register("A", |input: String| async move { Ok(format!("A({})", input)) })
         .build();
 
     let orchestration_registry = OrchestrationRegistry::builder()
@@ -274,12 +273,8 @@ async fn deterministic_replay_activity_only() {
             .unwrap(),
     );
 
-    let rt = runtime::Runtime::start_with_store(
-        store.clone(),
-        Arc::new(activity_registry),
-        orchestration_registry,
-    )
-    .await;
+    let rt =
+        runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
 
     let client = duroxide::Client::new(store.clone());
 
@@ -295,7 +290,10 @@ async fn deterministic_replay_activity_only() {
         .await
         .unwrap();
 
-    assert!(matches!(status, duroxide::runtime::OrchestrationStatus::Completed { .. }));
+    assert!(matches!(
+        status,
+        duroxide::runtime::OrchestrationStatus::Completed { .. }
+    ));
 
     if let duroxide::runtime::OrchestrationStatus::Completed { output } = status {
         assert_eq!(output, "A(2)");
@@ -318,11 +316,11 @@ async fn test_trace_fire_and_forget() {
         ctx.trace_info("Scheduled first activity");
         let future2 = ctx.schedule_activity("DoWork", "2");
         ctx.trace_info("Scheduled second activity");
-        
+
         // Wait for both activities
         let result1 = future1.into_activity().await?;
         let result2 = future2.into_activity().await?;
-        
+
         ctx.trace_info("Both activities completed");
         Ok(format!("{} {}", result1, result2))
     };
@@ -332,20 +330,28 @@ async fn test_trace_fire_and_forget() {
             .await
             .unwrap(),
     );
-    let orchestration_registry = OrchestrationRegistry::builder().register("test_trace_fire_and_forget", orch).build();
+    let orchestration_registry = OrchestrationRegistry::builder()
+        .register("test_trace_fire_and_forget", orch)
+        .build();
     let rt =
         runtime::Runtime::start_with_store(history_store.clone(), Arc::new(activities), orchestration_registry).await;
     let client = duroxide::Client::new(history_store.clone());
 
     // Start orchestration
-    client.start_orchestration("instance-trace-fire-and-forget", "test_trace_fire_and_forget", "").await.unwrap();
+    client
+        .start_orchestration("instance-trace-fire-and-forget", "test_trace_fire_and_forget", "")
+        .await
+        .unwrap();
 
     // Wait for completion
     let status = client
         .wait_for_orchestration("instance-trace-fire-and-forget", std::time::Duration::from_millis(2000))
         .await
         .unwrap();
-    assert!(matches!(status, duroxide::runtime::OrchestrationStatus::Completed { .. }));
+    assert!(matches!(
+        status,
+        duroxide::runtime::OrchestrationStatus::Completed { .. }
+    ));
 
     // Check history contains trace system calls
     let history = history_store.read("instance-trace-fire-and-forget").await;

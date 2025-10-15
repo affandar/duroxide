@@ -62,7 +62,10 @@ async fn single_timer_fires() {
         "Timer fired too early: expected >={TIMER_MS}ms, got {elapsed}ms"
     );
 
-    assert!(matches!(status, duroxide::runtime::OrchestrationStatus::Completed { .. }));
+    assert!(matches!(
+        status,
+        duroxide::runtime::OrchestrationStatus::Completed { .. }
+    ));
     if let duroxide::runtime::OrchestrationStatus::Completed { output } = status {
         assert_eq!(output, "done");
     }
@@ -89,14 +92,20 @@ async fn multiple_timers_fire_in_order() {
     let rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(acts), reg).await;
     let client = duroxide::Client::new(store.clone());
 
-    client.start_orchestration("inst-multi", "MultiTimer", "").await.unwrap();
+    client
+        .start_orchestration("inst-multi", "MultiTimer", "")
+        .await
+        .unwrap();
 
     let status = client
         .wait_for_orchestration("inst-multi", std::time::Duration::from_secs(5))
         .await
         .unwrap();
 
-    assert!(matches!(status, duroxide::runtime::OrchestrationStatus::Completed { .. }));
+    assert!(matches!(
+        status,
+        duroxide::runtime::OrchestrationStatus::Completed { .. }
+    ));
 
     drop(rt);
 }
@@ -126,14 +135,20 @@ async fn timer_with_activity() {
     let rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(activity_registry), reg).await;
     let client = duroxide::Client::new(store.clone());
 
-    client.start_orchestration("inst-timer-activity", "TimerActivity", "").await.unwrap();
+    client
+        .start_orchestration("inst-timer-activity", "TimerActivity", "")
+        .await
+        .unwrap();
 
     let status = client
         .wait_for_orchestration("inst-timer-activity", std::time::Duration::from_secs(5))
         .await
         .unwrap();
 
-    assert!(matches!(status, duroxide::runtime::OrchestrationStatus::Completed { .. }));
+    assert!(matches!(
+        status,
+        duroxide::runtime::OrchestrationStatus::Completed { .. }
+    ));
 
     if let duroxide::runtime::OrchestrationStatus::Completed { output } = status {
         assert!(output.contains("timer:"));
@@ -181,12 +196,8 @@ async fn timer_recovery_after_crash_before_fire() {
         .register("TimerRecoveryTest", orch)
         .build();
 
-    let rt = runtime::Runtime::start_with_store(
-        store1.clone(),
-        StdArc::new(activity_registry),
-        orchestration_registry,
-    )
-    .await;
+    let rt = runtime::Runtime::start_with_store(store1.clone(), StdArc::new(activity_registry), orchestration_registry)
+        .await;
 
     let client = duroxide::Client::new(store1.clone());
 
@@ -223,23 +234,20 @@ async fn timer_recovery_after_crash_before_fire() {
         .register("TimerRecoveryTest", orch2)
         .build();
 
-    let rt2 = runtime::Runtime::start_with_store(
-        store1.clone(),
-        StdArc::new(activity_registry2),
-        orchestration_registry2,
-    )
-    .await;
+    let rt2 =
+        runtime::Runtime::start_with_store(store1.clone(), StdArc::new(activity_registry2), orchestration_registry2)
+            .await;
 
     // Wait for orchestration to complete
     let status = client
-        .wait_for_orchestration(
-            "timer-recovery-instance",
-            std::time::Duration::from_secs(10),
-        )
+        .wait_for_orchestration("timer-recovery-instance", std::time::Duration::from_secs(10))
         .await
         .unwrap();
 
-    assert!(matches!(status, duroxide::runtime::OrchestrationStatus::Completed { .. }));
+    assert!(matches!(
+        status,
+        duroxide::runtime::OrchestrationStatus::Completed { .. }
+    ));
 
     // Verify the result shows timer fired
     if let duroxide::runtime::OrchestrationStatus::Completed { output } = status {
@@ -271,12 +279,8 @@ async fn timer_recovery_after_crash_after_fire() {
         .register("TimerRecoveryAfterTest", orch)
         .build();
 
-    let rt = runtime::Runtime::start_with_store(
-        store1.clone(),
-        StdArc::new(activity_registry),
-        orchestration_registry,
-    )
-    .await;
+    let rt = runtime::Runtime::start_with_store(store1.clone(), StdArc::new(activity_registry), orchestration_registry)
+        .await;
 
     let client = duroxide::Client::new(store1.clone());
 
@@ -309,23 +313,20 @@ async fn timer_recovery_after_crash_after_fire() {
         .register("TimerRecoveryAfterTest", orch2)
         .build();
 
-    let rt2 = runtime::Runtime::start_with_store(
-        store1.clone(),
-        StdArc::new(activity_registry2),
-        orchestration_registry2,
-    )
-    .await;
+    let rt2 =
+        runtime::Runtime::start_with_store(store1.clone(), StdArc::new(activity_registry2), orchestration_registry2)
+            .await;
 
     // Wait for orchestration to complete
     let status = client
-        .wait_for_orchestration(
-            "timer-recovery-after-instance",
-            std::time::Duration::from_secs(5),
-        )
+        .wait_for_orchestration("timer-recovery-after-instance", std::time::Duration::from_secs(5))
         .await
         .unwrap();
 
-    assert!(matches!(status, duroxide::runtime::OrchestrationStatus::Completed { .. }));
+    assert!(matches!(
+        status,
+        duroxide::runtime::OrchestrationStatus::Completed { .. }
+    ));
 
     if let duroxide::runtime::OrchestrationStatus::Completed { output } = status {
         assert_eq!(output, "Timer fired, then: done");
@@ -359,7 +360,10 @@ async fn zero_duration_timer() {
         .await
         .unwrap();
 
-    assert!(matches!(status, duroxide::runtime::OrchestrationStatus::Completed { .. }));
+    assert!(matches!(
+        status,
+        duroxide::runtime::OrchestrationStatus::Completed { .. }
+    ));
 
     if let duroxide::runtime::OrchestrationStatus::Completed { output } = status {
         assert_eq!(output, "zero-timer-fired");
@@ -383,14 +387,20 @@ async fn timer_cancellation() {
     let rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(acts), reg).await;
     let client = duroxide::Client::new(store.clone());
 
-    client.start_orchestration("inst-cancel", "TimerCancel", "").await.unwrap();
+    client
+        .start_orchestration("inst-cancel", "TimerCancel", "")
+        .await
+        .unwrap();
 
     let status = client
         .wait_for_orchestration("inst-cancel", std::time::Duration::from_secs(5))
         .await
         .unwrap();
 
-    assert!(matches!(status, duroxide::runtime::OrchestrationStatus::Completed { .. }));
+    assert!(matches!(
+        status,
+        duroxide::runtime::OrchestrationStatus::Completed { .. }
+    ));
 
     if let duroxide::runtime::OrchestrationStatus::Completed { output } = status {
         assert_eq!(output, "timer-completed");
@@ -471,14 +481,14 @@ async fn multiple_timers_recovery_after_crash() {
 
     // Wait for orchestration to complete
     let status = client
-        .wait_for_orchestration(
-            "multiple-timers-recovery-instance",
-            std::time::Duration::from_secs(10),
-        )
+        .wait_for_orchestration("multiple-timers-recovery-instance", std::time::Duration::from_secs(10))
         .await
         .unwrap();
 
-    assert!(matches!(status, duroxide::runtime::OrchestrationStatus::Completed { .. }));
+    assert!(matches!(
+        status,
+        duroxide::runtime::OrchestrationStatus::Completed { .. }
+    ));
 
     // Verify the result
     if let duroxide::runtime::OrchestrationStatus::Completed { output } = status {

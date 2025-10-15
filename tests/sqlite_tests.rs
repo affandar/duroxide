@@ -88,15 +88,7 @@ async fn test_sqlite_provider_basic() {
     };
 
     store
-        .ack_orchestration_item(
-            &item.lock_token,
-            1,
-            history_delta,
-            vec![],
-            vec![],
-            vec![],
-            metadata,
-        )
+        .ack_orchestration_item(&item.lock_token, 1, history_delta, vec![], vec![], vec![], metadata)
         .await
         .expect("Failed to ack orchestration item");
 
@@ -272,10 +264,7 @@ async fn test_sqlite_basic_persistence() {
         let store: Arc<dyn Provider> = Arc::new(store);
 
         // Dequeue and verify items
-        let (item1, token1) = store
-            .dequeue_worker_peek_lock()
-            .await
-            .expect("Should have first item");
+        let (item1, token1) = store.dequeue_worker_peek_lock().await.expect("Should have first item");
         match item1 {
             WorkItem::ActivityExecute { name, input, .. } => {
                 assert_eq!(name, "TestActivity");
@@ -284,10 +273,7 @@ async fn test_sqlite_basic_persistence() {
             _ => panic!("Expected ActivityExecute"),
         }
 
-        let (item2, token2) = store
-            .dequeue_worker_peek_lock()
-            .await
-            .expect("Should have second item");
+        let (item2, token2) = store.dequeue_worker_peek_lock().await.expect("Should have second item");
         match item2 {
             WorkItem::ActivityExecute { name, input, .. } => {
                 assert_eq!(name, "TestActivity2");
@@ -466,14 +452,14 @@ async fn timer_recovery_after_crash_before_fire() {
 
     // Wait for orchestration to complete
     let status = client
-        .wait_for_orchestration(
-            "timer-recovery-instance",
-            std::time::Duration::from_secs(10),
-        )
+        .wait_for_orchestration("timer-recovery-instance", std::time::Duration::from_secs(10))
         .await
         .unwrap();
 
-    assert!(matches!(status, duroxide::runtime::OrchestrationStatus::Completed { .. }));
+    assert!(matches!(
+        status,
+        duroxide::runtime::OrchestrationStatus::Completed { .. }
+    ));
 
     // Verify the result shows timer fired
     if let duroxide::runtime::OrchestrationStatus::Completed { output } = status {
@@ -688,7 +674,15 @@ async fn test_execution_status_running() {
     ];
 
     store
-        .ack_orchestration_item(&item.lock_token, 1, history_delta, vec![], vec![], vec![], ExecutionMetadata::default())
+        .ack_orchestration_item(
+            &item.lock_token,
+            1,
+            history_delta,
+            vec![],
+            vec![],
+            vec![],
+            ExecutionMetadata::default(),
+        )
         .await
         .unwrap();
 
@@ -736,7 +730,15 @@ async fn test_execution_output_captured_on_continue_as_new() {
     ];
 
     store
-        .ack_orchestration_item(&item.lock_token, 1, history_delta, vec![], vec![], vec![], ExecutionMetadata::default())
+        .ack_orchestration_item(
+            &item.lock_token,
+            1,
+            history_delta,
+            vec![],
+            vec![],
+            vec![],
+            ExecutionMetadata::default(),
+        )
         .await
         .unwrap();
 

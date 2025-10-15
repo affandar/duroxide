@@ -6,6 +6,7 @@
 
 ### Reliability & Provider API
 
+- build node and python bindings as well
 - convert execution, instance statuses to enums
 - Introduce a provider error type with Retryable/NonRetryable classification; update runtime to use it for retries across all provider ops (not just ack_orchestration_item)
 - Proper lock / visibility timeouts
