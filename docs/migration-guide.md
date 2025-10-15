@@ -174,7 +174,7 @@ for instance in instances {
 }
 
 // 2. Import to new provider
-let new_store = FsHistoryStore::new("./data", true);
+let new_store = SqliteProvider::new("sqlite:./data.db").await?;
 for (instance, history) in saved_data {
     // Recreate instance in new store
     new_store.create_instance(&instance).await?;

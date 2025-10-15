@@ -59,7 +59,7 @@ duroxide = "0.1"
 Hello world (activities + runtime)
 ```rust
 use std::sync::Arc;
-use duroxide::{OrchestrationContext, OrchestrationRegistry};
+use duroxide::{Client, OrchestrationContext, OrchestrationRegistry, OrchestrationStatus};
 use duroxide::runtime::{self};
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::providers::sqlite::SqliteProvider;
@@ -76,10 +76,11 @@ let orch = |ctx: OrchestrationContext, name: String| async move {
     Ok::<_, String>(res)
 };
 let orchestrations = OrchestrationRegistry::builder().register("HelloWorld", orch).build();
-let rt = runtime::Runtime::start_with_store(store, Arc::new(activities), orchestrations).await;
-rt.clone().start_orchestration("inst-hello-1", "HelloWorld", "Rust").await.unwrap();
-match rt.wait_for_orchestration("inst-hello-1", std::time::Duration::from_secs(5)).await.unwrap() {
-    runtime::OrchestrationStatus::Completed { output } => assert_eq!(output, "Hello, Rust!"),
+let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activities), orchestrations).await;
+let client = Client::new(store);
+client.start_orchestration("inst-hello-1", "HelloWorld", "Rust").await.unwrap();
+match client.wait_for_orchestration("inst-hello-1", std::time::Duration::from_secs(5)).await.unwrap() {
+    OrchestrationStatus::Completed { output } => assert_eq!(output, "Hello, Rust!"),
     _ => panic!("Orchestration failed"),
 }
 rt.shutdown().await;
@@ -139,7 +140,8 @@ ContinueAsNew and multi-execution
 - The initial `start_orchestration` handle resolves with an empty success when `ContinueAsNew` occurs; the latest execution can be observed via status APIs.
 
 Status and control-plane
-- `Runtime::get_orchestration_status(instance)` -> Running | Completed { output } | Failed { error } | NotFound
+- `Client::get_orchestration_status(instance)` -> Running | Completed { output } | Failed { error } | NotFound
+- `Client::wait_for_orchestration(instance, timeout)` -> Wait for completion with timeout
 - SQLite provider exposes execution-aware methods (`list_executions`, `read_with_execution`, etc.) for diagnostics.
 
 Local development

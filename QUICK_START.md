@@ -45,6 +45,7 @@ let event = ctx.schedule_wait("Event").into_event().await;
 
 ```rust
 use duroxide::*;
+use duroxide::providers::sqlite::SqliteProvider;
 use std::sync::Arc;
 
 // 1. Define an activity (your business logic)
@@ -62,13 +63,14 @@ let orchestration = |ctx: OrchestrationContext, name: String| async move {
 };
 
 // 3. Set up and run
-let store = Arc::new(FsHistoryStore::new("./data", true));
+let store = Arc::new(SqliteProvider::new("sqlite:./data.db").await.unwrap());
 let orchestrations = OrchestrationRegistry::builder()
     .register("HelloWorld", orchestration)
     .build();
 
-let rt = Runtime::start_with_store(store, Arc::new(activities), orchestrations).await;
-let _handle = rt.start_orchestration("inst-1", "HelloWorld", "World").await?;
+let rt = Runtime::start_with_store(store.clone(), Arc::new(activities), orchestrations).await;
+let client = Client::new(store);
+client.start_orchestration("inst-1", "HelloWorld", "World").await?;
 ```
 
 ## Common Patterns
@@ -129,16 +131,16 @@ async fn approval_workflow(ctx: OrchestrationContext) -> String {
 ## Complete Working Example
 
 ```rust
-use duroxide::providers::fs::FsHistoryStore;
+use duroxide::providers::sqlite::SqliteProvider;
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
-use duroxide::{OrchestrationContext, OrchestrationRegistry};
+use duroxide::{Client, OrchestrationContext, OrchestrationRegistry, OrchestrationStatus};
 use std::sync::Arc;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Setup
-    let store = Arc::new(FsHistoryStore::new("./data", true));
+    let store = Arc::new(SqliteProvider::new("sqlite:./data.db").await?);
     
     let activities = ActivityRegistry::builder()
         .register("ProcessOrder", |order_id: String| async move {
@@ -168,17 +170,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .build();
 
     // Run
-    let rt = runtime::DuroxideRuntime::start_with_store(
-        store, Arc::new(activities), orchestrations
+    let rt = runtime::Runtime::start_with_store(
+        store.clone(), Arc::new(activities), orchestrations
     ).await;
-
-    let _handle = rt.start_orchestration("order-1", "OrderProcessor", "ORDER-123").await?;
     
-    match rt.wait_for_orchestration("order-1", std::time::Duration::from_secs(5)).await? {
-        runtime::OrchestrationStatus::Completed { output } => {
+    let client = Client::new(store);
+    client.start_orchestration("order-1", "OrderProcessor", "ORDER-123").await?;
+    
+    match client.wait_for_orchestration("order-1", std::time::Duration::from_secs(5)).await? {
+        OrchestrationStatus::Completed { output } => {
             println!("✅ Success: {}", output);
         }
-        runtime::OrchestrationStatus::Failed { error } => {
+        OrchestrationStatus::Failed { error } => {
             println!("❌ Failed: {}", error);
         }
         _ => println!("⏳ Still running..."),
