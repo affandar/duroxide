@@ -2,10 +2,12 @@
 
 - Drop crates/dependencies that aren't needed
 - Add orchestrator functions
-- Macros for syntactic sugar
+- Macros for syntactic sugar [DESIGNED - see docs/proposals/MACRO-FINAL-DESIGN.md]
 
 ### Reliability & Provider API
 
+- macros for activities, orchestrations
+- orchestration functions!
 - build node and python bindings as well
 - convert execution, instance statuses to enums
 - Introduce a provider error type with Retryable/NonRetryable classification; update runtime to use it for retries across all provider ops (not just ack_orchestration_item)
