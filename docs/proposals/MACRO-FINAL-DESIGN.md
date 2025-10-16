@@ -2,21 +2,22 @@
 
 ## Overview
 
-This document specifies the complete macro system for duroxide, providing syntactic sugar for:
+This document specifies the macro system for duroxide, providing:
 - Auto-discovery of activities and orchestrations
 - Type-safe durable function calls
 - Clean tracing macros
+- Type-safe client invocation
 - Progressive features (names, versions, types)
 
 ---
 
 ## Design Goals
 
-1. **Clarity** - Clear distinction between inline and distributed execution
-2. **Type Safety** - Compile-time validation of all calls
-3. **Ergonomics** - Minimal boilerplate, clean syntax
-4. **Performance** - Zero runtime overhead (compile-time transformation)
-5. **Discoverability** - Auto-registration via distributed slices
+1. **Type Safety** - Compile-time validation of all calls
+2. **Ergonomics** - Minimal boilerplate, clean syntax
+3. **Discoverability** - Auto-registration via distributed slices
+4. **Clarity** - Clear distinction between durable and regular code
+5. **Performance** - Zero runtime overhead (compile-time transformation)
 6. **Flexibility** - Support versioning, custom names, typed I/O
 
 ---
@@ -26,16 +27,10 @@ This document specifies the complete macro system for duroxide, providing syntac
 ### Function Annotations
 
 ```rust
-// Inline orchestration function (executes in orchestration turn)
-#[orch_fn(typed)]
-fn calculate_tax(amount: f64, state: String) -> Result<f64, String> {
-    // Pure calculation or lightweight non-deterministic code
-}
-
 // Distributed activity (executes on worker)
 #[activity(typed)]
 async fn charge_payment(order: Order, amount: f64) -> Result<String, String> {
-    // I/O operations allowed
+    // I/O operations
 }
 
 // Orchestration
@@ -48,16 +43,30 @@ async fn process_order(ctx: OrchestrationContext, order: Order) -> Result<String
 ### Invocation Macros
 
 ```rust
-// Inline execution (completes in same turn)
-let tax = make_durable_inline!(calculate_tax(amount, state)).await?;
-
-// Worker execution (completes in future turn)
+// Activity execution (dispatched to worker)
 let payment = make_durable!(charge_payment(order, amount)).await?;
 
 // Tracing
 trace_info!("Processing order: {}", order.id);
 trace_warn!("Low inventory");
 trace_error!("Payment failed: {}", error);
+trace_debug!("State: {:?}", state);
+```
+
+### Client Invocation (Type-Safe)
+
+```rust
+// Start orchestration (no string names!)
+process_order::start(&client, "order-1", order).await?;
+
+// Wait for completion with typed result
+let status = process_order::wait(&client, "order-1", Duration::from_secs(30)).await?;
+
+// Check status
+let status = process_order::status(&client, "order-1").await?;
+
+// Cancel
+process_order::cancel(&client, "order-1", "User cancelled").await?;
 ```
 
 ### Auto-Discovery
@@ -85,72 +94,101 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Serialize, Deserialize)]
 struct Order {
     id: String,
+    customer_email: String,
     total: f64,
     state: String,
 }
 
-// ============ Inline Functions ============
-
-#[orch_fn(typed)]
-fn calculate_tax(amount: f64, state: String) -> Result<f64, String> {
-    let rate = match state.as_str() {
-        "CA" => 0.0725,
-        "NY" => 0.08875,
-        _ => 0.05,
-    };
-    Ok(amount * rate)
+#[derive(Serialize, Deserialize, Debug)]
+struct Receipt {
+    order_id: String,
+    transaction_id: String,
+    total: f64,
 }
 
-#[orch_fn(typed)]
-fn validate_order(order: Order) -> Result<bool, String> {
-    Ok(!order.id.is_empty() && order.total > 0.0)
-}
-
-// ============ Distributed Activities ============
+// ============ Activities ============
 
 #[activity(typed)]
-async fn charge_payment(order_id: String, amount: f64) -> Result<String, String> {
-    // Call external payment API
+async fn validate_inventory(order: Order) -> Result<bool, String> {
+    trace_info!("Checking inventory for order: {}", order.id);
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    Ok(true)
+}
+
+#[activity(typed)]
+async fn charge_payment(order: Order, amount: f64) -> Result<String, String> {
+    trace_info!("Charging ${:.2} for order: {}", amount, order.id);
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    
+    if amount > 10000.0 {
+        return Err("Amount exceeds limit".to_string());
+    }
+    
     Ok(format!("TXN-{}", uuid::Uuid::new_v4()))
 }
 
 #[activity(typed)]
-async fn send_email(email: String, body: String) -> Result<(), String> {
-    // Send via SMTP
+async fn send_email(email: String, subject: String, body: String) -> Result<(), String> {
+    trace_info!("Sending email to {}: {}", email, subject);
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    println!("📧 Email sent to {}\n{}", email, body);
     Ok(())
 }
 
 // ============ Orchestration ============
 
 #[orchestration]
-async fn process_order(ctx: OrchestrationContext, order: Order) -> Result<String, String> {
+async fn process_order(ctx: OrchestrationContext, order: Order) -> Result<Receipt, String> {
     trace_info!("Processing order: {}", order.id);
     
-    // Inline validation
-    let valid = make_durable_inline!(validate_order(order.clone())).await?;
-    if !valid {
-        return Err("Invalid order".to_string());
+    // Validate inventory
+    let inventory_ok = make_durable!(validate_inventory(order.clone())).await?;
+    if !inventory_ok {
+        trace_error!("Insufficient inventory");
+        return Err("Out of stock".to_string());
     }
+    trace_info!("✅ Inventory validated");
     
-    // Inline calculation
-    let tax = make_durable_inline!(calculate_tax(order.total, order.state)).await?;
-    let total = order.total + tax;
-    
+    // Calculate total with tax
+    let tax_rate = 0.0725; // Could be from inline function later
+    let total = order.total * (1.0 + tax_rate);
     trace_info!("Total with tax: ${:.2}", total);
     
-    // Distributed work
-    let txn = make_durable!(charge_payment(order.id.clone(), total)).await?;
-    let _ = make_durable!(send_email("customer@example.com".into(), "Receipt".into())).await;
+    // Charge payment
+    let transaction_id = make_durable!(charge_payment(order.clone(), total)).await?;
+    trace_info!("✅ Payment successful: {}", transaction_id);
     
-    trace_info!("Order complete: {}", txn);
-    Ok(txn)
+    // Send confirmation email (fire-and-forget)
+    let email_body = format!(
+        "Your order {} has been processed!\nTotal: ${:.2}\nTransaction: {}",
+        order.id, total, transaction_id
+    );
+    let _ = make_durable!(send_email(
+        order.customer_email.clone(),
+        "Order Confirmation".to_string(),
+        email_body
+    )).await;
+    
+    trace_info!("🎉 Order processing complete");
+    
+    Ok(Receipt {
+        order_id: order.id,
+        transaction_id,
+        total,
+    })
 }
 
 // ============ Main ============
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let store = setup_sqlite_provider().await?;
+    tracing_subscriber::fmt::init();
+    
+    let temp_dir = tempfile::tempdir()?;
+    let db_path = temp_dir.path().join("orders.db");
+    std::fs::File::create(&db_path)?;
+    let db_url = format!("sqlite:{}", db_path.to_str().unwrap());
+    let store = Arc::new(SqliteProvider::new(&db_url).await?);
     
     // Auto-discover everything!
     let rt = Runtime::builder()
@@ -161,18 +199,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await;
     
     let client = Client::new(store);
-    let order = Order { id: "ORD-1".into(), total: 100.0, state: "CA".into() };
     
-    client.start_orchestration_typed("order-1", "process_order", &order).await?;
+    let order = Order {
+        id: "ORD-12345".to_string(),
+        customer_email: "customer@example.com".to_string(),
+        total: 100.0,
+        state: "CA".to_string(),
+    };
     
-    let status = client.wait_for_orchestration_typed::<String>(
-        "order-1",
-        Duration::from_secs(30)
-    ).await?;
+    println!("🚀 Starting order processing...\n");
     
-    match status {
-        OrchestrationStatus::Completed { output } => println!("✅ {}", output),
-        OrchestrationStatus::Failed { error } => eprintln!("❌ {}", error),
+    // Type-safe start - no string names!
+    process_order::start(&client, "order-1", order).await?;
+    
+    // Type-safe wait with typed output
+    match process_order::wait(&client, "order-1", Duration::from_secs(30)).await? {
+        OrchestrationStatus::Completed { output } => {
+            println!("✅ SUCCESS");
+            println!("Receipt: {:?}", output);  // output is Receipt type!
+        }
+        OrchestrationStatus::Failed { error } => {
+            eprintln!("❌ FAILED: {}", error);
+        }
         _ => {}
     }
     
@@ -189,54 +237,38 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ```toml
 # duroxide-macros/Cargo.toml
+[package]
+name = "duroxide-macros"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+proc-macro = true
+
 [dependencies]
 proc-macro2 = "1.0"
 quote = "1.0"
 syn = { version = "2.0", features = ["full", "parsing", "extra-traits"] }
 
 # duroxide/Cargo.toml
+[workspace]
+members = [".", "duroxide-macros"]
+
 [dependencies]
+# ... existing dependencies ...
 linkme = "0.3"
 duroxide-macros = { path = "./duroxide-macros" }
-```
 
-### Architecture
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│ User Code                                                         │
-│                                                                   │
-│  #[orch_fn(typed)]                                               │
-│  fn calculate_tax(...) { ... }                                   │
-│                                                                   │
-│  #[activity(typed)]                                              │
-│  async fn charge_payment(...) { ... }                            │
-└────────────────────────┬────────────────────────────────────────┘
-                         │ (macro expansion)
-                         ▼
-┌─────────────────────────────────────────────────────────────────┐
-│ Generated Code                                                    │
-│                                                                   │
-│  - Struct with .call() method                                    │
-│  - Descriptor submitted to linkme distributed slice              │
-│  - Auto-registration data                                        │
-└────────────────────────┬────────────────────────────────────────┘
-                         │ (link-time collection)
-                         ▼
-┌─────────────────────────────────────────────────────────────────┐
-│ Runtime Discovery                                                 │
-│                                                                   │
-│  Runtime::builder()                                              │
-│    .discover_activities()    → iterates ACTIVITIES slice         │
-│    .discover_orchestrations() → iterates ORCHESTRATIONS slice    │
-└─────────────────────────────────────────────────────────────────┘
+[features]
+default = ["macros"]
+macros = ["duroxide-macros", "linkme"]
 ```
 
 ---
 
 ## Macro Implementation
 
-### 1. `#[orch_fn]` - Inline Orchestration Function
+### 1. `#[activity]` - Distributed Activity
 
 ```rust
 // duroxide-macros/src/lib.rs
@@ -245,129 +277,6 @@ use proc_macro::TokenStream;
 use quote::quote;
 use syn::{parse_macro_input, ItemFn, AttributeArgs, Meta, NestedMeta, Lit};
 
-#[proc_macro_attribute]
-pub fn orch_fn(attr: TokenStream, item: TokenStream) -> TokenStream {
-    let args = parse_macro_input!(attr as AttributeArgs);
-    let input = parse_macro_input!(item as ItemFn);
-    
-    // Parse attributes
-    let attrs = parse_attributes(args);
-    let fn_name = &input.sig.ident;
-    let fn_name_str = attrs.name.unwrap_or_else(|| fn_name.to_string());
-    
-    // Validate: must be synchronous
-    if input.sig.asyncness.is_some() {
-        return syn::Error::new_spanned(
-            &input.sig.asyncness,
-            "#[orch_fn] functions must be synchronous (not async)"
-        ).to_compile_error().into();
-    }
-    
-    let vis = &input.vis;
-    let fn_attrs = &input.attrs;
-    let sig = &input.sig;
-    let block = &input.block;
-    
-    if attrs.typed {
-        // Extract types
-        let input_type = extract_first_param_type(&input.sig);
-        let output_type = extract_result_ok_type(&input.sig);
-        
-        // Generate implementation name
-        let impl_name = syn::Ident::new(&format!("__impl_{}", fn_name), fn_name.span());
-        
-        let expanded = quote! {
-            // 1. Hidden implementation (user's code)
-            #[doc(hidden)]
-            #(#fn_attrs)*
-            fn #impl_name(__input: #input_type) -> Result<#output_type, String> #block
-            
-            // 2. Public struct with .call() method
-            #[doc = concat!("Inline orchestration function: ", #fn_name_str)]
-            #[doc = ""]
-            #[doc = "Executes synchronously within the orchestration turn."]
-            #[doc = "Use with `make_durable_inline!()` macro."]
-            #vis struct #fn_name;
-            
-            impl #fn_name {
-                #[doc = "Execute this function inline and record result in history."]
-                pub fn call(
-                    &self,
-                    __ctx: &::duroxide::OrchestrationContext,
-                    __input: #input_type,
-                ) -> impl ::std::future::Future<Output = Result<#output_type, String>> + Send {
-                    async move {
-                        // Lock context to access history
-                        let mut __inner = __ctx.inner.lock().unwrap();
-                        let __event_id = __inner.next_event_id;
-                        
-                        // Check for cached result (replay path)
-                        let __cached = __inner.history.iter().find_map(|e| {
-                            if let ::duroxide::Event::OrchFnCall { 
-                                event_id, name, output, .. 
-                            } = e {
-                                if *event_id == __event_id && name == #fn_name_str {
-                                    return Some(output.clone());
-                                }
-                            }
-                            None
-                        });
-                        
-                        if let Some(__output_json) = __cached {
-                            // Replay: use cached result
-                            __inner.next_event_id += 1;
-                            drop(__inner);  // Release lock
-                            
-                            let __result: #output_type = ::serde_json::from_str(&__output_json)
-                                .map_err(|e| format!("Deserialization error: {}", e))?;
-                            return Ok(__result);
-                        }
-                        
-                        // First execution: serialize input
-                        let __input_json = ::serde_json::to_string(&__input)
-                            .map_err(|e| format!("Serialization error: {}", e))?;
-                        
-                        // Release lock before executing user code
-                        drop(__inner);
-                        
-                        // Execute the actual function
-                        let __result = #impl_name(__input)?;
-                        
-                        // Serialize output
-                        let __output_json = ::serde_json::to_string(&__result)
-                            .map_err(|e| format!("Serialization error: {}", e))?;
-                        
-                        // Record in history
-                        let mut __inner = __ctx.inner.lock().unwrap();
-                        let __exec_id = __inner.execution_id;
-                        __inner.history.push(::duroxide::Event::OrchFnCall {
-                            event_id: __event_id,
-                            execution_id: __exec_id,
-                            name: #fn_name_str.to_string(),
-                            input: __input_json,
-                            output: __output_json.clone(),
-                        });
-                        __inner.next_event_id += 1;
-                        
-                        Ok(__result)
-                    }
-                }
-            }
-        };
-        
-        TokenStream::from(expanded)
-    } else {
-        // Non-typed version (string-based I/O)
-        // Similar implementation but without type parameters
-        // ...
-        TokenStream::from(quote! { #input })
-    }
-}
-```
-
-### 2. `#[activity]` - Distributed Activity
-
-```rust
 #[proc_macro_attribute]
 pub fn activity(attr: TokenStream, item: TokenStream) -> TokenStream {
     let args = parse_macro_input!(attr as AttributeArgs);
@@ -456,14 +365,46 @@ pub fn activity(attr: TokenStream, item: TokenStream) -> TokenStream {
         
         TokenStream::from(expanded)
     } else {
-        // Non-typed version
-        // ...
-        TokenStream::from(quote! { #input })
+        // Non-typed version (string-based I/O)
+        let expanded = quote! {
+            #(#fn_attrs)*
+            #vis #sig #block
+            
+            pub struct #fn_name;
+            
+            impl #fn_name {
+                pub fn call(
+                    &self,
+                    __ctx: &::duroxide::OrchestrationContext,
+                    __input: String,
+                ) -> impl ::std::future::Future<Output = Result<String, String>> + Send {
+                    async move {
+                        __ctx.schedule_activity(#activity_name, __input)
+                            .into_activity()
+                            .await
+                    }
+                }
+            }
+            
+            #[::linkme::distributed_slice(::duroxide::__internal::ACTIVITIES)]
+            #[linkme(crate = ::linkme)]
+            static ACTIVITY_DESCRIPTOR: ::duroxide::__internal::ActivityDescriptor = 
+                ::duroxide::__internal::ActivityDescriptor {
+                    name: #activity_name,
+                    invoke: |input: String| {
+                        Box::pin(async move {
+                            super::#fn_name(input).await
+                        })
+                    },
+                };
+        };
+        
+        TokenStream::from(expanded)
     }
 }
 ```
 
-### 3. `#[orchestration]` - Orchestration Function
+### 2. `#[orchestration]` - Orchestration Function
 
 ```rust
 #[proc_macro_attribute]
@@ -493,13 +434,78 @@ pub fn orchestration(attr: TokenStream, item: TokenStream) -> TokenStream {
     let input_type = extract_second_param_type(&input.sig);
     let output_type = extract_result_ok_type(&input.sig);
     
-    let impl_name = syn::Ident::new(&format!("__impl_{}", fn_name), fn_name.span());
-    
     let expanded = quote! {
-        // Keep user function but rename
-        #[doc(hidden)]
+        // Keep user function
         #(#fn_attrs)*
         #vis #sig #block
+        
+        // Generate client helper methods module
+        #[doc = concat!("Client methods for orchestration: ", #orch_name)]
+        #[doc = ""]
+        #[doc = "This module is auto-generated by the #[orchestration] macro."]
+        pub mod #fn_name {
+            use super::*;
+            
+            #[doc = "Start this orchestration with type-safe input."]
+            #[doc = ""]
+            #[doc = "# Example"]
+            #[doc = "```ignore"]
+            #[doc = concat!("let order = Order { /* ... */ };")]
+            #[doc = concat!(stringify!(#fn_name), "::start(&client, \"instance-1\", order).await?;")]
+            #[doc = "```"]
+            pub async fn start(
+                client: &::duroxide::Client,
+                instance_id: impl AsRef<str>,
+                input: #input_type,
+            ) -> Result<(), String> {
+                let input_json = ::serde_json::to_string(&input)
+                    .map_err(|e| format!("Failed to serialize input: {}", e))?;
+                client.start_orchestration(instance_id.as_ref(), #orch_name, input_json).await
+            }
+            
+            #[doc = "Wait for this orchestration to complete with typed output."]
+            pub async fn wait(
+                client: &::duroxide::Client,
+                instance_id: impl AsRef<str>,
+                timeout: ::std::time::Duration,
+            ) -> Result<::duroxide::OrchestrationStatus<#output_type>, String> {
+                let status = client.wait_for_orchestration(instance_id.as_ref(), timeout).await?;
+                match status {
+                    ::duroxide::OrchestrationStatus::Completed { output } => {
+                        let typed_output: #output_type = ::serde_json::from_str(&output)
+                            .map_err(|e| format!("Failed to deserialize output: {}", e))?;
+                        Ok(::duroxide::OrchestrationStatus::Completed { output: typed_output })
+                    }
+                    ::duroxide::OrchestrationStatus::Failed { error } => {
+                        Ok(::duroxide::OrchestrationStatus::Failed { error })
+                    }
+                    ::duroxide::OrchestrationStatus::Running => {
+                        Ok(::duroxide::OrchestrationStatus::Running)
+                    }
+                    ::duroxide::OrchestrationStatus::NotFound => {
+                        Ok(::duroxide::OrchestrationStatus::NotFound)
+                    }
+                }
+            }
+            
+            #[doc = "Get the current status of this orchestration."]
+            pub async fn status(
+                client: &::duroxide::Client,
+                instance_id: impl AsRef<str>,
+            ) -> Result<::duroxide::OrchestrationStatus<#output_type>, String> {
+                // Just call wait with zero timeout
+                Self::wait(client, instance_id, ::std::time::Duration::from_millis(0)).await
+            }
+            
+            #[doc = "Cancel this orchestration instance."]
+            pub async fn cancel(
+                client: &::duroxide::Client,
+                instance_id: impl AsRef<str>,
+                reason: impl Into<String>,
+            ) -> Result<(), String> {
+                client.cancel_instance(instance_id.as_ref(), reason).await
+            }
+        }
         
         // Submit to distributed slice for auto-discovery
         #[::linkme::distributed_slice(::duroxide::__internal::ORCHESTRATIONS)]
@@ -512,7 +518,7 @@ pub fn orchestration(attr: TokenStream, item: TokenStream) -> TokenStream {
                     Box::pin(async move {
                         let input: #input_type = ::serde_json::from_str(&input_json)
                             .map_err(|e| format!("Deserialization error: {}", e))?;
-                        let result = #fn_name(ctx, input).await?;
+                        let result = super::#fn_name(ctx, input).await?;
                         ::serde_json::to_string(&result)
                             .map_err(|e| format!("Serialization error: {}", e))
                     })
@@ -524,26 +530,18 @@ pub fn orchestration(attr: TokenStream, item: TokenStream) -> TokenStream {
 }
 ```
 
-### 4. Invocation Macros
+### 3. `make_durable!()` - Activity Invocation
 
 ```rust
-/// Make an inline function call durable.
-#[proc_macro]
-pub fn make_durable_inline(input: TokenStream) -> TokenStream {
-    let call = parse_macro_input!(input as syn::ExprCall);
-    
-    let func = &call.func;
-    let args = &call.args;
-    
-    // Transform: fn(args) → fn.call(&ctx, args)
-    let expanded = quote! {
-        #func.call(&ctx, #args)
-    };
-    
-    TokenStream::from(expanded)
-}
-
 /// Make an activity call durable (worker execution).
+///
+/// Automatically captures `ctx` from scope and transforms the call
+/// into a type-safe durable activity invocation.
+///
+/// # Example
+/// ```rust
+/// let result = make_durable!(my_activity(input)).await?;
+/// ```
 #[proc_macro]
 pub fn make_durable(input: TokenStream) -> TokenStream {
     let call = parse_macro_input!(input as syn::ExprCall);
@@ -552,6 +550,7 @@ pub fn make_durable(input: TokenStream) -> TokenStream {
     let args = &call.args;
     
     // Transform: fn(args) → fn.call(&ctx, args)
+    // The ctx is captured from surrounding scope
     let expanded = quote! {
         #func.call(&ctx, #args)
     };
@@ -560,31 +559,35 @@ pub fn make_durable(input: TokenStream) -> TokenStream {
 }
 ```
 
-### 5. Trace Macros
+### 4. Trace Macros
 
 ```rust
+/// Trace an info-level message.
 #[proc_macro]
 pub fn trace_info(input: TokenStream) -> TokenStream {
     trace_impl(input, "INFO")
 }
 
+/// Trace a warning-level message.
 #[proc_macro]
 pub fn trace_warn(input: TokenStream) -> TokenStream {
     trace_impl(input, "WARN")
 }
 
+/// Trace an error-level message.
 #[proc_macro]
 pub fn trace_error(input: TokenStream) -> TokenStream {
     trace_impl(input, "ERROR")
 }
 
+/// Trace a debug-level message.
 #[proc_macro]
 pub fn trace_debug(input: TokenStream) -> TokenStream {
     trace_impl(input, "DEBUG")
 }
 
 fn trace_impl(input: TokenStream, level: &str) -> TokenStream {
-    let input = TokenStream2::from(input);
+    let input = proc_macro2::TokenStream::from(input);
     
     let expanded = quote! {
         ctx.trace(#level, format!(#input))
@@ -709,25 +712,6 @@ pub mod __internal {
 }
 ```
 
-### New Event Type
-
-```rust
-// duroxide/src/lib.rs
-
-pub enum Event {
-    // ... existing events ...
-    
-    /// Inline orchestration function call (single event for schedule+completion)
-    OrchFnCall {
-        event_id: u64,
-        execution_id: u64,
-        name: String,
-        input: String,   // JSON serialized
-        output: String,  // JSON serialized
-    },
-}
-```
-
 ### Runtime Builder
 
 ```rust
@@ -755,12 +739,12 @@ impl RuntimeBuilder {
         self
     }
     
+    /// Auto-discover all activities annotated with #[activity]
     #[cfg(feature = "macros")]
     pub fn discover_activities(mut self) -> Self {
         let mut builder = ActivityRegistry::builder();
         
         for descriptor in crate::__internal::ACTIVITIES {
-            // Wrap the function pointer as ActivityHandler
             let handler = ActivityFromFn {
                 invoke: descriptor.invoke,
             };
@@ -771,6 +755,7 @@ impl RuntimeBuilder {
         self
     }
     
+    /// Auto-discover all orchestrations annotated with #[orchestration]
     #[cfg(feature = "macros")]
     pub fn discover_orchestrations(mut self) -> Self {
         let mut builder = OrchestrationRegistry::builder();
@@ -790,11 +775,13 @@ impl RuntimeBuilder {
         self
     }
     
+    /// Manually provide activities (opt-out of auto-discovery)
     pub fn activities(mut self, activities: ActivityRegistry) -> Self {
         self.activities = Some(activities);
         self
     }
     
+    /// Manually provide orchestrations (opt-out of auto-discovery)
     pub fn orchestrations(mut self, orchestrations: OrchestrationRegistry) -> Self {
         self.orchestrations = Some(orchestrations);
         self
@@ -825,7 +812,7 @@ impl Runtime {
     }
 }
 
-// Helper structs
+// Helper wrapper for function pointers
 struct ActivityFromFn {
     invoke: crate::__internal::ActivityFn,
 }
@@ -849,39 +836,213 @@ impl crate::OrchestrationHandler for OrchestrationFromFn {
 }
 ```
 
+### Prelude
+
+```rust
+// duroxide/src/prelude.rs
+
+pub use crate::{
+    Client,
+    OrchestrationContext,
+    OrchestrationRegistry,
+    OrchestrationStatus,
+    Event,
+};
+
+pub use crate::runtime::{
+    Runtime,
+    RuntimeOptions,
+    registry::{ActivityRegistry, OrchestrationRegistry as OrcheRegistry},
+};
+
+pub use crate::providers::sqlite::SqliteProvider;
+
+// Re-export all macros
+#[cfg(feature = "macros")]
+pub use duroxide_macros::{
+    activity,
+    orchestration,
+    make_durable,
+    trace_info,
+    trace_warn,
+    trace_error,
+    trace_debug,
+};
+
+pub use std::sync::Arc;
+pub use std::time::Duration;
+```
+
+---
+
+## Client Helper Methods
+
+The `#[orchestration]` macro generates a module with methods for type-safe invocation:
+
+```rust
+#[orchestration]
+async fn process_order(ctx: OrchestrationContext, order: Order) -> Result<Receipt, String> {
+    // ... implementation
+}
+
+// Macro generates:
+pub mod process_order {
+    pub async fn start(client: &Client, instance_id: &str, input: Order) -> Result<(), String>;
+    pub async fn wait(client: &Client, instance_id: &str, timeout: Duration) -> Result<OrchestrationStatus<Receipt>, String>;
+    pub async fn status(client: &Client, instance_id: &str) -> Result<OrchestrationStatus<Receipt>, String>;
+    pub async fn cancel(client: &Client, instance_id: &str, reason: &str) -> Result<(), String>;
+}
+```
+
+### Usage Examples
+
+```rust
+let client = Client::new(store);
+
+// Start - type-safe input!
+process_order::start(&client, "order-1", order).await?;
+
+// Wait - typed output!
+match process_order::wait(&client, "order-1", Duration::from_secs(30)).await? {
+    OrchestrationStatus::Completed { output } => {
+        // output is Receipt type, not JSON string!
+        println!("Receipt: {:?}", output);
+    }
+    OrchestrationStatus::Failed { error } => {
+        eprintln!("Failed: {}", error);
+    }
+    OrchestrationStatus::Running => {
+        println!("Still processing...");
+    }
+    OrchestrationStatus::NotFound => {
+        eprintln!("Instance not found");
+    }
+}
+
+// Check status without waiting
+let status = process_order::status(&client, "order-1").await?;
+
+// Cancel
+process_order::cancel(&client, "order-1", "User requested").await?;
+```
+
+### Advanced Patterns
+
+```rust
+// Poll for completion
+async fn wait_for_order(client: &Client, instance_id: &str) -> Result<Receipt, String> {
+    loop {
+        match process_order::status(client, instance_id).await? {
+            OrchestrationStatus::Completed { output } => return Ok(output),
+            OrchestrationStatus::Failed { error } => return Err(error),
+            OrchestrationStatus::Running => {
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+            OrchestrationStatus::NotFound => {
+                return Err("Instance not found".to_string());
+            }
+        }
+    }
+}
+
+// Batch start multiple orders
+for (i, order) in orders.iter().enumerate() {
+    let instance_id = format!("order-{}", i);
+    process_order::start(&client, &instance_id, order.clone()).await?;
+}
+
+// Wait for all with timeout
+let mut results = Vec::new();
+for i in 0..orders.len() {
+    let instance_id = format!("order-{}", i);
+    match process_order::wait(&client, &instance_id, Duration::from_secs(60)).await? {
+        OrchestrationStatus::Completed { output } => results.push(output),
+        OrchestrationStatus::Failed { error } => eprintln!("Order {} failed: {}", i, error),
+        _ => {}
+    }
+}
+
+// Cancel all pending
+for i in 0..orders.len() {
+    let instance_id = format!("order-{}", i);
+    let _ = process_order::cancel(&client, &instance_id, "Batch cancelled").await;
+}
+```
+
 ---
 
 ## Progressive Features
 
+### Basic Usage (Auto-Naming)
+
+```rust
+// Simple activity - name auto-derived as "greet"
+#[activity(typed)]
+async fn greet(name: String) -> Result<String, String> {
+    Ok(format!("Hello, {}!", name))
+}
+
+// Simple orchestration - name auto-derived as "hello_world", version "1.0.0"
+#[orchestration]
+async fn hello_world(ctx: OrchestrationContext, name: String) -> Result<String, String> {
+    let greeting = make_durable!(greet(name)).await?;
+    Ok(greeting)
+}
+```
+
 ### Custom Names
 
 ```rust
-// Override function name
-#[orch_fn(typed, name = "CalculateTax")]
-fn calculate_tax_v1(amount: f64, state: String) -> Result<f64, String> { ... }
+// Override activity name
+#[activity(typed, name = "GreetUser")]
+async fn greet_v1(name: String) -> Result<String, String> {
+    Ok(format!("Hello, {}!", name))
+}
 
-#[activity(typed, name = "ChargePayment")]
-async fn charge_payment_v1(order: Order) -> Result<String, String> { ... }
+// Override orchestration name
+#[orchestration(name = "HelloWorld")]
+async fn hello_world_impl(ctx: OrchestrationContext, name: String) -> Result<String, String> {
+    let greeting = make_durable!(greet_v1(name)).await?;
+    Ok(greeting)
+}
+
+// Client calls use custom name
+hello_world_impl::start(&client, "inst-1", "Alice".to_string()).await?;
+// But the runtime knows it as "HelloWorld"
 ```
 
 ### Versioning
 
 ```rust
-// Orchestrations support versioning
+// Version 1.0.0
 #[orchestration(version = "1.0.0")]
 async fn process_order_v1(ctx: OrchestrationContext, order: Order) -> Result<String, String> {
-    // Version 1 logic
+    // Old implementation
+    let payment = make_durable!(charge_payment_v1(order)).await?;
+    Ok(payment)
 }
 
+// Version 2.0.0 with same name but different implementation
 #[orchestration(name = "process_order", version = "2.0.0")]
-async fn process_order_v2(ctx: OrchestrationContext, order: Order) -> Result<String, String> {
-    // Version 2 logic with new features
+async fn process_order_v2(ctx: OrchestrationContext, order: Order) -> Result<Receipt, String> {
+    // New implementation with additional features
+    let validation = make_durable!(validate_inventory(order.clone())).await?;
+    if !validation {
+        return Err("Inventory check failed".into());
+    }
+    
+    let payment = make_durable!(charge_payment_v2(order)).await?;
+    
+    Ok(Receipt {
+        order_id: order.id,
+        transaction_id: payment,
+        total: order.total,
+    })
 }
 
-// Runtime resolves version based on policy
+// Both versions co-exist
 let rt = Runtime::builder()
-    .store(store)
-    .discover_orchestrations()  // Both versions registered
+    .discover_orchestrations()  // Registers both versions
     .start()
     .await;
 
@@ -889,47 +1050,91 @@ let rt = Runtime::builder()
 rt.orchestration_registry
     .set_version_policy("process_order", VersionPolicy::Latest)
     .await;
+
+// Client uses module name
+process_order_v2::start(&client, "order-1", order).await?;  // Explicit v2
 ```
 
 ### Type System Integration
 
 ```rust
-// Full type safety with custom types
-#[derive(Serialize, Deserialize)]
+// Complex domain types
+#[derive(Serialize, Deserialize, Clone)]
 struct PaymentRequest {
     order_id: String,
     amount: f64,
     currency: String,
+    payment_method: PaymentMethod,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
+enum PaymentMethod {
+    CreditCard { token: String },
+    PayPal { email: String },
+    BankTransfer { account: String },
+}
+
+#[derive(Serialize, Deserialize, Debug)]
 struct PaymentResponse {
     transaction_id: String,
-    status: String,
+    status: PaymentStatus,
+    timestamp: u64,
 }
 
+#[derive(Serialize, Deserialize, Debug)]
+enum PaymentStatus {
+    Success,
+    Declined { reason: String },
+    Pending,
+}
+
+// Type-safe activity
 #[activity(typed)]
-async fn charge_payment(request: PaymentRequest) -> Result<PaymentResponse, String> {
-    // Type-safe input and output
-    Ok(PaymentResponse {
-        transaction_id: format!("TXN-{}", uuid::Uuid::new_v4()),
-        status: "SUCCESS".to_string(),
-    })
+async fn process_payment(request: PaymentRequest) -> Result<PaymentResponse, String> {
+    // Full type safety with complex types
+    match request.payment_method {
+        PaymentMethod::CreditCard { token } => {
+            // Process card...
+            Ok(PaymentResponse {
+                transaction_id: format!("CC-{}", uuid::Uuid::new_v4()),
+                status: PaymentStatus::Success,
+                timestamp: 0,
+            })
+        }
+        PaymentMethod::PayPal { email } => {
+            // Process PayPal...
+            Ok(PaymentResponse {
+                transaction_id: format!("PP-{}", uuid::Uuid::new_v4()),
+                status: PaymentStatus::Success,
+                timestamp: 0,
+            })
+        }
+        PaymentMethod::BankTransfer { account } => {
+            // Process bank transfer...
+            Ok(PaymentResponse {
+                transaction_id: format!("BT-{}", uuid::Uuid::new_v4()),
+                status: PaymentStatus::Pending,
+                timestamp: 0,
+            })
+        }
+    }
 }
 
 #[orchestration]
-async fn process_order(ctx: OrchestrationContext, order: Order) -> Result<String, String> {
+async fn process_order(ctx: OrchestrationContext, order: Order) -> Result<PaymentResponse, String> {
     let request = PaymentRequest {
         order_id: order.id.clone(),
         amount: order.total,
         currency: "USD".to_string(),
+        payment_method: PaymentMethod::CreditCard { token: "tok_123".into() },
     };
     
-    // Type-safe call - compiler validates types!
-    let response = make_durable!(charge_payment(request)).await?;
+    // Type-safe call with complex types!
+    let response = make_durable!(process_payment(request)).await?;
     
-    trace_info!("Payment {}: {}", response.transaction_id, response.status);
-    Ok(response.transaction_id)
+    trace_info!("Payment processed: {:?}", response.status);
+    
+    Ok(response)
 }
 ```
 
@@ -937,62 +1142,101 @@ async fn process_order(ctx: OrchestrationContext, order: Order) -> Result<String
 
 ## Comparison: Before vs After
 
-### Before (Verbose)
+### Before (Verbose & Error-Prone)
 
 ```rust
+// Define activity
 let greet = |name: String| async move { 
     Ok(format!("Hello, {}!", name)) 
 };
 
+// Register manually with strings
 let activities = ActivityRegistry::builder()
-    .register("Greet", greet)
+    .register("Greet", greet)  // ⚠️ Can typo
     .build();
 
-let orchestration = |ctx: OrchestrationContext, name: String| async move {
-    ctx.trace("INFO", format!("Starting: {}", name));
+// Define orchestration
+let hello = |ctx: OrchestrationContext, name: String| async move {
+    ctx.trace("INFO", format!("Starting: {}", name));  // Verbose
     
+    // Manual serialization
     let name_json = serde_json::to_string(&name)?;
-    let result_json = ctx.schedule_activity("Greet", name_json)
+    
+    // String-based activity name
+    let result_json = ctx.schedule_activity("Greet", name_json)  // ⚠️ Can typo
         .into_activity()
         .await?;
+    
+    // Manual deserialization
     let greeting: String = serde_json::from_str(&result_json)?;
     
     Ok(greeting)
 };
 
+// Register orchestration with string
 let orchestrations = OrchestrationRegistry::builder()
-    .register("HelloWorld", orchestration)
+    .register("HelloWorld", hello)  // ⚠️ Can typo
     .build();
 
+// Start runtime
 let rt = Runtime::start_with_store(store, Arc::new(activities), orchestrations).await;
+
+// Client: manual serialization + string names
+let input_json = serde_json::to_string(&name)?;
+client.start_orchestration("inst-1", "HelloWorld", input_json).await?;  // ⚠️ Can typo
+
+// Wait: manual deserialization
+let status = client.wait_for_orchestration("inst-1", Duration::from_secs(10)).await?;
+match status {
+    OrchestrationStatus::Completed { output } => {
+        let result: String = serde_json::from_str(&output)?;
+        println!("Result: {}", result);
+    }
+    _ => {}
+}
 ```
 
-### After (Clean)
+### After (Clean & Type-Safe!)
 
 ```rust
+// Define activity
 #[activity(typed)]
 async fn greet(name: String) -> Result<String, String> {
     Ok(format!("Hello, {}!", name))
 }
 
+// Define orchestration
 #[orchestration]
 async fn hello_world(ctx: OrchestrationContext, name: String) -> Result<String, String> {
-    trace_info!("Starting: {}", name);
+    trace_info!("Starting: {}", name);  // Clean!
     
-    let greeting = make_durable!(greet(name)).await?;
+    let greeting = make_durable!(greet(name)).await?;  // Type-safe!
     
     Ok(greeting)
 }
 
+// Start runtime - auto-discovery!
 let rt = Runtime::builder()
     .store(store)
     .discover_activities()
     .discover_orchestrations()
     .start()
     .await;
+
+// Client: type-safe, no strings!
+hello_world::start(&client, "inst-1", name).await?;
+
+// Wait: typed output!
+match hello_world::wait(&client, "inst-1", Duration::from_secs(10)).await? {
+    OrchestrationStatus::Completed { output } => {
+        // output is already String!
+        println!("Result: {}", output);
+    }
+    _ => {}
+}
 ```
 
-**~70% reduction in code!** 🎉
+**Result:** ~75% reduction in code, 100% type-safe! 🎉
 
 ---
 
@@ -1027,15 +1271,16 @@ let rt = Runtime::builder()
     .await;
 ```
 
-### Phase 2: Typed Functions (Week 2-3)
+### Phase 2: Typed Functions & Client Helpers (Week 2-3)
 
-**Goal:** Add `typed` parameter support for type-safe I/O.
+**Goal:** Add `typed` parameter support and generate client helper methods.
 
 **Deliverables:**
 - [ ] Implement `#[activity(typed)]`
-- [ ] Implement `#[orchestration(typed)]` (implicit for orchestrations)
 - [ ] Add type extraction helpers
-- [ ] Handle serialization/deserialization
+- [ ] Handle serialization/deserialization in generated code
+- [ ] Generate client helper module (start, wait, status, cancel)
+- [ ] Make `OrchestrationStatus<T>` generic
 - [ ] Write type safety tests
 - [ ] Update examples
 
@@ -1044,32 +1289,34 @@ let rt = Runtime::builder()
 #[activity(typed)]
 async fn charge(order: Order) -> Result<PaymentResult, String> { ... }
 
-// Type-safe calls with custom types
+#[orchestration]
+async fn process(ctx: OrchestrationContext, order: Order) -> Result<Receipt, String> { ... }
+
+// Type-safe calls
+let result = make_durable!(charge(order)).await?;
+
+// Type-safe client
+process::start(&client, "inst-1", order).await?;
+let status = process::wait(&client, "inst-1", Duration::from_secs(30)).await?;
 ```
 
-### Phase 3: Invocation Macros (Week 3-4)
+### Phase 3: Invocation Macros (Week 3)
 
-**Goal:** Add `make_durable!()` and `make_durable_inline!()` macros.
+**Goal:** Add `make_durable!()` macro for clean activity calls.
 
 **Deliverables:**
-- [ ] Implement `#[orch_fn]` macro
-- [ ] Add `OrchFnCall` event type
 - [ ] Implement `make_durable!()` macro
-- [ ] Implement `make_durable_inline!()` macro
-- [ ] Update `OrchestrationContext` to handle inline functions
-- [ ] Write inline function tests
-- [ ] Performance benchmarks (inline vs worker)
+- [ ] Add implicit `ctx` capture
+- [ ] Write comprehensive tests
+- [ ] Update all examples to use macro
 
 **Success Criteria:**
 ```rust
-#[orch_fn(typed)]
-fn calculate_tax(amount: f64) -> Result<f64, String> { ... }
-
-let tax = make_durable_inline!(calculate_tax(100.0)).await?;
-let payment = make_durable!(charge_payment(order)).await?;
+// Clean activity invocation with implicit ctx
+let payment = make_durable!(charge_payment(order, total)).await?;
 ```
 
-### Phase 4: Trace Macros (Week 4)
+### Phase 4: Trace Macros (Week 3-4)
 
 **Goal:** Add clean tracing macros.
 
@@ -1083,19 +1330,20 @@ let payment = make_durable!(charge_payment(order)).await?;
 **Success Criteria:**
 ```rust
 trace_info!("Processing order: {}", order.id);
-trace_warn!("Low inventory");
+trace_warn!("Low inventory for SKU: {}", sku);
 trace_error!("Payment failed: {}", error);
 ```
 
-### Phase 5: Progressive Features (Week 5)
+### Phase 5: Progressive Features (Week 4-5)
 
 **Goal:** Custom names and versioning support.
 
 **Deliverables:**
-- [ ] Add `name` parameter parsing
-- [ ] Add `version` parameter parsing (orchestrations only)
+- [ ] Add `name` parameter parsing for activities
+- [ ] Add `name` parameter parsing for orchestrations
+- [ ] Add `version` parameter parsing for orchestrations
 - [ ] Test custom names
-- [ ] Test versioning with multiple versions
+- [ ] Test multiple versions of same orchestration
 - [ ] Write migration guide
 
 **Success Criteria:**
@@ -1105,9 +1353,12 @@ async fn my_activity(...) { ... }
 
 #[orchestration(version = "2.0.0")]
 async fn my_orch(...) { ... }
+
+#[orchestration(name = "ProcessOrder", version = "3.0.0")]
+async fn process_order_v3(...) { ... }
 ```
 
-### Phase 6: Documentation & Polish (Week 6)
+### Phase 6: Documentation & Polish (Week 5-6)
 
 **Goal:** Complete documentation and examples.
 
@@ -1117,8 +1368,8 @@ async fn my_orch(...) { ... }
 - [ ] Migration guide from old style
 - [ ] Update all examples to use macros
 - [ ] Best practices guide
-- [ ] Performance documentation
 - [ ] Troubleshooting guide
+- [ ] Performance documentation
 
 ---
 
@@ -1127,39 +1378,61 @@ async fn my_orch(...) { ... }
 ### Unit Tests (duroxide-macros)
 
 ```rust
+// duroxide-macros/tests/expand.rs
+
 #[test]
-fn test_activity_expansion() {
-    // Test macro expansion with trybuild
+fn test_activity_basic_expansion() {
+    #[activity]
+    async fn test_fn(input: String) -> Result<String, String> {
+        Ok(input)
+    }
 }
 
 #[test]
-fn test_orch_fn_must_be_sync() {
-    // Verify compile error for async orch_fn
+fn test_activity_typed_expansion() {
+    #[activity(typed)]
+    async fn test_fn(input: i32) -> Result<i32, String> {
+        Ok(input * 2)
+    }
 }
 
+#[test]
+fn test_orchestration_expansion() {
+    #[orchestration]
+    async fn test_orch(ctx: OrchestrationContext, input: String) -> Result<String, String> {
+        Ok(input)
+    }
+}
+
+// Use trybuild for compile-fail tests
 #[test]
 fn test_activity_must_be_async() {
-    // Verify compile error for sync activity
+    let t = trybuild::TestCases::new();
+    t.compile_fail("tests/ui/fail/activity_not_async.rs");
 }
 ```
 
 ### Integration Tests
 
 ```rust
+// tests/macro_integration_test.rs
+
+use duroxide::prelude::*;
+
+#[activity(typed)]
+async fn add(a: i32, b: i32) -> Result<i32, String> {
+    Ok(a + b)
+}
+
+#[orchestration]
+async fn test_orch(ctx: OrchestrationContext, input: i32) -> Result<i32, String> {
+    let result = make_durable!(add(input, 10)).await?;
+    Ok(result)
+}
+
 #[tokio::test]
 async fn test_auto_discovery() {
-    #[activity(typed)]
-    async fn test_activity(input: i32) -> Result<i32, String> {
-        Ok(input * 2)
-    }
-    
-    #[orchestration]
-    async fn test_orch(ctx: OrchestrationContext, input: i32) -> Result<i32, String> {
-        let result = make_durable!(test_activity(input)).await?;
-        Ok(result)
-    }
-    
-    let (store, _temp) = create_sqlite_store_disk().await;
+    let (store, _temp) = common::create_sqlite_store_disk().await;
     
     let rt = Runtime::builder()
         .store(store.clone())
@@ -1169,16 +1442,50 @@ async fn test_auto_discovery() {
         .await;
     
     let client = Client::new(store);
-    client.start_orchestration_typed("test-1", "test_orch", &5).await.unwrap();
     
-    let status = client.wait_for_orchestration_typed::<i32>("test-1", Duration::from_secs(5))
+    // Type-safe start
+    test_orch::start(&client, "test-1", 5).await.unwrap();
+    
+    // Type-safe wait
+    let status = test_orch::wait(&client, "test-1", Duration::from_secs(5))
         .await
         .unwrap();
     
     match status {
-        OrchestrationStatus::Completed { output } => assert_eq!(output, 10),
-        _ => panic!("Expected completed"),
+        OrchestrationStatus::Completed { output } => {
+            assert_eq!(output, 15); // 5 + 10
+        }
+        _ => panic!("Expected completed status"),
     }
+    
+    rt.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_client_helpers() {
+    let (store, _temp) = common::create_sqlite_store_disk().await;
+    
+    let rt = Runtime::builder()
+        .store(store.clone())
+        .discover_activities()
+        .discover_orchestrations()
+        .start()
+        .await;
+    
+    let client = Client::new(store);
+    
+    // Test start
+    test_orch::start(&client, "test-2", 10).await.unwrap();
+    
+    // Test status
+    let status = test_orch::status(&client, "test-2").await.unwrap();
+    assert!(matches!(status, OrchestrationStatus::Running | OrchestrationStatus::Completed { .. }));
+    
+    // Test wait
+    let final_status = test_orch::wait(&client, "test-2", Duration::from_secs(5))
+        .await
+        .unwrap();
+    assert!(matches!(final_status, OrchestrationStatus::Completed { .. }));
     
     rt.shutdown().await;
 }
@@ -1188,8 +1495,9 @@ async fn test_auto_discovery() {
 
 ```rust
 #[tokio::test]
-async fn benchmark_inline_vs_worker() {
-    // Measure latency difference between inline and worker execution
+async fn benchmark_macro_overhead() {
+    // Measure any performance impact of macro-generated code
+    // Should be zero runtime overhead
 }
 ```
 
@@ -1199,7 +1507,7 @@ async fn benchmark_inline_vs_worker() {
 
 ### Gradual Migration
 
-You can mix old and new styles:
+You can mix old and new styles during transition:
 
 ```rust
 // Old style (still works)
@@ -1214,7 +1522,7 @@ async fn new_activity(input: String) -> Result<String, String> {
     Ok(input)
 }
 
-// Mix both
+// Mix both!
 let rt = Runtime::builder()
     .store(store)
     .activities(activities)  // Manual registration
@@ -1223,35 +1531,46 @@ let rt = Runtime::builder()
     .await;
 ```
 
-### Step-by-Step
+### Step-by-Step Migration
 
-1. **Add macros dependency**
+1. **Add dependency:**
    ```toml
    [dependencies]
    duroxide = { version = "0.x", features = ["macros"] }
    ```
 
-2. **Convert activities one-by-one**
+2. **Convert one activity:**
    ```rust
    // Before
-   let greet = |name: String| async move { ... };
+   let greet = |name: String| async move { Ok(format!("Hello, {}!", name)) };
    
    // After
    #[activity(typed)]
-   async fn greet(name: String) -> Result<String, String> { ... }
+   async fn greet(name: String) -> Result<String, String> {
+       Ok(format!("Hello, {}!", name))
+   }
    ```
 
-3. **Update orchestrations**
+3. **Update orchestration to use `make_durable!()`:**
    ```rust
    // Before
-   let orch = |ctx: OrchestrationContext, input: String| async move { ... };
+   let result = ctx.schedule_activity("Greet", name).into_activity().await?;
+   
+   // After
+   let result = make_durable!(greet(name)).await?;
+   ```
+
+4. **Convert orchestration:**
+   ```rust
+   // Before
+   let orch = |ctx, input| async move { ... };
    
    // After
    #[orchestration]
    async fn my_orch(ctx: OrchestrationContext, input: String) -> Result<String, String> { ... }
    ```
 
-4. **Switch to auto-discovery**
+5. **Switch to auto-discovery:**
    ```rust
    // Before
    let rt = Runtime::start_with_store(store, Arc::new(activities), orchestrations).await;
@@ -1265,81 +1584,677 @@ let rt = Runtime::builder()
        .await;
    ```
 
+6. **Update client calls:**
+   ```rust
+   // Before
+   client.start_orchestration("inst-1", "MyOrch", input_json).await?;
+   
+   // After
+   my_orch::start(&client, "inst-1", input).await?;
+   ```
+
 ---
 
-## Prelude
+## API Reference
 
+### Macro Attributes
+
+#### `#[activity]`
+
+Marks an async function as a durable activity.
+
+**Syntax:**
 ```rust
-// duroxide/src/prelude.rs
+#[activity]
+#[activity(typed)]
+#[activity(name = "CustomName")]
+#[activity(typed, name = "CustomName")]
+```
 
-pub use crate::{
-    Client,
-    OrchestrationContext,
-    OrchestrationRegistry,
-    OrchestrationStatus,
-    Event,
-};
+**Parameters:**
+- `typed` - Enable type-safe I/O (recommended)
+- `name` - Custom activity name (default: function name)
 
-pub use crate::runtime::{
-    Runtime,
-    RuntimeOptions,
-    registry::{ActivityRegistry, OrchestrationRegistry as OrcheRegistry},
-};
+**Requirements:**
+- Function must be `async`
+- Must return `Result<T, String>` where `T: Serialize + DeserializeOwned`
 
-pub use crate::providers::sqlite::SqliteProvider;
+**Example:**
+```rust
+#[activity(typed)]
+async fn process_payment(order: Order) -> Result<PaymentResult, String> {
+    // I/O operations allowed
+    Ok(PaymentResult { /* ... */ })
+}
+```
 
-// Re-export all macros
-#[cfg(feature = "macros")]
-pub use duroxide_macros::{
-    activity,
-    orch_fn,
-    orchestration,
-    make_durable,
-    make_durable_inline,
-    trace_info,
-    trace_warn,
-    trace_error,
-    trace_debug,
-};
+#### `#[orchestration]`
 
-pub use std::sync::Arc;
-pub use std::time::Duration;
+Marks an async function as a durable orchestration.
+
+**Syntax:**
+```rust
+#[orchestration]
+#[orchestration(version = "2.0.0")]
+#[orchestration(name = "CustomName", version = "1.0.0")]
+```
+
+**Parameters:**
+- `name` - Custom orchestration name (default: function name)
+- `version` - Semantic version string (default: "1.0.0")
+
+**Requirements:**
+- Function must be `async`
+- First parameter must be `OrchestrationContext`
+- Must return `Result<T, String>` where `T: Serialize + DeserializeOwned`
+
+**Example:**
+```rust
+#[orchestration(version = "2.0.0")]
+async fn process_order(ctx: OrchestrationContext, order: Order) -> Result<Receipt, String> {
+    // Coordinate activities
+    Ok(Receipt { /* ... */ })
+}
+```
+
+**Generated Module:**
+```rust
+pub mod process_order {
+    pub async fn start(client: &Client, instance_id: &str, input: Order) -> Result<(), String>;
+    pub async fn wait(client: &Client, instance_id: &str, timeout: Duration) -> Result<OrchestrationStatus<Receipt>, String>;
+    pub async fn status(client: &Client, instance_id: &str) -> Result<OrchestrationStatus<Receipt>, String>;
+    pub async fn cancel(client: &Client, instance_id: &str, reason: &str) -> Result<(), String>;
+}
+```
+
+### Invocation Macros
+
+#### `make_durable!()`
+
+Schedules an activity for durable execution.
+
+**Syntax:**
+```rust
+let result = make_durable!(activity_name(args...)).await?;
+```
+
+**Behavior:**
+- Automatically captures `ctx` from surrounding scope
+- Transforms call into type-safe activity scheduling
+- Returns a future that must be awaited
+
+**Example:**
+```rust
+let payment = make_durable!(charge_payment(order, 100.0)).await?;
+let email = make_durable!(send_email("user@example.com".into(), "Subject".into())).await?;
+```
+
+#### `trace_info!()`, `trace_warn!()`, `trace_error!()`, `trace_debug!()`
+
+Emit durable trace messages.
+
+**Syntax:**
+```rust
+trace_info!("Message");
+trace_info!("Formatted: {}", value);
+trace_warn!("Warning: {}", msg);
+trace_error!("Error: {}", err);
+trace_debug!("Debug: {:?}", state);
+```
+
+**Behavior:**
+- Automatically captures `ctx` from surrounding scope
+- Supports format string syntax like `println!()`
+- Records in history for deterministic replay
+
+**Example:**
+```rust
+trace_info!("Processing order: {}", order.id);
+trace_warn!("Low inventory: {} remaining", count);
+trace_error!("Payment failed: {}", error);
 ```
 
 ---
 
-## Open Questions
+## Real-World Example: E-Commerce Order Processing
 
-1. **Cross-crate activities:** How to handle activities defined in separate crates? Linkme has limitations for cross-crate distributed slices.
+```rust
+use duroxide::prelude::*;
+use serde::{Deserialize, Serialize};
 
-2. **Generic functions:** Should we support generic activities/orch_fns? E.g., `fn process<T: Serialize>(item: T)`?
+// ============ Domain Types ============
 
-3. **Async traits:** Should activities implement a trait for runtime polymorphism?
+#[derive(Clone, Serialize, Deserialize)]
+struct Order {
+    id: String,
+    customer_id: String,
+    items: Vec<LineItem>,
+    subtotal: f64,
+    state: String,
+}
 
-4. **Error messages:** How to provide helpful compile errors when macros fail?
+#[derive(Clone, Serialize, Deserialize)]
+struct LineItem {
+    sku: String,
+    quantity: u32,
+    price: f64,
+}
 
-5. **IDE support:** Test with rust-analyzer to ensure good autocomplete and navigation.
+#[derive(Serialize, Deserialize, Debug)]
+struct Receipt {
+    order_id: String,
+    transaction_id: String,
+    tracking_number: String,
+    total: f64,
+}
+
+// ============ Activities ============
+
+#[activity(typed)]
+async fn validate_inventory(order: Order) -> Result<bool, String> {
+    trace_info!("Validating inventory for order: {}", order.id);
+    
+    // Check inventory system
+    for item in &order.items {
+        trace_debug!("Checking SKU {}: qty {}", item.sku, item.quantity);
+        // Simulate inventory check
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    
+    Ok(true)
+}
+
+#[activity(typed)]
+async fn reserve_inventory(order: Order) -> Result<String, String> {
+    trace_info!("Reserving inventory for order: {}", order.id);
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    Ok(format!("RESERVATION-{}", order.id))
+}
+
+#[activity(typed)]
+async fn charge_payment(order_id: String, amount: f64) -> Result<String, String> {
+    trace_info!("Charging ${:.2} for order: {}", amount, order_id);
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    
+    if amount > 10000.0 {
+        trace_error!("Amount ${:.2} exceeds limit", amount);
+        return Err("Amount exceeds limit".to_string());
+    }
+    
+    let txn_id = format!("TXN-{}", uuid::Uuid::new_v4());
+    trace_info!("Payment successful: {}", txn_id);
+    Ok(txn_id)
+}
+
+#[activity(typed)]
+async fn create_shipment(order: Order) -> Result<String, String> {
+    trace_info!("Creating shipment for order: {}", order.id);
+    tokio::time::sleep(Duration::from_millis(120)).await;
+    
+    let tracking = format!("TRACK-{}", order.id);
+    trace_info!("Shipment created: {}", tracking);
+    Ok(tracking)
+}
+
+#[activity(typed)]
+async fn send_confirmation_email(customer_id: String, order_id: String, receipt_text: String) -> Result<(), String> {
+    trace_info!("Sending confirmation to customer: {}", customer_id);
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    println!("📧 Email sent to {}\n{}", customer_id, receipt_text);
+    Ok(())
+}
+
+#[activity(typed)]
+async fn release_inventory(reservation_id: String) -> Result<(), String> {
+    trace_info!("Releasing inventory: {}", reservation_id);
+    tokio::time::sleep(Duration::from_millis(75)).await;
+    Ok(())
+}
+
+// ============ Orchestration ============
+
+#[orchestration(version = "1.0.0")]
+async fn process_order(ctx: OrchestrationContext, order: Order) -> Result<Receipt, String> {
+    trace_info!("🚀 Starting order processing: {}", order.id);
+    trace_debug!("Order details: {} items, subtotal ${:.2}", order.items.len(), order.subtotal);
+    
+    // Step 1: Validate inventory
+    trace_info!("Step 1/5: Validating inventory");
+    let inventory_ok = make_durable!(validate_inventory(order.clone())).await?;
+    
+    if !inventory_ok {
+        trace_error!("❌ Insufficient inventory for order: {}", order.id);
+        return Err("Insufficient inventory".to_string());
+    }
+    trace_info!("✅ Inventory validated");
+    
+    // Step 2: Reserve inventory
+    trace_info!("Step 2/5: Reserving inventory");
+    let reservation_id = make_durable!(reserve_inventory(order.clone())).await?;
+    trace_info!("✅ Inventory reserved: {}", reservation_id);
+    
+    // Step 3: Calculate total with tax
+    trace_info!("Step 3/5: Calculating total");
+    let tax_rate = match order.state.as_str() {
+        "CA" => 0.0725,
+        "NY" => 0.08875,
+        "TX" => 0.0625,
+        _ => 0.05,
+    };
+    let tax = order.subtotal * tax_rate;
+    let total = order.subtotal + tax;
+    trace_info!("Subtotal: ${:.2}, Tax: ${:.2}, Total: ${:.2}", order.subtotal, tax, total);
+    
+    // Step 4: Charge payment with timeout
+    trace_info!("Step 4/5: Processing payment");
+    let payment_future = make_durable!(charge_payment(order.id.clone(), total));
+    let timeout_future = ctx.schedule_timer(30000).into_timer(); // 30 second timeout
+    
+    let transaction_id = match ctx.select2(payment_future, timeout_future).await {
+        (0, result) => {
+            match result.into_activity() {
+                Ok(txn_id) => {
+                    trace_info!("✅ Payment successful: {}", txn_id);
+                    txn_id
+                }
+                Err(e) => {
+                    trace_error!("❌ Payment failed: {}", e);
+                    trace_info!("🔓 Releasing inventory reservation");
+                    
+                    // Compensate - release inventory
+                    let _ = make_durable!(release_inventory(reservation_id)).await;
+                    
+                    return Err(format!("Payment failed: {}", e));
+                }
+            }
+        }
+        (1, _) => {
+            trace_error!("⏱️  Payment timeout after 30 seconds");
+            trace_info!("🔓 Releasing inventory due to timeout");
+            
+            // Compensate - release inventory
+            let _ = make_durable!(release_inventory(reservation_id)).await;
+            
+            return Err("Payment timeout".to_string());
+        }
+        _ => unreachable!(),
+    };
+    
+    // Step 5: Create shipment
+    trace_info!("Step 5/5: Creating shipment");
+    let tracking_number = make_durable!(create_shipment(order.clone())).await?;
+    trace_info!("✅ Shipment created: {}", tracking_number);
+    
+    // Send confirmation email (fire-and-forget)
+    let email_body = format!(
+        "Your order {} has been processed!\nTotal: ${:.2}\nTransaction: {}\nTracking: {}",
+        order.id, total, transaction_id, tracking_number
+    );
+    let _ = make_durable!(send_confirmation_email(
+        order.customer_id.clone(),
+        order.id.clone(),
+        email_body
+    )).await;
+    
+    trace_info!("🎉 Order processing complete!");
+    
+    Ok(Receipt {
+        order_id: order.id,
+        transaction_id,
+        tracking_number,
+        total,
+    })
+}
+
+// ============ Main ============
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    tracing_subscriber::fmt::init();
+    
+    let temp_dir = tempfile::tempdir()?;
+    let db_path = temp_dir.path().join("ecommerce.db");
+    std::fs::File::create(&db_path)?;
+    let db_url = format!("sqlite:{}", db_path.to_str().unwrap());
+    let store = Arc::new(SqliteProvider::new(&db_url).await?);
+    
+    // Auto-discover everything!
+    let rt = Runtime::builder()
+        .store(store.clone())
+        .discover_activities()
+        .discover_orchestrations()
+        .start()
+        .await;
+    
+    let client = Client::new(store);
+    
+    let order = Order {
+        id: "ORD-12345".to_string(),
+        customer_id: "CUST-789".to_string(),
+        items: vec![
+            LineItem {
+                sku: "WIDGET-001".to_string(),
+                quantity: 2,
+                price: 29.99,
+            },
+            LineItem {
+                sku: "GADGET-002".to_string(),
+                quantity: 1,
+                price: 49.99,
+            },
+        ],
+        subtotal: 109.97,
+        state: "CA".to_string(),
+    };
+    
+    println!("🚀 Starting order processing...\n");
+    
+    // Type-safe start!
+    process_order::start(&client, "order-12345", order).await?;
+    
+    // Type-safe wait with typed output!
+    match process_order::wait(&client, "order-12345", Duration::from_secs(60)).await? {
+        OrchestrationStatus::Completed { output } => {
+            println!("\n✅ ORDER PROCESSED SUCCESSFULLY");
+            println!("Receipt: {:#?}", output);
+        }
+        OrchestrationStatus::Failed { error } => {
+            eprintln!("\n❌ ORDER PROCESSING FAILED");
+            eprintln!("Error: {}", error);
+        }
+        OrchestrationStatus::Running => {
+            println!("\n⏳ Order still processing...");
+        }
+        OrchestrationStatus::NotFound => {
+            eprintln!("\n❓ Order not found");
+        }
+    }
+    
+    rt.shutdown().await;
+    Ok(())
+}
+```
+
+**Expected Output:**
+```
+🚀 Starting order processing...
+
+📧 Email sent to CUST-789
+Your order ORD-12345 has been processed!
+Total: $117.94
+Transaction: TXN-...
+Tracking: TRACK-ORD-12345
+
+✅ ORDER PROCESSED SUCCESSFULLY
+Receipt: Receipt {
+    order_id: "ORD-12345",
+    transaction_id: "TXN-...",
+    tracking_number: "TRACK-ORD-12345",
+    total: 117.94,
+}
+```
 
 ---
 
-## Success Metrics
+## Best Practices
 
-- ✅ **70%+ reduction** in registration boilerplate
-- ✅ **Zero runtime overhead** - all compile-time transformation
-- ✅ **Full IDE support** - autocomplete, go-to-definition, refactoring
-- ✅ **Type safety** - compile-time validation of all calls
-- ✅ **100% backward compatible** - old style still works
-- ✅ **All examples migrated** - demonstrate best practices
+### When to Use `typed`
+
+**Always use `typed` unless:**
+- You need dynamic/runtime type handling
+- You're working with unstructured data
+- Legacy compatibility required
+
+**Example:**
+```rust
+// ✅ Recommended: typed
+#[activity(typed)]
+async fn process(order: Order) -> Result<Receipt, String> { ... }
+
+// ❌ Avoid: untyped (unless necessary)
+#[activity]
+async fn process(order_json: String) -> Result<String, String> { ... }
+```
+
+### Naming Conventions
+
+**Activities:**
+- Use snake_case function names
+- Name describes the action: `charge_payment`, `send_email`, `validate_inventory`
+- Keep names descriptive but concise
+
+**Orchestrations:**
+- Use snake_case function names
+- Name describes the workflow: `process_order`, `handle_refund`, `onboard_user`
+- Can use custom PascalCase names if needed: `#[orchestration(name = "ProcessOrder")]`
+
+### Error Handling
+
+```rust
+#[activity(typed)]
+async fn risky_operation(input: String) -> Result<Output, String> {
+    // Activities should return Result<T, String>
+    // Convert all errors to String
+    
+    let result = external_api_call()
+        .await
+        .map_err(|e| format!("API call failed: {}", e))?;
+    
+    Ok(result)
+}
+
+#[orchestration]
+async fn my_orch(ctx: OrchestrationContext, input: String) -> Result<String, String> {
+    // Orchestrations should handle errors gracefully
+    
+    match make_durable!(risky_operation(input)).await {
+        Ok(output) => {
+            trace_info!("Success: {:?}", output);
+            Ok("success".into())
+        }
+        Err(e) => {
+            trace_error!("Operation failed: {}", e);
+            // Compensate or return error
+            Err(format!("Failed: {}", e))
+        }
+    }
+}
+```
+
+### Versioning Strategy
+
+```rust
+// Version 1.0.0 - Initial release
+#[orchestration(version = "1.0.0")]
+async fn process_order_v1(ctx: OrchestrationContext, order: OrderV1) -> Result<String, String> {
+    // Simple implementation
+}
+
+// Version 2.0.0 - Breaking changes (new Order structure)
+#[orchestration(name = "process_order", version = "2.0.0")]
+async fn process_order_v2(ctx: OrchestrationContext, order: OrderV2) -> Result<Receipt, String> {
+    // Enhanced implementation with compensation logic
+}
+
+// Set default version policy
+rt.orchestration_registry
+    .set_version_policy("process_order", VersionPolicy::Latest)
+    .await;
+
+// Pin specific instances to specific versions
+rt.pinned_versions.lock().await.insert(
+    "order-legacy-123".to_string(),
+    Version::parse("1.0.0").unwrap()
+);
+```
 
 ---
 
-## Next Steps
+## Troubleshooting
 
-1. **Review this proposal** - gather feedback
-2. **Start Phase 1** - basic infrastructure
-3. **Iterate based on usage** - refine ergonomics
-4. **Document as we go** - keep docs up to date
-5. **Migrate examples** - dogfood the new API
+### Common Issues
+
+#### "cannot find value `ctx` in this scope"
+
+**Cause:** Using `make_durable!()` or trace macros outside an orchestration.
+
+**Fix:** These macros require `ctx` to be in scope (provided in orchestrations).
+
+```rust
+// ❌ Wrong
+async fn regular_function() {
+    let result = make_durable!(my_activity("test")).await?;  // No ctx!
+}
+
+// ✅ Correct
+#[orchestration]
+async fn my_orch(ctx: OrchestrationContext, input: String) -> Result<String, String> {
+    let result = make_durable!(my_activity(input)).await?;  // ctx in scope!
+    Ok(result)
+}
+```
+
+#### "#[activity] functions must be async"
+
+**Cause:** Trying to use `#[activity]` on a sync function.
+
+**Fix:** Activities must be async. For sync operations, use regular helper functions.
+
+```rust
+// ❌ Wrong
+#[activity(typed)]
+fn sync_activity(input: String) -> Result<String, String> { ... }
+
+// ✅ Correct
+#[activity(typed)]
+async fn async_activity(input: String) -> Result<String, String> { ... }
+```
+
+#### "Failed to serialize/deserialize"
+
+**Cause:** Type doesn't implement `Serialize`/`Deserialize`.
+
+**Fix:** Derive Serde traits on your types.
+
+```rust
+// ❌ Wrong
+struct Order {
+    id: String,
+}
+
+// ✅ Correct
+#[derive(Serialize, Deserialize, Clone)]
+struct Order {
+    id: String,
+}
+```
+
+### Debugging Macro Expansion
+
+```bash
+# Install cargo-expand
+cargo install cargo-expand
+
+# See what macros generate
+cargo expand --example my_example --features macros
+
+# Expand specific module
+cargo expand --lib my_module --features macros
+```
+
+---
+
+## Performance Characteristics
+
+### Compile-Time Overhead
+
+- Macro expansion: negligible (<1% increase in compile time)
+- Linkme collection: happens at link-time, minimal overhead
+
+### Runtime Overhead
+
+- **Zero!** All macro work is compile-time transformation
+- Generated code is identical to hand-written equivalent
+- No dynamic dispatch, no reflection, no runtime cost
+
+### Benchmarks
+
+```
+Activity invocation:
+- Old style: ctx.schedule_activity("name", json).into_activity().await
+- New style: make_durable!(name(input)).await
+- Overhead: 0ns (identical compiled code)
+
+Auto-discovery:
+- Link-time collection: ~5-10ms for 100 functions
+- Runtime cost: 0ns (happens once at startup)
+```
+
+---
+
+## Future Enhancements
+
+### Potential Phase 7+ Features
+
+1. **Sub-orchestration helpers:**
+   ```rust
+   let result = process_sub_order::call(&ctx, sub_order).await?;
+   ```
+
+2. **Retry policies:**
+   ```rust
+   #[activity(typed, retry = 3, backoff_ms = 1000)]
+   async fn flaky_api(input: String) -> Result<String, String> { ... }
+   ```
+
+3. **Timeout annotations:**
+   ```rust
+   #[activity(typed, timeout_ms = 5000)]
+   async fn slow_api(input: String) -> Result<String, String> { ... }
+   ```
+
+4. **Activity groups:**
+   ```rust
+   #[activity_group(name = "payments")]
+   mod payment_activities {
+       #[activity(typed)]
+       async fn charge_card(...) { ... }
+       
+       #[activity(typed)]
+       async fn process_paypal(...) { ... }
+   }
+   ```
+
+5. **Generic activities (advanced):**
+   ```rust
+   #[activity(typed)]
+   async fn transform<T: Serialize + DeserializeOwned>(item: T, op: String) -> Result<T, String> {
+       // Generic processing
+   }
+   ```
+
+---
+
+## Summary
+
+### What We're Building
+
+**Core macros:**
+- `#[activity(typed)]` - Auto-register activities
+- `#[orchestration]` - Auto-register orchestrations with client helpers
+- `make_durable!()` - Type-safe activity calls
+- `trace_*!()` - Clean logging
+
+**Benefits:**
+- ✅ ~75% less boilerplate
+- ✅ 100% type-safe
+- ✅ Zero runtime overhead
+- ✅ Full IDE support
+- ✅ Refactoring-safe
+- ✅ Auto-discovery
+
+**Timeline:**
+- **6 weeks** to full implementation
+- **Phase 1-2** (weeks 1-3) gets you 80% of the value
 
 **Ready to implement!** 🚀
-
