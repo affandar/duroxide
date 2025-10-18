@@ -947,3 +947,74 @@ impl Runtime {
 
     // spawn_instance_to_completion removed; atomic path is the only execution path
 }
+
+/// Runtime builder for constructing runtime with auto-discovery
+#[cfg(feature = "macros")]
+pub struct RuntimeBuilder {
+    store: Option<Arc<dyn Provider>>,
+    activities: Option<registry::ActivityRegistry>,
+    orchestrations: Option<registry::OrchestrationRegistry>,
+    options: RuntimeOptions,
+}
+
+#[cfg(feature = "macros")]
+impl RuntimeBuilder {
+    pub fn new() -> Self {
+        Self {
+            store: None,
+            activities: None,
+            orchestrations: None,
+            options: RuntimeOptions::default(),
+        }
+    }
+    
+    pub fn store(mut self, store: Arc<dyn Provider>) -> Self {
+        self.store = Some(store);
+        self
+    }
+    
+    pub fn discover_activities(mut self) -> Self {
+        let mut builder = registry::ActivityRegistry::builder();
+        
+        if let Some(activities) = crate::__internal::ACTIVITIES.get() {
+            for descriptor in activities.lock().unwrap().iter() {
+                builder = builder.register(descriptor.name, descriptor.invoke);
+            }
+        }
+        
+        self.activities = Some(builder.build());
+        self
+    }
+    
+    pub fn discover_orchestrations(mut self) -> Self {
+        let mut builder = registry::OrchestrationRegistry::builder();
+        
+        if let Some(orchestrations) = crate::__internal::ORCHESTRATIONS.get() {
+            for descriptor in orchestrations.lock().unwrap().iter() {
+                builder = builder.register_versioned(
+                    descriptor.name,
+                    descriptor.version,
+                    descriptor.invoke,
+                );
+            }
+        }
+        
+        self.orchestrations = Some(builder.build());
+        self
+    }
+    
+    pub async fn start(self) -> Result<Arc<Runtime>, String> {
+        let store = self.store.ok_or("Store required")?;
+        let activities = self.activities.ok_or("Activities required")?;
+        let orchestrations = self.orchestrations.ok_or("Orchestrations required")?;
+        
+        Ok(Runtime::start_with_store(store, Arc::new(activities), orchestrations).await)
+    }
+}
+
+#[cfg(feature = "macros")]
+impl Runtime {
+    pub fn builder() -> RuntimeBuilder {
+        RuntimeBuilder::new()
+    }
+}

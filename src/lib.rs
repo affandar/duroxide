@@ -13,6 +13,18 @@
 //! use duroxide::{OrchestrationContext, OrchestrationRegistry, Client};
 //! use std::sync::Arc;
 //!
+//! // With macros enabled:
+//! // use duroxide::macros::*;
+//! // #[activity]
+//! // async fn greet(name: String) -> Result<String, String> {
+//! //     Ok(format!("Hello, {}!", name))
+//! // }
+//! // #[orchestration]
+//! // async fn hello_world(ctx: OrchestrationContext, name: String) -> Result<String, String> {
+//! //     let greeting = schedule!(ctx, greet(name)).await?;
+//! //     Ok(greeting)
+//! // }
+//!
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! // 1. Create a storage provider
 //! let store = Arc::new(SqliteProvider::new("sqlite:./data.db").await.unwrap());
@@ -1122,6 +1134,52 @@ impl OrchestrationContext {
     }
 
     // removed: schedule_orchestration(name, input) without instance id (must pass instance id)
+
+    /// Generate a deterministic GUID
+    #[cfg(feature = "macros")]
+    pub async fn new_guid_macro(&self) -> Result<String, String> {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        
+        // Thread-local counter for uniqueness within the same timestamp
+        thread_local! {
+            static COUNTER: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+        }
+        let counter = COUNTER.with(|c| {
+            let val = c.get();
+            c.set(val.wrapping_add(1));
+            val
+        });
+        
+        // Format as UUID-like string
+        let guid = format!(
+            "{:08x}-{:04x}-{:04x}-{:04x}-{:012x}",
+            (timestamp >> 96) as u32,
+            ((timestamp >> 80) & 0xFFFF) as u16,
+            (counter & 0xFFFF) as u16,
+            ((timestamp >> 64) & 0xFFFF) as u16,
+            (timestamp & 0xFFFFFFFFFFFF) as u64
+        );
+        
+        Ok(guid)
+    }
+    
+    /// Get deterministic UTC timestamp in milliseconds
+    #[cfg(feature = "macros")]
+    pub async fn utc_now_macro(&self) -> Result<u64, String> {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        
+        Ok(timestamp)
+    }
 }
 
 // Aggregate future machinery lives in crate::futures
@@ -1235,5 +1293,68 @@ where
 {
     run_turn_with(history, 0, 1, orchestrator)
 }
+
+// Macro system support
+#[cfg(feature = "macros")]
+pub mod __internal {
+    use std::sync::OnceLock;
+    use std::future::Future;
+    use std::cell::RefCell;
+    use crate::OrchestrationContext;
+
+    pub struct ActivityDescriptor {
+        pub name: &'static str,
+        pub invoke: fn(String) -> std::pin::Pin<Box<dyn Future<Output = Result<String, String>> + Send>>,
+    }
+
+    pub struct OrchestrationDescriptor {
+        pub name: &'static str,
+        pub version: &'static str,
+        pub invoke: fn(OrchestrationContext, String) -> std::pin::Pin<Box<dyn Future<Output = Result<String, String>> + Send>>,
+    }
+
+    pub static ACTIVITIES: OnceLock<std::sync::Mutex<Vec<ActivityDescriptor>>> = OnceLock::new();
+    pub static ORCHESTRATIONS: OnceLock<std::sync::Mutex<Vec<OrchestrationDescriptor>>> = OnceLock::new();
+
+    thread_local! {
+        static CURRENT_CONTEXT: RefCell<Option<OrchestrationContext>> = RefCell::new(None);
+    }
+
+    pub fn get_current_context() -> OrchestrationContext {
+        CURRENT_CONTEXT.with(|ctx| {
+            ctx.borrow().clone().expect("No orchestration context available")
+        })
+    }
+
+    pub fn set_current_context(ctx: OrchestrationContext) {
+        CURRENT_CONTEXT.with(|c| {
+            *c.borrow_mut() = Some(ctx);
+        });
+    }
+
+    pub fn is_orchestration(name: &str) -> bool {
+        if let Some(orchestrations) = ORCHESTRATIONS.get() {
+            orchestrations.lock().unwrap().iter().any(|desc| desc.name == name)
+        } else {
+            false
+        }
+    }
+
+    pub fn is_activity(name: &str) -> bool {
+        if let Some(activities) = ACTIVITIES.get() {
+            activities.lock().unwrap().iter().any(|desc| desc.name == name)
+        } else {
+            false
+        }
+    }
+}
+
+#[cfg(feature = "macros")]
+pub mod macros {
+    pub use duroxide_macros::*;
+}
+
+#[cfg(feature = "macros")]
+pub use macros::*;
 
 // Executor helper removed - not used anywhere

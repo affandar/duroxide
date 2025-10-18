@@ -1,20 +1,18 @@
-//! Hello World Example - Start here to learn Duroxide basics
+//! Hello World Example - Lower Level API
 //!
 //! This example demonstrates:
-//! - Setting up a basic orchestration with activities using macros
+//! - Setting up a basic orchestration with activities using the lower-level API
 //! - Using the SQLite provider for persistence
 //! - Running orchestrations with the in-process runtime
-//! - Auto-discovery of activities and orchestrations
+//! - Manual registration of activities and orchestrations
 //!
-//! Run with: `cargo run --example hello_world --features macros`
+//! Run with: `cargo run --example hello_world_lower_level`
 
 use duroxide::providers::sqlite::SqliteProvider;
+use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
-use duroxide::{Client, OrchestrationContext};
+use duroxide::{Client, OrchestrationContext, OrchestrationRegistry};
 use std::sync::Arc;
-
-// Import macros directly
-use duroxide_macros::*;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -23,36 +21,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create a temporary SQLite database for persistence
     let temp_dir = tempfile::tempdir()?;
-    let db_path = temp_dir.path().join("hello_world.db");
+    let db_path = temp_dir.path().join("hello_world_lower_level.db");
     std::fs::File::create(&db_path)?;
     let db_url = format!("sqlite:{}", db_path.to_str().unwrap());
     let store = Arc::new(SqliteProvider::new(&db_url).await?);
 
-    // Define activities using macros
-    #[activity]
-    async fn greet(name: String) -> Result<String, String> {
-        Ok(format!("Hello, {}!", name))
-    }
+    // Register a simple activity that greets users
+    let activities = ActivityRegistry::builder()
+        .register("Greet", |name: String| async move { Ok(format!("Hello, {}!", name)) })
+        .build();
 
-    // Define orchestration using macros
-    #[orchestration]
-    async fn hello_world(ctx: OrchestrationContext, name: String) -> Result<String, String> {
+    // Define our orchestration
+    let orchestration = |ctx: OrchestrationContext, name: String| async move {
         ctx.trace_info("Starting greeting orchestration");
 
         // Schedule and await the greeting activity
-        let greeting = ctx.schedule_activity("greet", name).into_activity().await?;
+        let greeting = ctx.schedule_activity("Greet", name).into_activity().await?;
 
         ctx.trace_info(format!("Greeting completed: {}", greeting));
         Ok(greeting)
-    }
+    };
 
-    // Start the runtime with auto-discovery
-    let rt = runtime::Runtime::builder()
-        .store(store.clone())
-        .discover_activities()
-        .discover_orchestrations()
-        .start()
-        .await?;
+    // Register the orchestration
+    let orchestrations = OrchestrationRegistry::builder()
+        .register("HelloWorld", orchestration)
+        .build();
+
+    // Start the runtime
+    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activities), orchestrations).await;
 
     // Create a client bound to the same provider
     let client = Client::new(store);
@@ -60,7 +56,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Start an orchestration instance
     let instance_id = "hello-instance-1";
     client
-        .start_orchestration(instance_id, "hello_world", "Rust Developer")
+        .start_orchestration(instance_id, "HelloWorld", "Rust Developer")
         .await?;
 
     // Wait for completion

@@ -20,6 +20,10 @@ async-trait = "0.1"
 tracing = { version = "0.1", features = ["std"] }
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 semver = "1"
+uuid = "1.0"
+
+# Macro support
+duroxide-macros = { path = "duroxide-macros", optional = true }
 
 # SQLite support
 sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "sqlite", "macros", "migrate", "chrono"] }
@@ -36,4 +40,9 @@ tempfile = "3"
 [workspace]
 members = [
     ".",
+    "duroxide-macros",
 ]
+
+[features]
+default = []
+macros = ["duroxide-macros"]
