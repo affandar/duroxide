@@ -7,6 +7,8 @@
 ### Reliability & Provider API
 
 - macros for activities, orchestrations
+ - pick proposal from branch macro3 - macro and macro2 branches have fuller impls but not clean
+- should focus on simplification, refactoring and then threading for dispatchers before synatic sugars
 - orchestration functions!
 - build node and python bindings as well
 - convert execution, instance statuses to enums
