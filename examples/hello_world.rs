@@ -8,16 +8,17 @@
 //!
 //! Run with: `cargo run --example hello_world --features macros`
 
-use duroxide::providers::sqlite::SqliteProvider;
-use duroxide::runtime::{self};
-use duroxide::{Client, OrchestrationContext};
-use std::sync::Arc;
-
-// Import macros directly
-use duroxide_macros::*;
-
+#[cfg(feature = "macros")]
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    use duroxide::providers::sqlite::SqliteProvider;
+    use duroxide::runtime::{self};
+    use duroxide::{Client, OrchestrationContext};
+    use std::sync::Arc;
+
+    // Import macros directly
+    use duroxide_macros::*;
+
     // Initialize tracing for better output
     tracing_subscriber::fmt::init();
 
@@ -82,5 +83,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     rt.shutdown().await;
+    Ok(())
+}
+
+#[cfg(not(feature = "macros"))]
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    println!("This example requires the 'macros' feature to be enabled.");
+    println!("Run with: cargo run --example hello_world --features macros");
     Ok(())
 }

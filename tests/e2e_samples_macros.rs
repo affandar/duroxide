@@ -2,12 +2,19 @@
 //!
 //! Each test demonstrates a common orchestration pattern using
 //! `OrchestrationContext` and the macro-based auto-discovery system.
+
+mod common;
+
+#[cfg(feature = "macros")]
+mod macros_tests {
 use duroxide::runtime::{self};
 use duroxide::{Client, OrchestrationContext};
-use duroxide::macros::*;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-mod common;
+use crate::common;
+
+// Import macros directly
+use duroxide_macros::*;
 
 /// Hello World: define one activity and call it from an orchestrator using macros.
 ///
@@ -112,3 +119,5 @@ async fn sample_simple_orchestration_macros() {
 
     rt.shutdown().await;
 }
+
+} // mod macros_tests
