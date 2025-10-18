@@ -23,11 +23,15 @@ semver = "1"
 
 # SQLite support
 sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "sqlite", "macros", "migrate", "chrono"] }
+libsqlite3-sys = { version = "0.28", features = ["bundled"] }
 
-# Ensure SQLite is bundled
-[dependencies.libsqlite3-sys]
-version = "0.28"
-features = ["bundled"]
+# Macro support (optional)
+duroxide-macros = { path = "./duroxide-macros", optional = true }
+linkme = { version = "0.3", optional = true }
+
+[features]
+default = []
+macros = ["duroxide-macros", "linkme"]
 
 [dev-dependencies]
 # Used in tests/examples
@@ -36,4 +40,5 @@ tempfile = "3"
 [workspace]
 members = [
     ".",
+    "duroxide-macros",
 ]

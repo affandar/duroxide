@@ -242,6 +242,41 @@ use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
 pub mod client;
 pub mod futures;
 pub mod runtime;
+pub mod prelude;
+
+// Macro support (hidden internals)
+#[cfg(feature = "macros")]
+#[doc(hidden)]
+pub mod __internal {
+    use linkme::distributed_slice;
+    use std::pin::Pin;
+    use std::future::Future;
+    
+    pub type ActivityFn = fn(String) -> Pin<Box<dyn Future<Output = Result<String, String>> + Send>>;
+    pub type OrchestrationFn = fn(crate::OrchestrationContext, String) 
+        -> Pin<Box<dyn Future<Output = Result<String, String>> + Send>>;
+    
+    pub struct ActivityDescriptor {
+        pub name: &'static str,
+        pub invoke: ActivityFn,
+    }
+    
+    pub struct OrchestrationDescriptor {
+        pub name: &'static str,
+        pub version: &'static str,
+        pub invoke: OrchestrationFn,
+    }
+    
+    #[distributed_slice]
+    pub static ACTIVITIES: [ActivityDescriptor] = [..];
+    
+    #[distributed_slice]
+    pub static ORCHESTRATIONS: [OrchestrationDescriptor] = [..];
+}
+
+// Re-export macros
+#[cfg(feature = "macros")]
+pub use duroxide_macros::{activity, orchestration};
 // Re-export descriptor type for public API ergonomics
 pub use runtime::OrchestrationDescriptor;
 pub mod providers;
