@@ -38,10 +38,10 @@ pub mod orchestration_turn;
 
 /// High-level orchestration status derived from history.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum OrchestrationStatus {
+pub enum OrchestrationStatus<T = String> {
     NotFound,
     Running,
-    Completed { output: String },
+    Completed { output: T },
     Failed { error: String },
 }
 
@@ -86,6 +86,126 @@ pub use crate::runtime::registry::{OrchestrationRegistry, OrchestrationRegistryB
 
 pub use router::{InstanceRouter, OrchestratorMsg};
 
+/// Builder for constructing a Runtime with optional auto-discovery.
+#[cfg(feature = "macros")]
+pub struct RuntimeBuilder {
+    store: Option<Arc<dyn Provider>>,
+    activities: Option<registry::ActivityRegistry>,
+    orchestrations: Option<OrchestrationRegistry>,
+    options: RuntimeOptions,
+}
+
+#[cfg(feature = "macros")]
+impl RuntimeBuilder {
+    pub fn new() -> Self {
+        Self {
+            store: None,
+            activities: None,
+            orchestrations: None,
+            options: RuntimeOptions::default(),
+        }
+    }
+    
+    pub fn store(mut self, store: Arc<dyn Provider>) -> Self {
+        self.store = Some(store);
+        self
+    }
+    
+    pub fn options(mut self, options: RuntimeOptions) -> Self {
+        self.options = options;
+        self
+    }
+    
+    /// Auto-discover all activities annotated with #[activity]
+    pub fn discover_activities(mut self) -> Self {
+        use crate::__internal::ACTIVITIES;
+        
+        let mut map: std::collections::HashMap<String, Arc<dyn registry::ActivityHandler>> = 
+            std::collections::HashMap::new();
+        
+        for descriptor in ACTIVITIES {
+            // Wrap the function pointer in ActivityHandler
+            struct ActivityFromFn {
+                invoke: crate::__internal::ActivityFn,
+            }
+            
+            #[async_trait::async_trait]
+            impl registry::ActivityHandler for ActivityFromFn {
+                async fn invoke(&self, input: String) -> Result<String, String> {
+                    (self.invoke)(input).await
+                }
+            }
+            
+            let handler = Arc::new(ActivityFromFn {
+                invoke: descriptor.invoke,
+            }) as Arc<dyn registry::ActivityHandler>;
+            
+            map.insert(descriptor.name.to_string(), handler);
+        }
+        
+        self.activities = Some(registry::ActivityRegistry {
+            inner: Arc::new(map),
+        });
+        self
+    }
+    
+    /// Auto-discover all orchestrations annotated with #[orchestration]
+    pub fn discover_orchestrations(mut self) -> Self {
+        use crate::__internal::ORCHESTRATIONS;
+        
+        let mut map: std::collections::HashMap<
+            String,
+            std::collections::BTreeMap<semver::Version, Arc<dyn OrchestrationHandler>>,
+        > = std::collections::HashMap::new();
+        
+        for descriptor in ORCHESTRATIONS {
+            // Wrap the function pointer in OrchestrationHandler
+            struct OrchFromFn {
+                invoke: crate::__internal::OrchestrationFn,
+            }
+            
+            #[async_trait::async_trait]
+            impl OrchestrationHandler for OrchFromFn {
+                async fn invoke(&self, ctx: OrchestrationContext, input: String) -> Result<String, String> {
+                    (self.invoke)(ctx, input).await
+                }
+            }
+            
+            let handler = Arc::new(OrchFromFn { invoke: descriptor.invoke }) as Arc<dyn OrchestrationHandler>;
+            let version = semver::Version::parse(descriptor.version)
+                .expect("orchestration version must be valid semver");
+            
+            map.entry(descriptor.name.to_string())
+                .or_insert_with(std::collections::BTreeMap::new)
+                .insert(version, handler);
+        }
+        
+        self.orchestrations = Some(OrchestrationRegistry {
+            inner: Arc::new(map),
+            policy: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
+        });
+        self
+    }
+    
+    pub fn activities(mut self, activities: registry::ActivityRegistry) -> Self {
+        self.activities = Some(activities);
+        self
+    }
+    
+    pub fn orchestrations(mut self, orchestrations: OrchestrationRegistry) -> Self {
+        self.orchestrations = Some(orchestrations);
+        self
+    }
+    
+    pub async fn start(self) -> Arc<Runtime> {
+        let store = self.store.expect("store is required - use .store()");
+        let activities = self.activities.expect("activities required - use .discover_activities() or .activities()");
+        let orchestrations = self.orchestrations.expect("orchestrations required - use .discover_orchestrations() or .orchestrations()");
+        
+        Runtime::start_with_options(store, Arc::new(activities), orchestrations, self.options).await
+    }
+}
+
 /// In-process runtime that executes activities and timers and persists
 /// history via a `Provider`.
 pub struct Runtime {
@@ -116,6 +236,22 @@ pub struct OrchestrationDescriptor {
 }
 
 impl Runtime {
+    /// Create a new RuntimeBuilder for configuring the runtime.
+    ///
+    /// # Example
+    /// ```ignore
+    /// let rt = Runtime::builder()
+    ///     .store(store)
+    ///     .discover_activities()
+    ///     .discover_orchestrations()
+    ///     .start()
+    ///     .await;
+    /// ```
+    #[cfg(feature = "macros")]
+    pub fn builder() -> RuntimeBuilder {
+        RuntimeBuilder::new()
+    }
+    
     /// Compute execution metadata from history delta without inspecting event contents.
     /// This allows the runtime to extract semantic information and pass it to the provider
     /// as pre-computed metadata, preventing the provider from needing orchestration knowledge.

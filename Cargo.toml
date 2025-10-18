@@ -30,7 +30,7 @@ duroxide-macros = { path = "./duroxide-macros", optional = true }
 linkme = { version = "0.3", optional = true }
 
 [features]
-default = []
+default = ["macros"]
 macros = ["duroxide-macros", "linkme"]
 
 [dev-dependencies]

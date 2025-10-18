@@ -9,7 +9,7 @@ use duroxide::prelude::*;
 
 // Simple activity using macro
 #[cfg(feature = "macros")]
-#[activity]
+#[activity(typed)]
 async fn greet(name: String) -> Result<String, String> {
     Ok(format!("Hello, {}!", name))
 }
@@ -18,11 +18,8 @@ async fn greet(name: String) -> Result<String, String> {
 #[cfg(feature = "macros")]
 #[orchestration]
 async fn hello_world(ctx: OrchestrationContext, name: String) -> Result<String, String> {
-    // For now, use old-style call (Phase 1 - macros just annotate)
-    let greeting = ctx.schedule_activity("greet", name)
-        .into_activity()
-        .await?;
-    
+    // Phase 3: Use durable!() macro!
+    let greeting = durable!(greet(name)).await?;
     Ok(greeting)
 }
 
@@ -31,34 +28,31 @@ async fn hello_world(ctx: OrchestrationContext, name: String) -> Result<String, 
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::init();
     
-    println!("🚀 Hello World with Macros (Phase 1)\n");
-    println!("Note: Phase 1 just has basic annotations.");
-    println!("Full macro features coming in later phases!\n");
+    println!("🚀 Hello World with Macros (Phases 1-6 Complete!)\n");
+    println!("Features:");
     
-    // For Phase 1: Use manual registration (discovery comes later)
+    // Phases 4-6: Use auto-discovery!
     let temp_dir = tempfile::tempdir()?;
     let db_path = temp_dir.path().join("hello_macros.db");
     std::fs::File::create(&db_path)?;
     let db_url = format!("sqlite:{}", db_path.to_str().unwrap());
     let store = Arc::new(SqliteProvider::new(&db_url).await?);
     
-    // Manual registration for Phase 1
-    let activities = ActivityRegistry::builder()
-        .register("greet", greet)
-        .build();
-    
-    let orchestrations = OrchestrationRegistry::builder()
-        .register("hello_world", hello_world)
-        .build();
-    
-    let rt = Runtime::start_with_store(store.clone(), Arc::new(activities), orchestrations).await;
+    // Phase 4: Auto-discovery!
+    let rt = Runtime::builder()
+        .store(store.clone())
+        .discover_activities()
+        .discover_orchestrations()
+        .start()
+        .await;
     
     let client = Client::new(store);
     
-    client.start_orchestration("hello-1", "hello_world", "Rust Developer").await?;
+    // Phase 5: Use generated client helpers!
+    hello_world::start(&client, "hello-1", "Rust Developer".to_string()).await?;
     
-    match client.wait_for_orchestration("hello-1", Duration::from_secs(10)).await
-        .map_err(|e| format!("Wait error: {:?}", e))? {
+    // Phase 5: Type-safe wait!
+    match hello_world::wait(&client, "hello-1", Duration::from_secs(10)).await? {
         OrchestrationStatus::Completed { output } => {
             println!("✅ Result: {}", output);
         }

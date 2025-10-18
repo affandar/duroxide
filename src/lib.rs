@@ -275,8 +275,7 @@ pub mod __internal {
 }
 
 // Re-export macros
-#[cfg(feature = "macros")]
-pub use duroxide_macros::{activity, orchestration};
+pub use duroxide_macros::{activity, orchestration, durable, durable_trace_info, durable_trace_warn, durable_trace_error, durable_trace_debug, durable_newguid, durable_utcnow, main};
 // Re-export descriptor type for public API ergonomics
 pub use runtime::OrchestrationDescriptor;
 pub mod providers;

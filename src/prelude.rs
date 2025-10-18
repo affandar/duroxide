@@ -22,7 +22,6 @@ pub use crate::runtime::{
 pub use crate::providers::sqlite::SqliteProvider;
 
 // Re-export macros when feature is enabled
-#[cfg(feature = "macros")]
 pub use duroxide_macros::{
     activity,
     orchestration,
@@ -33,6 +32,7 @@ pub use duroxide_macros::{
     durable_trace_debug,
     durable_newguid,
     durable_utcnow,
+    main,
 };
 
 // Common standard library imports

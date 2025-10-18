@@ -4,168 +4,157 @@
 //! and deterministic result aggregation - a common pattern for
 //! processing multiple items concurrently.
 //!
+//! Now with macros for cleaner, type-safe code!
+//!
 //! Run with: `cargo run --example fan_out_fan_in`
 
-use duroxide::providers::sqlite::SqliteProvider;
-use duroxide::runtime::registry::ActivityRegistry;
-use duroxide::runtime::{self};
-use duroxide::{Client, DurableOutput, OrchestrationContext, OrchestrationRegistry};
+use duroxide::prelude::*;
+use duroxide::DurableOutput;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Clone, Serialize, Deserialize, Debug)]
 struct User {
     id: u32,
     name: String,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Clone, Serialize, Deserialize, Debug)]
 struct UserProfile {
     user_id: u32,
     email: String,
     preferences: Vec<String>,
 }
 
+// Activities with type safety
+#[activity(typed)]
+async fn fetch_user_profile(user: User) -> Result<UserProfile, String> {
+    // Simulate API call delay
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    
+    let profile = UserProfile {
+        user_id: user.id,
+        email: format!("{}@example.com", user.name.to_lowercase()),
+        preferences: vec!["notifications".to_string(), "dark_mode".to_string()],
+    };
+    
+    Ok(profile)
+}
+
+#[activity(typed)]
+async fn send_welcome_email(profile: UserProfile) -> Result<String, String> {
+    // Simulate email sending
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    Ok(format!("Welcome email sent to {}", profile.email))
+}
+
+// Fan-out/fan-in orchestration
+#[orchestration]
+async fn process_users(ctx: OrchestrationContext, users: Vec<User>) -> Result<String, String> {
+    durable_trace_info!("Starting fan-out/fan-in for {} users", users.len());
+    
+    // Fan-out: Schedule all user profile fetches
+    // Note: Must use ctx.join() for deterministic replay, not futures::try_join_all!
+    let profile_futures: Vec<_> = users
+        .into_iter()
+        .map(|user| {
+            // Serialize for schedule_activity (until typed client helpers support join)
+            let user_json = serde_json::to_string(&user).unwrap();
+            ctx.schedule_activity("fetch_user_profile", user_json)
+        })
+        .collect();
+    
+    // Fan-in: Wait for all to complete deterministically
+    let profile_results = ctx.join(profile_futures).await;
+    
+    // Extract results
+    let mut profiles = Vec::new();
+    for result in profile_results {
+        match result {
+            DurableOutput::Activity(Ok(profile_json)) => {
+                let profile: UserProfile = serde_json::from_str(&profile_json).unwrap();
+                profiles.push(profile);
+            }
+            DurableOutput::Activity(Err(e)) => return Err(e),
+            _ => unreachable!(),
+        }
+    }
+    
+    durable_trace_info!("✅ Fetched {} profiles", profiles.len());
+    
+    // Send welcome emails
+    let email_futures: Vec<_> = profiles
+        .into_iter()
+        .map(|profile| {
+            let profile_json = serde_json::to_string(&profile).unwrap();
+            ctx.schedule_activity("send_welcome_email", profile_json)
+        })
+        .collect();
+    
+    let email_results = ctx.join(email_futures).await;
+    
+    let mut email_count = 0;
+    for result in email_results {
+        match result {
+            DurableOutput::Activity(Ok(_)) => email_count += 1,
+            DurableOutput::Activity(Err(e)) => return Err(e),
+            _ => unreachable!(),
+        }
+    }
+    
+    durable_trace_info!("✅ Sent {} emails", email_count);
+    
+    Ok(format!("Processed {} users successfully", email_count))
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::init();
-
+    
     let temp_dir = tempfile::tempdir()?;
     let db_path = temp_dir.path().join("fan_out_fan_in.db");
     std::fs::File::create(&db_path)?;
     let db_url = format!("sqlite:{}", db_path.to_str().unwrap());
     let store = Arc::new(SqliteProvider::new(&db_url).await?);
-
-    // Register activities for user processing
-    let activities = ActivityRegistry::builder()
-        .register("FetchUserProfile", |user_json: String| async move {
-            let user: User = serde_json::from_str(&user_json).map_err(|e| format!("JSON parse error: {}", e))?;
-            // Simulate API call delay
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-
-            let profile = UserProfile {
-                user_id: user.id,
-                email: format!("{}@example.com", user.name.to_lowercase()),
-                preferences: vec!["notifications".to_string(), "dark_mode".to_string()],
-            };
-            Ok(serde_json::to_string(&profile).map_err(|e| format!("JSON serialize error: {}", e))?)
-        })
-        .register("SendWelcomeEmail", |profile_json: String| async move {
-            let profile: UserProfile =
-                serde_json::from_str(&profile_json).map_err(|e| format!("JSON parse error: {}", e))?;
-            // Simulate email sending
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-            Ok(format!("Welcome email sent to {}", profile.email))
-        })
-        .build();
-
-    // Fan-out/fan-in orchestration
-    let orchestration = |ctx: OrchestrationContext, users_json: String| async move {
-        ctx.trace_info("Starting fan-out/fan-in orchestration");
-
-        // Parse input users
-        let users: Vec<User> = serde_json::from_str(&users_json).map_err(|e| format!("JSON parse error: {}", e))?;
-        ctx.trace_info(format!("Processing {} users in parallel", users.len()));
-
-        // Fan-out: Schedule all user profile fetches in parallel
-        let profile_futures: Vec<_> = users
-            .into_iter()
-            .map(|user| {
-                let user_json = serde_json::to_string(&user).unwrap();
-                ctx.schedule_activity("FetchUserProfile", user_json)
-            })
-            .collect();
-
-        // Fan-in: Wait for all profiles to complete (deterministic order)
-        let profile_results = ctx.join(profile_futures).await;
-
-        // Process results and send welcome emails
-        let mut email_results = Vec::new();
-        for result in profile_results {
-            match result {
-                DurableOutput::Activity(Ok(profile_json)) => {
-                    let profile: UserProfile =
-                        serde_json::from_str(&profile_json).map_err(|e| format!("JSON parse error: {}", e))?;
-                    ctx.trace_info(format!("Fetched profile for user {}", profile.user_id));
-
-                    // Schedule welcome email
-                    let email_future = ctx.schedule_activity("SendWelcomeEmail", profile_json);
-                    email_results.push(email_future);
-                }
-                DurableOutput::Activity(Err(e)) => {
-                    ctx.trace_error(format!("Failed to fetch user profile: {}", e));
-                    return Err(format!("Profile fetch failed: {}", e));
-                }
-                _ => return Err("Unexpected result type".to_string()),
-            }
-        }
-
-        // Wait for all emails to be sent
-        let email_completions = ctx.join(email_results).await;
-        let mut success_count = 0;
-
-        for result in email_completions {
-            match result {
-                DurableOutput::Activity(Ok(message)) => {
-                    ctx.trace_info(message);
-                    success_count += 1;
-                }
-                DurableOutput::Activity(Err(e)) => {
-                    ctx.trace_error(format!("Email failed: {}", e));
-                }
-                _ => {}
-            }
-        }
-
-        Ok(format!("Successfully processed {} users", success_count))
-    };
-
-    let orchestrations = OrchestrationRegistry::builder()
-        .register("FanOutFanIn", orchestration)
-        .build();
-
-    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activities), orchestrations).await;
-
-    // Test data: multiple users to process
-    let users = vec![
-        User {
-            id: 1,
-            name: "Alice".to_string(),
-        },
-        User {
-            id: 2,
-            name: "Bob".to_string(),
-        },
-        User {
-            id: 3,
-            name: "Charlie".to_string(),
-        },
-    ];
-    let users_json = serde_json::to_string(&users)?;
-
-    let instance_id = "fan-out-instance-1";
+    
+    // Auto-discovery!
+    let rt = Runtime::builder()
+        .store(store.clone())
+        .discover_activities()
+        .discover_orchestrations()
+        .start()
+        .await;
+    
     let client = Client::new(store);
-    client
-        .start_orchestration(instance_id, "FanOutFanIn", users_json)
-        .await?;
-
-    match client
-        .wait_for_orchestration(instance_id, std::time::Duration::from_secs(10))
-        .await
-        .map_err(|e| format!("Wait error: {:?}", e))?
-    {
-        duroxide::OrchestrationStatus::Completed { output } => {
-            println!("✅ Fan-out/fan-in orchestration completed!");
-            println!("Result: {}", output);
+    
+    // Create test users
+    let users = vec![
+        User { id: 1, name: "Alice".to_string() },
+        User { id: 2, name: "Bob".to_string() },
+        User { id: 3, name: "Charlie".to_string() },
+    ];
+    
+    println!("🚀 Processing {} users in parallel\n", users.len());
+    
+    // Use generated client helper
+    process_users::start(&client, "fan-out-1", users).await?;
+    
+    // Wait with typed output
+    match process_users::wait(&client, "fan-out-1", Duration::from_secs(10)).await? {
+        OrchestrationStatus::Completed { output } => {
+            println!("✅ {}", output);
         }
-        duroxide::OrchestrationStatus::Failed { error } => {
-            println!("❌ Orchestration failed: {}", error);
+        OrchestrationStatus::Failed { error } => {
+            println!("❌ Failed: {}", error);
         }
         _ => {
-            println!("⏳ Orchestration still running");
+            println!("⏳ Still running...");
         }
     }
-
+    
     rt.shutdown().await;
+    
+    println!("\n📝 This example uses macros for clean, type-safe code.");
+    println!("For the low-level API, see: cargo run --example low_level_api");
+    
     Ok(())
 }
