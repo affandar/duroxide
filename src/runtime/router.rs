@@ -139,7 +139,6 @@ impl OrchestratorMsg {
     }
 }
 
-// StartRequest removed; instances are activated directly by the runtime
 
 pub struct InstanceRouter {
     pub(crate) inboxes: Mutex<HashMap<String, mpsc::UnboundedSender<OrchestratorMsg>>>,

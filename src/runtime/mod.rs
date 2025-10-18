@@ -32,7 +32,6 @@ pub mod router;
 mod timers;
 use async_trait::async_trait;
 
-// CompletionMap removed - replaced with unified cursor model
 pub mod execution;
 pub mod orchestration_turn;
 
@@ -78,30 +77,19 @@ where
 /// Immutable registry mapping orchestration names to versioned handlers.
 pub use crate::runtime::registry::{OrchestrationRegistry, OrchestrationRegistryBuilder, VersionPolicy};
 
-// Legacy VersionedOrchestrationRegistry removed; use OrchestrationRegistry instead
-
-// ActivityWorkItem removed; activities are executed by WorkDispatcher via provider queues
-
-// TimerWorkItem no longer used; timers flow via provider-backed queues
 
 pub use router::{InstanceRouter, OrchestratorMsg};
 
 /// In-process runtime that executes activities and timers and persists
 /// history via a `Provider`.
 pub struct Runtime {
-    // removed: in-proc activity channel and router
     joins: Mutex<Vec<JoinHandle<()>>>,
-    // instance_joins removed with spawn_instance_to_completion
     history_store: Arc<dyn Provider>,
-
-    // pending_starts removed
-    // result_waiters removed - using polling approach instead
     orchestration_registry: OrchestrationRegistry,
-    // Pinned versions for instances started in this runtime (in-memory for now)
+    /// Pinned versions for instances started in this runtime (in-memory for now)
     pinned_versions: Mutex<HashMap<String, Version>>,
     /// Track the current execution ID for each active instance
     current_execution_ids: Mutex<HashMap<String, u64>>,
-    // StartRequest layer removed; instances are activated directly
     /// Runtime configuration options
     options: RuntimeOptions,
 }
@@ -249,8 +237,6 @@ impl Runtime {
         }
         None
     }
-    // ensure_instance_active is no longer needed in the direct execution model
-    // Each completion message triggers a direct one-shot execution
 
     /// Start an orchestration and ensure the instance is active.
     /// Callers should use wait_for_orchestration to wait for completion.
@@ -476,7 +462,6 @@ impl Runtime {
                 // Both StartOrchestration and ContinueAsNew are handled identically.
                 // For ContinueAsNew, we start a fresh execution with empty history and execution_id = current + 1.
                 let (orchestration, input, version, parent_instance, parent_id, is_can) = match &start_item {
-                    // TODO : CR : Workitem::StartOrchestrationDetached must carry the execution_id as well, which should be provided at enqueue time.
                     WorkItem::StartOrchestration {
                         orchestration,
                         input,
@@ -943,7 +928,4 @@ impl Runtime {
         }
     }
 
-    // drain_instances removed with spawn_instance_to_completion
-
-    // spawn_instance_to_completion removed; atomic path is the only execution path
 }

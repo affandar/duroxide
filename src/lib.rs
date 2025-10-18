@@ -600,9 +600,6 @@ impl OrchestrationContext {
 
     /// Returns the current logical time in milliseconds based on the last
     /// `TimerFired` event in history.
-    // Removed: use system_now_ms().await for wall-clock time
-    /// Returns a deterministic GUID string, incremented per instance.
-    // Removed: use system_new_guid().await for GUIDs
 
     fn take_actions(&self) -> Vec<Action> {
         std::mem::take(&mut self.inner.lock().unwrap().actions)
@@ -1121,7 +1118,6 @@ impl OrchestrationContext {
         self.schedule_orchestration_versioned(name, version, instance, payload)
     }
 
-    // removed: schedule_orchestration(name, input) without instance id (must pass instance id)
 }
 
 // Aggregate future machinery lives in crate::futures
@@ -1140,7 +1136,6 @@ impl OrchestrationContext {
         JoinFuture(AggregateDurableFuture::new_join(self.clone(), futures))
     }
 
-    // find_history_index and synth_output_from_history removed - cursor model handles this
 }
 
 fn noop_waker() -> Waker {
@@ -1236,4 +1231,3 @@ where
     run_turn_with(history, 0, 1, orchestrator)
 }
 
-// Executor helper removed - not used anywhere

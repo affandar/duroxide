@@ -16,7 +16,6 @@ impl Runtime {
     /// - Inner loop: Process batches of completions in deterministic turns
     /// - Four-stage turn lifecycle: prep -> execute -> persist -> ack
     /// - Deterministic completion processing with robust error handling
-    // Non-atomic run_single_execution removed; atomic path only
 
     /// Set up version pinning from history
     async fn setup_version_pinning(&self, instance: &str, orchestration_name: &str, history: &[Event]) {
@@ -58,8 +57,6 @@ impl Runtime {
         })
     }
 
-    /// Handle unregistered orchestration by failing gracefully
-    // handle_unregistered_orchestration removed with non-atomic path
     /// Extract orchestration input and parent linkage from history
     fn extract_orchestration_context(
         &self,
@@ -91,17 +88,6 @@ impl Runtime {
         (input, parent_link)
     }
 
-    /// Handle orchestration completion (success or failure)
-    // handle_orchestration_completion removed with non-atomic path
-
-    /// Handle continue-as-new scenario - persist events and enqueue new execution
-    // handle_continue_as_new removed with non-atomic path
-
-    /// Handle persistence errors
-    // handle_persistence_error removed with non-atomic path
-
-    /// Propagate cancellation to child sub-orchestrations
-    // propagate_cancellation_to_children removed with non-atomic path
 
     /// Extract current execution history (from most recent OrchestrationStarted)
     /// This filters out events from previous executions in continue-as-new scenarios
@@ -313,8 +299,6 @@ impl Runtime {
 
                 Ok(String::new())
             }
-            // TODO : CR : the code for processing completed vs failed is almost identical, except for the fact that event type to be written, note that
-            //  for failed, we also want to take the detached orchestration action.
             TurnResult::Completed(output) => {
                 // At terminal, only detached orchestration actions should be honored; other pending actions are ignored.
                 enqueue_detached_from_pending(turn.pending_actions());

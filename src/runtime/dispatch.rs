@@ -157,7 +157,6 @@ pub async fn dispatch_start_sub_orchestration(
     // Try to parse version for pinning (will be pinned in start_internal_wait as well)
     let version_pin = version.clone().and_then(|s| semver::Version::parse(&s).ok());
 
-    // Just start the sub-orchestration - completion notification is automatic via handle_orchestration_completion!
     match rt_for_child
         .start_orchestration_with_parent(
             &child_full,
@@ -171,8 +170,7 @@ pub async fn dispatch_start_sub_orchestration(
     {
         Ok(()) => {
             debug!(parent_instance, scheduling_event_id, child_instance=%child_full, 
-                   "sub-orchestration started successfully - completion will be automatic");
-            // Done! Child will auto-notify parent when it completes via handle_orchestration_completion
+                   "sub-orchestration started successfully");
         }
         Err(e) => {
             // Only handle start failures - completion failures are handled by the child itself

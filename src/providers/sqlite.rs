@@ -16,8 +16,6 @@ use crate::Event;
 pub struct SqliteProvider {
     pool: SqlitePool,
     lock_timeout: Duration,
-    #[allow(dead_code)]
-    history_cap: usize,
 }
 
 impl SqliteProvider {
@@ -152,7 +150,6 @@ impl SqliteProvider {
         Ok(Self {
             pool,
             lock_timeout,
-            history_cap: 1024,
         })
     }
 

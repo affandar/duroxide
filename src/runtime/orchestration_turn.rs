@@ -1,4 +1,3 @@
-// CompletionMap removed - using unified cursor model
 use crate::providers::Provider;
 use crate::{
     Event,
@@ -437,8 +436,6 @@ impl OrchestrationTurn {
         TurnResult::Continue
     }
 
-    // Non-determinism detection removed - cursor model handles this automatically
-    // Any unconsumed completion will cause a panic when the next future polls
 }
 
 impl OrchestrationTurn {

@@ -1,6 +1,5 @@
 #[cfg(test)]
 mod tests {
-    // CompletionMap removed
     use crate::runtime::orchestration_turn::*;
     use crate::runtime::router::OrchestratorMsg;
     use crate::{Event, OrchestrationContext, OrchestrationHandler};
@@ -271,16 +270,16 @@ mod tests {
                 instance: "test-instance".to_string(),
                 execution_id: 1,
                 id: 999, // Scheduled below, not consumed by the mock handler
-                result: "unused-result".to_string(),
-                ack_token: Some("unused-token".to_string()),
+                result: "test-result".to_string(),
+                ack_token: Some("test-token".to_string()),
             },
-            "unused-token".to_string(),
+            "test-token".to_string(),
         )];
         // Provide matching schedule for id=999
         turn.baseline_history.push(Event::ActivityScheduled {
             event_id: 999,
-            name: "unused".to_string(),
-            input: "unused".to_string(),
+            name: "test-activity".to_string(),
+            input: "test-input".to_string(),
             execution_id: 1,
         });
         turn.prep_completions(messages);
