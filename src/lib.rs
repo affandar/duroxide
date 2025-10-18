@@ -1351,6 +1351,25 @@ pub mod __internal {
             false
         }
     }
+
+    pub fn clear_registries() {
+        if let Some(activities) = ACTIVITIES.get() {
+            if let Ok(mut activities) = activities.lock() {
+                activities.clear();
+            } else {
+                // If mutex is poisoned, reinitialize it
+                let _ = ACTIVITIES.set(std::sync::Mutex::new(Vec::new()));
+            }
+        }
+        if let Some(orchestrations) = ORCHESTRATIONS.get() {
+            if let Ok(mut orchestrations) = orchestrations.lock() {
+                orchestrations.clear();
+            } else {
+                // If mutex is poisoned, reinitialize it
+                let _ = ORCHESTRATIONS.set(std::sync::Mutex::new(Vec::new()));
+            }
+        }
+    }
 }
 
 #[cfg(feature = "macros")]

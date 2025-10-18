@@ -975,9 +975,14 @@ impl RuntimeBuilder {
     
     pub fn discover_activities(mut self) -> Self {
         let mut builder = registry::ActivityRegistry::builder();
+        let mut seen_names = std::collections::HashSet::new();
         
         if let Some(activities) = crate::__internal::ACTIVITIES.get() {
             for descriptor in activities.lock().unwrap().iter() {
+                if seen_names.contains(descriptor.name) {
+                    panic!("Duplicate activity name found: '{}'. All activities must have unique names.", descriptor.name);
+                }
+                seen_names.insert(descriptor.name);
                 builder = builder.register(descriptor.name, descriptor.invoke);
             }
         }
@@ -988,14 +993,65 @@ impl RuntimeBuilder {
     
     pub fn discover_orchestrations(mut self) -> Self {
         let mut builder = registry::OrchestrationRegistry::builder();
+        let mut seen_names = std::collections::HashSet::new();
         
         if let Some(orchestrations) = crate::__internal::ORCHESTRATIONS.get() {
             for descriptor in orchestrations.lock().unwrap().iter() {
+                if seen_names.contains(descriptor.name) {
+                    panic!("Duplicate orchestration name found: '{}'. All orchestrations must have unique names.", descriptor.name);
+                }
+                seen_names.insert(descriptor.name);
                 builder = builder.register_versioned(
                     descriptor.name,
                     descriptor.version,
                     descriptor.invoke,
                 );
+            }
+        }
+        
+        self.orchestrations = Some(builder.build());
+        self
+    }
+    
+    /// Discover activities from a specific module prefix
+    pub fn discover_activities_from_module(mut self, module_prefix: &str) -> Self {
+        let mut builder = registry::ActivityRegistry::builder();
+        let mut seen_names = std::collections::HashSet::new();
+        
+        if let Some(activities) = crate::__internal::ACTIVITIES.get() {
+            for descriptor in activities.lock().unwrap().iter() {
+                if descriptor.name.starts_with(module_prefix) {
+                    if seen_names.contains(descriptor.name) {
+                        panic!("Duplicate activity name found: '{}'. All activities must have unique names.", descriptor.name);
+                    }
+                    seen_names.insert(descriptor.name);
+                    builder = builder.register(descriptor.name, descriptor.invoke);
+                }
+            }
+        }
+        
+        self.activities = Some(builder.build());
+        self
+    }
+    
+    /// Discover orchestrations from a specific module prefix
+    pub fn discover_orchestrations_from_module(mut self, module_prefix: &str) -> Self {
+        let mut builder = registry::OrchestrationRegistry::builder();
+        let mut seen_names = std::collections::HashSet::new();
+        
+        if let Some(orchestrations) = crate::__internal::ORCHESTRATIONS.get() {
+            for descriptor in orchestrations.lock().unwrap().iter() {
+                if descriptor.name.starts_with(module_prefix) {
+                    if seen_names.contains(descriptor.name) {
+                        panic!("Duplicate orchestration name found: '{}'. All orchestrations must have unique names.", descriptor.name);
+                    }
+                    seen_names.insert(descriptor.name);
+                    builder = builder.register_versioned(
+                        descriptor.name,
+                        descriptor.version,
+                        descriptor.invoke,
+                    );
+                }
             }
         }
         

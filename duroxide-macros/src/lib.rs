@@ -4,16 +4,27 @@ use syn::{parse_macro_input, ItemFn};
 
 // Activity macro
 #[proc_macro_attribute]
-pub fn activity(_args: TokenStream, input: TokenStream) -> TokenStream {
+pub fn activity(args: TokenStream, input: TokenStream) -> TokenStream {
     let input_fn = parse_macro_input!(input as ItemFn);
     
     let fn_name = &input_fn.sig.ident;
     let fn_name_str = fn_name.to_string();
     
+    // Parse args to see if a custom name is provided
+    let full_name = if args.is_empty() {
+        // Default: use function name only (proc macros can't easily get calling module path)
+        // Users should provide explicit names if they want namespacing
+        fn_name_str.clone()
+    } else {
+        // Custom name provided
+        let args_str = args.to_string();
+        args_str.trim().trim_matches('"').to_string()
+    };
+    
     let registration = quote! {
         #[cfg(feature = "macros")]
         duroxide::__internal::ACTIVITIES.get_or_init(|| std::sync::Mutex::new(Vec::new())).lock().unwrap().push(duroxide::__internal::ActivityDescriptor {
-            name: #fn_name_str,
+            name: #full_name,
             invoke: |input: String| {
                 Box::pin(async move {
                     #fn_name(input).await
@@ -31,16 +42,27 @@ pub fn activity(_args: TokenStream, input: TokenStream) -> TokenStream {
 
 // Orchestration macro
 #[proc_macro_attribute]
-pub fn orchestration(_args: TokenStream, input: TokenStream) -> TokenStream {
+pub fn orchestration(args: TokenStream, input: TokenStream) -> TokenStream {
     let input_fn = parse_macro_input!(input as ItemFn);
     
     let fn_name = &input_fn.sig.ident;
     let fn_name_str = fn_name.to_string();
     
+    // Parse args to see if a custom name is provided
+    let full_name = if args.is_empty() {
+        // Default: use function name only (proc macros can't easily get calling module path)
+        // Users should provide explicit names if they want namespacing
+        fn_name_str.clone()
+    } else {
+        // Custom name provided
+        let args_str = args.to_string();
+        args_str.trim().trim_matches('"').to_string()
+    };
+    
     let registration = quote! {
         #[cfg(feature = "macros")]
         duroxide::__internal::ORCHESTRATIONS.get_or_init(|| std::sync::Mutex::new(Vec::new())).lock().unwrap().push(duroxide::__internal::OrchestrationDescriptor {
-            name: #fn_name_str,
+            name: #full_name,
             version: "1.0.0",
             invoke: |ctx: duroxide::OrchestrationContext, input: String| {
                 Box::pin(async move {
@@ -69,38 +91,34 @@ pub fn schedule(input: TokenStream) -> TokenStream {
         panic!("schedule! macro expects format: schedule!(ctx, function_name(args))");
     }
     
-    let ctx_part = parts[0].trim();
+    let ctx_part_str = parts[0].trim();
+    let ctx_part = syn::parse_str::<syn::Ident>(ctx_part_str).expect("Invalid context identifier");
     let call_part = parts[1].trim();
     
-    // Extract function name and arguments
-    let func_name = if let Some(paren_pos) = call_part.find('(') {
-        &call_part[..paren_pos]
-    } else {
-        panic!("Function call must include parentheses");
+    // Parse the function call as a Rust expression
+    let call_expr = syn::parse_str::<syn::ExprCall>(call_part).expect("Invalid function call syntax");
+    let func_name = match &*call_expr.func {
+        syn::Expr::Path(path) => path.path.get_ident().map(|i| i.to_string()).unwrap_or_else(|| "unknown".to_string()),
+        _ => panic!("Function call must use a simple identifier"),
     };
     
-    let args_part = if let Some(start) = call_part.find('(') {
-        if let Some(end) = call_part.rfind(')') {
-            &call_part[start+1..end]
-        } else {
-            panic!("Missing closing parenthesis");
-        }
+    // Handle single argument case
+    let args_expr = if call_expr.args.len() == 1 {
+        &call_expr.args[0]
     } else {
-        panic!("Missing opening parenthesis");
+        panic!("schedule! macro currently only supports single-argument function calls");
     };
     
     quote! {
         {
             let func_name = #func_name;
-            let args = (#args_part);
-            let serialized_args = serde_json::to_string(&args).expect("Failed to serialize args");
             
             // Auto-detect based on registration
-            if duroxide::__internal::is_orchestration(func_name) {
-                let instance_id = format!("{}-{}", func_name, uuid::Uuid::new_v4());
-                #ctx_part.schedule_sub_orchestration(func_name, &instance_id, serialized_args).into_sub_orchestration()
+            if duroxide::__internal::is_orchestration(&func_name) {
+                let instance_id = format!("{}-{}", func_name, std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos());
+                #ctx_part.schedule_sub_orchestration(func_name.clone(), #args_expr)
             } else {
-                #ctx_part.schedule_activity(func_name, serialized_args).into_activity()
+                #ctx_part.schedule_activity(func_name.clone(), (#args_expr).to_string())
             }
         }
     }.into()

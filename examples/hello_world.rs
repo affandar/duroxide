@@ -30,18 +30,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let store = Arc::new(SqliteProvider::new(&db_url).await?);
 
     // Define activities using macros
-    #[activity]
+    #[activity("examples::hello_world::greet")]
     async fn greet(name: String) -> Result<String, String> {
         Ok(format!("Hello, {}!", name))
     }
 
     // Define orchestration using macros
-    #[orchestration]
+    #[orchestration("examples::hello_world::hello_world")]
     async fn hello_world(ctx: OrchestrationContext, name: String) -> Result<String, String> {
         ctx.trace_info("Starting greeting orchestration");
 
         // Schedule and await the greeting activity
-        let greeting = ctx.schedule_activity("greet", name).into_activity().await?;
+        let greeting = ctx.schedule_activity("examples::hello_world::greet", name).into_activity().await?;
 
         ctx.trace_info(format!("Greeting completed: {}", greeting));
         Ok(greeting)
@@ -61,7 +61,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Start an orchestration instance
     let instance_id = "hello-instance-1";
     client
-        .start_orchestration(instance_id, "hello_world", "Rust Developer")
+        .start_orchestration(instance_id, "examples::hello_world::hello_world", "Rust Developer")
         .await?;
 
     // Wait for completion
