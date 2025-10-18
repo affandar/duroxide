@@ -9,14 +9,12 @@
 //! Run with: `cargo run --example fan_out_fan_in --features macros`
 
 use duroxide::providers::sqlite::SqliteProvider;
-use duroxide::runtime::{Runtime, OrchestrationStatus};
-use duroxide::{Client, OrchestrationContext, DurableOutput};
+use duroxide::runtime::{self, Runtime, OrchestrationStatus};
+use duroxide::{Client, OrchestrationContext, DurableOutput, OrchestrationRegistry};
+use duroxide::runtime::registry::ActivityRegistry;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Duration;
-
-// Import macros directly
-use duroxide_macros::*;
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
 struct User {
@@ -32,7 +30,6 @@ struct UserProfile {
 }
 
 // Activities with type safety
-#[activity]
 async fn fetch_user_profile(user: User) -> Result<UserProfile, String> {
     // Simulate API call delay
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -46,7 +43,6 @@ async fn fetch_user_profile(user: User) -> Result<UserProfile, String> {
     Ok(profile)
 }
 
-#[activity]
 async fn send_welcome_email(profile: UserProfile) -> Result<String, String> {
     // Simulate email sending
     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -54,9 +50,8 @@ async fn send_welcome_email(profile: UserProfile) -> Result<String, String> {
 }
 
 // Fan-out/fan-in orchestration
-#[orchestration]
 async fn process_users(ctx: OrchestrationContext, users: Vec<User>) -> Result<String, String> {
-    durable_trace_info!("Starting fan-out/fan-in for {} users", users.len());
+    ctx.trace_info(format!("Starting fan-out/fan-in for {} users", users.len()));
 
     // Fan-out: Schedule all user profile fetches
     // Note: Must use ctx.join() for deterministic replay, not futures::try_join_all!
@@ -84,7 +79,7 @@ async fn process_users(ctx: OrchestrationContext, users: Vec<User>) -> Result<St
         }
     }
     
-    durable_trace_info!("✅ Fetched {} profiles", profiles.len());
+    ctx.trace_info(format!("✅ Fetched {} profiles", profiles.len()));
     
     // Send welcome emails
     let email_futures: Vec<_> = profiles
@@ -106,7 +101,7 @@ async fn process_users(ctx: OrchestrationContext, users: Vec<User>) -> Result<St
         }
     }
     
-    durable_trace_info!("✅ Sent {} emails", email_count);
+    ctx.trace_info(format!("✅ Sent {} emails", email_count));
     
     Ok(format!("Processed {} users successfully", email_count))
 }
@@ -121,13 +116,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let db_url = format!("sqlite:{}", db_path.to_str().unwrap());
     let store = Arc::new(SqliteProvider::new(&db_url).await?);
     
-    // Auto-discovery!
-    let rt = Runtime::builder()
-        .store(store.clone())
-        .discover_activities()
-        .discover_orchestrations()
-        .start()
-        .await?;
+    // Register activities
+    let activities = ActivityRegistry::builder()
+        .register("fetch_user_profile", |input: String| async move {
+            let user: User = serde_json::from_str(&input).unwrap();
+            let result = fetch_user_profile(user).await?;
+            Ok(serde_json::to_string(&result).unwrap())
+        })
+        .register("send_welcome_email", |input: String| async move {
+            let profile: UserProfile = serde_json::from_str(&input).unwrap();
+            send_welcome_email(profile).await
+        })
+        .build();
+
+    // Register orchestration
+    let orchestrations = OrchestrationRegistry::builder()
+        .register("process_users", |ctx: OrchestrationContext, input: String| async move {
+            let users: Vec<User> = serde_json::from_str(&input).unwrap();
+            process_users(ctx, users).await
+        })
+        .build();
+
+    // Start runtime
+    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activities), orchestrations).await;
     
     let client = Client::new(store);
     

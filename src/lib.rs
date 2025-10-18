@@ -1137,48 +1137,52 @@ impl OrchestrationContext {
 
     /// Generate a deterministic GUID
     #[cfg(feature = "macros")]
-    pub async fn new_guid_macro(&self) -> Result<String, String> {
-        use std::time::{SystemTime, UNIX_EPOCH};
-        
-        let timestamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
-        
-        // Thread-local counter for uniqueness within the same timestamp
-        thread_local! {
-            static COUNTER: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    pub fn new_guid_macro(&self) -> impl std::future::Future<Output = Result<String, String>> + '_ {
+        async move {
+            use std::time::{SystemTime, UNIX_EPOCH};
+            
+            let timestamp = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0);
+            
+            // Thread-local counter for uniqueness within the same timestamp
+            thread_local! {
+                static COUNTER: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+            }
+            let counter = COUNTER.with(|c| {
+                let val = c.get();
+                c.set(val.wrapping_add(1));
+                val
+            });
+            
+            // Format as UUID-like string
+            let guid = format!(
+                "{:08x}-{:04x}-{:04x}-{:04x}-{:012x}",
+                (timestamp >> 96) as u32,
+                ((timestamp >> 80) & 0xFFFF) as u16,
+                (counter & 0xFFFF) as u16,
+                ((timestamp >> 64) & 0xFFFF) as u16,
+                (timestamp & 0xFFFFFFFFFFFF) as u64
+            );
+            
+            Ok(guid)
         }
-        let counter = COUNTER.with(|c| {
-            let val = c.get();
-            c.set(val.wrapping_add(1));
-            val
-        });
-        
-        // Format as UUID-like string
-        let guid = format!(
-            "{:08x}-{:04x}-{:04x}-{:04x}-{:012x}",
-            (timestamp >> 96) as u32,
-            ((timestamp >> 80) & 0xFFFF) as u16,
-            (counter & 0xFFFF) as u16,
-            ((timestamp >> 64) & 0xFFFF) as u16,
-            (timestamp & 0xFFFFFFFFFFFF) as u64
-        );
-        
-        Ok(guid)
     }
     
     /// Get deterministic UTC timestamp in milliseconds
     #[cfg(feature = "macros")]
-    pub async fn utc_now_macro(&self) -> Result<u64, String> {
-        use std::time::{SystemTime, UNIX_EPOCH};
-        
-        let timestamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_millis() as u64)
-            .unwrap_or(0);
-        
-        Ok(timestamp)
+    pub fn utc_now_macro(&self) -> impl std::future::Future<Output = Result<u64, String>> + '_ {
+        async move {
+            use std::time::{SystemTime, UNIX_EPOCH};
+            
+            let timestamp = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0);
+            
+            Ok(timestamp)
+        }
     }
 }
 

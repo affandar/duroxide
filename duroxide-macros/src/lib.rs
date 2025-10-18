@@ -60,12 +60,48 @@ pub fn orchestration(_args: TokenStream, input: TokenStream) -> TokenStream {
 // Schedule macro
 #[proc_macro]
 pub fn schedule(input: TokenStream) -> TokenStream {
-    // For now, just pass through the input as a placeholder
-    // This will be implemented properly once we have the basic structure working
+    let input_str = input.to_string();
+    
+    // Parse the input to extract ctx and function call
+    // Expected format: schedule!(ctx, function_name(args))
+    let parts: Vec<&str> = input_str.split(',').collect();
+    if parts.len() != 2 {
+        panic!("schedule! macro expects format: schedule!(ctx, function_name(args))");
+    }
+    
+    let ctx_part = parts[0].trim();
+    let call_part = parts[1].trim();
+    
+    // Extract function name and arguments
+    let func_name = if let Some(paren_pos) = call_part.find('(') {
+        &call_part[..paren_pos]
+    } else {
+        panic!("Function call must include parentheses");
+    };
+    
+    let args_part = if let Some(start) = call_part.find('(') {
+        if let Some(end) = call_part.rfind(')') {
+            &call_part[start+1..end]
+        } else {
+            panic!("Missing closing parenthesis");
+        }
+    } else {
+        panic!("Missing opening parenthesis");
+    };
+    
     quote! {
         {
-            // Placeholder implementation
-            todo!("Schedule macro not yet implemented")
+            let func_name = #func_name;
+            let args = (#args_part);
+            let serialized_args = serde_json::to_string(&args).expect("Failed to serialize args");
+            
+            // Auto-detect based on registration
+            if duroxide::__internal::is_orchestration(func_name) {
+                let instance_id = format!("{}-{}", func_name, uuid::Uuid::new_v4());
+                #ctx_part.schedule_sub_orchestration(func_name, &instance_id, serialized_args).into_sub_orchestration()
+            } else {
+                #ctx_part.schedule_activity(func_name, serialized_args).into_activity()
+            }
         }
     }.into()
 }
@@ -76,7 +112,7 @@ pub fn durable_newguid(_input: TokenStream) -> TokenStream {
     quote! {
         {
             let ctx = duroxide::__internal::get_current_context();
-            ctx.new_guid_macro().await
+            ctx.new_guid_macro()
         }
     }.into()
 }
@@ -86,7 +122,7 @@ pub fn durable_utcnow(_input: TokenStream) -> TokenStream {
     quote! {
         {
             let ctx = duroxide::__internal::get_current_context();
-            ctx.utc_now_macro().await
+            ctx.utc_now_macro()
         }
     }.into()
 }
