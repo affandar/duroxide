@@ -28,7 +28,10 @@ impl Default for RuntimeOptions {
 
 pub mod registry;
 mod timers;
+mod state_readers;
+
 use async_trait::async_trait;
+pub use state_readers::{HistoryReader, WorkItemReader};
 
 pub mod execution;
 pub mod orchestration_turn;
@@ -277,168 +280,50 @@ impl Runtime {
         let instance = &item.instance;
         let lock_token = &item.lock_token;
 
-        // Determine terminal state from history and whether batch contains CAN
-        let mut has_completed = false;
-        let mut has_failed = false;
-        let mut has_continued_as_new = false;
-        for e in item.history.iter().rev() {
-            match e {
-                Event::OrchestrationCompleted { .. } => {
-                    has_completed = true;
-                    break;
-                }
-                Event::OrchestrationFailed { .. } => {
-                    has_failed = true;
-                    break;
-                }
-                Event::OrchestrationContinuedAsNew { .. } => {
-                    has_continued_as_new = true;
-                    break;
-                }
-                _ => {}
-            }
-        }
-        
-        let has_can_msg = item
-            .messages
-            .iter()
-            .any(|w| matches!(w, WorkItem::ContinueAsNew { .. }));
+        // Extract metadata from history and work items
+        let history_reader = HistoryReader::from_history(&item.history);
+        let workitem_reader = WorkItemReader::from_messages(&item.messages, &history_reader, instance);
 
         // Bail on truly terminal histories (Completed/Failed), or ContinuedAsNew without a CAN start message
-        if has_completed || has_failed || (has_continued_as_new && !has_can_msg) {
+        if history_reader.is_completed || history_reader.is_failed || (history_reader.is_continued_as_new && !workitem_reader.is_continue_as_new) {
             warn!(instance = %instance, "Instance is terminal (completed/failed or CAN without start), acking batch without processing");
-            let _ = self
-                .history_store
-                .ack_orchestration_item(
-                    lock_token,
-                    item.execution_id,
-                    vec![], // No history changes
-                    vec![], // No worker items
-                    vec![], // No timer items
-                    vec![], // No orchestrator items
-                    ExecutionMetadata::default(),
-                )
-                .await;
+            self.ack_orchestration_empty(lock_token, item.execution_id).await;
             return;
         }
 
-        // Separate Start/ContinueAsNew from completion messages
-        let mut start_or_continue: Option<WorkItem> = None;
-        let mut completion_messages: Vec<WorkItem> = Vec::new();
-
-        for work_item in &item.messages {
-            match work_item {
-                WorkItem::StartOrchestration { .. } | WorkItem::ContinueAsNew { .. } => {
-                    if start_or_continue.is_some() {
-                        // Handle duplicate start gracefully - just warn and ignore
-                        warn!(instance, "Duplicate Start/ContinueAsNew in batch - ignoring duplicate");
-                        continue;
-                    }
-                    start_or_continue = Some(work_item.clone());
-                }
-                // Non-start/CAN work items are completion messages
-                WorkItem::ActivityCompleted { .. }
-                | WorkItem::ActivityFailed { .. }
-                | WorkItem::TimerFired { .. }
-                | WorkItem::ExternalRaised { .. }
-                | WorkItem::SubOrchCompleted { .. }
-                | WorkItem::SubOrchFailed { .. }
-                | WorkItem::CancelInstance { .. } => {
-                    completion_messages.push(work_item.clone());
-                }
-                // ActivityExecute and TimerSchedule shouldn't appear in orchestrator queue
-                WorkItem::ActivityExecute { .. } | WorkItem::TimerSchedule { .. } => {}
-            }
-        }
-
-        // Determine execution parameters
-        // Extract from WorkItem if present, otherwise from history
-        let (orchestration_name, input_str, version, parent_instance_str, parent_id, is_can) = 
-            if let Some(start_item) = start_or_continue {
-                match &start_item {
-                    WorkItem::StartOrchestration {
-                        orchestration,
-                        input,
-                        version,
-                        parent_instance,
-                        parent_id,
-                        ..
-                    } => (
-                        orchestration.clone(),
-                        input.clone(),
-                        version.clone(),
-                        parent_instance.clone(),
-                        *parent_id,
-                        false,
-                    ),
-                    WorkItem::ContinueAsNew {
-                        orchestration,
-                        input,
-                        version,
-                        ..
-                    } => (
-                        orchestration.clone(),
-                        input.clone(),
-                        version.clone(),
-                        None,
-                        None,
-                        true,
-                    ),
-                    _ => unreachable!(),
-                }
-            } else {
-                // No start item - extract orchestration name from history
-                let orchestration_name = item.history
-                    .iter()
-                    .rev()
-                    .find_map(|e| match e {
-                        Event::OrchestrationStarted { name, .. } => Some(name.clone()),
-                        _ => None,
-                    })
-                    .unwrap_or_else(|| {
-                        // Empty history with no start item and completion messages = error
-                        if !completion_messages.is_empty() {
-                            warn!(instance, "completion messages for unstarted instance");
-                        }
-                        String::new()
-                    });
-
-                (orchestration_name, String::new(), None, None, None, false)
-            };
-
         // Decide execution id and history to use
-        let (execution_id_to_use, history_to_use) = if is_can {
+        let (execution_id_to_use, history_to_use) = if workitem_reader.is_continue_as_new {
             (item.execution_id + 1, Vec::new())
         } else {
             (item.execution_id, item.history.clone())
         };
 
         // Log execution start
-        if !orchestration_name.is_empty() {
+        if workitem_reader.has_orchestration_name() {
             debug!(
                 instance,
-                orchestration = %orchestration_name,
+                orchestration = %workitem_reader.orchestration_name,
                 execution_id = %execution_id_to_use,
-                is_continue_as_new = is_can,
+                is_continue_as_new = workitem_reader.is_continue_as_new,
                 "Starting execution"
             );
-        } else if !completion_messages.is_empty() {
+        } else if !workitem_reader.completion_messages.is_empty() {
             // Empty orchestration name with completion messages - just warn and skip
             tracing::warn!(instance = %item.instance, "empty effective batch - this should not happen");
         }
 
         // Process the execution (unified path)
         let (history_delta, worker_items, timer_items, orchestrator_items, execution_id_for_ack) =
-            if !orchestration_name.is_empty() {
+            if workitem_reader.has_orchestration_name() {
                 let (hd, wi, ti, oi) = self
                     .handle_orchestration_atomic(
                         instance,
-                        &orchestration_name,
-                        &input_str,
-                        version.as_deref(),
-                        parent_instance_str.as_deref(),
-                        parent_id,
-                        completion_messages,
+                        &workitem_reader.orchestration_name,
+                        &workitem_reader.input,
+                        workitem_reader.version.as_deref(),
+                        workitem_reader.parent_instance.as_deref(),
+                        workitem_reader.parent_id,
+                        workitem_reader.completion_messages.clone(),
                         &history_to_use,
                         execution_id_to_use,
                         lock_token,
@@ -464,25 +349,14 @@ impl Runtime {
         let metadata = Runtime::compute_execution_metadata(&history_delta, &orchestrator_items, item.execution_id);
 
         // Robust ack with basic retry on any provider error
-        self.execute_with_retry(
-            || async {
-                self.history_store
-                    .ack_orchestration_item(
-                        lock_token,
-                        execution_id_for_ack,
-                        history_delta.clone(),
-                        worker_items.clone(),
-                        timer_items.clone(),
-                        orchestrator_items.clone(),
-                        metadata.clone(),
-                    )
-                    .await
-            },
-            "ack_orchestration_item",
-            Some(|| {
-                // Best-effort: abandon so it can be retried later
-                let _ = self.history_store.abandon_orchestration_item(lock_token, Some(50));
-            }),
+        self.ack_orchestration_with_changes(
+            lock_token,
+            execution_id_for_ack,
+            history_delta,
+            worker_items,
+            timer_items,
+            orchestrator_items,
+            metadata,
         )
         .await;
     }
@@ -604,6 +478,53 @@ impl Runtime {
                 }
             }
         }
+    }
+
+    /// Acknowledge an orchestration item with empty changes (for terminal states)
+    async fn ack_orchestration_empty(&self, lock_token: &str, execution_id: u64) {
+        self.ack_orchestration_with_changes(
+            lock_token,
+            execution_id,
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+            ExecutionMetadata::default(),
+        )
+        .await;
+    }
+
+    /// Acknowledge an orchestration item with changes, using retry logic
+    async fn ack_orchestration_with_changes(
+        &self,
+        lock_token: &str,
+        execution_id: u64,
+        history_delta: Vec<Event>,
+        worker_items: Vec<WorkItem>,
+        timer_items: Vec<WorkItem>,
+        orchestrator_items: Vec<WorkItem>,
+        metadata: ExecutionMetadata,
+    ) {
+        self.execute_with_retry(
+            || async {
+                self.history_store
+                    .ack_orchestration_item(
+                        lock_token,
+                        execution_id,
+                        history_delta.clone(),
+                        worker_items.clone(),
+                        timer_items.clone(),
+                        orchestrator_items.clone(),
+                        metadata.clone(),
+                    )
+                    .await
+            },
+            "ack_orchestration_item",
+            Some(|| {
+                let _ = self.history_store.abandon_orchestration_item(lock_token, Some(50));
+            }),
+        )
+        .await;
     }
 
     fn start_work_dispatcher(self: Arc<Self>, activities: Arc<registry::ActivityRegistry>) -> JoinHandle<()> {
