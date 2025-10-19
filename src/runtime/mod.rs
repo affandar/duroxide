@@ -647,8 +647,22 @@ impl Runtime {
             } else if let Some((v, _handler)) = self.orchestration_registry.resolve_for_start(orchestration).await {
                 (v.to_string(), true)
             } else {
-                // Use 0.0.0 for unregistered orchestrations (won't be pinned)
-                ("0.0.0".to_string(), false)
+                // Unregistered orchestration - fail immediately but still create proper history
+                history_delta.push(Event::OrchestrationStarted {
+                    event_id: 1, // First event always has event_id=1
+                    name: orchestration.to_string(),
+                    version: "0.0.0".to_string(), // Placeholder version for unregistered
+                    input: input.to_string(),
+                    parent_instance: parent_instance.map(|s| s.to_string()),
+                    parent_id,
+                });
+                
+                let terminal_event = Event::OrchestrationFailed {
+                    event_id: 2, // Second event
+                    error: format!("unregistered:{}", orchestration),
+                };
+                history_delta.push(terminal_event);
+                return (history_delta, worker_items, timer_items, orchestrator_items);
             };
 
             // Pin the resolved version only if we found a valid orchestration
