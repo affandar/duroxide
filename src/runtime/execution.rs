@@ -9,26 +9,27 @@ use crate::{
 };
 
 impl Runtime {
-    /// Execute an orchestration instance to completion
+    /// Execute a single orchestration turn atomically
     ///
-    /// Architecture:
-    /// - Outer loop: Dequeue orchestrator messages, ensure instance is active
-    /// - Inner loop: Process batches of completions in deterministic turns
-    /// - Four-stage turn lifecycle: prep -> execute -> persist -> ack
-    /// - Deterministic completion processing with robust error handling
+    /// This method processes completion messages and executes one orchestration turn,
+    /// collecting all resulting work items and history changes atomically.
+    /// It handles version pinning, handler resolution, and deterministic completion processing.
 
     /// Set up version pinning from history
-    async fn setup_version_pinning(&self, instance: &str, orchestration_name: &str, history: &[Event]) {
-        if let Some(version_str) = history.iter().rev().find_map(|e| match e {
+    async fn setup_version_pinning(&self, instance: &str, orchestration_name: &str, history: &[Event]) -> Result<(), String> {
+        let version_str = history.iter().rev().find_map(|e| match e {
             Event::OrchestrationStarted { name: n, version, .. } if n == orchestration_name => Some(version.clone()),
             _ => None,
-        }) {
-            if version_str != "0.0.0" {
-                if let Ok(v) = semver::Version::parse(&version_str) {
-                    self.pinned_versions.lock().await.insert(instance.to_string(), v);
-                }
+        }).ok_or_else(|| {
+            format!("corrupted history: no OrchestrationStarted event found for {}", orchestration_name)
+        })?;
+
+        if version_str != "0.0.0" {
+            if let Ok(v) = semver::Version::parse(&version_str) {
+                self.pinned_versions.lock().await.insert(instance.to_string(), v);
             }
         }
+        Ok(())
     }
 
     /// Resolve the orchestration handler, preferring pinned version
@@ -91,7 +92,7 @@ impl Runtime {
 
     /// Extract current execution history (from most recent OrchestrationStarted)
     /// This filters out events from previous executions in continue-as-new scenarios
-    fn extract_current_execution_history(full_history: &[Event]) -> Vec<Event> {
+    fn extract_current_execution_history(full_history: &[Event]) -> Result<Vec<Event>, String> {
         let current_execution_start = full_history
             .iter()
             .enumerate()
@@ -100,11 +101,11 @@ impl Runtime {
                 Event::OrchestrationStarted { .. } => Some(i),
                 _ => None,
             })
-            .unwrap_or(0);
+            .ok_or("corrupted history: no OrchestrationStarted event found")?;
 
-        full_history[current_execution_start..].to_vec()
+        Ok(full_history[current_execution_start..].to_vec())
     }
-    /// Execute a single orchestration execution collecting all changes atomically
+    /// Execute a single orchestration turn atomically
     pub async fn run_single_execution_atomic(
         self: Arc<Self>,
         instance: &str,
@@ -165,7 +166,16 @@ impl Runtime {
         let history = initial_history.clone();
 
         // Pin version from history if available
-        self.setup_version_pinning(instance, orchestration_name, &history).await;
+        if let Err(error) = self.setup_version_pinning(instance, orchestration_name, &history).await {
+            let max_existing = history.iter().map(|e| e.event_id()).max().unwrap_or(0);
+            let next_id = max_existing + 1;
+            let terminal_event = Event::OrchestrationFailed {
+                event_id: next_id,
+                error: error.clone(),
+            };
+            history_delta.push(terminal_event);
+            return (history_delta, worker_items, timer_items, orchestrator_items, Err(error));
+        }
 
         // Resolve orchestration handler
         let handler = match self.resolve_orchestration_handler(instance, orchestration_name).await {
@@ -204,7 +214,19 @@ impl Runtime {
         );
 
         // Execute orchestration turn
-        let current_execution_history = Self::extract_current_execution_history(&history);
+        let current_execution_history = match Self::extract_current_execution_history(&history) {
+            Ok(history) => history,
+            Err(error) => {
+                let max_existing = history.iter().map(|e| e.event_id()).max().unwrap_or(0);
+                let next_id = max_existing + 1;
+                let terminal_event = Event::OrchestrationFailed {
+                    event_id: next_id,
+                    error: error.clone(),
+                };
+                history_delta.push(terminal_event);
+                return (history_delta, worker_items, timer_items, orchestrator_items, Err(error));
+            }
+        };
         let mut turn = OrchestrationTurn::new(
             instance.to_string(),
             0, // turn_index
@@ -223,8 +245,7 @@ impl Runtime {
         // Collect history delta from turn
         history_delta.extend(turn.history_delta().to_vec());
 
-        // Check for nondeterminism is now handled by the turn execution itself
-        // The turn will return TurnResult::Failed with a specific error message
+        // Nondeterminism detection is handled by OrchestrationTurn::execute_orchestration
 
         // Handle turn result and collect work items
         let result = match turn_result {
@@ -300,7 +321,7 @@ impl Runtime {
                 Ok(String::new())
             }
             TurnResult::Completed(output) => {
-                // At terminal, only detached orchestration actions should be honored; other pending actions are ignored.
+                // Honor detached orchestration starts at terminal state
                 enqueue_detached_from_pending(turn.pending_actions());
 
                 // Add completion event with next event_id
@@ -325,7 +346,7 @@ impl Runtime {
                 Ok(output)
             }
             TurnResult::Failed(error) => {
-                // At terminal, only detached orchestration actions should be honored; other pending actions are ignored.
+                // Honor detached orchestration starts at terminal state
                 enqueue_detached_from_pending(turn.pending_actions());
 
                 // Add failure event
@@ -369,7 +390,6 @@ impl Runtime {
                 Ok("continued as new".to_string())
             }
             TurnResult::Cancelled(reason) => {
-                // Cancellation is currently recorded as a failure with a specific message.
                 let error = format!("canceled: {}", reason);
                 let next_id = calc_next_event_id(&history, &history_delta);
                 let terminal_event = Event::OrchestrationFailed {
@@ -473,7 +493,46 @@ impl Runtime {
     }
 }
 
-/// RAII guard to ensure active instance cleanup
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Event;
+
+    #[test]
+    fn test_extract_current_execution_history_corrupted() {
+        // Test corrupted history without OrchestrationStarted event
+        let corrupted_history = vec![
+            Event::ActivityCompleted { event_id: 1, source_event_id: 1, result: "test".to_string() },
+            Event::TimerFired { event_id: 2, source_event_id: 1, fire_at_ms: 1000 },
+        ];
+        
+        let result = Runtime::extract_current_execution_history(&corrupted_history);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), "corrupted history: no OrchestrationStarted event found");
+    }
+
+    #[test]
+    fn test_extract_current_execution_history_valid() {
+        // Test valid history with OrchestrationStarted event
+        let valid_history = vec![
+            Event::OrchestrationStarted { 
+                event_id: 1, 
+                name: "test".to_string(), 
+                version: "1.0.0".to_string(), 
+                input: "{}".to_string(),
+                parent_instance: None,
+                parent_id: None,
+            },
+            Event::ActivityCompleted { event_id: 2, source_event_id: 1, result: "test".to_string() },
+        ];
+        
+        let result = Runtime::extract_current_execution_history(&valid_history);
+        assert!(result.is_ok());
+        let extracted = result.unwrap();
+        assert_eq!(extracted.len(), 2);
+        assert!(matches!(extracted[0], Event::OrchestrationStarted { .. }));
+    }
+}
 
 /// Extract ack token from an orchestrator message
 fn extract_ack_token(msg: &OrchestratorMsg) -> Option<String> {

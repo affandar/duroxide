@@ -314,37 +314,6 @@ impl Runtime {
         None
     }
 
-    /// Start an orchestration and ensure the instance is active.
-    /// Callers should use wait_for_orchestration to wait for completion.
-    async fn start_internal_wait(
-        self: Arc<Self>,
-        instance: &str,
-        orchestration_name: &str,
-        input: String,
-        pin_version: Option<Version>,
-        parent_instance: Option<String>,
-        parent_id: Option<u64>,
-    ) -> Result<(), String> {
-        // Just queue the StartOrchestration work item - let the engine handle duplicates
-        let start_work_item = WorkItem::StartOrchestration {
-            instance: instance.to_string(),
-            orchestration: orchestration_name.to_string(),
-            input,
-            version: pin_version.map(|v| v.to_string()),
-            parent_instance,
-            parent_id,
-        };
-
-        if let Err(e) = self
-            .history_store
-            .enqueue_orchestrator_work(start_work_item, None)
-            .await
-        {
-            return Err(format!("failed to enqueue StartOrchestration work item: {}", e));
-        }
-
-        Ok(())
-    }
 
     /// Get the current execution ID for an instance, or fetch from store if not tracked
     async fn get_execution_id_for_instance(&self, instance: &str) -> u64 {
@@ -357,27 +326,6 @@ impl Runtime {
         self.history_store.latest_execution_id(instance).await.unwrap_or(1)
     }
 
-    /// Internal: start an orchestration and record parent linkage.
-    pub(crate) async fn start_orchestration_with_parent(
-        self: Arc<Self>,
-        instance: &str,
-        orchestration_name: &str,
-        input: impl Into<String>,
-        parent_instance: String,
-        parent_id: u64,
-        version: Option<semver::Version>,
-    ) -> Result<(), String> {
-        self.clone()
-            .start_internal_wait(
-                instance,
-                orchestration_name,
-                input.into(),
-                version,
-                Some(parent_instance),
-                Some(parent_id),
-            )
-            .await
-    }
 
     /// Start a new runtime using the in-memory SQLite provider.
     pub async fn start(
