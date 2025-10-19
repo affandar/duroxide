@@ -75,152 +75,19 @@ where
 /// Immutable registry mapping orchestration names to versioned handlers.
 pub use crate::runtime::registry::{OrchestrationRegistry, OrchestrationRegistryBuilder, VersionPolicy};
 
-// Message types for orchestration completion handling
-/// Completion messages delivered to active orchestration instances.
-/// These correspond directly to WorkItem completion variants but include ack tokens.
-#[derive(Debug, Clone)]
-pub enum OrchestratorMsg {
-    ActivityCompleted {
-        instance: String,
-        execution_id: u64,
-        id: u64,
-        result: String,
-        ack_token: Option<String>,
-    },
-    ActivityFailed {
-        instance: String,
-        execution_id: u64,
-        id: u64,
-        error: String,
-        ack_token: Option<String>,
-    },
-    TimerFired {
-        instance: String,
-        execution_id: u64,
-        id: u64,
-        fire_at_ms: u64,
-        ack_token: Option<String>,
-    },
-    ExternalByName {
-        instance: String,
-        name: String,
-        data: String,
-        ack_token: Option<String>,
-    },
-    SubOrchCompleted {
-        instance: String,
-        execution_id: u64,
-        id: u64,
-        result: String,
-        ack_token: Option<String>,
-    },
-    SubOrchFailed {
-        instance: String,
-        execution_id: u64,
-        id: u64,
-        error: String,
-        ack_token: Option<String>,
-    },
-    CancelRequested {
-        instance: String,
-        reason: String,
-        ack_token: Option<String>,
-    },
-}
-
-/// Convert a WorkItem completion to an OrchestratorMsg with ack token
-impl OrchestratorMsg {
-    pub fn from_work_item(work_item: WorkItem, ack_token: Option<String>) -> Option<Self> {
-        match work_item {
-            WorkItem::ActivityCompleted {
-                instance,
-                execution_id,
-                id,
-                result,
-            } => Some(OrchestratorMsg::ActivityCompleted {
-                instance,
-                execution_id,
-                id,
-                result,
-                ack_token,
-            }),
-            WorkItem::ActivityFailed {
-                instance,
-                execution_id,
-                id,
-                error,
-            } => Some(OrchestratorMsg::ActivityFailed {
-                instance,
-                execution_id,
-                id,
-                error,
-                ack_token,
-            }),
-            WorkItem::TimerFired {
-                instance,
-                execution_id,
-                id,
-                fire_at_ms,
-            } => Some(OrchestratorMsg::TimerFired {
-                instance,
-                execution_id,
-                id,
-                fire_at_ms,
-                ack_token,
-            }),
-            WorkItem::ExternalRaised { instance, name, data } => Some(OrchestratorMsg::ExternalByName {
-                instance,
-                name,
-                data,
-                ack_token,
-            }),
-            WorkItem::SubOrchCompleted {
-                parent_instance,
-                parent_execution_id,
-                parent_id,
-                result,
-            } => Some(OrchestratorMsg::SubOrchCompleted {
-                instance: parent_instance,
-                execution_id: parent_execution_id,
-                id: parent_id,
-                result,
-                ack_token,
-            }),
-            WorkItem::SubOrchFailed {
-                parent_instance,
-                parent_execution_id,
-                parent_id,
-                error,
-            } => Some(OrchestratorMsg::SubOrchFailed {
-                instance: parent_instance,
-                execution_id: parent_execution_id,
-                id: parent_id,
-                error,
-                ack_token,
-            }),
-            WorkItem::CancelInstance { instance, reason } => Some(OrchestratorMsg::CancelRequested {
-                instance,
-                reason,
-                ack_token,
-            }),
-            // Non-completion WorkItems don't convert to OrchestratorMsg
-            WorkItem::StartOrchestration { .. }
-            | WorkItem::ActivityExecute { .. }
-            | WorkItem::TimerSchedule { .. }
-            | WorkItem::ContinueAsNew { .. } => None,
-        }
-    }
-}
-
-pub fn kind_of(msg: &OrchestratorMsg) -> &'static str {
+pub fn kind_of(msg: &WorkItem) -> &'static str {
     match msg {
-        OrchestratorMsg::ActivityCompleted { .. } => "ActivityCompleted",
-        OrchestratorMsg::ActivityFailed { .. } => "ActivityFailed",
-        OrchestratorMsg::TimerFired { .. } => "TimerFired",
-        OrchestratorMsg::ExternalByName { .. } => "ExternalByName",
-        OrchestratorMsg::SubOrchCompleted { .. } => "SubOrchCompleted",
-        OrchestratorMsg::SubOrchFailed { .. } => "SubOrchFailed",
-        OrchestratorMsg::CancelRequested { .. } => "CancelRequested",
+        WorkItem::StartOrchestration { .. } => "StartOrchestration",
+        WorkItem::ActivityExecute { .. } => "ActivityExecute",
+        WorkItem::ActivityCompleted { .. } => "ActivityCompleted",
+        WorkItem::ActivityFailed { .. } => "ActivityFailed",
+        WorkItem::TimerSchedule { .. } => "TimerSchedule",
+        WorkItem::TimerFired { .. } => "TimerFired",
+        WorkItem::ExternalRaised { .. } => "ExternalRaised",
+        WorkItem::SubOrchCompleted { .. } => "SubOrchCompleted",
+        WorkItem::SubOrchFailed { .. } => "SubOrchFailed",
+        WorkItem::CancelInstance { .. } => "CancelInstance",
+        WorkItem::ContinueAsNew { .. } => "ContinueAsNew",
     }
 }
 
@@ -457,7 +324,7 @@ impl Runtime {
 
         // Separate Start/ContinueAsNew from completion messages
         let mut start_or_continue: Option<WorkItem> = None;
-        let mut completion_messages: Vec<OrchestratorMsg> = Vec::new();
+        let mut completion_messages: Vec<WorkItem> = Vec::new();
 
         for work_item in &item.messages {
             match work_item {
@@ -469,12 +336,18 @@ impl Runtime {
                     }
                     start_or_continue = Some(work_item.clone());
                 }
-                _ => {
-                    // Convert to OrchestratorMsg with shared token
-                    if let Some(msg) = OrchestratorMsg::from_work_item(work_item.clone(), Some(lock_token.clone())) {
-                        completion_messages.push(msg);
-                    }
+                // Non-start/CAN work items are completion messages
+                WorkItem::ActivityCompleted { .. }
+                | WorkItem::ActivityFailed { .. }
+                | WorkItem::TimerFired { .. }
+                | WorkItem::ExternalRaised { .. }
+                | WorkItem::SubOrchCompleted { .. }
+                | WorkItem::SubOrchFailed { .. }
+                | WorkItem::CancelInstance { .. } => {
+                    completion_messages.push(work_item.clone());
                 }
+                // ActivityExecute and TimerSchedule shouldn't appear in orchestrator queue
+                WorkItem::ActivityExecute { .. } | WorkItem::TimerSchedule { .. } => {}
             }
         }
 
@@ -623,7 +496,7 @@ impl Runtime {
         version: Option<&str>,
         parent_instance: Option<&str>,
         parent_id: Option<u64>,
-        completion_messages: Vec<OrchestratorMsg>,
+        completion_messages: Vec<WorkItem>,
         existing_history: &[Event],
         execution_id: u64,
         _lock_token: &str,

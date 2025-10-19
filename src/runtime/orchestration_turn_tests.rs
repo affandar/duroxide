@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use crate::runtime::OrchestratorMsg;
+    use crate::providers::WorkItem;
     use crate::runtime::orchestration_turn::*;
     use crate::{Event, OrchestrationContext, OrchestrationHandler};
     use async_trait::async_trait;
@@ -65,29 +65,21 @@ mod tests {
         let mut turn = OrchestrationTurn::new("test-instance".to_string(), 1, 1, baseline);
 
         let messages = vec![
-            (
-                OrchestratorMsg::ActivityCompleted {
-                    instance: "test-instance".to_string(),
-                    execution_id: 1,
-                    id: 1,
-                    result: "result1".to_string(),
-                    ack_token: Some("token1".to_string()),
-                },
-                "token1".to_string(),
-            ),
-            (
-                OrchestratorMsg::ActivityCompleted {
-                    instance: "test-instance".to_string(),
-                    execution_id: 1,
-                    id: 2,
-                    result: "result2".to_string(),
-                    ack_token: Some("token2".to_string()),
-                },
-                "token2".to_string(),
-            ),
+            WorkItem::ActivityCompleted {
+                instance: "test-instance".to_string(),
+                execution_id: 1,
+                id: 1,
+                result: "result1".to_string(),
+            },
+            WorkItem::ActivityCompleted {
+                instance: "test-instance".to_string(),
+                execution_id: 1,
+                id: 2,
+                result: "result2".to_string(),
+            },
         ];
 
-        let _tokens = turn.prep_completions(messages);
+        turn.prep_completions(messages);
 
         // Should have events in history_delta
         assert_eq!(turn.history_delta.len(), 2);
@@ -118,17 +110,15 @@ mod tests {
             baseline_history,
         );
 
-        let messages = vec![(
-            OrchestratorMsg::ExternalByName {
+        let messages = vec![
+            WorkItem::ExternalRaised {
                 instance: "test-instance".to_string(),
                 name: "test-event".to_string(),
                 data: "event-data".to_string(),
-                ack_token: Some("external-token".to_string()),
             },
-            "external-token".to_string(),
-        )];
+        ];
 
-        let _tokens = turn.prep_completions(messages);
+        turn.prep_completions(messages);
 
         // Should have external event in history_delta
         assert!(!turn.history_delta.is_empty());
@@ -140,26 +130,18 @@ mod tests {
         let mut turn = OrchestrationTurn::new("test-instance".to_string(), 1, 1, vec![]);
 
         let messages = vec![
-            (
-                OrchestratorMsg::ActivityCompleted {
-                    instance: "test-instance".to_string(),
-                    execution_id: 1,
-                    id: 1,
-                    result: "first-result".to_string(),
-                    ack_token: Some("token1".to_string()),
-                },
-                "token1".to_string(),
-            ),
-            (
-                OrchestratorMsg::ActivityCompleted {
-                    instance: "test-instance".to_string(),
-                    execution_id: 1,
-                    id: 1, // Same ID - should be duplicate
-                    result: "second-result".to_string(),
-                    ack_token: Some("token2".to_string()),
-                },
-                "token2".to_string(),
-            ),
+            WorkItem::ActivityCompleted {
+                instance: "test-instance".to_string(),
+                execution_id: 1,
+                id: 1,
+                result: "first-result".to_string(),
+            },
+            WorkItem::ActivityCompleted {
+                instance: "test-instance".to_string(),
+                execution_id: 1,
+                id: 1, // Same ID - should be duplicate
+                result: "second-result".to_string(),
+            },
         ];
 
         turn.baseline_history = vec![
@@ -176,7 +158,7 @@ mod tests {
             },
         ];
 
-        let _tokens = turn.prep_completions(messages);
+        turn.prep_completions(messages);
 
         // Should have zero events (both duplicates were filtered)
         assert_eq!(turn.history_delta.len(), 0);
@@ -265,16 +247,14 @@ mod tests {
         );
 
         // Add completion that won't be consumed by the handler but has a matching schedule
-        let messages = vec![(
-            OrchestratorMsg::ActivityCompleted {
+        let messages = vec![
+            WorkItem::ActivityCompleted {
                 instance: "test-instance".to_string(),
                 execution_id: 1,
                 id: 999, // Scheduled below, not consumed by the mock handler
                 result: "test-result".to_string(),
-                ack_token: Some("test-token".to_string()),
             },
-            "test-token".to_string(),
-        )];
+        ];
         // Provide matching schedule for id=999
         turn.baseline_history.push(Event::ActivityScheduled {
             event_id: 999,
@@ -359,18 +339,16 @@ mod tests {
         assert!(!turn.made_progress());
 
         // Add completion - should show progress
-        let messages = vec![(
-            OrchestratorMsg::ActivityCompleted {
+        let messages = vec![
+            WorkItem::ActivityCompleted {
                 instance: "test-instance".to_string(),
                 execution_id: 1,
                 id: 1,
                 result: "result".to_string(),
-                ack_token: Some("token".to_string()),
             },
-            "token".to_string(),
-        )];
+        ];
 
-        let _tokens = turn.prep_completions(messages);
+        turn.prep_completions(messages);
         assert!(turn.made_progress());
 
         // Add history delta - should still show progress

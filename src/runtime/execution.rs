@@ -5,7 +5,7 @@ use super::orchestration_turn::{OrchestrationTurn, TurnResult};
 use crate::{
     Event,
     providers::WorkItem,
-    runtime::{OrchestrationHandler, OrchestratorMsg, Runtime},
+    runtime::{OrchestrationHandler, Runtime},
 };
 
 impl Runtime {
@@ -125,7 +125,7 @@ impl Runtime {
         orchestration_name: &str,
         initial_history: Vec<Event>,
         execution_id: u64,
-        completion_messages: Vec<OrchestratorMsg>,
+        completion_messages: Vec<WorkItem>,
     ) -> (
         Vec<Event>,
         Vec<WorkItem>,
@@ -214,19 +214,14 @@ impl Runtime {
             tracing::debug!(target = "duroxide::runtime::execution", instance=%instance, "No parent link for orchestration");
         }
 
-        // Process completion messages in a single turn
-        let messages: Vec<(OrchestratorMsg, String)> = completion_messages
-            .into_iter()
-            .filter_map(|msg| extract_ack_token(&msg).map(|token| (msg, token)))
-            .collect();
-
         debug!(
             instance = %instance,
-            message_count = messages.len(),
+            message_count = completion_messages.len(),
             "starting orchestration turn atomically"
         );
 
         // Execute orchestration turn
+        let messages: Vec<WorkItem> = completion_messages;
         let current_execution_history = match Self::extract_current_execution_history(&history) {
             Ok(history) => history,
             Err(error) => {
@@ -562,15 +557,3 @@ mod tests {
     }
 }
 
-/// Extract ack token from an orchestrator message
-fn extract_ack_token(msg: &OrchestratorMsg) -> Option<String> {
-    match msg {
-        OrchestratorMsg::ActivityCompleted { ack_token, .. } => ack_token.clone(),
-        OrchestratorMsg::ActivityFailed { ack_token, .. } => ack_token.clone(),
-        OrchestratorMsg::TimerFired { ack_token, .. } => ack_token.clone(),
-        OrchestratorMsg::ExternalByName { ack_token, .. } => ack_token.clone(),
-        OrchestratorMsg::SubOrchCompleted { ack_token, .. } => ack_token.clone(),
-        OrchestratorMsg::SubOrchFailed { ack_token, .. } => ack_token.clone(),
-        OrchestratorMsg::CancelRequested { ack_token, .. } => ack_token.clone(),
-    }
-}
