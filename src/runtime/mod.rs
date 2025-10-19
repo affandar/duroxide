@@ -431,6 +431,7 @@ impl Runtime {
                 _ => {}
             }
         }
+        
         let has_can_msg = item
             .messages
             .iter()
@@ -477,12 +478,11 @@ impl Runtime {
             }
         }
 
-        // Process the execution
-        let (history_delta, worker_items, timer_items, orchestrator_items, execution_id_for_ack) =
+        // Determine execution parameters
+        // Extract from WorkItem if present, otherwise from history
+        let (orchestration_name, input_str, version, parent_instance_str, parent_id, is_can) = 
             if let Some(start_item) = start_or_continue {
-                // Both StartOrchestration and ContinueAsNew are handled identically.
-                // For ContinueAsNew, we start a fresh execution with empty history and execution_id = current + 1.
-                let (orchestration, input, version, parent_instance, parent_id, is_can) = match &start_item {
+                match &start_item {
                     WorkItem::StartOrchestration {
                         orchestration,
                         input,
@@ -491,10 +491,10 @@ impl Runtime {
                         parent_id,
                         ..
                     } => (
-                        orchestration.as_str(),
-                        input.as_str(),
-                        version.as_deref(),
-                        parent_instance.as_deref(),
+                        orchestration.clone(),
+                        input.clone(),
+                        version.clone(),
+                        parent_instance.clone(),
                         *parent_id,
                         false,
                     ),
@@ -504,38 +504,66 @@ impl Runtime {
                         version,
                         ..
                     } => (
-                        orchestration.as_str(),
-                        input.as_str(),
-                        version.as_deref(),
+                        orchestration.clone(),
+                        input.clone(),
+                        version.clone(),
                         None,
                         None,
                         true,
                     ),
                     _ => unreachable!(),
-                };
+                }
+            } else {
+                // No start item - extract orchestration name from history
+                let orchestration_name = item.history
+                    .iter()
+                    .rev()
+                    .find_map(|e| match e {
+                        Event::OrchestrationStarted { name, .. } => Some(name.clone()),
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| {
+                        // Empty history with no start item and completion messages = error
+                        if !completion_messages.is_empty() {
+                            warn!(instance, "completion messages for unstarted instance");
+                        }
+                        String::new()
+                    });
 
-                // Decide execution id and history to use
-                let (execution_id_to_use, history_to_use) = if is_can {
-                    (item.execution_id + 1, Vec::new())
-                } else {
-                    (item.execution_id, item.history.clone())
-                };
+                (orchestration_name, String::new(), None, None, None, false)
+            };
 
-                debug!(
-                    instance,
-                    orchestration = %orchestration,
-                    execution_id = %execution_id_to_use,
-                    is_continue_as_new = is_can,
-                    "Starting execution"
-                );
+        // Decide execution id and history to use
+        let (execution_id_to_use, history_to_use) = if is_can {
+            (item.execution_id + 1, Vec::new())
+        } else {
+            (item.execution_id, item.history.clone())
+        };
 
+        // Log execution start
+        if !orchestration_name.is_empty() {
+            debug!(
+                instance,
+                orchestration = %orchestration_name,
+                execution_id = %execution_id_to_use,
+                is_continue_as_new = is_can,
+                "Starting execution"
+            );
+        } else if !completion_messages.is_empty() {
+            // Empty orchestration name with completion messages - just warn and skip
+            tracing::warn!(instance = %item.instance, "empty effective batch - this should not happen");
+        }
+
+        // Process the execution (unified path)
+        let (history_delta, worker_items, timer_items, orchestrator_items, execution_id_for_ack) =
+            if !orchestration_name.is_empty() {
                 let (hd, wi, ti, oi) = self
-                    .handle_start_orchestration_atomic(
+                    .handle_orchestration_atomic(
                         instance,
-                        orchestration,
-                        input,
-                        version,
-                        parent_instance,
+                        &orchestration_name,
+                        &input_str,
+                        version.as_deref(),
+                        parent_instance_str.as_deref(),
                         parent_id,
                         completion_messages,
                         &history_to_use,
@@ -543,24 +571,10 @@ impl Runtime {
                         lock_token,
                     )
                     .await;
-
                 (hd, wi, ti, oi, execution_id_to_use)
-            } else if !completion_messages.is_empty() {
-                // Only completion messages - process them
-                let (hd, wi, ti, oi) = self
-                    .handle_completion_batch_atomic(
-                        instance,
-                        completion_messages,
-                        &item.history,
-                        item.execution_id,
-                        lock_token,
-                    )
-                    .await;
-                (hd, wi, ti, oi, item.execution_id)
             } else {
-                // Empty effective batch - just ack
-                tracing::warn!(instance = %item.instance, "empty effective batch - this should not happen");
-                (vec![], vec![], vec![], vec![], item.execution_id)
+                // Empty effective batch
+                (vec![], vec![], vec![], vec![], execution_id_to_use)
             };
 
         // Atomically commit all changes
@@ -601,7 +615,7 @@ impl Runtime {
     }
 
     // Helper methods for atomic orchestration processing
-    async fn handle_start_orchestration_atomic(
+    async fn handle_orchestration_atomic(
         self: &Arc<Self>,
         instance: &str,
         orchestration: &str,
@@ -680,81 +694,6 @@ impl Runtime {
         worker_items.extend(exec_worker_items);
         timer_items.extend(exec_timer_items);
         orchestrator_items.extend(exec_orchestrator_items);
-
-        (history_delta, worker_items, timer_items, orchestrator_items)
-    }
-
-    async fn handle_completion_batch_atomic(
-        self: &Arc<Self>,
-        instance: &str,
-        completion_messages: Vec<OrchestratorMsg>,
-        existing_history: &[Event],
-        execution_id: u64,
-        _lock_token: &str,
-    ) -> (Vec<Event>, Vec<WorkItem>, Vec<WorkItem>, Vec<WorkItem>) {
-        // If the instance has no history yet, it hasn't been started. Completion-only
-        // messages (e.g., external events) may arrive due to races. Drop them safely.
-        if existing_history.is_empty() {
-            // Double-check latest persisted history to avoid racing with a just-started instance.
-            let latest = self.history_store.read(instance).await;
-            if latest.is_empty() {
-                let kinds: Vec<&'static str> = completion_messages.iter().map(|m| kind_of(m)).collect();
-                warn!(
-                    instance,
-                    count = completion_messages.len(),
-                    kinds = ?kinds,
-                    "dropping completion-only batch for unstarted instance"
-                );
-                return (vec![], vec![], vec![], vec![]);
-            } else {
-                debug!(
-                    instance,
-                    "completion-only batch: detected newly-started instance after re-read"
-                );
-                // Use the latest history instead of the empty snapshot
-                let initial_history = latest;
-                let (history_delta, worker_items, timer_items, orchestrator_items, _result) = self
-                    .clone()
-                    .run_single_execution_atomic(
-                        instance,
-                        &initial_history
-                            .iter()
-                            .rev()
-                            .find_map(|e| match e {
-                                Event::OrchestrationStarted { name, .. } => Some(name.clone()),
-                                _ => None,
-                            })
-                            .unwrap_or_else(|| "Unknown".to_string()),
-                        initial_history.clone(),
-                        execution_id,
-                        completion_messages,
-                    )
-                    .await;
-                return (history_delta, worker_items, timer_items, orchestrator_items);
-            }
-        }
-
-        // Extract orchestration name from history
-        let orchestration_name = existing_history
-            .iter()
-            .rev()
-            .find_map(|e| match e {
-                Event::OrchestrationStarted { name, .. } => Some(name.clone()),
-                _ => None,
-            })
-            .unwrap_or_else(|| "Unknown".to_string());
-
-        let initial_history = existing_history.to_vec();
-        let (history_delta, worker_items, timer_items, orchestrator_items, _result) = self
-            .clone()
-            .run_single_execution_atomic(
-                instance,
-                &orchestration_name,
-                initial_history.clone(),
-                execution_id,
-                completion_messages,
-            )
-            .await;
 
         (history_delta, worker_items, timer_items, orchestrator_items)
     }
@@ -969,9 +908,9 @@ impl Runtime {
         })
     }
 
-    /// Abort background tasks. Channels are dropped with the runtime.
+    /// Abort background tasks.
     pub async fn shutdown(self: Arc<Self>) {
-        // Abort background tasks; channels will be dropped with Runtime
+        // Abort background dispatcher tasks
         let mut joins = self.joins.lock().await;
         for j in joins.drain(..) {
             j.abort();
