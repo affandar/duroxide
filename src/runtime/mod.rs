@@ -26,9 +26,7 @@ impl Default for RuntimeOptions {
     }
 }
 
-pub mod dispatch;
 pub mod registry;
-pub mod router;
 mod timers;
 use async_trait::async_trait;
 
@@ -78,7 +76,154 @@ where
 pub use crate::runtime::registry::{OrchestrationRegistry, OrchestrationRegistryBuilder, VersionPolicy};
 
 
-pub use router::{InstanceRouter, OrchestratorMsg};
+// Message types for orchestration completion handling
+/// Completion messages delivered to active orchestration instances.
+/// These correspond directly to WorkItem completion variants but include ack tokens.
+#[derive(Debug, Clone)]
+pub enum OrchestratorMsg {
+    ActivityCompleted {
+        instance: String,
+        execution_id: u64,
+        id: u64,
+        result: String,
+        ack_token: Option<String>,
+    },
+    ActivityFailed {
+        instance: String,
+        execution_id: u64,
+        id: u64,
+        error: String,
+        ack_token: Option<String>,
+    },
+    TimerFired {
+        instance: String,
+        execution_id: u64,
+        id: u64,
+        fire_at_ms: u64,
+        ack_token: Option<String>,
+    },
+    ExternalByName {
+        instance: String,
+        name: String,
+        data: String,
+        ack_token: Option<String>,
+    },
+    SubOrchCompleted {
+        instance: String,
+        execution_id: u64,
+        id: u64,
+        result: String,
+        ack_token: Option<String>,
+    },
+    SubOrchFailed {
+        instance: String,
+        execution_id: u64,
+        id: u64,
+        error: String,
+        ack_token: Option<String>,
+    },
+    CancelRequested {
+        instance: String,
+        reason: String,
+        ack_token: Option<String>,
+    },
+}
+
+/// Convert a WorkItem completion to an OrchestratorMsg with ack token
+impl OrchestratorMsg {
+    pub fn from_work_item(work_item: WorkItem, ack_token: Option<String>) -> Option<Self> {
+        match work_item {
+            WorkItem::ActivityCompleted {
+                instance,
+                execution_id,
+                id,
+                result,
+            } => Some(OrchestratorMsg::ActivityCompleted {
+                instance,
+                execution_id,
+                id,
+                result,
+                ack_token,
+            }),
+            WorkItem::ActivityFailed {
+                instance,
+                execution_id,
+                id,
+                error,
+            } => Some(OrchestratorMsg::ActivityFailed {
+                instance,
+                execution_id,
+                id,
+                error,
+                ack_token,
+            }),
+            WorkItem::TimerFired {
+                instance,
+                execution_id,
+                id,
+                fire_at_ms,
+            } => Some(OrchestratorMsg::TimerFired {
+                instance,
+                execution_id,
+                id,
+                fire_at_ms,
+                ack_token,
+            }),
+            WorkItem::ExternalRaised { instance, name, data } => Some(OrchestratorMsg::ExternalByName {
+                instance,
+                name,
+                data,
+                ack_token,
+            }),
+            WorkItem::SubOrchCompleted {
+                parent_instance,
+                parent_execution_id,
+                parent_id,
+                result,
+            } => Some(OrchestratorMsg::SubOrchCompleted {
+                instance: parent_instance,
+                execution_id: parent_execution_id,
+                id: parent_id,
+                result,
+                ack_token,
+            }),
+            WorkItem::SubOrchFailed {
+                parent_instance,
+                parent_execution_id,
+                parent_id,
+                error,
+            } => Some(OrchestratorMsg::SubOrchFailed {
+                instance: parent_instance,
+                execution_id: parent_execution_id,
+                id: parent_id,
+                error,
+                ack_token,
+            }),
+            WorkItem::CancelInstance { instance, reason } => Some(OrchestratorMsg::CancelRequested {
+                instance,
+                reason,
+                ack_token,
+            }),
+            // Non-completion WorkItems don't convert to OrchestratorMsg
+            WorkItem::StartOrchestration { .. }
+            | WorkItem::ActivityExecute { .. }
+            | WorkItem::TimerSchedule { .. }
+            | WorkItem::ContinueAsNew { .. } => None,
+        }
+    }
+}
+
+pub fn kind_of(msg: &OrchestratorMsg) -> &'static str {
+    match msg {
+        OrchestratorMsg::ActivityCompleted { .. } => "ActivityCompleted",
+        OrchestratorMsg::ActivityFailed { .. } => "ActivityFailed",
+        OrchestratorMsg::TimerFired { .. } => "TimerFired",
+        OrchestratorMsg::ExternalByName { .. } => "ExternalByName",
+        OrchestratorMsg::SubOrchCompleted { .. } => "SubOrchCompleted",
+        OrchestratorMsg::SubOrchFailed { .. } => "SubOrchFailed",
+        OrchestratorMsg::CancelRequested { .. } => "CancelRequested",
+    }
+}
 
 /// In-process runtime that executes activities and timers and persists
 /// history via a `Provider`.
@@ -142,75 +287,6 @@ impl Runtime {
     }
 
     // Execution engine: consumes provider queues and persists history atomically.
-    /// Internal: apply pure decisions by appending necessary history and dispatching work.
-    async fn apply_decisions(self: &Arc<Self>, instance: &str, history: &Vec<Event>, decisions: Vec<crate::Action>) {
-        debug!("apply_decisions: {instance} {decisions:#?}");
-        for d in decisions {
-            match d {
-                crate::Action::ContinueAsNew { .. } => { /* handled by caller */ }
-                crate::Action::CallActivity {
-                    scheduling_event_id,
-                    name,
-                    input,
-                } => {
-                    dispatch::dispatch_call_activity(self, instance, history, scheduling_event_id, name, input).await;
-                }
-                crate::Action::CreateTimer {
-                    scheduling_event_id,
-                    delay_ms,
-                } => {
-                    dispatch::dispatch_create_timer(self, instance, history, scheduling_event_id, delay_ms).await;
-                }
-                crate::Action::WaitExternal {
-                    scheduling_event_id,
-                    name,
-                } => {
-                    dispatch::dispatch_wait_external(self, instance, history, scheduling_event_id, name).await;
-                }
-                crate::Action::StartOrchestrationDetached {
-                    scheduling_event_id,
-                    name,
-                    version,
-                    instance: child_inst,
-                    input,
-                } => {
-                    dispatch::dispatch_start_detached(
-                        self,
-                        instance,
-                        scheduling_event_id,
-                        name,
-                        version,
-                        child_inst,
-                        input,
-                    )
-                    .await;
-                }
-                crate::Action::StartSubOrchestration {
-                    scheduling_event_id,
-                    name,
-                    version,
-                    instance: child_suffix,
-                    input,
-                } => {
-                    dispatch::dispatch_start_sub_orchestration(
-                        self,
-                        instance,
-                        history,
-                        scheduling_event_id,
-                        name,
-                        version,
-                        child_suffix,
-                        input,
-                    )
-                    .await;
-                }
-                crate::Action::SystemCall { .. } => {
-                    // System calls are handled synchronously during orchestration turn
-                    // No worker dispatch needed - they complete immediately
-                }
-            }
-        }
-    }
     /// Return the most recent descriptor `{ name, version, parent_instance?, parent_id? }` for an instance.
     /// Returns `None` if the instance/history does not exist or no OrchestrationStarted is present.
     pub async fn get_orchestration_descriptor(
@@ -682,7 +758,7 @@ impl Runtime {
             if latest.is_empty() {
                 let kinds: Vec<&'static str> = completion_messages
                     .iter()
-                    .map(|m| crate::runtime::router::kind_of(m))
+                    .map(|m| kind_of(m))
                     .collect();
                 warn!(
                     instance,

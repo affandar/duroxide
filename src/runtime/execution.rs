@@ -5,7 +5,7 @@ use super::orchestration_turn::{OrchestrationTurn, TurnResult};
 use crate::{
     Event,
     providers::WorkItem,
-    runtime::{OrchestrationHandler, Runtime, router::OrchestratorMsg},
+    runtime::{OrchestrationHandler, Runtime, OrchestratorMsg},
 };
 
 impl Runtime {

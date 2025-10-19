@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests {
     use crate::runtime::orchestration_turn::*;
-    use crate::runtime::router::OrchestratorMsg;
+    use crate::runtime::OrchestratorMsg;
     use crate::{Event, OrchestrationContext, OrchestrationHandler};
     use async_trait::async_trait;
     use std::sync::Arc;

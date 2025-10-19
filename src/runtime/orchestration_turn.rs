@@ -1,7 +1,6 @@
-use crate::providers::Provider;
 use crate::{
     Event,
-    runtime::{OrchestrationHandler, router::OrchestratorMsg},
+    runtime::{OrchestrationHandler, OrchestratorMsg},
 };
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
@@ -439,42 +438,6 @@ impl OrchestrationTurn {
 }
 
 impl OrchestrationTurn {
-    /// Stage 3: Persist all state changes atomically
-    /// This stage writes all history deltas and dispatches actions
-    pub async fn persist_changes(
-        &mut self,
-        _history_store: Arc<dyn Provider>,
-        runtime: &Arc<crate::runtime::Runtime>,
-    ) -> Result<(), String> {
-        debug!(
-            instance = %self.instance,
-            turn_index = self.turn_index,
-            delta_count = self.history_delta.len(),
-            action_count = self.pending_actions.len(),
-            "persisting turn changes"
-        );
-
-        // In atomic path, provider append happens during ack_orchestration_item. Nothing to persist here.
-
-        // Apply decisions (dispatch actions) now that history is persisted
-        let full_history = {
-            let mut h = self.baseline_history.clone();
-            h.extend(self.history_delta.clone());
-            h
-        };
-
-        runtime
-            .apply_decisions(&self.instance, &full_history, self.pending_actions.clone())
-            .await;
-
-        debug!(
-            instance = %self.instance,
-            actions_applied = self.pending_actions.len(),
-            "actions dispatched"
-        );
-
-        Ok(())
-    }
 
     // Getter methods for atomic execution
     pub fn history_delta(&self) -> &[Event] {
@@ -502,7 +465,7 @@ impl OrchestrationTurn {
 mod tests {
     use super::*;
     use crate::Event;
-    use crate::runtime::router::OrchestratorMsg;
+    use crate::runtime::OrchestratorMsg;
 
     #[test]
     fn test_turn_creation() {
