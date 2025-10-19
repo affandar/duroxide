@@ -39,6 +39,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             input: r#"{"message": "Hello, SQLite!"}"#.to_string(),
             parent_instance: None,
             parent_id: None,
+            execution_id: duroxide::INITIAL_EXECUTION_ID,
         };
 
         provider.enqueue_orchestrator_work(start_work, None).await?;

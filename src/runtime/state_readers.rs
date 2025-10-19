@@ -399,6 +399,7 @@ mod tests {
                 version: Some("1.0.0".to_string()),
                 parent_instance: Some("parent".to_string()),
                 parent_id: Some(42),
+                execution_id: crate::INITIAL_EXECUTION_ID,
             },
             WorkItem::ActivityCompleted {
                 instance: "test-inst".to_string(),
@@ -501,6 +502,7 @@ mod tests {
                 version: None,
                 parent_instance: None,
                 parent_id: None,
+                execution_id: crate::INITIAL_EXECUTION_ID,
             },
             WorkItem::StartOrchestration {
                 instance: "test-inst".to_string(),
@@ -509,6 +511,7 @@ mod tests {
                 version: None,
                 parent_instance: None,
                 parent_id: None,
+                execution_id: crate::INITIAL_EXECUTION_ID,
             },
         ];
 

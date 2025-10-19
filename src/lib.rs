@@ -297,6 +297,14 @@ mod _typed_codec {
     }
 }
 
+/// Initial execution ID for new orchestration instances.
+/// All orchestrations start with execution_id = 1.
+pub const INITIAL_EXECUTION_ID: u64 = 1;
+
+/// Initial event ID for new executions.
+/// The first event (OrchestrationStarted) always has event_id = 1.
+pub const INITIAL_EVENT_ID: u64 = 1;
+
 /// Append-only orchestration history entries persisted by a provider and
 /// consumed during replay. All events have a monotonically increasing event_id
 /// representing their position in history. Scheduling and completion events

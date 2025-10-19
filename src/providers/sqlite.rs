@@ -39,7 +39,7 @@ impl SqliteProvider {
 
         // Check if this is a StartOrchestration - if so, create instance
         if let WorkItem::StartOrchestration {
-            orchestration, version, ..
+            orchestration, version, execution_id, ..
         } = &item
         {
             let version = version.as_deref().unwrap_or("1.0.0");
@@ -59,10 +59,11 @@ impl SqliteProvider {
             sqlx::query(
                 r#"
                 INSERT OR IGNORE INTO executions (instance_id, execution_id)
-                VALUES (?, 1)
+                VALUES (?, ?)
                 "#,
             )
             .bind(instance)
+            .bind(*execution_id as i64)
             .execute(&self.pool)
             .await
             .map_err(|e| e.to_string())?;
@@ -1618,6 +1619,7 @@ mod tests {
             input: "{}".to_string(),
             parent_instance: None,
             parent_id: None,
+            execution_id: crate::INITIAL_EXECUTION_ID,
         };
 
         store.enqueue_orchestrator_work(item.clone(), None).await.unwrap();
@@ -1671,6 +1673,7 @@ mod tests {
             input: "{}".to_string(),
             parent_instance: None,
             parent_id: None,
+            execution_id: crate::INITIAL_EXECUTION_ID,
         };
 
         store.enqueue_orchestrator_work(start, None).await.unwrap();
@@ -1764,6 +1767,7 @@ mod tests {
             input: "{}".to_string(),
             parent_instance: None,
             parent_id: None,
+            execution_id: crate::INITIAL_EXECUTION_ID,
         };
 
         store.enqueue_orchestrator_work(item, None).await.unwrap();
@@ -1895,6 +1899,7 @@ mod tests {
             input: "{}".to_string(),
             parent_instance: None,
             parent_id: None,
+            execution_id: crate::INITIAL_EXECUTION_ID,
         };
         store.enqueue_orchestrator_work(item, None).await.unwrap();
 
@@ -1978,6 +1983,7 @@ mod tests {
             input: "{}".to_string(),
             parent_instance: None,
             parent_id: None,
+            execution_id: crate::INITIAL_EXECUTION_ID,
         };
 
         // Enqueue with 2 second delay
@@ -2019,6 +2025,7 @@ mod tests {
             input: "{}".to_string(),
             parent_instance: None,
             parent_id: None,
+            execution_id: crate::INITIAL_EXECUTION_ID,
         };
 
         store.enqueue_orchestrator_work(start_item, None).await.unwrap();
@@ -2078,6 +2085,7 @@ mod tests {
             input: "{}".to_string(),
             parent_instance: None,
             parent_id: None,
+            execution_id: crate::INITIAL_EXECUTION_ID,
         };
 
         store.enqueue_orchestrator_work(item, None).await.unwrap();

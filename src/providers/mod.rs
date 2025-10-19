@@ -150,7 +150,7 @@ pub struct ExecutionMetadata {
 pub enum WorkItem {
     /// Start a new orchestration instance
     /// - Creates instance metadata (if doesn't exist)
-    /// - Should create execution with ID=1
+    /// - `execution_id`: The execution ID for this start (usually INITIAL_EXECUTION_ID=1)
     /// - `version`: None means use provider default (e.g., "1.0.0")
     StartOrchestration {
         instance: String,
@@ -159,6 +159,7 @@ pub enum WorkItem {
         version: Option<String>,
         parent_instance: Option<String>,
         parent_id: Option<u64>,
+        execution_id: u64,
     },
 
     /// Execute an activity (goes to worker queue)
@@ -1256,12 +1257,17 @@ pub trait Provider: Any + Send + Sync {
     ///
     /// # Return Value
     ///
-    /// - `None` if instance doesn't exist
-    /// - `Some(1)` for single-execution instances
-    /// - `Some(n)` where n > 1 for multi-execution instances
+    /// - `None` if instance doesn't exist or no execution ID can be determined
+    /// - `Some(n)` for instances with executions (derived from history)
     async fn latest_execution_id(&self, instance: &str) -> Option<u64> {
         let h = self.read(instance).await;
-        if h.is_empty() { None } else { Some(1) }
+        if h.is_empty() {
+            None
+        } else {
+            // Count OrchestrationStarted events to determine latest execution_id
+            let count = h.iter().filter(|e| matches!(e, crate::Event::OrchestrationStarted { .. })).count() as u64;
+            if count > 0 { Some(count) } else { None }
+        }
     }
 
     /// Read history for a specific execution.

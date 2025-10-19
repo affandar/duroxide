@@ -170,6 +170,7 @@ impl Runtime {
                         version: version.clone(),
                         parent_instance: None,
                         parent_id: None,
+                        execution_id: crate::INITIAL_EXECUTION_ID,
                     });
                 }
             }
@@ -304,6 +305,7 @@ impl Runtime {
                                 version: version.clone(),
                                 parent_instance: Some(instance.to_string()),
                                 parent_id: Some(*scheduling_event_id),
+                                execution_id: crate::INITIAL_EXECUTION_ID,
                             });
                         }
                         crate::Action::StartOrchestrationDetached {
@@ -320,6 +322,7 @@ impl Runtime {
                                 version: version.clone(),
                                 parent_instance: None,
                                 parent_id: None,
+                                execution_id: crate::INITIAL_EXECUTION_ID,
                             });
                         }
                         _ => {} // Other actions don't generate work items

@@ -191,7 +191,7 @@ impl Runtime {
         }
 
         // Fall back to querying the store
-        self.history_store.latest_execution_id(instance).await.unwrap_or(1)
+        self.history_store.latest_execution_id(instance).await.unwrap_or(crate::INITIAL_EXECUTION_ID)
     }
 
     /// Start a new runtime using the in-memory SQLite provider.
@@ -390,7 +390,7 @@ impl Runtime {
             } else {
                 // Unregistered orchestration - fail immediately but still create proper history
                 history_delta.push(Event::OrchestrationStarted {
-                    event_id: 1, // First event always has event_id=1
+                    event_id: crate::INITIAL_EVENT_ID,
                     name: orchestration.to_string(),
                     version: "0.0.0".to_string(), // Placeholder version for unregistered
                     input: input.to_string(),
@@ -399,7 +399,7 @@ impl Runtime {
                 });
 
                 let terminal_event = Event::OrchestrationFailed {
-                    event_id: 2, // Second event
+                    event_id: crate::INITIAL_EVENT_ID + 1,
                     error: format!("unregistered:{}", orchestration),
                 };
                 history_delta.push(terminal_event);

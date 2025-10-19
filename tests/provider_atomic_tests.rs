@@ -89,6 +89,7 @@ async fn test_fetch_orchestration_item_new_instance() {
                 version: Some("1.0.0".to_string()),
                 parent_instance: None,
                 parent_id: None,
+                execution_id: duroxide::INITIAL_EXECUTION_ID,
             },
             None,
         )
@@ -204,6 +205,7 @@ async fn test_ack_orchestration_item_atomic() {
                 version: Some("1.0.0".to_string()),
                 parent_instance: None,
                 parent_id: None,
+                execution_id: duroxide::INITIAL_EXECUTION_ID,
             },
             None,
         )
@@ -311,6 +313,7 @@ async fn test_abandon_orchestration_item() {
                 version: Some("1.0.0".to_string()),
                 parent_instance: None,
                 parent_id: None,
+                execution_id: duroxide::INITIAL_EXECUTION_ID,
             },
             None,
         )
@@ -351,6 +354,7 @@ async fn test_abandon_orchestration_item_with_delay() {
                 version: Some("1.0.0".to_string()),
                 parent_instance: None,
                 parent_id: None,
+                execution_id: duroxide::INITIAL_EXECUTION_ID,
             },
             None,
         )
@@ -400,6 +404,7 @@ async fn test_in_memory_provider_atomic_operations() {
                 version: Some("1.0.0".to_string()),
                 parent_instance: None,
                 parent_id: None,
+                execution_id: duroxide::INITIAL_EXECUTION_ID,
             },
             None,
         )
