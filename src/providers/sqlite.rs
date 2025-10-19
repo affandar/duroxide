@@ -442,20 +442,8 @@ impl SqliteProvider {
         execution_id: u64,
         events: Vec<Event>,
     ) -> Result<(), sqlx::Error> {
-        // Get next event_id
-        let _start_id: i64 = sqlx::query_scalar(
-            r#"
-            SELECT COALESCE(MAX(event_id), 0) + 1
-            FROM history
-            WHERE instance_id = ? AND execution_id = ?
-            "#,
-        )
-        .bind(instance)
-        .bind(execution_id as i64)
-        .fetch_one(&mut **tx)
-        .await?;
-
         // Validate that runtime provided concrete event_ids
+        // The provider must NOT generate event_ids - they come from the runtime
         for event in &events {
             if event.event_id() == 0 {
                 return Err(sqlx::Error::Protocol("event_id must be set by runtime".into()));

@@ -1,0 +1,207 @@
+# Provider ID Generation Analysis
+
+## Summary
+The SQLite provider is generating both `execution_id` and `event_id` values in several places, when these should **strictly** come from the runtime. This violates the design principle that the runtime is the source of truth for all IDs.
+
+---
+
+## Critical Issues Found
+
+### 1. **`create_new_execution` generates execution_id** ⚠️ CRITICAL
+**Location**: `src/providers/sqlite.rs:1236-1240`
+
+```rust
+// Get next execution ID
+let next_exec_id: i64 =
+    sqlx::query_scalar("SELECT COALESCE(MAX(execution_id), 0) + 1 FROM executions WHERE instance_id = ?")
+        .bind(instance)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+```
+
+**Problem**: The provider is calculating the next execution_id instead of receiving it from the runtime.
+
+**Also creates event_id**: Line 1271
+```rust
+let start_event = Event::OrchestrationStarted {
+    event_id: 1,  // Hard-coded by provider!
+    name: orchestration.to_string(),
+    ...
+};
+```
+
+**Status**: This method is deprecated and should be removed. The runtime should handle execution creation via `ack_orchestration_item` with `ExecutionMetadata`.
+
+---
+
+### 2. **`append_history_in_tx` queries for next event_id** ⚠️ MEDIUM
+**Location**: `src/providers/sqlite.rs:446-456`
+
+```rust
+// Get next event_id
+let _start_id: i64 = sqlx::query_scalar(
+    r#"
+    SELECT COALESCE(MAX(event_id), 0) + 1
+    FROM history
+    WHERE instance_id = ? AND execution_id = ?
+    "#,
+)
+.bind(instance)
+.bind(execution_id as i64)
+.fetch_one(&mut **tx)
+.await?;
+```
+
+**Problem**: The provider is querying for the next event_id, even though the variable is unused (`_start_id`). This suggests the provider was previously generating event_id values.
+
+**Mitigation**: The code validates that runtime provided event_ids (line 458-463):
+```rust
+// Validate that runtime provided concrete event_ids
+for event in &events {
+    if event.event_id() == 0 {
+        return Err(sqlx::Error::Protocol("event_id must be set by runtime".into()));
+    }
+}
+```
+
+**Recommendation**: Remove the unused `_start_id` query entirely.
+
+---
+
+### 3. **`read` method defaults execution_id** ⚠️ LOW
+**Location**: `src/providers/sqlite.rs:400-410`
+
+```rust
+let execution_id = match execution_id {
+    Some(id) => id as i64,
+    None => {
+        // Get latest execution
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COALESCE(MAX(execution_id), 1) FROM executions WHERE instance_id = ?",
+        )
+        .bind(instance)
+        .fetch_one(&mut **tx)
+        .await?
+    }
+};
+```
+
+**Problem**: When `execution_id` is `None`, the provider calculates it as `MAX(execution_id)`.
+
+**Justification**: This is acceptable for read operations where the caller wants "latest execution". This is a read-only convenience, not a write operation.
+
+---
+
+### 4. **`latest_execution_id` returns MAX** ✅ OK
+**Location**: `src/providers/sqlite.rs:1399-1406`
+
+```rust
+async fn latest_execution_id(&self, instance: &str) -> Result<u64, String> {
+    let row = sqlx::query(
+        "SELECT COALESCE(MAX(execution_id), 1) as max_execution_id FROM executions WHERE instance_id = ?",
+    )
+    ...
+}
+```
+
+**Status**: This is a **query method** (read-only), not a generator. It's returning what's already in the database, which is fine.
+
+---
+
+## Current Runtime Flow
+
+### ✅ Good: `ack_orchestration_item` receives execution_id from runtime
+**Location**: `src/providers/sqlite.rs:699-703`
+
+```rust
+async fn ack_orchestration_item(
+    &self,
+    lock_token: &str,
+    execution_id: u64,  // ✅ Runtime provides this
+    history_delta: Vec<Event>,
+    ...
+)
+```
+
+The provider:
+1. Receives `execution_id` from runtime
+2. Creates execution record if needed (line 753-763)
+3. Updates `current_execution_id` to the runtime-provided value (line 766-777)
+4. Appends history with events that have runtime-provided event_ids
+
+**This is the correct pattern!**
+
+---
+
+## Recommendations
+
+### 1. **Remove `create_new_execution` method** (HIGH PRIORITY)
+- The provider should NOT generate execution_ids
+- The runtime already handles this via `ack_orchestration_item` with `execution_id` parameter
+- Only used by tests currently
+
+### 2. **Remove unused `_start_id` query** ✅ COMPLETED
+In `append_history_in_tx`:
+```rust
+// DELETED - was querying for next event_id but never used
+```
+
+This query was removed because:
+- The variable was unused (`_start_id`)
+- The runtime provides all event_ids
+- There's already validation that event_id != 0
+
+### 3. **Keep validation** (REQUIRED)
+The validation at line 458-463 should remain:
+```rust
+for event in &events {
+    if event.event_id() == 0 {
+        return Err(sqlx::Error::Protocol("event_id must be set by runtime".into()));
+    }
+}
+```
+
+### 4. **Document the contract clearly** ✅ COMPLETED
+Added to Provider trait documentation in `src/providers/mod.rs`:
+```rust
+// ⚠️ CRITICAL ID GENERATION CONTRACT:
+//
+// The provider MUST NOT generate execution_id or event_id values.
+// All IDs are generated by the runtime and passed to the provider:
+//   - execution_id: Passed to ack_orchestration_item()
+//   - event_id: Set in each Event in the history_delta
+//
+// The provider's role is to STORE these IDs, not generate them.
+```
+
+Also added comprehensive documentation to `docs/provider-implementation-guide.md` with:
+- ✅ Correct patterns showing runtime-provided IDs
+- ❌ Wrong patterns showing provider-generated IDs (what NOT to do)
+- Clear examples and validation code
+
+---
+
+## Summary Table
+
+| Location | What | Status | Action |
+|----------|------|--------|--------|
+| `create_new_execution` (line 1236) | Generates execution_id | ❌ BAD | **Remove method** |
+| `create_new_execution` (line 1271) | Hard-codes event_id=1 | ❌ BAD | **Remove method** |
+| `append_history_in_tx` (line 446) | Queries for next event_id | ⚠️ UNUSED | **Remove query** |
+| `append_history_in_tx` (line 458) | Validates event_id != 0 | ✅ GOOD | **Keep** |
+| `ack_orchestration_item` | Receives execution_id | ✅ GOOD | **Keep** |
+| `read` (line 400) | Defaults to MAX for convenience | ✅ OK | **Keep** (read-only) |
+| `latest_execution_id` | Returns MAX | ✅ OK | **Keep** (query method) |
+
+---
+
+## Testing Impact
+
+Currently only **tests** use `create_new_execution`:
+- `tests/provider_atomic_tests.rs` (2 uses)
+- `tests/unit_tests.rs` (4 uses)
+- `src/providers/sqlite.rs` tests (3 uses)
+
+These should be refactored to use the normal `Client::start_orchestration` flow, which properly goes through the runtime.
+
