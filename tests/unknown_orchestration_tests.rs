@@ -33,12 +33,12 @@ async fn unknown_orchestration_fails_gracefully() {
     assert_eq!(error, "unregistered:DoesNotExist");
 
     let hist = client.read_execution_history("inst-unknown-1", 1).await.unwrap();
-    
+
     // History should be well-formed: start with OrchestrationStarted, end with OrchestrationFailed
     assert_eq!(hist.len(), 2);
     assert!(matches!(&hist[0], Event::OrchestrationStarted { .. }));
     assert!(matches!(&hist[1], Event::OrchestrationFailed { error, .. } if error == "unregistered:DoesNotExist"));
-    
+
     // Store history should also include both events
     let persisted = store.read("inst-unknown-1").await;
     assert_eq!(persisted.len(), 2);

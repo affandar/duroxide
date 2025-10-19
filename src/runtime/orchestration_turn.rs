@@ -434,11 +434,9 @@ impl OrchestrationTurn {
         // Cursor model handles non-determinism automatically via strict sequential consumption
         TurnResult::Continue
     }
-
 }
 
 impl OrchestrationTurn {
-
     // Getter methods for atomic execution
     pub fn history_delta(&self) -> &[Event] {
         &self.history_delta

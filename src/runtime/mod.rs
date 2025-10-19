@@ -75,7 +75,6 @@ where
 /// Immutable registry mapping orchestration names to versioned handlers.
 pub use crate::runtime::registry::{OrchestrationRegistry, OrchestrationRegistryBuilder, VersionPolicy};
 
-
 // Message types for orchestration completion handling
 /// Completion messages delivered to active orchestration instances.
 /// These correspond directly to WorkItem completion variants but include ack tokens.
@@ -314,7 +313,6 @@ impl Runtime {
         None
     }
 
-
     /// Get the current execution ID for an instance, or fetch from store if not tracked
     async fn get_execution_id_for_instance(&self, instance: &str) -> u64 {
         // First check in-memory tracking
@@ -325,7 +323,6 @@ impl Runtime {
         // Fall back to querying the store
         self.history_store.latest_execution_id(instance).await.unwrap_or(1)
     }
-
 
     /// Start a new runtime using the in-memory SQLite provider.
     pub async fn start(
@@ -562,6 +559,7 @@ impl Runtime {
                 (hd, wi, ti, oi, item.execution_id)
             } else {
                 // Empty effective batch - just ack
+                tracing::warn!(instance = %item.instance, "empty effective batch - this should not happen");
                 (vec![], vec![], vec![], vec![], item.execution_id)
             };
 
@@ -579,45 +577,27 @@ impl Runtime {
         let metadata = Runtime::compute_execution_metadata(&history_delta, &orchestrator_items, item.execution_id);
 
         // Robust ack with basic retry on any provider error
-        let mut attempts: u32 = 0;
-        let max_attempts: u32 = 5;
-        loop {
-            match self
-                .history_store
-                .ack_orchestration_item(
-                    lock_token,
-                    execution_id_for_ack,
-                    history_delta.clone(),
-                    worker_items.clone(),
-                    timer_items.clone(),
-                    orchestrator_items.clone(),
-                    metadata.clone(),
-                )
-                .await
-            {
-                Ok(()) => {
-                    debug!(instance, "Successfully acked orchestration item");
-                    break;
-                }
-                Err(e) => {
-                    if attempts < max_attempts {
-                        let backoff_ms = 10u64.saturating_mul(1 << attempts);
-                        warn!(instance, attempts, backoff_ms, error = %e, "Ack failed; retrying");
-                        tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
-                        attempts += 1;
-                        continue;
-                    } else {
-                        warn!(instance, attempts, error = %e, "Failed to ack orchestration item");
-                        // Best-effort: abandon so it can be retried later
-                        let _ = self
-                            .history_store
-                            .abandon_orchestration_item(lock_token, Some(50))
-                            .await;
-                        break;
-                    }
-                }
-            }
-        }
+        self.execute_with_retry(
+            || async {
+                self.history_store
+                    .ack_orchestration_item(
+                        lock_token,
+                        execution_id_for_ack,
+                        history_delta.clone(),
+                        worker_items.clone(),
+                        timer_items.clone(),
+                        orchestrator_items.clone(),
+                        metadata.clone(),
+                    )
+                    .await
+            },
+            "ack_orchestration_item",
+            Some(|| {
+                // Best-effort: abandon so it can be retried later
+                let _ = self.history_store.abandon_orchestration_item(lock_token, Some(50));
+            }),
+        )
+        .await;
     }
 
     // Helper methods for atomic orchestration processing
@@ -656,7 +636,7 @@ impl Runtime {
                     parent_instance: parent_instance.map(|s| s.to_string()),
                     parent_id,
                 });
-                
+
                 let terminal_event = Event::OrchestrationFailed {
                     event_id: 2, // Second event
                     error: format!("unregistered:{}", orchestration),
@@ -718,10 +698,7 @@ impl Runtime {
             // Double-check latest persisted history to avoid racing with a just-started instance.
             let latest = self.history_store.read(instance).await;
             if latest.is_empty() {
-                let kinds: Vec<&'static str> = completion_messages
-                    .iter()
-                    .map(|m| kind_of(m))
-                    .collect();
+                let kinds: Vec<&'static str> = completion_messages.iter().map(|m| kind_of(m)).collect();
                 warn!(
                     instance,
                     count = completion_messages.len(),
@@ -780,6 +757,41 @@ impl Runtime {
             .await;
 
         (history_delta, worker_items, timer_items, orchestrator_items)
+    }
+
+    /// Execute a function with retry logic and exponential backoff
+    async fn execute_with_retry<F, R, E>(&self, operation: F, operation_tag: &str, failure_handler: Option<impl Fn()>)
+    where
+        F: Fn() -> R,
+        R: std::future::Future<Output = Result<(), E>>,
+        E: std::fmt::Display,
+    {
+        let mut attempts: u32 = 0;
+        let max_attempts: u32 = 5;
+
+        loop {
+            match operation().await {
+                Ok(()) => {
+                    debug!("{} succeeded", operation_tag);
+                    break;
+                }
+                Err(e) => {
+                    if attempts < max_attempts {
+                        let backoff_ms = 10u64.saturating_mul(1 << attempts);
+                        warn!(attempts, backoff_ms, error = %e, "{} failed; retrying", operation_tag);
+                        tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
+                        attempts += 1;
+                        continue;
+                    } else {
+                        warn!(attempts, error = %e, "Failed to {}", operation_tag);
+                        if let Some(handler) = failure_handler {
+                            handler();
+                        }
+                        break;
+                    }
+                }
+            }
+        }
     }
 
     fn start_work_dispatcher(self: Arc<Self>, activities: Arc<registry::ActivityRegistry>) -> JoinHandle<()> {
@@ -965,5 +977,4 @@ impl Runtime {
             j.abort();
         }
     }
-
 }

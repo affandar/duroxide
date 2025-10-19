@@ -63,4 +63,3 @@ pub async fn create_sqlite_store_disk() -> (StdArc<dyn Provider>, TempDir) {
     let store = StdArc::new(SqliteProvider::new(&db_url).await.unwrap()) as StdArc<dyn Provider>;
     (store, td)
 }
-

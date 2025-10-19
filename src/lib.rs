@@ -1117,7 +1117,6 @@ impl OrchestrationContext {
         let payload = crate::_typed_codec::Json::encode(input).expect("encode");
         self.schedule_orchestration_versioned(name, version, instance, payload)
     }
-
 }
 
 // Aggregate future machinery lives in crate::futures
@@ -1135,7 +1134,6 @@ impl OrchestrationContext {
     pub fn join(&self, futures: Vec<DurableFuture>) -> JoinFuture {
         JoinFuture(AggregateDurableFuture::new_join(self.clone(), futures))
     }
-
 }
 
 fn noop_waker() -> Waker {
@@ -1230,4 +1228,3 @@ where
 {
     run_turn_with(history, 0, 1, orchestrator)
 }
-

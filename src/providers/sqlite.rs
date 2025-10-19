@@ -147,10 +147,7 @@ impl SqliteProvider {
             .map(Duration::from_millis)
             .unwrap_or(Duration::from_secs(30));
 
-        Ok(Self {
-            pool,
-            lock_timeout,
-        })
+        Ok(Self { pool, lock_timeout })
     }
 
     /// Convenience: create a shared in-memory SQLite store for tests

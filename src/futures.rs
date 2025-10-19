@@ -15,7 +15,6 @@ pub enum DurableOutput {
 
 pub struct DurableFuture(pub(crate) Kind);
 
-
 pub(crate) enum Kind {
     Activity {
         name: String,

@@ -5,7 +5,7 @@ use super::orchestration_turn::{OrchestrationTurn, TurnResult};
 use crate::{
     Event,
     providers::WorkItem,
-    runtime::{OrchestrationHandler, Runtime, OrchestratorMsg},
+    runtime::{OrchestrationHandler, OrchestratorMsg, Runtime},
 };
 
 impl Runtime {
@@ -16,13 +16,27 @@ impl Runtime {
     /// It handles version pinning, handler resolution, and deterministic completion processing.
 
     /// Set up version pinning from history
-    async fn setup_version_pinning(&self, instance: &str, orchestration_name: &str, history: &[Event]) -> Result<(), String> {
-        let version_str = history.iter().rev().find_map(|e| match e {
-            Event::OrchestrationStarted { name: n, version, .. } if n == orchestration_name => Some(version.clone()),
-            _ => None,
-        }).ok_or_else(|| {
-            format!("corrupted history: no OrchestrationStarted event found for {}", orchestration_name)
-        })?;
+    async fn setup_version_pinning(
+        &self,
+        instance: &str,
+        orchestration_name: &str,
+        history: &[Event],
+    ) -> Result<(), String> {
+        let version_str = history
+            .iter()
+            .rev()
+            .find_map(|e| match e {
+                Event::OrchestrationStarted { name: n, version, .. } if n == orchestration_name => {
+                    Some(version.clone())
+                }
+                _ => None,
+            })
+            .ok_or_else(|| {
+                format!(
+                    "corrupted history: no OrchestrationStarted event found for {}",
+                    orchestration_name
+                )
+            })?;
 
         if version_str != "0.0.0" {
             if let Ok(v) = semver::Version::parse(&version_str) {
@@ -88,7 +102,6 @@ impl Runtime {
 
         (input, parent_link)
     }
-
 
     /// Extract current execution history (from most recent OrchestrationStarted)
     /// This filters out events from previous executions in continue-as-new scenarios
@@ -502,30 +515,45 @@ mod tests {
     fn test_extract_current_execution_history_corrupted() {
         // Test corrupted history without OrchestrationStarted event
         let corrupted_history = vec![
-            Event::ActivityCompleted { event_id: 1, source_event_id: 1, result: "test".to_string() },
-            Event::TimerFired { event_id: 2, source_event_id: 1, fire_at_ms: 1000 },
+            Event::ActivityCompleted {
+                event_id: 1,
+                source_event_id: 1,
+                result: "test".to_string(),
+            },
+            Event::TimerFired {
+                event_id: 2,
+                source_event_id: 1,
+                fire_at_ms: 1000,
+            },
         ];
-        
+
         let result = Runtime::extract_current_execution_history(&corrupted_history);
         assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), "corrupted history: no OrchestrationStarted event found");
+        assert_eq!(
+            result.unwrap_err(),
+            "corrupted history: no OrchestrationStarted event found"
+        );
     }
 
     #[test]
     fn test_extract_current_execution_history_valid() {
         // Test valid history with OrchestrationStarted event
         let valid_history = vec![
-            Event::OrchestrationStarted { 
-                event_id: 1, 
-                name: "test".to_string(), 
-                version: "1.0.0".to_string(), 
+            Event::OrchestrationStarted {
+                event_id: 1,
+                name: "test".to_string(),
+                version: "1.0.0".to_string(),
                 input: "{}".to_string(),
                 parent_instance: None,
                 parent_id: None,
             },
-            Event::ActivityCompleted { event_id: 2, source_event_id: 1, result: "test".to_string() },
+            Event::ActivityCompleted {
+                event_id: 2,
+                source_event_id: 1,
+                result: "test".to_string(),
+            },
         ];
-        
+
         let result = Runtime::extract_current_execution_history(&valid_history);
         assert!(result.is_ok());
         let extracted = result.unwrap();
