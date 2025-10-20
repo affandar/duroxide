@@ -327,6 +327,7 @@ impl Runtime {
                 let (hd, wi, ti, oi) = self
                     .handle_orchestration_atomic(
                         instance,
+                        &history_mgr,
                         &workitem_reader,
                         &history_to_use,
                         execution_id_to_use,
@@ -368,6 +369,7 @@ impl Runtime {
     async fn handle_orchestration_atomic(
         self: &Arc<Self>,
         instance: &str,
+        history_mgr: &HistoryManager,
         workitem_reader: &WorkItemReader,
         existing_history: &[Event],
         execution_id: u64,
@@ -423,14 +425,11 @@ impl Runtime {
         // Run the atomic execution to get all changes
         let full_history = [existing_history, &history_delta].concat();
         
-        // Create a temporary history manager for the full history (existing + new OrchestrationStarted)
-        let temp_history_mgr = crate::runtime::state_helpers::HistoryManager::from_history(&full_history);
-        
         let (exec_history_delta, exec_worker_items, exec_timer_items, exec_orchestrator_items, _result) = self
             .clone()
             .run_single_execution_atomic(
                 instance,
-                &temp_history_mgr,
+                history_mgr,
                 workitem_reader,
                 full_history.clone(),
                 execution_id,
