@@ -122,10 +122,10 @@ impl Runtime {
     pub async fn run_single_execution_atomic(
         self: Arc<Self>,
         instance: &str,
-        orchestration_name: &str,
+        _history_mgr: &crate::runtime::state_helpers::HistoryManager,
+        workitem_reader: &crate::runtime::state_helpers::WorkItemReader,
         initial_history: Vec<Event>,
         execution_id: u64,
-        completion_messages: Vec<WorkItem>,
     ) -> (
         Vec<Event>,
         Vec<WorkItem>,
@@ -133,6 +133,7 @@ impl Runtime {
         Vec<WorkItem>,
         Result<String, String>,
     ) {
+        let orchestration_name = &workitem_reader.orchestration_name;
         debug!(instance, orchestration_name, "🚀 Starting atomic single execution");
 
         // Track all changes
@@ -208,21 +209,21 @@ impl Runtime {
         };
 
         // Extract input and parent linkage for the orchestration
-        let (input, parent_link) = self.extract_orchestration_context(orchestration_name, &history);
+        let (input, parent_link) = self.extract_orchestration_context(&orchestration_name, &history);
         if let Some((ref pinst, pid)) = parent_link {
             tracing::debug!(target = "duroxide::runtime::execution", instance=%instance, parent_instance=%pinst, parent_id=%pid, "Detected parent link for orchestration");
         } else {
             tracing::debug!(target = "duroxide::runtime::execution", instance=%instance, "No parent link for orchestration");
         }
 
+        // Execute orchestration turn
+        let messages = &workitem_reader.completion_messages;
+        
         debug!(
             instance = %instance,
-            message_count = completion_messages.len(),
+            message_count = messages.len(),
             "starting orchestration turn atomically"
         );
-
-        // Execute orchestration turn
-        let messages: Vec<WorkItem> = completion_messages;
         let current_execution_history = match Self::extract_current_execution_history(&history) {
             Ok(history) => history,
             Err(error) => {
@@ -245,7 +246,7 @@ impl Runtime {
 
         // Prep completions from incoming messages
         if !messages.is_empty() {
-            turn.prep_completions(messages.clone());
+            turn.prep_completions(messages.to_vec());
         }
 
         // Execute the orchestration logic

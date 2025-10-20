@@ -6,7 +6,7 @@ use tracing::warn;
 /// This struct provides convenient access to key information derived from
 /// the event history without needing to repeatedly scan through events.
 #[derive(Debug, Clone)]
-pub struct HistoryReader {
+pub struct HistoryManager {
     /// Orchestration name (from OrchestrationStarted)
     pub orchestration_name: Option<String>,
     
@@ -35,7 +35,7 @@ pub struct HistoryReader {
     pub current_execution_id: Option<u64>,
 }
 
-impl HistoryReader {
+impl HistoryManager {
     /// Extract metadata from orchestration history
     /// 
     /// Scans through the history (in reverse for terminal states) to extract
@@ -161,7 +161,7 @@ impl WorkItemReader {
     /// Falls back to history_reader if no start item is present.
     pub fn from_messages(
         messages: &[WorkItem],
-        history_reader: &HistoryReader,
+        history_mgr: &HistoryManager,
         instance: &str,
     ) -> Self {
         let mut start_item: Option<WorkItem> = None;
@@ -227,8 +227,8 @@ impl WorkItemReader {
                     _ => unreachable!(),
                 }
             } else {
-                // No start item - extract from history reader
-                let orchestration_name = history_reader.orchestration_name.clone().unwrap_or_else(|| {
+                // No start item - extract from history manager
+                let orchestration_name = history_mgr.orchestration_name.clone().unwrap_or_else(|| {
                     if !completion_messages.is_empty() {
                         warn!(instance, "completion messages for unstarted instance");
                     }
@@ -266,7 +266,7 @@ mod tests {
 
     #[test]
     fn test_history_reader_from_empty_history() {
-        let metadata = HistoryReader::from_history(&[]);
+        let metadata = HistoryManager::from_history(&[]);
         assert!(metadata.orchestration_name.is_none());
         assert!(!metadata.is_terminal());
         assert_eq!(metadata.status(), "Running");
@@ -283,7 +283,7 @@ mod tests {
             parent_id: None,
         }];
 
-        let metadata = HistoryReader::from_history(&history);
+        let metadata = HistoryManager::from_history(&history);
         assert_eq!(metadata.orchestration_name, Some("test-orch".to_string()));
         assert_eq!(metadata.orchestration_version, Some("1.0.0".to_string()));
         assert_eq!(metadata.orchestration_input, Some("test-input".to_string()));
@@ -309,7 +309,7 @@ mod tests {
             },
         ];
 
-        let metadata = HistoryReader::from_history(&history);
+        let metadata = HistoryManager::from_history(&history);
         assert!(metadata.is_completed);
         assert!(metadata.is_terminal());
         assert_eq!(metadata.status(), "Completed");
@@ -332,7 +332,7 @@ mod tests {
             },
         ];
 
-        let metadata = HistoryReader::from_history(&history);
+        let metadata = HistoryManager::from_history(&history);
         assert!(metadata.is_failed);
         assert!(metadata.is_terminal());
         assert_eq!(metadata.status(), "Failed");
@@ -363,7 +363,7 @@ mod tests {
             },
         ];
 
-        let metadata = HistoryReader::from_history(&history);
+        let metadata = HistoryManager::from_history(&history);
         // Most recent execution
         assert_eq!(metadata.orchestration_input, Some("input2".to_string()));
         assert_eq!(metadata.current_execution_id, Some(2));
@@ -381,7 +381,7 @@ mod tests {
             parent_id: Some(42),
         }];
 
-        let metadata = HistoryReader::from_history(&history);
+        let metadata = HistoryManager::from_history(&history);
         assert_eq!(
             metadata.parent_instance,
             Some("parent-instance".to_string())
@@ -409,8 +409,8 @@ mod tests {
             },
         ];
 
-        let history_reader = HistoryReader::from_history(&[]);
-        let reader = WorkItemReader::from_messages(&messages, &history_reader, "test-inst");
+        let history_mgr = HistoryManager::from_history(&[]);
+        let reader = WorkItemReader::from_messages(&messages, &history_mgr, "test-inst");
 
         assert!(reader.has_start_item());
         assert_eq!(reader.orchestration_name, "test-orch");
@@ -433,8 +433,8 @@ mod tests {
             },
         ];
 
-        let history_reader = HistoryReader::from_history(&[]);
-        let reader = WorkItemReader::from_messages(&messages, &history_reader, "test-inst");
+        let history_mgr = HistoryManager::from_history(&[]);
+        let reader = WorkItemReader::from_messages(&messages, &history_mgr, "test-inst");
 
         assert!(reader.has_start_item());
         assert_eq!(reader.orchestration_name, "test-orch");
@@ -470,8 +470,8 @@ mod tests {
             parent_id: None,
         }];
 
-        let history_reader = HistoryReader::from_history(&history);
-        let reader = WorkItemReader::from_messages(&messages, &history_reader, "test-inst");
+        let history_mgr = HistoryManager::from_history(&history);
+        let reader = WorkItemReader::from_messages(&messages, &history_mgr, "test-inst");
 
         assert!(!reader.has_start_item());
         assert_eq!(reader.orchestration_name, "test-orch"); // From history
@@ -483,8 +483,8 @@ mod tests {
     #[test]
     fn test_workitem_reader_empty_messages() {
         let messages = vec![];
-        let history_reader = HistoryReader::from_history(&[]);
-        let reader = WorkItemReader::from_messages(&messages, &history_reader, "test-inst");
+        let history_mgr = HistoryManager::from_history(&[]);
+        let reader = WorkItemReader::from_messages(&messages, &history_mgr, "test-inst");
 
         assert!(!reader.has_start_item());
         assert_eq!(reader.orchestration_name, ""); // Empty
@@ -515,8 +515,8 @@ mod tests {
             },
         ];
 
-        let history_reader = HistoryReader::from_history(&[]);
-        let reader = WorkItemReader::from_messages(&messages, &history_reader, "test-inst");
+        let history_mgr = HistoryManager::from_history(&[]);
+        let reader = WorkItemReader::from_messages(&messages, &history_mgr, "test-inst");
 
         // Should only use the first one
         assert_eq!(reader.orchestration_name, "first-orch");

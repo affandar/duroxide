@@ -28,10 +28,10 @@ impl Default for RuntimeOptions {
 
 pub mod registry;
 mod timers;
-mod state_readers;
+mod state_helpers;
 
 use async_trait::async_trait;
-pub use state_readers::{HistoryReader, WorkItemReader};
+pub use state_helpers::{HistoryManager, WorkItemReader};
 
 pub mod execution;
 pub mod orchestration_turn;
@@ -281,11 +281,11 @@ impl Runtime {
         let lock_token = &item.lock_token;
 
         // Extract metadata from history and work items
-        let history_reader = HistoryReader::from_history(&item.history);
-        let workitem_reader = WorkItemReader::from_messages(&item.messages, &history_reader, instance);
+        let history_mgr = HistoryManager::from_history(&item.history);
+        let workitem_reader = WorkItemReader::from_messages(&item.messages, &history_mgr, instance);
 
         // Bail on truly terminal histories (Completed/Failed), or ContinuedAsNew without a CAN start message
-        if history_reader.is_completed || history_reader.is_failed || (history_reader.is_continued_as_new && !workitem_reader.is_continue_as_new) {
+        if history_mgr.is_completed || history_mgr.is_failed || (history_mgr.is_continued_as_new && !workitem_reader.is_continue_as_new) {
             warn!(instance = %instance, "Instance is terminal (completed/failed or CAN without start), acking batch without processing");
             self.ack_orchestration_with_changes(
                 lock_token,
@@ -422,14 +422,18 @@ impl Runtime {
 
         // Run the atomic execution to get all changes
         let full_history = [existing_history, &history_delta].concat();
+        
+        // Create a temporary history manager for the full history (existing + new OrchestrationStarted)
+        let temp_history_mgr = crate::runtime::state_helpers::HistoryManager::from_history(&full_history);
+        
         let (exec_history_delta, exec_worker_items, exec_timer_items, exec_orchestrator_items, _result) = self
             .clone()
             .run_single_execution_atomic(
                 instance,
-                &workitem_reader.orchestration_name,
+                &temp_history_mgr,
+                workitem_reader,
                 full_history.clone(),
                 execution_id,
-                workitem_reader.completion_messages.clone(),
             )
             .await;
 
