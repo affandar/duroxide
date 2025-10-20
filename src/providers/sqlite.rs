@@ -1208,69 +1208,6 @@ impl Provider for SqliteProvider {
         Ok(())
     }
 
-    async fn create_new_execution(
-        &self,
-        instance: &str,
-        orchestration: &str,
-        version: &str,
-        input: &str,
-        parent_instance: Option<&str>,
-        parent_id: Option<u64>,
-    ) -> Result<u64, String> {
-        let mut tx = self.pool.begin().await.map_err(|e| e.to_string())?;
-
-        // Get next execution ID
-        let next_exec_id: i64 =
-            sqlx::query_scalar("SELECT COALESCE(MAX(execution_id), 0) + 1 FROM executions WHERE instance_id = ?")
-                .bind(instance)
-                .fetch_one(&mut *tx)
-                .await
-                .map_err(|e| e.to_string())?;
-
-        // Create instance record if needed
-        sqlx::query(
-            r#"
-            INSERT OR IGNORE INTO instances (instance_id, orchestration_name, orchestration_version)
-            VALUES (?, ?, ?)
-            "#,
-        )
-        .bind(instance)
-        .bind(orchestration)
-        .bind(version)
-        .execute(&mut *tx)
-        .await
-        .map_err(|e| e.to_string())?;
-
-        // Create execution record
-        sqlx::query(
-            r#"
-            INSERT INTO executions (instance_id, execution_id)
-            VALUES (?, ?)
-            "#,
-        )
-        .bind(instance)
-        .bind(next_exec_id)
-        .execute(&mut *tx)
-        .await
-        .map_err(|e| e.to_string())?;
-
-        // Create OrchestrationStarted event with explicit event_id=1 for new execution
-        let start_event = Event::OrchestrationStarted {
-            event_id: 1,
-            name: orchestration.to_string(),
-            version: version.to_string(),
-            input: input.to_string(),
-            parent_instance: parent_instance.map(|s| s.to_string()),
-            parent_id,
-        };
-
-        self.append_history_in_tx(&mut tx, instance, next_exec_id as u64, vec![start_event])
-            .await
-            .map_err(|e| e.to_string())?;
-
-        tx.commit().await.map_err(|e| e.to_string())?;
-        Ok(next_exec_id as u64)
-    }
 
     async fn list_instances(&self) -> Vec<String> {
         let mut conn = match self.pool.acquire().await {
@@ -1589,6 +1526,57 @@ mod tests {
     use super::*;
     use crate::providers::ExecutionMetadata;
 
+    // Test helper - duplicated here to avoid module issues
+    async fn test_create_execution(
+        provider: &dyn Provider,
+        instance: &str,
+        orchestration: &str,
+        version: &str,
+        input: &str,
+        parent_instance: Option<&str>,
+        parent_id: Option<u64>,
+    ) -> Result<u64, String> {
+        let execs = provider.list_executions(instance).await;
+        let next_execution_id = if execs.is_empty() {
+            crate::INITIAL_EXECUTION_ID
+        } else {
+            execs.iter().max().copied().unwrap() + 1
+        };
+        
+        provider.enqueue_orchestrator_work(
+            WorkItem::StartOrchestration {
+                instance: instance.to_string(),
+                orchestration: orchestration.to_string(),
+                version: Some(version.to_string()),
+                input: input.to_string(),
+                parent_instance: parent_instance.map(|s| s.to_string()),
+                parent_id,
+                execution_id: next_execution_id,
+            },
+            None,
+        ).await?;
+
+        let item = provider.fetch_orchestration_item().await
+            .ok_or_else(|| "Failed to fetch orchestration item".to_string())?;
+
+        provider.ack_orchestration_item(
+            &item.lock_token,
+            next_execution_id,
+            vec![Event::OrchestrationStarted {
+                event_id: crate::INITIAL_EVENT_ID,
+                name: orchestration.to_string(),
+                version: version.to_string(),
+                input: input.to_string(),
+                parent_instance: parent_instance.map(|s| s.to_string()),
+                parent_id,
+            }],
+            vec![], vec![], vec![],
+            ExecutionMetadata::default(),
+        ).await?;
+
+        Ok(next_execution_id)
+    }
+
     async fn create_test_store() -> SqliteProvider {
         SqliteProvider::new("sqlite::memory:")
             .await
@@ -1822,11 +1810,18 @@ mod tests {
         assert_eq!(ManagementCapability::latest_execution_id(&store, instance).await, Ok(1)); // ManagementCapability default
         assert!(Provider::list_executions(&store, instance).await.is_empty());
 
-        // Create first execution
-        let exec1 = store
-            .create_new_execution(instance, "MultiExecTest", "1.0.0", "input1", None, None)
-            .await
-            .unwrap();
+        // Create first execution using test helper
+        let exec1 = test_create_execution(
+            &store,
+            instance,
+            "MultiExecTest",
+            "1.0.0",
+            "input1",
+            None,
+            None,
+        )
+        .await
+        .unwrap();
         assert_eq!(exec1, 1);
 
         // Verify execution exists
@@ -1851,11 +1846,18 @@ mod tests {
             .await
             .unwrap();
 
-        // Create second execution (ContinueAsNew)
-        let exec2 = store
-            .create_new_execution(instance, "MultiExecTest", "1.0.0", "input2", None, None)
-            .await
-            .unwrap();
+        // Create second execution using test helper
+        let exec2 = test_create_execution(
+            &store,
+            instance,
+            "MultiExecTest",
+            "1.0.0",
+            "input2",
+            None,
+            None,
+        )
+        .await
+        .unwrap();
         assert_eq!(exec2, 2);
 
         // Verify latest execution
@@ -1914,12 +1916,19 @@ mod tests {
         // Initially empty
         assert!(Provider::list_instances(&store).await.is_empty());
 
-        // Create a few instances
+        // Create a few instances using test helper
         for i in 1..=3 {
-            store
-                .create_new_execution(&format!("instance-{}", i), "ListTest", "1.0.0", "{}", None, None)
-                .await
-                .unwrap();
+            test_create_execution(
+                &store,
+                &format!("instance-{}", i),
+                "ListTest",
+                "1.0.0",
+                "{}",
+                None,
+                None,
+            )
+            .await
+            .unwrap();
         }
 
         // List instances

@@ -189,12 +189,6 @@ impl Provider for MyProvider {
         self.read(instance).await
     }
     
-    async fn create_new_execution(...) -> Result<u64, String> {
-        // Optional convenience used by tests/management. Runtime path uses ack_orchestration_item
-        // with explicit execution_id for ContinueAsNew.
-        todo!()
-    }
-    
     // === OPTIONAL: Timer Queue (only if supports_delayed_visibility=true) ===
     
     fn supports_delayed_visibility(&self) -> bool {

@@ -407,7 +407,7 @@ pub enum WorkItem {
 /// - enqueue_orchestrator_work
 ///
 /// **OPTIONAL** (has defaults):
-/// - latest_execution_id, read_with_execution, create_new_execution
+/// - latest_execution_id, read_with_execution
 /// - list_instances, list_executions
 /// - Timer queue methods (only if supports_delayed_visibility=true)
 ///
@@ -658,7 +658,7 @@ pub enum WorkItem {
 /// - enqueue_orchestrator_work
 ///
 /// **OPTIONAL** (has defaults):
-/// - latest_execution_id, read_with_execution, create_new_execution
+/// - latest_execution_id, read_with_execution
 /// - list_instances, list_executions
 /// - Timer queue methods (only if supports_delayed_visibility=true)
 ///
@@ -1365,70 +1365,6 @@ pub trait Provider: Any + Send + Sync {
         new_events: Vec<Event>,
     ) -> Result<(), String>;
 
-    /// Create a new execution for ContinueAsNew scenarios.
-    ///
-    /// # Deprecation Notice
-    ///
-    /// **This method may be removed in future versions.**
-    /// The runtime now handles execution creation via `ExecutionMetadata.create_next_execution`.
-    /// Providers should handle execution creation in `ack_orchestration_item` based on metadata.
-    ///
-    /// # What This Does
-    ///
-    /// 1. Create new execution row with ID = latest + 1
-    /// 2. Create and append Event::OrchestrationStarted for new execution
-    ///
-    /// # Implementation Pattern
-    ///
-    /// ```ignore
-    /// async fn create_new_execution(
-    ///     instance: &str,
-    ///     orchestration: &str,
-    ///     version: &str,
-    ///     input: &str,
-    ///     parent_instance: Option<&str>,
-    ///     parent_id: Option<u64>,
-    /// ) -> Result<u64, String> {
-    ///     let tx = begin_transaction()?;
-    ///     
-    ///     // Get next execution ID
-    ///     let next_id = SELECT COALESCE(MAX(execution_id), 0) + 1
-    ///         FROM executions WHERE instance_id = ?;
-    ///     
-    ///     // Create execution row
-    ///     INSERT INTO executions (instance_id, execution_id, status)
-    ///     VALUES (?, next_id, 'Running');
-    ///     
-    ///     // Create OrchestrationStarted event
-    ///     let start_event = Event::OrchestrationStarted {
-    ///         event_id: 1,  // First event of new execution
-    ///         name: orchestration.to_string(),
-    ///         version: version.to_string(),
-    ///         input: input.to_string(),
-    ///         parent_instance: parent_instance.map(|s| s.to_string()),
-    ///         parent_id,
-    ///     };
-    ///     
-    ///     // Append to history
-    ///     INSERT INTO history (...) VALUES (instance, next_id, 1, serialize(start_event), ...);
-    ///     
-    ///     commit_transaction()?;
-    ///     Ok(next_id)
-    /// }
-    /// ```
-    ///
-    /// # Note
-    ///
-    /// Prefer handling this in `ack_orchestration_item` via metadata instead of this method.
-    async fn create_new_execution(
-        &self,
-        _instance: &str,
-        _orchestration: &str,
-        _version: &str,
-        _input: &str,
-        _parent_instance: Option<&str>,
-        _parent_id: Option<u64>,
-    ) -> Result<u64, String>;
 
     // ===== Timer Support (REQUIRED only if supports_delayed_visibility returns true) =====
 

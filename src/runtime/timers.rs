@@ -204,19 +204,6 @@ mod tests {
                     .append_with_execution(instance, execution_id, new_events)
                     .await
             }
-            async fn create_new_execution(
-                &self,
-                instance: &str,
-                orchestration: &str,
-                version: &str,
-                input: &str,
-                parent_instance: Option<&str>,
-                parent_id: Option<u64>,
-            ) -> Result<u64, String> {
-                self.inner
-                    .create_new_execution(instance, orchestration, version, input, parent_instance, parent_id)
-                    .await
-            }
             fn supports_delayed_visibility(&self) -> bool {
                 self.inner.supports_delayed_visibility()
             }

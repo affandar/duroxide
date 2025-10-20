@@ -1,5 +1,5 @@
 use duroxide::Event;
-use duroxide::providers::Provider;
+use duroxide::providers::{ExecutionMetadata, Provider, WorkItem};
 use duroxide::providers::sqlite::SqliteProvider;
 use std::sync::Arc as StdArc;
 use std::time::{Duration, Instant};
@@ -62,4 +62,71 @@ pub async fn create_sqlite_store_disk() -> (StdArc<dyn Provider>, TempDir) {
     let db_url = format!("sqlite:{}", db_path.display());
     let store = StdArc::new(SqliteProvider::new(&db_url).await.unwrap()) as StdArc<dyn Provider>;
     (store, td)
+}
+
+/// Test helper to create a new orchestration instance with initial history.
+/// 
+/// This replicates what the runtime does in production by using real provider APIs:
+/// 1. Enqueues StartOrchestration work item
+/// 2. Fetches it to get a lock token
+/// 3. Acks with OrchestrationStarted event
+///
+/// Use this to seed test state without spinning up a full runtime.
+pub async fn test_create_execution(
+    provider: &dyn Provider,
+    instance: &str,
+    orchestration: &str,
+    version: &str,
+    input: &str,
+    parent_instance: Option<&str>,
+    parent_id: Option<u64>,
+) -> Result<u64, String> {
+    // Calculate next execution ID (max + 1, or INITIAL if none exist)
+    let execs = provider.list_executions(instance).await;
+    let next_execution_id = if execs.is_empty() {
+        duroxide::INITIAL_EXECUTION_ID
+    } else {
+        execs.iter().max().copied().unwrap() + 1
+    };
+    
+    // Enqueue StartOrchestration work item with calculated execution_id
+    provider.enqueue_orchestrator_work(
+        WorkItem::StartOrchestration {
+            instance: instance.to_string(),
+            orchestration: orchestration.to_string(),
+            version: Some(version.to_string()),
+            input: input.to_string(),
+            parent_instance: parent_instance.map(|s| s.to_string()),
+            parent_id,
+            execution_id: next_execution_id,
+        },
+        None,
+    ).await?;
+
+    // Fetch to get lock token
+    let item = provider.fetch_orchestration_item().await
+        .ok_or_else(|| "Failed to fetch orchestration item".to_string())?;
+
+    // The fetched item should have the execution_id we enqueued
+    let execution_id = next_execution_id;
+
+    // Ack with OrchestrationStarted event
+    provider.ack_orchestration_item(
+        &item.lock_token,
+        execution_id,
+        vec![Event::OrchestrationStarted {
+            event_id: duroxide::INITIAL_EVENT_ID,
+            name: orchestration.to_string(),
+            version: version.to_string(),
+            input: input.to_string(),
+            parent_instance: parent_instance.map(|s| s.to_string()),
+            parent_id,
+        }],
+        vec![], // no worker items
+        vec![], // no timer items
+        vec![], // no orchestrator items
+        ExecutionMetadata::default(),
+    ).await?;
+
+    Ok(execution_id)
 }

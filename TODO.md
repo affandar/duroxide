@@ -6,9 +6,14 @@
 
 ### Reliability & Provider API
 
-- macros for activities, orchestrations
- - pick proposal from branch macro3 - macro and macro2 branches have fuller impls but not clean
+- Provider cleanup:
+  -- create_with_execution (ack_orchestration_item already creates new history)
+  -- append_with_execution (unused)
+- provider layer should have retries built into it and not sprinkled across all the code
+- need to build an azure storage provider
 - should focus on simplification, refactoring and then threading for dispatchers before synatic sugars
+ - pick proposal from branch macro3 - macro and macro2 branches have fuller impls but not clean
+- macros for activities, orchestrations
 - orchestration functions!
 - build node and python bindings as well
 - convert execution, instance statuses to enums
