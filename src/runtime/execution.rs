@@ -122,9 +122,8 @@ impl Runtime {
     pub async fn run_single_execution_atomic(
         self: Arc<Self>,
         instance: &str,
-        _history_mgr: &crate::runtime::state_helpers::HistoryManager,
+        history_mgr: &mut crate::runtime::state_helpers::HistoryManager,
         workitem_reader: &crate::runtime::state_helpers::WorkItemReader,
-        initial_history: Vec<Event>,
         execution_id: u64,
     ) -> (
         Vec<Event>,
@@ -137,21 +136,9 @@ impl Runtime {
         debug!(instance, orchestration_name, "🚀 Starting atomic single execution");
 
         // Track all changes
-        let mut history_delta = Vec::new();
         let mut worker_items = Vec::new();
         let mut timer_items = Vec::new();
         let mut orchestrator_items = Vec::new();
-
-        // Helper: compute the next event id based on existing and delta history
-        let calc_next_event_id = |existing: &Vec<Event>, delta: &Vec<Event>| -> u64 {
-            existing
-                .iter()
-                .chain(delta.iter())
-                .map(|e| e.event_id())
-                .max()
-                .unwrap_or(0)
-                + 1
-        };
 
         // Helper: only honor detached starts at terminal; ignore all other pending actions
         let mut enqueue_detached_from_pending = |pending: &[_]| {
@@ -177,19 +164,17 @@ impl Runtime {
             }
         };
 
-        // Use provided history directly
-        let history = initial_history.clone();
+        // Use history from manager
+        let history = history_mgr.full_history();
 
         // Pin version from history if available
         if let Err(error) = self.setup_version_pinning(instance, orchestration_name, &history).await {
-            let max_existing = history.iter().map(|e| e.event_id()).max().unwrap_or(0);
-            let next_id = max_existing + 1;
-            let terminal_event = Event::OrchestrationFailed {
+            let next_id = history_mgr.next_event_id();
+            history_mgr.append(Event::OrchestrationFailed {
                 event_id: next_id,
                 error: error.clone(),
-            };
-            history_delta.push(terminal_event);
-            return (history_delta, worker_items, timer_items, orchestrator_items, Err(error));
+            });
+            return (history_mgr.delta().to_vec(), worker_items, timer_items, orchestrator_items, Err(error));
         }
 
         // Resolve orchestration handler
@@ -197,14 +182,12 @@ impl Runtime {
             Ok(h) => h,
             Err(error) => {
                 // Handle unregistered orchestration
-                let max_existing = history.iter().map(|e| e.event_id()).max().unwrap_or(0);
-                let next_id = max_existing + 1;
-                let terminal_event = Event::OrchestrationFailed {
+                let next_id = history_mgr.next_event_id();
+                history_mgr.append(Event::OrchestrationFailed {
                     event_id: next_id,
                     error: error.clone(),
-                };
-                history_delta.push(terminal_event);
-                return (history_delta, worker_items, timer_items, orchestrator_items, Err(error));
+                });
+                return (history_mgr.delta().to_vec(), worker_items, timer_items, orchestrator_items, Err(error));
             }
         };
 
@@ -227,14 +210,12 @@ impl Runtime {
         let current_execution_history = match Self::extract_current_execution_history(&history) {
             Ok(history) => history,
             Err(error) => {
-                let max_existing = history.iter().map(|e| e.event_id()).max().unwrap_or(0);
-                let next_id = max_existing + 1;
-                let terminal_event = Event::OrchestrationFailed {
+                let next_id = history_mgr.next_event_id();
+                history_mgr.append(Event::OrchestrationFailed {
                     event_id: next_id,
                     error: error.clone(),
-                };
-                history_delta.push(terminal_event);
-                return (history_delta, worker_items, timer_items, orchestrator_items, Err(error));
+                });
+                return (history_mgr.delta().to_vec(), worker_items, timer_items, orchestrator_items, Err(error));
             }
         };
         let mut turn = OrchestrationTurn::new(
@@ -253,7 +234,7 @@ impl Runtime {
         let turn_result = turn.execute_orchestration(handler.clone(), input.clone());
 
         // Collect history delta from turn
-        history_delta.extend(turn.history_delta().to_vec());
+        history_mgr.extend(turn.history_delta().to_vec());
 
         // Nondeterminism detection is handled by OrchestrationTurn::execute_orchestration
 
@@ -337,12 +318,11 @@ impl Runtime {
                 enqueue_detached_from_pending(turn.pending_actions());
 
                 // Add completion event with next event_id
-                let next_id = calc_next_event_id(&history, &history_delta);
-                let terminal_event = Event::OrchestrationCompleted {
+                let next_id = history_mgr.next_event_id();
+                history_mgr.append(Event::OrchestrationCompleted {
                     event_id: next_id,
                     output: output.clone(),
-                };
-                history_delta.push(terminal_event);
+                });
 
                 // Notify parent if this is a sub-orchestration
                 if let Some((parent_instance, parent_id)) = parent_link {
@@ -362,12 +342,11 @@ impl Runtime {
                 enqueue_detached_from_pending(turn.pending_actions());
 
                 // Add failure event
-                let next_id = calc_next_event_id(&history, &history_delta);
-                let terminal_event = Event::OrchestrationFailed {
+                let next_id = history_mgr.next_event_id();
+                history_mgr.append(Event::OrchestrationFailed {
                     event_id: next_id,
                     error: error.clone(),
-                };
-                history_delta.push(terminal_event);
+                });
 
                 // Notify parent if this is a sub-orchestration
                 if let Some((parent_instance, parent_id)) = parent_link {
@@ -384,12 +363,11 @@ impl Runtime {
             }
             TurnResult::ContinueAsNew { input, version } => {
                 // Add ContinuedAsNew terminal event to history
-                let next_id = calc_next_event_id(&history, &history_delta);
-                let terminal_event = Event::OrchestrationContinuedAsNew {
+                let next_id = history_mgr.next_event_id();
+                history_mgr.append(Event::OrchestrationContinuedAsNew {
                     event_id: next_id,
                     input: input.clone(),
-                };
-                history_delta.push(terminal_event);
+                });
 
                 // Enqueue continue as new work item
                 orchestrator_items.push(WorkItem::ContinueAsNew {
@@ -403,19 +381,14 @@ impl Runtime {
             }
             TurnResult::Cancelled(reason) => {
                 let error = format!("canceled: {}", reason);
-                let next_id = calc_next_event_id(&history, &history_delta);
-                let terminal_event = Event::OrchestrationFailed {
+                let next_id = history_mgr.next_event_id();
+                history_mgr.append(Event::OrchestrationFailed {
                     event_id: next_id,
                     error: error.clone(),
-                };
-                history_delta.push(terminal_event);
+                });
 
                 // Propagate cancellation to children
-                let full_history = {
-                    let mut h = history.clone();
-                    h.extend(history_delta.iter().cloned());
-                    h
-                };
+                let full_history = history_mgr.full_history();
                 let cancel_work_items = self.get_child_cancellation_work_items(instance, &full_history).await;
                 orchestrator_items.extend(cancel_work_items);
 
@@ -436,12 +409,12 @@ impl Runtime {
         debug!(
             instance,
             "run_single_execution_atomic complete: history_delta={}, worker={}, timer={}, orch={}",
-            history_delta.len(),
+            history_mgr.delta().len(),
             worker_items.len(),
             timer_items.len(),
             orchestrator_items.len()
         );
-        (history_delta, worker_items, timer_items, orchestrator_items, result)
+        (history_mgr.delta().to_vec(), worker_items, timer_items, orchestrator_items, result)
     }
 
     /// Get work items to cancel child sub-orchestrations

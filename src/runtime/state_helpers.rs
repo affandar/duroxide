@@ -33,6 +33,12 @@ pub struct HistoryManager {
     
     /// The execution ID from the most recent OrchestrationStarted
     pub current_execution_id: Option<u64>,
+    
+    /// The complete history being managed
+    history: Vec<Event>,
+    
+    /// New events to be appended (history delta)
+    delta: Vec<Event>,
 }
 
 impl HistoryManager {
@@ -51,6 +57,8 @@ impl HistoryManager {
             is_failed: false,
             is_continued_as_new: false,
             current_execution_id: None,
+            history: history.to_vec(),
+            delta: Vec::new(),
         };
 
         // Scan forward for OrchestrationStarted (could be multiple due to CAN)
@@ -108,6 +116,11 @@ impl HistoryManager {
     pub fn is_terminal(&self) -> bool {
         self.is_completed || self.is_failed || self.is_continued_as_new
     }
+    
+    /// Check if the history is empty (new instance)
+    pub fn is_empty(&self) -> bool {
+        self.history.is_empty()
+    }
 
     /// Get a human-readable status string
     pub fn status(&self) -> &'static str {
@@ -120,6 +133,44 @@ impl HistoryManager {
         } else {
             "Running"
         }
+    }
+    
+    // === Mutation methods for building history delta ===
+    
+    /// Calculate the next event ID based on existing history and delta
+    pub fn next_event_id(&self) -> u64 {
+        self.history
+            .iter()
+            .chain(self.delta.iter())
+            .map(|e| e.event_id())
+            .max()
+            .unwrap_or(0)
+            + 1
+    }
+    
+    /// Append a single event to the delta
+    pub fn append(&mut self, event: Event) {
+        self.delta.push(event);
+    }
+    
+    /// Extend delta with multiple events
+    pub fn extend(&mut self, events: Vec<Event>) {
+        self.delta.extend(events);
+    }
+    
+    /// Get a reference to the history delta
+    pub fn delta(&self) -> &[Event] {
+        &self.delta
+    }
+    
+    /// Consume the manager and return the history delta
+    pub fn into_delta(self) -> Vec<Event> {
+        self.delta
+    }
+    
+    /// Get the complete history (original + delta)
+    pub fn full_history(&self) -> Vec<Event> {
+        [&self.history[..], &self.delta[..]].concat()
     }
 }
 
