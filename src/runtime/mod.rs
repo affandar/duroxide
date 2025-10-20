@@ -287,7 +287,16 @@ impl Runtime {
         // Bail on truly terminal histories (Completed/Failed), or ContinuedAsNew without a CAN start message
         if history_reader.is_completed || history_reader.is_failed || (history_reader.is_continued_as_new && !workitem_reader.is_continue_as_new) {
             warn!(instance = %instance, "Instance is terminal (completed/failed or CAN without start), acking batch without processing");
-            self.ack_orchestration_empty(lock_token, item.execution_id).await;
+            self.ack_orchestration_with_changes(
+                lock_token,
+                item.execution_id,
+                vec![],
+                vec![],
+                vec![],
+                vec![],
+                ExecutionMetadata::default(),
+            )
+            .await;
             return;
         }
 
@@ -318,15 +327,9 @@ impl Runtime {
                 let (hd, wi, ti, oi) = self
                     .handle_orchestration_atomic(
                         instance,
-                        &workitem_reader.orchestration_name,
-                        &workitem_reader.input,
-                        workitem_reader.version.as_deref(),
-                        workitem_reader.parent_instance.as_deref(),
-                        workitem_reader.parent_id,
-                        workitem_reader.completion_messages.clone(),
+                        &workitem_reader,
                         &history_to_use,
                         execution_id_to_use,
-                        lock_token,
                     )
                     .await;
                 (hd, wi, ti, oi, execution_id_to_use)
@@ -365,15 +368,9 @@ impl Runtime {
     async fn handle_orchestration_atomic(
         self: &Arc<Self>,
         instance: &str,
-        orchestration: &str,
-        input: &str,
-        version: Option<&str>,
-        parent_instance: Option<&str>,
-        parent_id: Option<u64>,
-        completion_messages: Vec<WorkItem>,
+        workitem_reader: &WorkItemReader,
         existing_history: &[Event],
         execution_id: u64,
-        _lock_token: &str,
     ) -> (Vec<Event>, Vec<WorkItem>, Vec<WorkItem>, Vec<WorkItem>) {
         let mut history_delta = Vec::new();
         let mut worker_items = Vec::new();
@@ -383,24 +380,24 @@ impl Runtime {
         // Create started event if this is a new instance
         if existing_history.is_empty() {
             // Resolve version using registry policy if not explicitly provided
-            let (resolved_version, should_pin) = if let Some(v) = version {
+            let (resolved_version, should_pin) = if let Some(v) = &workitem_reader.version {
                 (v.to_string(), true)
-            } else if let Some((v, _handler)) = self.orchestration_registry.resolve_for_start(orchestration).await {
+            } else if let Some((v, _handler)) = self.orchestration_registry.resolve_for_start(&workitem_reader.orchestration_name).await {
                 (v.to_string(), true)
             } else {
                 // Unregistered orchestration - fail immediately but still create proper history
                 history_delta.push(Event::OrchestrationStarted {
                     event_id: crate::INITIAL_EVENT_ID,
-                    name: orchestration.to_string(),
+                    name: workitem_reader.orchestration_name.clone(),
                     version: "0.0.0".to_string(), // Placeholder version for unregistered
-                    input: input.to_string(),
-                    parent_instance: parent_instance.map(|s| s.to_string()),
-                    parent_id,
+                    input: workitem_reader.input.clone(),
+                    parent_instance: workitem_reader.parent_instance.clone(),
+                    parent_id: workitem_reader.parent_id,
                 });
 
                 let terminal_event = Event::OrchestrationFailed {
                     event_id: crate::INITIAL_EVENT_ID + 1,
-                    error: format!("unregistered:{}", orchestration),
+                    error: format!("unregistered:{}", &workitem_reader.orchestration_name),
                 };
                 history_delta.push(terminal_event);
                 return (history_delta, worker_items, timer_items, orchestrator_items);
@@ -415,11 +412,11 @@ impl Runtime {
 
             history_delta.push(Event::OrchestrationStarted {
                 event_id: 1, // First event always has event_id=1
-                name: orchestration.to_string(),
+                name: workitem_reader.orchestration_name.clone(),
                 version: resolved_version,
-                input: input.to_string(),
-                parent_instance: parent_instance.map(|s| s.to_string()),
-                parent_id,
+                input: workitem_reader.input.clone(),
+                parent_instance: workitem_reader.parent_instance.clone(),
+                parent_id: workitem_reader.parent_id,
             });
         }
 
@@ -429,10 +426,10 @@ impl Runtime {
             .clone()
             .run_single_execution_atomic(
                 instance,
-                orchestration,
+                &workitem_reader.orchestration_name,
                 full_history.clone(),
                 execution_id,
-                completion_messages,
+                workitem_reader.completion_messages.clone(),
             )
             .await;
 
@@ -480,19 +477,6 @@ impl Runtime {
         }
     }
 
-    /// Acknowledge an orchestration item with empty changes (for terminal states)
-    async fn ack_orchestration_empty(&self, lock_token: &str, execution_id: u64) {
-        self.ack_orchestration_with_changes(
-            lock_token,
-            execution_id,
-            vec![],
-            vec![],
-            vec![],
-            vec![],
-            ExecutionMetadata::default(),
-        )
-        .await;
-    }
 
     /// Acknowledge an orchestration item with changes, using retry logic
     async fn ack_orchestration_with_changes(
