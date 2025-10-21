@@ -15,36 +15,6 @@ impl Runtime {
     /// collecting all resulting work items and history changes atomically.
     /// It handles version pinning, handler resolution, and deterministic completion processing.
 
-    /// Set up version pinning from history
-    async fn setup_version_pinning(
-        &self,
-        instance: &str,
-        orchestration_name: &str,
-        history: &[Event],
-    ) -> Result<(), String> {
-        let version_str = history
-            .iter()
-            .rev()
-            .find_map(|e| match e {
-                Event::OrchestrationStarted { name: n, version, .. } if n == orchestration_name => {
-                    Some(version.clone())
-                }
-                _ => None,
-            })
-            .ok_or_else(|| {
-                format!(
-                    "corrupted history: no OrchestrationStarted event found for {}",
-                    orchestration_name
-                )
-            })?;
-
-        if version_str != "0.0.0" {
-            if let Ok(v) = semver::Version::parse(&version_str) {
-                self.pinned_versions.lock().await.insert(instance.to_string(), v);
-            }
-        }
-        Ok(())
-    }
 
     /// Resolve the orchestration handler, preferring pinned version
     async fn resolve_orchestration_handler(
@@ -72,52 +42,6 @@ impl Runtime {
         })
     }
 
-    /// Extract orchestration input and parent linkage from history
-    fn extract_orchestration_context(
-        &self,
-        orchestration_name: &str,
-        history: &[Event],
-    ) -> (String, Option<(String, u64)>) {
-        let mut input = String::new();
-        let mut parent_link = None;
-
-        for e in history.iter().rev() {
-            if let Event::OrchestrationStarted {
-                name: n,
-                input: inp,
-                parent_instance,
-                parent_id,
-                ..
-            } = e
-            {
-                if n == orchestration_name {
-                    input = inp.clone();
-                    if let (Some(pinst), Some(pid)) = (parent_instance.clone(), *parent_id) {
-                        parent_link = Some((pinst, pid));
-                    }
-                    break;
-                }
-            }
-        }
-
-        (input, parent_link)
-    }
-
-    /// Extract current execution history (from most recent OrchestrationStarted)
-    /// This filters out events from previous executions in continue-as-new scenarios
-    fn extract_current_execution_history(full_history: &[Event]) -> Result<Vec<Event>, String> {
-        let current_execution_start = full_history
-            .iter()
-            .enumerate()
-            .rev()
-            .find_map(|(i, e)| match e {
-                Event::OrchestrationStarted { .. } => Some(i),
-                _ => None,
-            })
-            .ok_or("corrupted history: no OrchestrationStarted event found")?;
-
-        Ok(full_history[current_execution_start..].to_vec())
-    }
     /// Execute a single orchestration turn atomically
     pub async fn run_single_execution_atomic(
         self: Arc<Self>,
@@ -164,17 +88,24 @@ impl Runtime {
             }
         };
 
-        // Use history from manager
-        let history = history_mgr.full_history();
-
-        // Pin version from history if available
-        if let Err(error) = self.setup_version_pinning(instance, orchestration_name, &history).await {
-            let next_id = history_mgr.next_event_id();
-            history_mgr.append(Event::OrchestrationFailed {
-                event_id: next_id,
-                error: error.clone(),
-            });
-            return (history_mgr.delta().to_vec(), worker_items, timer_items, orchestrator_items, Err(error));
+        // Pin version from history if available (only for existing instances)
+        if !history_mgr.is_empty() {
+            if let Some(version_str) = history_mgr.version() {
+                if version_str != "0.0.0" {
+                    if let Ok(v) = semver::Version::parse(version_str) {
+                        self.pinned_versions.lock().await.insert(instance.to_string(), v);
+                    }
+                }
+            } else {
+                // No version in non-empty history - corrupted
+                let error = format!("corrupted history: no OrchestrationStarted event found for {}", orchestration_name);
+                let next_id = history_mgr.next_event_id();
+                history_mgr.append(Event::OrchestrationFailed {
+                    event_id: next_id,
+                    error: error.clone(),
+                });
+                return (history_mgr.delta().to_vec(), worker_items, timer_items, orchestrator_items, Err(error));
+            }
         }
 
         // Resolve orchestration handler
@@ -191,8 +122,10 @@ impl Runtime {
             }
         };
 
-        // Extract input and parent linkage for the orchestration
-        let (input, parent_link) = self.extract_orchestration_context(&orchestration_name, &history);
+        // Extract input and parent linkage from history manager
+        // (works for both existing history and newly appended OrchestrationStarted in delta)
+        let (input, parent_link) = history_mgr.extract_context();
+        
         if let Some((ref pinst, pid)) = parent_link {
             tracing::debug!(target = "duroxide::runtime::execution", instance=%instance, parent_instance=%pinst, parent_id=%pid, "Detected parent link for orchestration");
         } else {
@@ -207,7 +140,7 @@ impl Runtime {
             message_count = messages.len(),
             "starting orchestration turn atomically"
         );
-        let current_execution_history = match Self::extract_current_execution_history(&history) {
+        let current_execution_history = match history_mgr.current_execution_history() {
             Ok(history) => history,
             Err(error) => {
                 let next_id = history_mgr.next_event_id();
@@ -484,7 +417,8 @@ mod tests {
     use crate::Event;
 
     #[test]
-    fn test_extract_current_execution_history_corrupted() {
+    fn test_history_manager_current_execution_corrupted() {
+        use crate::runtime::state_helpers::HistoryManager;
         // Test corrupted history without OrchestrationStarted event
         let corrupted_history = vec![
             Event::ActivityCompleted {
@@ -499,7 +433,8 @@ mod tests {
             },
         ];
 
-        let result = Runtime::extract_current_execution_history(&corrupted_history);
+        let mgr = HistoryManager::from_history(&corrupted_history);
+        let result = mgr.current_execution_history();
         assert!(result.is_err());
         assert_eq!(
             result.unwrap_err(),
@@ -508,7 +443,8 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_current_execution_history_valid() {
+    fn test_history_manager_current_execution_valid() {
+        use crate::runtime::state_helpers::HistoryManager;
         // Test valid history with OrchestrationStarted event
         let valid_history = vec![
             Event::OrchestrationStarted {
@@ -526,7 +462,8 @@ mod tests {
             },
         ];
 
-        let result = Runtime::extract_current_execution_history(&valid_history);
+        let mgr = HistoryManager::from_history(&valid_history);
+        let result = mgr.current_execution_history();
         assert!(result.is_ok());
         let extracted = result.unwrap();
         assert_eq!(extracted.len(), 2);

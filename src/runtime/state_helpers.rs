@@ -172,6 +172,72 @@ impl HistoryManager {
     pub fn full_history(&self) -> Vec<Event> {
         [&self.history[..], &self.delta[..]].concat()
     }
+    
+    /// Get the version from the most recent OrchestrationStarted event
+    pub fn version(&self) -> Option<&str> {
+        self.orchestration_version.as_deref()
+    }
+    
+    /// Get the input from the most recent OrchestrationStarted event
+    pub fn input(&self) -> Option<&str> {
+        self.orchestration_input.as_deref()
+    }
+    
+    /// Extract input and parent linkage from history for orchestration context
+    /// This looks at the full history including any newly appended events in the delta
+    pub fn extract_context(&self) -> (String, Option<(String, u64)>) {
+        // First check if we have metadata from the initial scan
+        if let Some(ref input) = self.orchestration_input {
+            let parent_link = if let (Some(parent_inst), Some(parent_id)) = (&self.parent_instance, self.parent_id) {
+                Some((parent_inst.clone(), parent_id))
+            } else {
+                None
+            };
+            return (input.clone(), parent_link);
+        }
+        
+        // If no metadata yet (empty initial history), check the delta for OrchestrationStarted
+        for e in self.delta.iter().rev() {
+            if let Event::OrchestrationStarted {
+                input,
+                parent_instance,
+                parent_id,
+                ..
+            } = e
+            {
+                let parent_link = if let (Some(pinst), Some(pid)) = (parent_instance.clone(), *parent_id) {
+                    Some((pinst, pid))
+                } else {
+                    None
+                };
+                return (input.clone(), parent_link);
+            }
+        }
+        
+        // Fallback - no OrchestrationStarted found
+        (String::new(), None)
+    }
+    
+    /// Extract current execution history (filters out events from previous executions in CAN scenarios)
+    pub fn current_execution_history(&self) -> Result<Vec<Event>, String> {
+        let full_history = self.full_history();
+        
+        // Find the most recent OrchestrationStarted event to determine current execution boundary
+        let current_execution_start = full_history
+            .iter()
+            .enumerate()
+            .rev()
+            .find_map(|(idx, e)| {
+                if matches!(e, Event::OrchestrationStarted { .. }) {
+                    Some(idx)
+                } else {
+                    None
+                }
+            })
+            .ok_or("corrupted history: no OrchestrationStarted event found")?;
+
+        Ok(full_history[current_execution_start..].to_vec())
+    }
 }
 
 /// Reader for extracting information from a batch of work items
