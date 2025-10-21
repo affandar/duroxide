@@ -174,8 +174,21 @@ impl HistoryManager {
     }
     
     /// Get the version from the most recent OrchestrationStarted event
-    pub fn version(&self) -> Option<&str> {
-        self.orchestration_version.as_deref()
+    /// Checks both existing history (cached) and delta (for newly created instances)
+    pub fn version(&self) -> Option<String> {
+        // First check cached metadata from initial history
+        if let Some(ref v) = self.orchestration_version {
+            return Some(v.clone());
+        }
+        
+        // If no cached version, check delta for newly appended OrchestrationStarted
+        for e in self.delta.iter().rev() {
+            if let Event::OrchestrationStarted { version, .. } = e {
+                return Some(version.clone());
+            }
+        }
+        
+        None
     }
     
     /// Get the input from the most recent OrchestrationStarted event

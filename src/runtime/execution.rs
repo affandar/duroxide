@@ -92,7 +92,7 @@ impl Runtime {
         if !history_mgr.is_empty() {
             if let Some(version_str) = history_mgr.version() {
                 if version_str != "0.0.0" {
-                    if let Ok(v) = semver::Version::parse(version_str) {
+                    if let Ok(v) = semver::Version::parse(&version_str) {
                         self.pinned_versions.lock().await.insert(instance.to_string(), v);
                     }
                 }
