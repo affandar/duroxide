@@ -100,11 +100,7 @@ impl Runtime {
             Ok(h) => h,
             Err(error) => {
                 // Handle unregistered orchestration
-                let next_id = history_mgr.next_event_id();
-                history_mgr.append(Event::OrchestrationFailed {
-                    event_id: next_id,
-                    error: error.clone(),
-                });
+                history_mgr.append_failed(error.clone());
                 return (history_mgr.delta().to_vec(), worker_items, timer_items, orchestrator_items, Err(error));
             }
         };
@@ -127,17 +123,8 @@ impl Runtime {
             message_count = messages.len(),
             "starting orchestration turn atomically"
         );
-        let current_execution_history = match history_mgr.current_execution_history() {
-            Ok(history) => history,
-            Err(error) => {
-                let next_id = history_mgr.next_event_id();
-                history_mgr.append(Event::OrchestrationFailed {
-                    event_id: next_id,
-                    error: error.clone(),
-                });
-                return (history_mgr.delta().to_vec(), worker_items, timer_items, orchestrator_items, Err(error));
-            }
-        };
+        // Use full history (always contains only current execution)
+        let current_execution_history = history_mgr.full_history();
         let mut turn = OrchestrationTurn::new(
             instance.to_string(),
             0, // turn_index
@@ -262,11 +249,7 @@ impl Runtime {
                 enqueue_detached_from_pending(turn.pending_actions());
 
                 // Add failure event
-                let next_id = history_mgr.next_event_id();
-                history_mgr.append(Event::OrchestrationFailed {
-                    event_id: next_id,
-                    error: error.clone(),
-                });
+                history_mgr.append_failed(error.clone());
 
                 // Notify parent if this is a sub-orchestration
                 if let Some((parent_instance, parent_id)) = parent_link {
@@ -301,11 +284,7 @@ impl Runtime {
             }
             TurnResult::Cancelled(reason) => {
                 let error = format!("canceled: {}", reason);
-                let next_id = history_mgr.next_event_id();
-                history_mgr.append(Event::OrchestrationFailed {
-                    event_id: next_id,
-                    error: error.clone(),
-                });
+                history_mgr.append_failed(error.clone());
 
                 // Propagate cancellation to children
                 let full_history = history_mgr.full_history();
@@ -398,63 +377,4 @@ impl Runtime {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::Event;
-
-    #[test]
-    fn test_history_manager_current_execution_corrupted() {
-        use crate::runtime::state_helpers::HistoryManager;
-        // Test corrupted history without OrchestrationStarted event
-        let corrupted_history = vec![
-            Event::ActivityCompleted {
-                event_id: 1,
-                source_event_id: 1,
-                result: "test".to_string(),
-            },
-            Event::TimerFired {
-                event_id: 2,
-                source_event_id: 1,
-                fire_at_ms: 1000,
-            },
-        ];
-
-        let mgr = HistoryManager::from_history(&corrupted_history);
-        let result = mgr.current_execution_history();
-        assert!(result.is_err());
-        assert_eq!(
-            result.unwrap_err(),
-            "corrupted history: no OrchestrationStarted event found"
-        );
-    }
-
-    #[test]
-    fn test_history_manager_current_execution_valid() {
-        use crate::runtime::state_helpers::HistoryManager;
-        // Test valid history with OrchestrationStarted event
-        let valid_history = vec![
-            Event::OrchestrationStarted {
-                event_id: 1,
-                name: "test".to_string(),
-                version: "1.0.0".to_string(),
-                input: "{}".to_string(),
-                parent_instance: None,
-                parent_id: None,
-            },
-            Event::ActivityCompleted {
-                event_id: 2,
-                source_event_id: 1,
-                result: "test".to_string(),
-            },
-        ];
-
-        let mgr = HistoryManager::from_history(&valid_history);
-        let result = mgr.current_execution_history();
-        assert!(result.is_ok());
-        let extracted = result.unwrap();
-        assert_eq!(extracted.len(), 2);
-        assert!(matches!(extracted[0], Event::OrchestrationStarted { .. }));
-    }
-}
 

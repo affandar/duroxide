@@ -393,10 +393,7 @@ impl Runtime {
                     parent_id: workitem_reader.parent_id,
                 });
 
-                history_mgr.append(Event::OrchestrationFailed {
-                    event_id: crate::INITIAL_EVENT_ID + 1,
-                    error: format!("unregistered:{}", &workitem_reader.orchestration_name),
-                });
+                history_mgr.append_failed(format!("unregistered:{}", &workitem_reader.orchestration_name));
                 return (worker_items, timer_items, orchestrator_items);
             };
 

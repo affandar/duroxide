@@ -153,6 +153,15 @@ impl HistoryManager {
         self.delta.push(event);
     }
     
+    /// Append an OrchestrationFailed event with the next event_id
+    pub fn append_failed(&mut self, error: String) {
+        let next_id = self.next_event_id();
+        self.append(Event::OrchestrationFailed {
+            event_id: next_id,
+            error,
+        });
+    }
+    
     /// Extend delta with multiple events
     pub fn extend(&mut self, events: Vec<Event>) {
         self.delta.extend(events);
@@ -238,26 +247,6 @@ impl HistoryManager {
         (String::new(), None)
     }
     
-    /// Extract current execution history (filters out events from previous executions in CAN scenarios)
-    pub fn current_execution_history(&self) -> Result<Vec<Event>, String> {
-        let full_history = self.full_history();
-        
-        // Find the most recent OrchestrationStarted event to determine current execution boundary
-        let current_execution_start = full_history
-            .iter()
-            .enumerate()
-            .rev()
-            .find_map(|(idx, e)| {
-                if matches!(e, Event::OrchestrationStarted { .. }) {
-                    Some(idx)
-                } else {
-                    None
-                }
-            })
-            .ok_or("corrupted history: no OrchestrationStarted event found")?;
-
-        Ok(full_history[current_execution_start..].to_vec())
-    }
 }
 
 /// Reader for extracting information from a batch of work items
