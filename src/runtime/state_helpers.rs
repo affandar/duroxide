@@ -117,9 +117,9 @@ impl HistoryManager {
         self.is_completed || self.is_failed || self.is_continued_as_new
     }
     
-    /// Check if the history is empty (new instance)
+    /// Check if the history is empty (new instance with no events yet)
     pub fn is_empty(&self) -> bool {
-        self.history.is_empty()
+        self.history.is_empty() && self.delta.is_empty()
     }
 
     /// Get a human-readable status string

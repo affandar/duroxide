@@ -88,23 +88,14 @@ impl Runtime {
             }
         };
 
-        // Pin version from history if available (only for existing instances)
-        if !history_mgr.is_empty() {
-            if let Some(version_str) = history_mgr.version() {
-                if version_str != "0.0.0" {
-                    if let Ok(v) = semver::Version::parse(&version_str) {
-                        self.pinned_versions.lock().await.insert(instance.to_string(), v);
-                    }
-                }
-            } else {
-                // No version in non-empty history - corrupted
-                let error = format!("corrupted history: no OrchestrationStarted event found for {}", orchestration_name);
-                let next_id = history_mgr.next_event_id();
-                history_mgr.append(Event::OrchestrationFailed {
-                    event_id: next_id,
-                    error: error.clone(),
-                });
-                return (history_mgr.delta().to_vec(), worker_items, timer_items, orchestrator_items, Err(error));
+        // History must have OrchestrationStarted at this point (either from existing history or newly created)
+        debug_assert!(!history_mgr.is_empty(), "history_mgr should never be empty here");
+        
+        // Pin version from history
+        let version_str = history_mgr.version().expect("history must have OrchestrationStarted with version");
+        if version_str != "0.0.0" {
+            if let Ok(v) = semver::Version::parse(&version_str) {
+                self.pinned_versions.lock().await.insert(instance.to_string(), v);
             }
         }
 
