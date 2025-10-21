@@ -28,7 +28,7 @@ impl Runtime {
         let handler_opt = if let Some(ref version_str) = version_from_history {
             // Use exact version from history
             if let Ok(v) = semver::Version::parse(&version_str) {
-                self.orchestration_registry.resolve_exact(orchestration_name, &v)
+                self.orchestration_registry.resolve_handler_exact(orchestration_name, &v)
             } else {
                 None
             }

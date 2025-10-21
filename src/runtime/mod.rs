@@ -377,10 +377,10 @@ impl Runtime {
 
         // Create started event if this is a new instance
         if history_mgr.is_empty() {
-            // Resolve version: use provided version or get from registry
+            // Resolve version: use provided version or get from registry policy
             let resolved_version = if let Some(v) = &workitem_reader.version {
                 v.to_string()
-            } else if let Some((v, _handler)) = self.orchestration_registry.resolve_for_start(&workitem_reader.orchestration_name).await {
+            } else if let Some(v) = self.orchestration_registry.resolve_version(&workitem_reader.orchestration_name).await {
                 v.to_string()
             } else {
                 // Not found in registry - fail with unregistered error
