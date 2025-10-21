@@ -1,7 +1,6 @@
 //
 use crate::providers::{ExecutionMetadata, Provider, WorkItem};
 use crate::{Event, OrchestrationContext};
-use semver::Version;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -100,8 +99,6 @@ pub struct Runtime {
     joins: Mutex<Vec<JoinHandle<()>>>,
     history_store: Arc<dyn Provider>,
     orchestration_registry: OrchestrationRegistry,
-    /// Pinned versions for instances started in this runtime (in-memory for now)
-    pinned_versions: Mutex<HashMap<String, Version>>,
     /// Track the current execution ID for each active instance
     current_execution_ids: Mutex<HashMap<String, u64>>,
     /// Runtime configuration options
@@ -239,7 +236,6 @@ impl Runtime {
             history_store,
 
             orchestration_registry,
-            pinned_versions: Mutex::new(HashMap::new()),
             current_execution_ids: Mutex::new(HashMap::new()),
 
             options,
@@ -381,13 +377,13 @@ impl Runtime {
 
         // Create started event if this is a new instance
         if history_mgr.is_empty() {
-            // Resolve version using registry policy if not explicitly provided
-            let (resolved_version, should_pin) = if let Some(v) = &workitem_reader.version {
-                (v.to_string(), true)
+            // Resolve version: use provided version or get from registry
+            let resolved_version = if let Some(v) = &workitem_reader.version {
+                v.to_string()
             } else if let Some((v, _handler)) = self.orchestration_registry.resolve_for_start(&workitem_reader.orchestration_name).await {
-                (v.to_string(), true)
+                v.to_string()
             } else {
-                // Unregistered orchestration - fail immediately but still create proper history
+                // Not found in registry - fail with unregistered error
                 history_mgr.append(Event::OrchestrationStarted {
                     event_id: crate::INITIAL_EVENT_ID,
                     name: workitem_reader.orchestration_name.clone(),
@@ -403,13 +399,6 @@ impl Runtime {
                 });
                 return (worker_items, timer_items, orchestrator_items);
             };
-
-            // Pin the resolved version only if we found a valid orchestration
-            if should_pin {
-                if let Ok(v) = semver::Version::parse(&resolved_version) {
-                    self.pinned_versions.lock().await.insert(instance.to_string(), v);
-                }
-            }
 
             history_mgr.append(Event::OrchestrationStarted {
                 event_id: 1, // First event always has event_id=1

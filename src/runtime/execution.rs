@@ -16,25 +16,29 @@ impl Runtime {
     /// It handles version pinning, handler resolution, and deterministic completion processing.
 
 
-    /// Resolve the orchestration handler, preferring pinned version
+    /// Resolve the orchestration handler using version from history
     async fn resolve_orchestration_handler(
         &self,
-        instance: &str,
         orchestration_name: &str,
+        history_mgr: &crate::runtime::state_helpers::HistoryManager,
     ) -> Result<Arc<dyn OrchestrationHandler>, String> {
-        let pinned_version = self.pinned_versions.lock().await.get(instance).cloned();
+        // Get version from history (includes delta for new instances)
+        let version_from_history = history_mgr.version();
 
-        let handler_opt = if let Some(v) = pinned_version.clone() {
-            self.orchestration_registry.resolve_exact(orchestration_name, &v)
+        let handler_opt = if let Some(ref version_str) = version_from_history {
+            // Use exact version from history
+            if let Ok(v) = semver::Version::parse(&version_str) {
+                self.orchestration_registry.resolve_exact(orchestration_name, &v)
+            } else {
+                None
+            }
         } else {
-            self.orchestration_registry
-                .resolve_for_start(orchestration_name)
-                .await
-                .map(|(_v, h)| h)
+            // No version in history - shouldn't happen at this point
+            None
         };
 
         handler_opt.ok_or_else(|| {
-            if let Some(v) = pinned_version {
+            if let Some(v) = version_from_history {
                 format!("canceled: missing version {}@{}", orchestration_name, v)
             } else {
                 format!("unregistered:{}", orchestration_name)
@@ -88,19 +92,11 @@ impl Runtime {
             }
         };
 
-        // History must have OrchestrationStarted at this point (either from existing history or newly created)
+        // History must have OrchestrationStarted at this point (either from existing history or newly created in delta)
         debug_assert!(!history_mgr.is_empty(), "history_mgr should never be empty here");
-        
-        // Pin version from history
-        let version_str = history_mgr.version().expect("history must have OrchestrationStarted with version");
-        if version_str != "0.0.0" {
-            if let Ok(v) = semver::Version::parse(&version_str) {
-                self.pinned_versions.lock().await.insert(instance.to_string(), v);
-            }
-        }
 
-        // Resolve orchestration handler
-        let handler = match self.resolve_orchestration_handler(instance, orchestration_name).await {
+        // Resolve orchestration handler using version from history
+        let handler = match self.resolve_orchestration_handler(orchestration_name, history_mgr).await {
             Ok(h) => h,
             Err(error) => {
                 // Handle unregistered orchestration
