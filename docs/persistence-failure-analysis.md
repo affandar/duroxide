@@ -22,7 +22,7 @@ The DTF orchestration runtime has several critical failure points in its persist
 
 ### 1. History Append Failures (CRITICAL)
 
-**Location**: `orchestration_turn.rs:332-335`
+**Location**: `replay_engine.rs:...`
 ```rust
 history_store
     .append(&self.instance, self.history_delta.clone())
@@ -59,7 +59,7 @@ let _ = rt
 
 ### 3. Terminal Event Append Failures
 
-**Location**: `execution.rs` - `handle_orchestration_completion`
+**Location**: `execution.rs` - turn handling
 ```rust
 // Append terminal event (OrchestrationCompleted/Failed/ContinuedAsNew)
 history_store.append(&instance, vec![terminal_event]).await
@@ -96,7 +96,7 @@ let _ = self
 
 ### 5. Message Acknowledgment Failures
 
-**Location**: `orchestration_turn.rs:367-380`
+**Location**: `replay_engine.rs` - completion acknowledgment path (now handled atomically by runtime)
 ```rust
 for token in &self.ack_tokens {
     if let Err(e) = history_store.ack(QueueKind::Orchestrator, token).await {
@@ -190,7 +190,6 @@ impl OrchestrationSaga {
 // Before any operations
 let wal_entry = WalEntry {
     instance,
-    turn_index,
     planned_history: delta.clone(),
     planned_actions: decisions.clone(),
 };

@@ -1358,20 +1358,9 @@ for event in history {
 }
 ```
 
-### 3. Check Turn Index
+### 3. Inspect Deterministic Flow
 
-```rust
-async fn debug_turns(ctx: OrchestrationContext, _input: String) -> Result<String, String> {
-    let turn = ctx.turn_index();
-    ctx.trace_info(format!("Turn index: {}", turn));
-    
-    // Turn 1: turn_index = 0
-    // Turn 2: turn_index = 1
-    // etc.
-    
-    Ok(())
-}
-```
+Use trace statements and history inspection to understand orchestration progress across turns. Each turn is triggered by new completions and is replay-safe; there is no public turn index.
 
 ---
 

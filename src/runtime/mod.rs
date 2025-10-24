@@ -33,7 +33,7 @@ use async_trait::async_trait;
 pub use state_helpers::{HistoryManager, WorkItemReader};
 
 pub mod execution;
-pub mod orchestration_turn;
+pub mod replay_engine;
 
 /// High-level orchestration status derived from history.
 #[derive(Debug, Clone, PartialEq, Eq)]

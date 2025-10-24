@@ -542,9 +542,6 @@ struct CtxInner {
 
     // Execution metadata
     execution_id: u64,
-
-    // Turn metadata
-    turn_index: u64,
     logging_enabled_this_poll: bool,
     // When set, indicates a nondeterminism condition detected by futures during polling
     nondeterminism_error: Option<String>,
@@ -570,7 +567,6 @@ impl CtxInner {
             consumed_completions: Default::default(),
             consumed_external_events: Default::default(),
             execution_id,
-            turn_index: 0,
             logging_enabled_this_poll: false,
             nondeterminism_error: None,
         }
@@ -611,15 +607,6 @@ impl OrchestrationContext {
 
     fn take_actions(&self) -> Vec<Action> {
         std::mem::take(&mut self.inner.lock().unwrap().actions)
-    }
-
-    // Turn metadata
-    /// The zero-based turn counter assigned by the host for diagnostics.
-    pub fn turn_index(&self) -> u64 {
-        self.inner.lock().unwrap().turn_index
-    }
-    pub(crate) fn set_turn_index(&self, idx: u64) {
-        self.inner.lock().unwrap().turn_index = idx;
     }
 
     // Replay-safe logging control
@@ -1166,11 +1153,10 @@ fn poll_once<F: Future>(fut: &mut F) -> Poll<F::Output> {
 /// updated history, requested `Action`s, and an optional output.
 pub type TurnResult<O> = (Vec<Event>, Vec<Action>, Option<O>);
 
-/// Execute one orchestration turn with explicit turn_index and execution_id.
+/// Execute one orchestration turn with explicit execution_id.
 /// This is the full-featured run_turn implementation used by the runtime.
 pub fn run_turn_with<O, F>(
     history: Vec<Event>,
-    turn_index: u64,
     execution_id: u64,
     orchestrator: impl Fn(OrchestrationContext) -> F,
 ) -> (Vec<Event>, Vec<Action>, Option<O>)
@@ -1178,7 +1164,6 @@ where
     F: Future<Output = O>,
 {
     let ctx = OrchestrationContext::new(history, execution_id);
-    ctx.set_turn_index(turn_index);
     ctx.inner.lock().unwrap().logging_enabled_this_poll = false;
     let mut fut = orchestrator(ctx.clone());
     match poll_once(&mut fut) {
@@ -1201,7 +1186,6 @@ where
 /// `CtxInner.nondeterminism_error` that futures may set during scheduling order checks.
 pub fn run_turn_with_status<O, F>(
     history: Vec<Event>,
-    turn_index: u64,
     execution_id: u64,
     orchestrator: impl Fn(OrchestrationContext) -> F,
 ) -> (Vec<Event>, Vec<Action>, Option<O>, Option<String>)
@@ -1209,7 +1193,6 @@ where
     F: Future<Output = O>,
 {
     let ctx = OrchestrationContext::new(history, execution_id);
-    ctx.set_turn_index(turn_index);
     ctx.inner.lock().unwrap().logging_enabled_this_poll = false;
     let mut fut = orchestrator(ctx.clone());
     match poll_once(&mut fut) {
@@ -1229,10 +1212,10 @@ where
     }
 }
 
-/// Simple run_turn for tests. Uses default execution_id=1 and turn_index=0.
+/// Simple run_turn for tests. Uses default execution_id=1.
 pub fn run_turn<O, F>(history: Vec<Event>, orchestrator: impl Fn(OrchestrationContext) -> F) -> TurnResult<O>
 where
     F: Future<Output = O>,
 {
-    run_turn_with(history, 0, 1, orchestrator)
+    run_turn_with(history, 1, orchestrator)
 }

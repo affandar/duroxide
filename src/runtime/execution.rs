@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use tracing::debug;
 
-use super::orchestration_turn::{OrchestrationTurn, TurnResult};
+use super::replay_engine::{ReplayEngine, TurnResult};
 use crate::{
     Event,
     providers::WorkItem,
@@ -125,9 +125,8 @@ impl Runtime {
         );
         // Use full history (always contains only current execution)
         let current_execution_history = history_mgr.full_history();
-        let mut turn = OrchestrationTurn::new(
+        let mut turn = ReplayEngine::new(
             instance.to_string(),
-            0, // turn_index
             execution_id,
             current_execution_history,
         );
@@ -143,7 +142,7 @@ impl Runtime {
         // Collect history delta from turn
         history_mgr.extend(turn.history_delta().to_vec());
 
-        // Nondeterminism detection is handled by OrchestrationTurn::execute_orchestration
+        // Nondeterminism detection is handled by ReplayEngine::execute_orchestration
 
         // Handle turn result and collect work items
         let result = match turn_result {

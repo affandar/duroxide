@@ -18,8 +18,8 @@ If this fails after history is persisted, the orchestration hangs forever.
 ### Before (Current Broken Implementation)
 
 ```rust
-// orchestration_turn.rs - Current implementation
-impl OrchestrationTurn {
+// replay_engine.rs - Current implementation
+impl ReplayEngine {
     pub async fn persist_changes(&mut self, store: Arc<dyn Provider>, runtime: &Runtime) -> Result<(), String> {
         // Step 1: Append history (can succeed)
         store.append(&self.instance, self.history_delta.clone())
@@ -41,8 +41,8 @@ impl OrchestrationTurn {
 ### After (With Transactional Provider)
 
 ```rust
-// orchestration_turn.rs - Fixed with transactions
-impl OrchestrationTurn {
+// replay_engine.rs - Fixed with transactions
+impl ReplayEngine {
     pub async fn persist_changes(&mut self, store: Arc<dyn TransactionalProvider>, runtime: &Runtime) -> Result<(), String> {
         // Build transaction with ALL operations
         let ops = vec![
