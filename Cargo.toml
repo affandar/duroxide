@@ -36,4 +36,5 @@ tempfile = "3"
 [workspace]
 members = [
     ".",
+    "stress-tests",
 ]
