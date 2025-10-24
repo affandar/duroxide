@@ -7,12 +7,8 @@ Welcome to the Duroxide documentation! This guide will help you understand and u
 ### Getting Started
 - **[Quick Start Guide](../QUICK_START.md)** - Get up and running in 5 minutes
 - **[Examples](../examples/)** - Complete, runnable examples with explanations
-- **[Core Concepts](concepts.md)** - Understand the fundamental concepts
+- **[Orchestration Guide](ORCHESTRATION-GUIDE.md)** - Complete guide to writing orchestrations
 - **[Troubleshooting](troubleshooting.md)** - Common issues and solutions
-
-### User Guide
-- **[Common Patterns](patterns.md)** - Orchestration patterns and best practices
-- **[API Reference](api.md)** - Complete API documentation
 - **[External Events](external-events.md)** - Working with external events
 - **[ContinueAsNew](continue-as-new.md)** - Long-running orchestration patterns
 - **[Sub-Orchestrations](sub-orchestrations.md)** - Composing orchestrations
@@ -25,7 +21,6 @@ Welcome to the Duroxide documentation! This guide will help you understand and u
 
 ### Advanced Topics
 - **[Reliability & Queues](reliability-queue-and-history.md)** - Reliability guarantees
-- **[Active Instances](active-instances-and-gating.md)** - Instance lifecycle management
 
 ### Development
 - **[Persistence Analysis](persistence-failure-analysis.md)** - Failure mode analysis
@@ -37,11 +32,11 @@ Welcome to the Duroxide documentation! This guide will help you understand and u
 ### For New Users:
 1. Start with the **[Quick Start Guide](../QUICK_START.md)**
 2. Run the **[Hello World Example](../examples/hello_world.rs)**
-3. Read **[Core Concepts](concepts.md)** to understand how Duroxide works
-4. Explore **[Common Patterns](patterns.md)** for your use case
+3. Read the **[Orchestration Guide](ORCHESTRATION-GUIDE.md)** to understand how Duroxide works
+4. Explore **[External Events](external-events.md)** and **[ContinueAsNew](continue-as-new.md)** for advanced patterns
 
 ### For Developers:
-1. Review the **[API Reference](api.md)**
+1. Review the **[Orchestration Guide](ORCHESTRATION-GUIDE.md)** for complete API reference
 2. Study the **[Architecture](architecture.md)**
 3. Understand the **[Execution Model](polling-and-execution-model.md)**
 4. Check **[Design Invariants](design-invariants.md)** before contributing
@@ -49,8 +44,7 @@ Welcome to the Duroxide documentation! This guide will help you understand and u
 ### For Production Use:
 1. Understand **[Reliability Guarantees](reliability-queue-and-history.md)**
 2. Learn about **[ContinueAsNew](continue-as-new.md)** for long-running workflows
-3. Review **[Active Instance Management](active-instances-and-gating.md)**
-4. Plan for **[External Events](external-events.md)** integration
+3. Plan for **[External Events](external-events.md)** integration
 
 ## 📖 Key Concepts Summary
 

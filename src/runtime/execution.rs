@@ -1,56 +1,44 @@
 use std::sync::Arc;
 use tracing::debug;
 
-use super::orchestration_turn::{OrchestrationTurn, TurnResult};
+use super::replay_engine::{ReplayEngine, TurnResult};
 use crate::{
     Event,
     providers::WorkItem,
-    runtime::{OrchestrationHandler, Runtime, router::OrchestratorMsg},
+    runtime::{OrchestrationHandler, Runtime},
 };
 
 impl Runtime {
-    /// Execute an orchestration instance to completion
+    /// Execute a single orchestration turn atomically
     ///
-    /// Architecture:
-    /// - Outer loop: Dequeue orchestrator messages, ensure instance is active
-    /// - Inner loop: Process batches of completions in deterministic turns
-    /// - Four-stage turn lifecycle: prep -> execute -> persist -> ack
-    /// - Deterministic completion processing with robust error handling
-    // Non-atomic run_single_execution removed; atomic path only
+    /// This method processes completion messages and executes one orchestration turn,
+    /// collecting all resulting work items and history changes atomically.
+    /// It handles version pinning, handler resolution, and deterministic completion processing.
 
-    /// Set up version pinning from history
-    async fn setup_version_pinning(&self, instance: &str, orchestration_name: &str, history: &[Event]) {
-        if let Some(version_str) = history.iter().rev().find_map(|e| match e {
-            Event::OrchestrationStarted { name: n, version, .. } if n == orchestration_name => Some(version.clone()),
-            _ => None,
-        }) {
-            if version_str != "0.0.0" {
-                if let Ok(v) = semver::Version::parse(&version_str) {
-                    self.pinned_versions.lock().await.insert(instance.to_string(), v);
-                }
-            }
-        }
-    }
 
-    /// Resolve the orchestration handler, preferring pinned version
+    /// Resolve the orchestration handler using version from history
     async fn resolve_orchestration_handler(
         &self,
-        instance: &str,
         orchestration_name: &str,
+        history_mgr: &crate::runtime::state_helpers::HistoryManager,
     ) -> Result<Arc<dyn OrchestrationHandler>, String> {
-        let pinned_version = self.pinned_versions.lock().await.get(instance).cloned();
+        // Get version from history (includes delta for new instances)
+        let version_from_history = history_mgr.version();
 
-        let handler_opt = if let Some(v) = pinned_version.clone() {
-            self.orchestration_registry.resolve_exact(orchestration_name, &v)
+        let handler_opt = if let Some(ref version_str) = version_from_history {
+            // Use exact version from history
+            if let Ok(v) = semver::Version::parse(&version_str) {
+                self.orchestration_registry.resolve_handler_exact(orchestration_name, &v)
+            } else {
+                None
+            }
         } else {
-            self.orchestration_registry
-                .resolve_for_start(orchestration_name)
-                .await
-                .map(|(_v, h)| h)
+            // No version in history - shouldn't happen at this point
+            None
         };
 
         handler_opt.ok_or_else(|| {
-            if let Some(v) = pinned_version {
+            if let Some(v) = version_from_history {
                 format!("canceled: missing version {}@{}", orchestration_name, v)
             } else {
                 format!("unregistered:{}", orchestration_name)
@@ -58,74 +46,13 @@ impl Runtime {
         })
     }
 
-    /// Handle unregistered orchestration by failing gracefully
-    // handle_unregistered_orchestration removed with non-atomic path
-    /// Extract orchestration input and parent linkage from history
-    fn extract_orchestration_context(
-        &self,
-        orchestration_name: &str,
-        history: &[Event],
-    ) -> (String, Option<(String, u64)>) {
-        let mut input = String::new();
-        let mut parent_link = None;
-
-        for e in history.iter().rev() {
-            if let Event::OrchestrationStarted {
-                name: n,
-                input: inp,
-                parent_instance,
-                parent_id,
-                ..
-            } = e
-            {
-                if n == orchestration_name {
-                    input = inp.clone();
-                    if let (Some(pinst), Some(pid)) = (parent_instance.clone(), *parent_id) {
-                        parent_link = Some((pinst, pid));
-                    }
-                    break;
-                }
-            }
-        }
-
-        (input, parent_link)
-    }
-
-    /// Handle orchestration completion (success or failure)
-    // handle_orchestration_completion removed with non-atomic path
-
-    /// Handle continue-as-new scenario - persist events and enqueue new execution
-    // handle_continue_as_new removed with non-atomic path
-
-    /// Handle persistence errors
-    // handle_persistence_error removed with non-atomic path
-
-    /// Propagate cancellation to child sub-orchestrations
-    // propagate_cancellation_to_children removed with non-atomic path
-
-    /// Extract current execution history (from most recent OrchestrationStarted)
-    /// This filters out events from previous executions in continue-as-new scenarios
-    fn extract_current_execution_history(full_history: &[Event]) -> Vec<Event> {
-        let current_execution_start = full_history
-            .iter()
-            .enumerate()
-            .rev()
-            .find_map(|(i, e)| match e {
-                Event::OrchestrationStarted { .. } => Some(i),
-                _ => None,
-            })
-            .unwrap_or(0);
-
-        full_history[current_execution_start..].to_vec()
-    }
-    /// Execute a single orchestration execution collecting all changes atomically
+    /// Execute a single orchestration turn atomically
     pub async fn run_single_execution_atomic(
         self: Arc<Self>,
         instance: &str,
-        orchestration_name: &str,
-        initial_history: Vec<Event>,
+        history_mgr: &mut crate::runtime::state_helpers::HistoryManager,
+        workitem_reader: &crate::runtime::state_helpers::WorkItemReader,
         execution_id: u64,
-        completion_messages: Vec<OrchestratorMsg>,
     ) -> (
         Vec<Event>,
         Vec<WorkItem>,
@@ -133,24 +60,13 @@ impl Runtime {
         Vec<WorkItem>,
         Result<String, String>,
     ) {
+        let orchestration_name = &workitem_reader.orchestration_name;
         debug!(instance, orchestration_name, "🚀 Starting atomic single execution");
 
         // Track all changes
-        let mut history_delta = Vec::new();
         let mut worker_items = Vec::new();
         let mut timer_items = Vec::new();
         let mut orchestrator_items = Vec::new();
-
-        // Helper: compute the next event id based on existing and delta history
-        let calc_next_event_id = |existing: &Vec<Event>, delta: &Vec<Event>| -> u64 {
-            existing
-                .iter()
-                .chain(delta.iter())
-                .map(|e| e.event_id())
-                .max()
-                .unwrap_or(0)
-                + 1
-        };
 
         // Helper: only honor detached starts at terminal; ignore all other pending actions
         let mut enqueue_detached_from_pending = |pending: &[_]| {
@@ -170,75 +86,63 @@ impl Runtime {
                         version: version.clone(),
                         parent_instance: None,
                         parent_id: None,
+                        execution_id: crate::INITIAL_EXECUTION_ID,
                     });
                 }
             }
         };
 
-        // Use provided history directly
-        let history = initial_history.clone();
+        // History must have OrchestrationStarted at this point (either from existing history or newly created in delta)
+        debug_assert!(!history_mgr.is_empty(), "history_mgr should never be empty here");
 
-        // Pin version from history if available
-        self.setup_version_pinning(instance, orchestration_name, &history).await;
-
-        // Resolve orchestration handler
-        let handler = match self.resolve_orchestration_handler(instance, orchestration_name).await {
+        // Resolve orchestration handler using version from history
+        let handler = match self.resolve_orchestration_handler(orchestration_name, history_mgr).await {
             Ok(h) => h,
             Err(error) => {
                 // Handle unregistered orchestration
-                let max_existing = history.iter().map(|e| e.event_id()).max().unwrap_or(0);
-                let next_id = max_existing + 1;
-                let terminal_event = Event::OrchestrationFailed {
-                    event_id: next_id,
-                    error: error.clone(),
-                };
-                history_delta.push(terminal_event);
-                return (history_delta, worker_items, timer_items, orchestrator_items, Err(error));
+                history_mgr.append_failed(error.clone());
+                return (history_mgr.delta().to_vec(), worker_items, timer_items, orchestrator_items, Err(error));
             }
         };
 
-        // Extract input and parent linkage for the orchestration
-        let (input, parent_link) = self.extract_orchestration_context(orchestration_name, &history);
+        // Extract input and parent linkage from history manager
+        // (works for both existing history and newly appended OrchestrationStarted in delta)
+        let (input, parent_link) = history_mgr.extract_context();
+        
         if let Some((ref pinst, pid)) = parent_link {
             tracing::debug!(target = "duroxide::runtime::execution", instance=%instance, parent_instance=%pinst, parent_id=%pid, "Detected parent link for orchestration");
         } else {
             tracing::debug!(target = "duroxide::runtime::execution", instance=%instance, "No parent link for orchestration");
         }
 
-        // Process completion messages in a single turn
-        let messages: Vec<(OrchestratorMsg, String)> = completion_messages
-            .into_iter()
-            .filter_map(|msg| extract_ack_token(&msg).map(|token| (msg, token)))
-            .collect();
-
+        // Execute orchestration turn
+        let messages = &workitem_reader.completion_messages;
+        
         debug!(
             instance = %instance,
             message_count = messages.len(),
             "starting orchestration turn atomically"
         );
-
-        // Execute orchestration turn
-        let current_execution_history = Self::extract_current_execution_history(&history);
-        let mut turn = OrchestrationTurn::new(
+        // Use full history (always contains only current execution)
+        let current_execution_history = history_mgr.full_history();
+        let mut turn = ReplayEngine::new(
             instance.to_string(),
-            0, // turn_index
             execution_id,
             current_execution_history,
         );
 
         // Prep completions from incoming messages
         if !messages.is_empty() {
-            turn.prep_completions(messages.clone());
+            turn.prep_completions(messages.to_vec());
         }
 
         // Execute the orchestration logic
         let turn_result = turn.execute_orchestration(handler.clone(), input.clone());
 
         // Collect history delta from turn
-        history_delta.extend(turn.history_delta().to_vec());
+        history_mgr.extend(turn.history_delta().to_vec());
 
-        // Check for nondeterminism is now handled by the turn execution itself
-        // The turn will return TurnResult::Failed with a specific error message
+        // Nondeterminism detection is handled by ReplayEngine::execute_orchestration
 
         // Handle turn result and collect work items
         let result = match turn_result {
@@ -289,6 +193,7 @@ impl Runtime {
                                 version: version.clone(),
                                 parent_instance: Some(instance.to_string()),
                                 parent_id: Some(*scheduling_event_id),
+                                execution_id: crate::INITIAL_EXECUTION_ID,
                             });
                         }
                         crate::Action::StartOrchestrationDetached {
@@ -305,6 +210,7 @@ impl Runtime {
                                 version: version.clone(),
                                 parent_instance: None,
                                 parent_id: None,
+                                execution_id: crate::INITIAL_EXECUTION_ID,
                             });
                         }
                         _ => {} // Other actions don't generate work items
@@ -313,19 +219,16 @@ impl Runtime {
 
                 Ok(String::new())
             }
-            // TODO : CR : the code for processing completed vs failed is almost identical, except for the fact that event type to be written, note that
-            //  for failed, we also want to take the detached orchestration action.
             TurnResult::Completed(output) => {
-                // At terminal, only detached orchestration actions should be honored; other pending actions are ignored.
+                // Honor detached orchestration starts at terminal state
                 enqueue_detached_from_pending(turn.pending_actions());
 
                 // Add completion event with next event_id
-                let next_id = calc_next_event_id(&history, &history_delta);
-                let terminal_event = Event::OrchestrationCompleted {
+                let next_id = history_mgr.next_event_id();
+                history_mgr.append(Event::OrchestrationCompleted {
                     event_id: next_id,
                     output: output.clone(),
-                };
-                history_delta.push(terminal_event);
+                });
 
                 // Notify parent if this is a sub-orchestration
                 if let Some((parent_instance, parent_id)) = parent_link {
@@ -341,16 +244,11 @@ impl Runtime {
                 Ok(output)
             }
             TurnResult::Failed(error) => {
-                // At terminal, only detached orchestration actions should be honored; other pending actions are ignored.
+                // Honor detached orchestration starts at terminal state
                 enqueue_detached_from_pending(turn.pending_actions());
 
                 // Add failure event
-                let next_id = calc_next_event_id(&history, &history_delta);
-                let terminal_event = Event::OrchestrationFailed {
-                    event_id: next_id,
-                    error: error.clone(),
-                };
-                history_delta.push(terminal_event);
+                history_mgr.append_failed(error.clone());
 
                 // Notify parent if this is a sub-orchestration
                 if let Some((parent_instance, parent_id)) = parent_link {
@@ -367,12 +265,11 @@ impl Runtime {
             }
             TurnResult::ContinueAsNew { input, version } => {
                 // Add ContinuedAsNew terminal event to history
-                let next_id = calc_next_event_id(&history, &history_delta);
-                let terminal_event = Event::OrchestrationContinuedAsNew {
+                let next_id = history_mgr.next_event_id();
+                history_mgr.append(Event::OrchestrationContinuedAsNew {
                     event_id: next_id,
                     input: input.clone(),
-                };
-                history_delta.push(terminal_event);
+                });
 
                 // Enqueue continue as new work item
                 orchestrator_items.push(WorkItem::ContinueAsNew {
@@ -385,21 +282,11 @@ impl Runtime {
                 Ok("continued as new".to_string())
             }
             TurnResult::Cancelled(reason) => {
-                // Cancellation is currently recorded as a failure with a specific message.
                 let error = format!("canceled: {}", reason);
-                let next_id = calc_next_event_id(&history, &history_delta);
-                let terminal_event = Event::OrchestrationFailed {
-                    event_id: next_id,
-                    error: error.clone(),
-                };
-                history_delta.push(terminal_event);
+                history_mgr.append_failed(error.clone());
 
                 // Propagate cancellation to children
-                let full_history = {
-                    let mut h = history.clone();
-                    h.extend(history_delta.iter().cloned());
-                    h
-                };
+                let full_history = history_mgr.full_history();
                 let cancel_work_items = self.get_child_cancellation_work_items(instance, &full_history).await;
                 orchestrator_items.extend(cancel_work_items);
 
@@ -420,12 +307,12 @@ impl Runtime {
         debug!(
             instance,
             "run_single_execution_atomic complete: history_delta={}, worker={}, timer={}, orch={}",
-            history_delta.len(),
+            history_mgr.delta().len(),
             worker_items.len(),
             timer_items.len(),
             orchestrator_items.len()
         );
-        (history_delta, worker_items, timer_items, orchestrator_items, result)
+        (history_mgr.delta().to_vec(), worker_items, timer_items, orchestrator_items, result)
     }
 
     /// Get work items to cancel child sub-orchestrations
@@ -489,17 +376,4 @@ impl Runtime {
     }
 }
 
-/// RAII guard to ensure active instance cleanup
 
-/// Extract ack token from an orchestrator message
-fn extract_ack_token(msg: &OrchestratorMsg) -> Option<String> {
-    match msg {
-        OrchestratorMsg::ActivityCompleted { ack_token, .. } => ack_token.clone(),
-        OrchestratorMsg::ActivityFailed { ack_token, .. } => ack_token.clone(),
-        OrchestratorMsg::TimerFired { ack_token, .. } => ack_token.clone(),
-        OrchestratorMsg::ExternalByName { ack_token, .. } => ack_token.clone(),
-        OrchestratorMsg::SubOrchCompleted { ack_token, .. } => ack_token.clone(),
-        OrchestratorMsg::SubOrchFailed { ack_token, .. } => ack_token.clone(),
-        OrchestratorMsg::CancelRequested { ack_token, .. } => ack_token.clone(),
-    }
-}

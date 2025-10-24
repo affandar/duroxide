@@ -47,6 +47,7 @@ async fn test_sqlite_provider_basic() {
         input: r#"{"test": true}"#.to_string(),
         parent_instance: None,
         parent_id: None,
+        execution_id: duroxide::INITIAL_EXECUTION_ID,
     };
 
     store
@@ -116,6 +117,7 @@ async fn test_execution_status_completed() {
                 input: "{}".to_string(),
                 parent_instance: None,
                 parent_id: None,
+                execution_id: duroxide::INITIAL_EXECUTION_ID,
             },
             None,
         )
@@ -173,6 +175,7 @@ async fn test_execution_status_failed() {
                 input: "{}".to_string(),
                 parent_instance: None,
                 parent_id: None,
+                execution_id: duroxide::INITIAL_EXECUTION_ID,
             },
             None,
         )
@@ -329,6 +332,7 @@ async fn test_sqlite_file_concurrent_access() {
                 input: format!("{{\"id\": {}}}", i),
                 parent_instance: None,
                 parent_id: None,
+                execution_id: duroxide::INITIAL_EXECUTION_ID,
             };
 
             store_clone
@@ -483,6 +487,7 @@ async fn test_sqlite_provider_transactional() {
         input: "{}".to_string(),
         parent_instance: None,
         parent_id: None,
+        execution_id: duroxide::INITIAL_EXECUTION_ID,
     };
 
     store
@@ -589,6 +594,7 @@ async fn test_sqlite_provider_timer_queue() {
                 input: "{}".to_string(),
                 parent_instance: None,
                 parent_id: None,
+                execution_id: duroxide::INITIAL_EXECUTION_ID,
             },
             None,
         )
@@ -648,6 +654,7 @@ async fn test_execution_status_running() {
         input: "test".to_string(),
         parent_instance: None,
         parent_id: None,
+        execution_id: duroxide::INITIAL_EXECUTION_ID,
     };
 
     store.enqueue_orchestrator_work(start_work, None).await.unwrap();
@@ -706,6 +713,7 @@ async fn test_execution_output_captured_on_continue_as_new() {
         input: "test".to_string(),
         parent_instance: None,
         parent_id: None,
+        execution_id: duroxide::INITIAL_EXECUTION_ID,
     };
 
     store.enqueue_orchestrator_work(start_work, None).await.unwrap();

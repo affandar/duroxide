@@ -318,7 +318,6 @@ pub trait ReplayEngine {
     fn replay(
         &self,
         history: Vec<Event>,
-        turn_index: u64,
         handler: Arc<dyn OrchestrationHandler>,
         input: String,
     ) -> (
@@ -501,14 +500,12 @@ Each turn executes via **single poll** of the orchestration future:
 ```rust
 pub fn run_turn_with_claims<O, F>(
     history: Vec<Event>,
-    turn_index: u64,
     orchestrator: impl Fn(OrchestrationContext) -> F,
 ) -> (Vec<Event>, Vec<Action>, Vec<(LogLevel, String)>, Option<O>, ClaimedIdsSnapshot)
 where
     F: Future<Output = O>,
 {
-    let ctx = OrchestrationContext::new(history);
-    ctx.set_turn_index(turn_index);
+    let ctx = OrchestrationContext::new(history, /* execution_id */ 1);
     
     let mut fut = orchestrator(ctx.clone());
     match poll_once(&mut fut) {

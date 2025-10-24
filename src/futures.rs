@@ -15,8 +15,6 @@ pub enum DurableOutput {
 
 pub struct DurableFuture(pub(crate) Kind);
 
-// CompletionMap-based polling removed - replaced with unified cursor approach
-
 pub(crate) enum Kind {
     Activity {
         name: String,

@@ -5,6 +5,9 @@ use duroxide::runtime::{self};
 use duroxide::{Action, Event, OrchestrationContext, OrchestrationRegistry, run_turn};
 use std::sync::Arc;
 
+mod common;
+use common::test_create_execution;
+
 // Helper to create runtime with registries for tests
 #[allow(dead_code)]
 async fn create_test_runtime(activity_registry: ActivityRegistry) -> Arc<runtime::Runtime> {
@@ -282,8 +285,8 @@ async fn providers_fs_multi_execution_persistence_and_latest_read() {
     let _tmp = tempfile::tempdir().unwrap();
     let fs = SqliteProvider::new_in_memory().await.unwrap();
 
-    // Create execution #1 and append CAN terminal
-    fs.create_new_execution("pfs", "O", "0.0.0", "0", None, None)
+    // Create execution #1 using test helper
+    test_create_execution(&fs, "pfs", "O", "0.0.0", "0", None, None)
         .await
         .unwrap();
     fs.append_with_execution(
@@ -298,9 +301,8 @@ async fn providers_fs_multi_execution_persistence_and_latest_read() {
     .unwrap();
     let e1_before = fs.read_with_execution("pfs", 1).await;
 
-    // Create execution #2 via reset_for_continue_as_new; complete it
-    let _eid2 = fs
-        .create_new_execution("pfs", "O", "0.0.0", "1", None, None)
+    // Create execution #2 using test helper
+    let _eid2 = test_create_execution(&fs, "pfs", "O", "0.0.0", "1", None, None)
         .await
         .unwrap();
     fs.append_with_execution(
@@ -333,7 +335,7 @@ async fn providers_fs_multi_execution_persistence_and_latest_read() {
 async fn providers_inmem_multi_execution_persistence_and_latest_read() {
     let mem = SqliteProvider::new_in_memory().await.unwrap();
 
-    mem.create_new_execution("pmem", "O", "0.0.0", "0", None, None)
+    test_create_execution(&mem, "pmem", "O", "0.0.0", "0", None, None)
         .await
         .unwrap();
     mem.append_with_execution(
@@ -348,8 +350,7 @@ async fn providers_inmem_multi_execution_persistence_and_latest_read() {
     .unwrap();
     let e1_before = mem.read_with_execution("pmem", 1).await;
 
-    let _eid2 = mem
-        .create_new_execution("pmem", "O", "0.0.0", "1", None, None)
+    let _eid2 = test_create_execution(&mem, "pmem", "O", "0.0.0", "1", None, None)
         .await
         .unwrap();
     mem.append_with_execution(

@@ -147,6 +147,7 @@ impl Client {
             version: None,
             parent_instance: None,
             parent_id: None,
+            execution_id: crate::INITIAL_EXECUTION_ID,
         };
         self.store.enqueue_orchestrator_work(item, None).await
     }
@@ -166,6 +167,7 @@ impl Client {
             version: Some(version.into()),
             parent_instance: None,
             parent_id: None,
+            execution_id: crate::INITIAL_EXECUTION_ID,
         };
         self.store.enqueue_orchestrator_work(item, None).await
     }

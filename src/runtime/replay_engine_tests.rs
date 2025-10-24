@@ -1,8 +1,7 @@
 #[cfg(test)]
 mod tests {
-    // CompletionMap removed
-    use crate::runtime::orchestration_turn::*;
-    use crate::runtime::router::OrchestratorMsg;
+    use crate::providers::WorkItem;
+    use crate::runtime::replay_engine::*;
     use crate::{Event, OrchestrationContext, OrchestrationHandler};
     use async_trait::async_trait;
     use std::sync::Arc;
@@ -20,7 +19,7 @@ mod tests {
     }
 
     #[test]
-    fn test_turn_creation() {
+    fn test_engine_creation() {
         let baseline_history = vec![Event::OrchestrationStarted {
             event_id: 0,
             name: "test-orch".to_string(),
@@ -30,20 +29,18 @@ mod tests {
             parent_id: None,
         }];
 
-        let turn = OrchestrationTurn::new(
+        let engine = ReplayEngine::new(
             "test-instance".to_string(),
-            1,
             1, // execution_id
             baseline_history.clone(),
         );
 
-        assert_eq!(turn.instance, "test-instance");
-        assert_eq!(turn.turn_index, 1);
-        assert_eq!(turn.baseline_history, baseline_history);
-        // Ack tokens are no longer collected in the turn
-        assert!(turn.history_delta.is_empty());
-        assert!(turn.pending_actions.is_empty());
-        assert!(!turn.made_progress());
+        assert_eq!(engine.instance, "test-instance");
+        assert_eq!(engine.baseline_history, baseline_history);
+        // Ack tokens are no longer collected in the engine
+        assert!(engine.history_delta.is_empty());
+        assert!(engine.pending_actions.is_empty());
+        assert!(!engine.made_progress());
     }
 
     #[test]
@@ -63,36 +60,28 @@ mod tests {
                 execution_id: 1,
             },
         ];
-        let mut turn = OrchestrationTurn::new("test-instance".to_string(), 1, 1, baseline);
+        let mut engine = ReplayEngine::new("test-instance".to_string(), 1, baseline);
 
         let messages = vec![
-            (
-                OrchestratorMsg::ActivityCompleted {
-                    instance: "test-instance".to_string(),
-                    execution_id: 1,
-                    id: 1,
-                    result: "result1".to_string(),
-                    ack_token: Some("token1".to_string()),
-                },
-                "token1".to_string(),
-            ),
-            (
-                OrchestratorMsg::ActivityCompleted {
-                    instance: "test-instance".to_string(),
-                    execution_id: 1,
-                    id: 2,
-                    result: "result2".to_string(),
-                    ack_token: Some("token2".to_string()),
-                },
-                "token2".to_string(),
-            ),
+            WorkItem::ActivityCompleted {
+                instance: "test-instance".to_string(),
+                execution_id: 1,
+                id: 1,
+                result: "result1".to_string(),
+            },
+            WorkItem::ActivityCompleted {
+                instance: "test-instance".to_string(),
+                execution_id: 1,
+                id: 2,
+                result: "result2".to_string(),
+            },
         ];
 
-        let _tokens = turn.prep_completions(messages);
+        engine.prep_completions(messages);
 
         // Should have events in history_delta
-        assert_eq!(turn.history_delta.len(), 2);
-        assert!(turn.made_progress());
+        assert_eq!(engine.history_delta.len(), 2);
+        assert!(engine.made_progress());
     }
 
     #[test]
@@ -112,58 +101,47 @@ mod tests {
             },
         ];
 
-        let mut turn = OrchestrationTurn::new(
+        let mut engine = ReplayEngine::new(
             "test-instance".to_string(),
-            1,
             1, // execution_id
             baseline_history,
         );
 
-        let messages = vec![(
-            OrchestratorMsg::ExternalByName {
+        let messages = vec![
+            WorkItem::ExternalRaised {
                 instance: "test-instance".to_string(),
                 name: "test-event".to_string(),
                 data: "event-data".to_string(),
-                ack_token: Some("external-token".to_string()),
             },
-            "external-token".to_string(),
-        )];
+        ];
 
-        let _tokens = turn.prep_completions(messages);
+        engine.prep_completions(messages);
 
         // Should have external event in history_delta
-        assert!(!turn.history_delta.is_empty());
-        assert!(turn.made_progress());
+        assert!(!engine.history_delta.is_empty());
+        assert!(engine.made_progress());
     }
 
     #[test]
     fn test_prep_completions_duplicate_handling() {
-        let mut turn = OrchestrationTurn::new("test-instance".to_string(), 1, 1, vec![]);
+        let mut engine = ReplayEngine::new("test-instance".to_string(), 1, vec![]);
 
         let messages = vec![
-            (
-                OrchestratorMsg::ActivityCompleted {
-                    instance: "test-instance".to_string(),
-                    execution_id: 1,
-                    id: 1,
-                    result: "first-result".to_string(),
-                    ack_token: Some("token1".to_string()),
-                },
-                "token1".to_string(),
-            ),
-            (
-                OrchestratorMsg::ActivityCompleted {
-                    instance: "test-instance".to_string(),
-                    execution_id: 1,
-                    id: 1, // Same ID - should be duplicate
-                    result: "second-result".to_string(),
-                    ack_token: Some("token2".to_string()),
-                },
-                "token2".to_string(),
-            ),
+            WorkItem::ActivityCompleted {
+                instance: "test-instance".to_string(),
+                execution_id: 1,
+                id: 1,
+                result: "first-result".to_string(),
+            },
+            WorkItem::ActivityCompleted {
+                instance: "test-instance".to_string(),
+                execution_id: 1,
+                id: 1, // Same ID - should be duplicate
+                result: "second-result".to_string(),
+            },
         ];
 
-        turn.baseline_history = vec![
+        engine.baseline_history = vec![
             Event::ActivityScheduled {
                 event_id: 1,
                 name: "test".to_string(),
@@ -177,10 +155,10 @@ mod tests {
             },
         ];
 
-        let _tokens = turn.prep_completions(messages);
+        engine.prep_completions(messages);
 
         // Should have zero events (both duplicates were filtered)
-        assert_eq!(turn.history_delta.len(), 0);
+        assert_eq!(engine.history_delta.len(), 0);
     }
 
     #[test]
@@ -194,9 +172,8 @@ mod tests {
             parent_id: None,
         }];
 
-        let mut turn = OrchestrationTurn::new(
+        let mut engine = ReplayEngine::new(
             "test-instance".to_string(),
-            1,
             1, // execution_id
             baseline_history,
         );
@@ -205,7 +182,7 @@ mod tests {
             result: Ok("orchestration-result".to_string()),
         });
 
-        let result = turn.execute_orchestration(handler, "test-input".to_string());
+        let result = engine.execute_orchestration(handler, "test-input".to_string());
 
         match result {
             TurnResult::Completed(output) => {
@@ -226,9 +203,8 @@ mod tests {
             parent_id: None,
         }];
 
-        let mut turn = OrchestrationTurn::new(
+        let mut engine = ReplayEngine::new(
             "test-instance".to_string(),
-            1,
             1, // execution_id
             baseline_history,
         );
@@ -237,7 +213,7 @@ mod tests {
             result: Err("orchestration-error".to_string()),
         });
 
-        let result = turn.execute_orchestration(handler, "test-input".to_string());
+        let result = engine.execute_orchestration(handler, "test-input".to_string());
 
         match result {
             TurnResult::Failed(error) => {
@@ -258,38 +234,35 @@ mod tests {
             parent_id: None,
         }];
 
-        let mut turn = OrchestrationTurn::new(
+        let mut engine = ReplayEngine::new(
             "test-instance".to_string(),
-            1,
             1, // execution_id
             baseline_history,
         );
 
         // Add completion that won't be consumed by the handler but has a matching schedule
-        let messages = vec![(
-            OrchestratorMsg::ActivityCompleted {
+        let messages = vec![
+            WorkItem::ActivityCompleted {
                 instance: "test-instance".to_string(),
                 execution_id: 1,
                 id: 999, // Scheduled below, not consumed by the mock handler
-                result: "unused-result".to_string(),
-                ack_token: Some("unused-token".to_string()),
+                result: "test-result".to_string(),
             },
-            "unused-token".to_string(),
-        )];
+        ];
         // Provide matching schedule for id=999
-        turn.baseline_history.push(Event::ActivityScheduled {
+        engine.baseline_history.push(Event::ActivityScheduled {
             event_id: 999,
-            name: "unused".to_string(),
-            input: "unused".to_string(),
+            name: "test-activity".to_string(),
+            input: "test-input".to_string(),
             execution_id: 1,
         });
-        turn.prep_completions(messages);
+        engine.prep_completions(messages);
 
         let handler = Arc::new(MockHandler {
             result: Ok("orchestration-result".to_string()),
         });
 
-        let result = turn.execute_orchestration(handler, "test-input".to_string());
+        let result = engine.execute_orchestration(handler, "test-input".to_string());
 
         // With the mock handler, the orchestration completes successfully
         // The cursor model handles non-determinism naturally
@@ -312,15 +285,14 @@ mod tests {
             parent_id: None,
         }];
 
-        let mut turn = OrchestrationTurn::new(
+        let mut engine = ReplayEngine::new(
             "test-instance".to_string(),
-            1,
             1, // execution_id
             baseline_history.clone(),
         );
 
         // Add some delta events (simulating orchestration execution)
-        turn.history_delta = vec![
+        engine.history_delta = vec![
             Event::ActivityScheduled {
                 event_id: 1,
                 name: "test-activity".to_string(),
@@ -334,7 +306,7 @@ mod tests {
             },
         ];
 
-        let final_history = turn.final_history();
+        let final_history = engine.final_history();
 
         assert_eq!(final_history.len(), 3); // baseline + 2 delta events
         assert_eq!(final_history[0], baseline_history[0]);
@@ -344,9 +316,8 @@ mod tests {
 
     #[test]
     fn test_made_progress() {
-        let mut turn = OrchestrationTurn::new(
+        let mut engine = ReplayEngine::new(
             "test-instance".to_string(),
-            1,
             1,
             vec![Event::ActivityScheduled {
                 event_id: 1,
@@ -357,34 +328,34 @@ mod tests {
         );
 
         // Initially no progress
-        assert!(!turn.made_progress());
+        assert!(!engine.made_progress());
 
         // Add completion - should show progress
-        let messages = vec![(
-            OrchestratorMsg::ActivityCompleted {
+        let messages = vec![
+            WorkItem::ActivityCompleted {
                 instance: "test-instance".to_string(),
                 execution_id: 1,
                 id: 1,
                 result: "result".to_string(),
-                ack_token: Some("token".to_string()),
             },
-            "token".to_string(),
-        )];
+        ];
 
-        let _tokens = turn.prep_completions(messages);
-        assert!(turn.made_progress());
+        engine.prep_completions(messages);
+        assert!(engine.made_progress());
 
         // Add history delta - should still show progress
-        turn.history_delta = vec![Event::ActivityScheduled {
+        engine.history_delta = vec![Event::ActivityScheduled {
             event_id: 1,
             name: "test".to_string(),
             input: "input".to_string(),
             execution_id: 1,
         }];
-        assert!(turn.made_progress());
+        assert!(engine.made_progress());
 
         // Clear both - no progress
-        turn.history_delta.clear();
-        assert!(!turn.made_progress());
+        engine.history_delta.clear();
+        assert!(!engine.made_progress());
     }
 }
+
+

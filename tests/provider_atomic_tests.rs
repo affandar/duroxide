@@ -3,6 +3,9 @@ use duroxide::providers::sqlite::SqliteProvider;
 use duroxide::providers::{ExecutionMetadata, Provider, WorkItem};
 use std::sync::Arc;
 
+mod common;
+use common::test_create_execution;
+
 /// Verify provider ignores work items after a terminal event by just acking
 #[tokio::test]
 async fn test_ignore_work_after_terminal_event() {
@@ -14,8 +17,8 @@ async fn test_ignore_work_after_terminal_event() {
 
     let instance = "inst-terminal";
 
-    // Seed terminal history: OrchestrationCompleted (assume OrchestrationStarted already exists from create_new_execution)
-    let _ = Provider::create_new_execution(store.as_ref(), instance, "TermOrch", "1.0.0", "seed", None, None)
+    // Seed terminal history: OrchestrationCompleted (using test helper)
+    let _ = test_create_execution(store.as_ref(), instance, "TermOrch", "1.0.0", "seed", None, None)
         .await
         .unwrap();
     // Use event_id=1 (first event)
@@ -89,6 +92,7 @@ async fn test_fetch_orchestration_item_new_instance() {
                 version: Some("1.0.0".to_string()),
                 parent_instance: None,
                 parent_id: None,
+                execution_id: duroxide::INITIAL_EXECUTION_ID,
             },
             None,
         )
@@ -118,8 +122,8 @@ async fn test_fetch_orchestration_item_existing_instance() {
     let db_url = format!("sqlite:{}", db_path.display());
     let store: Arc<dyn Provider> = Arc::new(SqliteProvider::new(&db_url).await.unwrap());
 
-    // Seed instance history using provider APIs: create_new_execution then append_with_execution
-    duroxide::providers::Provider::create_new_execution(
+    // Seed instance history using test helper
+    test_create_execution(
         store.as_ref(),
         "test-instance",
         "TestOrch",
@@ -204,6 +208,7 @@ async fn test_ack_orchestration_item_atomic() {
                 version: Some("1.0.0".to_string()),
                 parent_instance: None,
                 parent_id: None,
+                execution_id: duroxide::INITIAL_EXECUTION_ID,
             },
             None,
         )
@@ -311,6 +316,7 @@ async fn test_abandon_orchestration_item() {
                 version: Some("1.0.0".to_string()),
                 parent_instance: None,
                 parent_id: None,
+                execution_id: duroxide::INITIAL_EXECUTION_ID,
             },
             None,
         )
@@ -351,6 +357,7 @@ async fn test_abandon_orchestration_item_with_delay() {
                 version: Some("1.0.0".to_string()),
                 parent_instance: None,
                 parent_id: None,
+                execution_id: duroxide::INITIAL_EXECUTION_ID,
             },
             None,
         )
@@ -400,6 +407,7 @@ async fn test_in_memory_provider_atomic_operations() {
                 version: Some("1.0.0".to_string()),
                 parent_instance: None,
                 parent_id: None,
+                execution_id: duroxide::INITIAL_EXECUTION_ID,
             },
             None,
         )

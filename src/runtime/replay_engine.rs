@@ -1,8 +1,7 @@
-// CompletionMap removed - using unified cursor model
-use crate::providers::Provider;
 use crate::{
     Event,
-    runtime::{OrchestrationHandler, router::OrchestratorMsg},
+    providers::WorkItem,
+    runtime::OrchestrationHandler,
 };
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
@@ -23,35 +22,32 @@ pub enum TurnResult {
     Cancelled(String),
 }
 
-/// Represents a single orchestration turn with clean lifecycle stages
-pub struct OrchestrationTurn {
+/// Replays history and executes one deterministic orchestration evaluation
+pub struct ReplayEngine {
     /// Instance identifier
-    instance: String,
+    pub(crate) instance: String,
 
-    /// Current turn index
-    turn_index: u64,
     /// Current execution ID
-    execution_id: u64,
-    /// History events generated during this turn
-    history_delta: Vec<Event>,
+    pub(crate) execution_id: u64,
+    /// History events generated during this run
+    pub(crate) history_delta: Vec<Event>,
     /// Actions to dispatch after persistence
-    pending_actions: Vec<crate::Action>,
-    /// Current history at start of turn
-    baseline_history: Vec<Event>,
-    /// Next event_id for new events added this turn
-    next_event_id: u64,
-    /// If set, indicates a nondeterminism error detected during this turn
-    nondet_error: Option<String>,
+    pub(crate) pending_actions: Vec<crate::Action>,
+    /// Current history at start of run
+    pub(crate) baseline_history: Vec<Event>,
+    /// Next event_id for new events added this run
+    pub(crate) next_event_id: u64,
+    /// If set, indicates a nondeterminism error detected during this run
+    pub(crate) nondet_error: Option<String>,
 }
 
-impl OrchestrationTurn {
-    /// Create a new orchestration turn
-    pub fn new(instance: String, turn_index: u64, execution_id: u64, baseline_history: Vec<Event>) -> Self {
+impl ReplayEngine {
+    /// Create a new replay engine for an instance/execution
+    pub fn new(instance: String, execution_id: u64, baseline_history: Vec<Event>) -> Self {
         let next_event_id = baseline_history.last().map(|e| e.event_id() + 1).unwrap_or(1);
 
         Self {
             instance,
-            turn_index,
             execution_id,
             history_delta: Vec::new(),
             pending_actions: Vec::new(),
@@ -62,17 +58,14 @@ impl OrchestrationTurn {
     }
 
     /// Stage 1: Convert completion messages directly to events
-    /// Returns ack tokens for atomic acknowledgment
-    pub fn prep_completions(&mut self, messages: Vec<(OrchestratorMsg, String)>) -> Vec<String> {
-        let mut ack_tokens = Vec::new();
+    pub fn prep_completions(&mut self, messages: Vec<WorkItem>) {
         debug!(
             instance = %self.instance,
-            turn_index = self.turn_index,
             message_count = messages.len(),
             "converting messages to events"
         );
 
-        for (msg, token) in messages {
+        for msg in messages {
             // Check filtering conditions
             if !self.is_completion_for_current_execution(&msg) {
                 if self.has_continue_as_new_in_history() {
@@ -80,45 +73,43 @@ impl OrchestrationTurn {
                 } else {
                     warn!(instance = %self.instance, "completion from different execution");
                 }
-                ack_tokens.push(token);
                 continue;
             }
 
             if self.is_completion_already_in_history(&msg) {
                 warn!(instance = %self.instance, "ignoring duplicate completion");
-                ack_tokens.push(token);
                 continue;
             }
 
-            // Drop duplicates already staged in this turn's history_delta
+            // Drop duplicates already staged in this run's history_delta
             let already_in_delta = match &msg {
-                OrchestratorMsg::ActivityCompleted { id, .. } | OrchestratorMsg::ActivityFailed { id, .. } => {
+                WorkItem::ActivityCompleted { id, .. } | WorkItem::ActivityFailed { id, .. } => {
                     self.history_delta.iter().any(|e| match e {
                         Event::ActivityCompleted { source_event_id, .. } if source_event_id == id => true,
                         Event::ActivityFailed { source_event_id, .. } if source_event_id == id => true,
                         _ => false,
                     })
                 }
-                OrchestratorMsg::TimerFired { id, .. } => self
+                WorkItem::TimerFired { id, .. } => self
                     .history_delta
                     .iter()
                     .any(|e| matches!(e, Event::TimerFired { source_event_id, .. } if source_event_id == id)),
-                OrchestratorMsg::SubOrchCompleted { id, .. } | OrchestratorMsg::SubOrchFailed { id, .. } => {
+                WorkItem::SubOrchCompleted { parent_id, .. } | WorkItem::SubOrchFailed { parent_id, .. } => {
                     self.history_delta.iter().any(|e| match e {
-                        Event::SubOrchestrationCompleted { source_event_id, .. } if source_event_id == id => true,
-                        Event::SubOrchestrationFailed { source_event_id, .. } if source_event_id == id => true,
+                        Event::SubOrchestrationCompleted { source_event_id, .. } if source_event_id == parent_id => true,
+                        Event::SubOrchestrationFailed { source_event_id, .. } if source_event_id == parent_id => true,
                         _ => false,
                     })
                 }
-                OrchestratorMsg::ExternalByName { name, data, .. } => self
+                WorkItem::ExternalRaised { name, data, .. } => self
                     .history_delta
                     .iter()
                     .any(|e| matches!(e, Event::ExternalEvent { name: n, data: d, .. } if n == name && d == data)),
-                OrchestratorMsg::CancelRequested { .. } => false,
+                WorkItem::CancelInstance { .. } => false,
+                _ => false, // Non-completion work items
             };
             if already_in_delta {
-                warn!(instance = %self.instance, "dropping duplicate completion in current turn");
-                ack_tokens.push(token);
+                warn!(instance = %self.instance, "dropping duplicate completion in current run");
                 continue;
             }
 
@@ -138,7 +129,7 @@ impl OrchestrationTurn {
             };
             let mut nd_err: Option<String> = None;
             match &msg {
-                OrchestratorMsg::ActivityCompleted { id, .. } | OrchestratorMsg::ActivityFailed { id, .. } => {
+                WorkItem::ActivityCompleted { id, .. } | WorkItem::ActivityFailed { id, .. } => {
                     match schedule_kind(id) {
                         Some("activity") => {}
                         Some(other) => {
@@ -155,7 +146,7 @@ impl OrchestrationTurn {
                         }
                     }
                 }
-                OrchestratorMsg::TimerFired { id, .. } => match schedule_kind(id) {
+                WorkItem::TimerFired { id, .. } => match schedule_kind(id) {
                     Some("timer") => {}
                     Some(other) => {
                         nd_err = Some(format!(
@@ -165,52 +156,52 @@ impl OrchestrationTurn {
                     }
                     None => nd_err = Some(format!("nondeterministic: no matching schedule for timer id={}", id)),
                 },
-                OrchestratorMsg::SubOrchCompleted { id, .. } | OrchestratorMsg::SubOrchFailed { id, .. } => {
-                    match schedule_kind(id) {
+                WorkItem::SubOrchCompleted { parent_id, .. } | WorkItem::SubOrchFailed { parent_id, .. } => {
+                    match schedule_kind(parent_id) {
                         Some("suborchestration") => {}
                         Some(other) => {
                             nd_err = Some(format!(
                                 "nondeterministic: completion kind mismatch for id={}, expected '{}', got 'suborchestration'",
-                                id, other
+                                parent_id, other
                             ))
                         }
                         None => {
                             nd_err = Some(format!(
                                 "nondeterministic: no matching schedule for sub-orchestration id={}",
-                                id
+                                parent_id
                             ))
                         }
                     }
                 }
-                OrchestratorMsg::ExternalByName { .. } | OrchestratorMsg::CancelRequested { .. } => {}
+                WorkItem::ExternalRaised { .. } | WorkItem::CancelInstance { .. } => {}
+                _ => {} // Non-completion work items
             }
             if let Some(err) = nd_err {
                 warn!(instance = %self.instance, error=%err, "detected nondeterminism in completion batch");
                 self.nondet_error = Some(err);
-                ack_tokens.push(token);
                 continue;
             }
 
             // Convert message to event
             let event_opt = match msg {
-                OrchestratorMsg::ActivityCompleted { id, result, .. } => {
+                WorkItem::ActivityCompleted { id, result, .. } => {
                     Some(Event::ActivityCompleted {
                         event_id: 0, // Will be assigned
                         source_event_id: id,
                         result,
                     })
                 }
-                OrchestratorMsg::ActivityFailed { id, error, .. } => Some(Event::ActivityFailed {
+                WorkItem::ActivityFailed { id, error, .. } => Some(Event::ActivityFailed {
                     event_id: 0,
                     source_event_id: id,
                     error,
                 }),
-                OrchestratorMsg::TimerFired { id, fire_at_ms, .. } => Some(Event::TimerFired {
+                WorkItem::TimerFired { id, fire_at_ms, .. } => Some(Event::TimerFired {
                     event_id: 0,
                     source_event_id: id,
                     fire_at_ms,
                 }),
-                OrchestratorMsg::ExternalByName { name, data, .. } => {
+                WorkItem::ExternalRaised { name, data, .. } => {
                     // Only materialize ExternalEvent if a subscription exists in this execution
                     let subscribed = self
                         .baseline_history
@@ -227,17 +218,17 @@ impl OrchestrationTurn {
                         None
                     }
                 }
-                OrchestratorMsg::SubOrchCompleted { id, result, .. } => Some(Event::SubOrchestrationCompleted {
+                WorkItem::SubOrchCompleted { parent_id, result, .. } => Some(Event::SubOrchestrationCompleted {
                     event_id: 0,
-                    source_event_id: id,
+                    source_event_id: parent_id,
                     result,
                 }),
-                OrchestratorMsg::SubOrchFailed { id, error, .. } => Some(Event::SubOrchestrationFailed {
+                WorkItem::SubOrchFailed { parent_id, error, .. } => Some(Event::SubOrchestrationFailed {
                     event_id: 0,
-                    source_event_id: id,
+                    source_event_id: parent_id,
                     error,
                 }),
-                OrchestratorMsg::CancelRequested { reason, .. } => {
+                WorkItem::CancelInstance { reason, .. } => {
                     let already_terminated = self.baseline_history.iter().any(|e| {
                         matches!(
                             e,
@@ -256,6 +247,7 @@ impl OrchestrationTurn {
                         None
                     }
                 }
+                _ => None, // Non-completion work items
             };
 
             if let Some(mut event) = event_opt {
@@ -264,8 +256,6 @@ impl OrchestrationTurn {
                 self.next_event_id += 1;
                 self.history_delta.push(event);
             }
-
-            ack_tokens.push(token);
         }
 
         debug!(
@@ -273,8 +263,6 @@ impl OrchestrationTurn {
             event_count = self.history_delta.len(),
             "completion events created"
         );
-
-        ack_tokens
     }
 
     /// Get the current execution ID from the baseline history
@@ -283,38 +271,39 @@ impl OrchestrationTurn {
     }
 
     /// Check if a completion message belongs to the current execution
-    fn is_completion_for_current_execution(&self, msg: &OrchestratorMsg) -> bool {
+    fn is_completion_for_current_execution(&self, msg: &WorkItem) -> bool {
         let current_execution_id = self.get_current_execution_id();
         match msg {
-            OrchestratorMsg::ActivityCompleted { execution_id, .. } => *execution_id == current_execution_id,
-            OrchestratorMsg::ActivityFailed { execution_id, .. } => *execution_id == current_execution_id,
-            OrchestratorMsg::TimerFired { execution_id, .. } => *execution_id == current_execution_id,
-            OrchestratorMsg::SubOrchCompleted { execution_id, .. } => *execution_id == current_execution_id,
-            OrchestratorMsg::SubOrchFailed { execution_id, .. } => *execution_id == current_execution_id,
-            OrchestratorMsg::ExternalByName { .. } => true, // External events don't have execution IDs
-            OrchestratorMsg::CancelRequested { .. } => true, // Cancellation applies to current execution
+            WorkItem::ActivityCompleted { execution_id, .. } => *execution_id == current_execution_id,
+            WorkItem::ActivityFailed { execution_id, .. } => *execution_id == current_execution_id,
+            WorkItem::TimerFired { execution_id, .. } => *execution_id == current_execution_id,
+            WorkItem::SubOrchCompleted { parent_execution_id, .. } => *parent_execution_id == current_execution_id,
+            WorkItem::SubOrchFailed { parent_execution_id, .. } => *parent_execution_id == current_execution_id,
+            WorkItem::ExternalRaised { .. } => true, // External events don't have execution IDs
+            WorkItem::CancelInstance { .. } => true, // Cancellation applies to current execution
+            _ => false, // Non-completion work items (shouldn't reach here)
         }
     }
 
     /// Check if a completion is already in the baseline history (duplicate)
-    fn is_completion_already_in_history(&self, msg: &OrchestratorMsg) -> bool {
+    fn is_completion_already_in_history(&self, msg: &WorkItem) -> bool {
         match msg {
-            OrchestratorMsg::ActivityCompleted { id, .. } => self
+            WorkItem::ActivityCompleted { id, .. } => self
                 .baseline_history
                 .iter()
                 .any(|e| matches!(e, Event::ActivityCompleted { source_event_id, .. } if *source_event_id == *id)),
-            OrchestratorMsg::TimerFired { id, .. } => self
+            WorkItem::TimerFired { id, .. } => self
                 .baseline_history
                 .iter()
                 .any(|e| matches!(e, Event::TimerFired { source_event_id, .. } if *source_event_id == *id)),
-            OrchestratorMsg::SubOrchCompleted { id, .. } => self.baseline_history.iter().any(
-                |e| matches!(e, Event::SubOrchestrationCompleted { source_event_id, .. } if *source_event_id == *id),
+            WorkItem::SubOrchCompleted { parent_id, .. } => self.baseline_history.iter().any(
+                |e| matches!(e, Event::SubOrchestrationCompleted { source_event_id, .. } if *source_event_id == *parent_id),
             ),
-            OrchestratorMsg::SubOrchFailed { id, .. } => self
+            WorkItem::SubOrchFailed { parent_id, .. } => self
                 .baseline_history
                 .iter()
-                .any(|e| matches!(e, Event::SubOrchestrationFailed { source_event_id, .. } if *source_event_id == *id)),
-            OrchestratorMsg::ExternalByName { name, data, .. } => self.baseline_history.iter().any(|e| {
+                .any(|e| matches!(e, Event::SubOrchestrationFailed { source_event_id, .. } if *source_event_id == *parent_id)),
+            WorkItem::ExternalRaised { name, data, .. } => self.baseline_history.iter().any(|e| {
                 matches!(e, Event::ExternalEvent { name: hist_name, data: hist_data, .. }
                         if hist_name == name && hist_data == data)
             }),
@@ -334,14 +323,13 @@ impl OrchestrationTurn {
     pub fn execute_orchestration(&mut self, handler: Arc<dyn OrchestrationHandler>, input: String) -> TurnResult {
         debug!(
             instance = %self.instance,
-            turn_index = self.turn_index,
             "executing orchestration turn"
         );
         if let Some(err) = self.nondet_error.clone() {
             return TurnResult::Failed(err);
         }
 
-        // Build working history: baseline + completion events from this turn
+        // Build working history: baseline + completion events from this run
         let working_history_len_before = self.baseline_history.len() + self.history_delta.len();
         let mut working_history = self.baseline_history.clone();
         working_history.extend(self.history_delta.clone());
@@ -349,7 +337,7 @@ impl OrchestrationTurn {
         // Run orchestration with unified cursor model
         let execution_id = self.get_current_execution_id();
         let run_result = catch_unwind(AssertUnwindSafe(|| {
-            crate::run_turn_with_status(working_history, self.turn_index, execution_id, move |ctx| {
+            crate::run_turn_with_status(working_history, execution_id, move |ctx| {
                 let h = handler.clone();
                 let inp = input.clone();
                 async move { h.invoke(ctx, inp).await }
@@ -378,16 +366,6 @@ impl OrchestrationTurn {
         // If futures recorded nondeterminism, fail gracefully
         if updated_history.is_empty() {
             // Nothing to check; proceed
-        }
-        // Inspect nondeterminism flag
-        if let Some(err) = {
-            // Rebuild a context view to peek at the flag by leveraging a small helper
-            // We can infer nondeterminism if no new scheduling matched and futures set the flag
-            // Here, we conservatively check the last delta for no-op and rely on prep_completions filtering.
-            // Since we cannot access ctx here, rely on Turn-level flag (set earlier) or re-run minimal check.
-            None::<String>
-        } {
-            return TurnResult::Failed(err);
         }
 
         // Calculate NEW events added during orchestration execution
@@ -425,7 +403,7 @@ impl OrchestrationTurn {
             }
         }
 
-        // Determine turn result based on output and decisions
+        // Determine result based on output and decisions
         if let Some(output) = output_opt {
             return match output {
                 Ok(result) => TurnResult::Completed(result),
@@ -436,49 +414,9 @@ impl OrchestrationTurn {
         // Cursor model handles non-determinism automatically via strict sequential consumption
         TurnResult::Continue
     }
-
-    // Non-determinism detection removed - cursor model handles this automatically
-    // Any unconsumed completion will cause a panic when the next future polls
 }
 
-impl OrchestrationTurn {
-    /// Stage 3: Persist all state changes atomically
-    /// This stage writes all history deltas and dispatches actions
-    pub async fn persist_changes(
-        &mut self,
-        _history_store: Arc<dyn Provider>,
-        runtime: &Arc<crate::runtime::Runtime>,
-    ) -> Result<(), String> {
-        debug!(
-            instance = %self.instance,
-            turn_index = self.turn_index,
-            delta_count = self.history_delta.len(),
-            action_count = self.pending_actions.len(),
-            "persisting turn changes"
-        );
-
-        // In atomic path, provider append happens during ack_orchestration_item. Nothing to persist here.
-
-        // Apply decisions (dispatch actions) now that history is persisted
-        let full_history = {
-            let mut h = self.baseline_history.clone();
-            h.extend(self.history_delta.clone());
-            h
-        };
-
-        runtime
-            .apply_decisions(&self.instance, &full_history, self.pending_actions.clone())
-            .await;
-
-        debug!(
-            instance = %self.instance,
-            actions_applied = self.pending_actions.len(),
-            "actions dispatched"
-        );
-
-        Ok(())
-    }
-
+impl ReplayEngine {
     // Getter methods for atomic execution
     pub fn history_delta(&self) -> &[Event] {
         &self.history_delta
@@ -488,12 +426,12 @@ impl OrchestrationTurn {
         &self.pending_actions
     }
 
-    /// Check if this turn made any progress (added history)
+    /// Check if this run made any progress (added history)
     pub fn made_progress(&self) -> bool {
         !self.history_delta.is_empty()
     }
 
-    /// Get the final history after this turn
+    /// Get the final history after this run
     pub fn final_history(&self) -> Vec<Event> {
         let mut final_hist = self.baseline_history.clone();
         final_hist.extend(self.history_delta.clone());
@@ -505,13 +443,11 @@ impl OrchestrationTurn {
 mod tests {
     use super::*;
     use crate::Event;
-    use crate::runtime::router::OrchestratorMsg;
 
     #[test]
-    fn test_turn_creation() {
-        let turn = OrchestrationTurn::new(
+    fn test_engine_creation() {
+        let engine = ReplayEngine::new(
             "test-instance".to_string(),
-            1,
             1, // execution_id
             vec![Event::OrchestrationStarted {
                 event_id: 0,
@@ -523,43 +459,14 @@ mod tests {
             }],
         );
 
-        assert_eq!(turn.instance, "test-instance");
-        assert_eq!(turn.turn_index, 1);
-        assert!(turn.history_delta.is_empty());
-        assert!(!turn.made_progress());
-    }
-
-    #[test]
-    fn test_prep_completions_creates_events() {
-        // Provide matching schedule for the injected completion
-        let baseline = vec![Event::ActivityScheduled {
-            event_id: 1,
-            name: "x".to_string(),
-            input: "y".to_string(),
-            execution_id: 1,
-        }];
-        let mut turn = OrchestrationTurn::new("test-instance".to_string(), 1, 1, baseline);
-
-        let messages = vec![(
-            OrchestratorMsg::ActivityCompleted {
-                instance: "test-instance".to_string(),
-                execution_id: 1,
-                id: 1,
-                result: "success".to_string(),
-                ack_token: Some("token1".to_string()),
-            },
-            "token1".to_string(),
-        )];
-
-        let ack_tokens = turn.prep_completions(messages);
-
-        // Should have converted message to event
-        assert_eq!(ack_tokens.len(), 1);
-        assert_eq!(turn.history_delta.len(), 1);
-        assert!(turn.made_progress());
+        assert_eq!(engine.instance, "test-instance");
+        assert!(engine.history_delta.is_empty());
+        assert!(!engine.made_progress());
     }
 }
 
 // Include comprehensive tests
-#[path = "orchestration_turn_tests.rs"]
-mod orchestration_turn_tests;
+#[path = "replay_engine_tests.rs"]
+mod replay_engine_tests;
+
+

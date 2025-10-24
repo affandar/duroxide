@@ -1,3 +1,4 @@
+use duroxide::Event;
 /// Example demonstrating SQLite provider's automatic database file creation
 /// and data persistence capabilities.
 ///
@@ -5,10 +6,8 @@
 /// 1. Creating a database file automatically if it doesn't exist
 /// 2. Preserving data when reopening an existing database
 /// 3. Schema initialization is idempotent
-
 use duroxide::providers::sqlite::SqliteProvider;
 use duroxide::providers::{Provider, WorkItem};
-use duroxide::Event;
 use std::path::PathBuf;
 
 #[tokio::main]
@@ -40,6 +39,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             input: r#"{"message": "Hello, SQLite!"}"#.to_string(),
             parent_instance: None,
             parent_id: None,
+            execution_id: duroxide::INITIAL_EXECUTION_ID,
         };
 
         provider.enqueue_orchestrator_work(start_work, None).await?;
@@ -67,15 +67,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             ];
 
             provider
-                .ack_orchestration_item(
-                    &item.lock_token,
-                    1,
-                    history,
-                    vec![],
-                    vec![],
-                    vec![],
-                    Default::default(),
-                )
+                .ack_orchestration_item(&item.lock_token, 1, history, vec![], vec![], vec![], Default::default())
                 .await?;
 
             println!("  Added orchestration history");
@@ -114,7 +106,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     println!("\n=== Example completed successfully! ===");
-    println!("The database file '{}' has been created and can be reused.", db_path.display());
+    println!(
+        "The database file '{}' has been created and can be reused.",
+        db_path.display()
+    );
     println!("Run this example again to see how it preserves the existing data.");
 
     Ok(())

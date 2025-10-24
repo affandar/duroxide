@@ -27,7 +27,7 @@ impl OrchestrationRegistry {
         }
     }
 
-    pub async fn resolve_for_start(&self, name: &str) -> Option<(Version, Arc<dyn OrchestrationHandler>)> {
+    pub async fn resolve_handler(&self, name: &str) -> Option<(Version, Arc<dyn OrchestrationHandler>)> {
         let pol = self
             .policy
             .lock()
@@ -48,7 +48,28 @@ impl OrchestrationRegistry {
         }
     }
 
-    pub fn resolve_exact(&self, name: &str, v: &Version) -> Option<Arc<dyn OrchestrationHandler>> {
+    pub async fn resolve_version(&self, name: &str) -> Option<Version> {
+        let pol = self
+            .policy
+            .lock()
+            .await
+            .get(name)
+            .cloned()
+            .unwrap_or(VersionPolicy::Latest);
+        match pol {
+            VersionPolicy::Latest => {
+                let m = self.inner.get(name)?;
+                let (v, _h) = m.iter().next_back()?;
+                Some(v.clone())
+            }
+            VersionPolicy::Exact(v) => {
+                self.inner.get(name)?.get(&v)?;
+                Some(v)
+            }
+        }
+    }
+
+    pub fn resolve_handler_exact(&self, name: &str, v: &Version) -> Option<Arc<dyn OrchestrationHandler>> {
         self.inner.get(name)?.get(v).cloned()
     }
 

@@ -502,13 +502,13 @@ fn register_multiple_versions_latest_is_highest() {
 }
 
 #[tokio::test]
-async fn policy_exact_pins_resolve_for_start() {
+async fn policy_exact_pins_resolve_handler() {
     let reg = OrchestrationRegistry::builder()
         .register("OrderFlow", handler_echo()) // 1.0.0
         .register_versioned("OrderFlow", "1.1.0", handler_echo())
         .build();
     // Default Latest -> 1.1.0
-    let (v_latest, _h) = reg.resolve_for_start("OrderFlow").await.expect("resolve latest");
+    let (v_latest, _h) = reg.resolve_handler("OrderFlow").await.expect("resolve latest");
     assert_eq!(v_latest, Version::parse("1.1.0").unwrap());
     // Pin to 1.0.0
     reg.set_version_policy(
@@ -516,11 +516,11 @@ async fn policy_exact_pins_resolve_for_start() {
         duroxide::runtime::VersionPolicy::Exact(Version::parse("1.0.0").unwrap()),
     )
     .await;
-    let (v_pinned, _h) = reg.resolve_for_start("OrderFlow").await.expect("resolve pinned");
+    let (v_pinned, _h) = reg.resolve_handler("OrderFlow").await.expect("resolve pinned");
     assert_eq!(v_pinned, Version::parse("1.0.0").unwrap());
     // Unpin back to Latest
     reg.unpin("OrderFlow").await;
-    let (v_unpinned, _h) = reg.resolve_for_start("OrderFlow").await.expect("resolve unpinned");
+    let (v_unpinned, _h) = reg.resolve_handler("OrderFlow").await.expect("resolve unpinned");
     assert_eq!(v_unpinned, Version::parse("1.1.0").unwrap());
 }
 
@@ -555,16 +555,16 @@ fn non_monotonic_registration_panics() {
 }
 
 #[test]
-fn resolve_exact_missing_returns_none() {
+fn resolve_handler_exact_missing_returns_none() {
     let reg = OrchestrationRegistry::builder()
         .register("OrderFlow", handler_echo())
         .build();
     assert!(
-        reg.resolve_exact("OrderFlow", &Version::parse("9.9.9").unwrap())
+        reg.resolve_handler_exact("OrderFlow", &Version::parse("9.9.9").unwrap())
             .is_none()
     );
     assert!(
-        reg.resolve_exact("Missing", &Version::parse("1.0.0").unwrap())
+        reg.resolve_handler_exact("Missing", &Version::parse("1.0.0").unwrap())
             .is_none()
     );
 }
