@@ -118,7 +118,7 @@ async fn orchestration_completes_and_replays_deterministically_with(store: StdAr
         .register("DeterministicTest", orchestration2)
         .build();
 
-    let _rt2 =
+    let rt2 =
         runtime::Runtime::start_with_store(store.clone(), StdArc::new(activity_registry2), orchestration_registry2)
             .await;
 
@@ -180,7 +180,7 @@ async fn test_trace_deterministic_in_history() {
             .unwrap(),
     );
     let orchestration_registry = OrchestrationRegistry::builder().register("test_orch", orch).build();
-    let _rt =
+    let rt =
         runtime::Runtime::start_with_store(history_store.clone(), Arc::new(activities), orchestration_registry).await;
     let client = duroxide::Client::new(history_store.clone());
 
@@ -333,7 +333,7 @@ async fn test_trace_fire_and_forget() {
     let orchestration_registry = OrchestrationRegistry::builder()
         .register("test_trace_fire_and_forget", orch)
         .build();
-    let _rt =
+    let rt =
         runtime::Runtime::start_with_store(history_store.clone(), Arc::new(activities), orchestration_registry).await;
     let client = duroxide::Client::new(history_store.clone());
 
