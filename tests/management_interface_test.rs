@@ -2,11 +2,19 @@
 
 use duroxide::providers::sqlite::SqliteProvider;
 use duroxide::runtime::registry::ActivityRegistry;
-use duroxide::runtime::{self};
+use duroxide::runtime::{self, RuntimeOptions};
 use duroxide::{Client, OrchestrationContext, OrchestrationRegistry};
 use std::sync::Arc;
 
 mod common;
+
+// Helper to create fast-polling runtime for management tests (timing-sensitive)
+fn fast_runtime_options() -> RuntimeOptions {
+    RuntimeOptions {
+        dispatcher_idle_sleep_ms: 10,
+        ..Default::default()
+    }
+}
 
 /// Test: Basic capability discovery
 #[tokio::test]
@@ -114,7 +122,12 @@ async fn test_instance_discovery() {
         )
         .build();
 
-    let _rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activities), orchestrations).await;
+    let _rt = runtime::Runtime::start_with_options(
+        store.clone(), 
+        Arc::new(activities), 
+        orchestrations,
+        fast_runtime_options()
+    ).await;
 
     // Start multiple orchestrations
     client
@@ -170,7 +183,12 @@ async fn test_instance_info() {
         )
         .build();
 
-    let _rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activities), orchestrations).await;
+    let _rt = runtime::Runtime::start_with_options(
+        store.clone(), 
+        Arc::new(activities), 
+        orchestrations,
+        fast_runtime_options()
+    ).await;
 
     // Start orchestration
     client
@@ -220,7 +238,12 @@ async fn test_execution_info() {
         )
         .build();
 
-    let _rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activities), orchestrations).await;
+    let _rt = runtime::Runtime::start_with_options(
+        store.clone(), 
+        Arc::new(activities), 
+        orchestrations,
+        fast_runtime_options()
+    ).await;
 
     // Start orchestration
     client
@@ -377,7 +400,12 @@ async fn test_system_metrics() {
         )
         .build();
 
-    let _rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activities), orchestrations).await;
+    let _rt = runtime::Runtime::start_with_options(
+        store.clone(), 
+        Arc::new(activities), 
+        orchestrations,
+        fast_runtime_options()
+    ).await;
 
     // Start orchestrations with different outcomes
     client
@@ -449,7 +477,12 @@ async fn test_queue_depths() {
         )
         .build();
 
-    let _rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activities), orchestrations).await;
+    let _rt = runtime::Runtime::start_with_options(
+        store.clone(), 
+        Arc::new(activities), 
+        orchestrations,
+        fast_runtime_options()
+    ).await;
 
     // Start multiple orchestrations quickly
     for i in 1..=5 {
@@ -550,7 +583,12 @@ async fn test_complex_workflow_management() {
         )
         .build();
 
-    let _rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activities), orchestrations).await;
+    let _rt = runtime::Runtime::start_with_options(
+        store.clone(), 
+        Arc::new(activities), 
+        orchestrations,
+        fast_runtime_options()
+    ).await;
 
     // Start multiple order processing workflows
     let orders = vec!["order-1", "order-2", "order-3", "order-4", "order-5"];

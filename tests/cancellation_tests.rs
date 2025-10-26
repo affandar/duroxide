@@ -28,10 +28,17 @@ async fn cancel_parent_down_propagates_to_child() {
         .register("Parent", parent)
         .build();
     let activity_registry = ActivityRegistry::builder().build();
-    let rt = runtime::Runtime::start_with_store(
+    
+    // Use faster polling for cancellation timing test
+    let options = runtime::RuntimeOptions {
+        dispatcher_idle_sleep_ms: 10,
+        ..Default::default()
+    };
+    let rt = runtime::Runtime::start_with_options(
         store.clone(),
         std::sync::Arc::new(activity_registry),
         orchestration_registry,
+        options,
     )
     .await;
     let client = Client::new(store.clone());

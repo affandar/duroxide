@@ -13,7 +13,7 @@ pub struct RuntimeOptions {
     /// Polling interval in milliseconds when dispatcher queues are empty.
     /// Lower values = more responsive, higher CPU usage when idle.
     /// Higher values = less CPU usage, higher latency when idle.
-    /// Default: 10ms (100 Hz)
+    /// Default: 100ms (10 Hz)
     pub dispatcher_idle_sleep_ms: u64,
     
     /// Number of concurrent orchestration workers.
@@ -26,7 +26,7 @@ pub struct RuntimeOptions {
 impl Default for RuntimeOptions {
     fn default() -> Self {
         Self {
-            dispatcher_idle_sleep_ms: 10,
+            dispatcher_idle_sleep_ms: 100,
             orchestration_concurrency: 2,
         }
     }

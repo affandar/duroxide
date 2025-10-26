@@ -1201,8 +1201,18 @@ async fn sample_cancellation_parent_cascades_to_children_fs() {
         .register("ParentSample", parent)
         .build();
     let activity_registry = ActivityRegistry::builder().build();
-    let rt =
-        runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+    
+    // Use faster polling for cancellation timing test
+    let options = runtime::RuntimeOptions {
+        dispatcher_idle_sleep_ms: 10,
+        ..Default::default()
+    };
+    let rt = runtime::Runtime::start_with_options(
+        store.clone(),
+        Arc::new(activity_registry),
+        orchestration_registry,
+        options,
+    ).await;
 
     // Start the parent orchestration
     let client = Client::new(store.clone());
