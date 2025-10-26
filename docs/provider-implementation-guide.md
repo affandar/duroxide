@@ -159,9 +159,11 @@ impl Provider for MyProvider {
         todo!()
     }
     
-    async fn ack_worker(&self, token: &str) -> Result<(), String> {
-        // Delete item from worker queue
-        // Idempotent (Ok if already deleted)
+    async fn ack_worker(&self, token: &str, completion: WorkItem) -> Result<(), String> {
+        // Atomically:
+        // 1. Delete item from worker queue (WHERE lock_token = token)
+        // 2. Enqueue completion (ActivityCompleted or ActivityFailed) to orchestrator queue
+        // MUST be atomic - prevents lost completions or duplicate work
         
         todo!()
     }
@@ -209,9 +211,12 @@ impl Provider for MyProvider {
         None
     }
     
-    async fn ack_timer(&self, token: &str) -> Result<(), String> {
+    async fn ack_timer(&self, token: &str, completion: WorkItem, delay_ms: Option<u64>) -> Result<(), String> {
         // Only called if supports_delayed_visibility=true
-        // Delete timer from queue
+        // Atomically:
+        // 1. Delete timer from queue (WHERE lock_token = token)
+        // 2. Enqueue TimerFired to orchestrator queue with optional visibility delay
+        // MUST be atomic - prevents lost timer completions
         
         Err("Not supported".to_string())
     }

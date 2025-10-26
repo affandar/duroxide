@@ -6,6 +6,7 @@ use tempfile::TempDir;
 use tokio::task::JoinSet;
 
 /// Helper to create a SQLite store for testing
+#[allow(dead_code)]
 async fn create_sqlite_store() -> (Arc<dyn Provider>, TempDir) {
     let td = tempfile::tempdir().unwrap();
     let db_path = td.path().join("test.db");
@@ -86,6 +87,8 @@ async fn test_sqlite_provider_basic() {
     let metadata = ExecutionMetadata {
         status: Some("Running".to_string()),
         output: None,
+        orchestration_name: None,
+        orchestration_version: None,
     };
 
     store
@@ -129,6 +132,8 @@ async fn test_execution_status_completed() {
     let metadata = ExecutionMetadata {
         status: Some("Completed".to_string()),
         output: Some("Success".to_string()),
+        orchestration_name: None,
+        orchestration_version: None,
     };
 
     store
@@ -187,6 +192,8 @@ async fn test_execution_status_failed() {
     let metadata = ExecutionMetadata {
         status: Some("Failed".to_string()),
         output: Some("Error occurred".to_string()),
+        orchestration_name: None,
+        orchestration_version: None,
     };
 
     store
@@ -285,9 +292,19 @@ async fn test_sqlite_basic_persistence() {
             _ => panic!("Expected ActivityExecute"),
         }
 
-        // Acknowledge items
-        store.ack_worker(&token1).await.expect("Failed to ack worker 1");
-        store.ack_worker(&token2).await.expect("Failed to ack worker 2");
+        // Acknowledge items with dummy completions
+        store.ack_worker(&token1, WorkItem::ActivityCompleted {
+            instance: "test-instance".to_string(),
+            execution_id: 1,
+            id: 1,
+            result: "done".to_string(),
+        }).await.expect("Failed to ack worker 1");
+        store.ack_worker(&token2, WorkItem::ActivityCompleted {
+            instance: "test-instance".to_string(),
+            execution_id: 1,
+            id: 2,
+            result: "done".to_string(),
+        }).await.expect("Failed to ack worker 2");
 
         // Verify no more items
         assert!(store.dequeue_worker_peek_lock().await.is_none());
@@ -365,6 +382,8 @@ async fn test_sqlite_file_concurrent_access() {
                 ExecutionMetadata {
                     status: Some("Running".to_string()),
                     output: None,
+                    orchestration_name: None,
+                    orchestration_version: None,
                 },
             )
             .await
@@ -571,9 +590,19 @@ async fn test_sqlite_provider_transactional() {
 
     // Verify all worker items enqueued
     let mut worker_count = 0;
-    while let Some((_, token)) = store.dequeue_worker_peek_lock().await {
+    while let Some((work_item, token)) = store.dequeue_worker_peek_lock().await {
         worker_count += 1;
-        store.ack_worker(&token).await.expect("Failed to ack");
+        // Extract id from work item for completion
+        let id = match work_item {
+            WorkItem::ActivityExecute { id, .. } => id,
+            _ => panic!("Expected ActivityExecute"),
+        };
+        store.ack_worker(&token, WorkItem::ActivityCompleted {
+            instance: "test-instance".to_string(),
+            execution_id: 1,
+            id,
+            result: "done".to_string(),
+        }).await.expect("Failed to ack");
     }
     assert_eq!(worker_count, 3);
 }

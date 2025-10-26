@@ -6,9 +6,11 @@
 
 ### Reliability & Provider API
 
-- Provider cleanup:
-  -- create_with_execution (ack_orchestration_item already creates new history)
-  -- append_with_execution (unused)
+- multi threaded orchestrator dispatcher
+- multi threaded timer/worker dispatchers
+- Update provider docs
+- Add new provider tests
+- prompt files??
 - provider layer should have retries built into it and not sprinkled across all the code
 - need to build an azure storage provider
 - should focus on simplification, refactoring and then threading for dispatchers before synatic sugars
@@ -46,6 +48,9 @@
 
 ## DONE
 
+- Provider cleanup:
+  -- create_with_execution (ack_orchestration_item already creates new history)
+  -- append_with_execution (unused)
 - sqlite instance table should not have a status, it should only be in the execution table
 - updated to sqlx 0.8
 - remove unused crate dependencies

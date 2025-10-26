@@ -111,6 +111,10 @@ pub struct ExecutionMetadata {
     pub status: Option<String>,
     /// Output/error/input to store (for Completed/Failed/ContinuedAsNew)
     pub output: Option<String>,
+    /// Orchestration name (for new instances or updates)
+    pub orchestration_name: Option<String>,
+    /// Orchestration version (for new instances or updates)
+    pub orchestration_version: Option<String>,
 }
 
 /// Provider-backed work queue items the runtime consumes continually.
@@ -1226,20 +1230,31 @@ pub trait Provider: Any + Send + Sync {
     ///
     /// # What This Does
     ///
-    /// Delete the worker queue item after successful processing.
+    /// Atomically acknowledge worker item and enqueue completion to orchestrator queue.
+    ///
+    /// # Purpose
+    ///
+    /// Ensures completion delivery and worker ack happen atomically.
+    /// Prevents lost completions if enqueue succeeds but ack fails.
+    /// Prevents duplicate work if ack succeeds but enqueue fails.
+    ///
+    /// # Parameters
+    ///
+    /// * `token` - Lock token from dequeue_worker_peek_lock
+    /// * `completion` - WorkItem::ActivityCompleted or WorkItem::ActivityFailed
     ///
     /// # Implementation
     ///
     /// ```ignore
-    /// async fn ack_worker(&self, token: &str) -> Result<(), String> {
-    ///     DELETE FROM worker_queue WHERE lock_token = ?
+    /// async fn ack_worker(&self, token: &str, completion: WorkItem) -> Result<(), String> {
+    ///     BEGIN TRANSACTION
+    ///         DELETE FROM worker_queue WHERE lock_token = ?token
+    ///         INSERT INTO orchestrator_queue (instance_id, work_item, visible_at)
+    ///         VALUES (completion.instance, serialize(completion), now)
+    ///     COMMIT
     /// }
     /// ```
-    ///
-    /// # Error Handling
-    ///
-    /// If token is invalid (already acked), return Ok (idempotent).
-    async fn ack_worker(&self, _token: &str) -> Result<(), String>;
+    async fn ack_worker(&self, token: &str, completion: WorkItem) -> Result<(), String>;
 
     // ===== Multi-Execution Support (REQUIRED for ContinueAsNew) =====
     // These methods enable orchestrations to continue with new input while maintaining history.
@@ -1461,16 +1476,31 @@ pub trait Provider: Any + Send + Sync {
     ///
     /// # What This Does
     ///
-    /// Delete the timer from queue after successful processing.
+    /// Atomically acknowledge timer item and enqueue completion to orchestrator queue.
+    ///
+    /// # Purpose
+    ///
+    /// Ensures TimerFired delivery and timer ack happen atomically.
+    ///
+    /// # Parameters
+    ///
+    /// * `token` - Lock token from dequeue_timer_peek_lock
+    /// * `completion` - WorkItem::TimerFired
+    /// * `delay_ms` - Optional delay before completion becomes visible (for delayed visibility support)
     ///
     /// # Implementation
     ///
     /// ```ignore
-    /// async fn ack_timer(&self, token: &str) -> Result<(), String> {
-    ///     DELETE FROM timer_queue WHERE lock_token = ?
+    /// async fn ack_timer(&self, token: &str, completion: WorkItem, delay_ms: Option<u64>) -> Result<(), String> {
+    ///     BEGIN TRANSACTION
+    ///         DELETE FROM timer_queue WHERE lock_token = ?token
+    ///         visible_at = if delay_ms { now + delay } else { now }
+    ///         INSERT INTO orchestrator_queue (instance_id, work_item, visible_at)
+    ///         VALUES (completion.instance, serialize(completion), visible_at)
+    ///     COMMIT
     /// }
     /// ```
-    async fn ack_timer(&self, _token: &str) -> Result<(), String>;
+    async fn ack_timer(&self, token: &str, completion: WorkItem, delay_ms: Option<u64>) -> Result<(), String>;
 
     // ===== Optional Management APIs =====
     // These have default implementations and are primarily used for testing/debugging.
