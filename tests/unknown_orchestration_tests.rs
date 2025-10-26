@@ -45,5 +45,5 @@ async fn unknown_orchestration_fails_gracefully() {
     assert!(matches!(&persisted[0], Event::OrchestrationStarted { .. }));
     assert!(matches!(&persisted[1], Event::OrchestrationFailed { error, .. } if error == "unregistered:DoesNotExist"));
 
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }

@@ -103,7 +103,7 @@ async fn cancel_parent_down_propagates_to_child() {
         }
     }
 
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }
 
 #[tokio::test]
@@ -152,7 +152,7 @@ async fn cancel_after_completion_is_noop() {
             .any(|e| matches!(e, Event::OrchestrationCancelRequested { .. }))
     );
 
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }
 
 #[tokio::test]
@@ -215,7 +215,7 @@ async fn cancel_child_directly_signals_parent() {
     let ph = store.read("inst-chdirect").await;
     assert!(ph.iter().any(|e| matches!(e, Event::SubOrchestrationFailed { source_event_id, error, .. } if *source_event_id == 2 && error.starts_with("canceled: by_test"))));
 
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }
 
 #[tokio::test]
@@ -291,7 +291,7 @@ async fn cancel_continue_as_new_second_exec() {
             .any(|e| matches!(e, Event::OrchestrationCancelRequested { .. }))
     );
 
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }
 
 #[tokio::test]
@@ -342,7 +342,7 @@ async fn orchestration_completes_before_activity_finishes() {
             .any(|e| matches!(e, Event::OrchestrationCompleted { output, .. } if output == "done"))
     );
 
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }
 
 #[tokio::test]
@@ -393,5 +393,5 @@ async fn orchestration_fails_before_activity_finishes() {
             .any(|e| matches!(e, Event::OrchestrationFailed { error, .. } if error == "boom"))
     );
 
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }

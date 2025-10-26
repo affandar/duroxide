@@ -20,13 +20,11 @@ pub struct TimerService {
     items: HashMap<String, (String, u64, u64, String)>,
     keys: HashSet<String>,
     min_heap: BinaryHeap<Reverse<(u64, String)>>,
-    poller_idle_ms: u64,
 }
 
 impl TimerService {
     pub fn start(
         store: Arc<dyn Provider>,
-        poller_idle_ms: u64,
     ) -> (
         tokio::task::JoinHandle<()>,
         tokio::sync::mpsc::UnboundedSender<TimerWithToken>,
@@ -38,7 +36,6 @@ impl TimerService {
             items: HashMap::new(),
             keys: HashSet::new(),
             min_heap: BinaryHeap::new(),
-            poller_idle_ms,
         };
         let handle = tokio::spawn(async move { svc.run().await });
         (handle, tx)
@@ -92,7 +89,10 @@ impl TimerService {
                     maybe = self.rx.recv() => {
                         match maybe {
                             Some(item) => self.insert_item(item),
-                            _ => tokio::time::sleep(std::time::Duration::from_millis(self.poller_idle_ms)).await,
+                            None => {
+                                // Channel closed (sender dropped during shutdown) - exit
+                                break;
+                            }
                         }
                     }
                 }
@@ -100,7 +100,10 @@ impl TimerService {
                 // No timers; block on next schedule
                 match self.rx.recv().await {
                     Some(item) => self.insert_item(item),
-                    _ => tokio::time::sleep(std::time::Duration::from_millis(self.poller_idle_ms)).await,
+                    None => {
+                        // Channel closed (sender dropped during shutdown) - exit
+                        break;
+                    }
                 }
             }
         }
@@ -243,7 +246,7 @@ mod tests {
             inner: base,
             captured: captured.clone(),
         });
-        let (_jh, tx) = TimerService::start(store.clone(), 5);
+        let (_jh, tx) = TimerService::start(store.clone());
         // schedule three timers: immediate, +10ms, +5ms
         let now = now_ms();
         let _ = tx.send(TimerWithToken {

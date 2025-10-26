@@ -57,7 +57,7 @@ where
     assert_eq!(count_scheduled(&pre_crash_hist, "2"), 1);
     assert_eq!(count_scheduled(&pre_crash_hist, "3"), 0);
 
-    rt1.shutdown().await;
+    rt1.shutdown(None).await;
     // no handle to drop when using client
 
     let store2 = make_store_stage2();
@@ -98,7 +98,7 @@ where
     assert_eq!(count_scheduled(&final_hist2, "3"), 1);
     assert_eq!(count_scheduled(&final_hist2, "4"), 1);
 
-    rt2.shutdown().await;
+    rt2.shutdown(None).await;
 }
 
 #[tokio::test]
@@ -325,7 +325,7 @@ async fn recovery_multiple_orchestrations_sqlite_provider() {
         )
         .await
     );
-    rt1.shutdown().await;
+    rt1.shutdown(None).await;
 
     // Stage 2: restart with same store; runtime should auto-resume non-terminal instances
     // Reopen the same DB file for stage 2 to simulate restart
@@ -364,5 +364,5 @@ async fn recovery_multiple_orchestrations_sqlite_provider() {
         }
     }
 
-    rt2.shutdown().await;
+    rt2.shutdown(None).await;
 }

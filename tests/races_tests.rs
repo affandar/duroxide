@@ -66,7 +66,7 @@ async fn wait_external_completes_with(store: StdArc<dyn Provider>) {
     ));
     assert_eq!(final_history.len(), 4);
 
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }
 
 #[tokio::test]
@@ -135,7 +135,7 @@ async fn race_external_vs_timer_ordering_with(store: StdArc<dyn Provider>) {
         );
     }
 
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }
 
 #[tokio::test]
@@ -202,7 +202,7 @@ async fn race_event_vs_timer_event_wins_with(store: StdArc<dyn Provider>) {
         assert!(idx_e < idx_t, "expected external before timer: {final_history:#?}");
     }
 
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }
 
 #[tokio::test]

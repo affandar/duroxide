@@ -61,7 +61,7 @@ async fn test_status_running() {
         status
     );
 
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }
 
 /// Test: Status is Completed with correct output
@@ -113,7 +113,7 @@ async fn test_status_completed() {
         other => panic!("Expected Completed on re-check, got: {:?}", other),
     }
 
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }
 
 /// Test: Status is Failed with correct error message
@@ -165,7 +165,7 @@ async fn test_status_failed() {
         other => panic!("Expected Failed on re-check, got: {:?}", other),
     }
 
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }
 
 /// Test: Status shows latest execution after ContinueAsNew
@@ -235,7 +235,7 @@ async fn test_status_after_continue_as_new() {
         "History should contain the final execution's start event with input=2"
     );
 
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }
 
 /// Test: Status is Failed when orchestration is cancelled
@@ -293,7 +293,7 @@ async fn test_status_cancelled() {
         other => panic!("Expected Failed (cancelled), got: {:?}", other),
     }
 
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }
 
 /// Test: Status transitions correctly through lifecycle
@@ -316,7 +316,17 @@ async fn test_status_lifecycle_transitions() {
         .register("LifecycleOrch", orchestration)
         .build();
 
-    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activities), orchestrations).await;
+    // TIMING-SENSITIVE: Test checks status after 50ms, needs fast polling to see Running state
+    let options = runtime::RuntimeOptions {
+        dispatcher_idle_sleep_ms: 10,
+        ..Default::default()
+    };
+    let rt = runtime::Runtime::start_with_options(
+        store.clone(),
+        Arc::new(activities),
+        orchestrations,
+        options,
+    ).await;
 
     let client = Client::new(store.clone());
 
@@ -355,7 +365,7 @@ async fn test_status_lifecycle_transitions() {
     let status = client.get_orchestration_status("test-lifecycle").await;
     assert!(matches!(status, OrchestrationStatus::Completed { .. }));
 
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }
 
 /// Test: Multiple orchestrations have independent statuses
@@ -408,5 +418,5 @@ async fn test_status_independence() {
         "inst-fail should be Failed"
     );
 
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }

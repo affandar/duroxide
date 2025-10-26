@@ -170,7 +170,7 @@ async fn concurrent_orchestrations_different_activities_with(store: StdArc<dyn P
     assert!(hist1.iter().any(|e| matches!(e, Event::TimerFired { .. })));
     assert!(hist2.iter().any(|e| matches!(e, Event::TimerFired { .. })));
 
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }
 
 #[tokio::test]
@@ -320,7 +320,7 @@ async fn concurrent_orchestrations_same_activities_with(store: StdArc<dyn Provid
     assert!(hist1.iter().any(|e| matches!(e, Event::TimerFired { .. })));
     assert!(hist2.iter().any(|e| matches!(e, Event::TimerFired { .. })));
 
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }
 
 #[tokio::test]
@@ -409,5 +409,5 @@ async fn single_orchestration_with_join_test() {
         _ => panic!("unexpected orchestration status"),
     }
 
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }

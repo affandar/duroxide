@@ -58,7 +58,7 @@ async fn external_duplicate_workitems_dedup() {
         external_events.len()
     );
 
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }
 
 #[tokio::test]
@@ -135,7 +135,7 @@ async fn timer_duplicate_workitems_dedup() {
     let fired: Vec<&Event> = hist.iter().filter(|e| matches!(e, Event::TimerFired { .. })).collect();
     assert_eq!(fired.len(), 1, "expected 1 TimerFired, got {}", fired.len());
 
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }
 
 #[tokio::test]
@@ -227,7 +227,7 @@ async fn activity_duplicate_completion_workitems_dedup() {
         acts.len()
     );
 
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }
 // merged file: imports above already declared; avoid reimporting
 
@@ -283,7 +283,7 @@ async fn crash_after_dequeue_before_append_completion() {
         .collect();
     assert_eq!(evs.len(), 1);
 
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }
 
 #[tokio::test]
@@ -357,5 +357,5 @@ async fn crash_after_append_before_ack_timer() {
     let fired: Vec<&Event> = hist.iter().filter(|e| matches!(e, Event::TimerFired { .. })).collect();
     assert_eq!(fired.len(), 1);
 
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }

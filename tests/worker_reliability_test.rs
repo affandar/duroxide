@@ -97,7 +97,7 @@ async fn activity_reliability_after_crash_before_completion_enqueue() {
 
     // Simulate crash by shutting down runtime
     println!("Simulating crash - shutting down runtime before activity completes...");
-    rt1.shutdown().await;
+    rt1.shutdown(None).await;
 
     // Small delay to ensure shutdown completes
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -164,7 +164,7 @@ async fn activity_reliability_after_crash_before_completion_enqueue() {
     );
 
     println!("✅ Activity reliability test passed - activity completed correctly after restart");
-    rt2.shutdown().await;
+    rt2.shutdown(None).await;
 
     // Restore environment
     match prev_lease {
@@ -278,7 +278,7 @@ async fn multiple_activities_reliability_after_crash() {
     );
 
     println!("Crashing with 3 pending activities...");
-    rt1.shutdown().await;
+    rt1.shutdown(None).await;
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
     // Phase 2: Restart and verify all activities complete
@@ -321,7 +321,7 @@ async fn multiple_activities_reliability_after_crash() {
         "All 3 TestActivity activities should have completed"
     );
 
-    rt2.shutdown().await;
+    rt2.shutdown(None).await;
 
     // Restore environment
     match prev_lease {

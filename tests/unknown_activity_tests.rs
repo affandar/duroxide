@@ -95,7 +95,7 @@ async fn unknown_activity_is_isolated_from_other_orchestrations_fs() {
         other => panic!("unexpected status for missing: {other:?}"),
     }
 
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }
 
 #[tokio::test]
@@ -164,5 +164,5 @@ async fn unknown_activity_is_isolated_from_other_orchestrations_inmem() {
         other => panic!("unexpected status for missing: {other:?}"),
     }
 
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }

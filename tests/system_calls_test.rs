@@ -45,7 +45,7 @@ async fn test_new_guid() {
         panic!("Orchestration did not complete successfully: {:?}", status);
     }
 
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }
 
 #[tokio::test]
@@ -98,7 +98,7 @@ async fn test_utcnow_ms() {
         panic!("Orchestration did not complete successfully: {:?}", status);
     }
 
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }
 
 #[tokio::test]
@@ -146,7 +146,7 @@ async fn test_system_calls_deterministic_replay() {
         panic!("First run did not complete successfully: {:?}", status1);
     };
 
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 
     // Start new runtime with same store (simulating restart)
     let rt2 = runtime::Runtime::start_with_store(store.clone(), activities, orchestrations).await;
@@ -167,7 +167,7 @@ async fn test_system_calls_deterministic_replay() {
     // Outputs should be identical
     assert_eq!(output1, output2);
 
-    rt2.shutdown().await;
+    rt2.shutdown(None).await;
 }
 
 #[tokio::test]
@@ -239,7 +239,7 @@ async fn test_system_calls_with_select() {
         panic!("Orchestration did not complete successfully: {:?}", status);
     }
 
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }
 
 #[tokio::test]
@@ -337,5 +337,5 @@ async fn test_system_calls_join_with_activities() {
         panic!("Orchestration did not complete successfully: {:?}", status);
     }
 
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }

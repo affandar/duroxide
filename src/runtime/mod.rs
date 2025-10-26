@@ -2,6 +2,7 @@
 use crate::providers::{ExecutionMetadata, Provider, WorkItem};
 use crate::{Event, OrchestrationContext};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
@@ -108,6 +109,8 @@ pub struct Runtime {
     orchestration_registry: OrchestrationRegistry,
     /// Track the current execution ID for each active instance
     current_execution_ids: Mutex<HashMap<String, u64>>,
+    /// Shutdown flag checked by dispatchers
+    shutdown_flag: Arc<AtomicBool>,
     /// Runtime configuration options
     options: RuntimeOptions,
 }
@@ -249,6 +252,7 @@ impl Runtime {
 
             orchestration_registry,
             current_execution_ids: Mutex::new(HashMap::new()),
+            shutdown_flag: Arc::new(AtomicBool::new(false)),
 
             options,
         });
@@ -273,15 +277,23 @@ impl Runtime {
         // EXECUTION: spawns N concurrent orchestration workers
         // Instance-level locking in provider prevents concurrent processing of same instance
         let concurrency = self.options.orchestration_concurrency;
+        let shutdown = self.shutdown_flag.clone();
         
         tokio::spawn(async move {
             let mut worker_handles = Vec::new();
             
             for worker_id in 0..concurrency {
                 let rt = self.clone();
+                let shutdown = shutdown.clone();
                 let handle = tokio::spawn(async move {
                     debug!("Orchestration worker {} started", worker_id);
                     loop {
+                        // Check shutdown flag before fetching
+                        if shutdown.load(Ordering::Relaxed) {
+                            debug!("Orchestration worker {} exiting", worker_id);
+                            break;
+                        }
+                        
                         if let Some(item) = rt.history_store.fetch_orchestration_item().await {
                             // Process orchestration item atomically
                             // Provider ensures no other worker has this instance locked
@@ -294,10 +306,11 @@ impl Runtime {
                 worker_handles.push(handle);
             }
             
-            // Wait for all workers to complete (never happens unless shutdown)
+            // Wait for all workers to complete
             for handle in worker_handles {
                 let _ = handle.await;
             }
+            debug!("Orchestration dispatcher exited");
         })
     }
 
@@ -527,8 +540,16 @@ impl Runtime {
 
     fn start_work_dispatcher(self: Arc<Self>, activities: Arc<registry::ActivityRegistry>) -> JoinHandle<()> {
         // EXECUTION: consumes worker queue, executes activities, enqueues completions
+        let shutdown = self.shutdown_flag.clone();
+        
         tokio::spawn(async move {
             loop {
+                // Check shutdown flag before fetching
+                if shutdown.load(Ordering::Relaxed) {
+                    debug!("Work dispatcher exiting");
+                    break;
+                }
+                
                 if let Some((item, token)) = self.history_store.dequeue_worker_peek_lock().await {
                     match item {
                         WorkItem::ActivityExecute {
@@ -601,11 +622,20 @@ impl Runtime {
 
     fn start_timer_dispatcher(self: Arc<Self>) -> JoinHandle<()> {
         // EXECUTION: consumes timer queue; uses provider delayed visibility or in-proc timer
+        let shutdown = self.shutdown_flag.clone();
+        
         if self.history_store.supports_delayed_visibility() {
             // For providers with delayed visibility support, we still use the timer queue
             // but leverage delayed visibility when enqueuing TimerFired
+            let shutdown_clone = shutdown.clone();
             return tokio::spawn(async move {
                 loop {
+                    // Check shutdown flag before fetching
+                    if shutdown_clone.load(Ordering::Relaxed) {
+                        debug!("Timer dispatcher exiting");
+                        break;
+                    }
+                    
                     if let Some((item, token)) = self.history_store.dequeue_timer_peek_lock().await {
                         match item {
                             WorkItem::TimerSchedule {
@@ -653,16 +683,25 @@ impl Runtime {
 
         // Fallback in-process timer service (refactored)
         let idle_sleep_ms = self.options.dispatcher_idle_sleep_ms;
+        let shutdown_clone = shutdown.clone();
+        
         tokio::spawn(async move {
             let (svc_jh, svc_tx) =
-                crate::runtime::timers::TimerService::start(self.history_store.clone(), idle_sleep_ms);
+                crate::runtime::timers::TimerService::start(self.history_store.clone());
 
             // Intake task: keep pulling schedules and forwarding to service
             // The timer service will handle acknowledgment after firing
             let intake_rt = self.clone();
             let intake_tx = svc_tx.clone();
+            let shutdown_intake = shutdown_clone.clone();
             tokio::spawn(async move {
                 loop {
+                    // Check shutdown flag before fetching
+                    if shutdown_intake.load(Ordering::Relaxed) {
+                        debug!("Timer intake task exiting");
+                        break;
+                    }
+                    
                     if let Some((item, token)) = intake_rt.history_store.dequeue_timer_peek_lock().await {
                         match item {
                             WorkItem::TimerSchedule {
@@ -699,12 +738,42 @@ impl Runtime {
         })
     }
 
-    /// Abort background tasks.
-    pub async fn shutdown(self: Arc<Self>) {
-        // Abort background dispatcher tasks
+    /// Shutdown the runtime.
+    /// 
+    /// # Parameters
+    /// 
+    /// * `timeout_ms` - How long to wait for graceful shutdown:
+    ///   - `None`: Default 1000ms
+    ///   - `Some(0)`: Immediate abort
+    ///   - `Some(ms)`: Wait specified milliseconds
+    pub async fn shutdown(self: Arc<Self>, timeout_ms: Option<u64>) {
+        let timeout_ms = timeout_ms.unwrap_or(1000);
+        
+        if timeout_ms == 0 {
+            warn!("Immediate shutdown - aborting all tasks");
+            let mut joins = self.joins.lock().await;
+            for j in joins.drain(..) {
+                j.abort();
+            }
+            return;
+        }
+        
+        debug!("Graceful shutdown (timeout: {}ms)", timeout_ms);
+        
+        // Set shutdown flag - workers check this between iterations
+        self.shutdown_flag.store(true, Ordering::Relaxed);
+        
+        // Give workers time to notice and exit gracefully
+        tokio::time::sleep(std::time::Duration::from_millis(timeout_ms)).await;
+        
+        // Check if any tasks are still running (need to be aborted)
         let mut joins = self.joins.lock().await;
+        
+        // Abort any remaining tasks
         for j in joins.drain(..) {
             j.abort();
         }
+        
+        debug!("Runtime shut down");
     }
 }

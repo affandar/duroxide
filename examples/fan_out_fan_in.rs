@@ -166,6 +166,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    rt.shutdown().await;
+    rt.shutdown(None).await;
     Ok(())
 }

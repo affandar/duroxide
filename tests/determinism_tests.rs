@@ -118,7 +118,7 @@ async fn orchestration_completes_and_replays_deterministically_with(store: StdAr
         .register("DeterministicTest", orchestration2)
         .build();
 
-    let rt2 =
+    let _rt2 =
         runtime::Runtime::start_with_store(store.clone(), StdArc::new(activity_registry2), orchestration_registry2)
             .await;
 

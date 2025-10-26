@@ -45,7 +45,7 @@ async fn test_default_polling_frequency() {
     // With 10ms polling, should complete reasonably fast (< 500ms for simple workflow)
     assert!(elapsed.as_millis() < 500, "Took too long: {}ms", elapsed.as_millis());
 
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }
 
 /// Test: Runtime uses custom polling frequency (50ms)
@@ -66,7 +66,7 @@ async fn test_custom_polling_frequency() {
     // Start with slower polling (50ms)
     let options = RuntimeOptions {
         dispatcher_idle_sleep_ms: 50,
-        orchestration_concurrency: 1,
+        ..Default::default()
     };
 
     let rt = runtime::Runtime::start_with_options(store.clone(), Arc::new(activities), orchestrations, options).await;
@@ -82,7 +82,7 @@ async fn test_custom_polling_frequency() {
 
     assert!(matches!(status, runtime::OrchestrationStatus::Completed { .. }));
 
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }
 
 /// Test: Fast polling (1ms) for high-throughput scenarios
@@ -102,7 +102,7 @@ async fn test_fast_polling() {
     // Very responsive: 1ms polling
     let options = RuntimeOptions {
         dispatcher_idle_sleep_ms: 1,
-        orchestration_concurrency: 1,
+        ..Default::default()
     };
 
     let rt = runtime::Runtime::start_with_options(store.clone(), Arc::new(activities), orchestrations, options).await;
@@ -123,5 +123,5 @@ async fn test_fast_polling() {
     // Fast polling should complete very quickly
     assert!(elapsed.as_millis() < 200, "Took too long: {}ms", elapsed.as_millis());
 
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }

@@ -54,7 +54,7 @@ async fn select2_two_externals_history_order_wins() {
         .await,
         "timeout waiting for subscriptions"
     );
-    rt1.shutdown().await;
+    rt1.shutdown(None).await;
 
     let wi_b = duroxide::providers::WorkItem::ExternalRaised {
         instance: "inst-ab2".to_string(),
@@ -117,7 +117,7 @@ async fn select2_two_externals_history_order_wins() {
         output, "B:vb",
         "expected B to win since it's first in history order, got {output}"
     );
-    rt2.shutdown().await;
+    rt2.shutdown(None).await;
 }
 
 #[tokio::test]
@@ -168,7 +168,7 @@ async fn select_two_externals_history_order_wins() {
         .await,
         "timeout waiting for subscriptions"
     );
-    rt1.shutdown().await;
+    rt1.shutdown(None).await;
 
     let wi_b = duroxide::providers::WorkItem::ExternalRaised {
         instance: "inst-ab".to_string(),
@@ -231,7 +231,7 @@ async fn select_two_externals_history_order_wins() {
         output, "B:vb",
         "expected B to win since it's first in history order, got {output}"
     );
-    rt2.shutdown().await;
+    rt2.shutdown(None).await;
 }
 
 #[tokio::test]
@@ -283,7 +283,13 @@ async fn select_three_mixed_history_winner() {
         )
         .await
     );
-    rt1.shutdown().await;
+    
+    // TIMING-SENSITIVE: Use immediate shutdown (no graceful wait) because:
+    // - Timer(500ms) is ticking and will fire during rt2 startup if we delay
+    // - Graceful shutdown would add 1000ms delay, virtually guaranteeing timer fires first
+    // - Test expects externals to be processed before timer expires
+    // - Immediate abort stops timer dispatcher instantly, preventing premature firing
+    rt1.shutdown(Some(0)).await;
 
     let wi_b = duroxide::providers::WorkItem::ExternalRaised {
         instance: "inst-atb".to_string(),
@@ -345,7 +351,7 @@ async fn select_three_mixed_history_winner() {
         output, "B:vb",
         "expected B to win since it's first in history order, got {output}"
     );
-    rt2.shutdown().await;
+    rt2.shutdown(None).await;
 }
 
 #[tokio::test]
@@ -399,7 +405,7 @@ async fn join_returns_history_order() {
         )
         .await
     );
-    rt1.shutdown().await;
+    rt1.shutdown(None).await;
 
     // Enqueue B then A so history order is B, then A
     let wi_b = duroxide::providers::WorkItem::ExternalRaised {
@@ -437,5 +443,5 @@ async fn join_returns_history_order() {
     };
     // Ensure output is vb,va to reflect history order B before A
     assert_eq!(output, "vb,va");
-    rt2.shutdown().await;
+    rt2.shutdown(None).await;
 }
