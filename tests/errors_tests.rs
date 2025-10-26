@@ -78,7 +78,7 @@ async fn error_handling_compensation_on_ship_failure_with(store: StdArc<dyn Prov
         duroxide::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
         _ => panic!("unexpected orchestration status"),
     }
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }
 
 #[tokio::test]
@@ -128,7 +128,7 @@ async fn error_handling_success_path_with(store: StdArc<dyn Provider>) {
         duroxide::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
         _ => panic!("unexpected orchestration status"),
     }
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }
 
 #[tokio::test]
@@ -181,7 +181,7 @@ async fn error_handling_early_debit_failure_with(store: StdArc<dyn Provider>) {
         duroxide::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
         _ => panic!("unexpected orchestration status"),
     }
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }
 
 #[tokio::test]
@@ -229,7 +229,7 @@ async fn unknown_activity_fails_with(store: StdArc<dyn Provider>) {
         duroxide::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
         _ => panic!("unexpected orchestration status"),
     }
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }
 
 #[tokio::test]
@@ -292,7 +292,7 @@ async fn event_after_completion_is_ignored_fs() {
         before,
         "post-completion event must not append history"
     );
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }
 
 // 7) Event raised before subscription after instance start is ignored
@@ -358,7 +358,7 @@ async fn event_before_subscription_after_start_is_ignored() {
         duroxide::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
         _ => panic!("unexpected orchestration status"),
     }
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }
 
 // 8) History cap exceeded triggers a hard error (no truncation) for both providers
@@ -406,7 +406,7 @@ async fn history_cap_exceeded_with(store: StdArc<dyn Provider>) {
             // Other errors are also acceptable for capacity exceeded scenarios
         }
     }
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }
 
 #[tokio::test]
@@ -465,7 +465,7 @@ async fn orchestration_immediate_fail_fs() {
         duroxide::OrchestrationStatus::Failed { error } => assert_eq!(error, "oops"),
         other => panic!("unexpected status: {other:?}"),
     }
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }
 
 #[tokio::test]
@@ -510,7 +510,7 @@ async fn orchestration_propagates_activity_failure_fs() {
         duroxide::OrchestrationStatus::Failed { error } => assert_eq!(error, "bad"),
         other => panic!("unexpected status: {other:?}"),
     }
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }
 
 #[tokio::test]
@@ -548,7 +548,7 @@ async fn typed_activity_decode_error_fs() {
         _ => panic!("unexpected orchestration status"),
     };
     assert_eq!(output, "ok");
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }
 
 #[tokio::test]
@@ -595,5 +595,5 @@ async fn typed_event_decode_error_fs() {
         Err(error) => panic!("orchestration failed: {error}"),
     };
     assert_eq!(output, "decode_err");
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }

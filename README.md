@@ -83,7 +83,7 @@ match client.wait_for_orchestration("inst-hello-1", std::time::Duration::from_se
     OrchestrationStatus::Completed { output } => assert_eq!(output, "Hello, Rust!"),
     _ => panic!("Orchestration failed"),
 }
-rt.shutdown().await;
+rt.shutdown(None).await;  // Graceful shutdown with 1s timeout
 # }
 ```
 

@@ -3,9 +3,17 @@ use futures::future::{Either, select};
 use std::sync::Arc;
 mod common;
 use duroxide::runtime::registry::ActivityRegistry;
-use duroxide::runtime::{self};
+use duroxide::runtime::{self, RuntimeOptions};
 use duroxide::{Event, OrchestrationContext, OrchestrationRegistry};
 use std::sync::Arc as StdArc;
+
+// Helper for timing-sensitive race tests
+fn fast_runtime_options() -> RuntimeOptions {
+    RuntimeOptions {
+        dispatcher_idle_sleep_ms: 10,
+        ..Default::default()
+    }
+}
 
 async fn wait_external_completes_with(store: StdArc<dyn Provider>) {
     let orchestrator = |ctx: OrchestrationContext, _input: String| async move {
@@ -18,8 +26,12 @@ async fn wait_external_completes_with(store: StdArc<dyn Provider>) {
         .register("WaitExternal", orchestrator)
         .build();
 
-    let rt =
-        runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+    let rt = runtime::Runtime::start_with_options(
+        store.clone(), 
+        Arc::new(activity_registry), 
+        orchestration_registry,
+        fast_runtime_options()
+    ).await;
     let store_for_wait = store.clone();
     let client_for_event = duroxide::Client::new(store.clone());
     tokio::spawn(async move {
@@ -54,7 +66,7 @@ async fn wait_external_completes_with(store: StdArc<dyn Provider>) {
     ));
     assert_eq!(final_history.len(), 4);
 
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }
 
 #[tokio::test]
@@ -77,8 +89,12 @@ async fn race_external_vs_timer_ordering_with(store: StdArc<dyn Provider>) {
         .register("RaceOrchestration", orchestrator)
         .build();
 
-    let rt =
-        runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+    let rt = runtime::Runtime::start_with_options(
+        store.clone(), 
+        Arc::new(activity_registry), 
+        orchestration_registry,
+        fast_runtime_options()
+    ).await;
     let store_for_wait = store.clone();
     let client_for_event = duroxide::Client::new(store.clone());
     tokio::spawn(async move {
@@ -119,7 +135,7 @@ async fn race_external_vs_timer_ordering_with(store: StdArc<dyn Provider>) {
         );
     }
 
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }
 
 #[tokio::test]
@@ -145,8 +161,12 @@ async fn race_event_vs_timer_event_wins_with(store: StdArc<dyn Provider>) {
         .register("RaceEventVsTimer", orchestrator)
         .build();
 
-    let rt =
-        runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+    let rt = runtime::Runtime::start_with_options(
+        store.clone(), 
+        Arc::new(activity_registry), 
+        orchestration_registry,
+        fast_runtime_options()
+    ).await;
     let store_for_wait = store.clone();
     let client_for_event = duroxide::Client::new(store.clone());
     tokio::spawn(async move {
@@ -182,7 +202,7 @@ async fn race_event_vs_timer_event_wins_with(store: StdArc<dyn Provider>) {
         assert!(idx_e < idx_t, "expected external before timer: {final_history:#?}");
     }
 
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }
 
 #[tokio::test]

@@ -55,7 +55,7 @@ async fn sample_hello_world_fs() {
         runtime::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
         _ => panic!("unexpected orchestration status"),
     }
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }
 
 /// Basic control flow: branch on a flag returned by an activity.
@@ -106,7 +106,7 @@ async fn sample_basic_control_flow_fs() {
         runtime::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
         _ => panic!("unexpected orchestration status"),
     }
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }
 
 /// Loops and accumulation: call an activity repeatedly and build up a value.
@@ -154,7 +154,7 @@ async fn sample_loop_fs() {
         runtime::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
         _ => panic!("unexpected orchestration status"),
     }
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }
 
 /// Error handling and compensation: recover from a failed activity.
@@ -217,7 +217,7 @@ async fn sample_error_handling_fs() {
         runtime::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
         _ => panic!("unexpected orchestration status"),
     }
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }
 
 /// Timeouts via racing a long-running activity against a timer.
@@ -272,7 +272,7 @@ async fn sample_timeout_with_timer_race_fs() {
         runtime::OrchestrationStatus::Completed { output } => panic!("expected timeout failure, got: {output}"),
         _ => panic!("unexpected orchestration status"),
     }
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }
 
 /// Mixed race with select2: activity vs external event, demonstrate using the winner index.
@@ -337,7 +337,7 @@ async fn sample_select2_activity_vs_external_fs() {
     };
     // External event should win (idx==1) because activity sleeps 300ms
     assert_eq!(s, "event:ok");
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }
 
 /// Parallel fan-out/fan-in: run two activities concurrently and join results.
@@ -396,7 +396,7 @@ async fn dtf_legacy_gabbar_greetings_fs() {
         runtime::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
         _ => panic!("unexpected orchestration status"),
     }
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }
 
 /// System activities: use built-in activities to get wall-clock time and a new GUID.
@@ -450,7 +450,7 @@ async fn sample_system_activities_fs() {
     assert_eq!(guid_str.len(), 36);
     assert!(guid_str.chars().filter(|c| *c != '-').all(|c| c.is_ascii_hexdigit()));
 
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }
 
 /// Sample: start an orchestration and poll its status until completion.
@@ -486,7 +486,7 @@ async fn sample_status_polling_fs() {
         OrchestrationStatus::Failed { error } => panic!("unexpected failure: {error}"),
         _ => unreachable!(),
     }
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }
 
 /// Sub-orchestrations: simple parent/child orchestration.
@@ -537,7 +537,7 @@ async fn sample_sub_orchestration_basic_fs() {
         runtime::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
         _ => panic!("unexpected orchestration status"),
     }
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }
 
 /// Sub-orchestrations: fan-out to multiple children and join.
@@ -600,7 +600,7 @@ async fn sample_sub_orchestration_fanout_fs() {
         runtime::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
         _ => panic!("unexpected orchestration status"),
     }
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }
 
 /// Sub-orchestrations: chained (root -> mid -> leaf).
@@ -656,7 +656,7 @@ async fn sample_sub_orchestration_chained_fs() {
         runtime::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
         _ => panic!("unexpected orchestration status"),
     }
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }
 
 /// Detached orchestration scheduling: start independent orchestrations without awaiting.
@@ -725,7 +725,7 @@ async fn sample_detached_orchestration_scheduling_fs() {
         }
     }
 
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }
 
 /// ContinueAsNew sample: roll over input across executions until a condition is met.
@@ -770,7 +770,7 @@ async fn sample_continue_as_new_fs() {
     // Check executions exist
     let execs = store.list_executions("inst-sample-can").await;
     assert_eq!(execs, vec![1, 2, 3, 4]);
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }
 
 // Typed samples
@@ -825,7 +825,7 @@ async fn sample_typed_activity_and_orchestration_fs() {
         Ok(result) => assert_eq!(result, AddRes { sum: 5 }),
         Err(error) => panic!("orchestration failed: {error}"),
     }
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }
 
 /// Typed external event sample: await Ack { ok } from an event
@@ -867,7 +867,7 @@ async fn sample_typed_event_fs() {
         Ok(result) => assert_eq!(result, serde_json::to_string(&Ack { ok: true }).unwrap()),
         Err(error) => panic!("orchestration failed: {error}"),
     }
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }
 
 /// Mixed string and typed activities with typed orchestration, showcasing select on typed+string
@@ -924,7 +924,7 @@ async fn sample_mixed_string_and_typed_typed_orch_fs() {
         Err(error) => panic!("orchestration failed: {error}"),
     };
     assert!(s == "sum=3" || s == "up=HELLO");
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }
 
 /// Mixed string and typed activities with string orchestration, showcasing select on typed+string
@@ -976,7 +976,7 @@ async fn sample_mixed_string_and_typed_string_orch_fs() {
         _ => panic!("unexpected orchestration status"),
     };
     assert!(s == "sum=12" || s == "up=RACE");
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }
 
 /// Versioning: default latest vs pinned exact on start
@@ -1040,7 +1040,7 @@ async fn sample_versioning_start_latest_vs_exact_fs() {
         _ => panic!("unexpected orchestration status"),
     }
 
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }
 
 /// Versioning: sub-orchestration explicit version vs default policy
@@ -1093,7 +1093,7 @@ async fn sample_versioning_sub_orchestration_explicit_vs_policy_fs() {
         _ => panic!("unexpected orchestration status"),
     }
 
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }
 
 /// Versioning + ContinueAsNew: safe upgrade of a long-running (infinite) orchestration
@@ -1166,7 +1166,7 @@ async fn sample_versioning_continue_as_new_upgrade_fs() {
             .any(|e| matches!(e, duroxide::Event::OrchestrationStarted { input, .. } if input == "v1:state"))
     );
 
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }
 
 /// Cancellation: cancel a parent orchestration and observe cascading cancellation to children.
@@ -1201,8 +1201,18 @@ async fn sample_cancellation_parent_cascades_to_children_fs() {
         .register("ParentSample", parent)
         .build();
     let activity_registry = ActivityRegistry::builder().build();
-    let rt =
-        runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+    
+    // Use faster polling for cancellation timing test
+    let options = runtime::RuntimeOptions {
+        dispatcher_idle_sleep_ms: 10,
+        ..Default::default()
+    };
+    let rt = runtime::Runtime::start_with_options(
+        store.clone(),
+        Arc::new(activity_registry),
+        orchestration_registry,
+        options,
+    ).await;
 
     // Start the parent orchestration
     let client = Client::new(store.clone());
@@ -1247,7 +1257,7 @@ async fn sample_cancellation_parent_cascades_to_children_fs() {
         assert!(ok_child, "timeout waiting for child cancel for {child}");
     }
 
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }
 
 /// Error handling: basic activity failure
@@ -1323,7 +1333,7 @@ async fn sample_basic_error_handling_fs() {
         _ => panic!("unexpected orchestration status"),
     }
 
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }
 
 /// Error handling: nested function with `?` operator
@@ -1415,7 +1425,7 @@ async fn sample_nested_function_error_handling_fs() {
         _ => panic!("unexpected orchestration status"),
     }
 
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }
 
 /// Error handling: error recovery with logging
@@ -1509,5 +1519,5 @@ async fn sample_error_recovery_fs() {
         _ => panic!("unexpected orchestration status"),
     }
 
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }

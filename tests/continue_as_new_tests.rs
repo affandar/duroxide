@@ -101,7 +101,7 @@ async fn continue_as_new_multiexec() {
             .any(|e| matches!(e, Event::OrchestrationCompleted { output, .. } if output == "done:2"))
     );
 
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }
 
 // External events are dispatched to the most recent execution.
@@ -201,7 +201,7 @@ async fn continue_as_new_event_routes_to_latest() {
     let current_hist = store.read("inst-can-evt").await;
     assert_eq!(current_hist, latest_hist);
 
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }
 
 // External events sent before the new execution's subscription are dropped; after subscribing, events are delivered.
@@ -302,7 +302,7 @@ async fn continue_as_new_event_drop_then_process() {
             .any(|e| matches!(e, Event::ExternalEvent { name, .. } if name == "Go"))
     );
 
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }
 
 // An event raised while active but before any subscription exists is warned and dropped; re-raising after subscription succeeds.
@@ -366,7 +366,7 @@ async fn event_drop_then_retry_after_subscribe() {
         .collect();
     assert_eq!(events.len(), 1);
 
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }
 // Test: Execution ID validation for ContinueAsNew scenarios
 // This test verifies that completions from old executions are properly ignored

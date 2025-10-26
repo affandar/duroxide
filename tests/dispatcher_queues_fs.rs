@@ -56,7 +56,7 @@ async fn dispatcher_enqueues_timer_schedule_then_completes() {
     .await;
     assert!(ok, "timeout waiting for completion");
 
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }
 
 #[tokio::test]
@@ -92,5 +92,5 @@ async fn dispatcher_enqueues_start_orchestration_to_orch_queue() {
     .await;
     assert!(ok, "timeout waiting for child completion");
 
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }

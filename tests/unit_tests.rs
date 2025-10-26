@@ -93,7 +93,7 @@ async fn deterministic_replay_activity_only() {
     let (_h2, acts2, out2) = run_turn(final_history.clone(), orchestrator);
     assert!(acts2.is_empty());
     assert_eq!(out2.unwrap(), output);
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }
 
 // Provider admin APIs moved to provider-local tests; runtime tests should use runtime-only APIs.
@@ -155,7 +155,7 @@ async fn runtime_duplicate_orchestration_deduped_single_execution() {
         .count();
     assert_eq!(started_count, 1);
 
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }
 
 #[tokio::test]
@@ -198,7 +198,7 @@ async fn orchestration_descriptor_root_and_child() {
     assert!(dchild.version.len() > 0);
     assert_eq!(dchild.parent_instance.as_deref(), Some("inst-desc"));
     assert_eq!(dchild.parent_id, Some(2));
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }
 
 #[tokio::test]
@@ -276,7 +276,7 @@ async fn orchestration_status_apis() {
         assert_eq!(error, "boom");
     }
 
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }
 
 // Providers: filesystem multi-execution persistence and latest read() contract

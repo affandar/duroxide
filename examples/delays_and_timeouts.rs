@@ -161,7 +161,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         _ => println!("⏳ Timeout example still running..."),
     }
 
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 
     println!("\n📚 Key Takeaways:");
     println!("✅ Use ctx.schedule_timer(ms).into_timer().await for orchestration delays");

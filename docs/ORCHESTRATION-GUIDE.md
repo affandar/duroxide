@@ -70,7 +70,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     println!("Result: {:?}", status);
     
-    rt.shutdown().await;
+    rt.shutdown(None).await;
     Ok(())
 }
 ```
@@ -1210,7 +1210,7 @@ async fn test_full_workflow() {
         _ => panic!("Expected completion"),
     }
     
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }
 ```
 

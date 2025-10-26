@@ -31,7 +31,7 @@ async fn runtime_start_versioned_string_uses_explicit_version() {
         runtime::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
         _ => panic!("unexpected orchestration status"),
     }
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }
 
 #[tokio::test]
@@ -62,7 +62,7 @@ async fn runtime_start_versioned_typed_uses_explicit_version() {
         Ok(result) => assert_eq!(result, 1),
         Err(error) => panic!("orchestration failed: {error}"),
     }
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }
 
 #[tokio::test]
@@ -116,7 +116,7 @@ async fn sub_orchestration_versioned_explicit_and_policy() {
         runtime::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
         _ => panic!("unexpected orchestration status"),
     }
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }
 
 #[tokio::test]
@@ -161,7 +161,7 @@ async fn detached_versioned_uses_policy_latest() {
         _ => panic!("unexpected child orchestration status"),
     };
     assert_eq!(out_child, "l2");
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }
 
 #[tokio::test]
@@ -190,7 +190,7 @@ async fn continue_as_new_versioned_typed_explicit() {
         runtime::OrchestrationStatus::Failed { error } => panic!("unexpected failure: {error}"),
         _ => unreachable!(),
     }
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }
 // merged sections below reuse imports from the top of this file
 
@@ -228,7 +228,7 @@ async fn start_uses_latest_version() {
     // Check history for completion event
     let hist = client.read_execution_history("inst-vlatest", 1).await.unwrap();
     assert!(matches!(hist.last().unwrap(), Event::OrchestrationCompleted { .. }));
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }
 
 #[tokio::test]
@@ -263,7 +263,7 @@ async fn policy_exact_pins_start() {
         runtime::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
         _ => panic!("unexpected orchestration status"),
     }
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }
 
 #[tokio::test]
@@ -329,7 +329,7 @@ async fn sub_orchestration_uses_latest_by_default_and_pinned_when_set() {
         _ => panic!("unexpected orchestration status"),
     }
 
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }
 
 #[tokio::test]
@@ -384,7 +384,7 @@ async fn parent_calls_child_upgrade_child_and_verify_latest_used() {
         hist.iter()
             .any(|e| matches!(e, Event::SubOrchestrationCompleted { .. }))
     );
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }
 
 #[tokio::test]
@@ -442,7 +442,7 @@ async fn continue_as_new_upgrades_version_deterministically() {
         runtime::OrchestrationStatus::Failed { error } => panic!("unexpected failure: {error}"),
         _ => unreachable!(),
     }
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }
 
 // imports already present above for merged section

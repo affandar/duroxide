@@ -187,7 +187,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         _ => println!("⏳ Still running..."),
     }
 
-    rt.shutdown().await;
+    rt.shutdown(None).await;  // Graceful shutdown
     Ok(())
 }
 ```

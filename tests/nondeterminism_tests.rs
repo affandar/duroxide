@@ -384,7 +384,7 @@ async fn continue_as_new_with_unconsumed_completion_triggers_nondeterminism() {
         other => panic!("Unexpected status: {other:?}"),
     }
 
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }
 
 #[tokio::test]
@@ -468,7 +468,7 @@ async fn execution_id_filtering_without_continue_as_new_triggers_nondeterminism(
         other => panic!("Unexpected status: {other:?}"),
     }
 
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }
 
 #[tokio::test]
@@ -526,5 +526,5 @@ async fn duplicate_external_events_are_handled_gracefully() {
         other => panic!("Unexpected status: {other:?}"),
     }
 
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 }

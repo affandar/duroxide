@@ -254,7 +254,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         total_activities as f64 / total_time.as_secs_f64());
 
     // Shutdown
-    rt.shutdown().await;
+    rt.shutdown(None).await;
 
     Ok(())
 }
