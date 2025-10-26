@@ -921,7 +921,6 @@ Create a trait-based factory to enable testing any provider:
 ```rust
 pub trait ProviderFactory {
     async fn create_provider() -> Box<dyn Provider>;
-    fn supports_delayed_visibility() -> bool;
     fn supports_lock_expiration() -> bool;
 }
 
@@ -933,7 +932,6 @@ impl ProviderFactory for SqliteProviderFactory {
         Box::new(SqliteProvider::new_in_memory().await.unwrap())
     }
     
-    fn supports_delayed_visibility() -> bool { true }
     fn supports_lock_expiration() -> bool { true }
 }
 ```

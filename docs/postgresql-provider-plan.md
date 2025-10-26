@@ -974,10 +974,7 @@ impl Provider for PostgresProvider {
         self.enqueue_orchestrator_work_with_delay(item, delay_ms).await
     }
 
-    // Timer queue (supports delayed visibility)
-    fn supports_delayed_visibility(&self) -> bool {
-        true
-    }
+    // Timer queue (REQUIRED - all providers must support delayed visibility)
 
     async fn enqueue_timer_work(&self, item: WorkItem) -> Result<(), String> {
         if let WorkItem::TimerSchedule { fire_at_ms, .. } = &item {

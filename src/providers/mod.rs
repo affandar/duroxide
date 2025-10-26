@@ -346,7 +346,7 @@ pub enum WorkItem {
 /// The runtime runs 3 background dispatchers polling your queues:
 /// 1. **Orchestration Dispatcher**: Polls fetch_orchestration_item() continuously
 /// 2. **Work Dispatcher**: Polls dequeue_worker_peek_lock() continuously
-/// 3. **Timer Dispatcher**: Polls dequeue_timer_peek_lock() (if supports_delayed_visibility=true)
+/// 3. **Timer Dispatcher**: Polls dequeue_timer_peek_lock() continuously
 ///
 /// **Your implementation must be thread-safe** and support concurrent access from multiple dispatchers.
 ///
@@ -413,7 +413,6 @@ pub enum WorkItem {
 /// **OPTIONAL** (has defaults):
 /// - latest_execution_id, read_with_execution
 /// - list_instances, list_executions
-/// - Timer queue methods (only if supports_delayed_visibility=true)
 ///
 /// # Recommended Database Schema (SQL Example)
 ///
@@ -587,7 +586,7 @@ pub enum WorkItem {
 /// The runtime runs 3 background dispatchers polling your queues:
 /// 1. **Orchestration Dispatcher**: Polls fetch_orchestration_item() continuously
 /// 2. **Work Dispatcher**: Polls dequeue_worker_peek_lock() continuously
-/// 3. **Timer Dispatcher**: Polls dequeue_timer_peek_lock() (if supports_delayed_visibility=true)
+/// 3. **Timer Dispatcher**: Polls dequeue_timer_peek_lock() continuously
 ///
 /// **Your implementation must be thread-safe** and support concurrent access from multiple dispatchers.
 ///
@@ -664,7 +663,6 @@ pub enum WorkItem {
 /// **OPTIONAL** (has defaults):
 /// - latest_execution_id, read_with_execution
 /// - list_instances, list_executions
-/// - Timer queue methods (only if supports_delayed_visibility=true)
 ///
 /// # Testing Your Provider
 ///
@@ -694,7 +692,7 @@ pub enum WorkItem {
 ///
 /// When implementing a new provider, focus on these core methods:
 ///
-/// ## Required Methods (11 total)
+/// ## Required Methods (12 total)
 ///
 /// 1. **Orchestration Processing (3 methods)**
 ///    - `fetch_orchestration_item()` - Atomic batch processing
@@ -711,8 +709,7 @@ pub enum WorkItem {
 /// 4. **Orchestrator Queue (1 method)**
 ///    - `enqueue_orchestrator_work()` - Enqueue control messages
 ///
-/// 5. **Timer Support (4 methods, conditional)**
-///    - `supports_delayed_visibility()` - Check timer capability
+/// 5. **Timer Support (3 methods, REQUIRED)**
 ///    - `enqueue_timer_work()` - Schedule delayed messages
 ///    - `dequeue_timer_peek_lock()` - Get timer messages
 ///    - `ack_timer()` - Acknowledge timer processing
@@ -1381,37 +1378,9 @@ pub trait Provider: Any + Send + Sync {
     ) -> Result<(), String>;
 
 
-    // ===== Timer Support (REQUIRED only if supports_delayed_visibility returns true) =====
-
-    /// Whether this provider natively supports delayed message visibility.
-    ///
-    /// # Return Value
-    ///
-    /// - `true`: Provider can delay message visibility (e.g., via database-level visibility timeouts)
-    ///   - Runtime will use timer queue methods below
-    ///   - More efficient - leverages database features
-    ///   - Example: SQLite with `visible_at` timestamp column
-    ///
-    /// - `false`: Provider does NOT support delayed visibility (default)
-    ///   - Runtime uses in-process timer service instead
-    ///   - Simpler provider implementation
-    ///   - Works fine for most use cases
-    ///
-    /// # Implementation Guidance
-    ///
-    /// Return true if you can:
-    /// - Store messages with future `visible_at` timestamp
-    /// - Filter messages in dequeue based on `visible_at <= now()`
-    /// - Efficiently wake up when next timer becomes ready
-    ///
-    /// If unsure, return false (default). The runtime timer service works well.
-    fn supports_delayed_visibility(&self) -> bool {
-        false
-    }
+    // ===== Timer Support (REQUIRED) =====
 
     /// Enqueue a timer to fire at a specific time.
-    ///
-    /// **Only called if `supports_delayed_visibility() = true`**
     ///
     /// # What This Does
     ///
@@ -1434,8 +1403,6 @@ pub trait Provider: Any + Send + Sync {
     async fn enqueue_timer_work(&self, _item: WorkItem) -> Result<(), String>;
 
     /// Dequeue a timer that's ready to fire.
-    ///
-    /// **Only called if `supports_delayed_visibility() = true`**
     ///
     /// # What This Does
     ///
@@ -1471,8 +1438,6 @@ pub trait Provider: Any + Send + Sync {
     async fn dequeue_timer_peek_lock(&self) -> Option<(WorkItem, String)>;
 
     /// Acknowledge a processed timer.
-    ///
-    /// **Only called if `supports_delayed_visibility() = true`**
     ///
     /// # What This Does
     ///

@@ -34,7 +34,6 @@ impl Default for RuntimeOptions {
 }
 
 pub mod registry;
-mod timers;
 mod state_helpers;
 
 use async_trait::async_trait;
@@ -621,120 +620,59 @@ impl Runtime {
     }
 
     fn start_timer_dispatcher(self: Arc<Self>) -> JoinHandle<()> {
-        // EXECUTION: consumes timer queue; uses provider delayed visibility or in-proc timer
+        // EXECUTION: consumes timer queue with provider delayed visibility support
         let shutdown = self.shutdown_flag.clone();
         
-        if self.history_store.supports_delayed_visibility() {
-            // For providers with delayed visibility support, we still use the timer queue
-            // but leverage delayed visibility when enqueuing TimerFired
-            let shutdown_clone = shutdown.clone();
-            return tokio::spawn(async move {
-                loop {
-                    // Check shutdown flag before fetching
-                    if shutdown_clone.load(Ordering::Relaxed) {
-                        debug!("Timer dispatcher exiting");
-                        break;
-                    }
-                    
-                    if let Some((item, token)) = self.history_store.dequeue_timer_peek_lock().await {
-                        match item {
-                            WorkItem::TimerSchedule {
-                                instance,
-                                execution_id,
-                                id,
-                                fire_at_ms,
-                            } => {
-                                // Calculate delay from now
-                                let current_time_ms = std::time::SystemTime::now()
-                                    .duration_since(std::time::UNIX_EPOCH)
-                                    .unwrap()
-                                    .as_millis() as u64;
-                                let delay_ms = fire_at_ms.saturating_sub(current_time_ms);
-
-                                // Atomically ack timer and enqueue TimerFired with visibility delay
-                                let timer_fired = WorkItem::TimerFired {
-                                    instance: instance.clone(),
-                                    execution_id,
-                                    id,
-                                    fire_at_ms,
-                                };
-
-                                // Use atomic ack with delayed visibility support
-                                if let Err(e) = self
-                                    .history_store
-                                    .ack_timer(&token, timer_fired, Some(delay_ms))
-                                    .await
-                                {
-                                    warn!(instance=%instance, execution_id, id, error=%e, "timer: atomic ack failed");
-                                }
-                            }
-                            other => {
-                                error!(?other, "unexpected WorkItem in Timer dispatcher; state corruption");
-                                panic!("unexpected WorkItem in Timer dispatcher");
-                            }
-                        }
-                    } else {
-                        tokio::time::sleep(std::time::Duration::from_millis(self.options.dispatcher_idle_sleep_ms))
-                            .await;
-                    }
-                }
-            });
-        }
-
-        // Fallback in-process timer service (refactored)
-        let idle_sleep_ms = self.options.dispatcher_idle_sleep_ms;
-        let shutdown_clone = shutdown.clone();
-        
         tokio::spawn(async move {
-            let (svc_jh, svc_tx) =
-                crate::runtime::timers::TimerService::start(self.history_store.clone());
+            loop {
+                // Check shutdown flag before fetching
+                if shutdown.load(Ordering::Relaxed) {
+                    debug!("Timer dispatcher exiting");
+                    break;
+                }
+                
+                if let Some((item, token)) = self.history_store.dequeue_timer_peek_lock().await {
+                    match item {
+                        WorkItem::TimerSchedule {
+                            instance,
+                            execution_id,
+                            id,
+                            fire_at_ms,
+                        } => {
+                            // Calculate delay from now
+                            let current_time_ms = std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap()
+                                .as_millis() as u64;
+                            let delay_ms = fire_at_ms.saturating_sub(current_time_ms);
 
-            // Intake task: keep pulling schedules and forwarding to service
-            // The timer service will handle acknowledgment after firing
-            let intake_rt = self.clone();
-            let intake_tx = svc_tx.clone();
-            let shutdown_intake = shutdown_clone.clone();
-            tokio::spawn(async move {
-                loop {
-                    // Check shutdown flag before fetching
-                    if shutdown_intake.load(Ordering::Relaxed) {
-                        debug!("Timer intake task exiting");
-                        break;
-                    }
-                    
-                    if let Some((item, token)) = intake_rt.history_store.dequeue_timer_peek_lock().await {
-                        match item {
-                            WorkItem::TimerSchedule {
-                                instance,
+                            // Atomically ack timer and enqueue TimerFired with visibility delay
+                            let timer_fired = WorkItem::TimerFired {
+                                instance: instance.clone(),
                                 execution_id,
                                 id,
                                 fire_at_ms,
-                            } => {
-                                // Send to timer service WITH the ack token
-                                let timer_with_token = crate::runtime::timers::TimerWithToken {
-                                    item: WorkItem::TimerSchedule {
-                                        instance,
-                                        execution_id,
-                                        id,
-                                        fire_at_ms,
-                                    },
-                                    ack_token: token,
-                                };
-                                let _ = intake_tx.send(timer_with_token);
-                                // Do NOT ack here - the timer service will ack after firing
-                            }
-                            other => {
-                                error!(?other, "unexpected WorkItem in Timer dispatcher; state corruption");
-                                panic!("unexpected WorkItem in Timer dispatcher");
+                            };
+
+                            // Use atomic ack with delayed visibility support
+                            if let Err(e) = self
+                                .history_store
+                                .ack_timer(&token, timer_fired, Some(delay_ms))
+                                .await
+                            {
+                                warn!(instance=%instance, execution_id, id, error=%e, "timer: atomic ack failed");
                             }
                         }
-                    } else {
-                        tokio::time::sleep(std::time::Duration::from_millis(idle_sleep_ms)).await;
+                        other => {
+                            error!(?other, "unexpected WorkItem in Timer dispatcher; state corruption");
+                            panic!("unexpected WorkItem in Timer dispatcher");
+                        }
                     }
+                } else {
+                    tokio::time::sleep(std::time::Duration::from_millis(self.options.dispatcher_idle_sleep_ms))
+                        .await;
                 }
-            });
-            // Keep service join handle alive within dispatcher lifetime
-            let _ = svc_jh.await;
+            }
         })
     }
 

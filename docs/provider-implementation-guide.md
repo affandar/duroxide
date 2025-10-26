@@ -191,34 +191,27 @@ impl Provider for MyProvider {
         self.read(instance).await
     }
     
-    // === OPTIONAL: Timer Queue (only if supports_delayed_visibility=true) ===
-    
-    fn supports_delayed_visibility(&self) -> bool {
-        false  // Return true if you can delay message visibility
-    }
+    // === REQUIRED: Timer Queue ===
     
     async fn enqueue_timer_work(&self, item: WorkItem) -> Result<(), String> {
-        // Only called if supports_delayed_visibility=true
         // Store timer with fire_at visibility delay
         
-        Err("Not supported".to_string())
+        todo!()
     }
     
     async fn dequeue_timer_peek_lock(&self) -> Option<(WorkItem, String)> {
-        // Only called if supports_delayed_visibility=true
         // Return next timer where fire_at <= now()
         
-        None
+        todo!()
     }
     
     async fn ack_timer(&self, token: &str, completion: WorkItem, delay_ms: Option<u64>) -> Result<(), String> {
-        // Only called if supports_delayed_visibility=true
         // Atomically:
         // 1. Delete timer from queue (WHERE lock_token = token)
         // 2. Enqueue TimerFired to orchestrator queue with optional visibility delay
         // MUST be atomic - prevents lost timer completions
         
-        Err("Not supported".to_string())
+        todo!()
     }
     
     // === OPTIONAL: Management APIs ===
@@ -532,9 +525,9 @@ RETURN Ok(())  // Idempotent
    - PRIMARY KEY: (instance_id, execution_id)
    - Columns: status, output, started_at, completed_at
 
-### Optional Tables
+### Required Tables
 
-6. **timer_queue** - Timer schedules (only if supports_delayed_visibility=true)
+6. **timer_queue** - Timer schedules (REQUIRED)
    - PRIMARY KEY: id (auto-increment)
    - Columns: work_item (JSON), fire_at, lock_token, locked_until
    - INDEX: (fire_at, lock_token)

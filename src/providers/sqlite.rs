@@ -514,9 +514,6 @@ impl SqliteProvider {
 
 #[async_trait::async_trait]
 impl Provider for SqliteProvider {
-    fn supports_delayed_visibility(&self) -> bool {
-        true
-    }
     async fn fetch_orchestration_item(&self) -> Option<OrchestrationItem> {
         let mut tx = self.pool.begin().await.ok()?;
         let now_ms = Self::now_millis();
