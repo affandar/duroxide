@@ -67,24 +67,20 @@ impl TimerService {
             }
 
             for (instance, execution_id, id, fire_at_ms, ack_token) in due.drain(..) {
-                // First enqueue the TimerFired event
-                let enqueue_result = self
+                // Atomically enqueue TimerFired and ack timer
+                let _ = self
                     .store
-                    .enqueue_orchestrator_work(
+                    .ack_timer(
+                        &ack_token,
                         WorkItem::TimerFired {
                             instance,
                             execution_id,
                             id,
                             fire_at_ms,
                         },
-                        None,
+                        None, // No delay for in-process timers
                     )
                     .await;
-
-                // Only acknowledge the timer after successful enqueue
-                if enqueue_result.is_ok() {
-                    let _ = self.store.ack_timer(&ack_token).await;
-                }
             }
 
             // Wait for next event or schedule
@@ -161,6 +157,7 @@ mod tests {
             }
 
             async fn enqueue_orchestrator_work(&self, item: WorkItem, _delay_ms: Option<u64>) -> Result<(), String> {
+                // No longer called directly from ack_timer - capture in ack_timer instead
                 self.captured.lock().await.push(item);
                 Ok(())
             }
@@ -171,8 +168,8 @@ mod tests {
             async fn dequeue_worker_peek_lock(&self) -> Option<(WorkItem, String)> {
                 self.inner.dequeue_worker_peek_lock().await
             }
-            async fn ack_worker(&self, token: &str) -> Result<(), String> {
-                self.inner.ack_worker(token).await
+            async fn ack_worker(&self, token: &str, completion: WorkItem) -> Result<(), String> {
+                self.inner.ack_worker(token, completion).await
             }
 
             async fn enqueue_timer_work(&self, item: WorkItem) -> Result<(), String> {
@@ -181,8 +178,10 @@ mod tests {
             async fn dequeue_timer_peek_lock(&self) -> Option<(WorkItem, String)> {
                 self.inner.dequeue_timer_peek_lock().await
             }
-            async fn ack_timer(&self, token: &str) -> Result<(), String> {
-                self.inner.ack_timer(token).await
+            async fn ack_timer(&self, _token: &str, completion: WorkItem, _delay_ms: Option<u64>) -> Result<(), String> {
+                // Capture the completion (don't call inner - would create duplicate)
+                self.captured.lock().await.push(completion);
+                Ok(())
             }
 
             async fn latest_execution_id(&self, instance: &str) -> Option<u64> {

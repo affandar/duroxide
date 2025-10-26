@@ -66,6 +66,7 @@ async fn test_custom_polling_frequency() {
     // Start with slower polling (50ms)
     let options = RuntimeOptions {
         dispatcher_idle_sleep_ms: 50,
+        orchestration_concurrency: 1,
     };
 
     let rt = runtime::Runtime::start_with_options(store.clone(), Arc::new(activities), orchestrations, options).await;
@@ -101,6 +102,7 @@ async fn test_fast_polling() {
     // Very responsive: 1ms polling
     let options = RuntimeOptions {
         dispatcher_idle_sleep_ms: 1,
+        orchestration_concurrency: 1,
     };
 
     let rt = runtime::Runtime::start_with_options(store.clone(), Arc::new(activities), orchestrations, options).await;

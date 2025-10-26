@@ -72,3 +72,11 @@ CREATE TABLE IF NOT EXISTS timer_queue (
 
 -- Indexes for timer queue
 CREATE INDEX IF NOT EXISTS idx_timer_fire ON timer_queue(fire_at, lock_token);
+
+-- Instance-level locks for concurrent dispatcher coordination
+CREATE TABLE IF NOT EXISTS instance_locks (
+    instance_id TEXT PRIMARY KEY,
+    lock_token TEXT NOT NULL,
+    locked_until INTEGER NOT NULL,
+    locked_at INTEGER NOT NULL
+);

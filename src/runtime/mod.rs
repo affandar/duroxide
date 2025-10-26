@@ -15,12 +15,19 @@ pub struct RuntimeOptions {
     /// Higher values = less CPU usage, higher latency when idle.
     /// Default: 10ms (100 Hz)
     pub dispatcher_idle_sleep_ms: u64,
+    
+    /// Number of concurrent orchestration workers.
+    /// Each worker can process one orchestration turn at a time.
+    /// Higher values = more parallel orchestration execution.
+    /// Default: 2
+    pub orchestration_concurrency: usize,
 }
 
 impl Default for RuntimeOptions {
     fn default() -> Self {
         Self {
             dispatcher_idle_sleep_ms: 10,
+            orchestration_concurrency: 2,
         }
     }
 }
@@ -125,9 +132,14 @@ impl Runtime {
     ) -> ExecutionMetadata {
         let mut metadata = ExecutionMetadata::default();
 
-        // Scan history_delta for terminal events
+        // Scan history_delta for OrchestrationStarted (first event) and terminal events
         for event in history_delta {
             match event {
+                Event::OrchestrationStarted { name, version, .. } => {
+                    // Capture orchestration metadata from start event
+                    metadata.orchestration_name = Some(name.clone());
+                    metadata.orchestration_version = Some(version.clone());
+                }
                 Event::OrchestrationCompleted { output, .. } => {
                     metadata.status = Some("Completed".to_string());
                     metadata.output = Some(output.clone());
@@ -258,15 +270,33 @@ impl Runtime {
     }
 
     fn start_orchestration_dispatcher(self: Arc<Self>) -> JoinHandle<()> {
-        // EXECUTION: consumes provider orchestrator items, drives atomic turns
+        // EXECUTION: spawns N concurrent orchestration workers
+        // Instance-level locking in provider prevents concurrent processing of same instance
+        let concurrency = self.options.orchestration_concurrency;
+        
         tokio::spawn(async move {
-            loop {
-                if let Some(item) = self.history_store.fetch_orchestration_item().await {
-                    // Process orchestration item atomically
-                    self.process_orchestration_item(item).await;
-                } else {
-                    tokio::time::sleep(std::time::Duration::from_millis(self.options.dispatcher_idle_sleep_ms)).await;
-                }
+            let mut worker_handles = Vec::new();
+            
+            for worker_id in 0..concurrency {
+                let rt = self.clone();
+                let handle = tokio::spawn(async move {
+                    debug!("Orchestration worker {} started", worker_id);
+                    loop {
+                        if let Some(item) = rt.history_store.fetch_orchestration_item().await {
+                            // Process orchestration item atomically
+                            // Provider ensures no other worker has this instance locked
+                            rt.process_orchestration_item(item).await;
+                        } else {
+                            tokio::time::sleep(std::time::Duration::from_millis(rt.options.dispatcher_idle_sleep_ms)).await;
+                        }
+                    }
+                });
+                worker_handles.push(handle);
+            }
+            
+            // Wait for all workers to complete (never happens unless shutdown)
+            for handle in worker_handles {
+                let _ = handle.await;
             }
         })
     }
@@ -508,55 +538,53 @@ impl Runtime {
                             name,
                             input,
                         } => {
-                            // Execute activity via registry directly; enqueue completion/failure to orchestrator queue
-                            let enqueue_result = if let Some(handler) = activities.get(&name) {
+                            // Execute activity and atomically ack with completion
+                            let ack_result = if let Some(handler) = activities.get(&name) {
                                 match handler.invoke(input).await {
                                     Ok(result) => {
                                         self.history_store
-                                            .enqueue_orchestrator_work(
+                                            .ack_worker(
+                                                &token,
                                                 WorkItem::ActivityCompleted {
                                                     instance: instance.clone(),
                                                     execution_id,
                                                     id,
                                                     result,
                                                 },
-                                                None,
                                             )
                                             .await
                                     }
                                     Err(error) => {
                                         self.history_store
-                                            .enqueue_orchestrator_work(
+                                            .ack_worker(
+                                                &token,
                                                 WorkItem::ActivityFailed {
                                                     instance: instance.clone(),
                                                     execution_id,
                                                     id,
                                                     error,
                                                 },
-                                                None,
                                             )
                                             .await
                                     }
                                 }
                             } else {
                                 self.history_store
-                                    .enqueue_orchestrator_work(
+                                    .ack_worker(
+                                        &token,
                                         WorkItem::ActivityFailed {
                                             instance: instance.clone(),
                                             execution_id,
                                             id,
                                             error: format!("unregistered:{}", name),
                                         },
-                                        None,
                                     )
                                     .await
                             };
 
-                            // Only acknowledge after successful enqueue
-                            if enqueue_result.is_ok() {
-                                let _ = self.history_store.ack_worker(&token).await;
-                            } else {
-                                warn!(instance = %instance, execution_id, id, "worker: enqueue to orchestrator failed; not acking");
+                            // Log if atomic ack failed
+                            if let Err(e) = ack_result {
+                                warn!(instance = %instance, execution_id, id, error=%e, "worker: atomic ack failed");
                             }
                         }
                         other => {
@@ -593,21 +621,22 @@ impl Runtime {
                                     .as_millis() as u64;
                                 let delay_ms = fire_at_ms.saturating_sub(current_time_ms);
 
-                                // Enqueue TimerFired with visibility delay
+                                // Atomically ack timer and enqueue TimerFired with visibility delay
                                 let timer_fired = WorkItem::TimerFired {
-                                    instance,
+                                    instance: instance.clone(),
                                     execution_id,
                                     id,
                                     fire_at_ms,
                                 };
 
-                                // Use the provider's delayed visibility support
-                                let _ = self
+                                // Use atomic ack with delayed visibility support
+                                if let Err(e) = self
                                     .history_store
-                                    .enqueue_orchestrator_work(timer_fired, Some(delay_ms))
-                                    .await;
-
-                                let _ = self.history_store.ack_timer(&token).await;
+                                    .ack_timer(&token, timer_fired, Some(delay_ms))
+                                    .await
+                                {
+                                    warn!(instance=%instance, execution_id, id, error=%e, "timer: atomic ack failed");
+                                }
                             }
                             other => {
                                 error!(?other, "unexpected WorkItem in Timer dispatcher; state corruption");

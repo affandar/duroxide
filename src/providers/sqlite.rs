@@ -354,6 +354,20 @@ impl SqliteProvider {
         .execute(pool)
         .await?;
 
+        // Instance-level locks for concurrent dispatcher coordination
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS instance_locks (
+                instance_id TEXT PRIMARY KEY,
+                lock_token TEXT NOT NULL,
+                locked_until INTEGER NOT NULL,
+                locked_at INTEGER NOT NULL
+            )
+            "#,
+        )
+        .execute(pool)
+        .await?;
+
         // Create indexes
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_orch_visible ON orchestrator_queue(visible_at, lock_token)")
             .execute(pool)
@@ -505,27 +519,18 @@ impl Provider for SqliteProvider {
     }
     async fn fetch_orchestration_item(&self) -> Option<OrchestrationItem> {
         let mut tx = self.pool.begin().await.ok()?;
-        // Queue diagnostics
-        if let Ok((total_count,)) = sqlx::query_as::<_, (i64,)>("SELECT COUNT(*) FROM orchestrator_queue")
-            .fetch_one(&mut *tx)
-            .await
-        {
-            tracing::debug!(
-                target = "duroxide::providers::sqlite",
-                total_count,
-                "orchestrator_queue size"
-            );
-        }
-
-        // Find the next available message and use its instance to process a batch
         let now_ms = Self::now_millis();
+
+        // Find an instance that has visible messages AND is not locked (or lock expired)
+        // Join orchestrator_queue with instance_locks to check lock status
         let row = sqlx::query(
             r#"
-            SELECT id, instance_id
-            FROM orchestrator_queue
-            WHERE (lock_token IS NULL OR locked_until <= ?1)
-              AND visible_at <= ?1
-            ORDER BY id
+            SELECT q.instance_id
+            FROM orchestrator_queue q
+            LEFT JOIN instance_locks il ON q.instance_id = il.instance_id
+            WHERE q.visible_at <= ?1
+              AND (il.instance_id IS NULL OR il.locked_until <= ?1)
+            ORDER BY q.id
             LIMIT 1
             "#,
         )
@@ -533,40 +538,79 @@ impl Provider for SqliteProvider {
         .fetch_optional(&mut *tx)
         .await
         .ok()?;
+        
         if row.is_none() {
+            // Check if there are any messages at all
+            let msg_count: Option<i64> = sqlx::query_scalar("SELECT COUNT(*) FROM orchestrator_queue")
+                .fetch_one(&mut *tx)
+                .await
+                .ok();
             tracing::debug!(
                 target = "duroxide::providers::sqlite",
-                "No orchestration items available"
+                total_messages=?msg_count,
+                "No available instances"
             );
             tx.rollback().await.ok();
             return None;
         }
-        let row = row?;
-        let first_id: i64 = row.try_get("id").ok()?;
-        let instance_id: String = row.try_get("instance_id").ok()?;
-        tracing::debug!(target="duroxide::providers::sqlite", first_id, instance_id=%instance_id, "Selected next orchestrator queue row");
+        
+        let instance_id: String = row?.try_get("instance_id").ok()?;
+        tracing::debug!(target="duroxide::providers::sqlite", instance_id=%instance_id, "Selected available instance");
+        
         let lock_token = Self::generate_lock_token();
         let locked_until = Self::timestamp_after(self.lock_timeout);
 
-        // Lock all messages for this instance that are visible
+        // Atomically acquire instance lock (INSERT OR REPLACE to handle expired locks)
+        let lock_result = sqlx::query(
+            r#"
+            INSERT INTO instance_locks (instance_id, lock_token, locked_until, locked_at)
+            VALUES (?1, ?2, ?3, ?4)
+            ON CONFLICT(instance_id) DO UPDATE
+            SET lock_token = ?2, locked_until = ?3, locked_at = ?4
+            WHERE locked_until <= ?4
+            "#,
+        )
+        .bind(&instance_id)
+        .bind(&lock_token)
+        .bind(locked_until)
+        .bind(now_ms)
+        .execute(&mut *tx)
+        .await;
+
+        match lock_result {
+            Ok(result) => {
+                let affected = result.rows_affected();
+                tracing::debug!(target="duroxide::providers::sqlite", instance=%instance_id, rows_affected=affected, "Instance lock result");
+                if affected == 0 {
+                    // Failed to acquire lock (lock still held by another worker)
+                    tracing::debug!(target="duroxide::providers::sqlite", instance=%instance_id, "Failed to acquire instance lock (already locked)");
+                    tx.rollback().await.ok();
+                    return None;
+                }
+            }
+            Err(e) => {
+                tracing::debug!(target="duroxide::providers::sqlite", instance=%instance_id, error=%e.to_string(), "Error acquiring instance lock");
+                tx.rollback().await.ok();
+                return None;
+            }
+        }
+
+        // Fetch ALL messages for this instance and mark them with our lock_token for later deletion
+        // We mark them so we can distinguish between messages we fetched vs new messages that arrive later
         sqlx::query(
             r#"
             UPDATE orchestrator_queue
-            SET lock_token = ?1, locked_until = ?2
-            WHERE instance_id = ?3
-              AND (lock_token IS NULL OR locked_until <= ?4)
-              AND visible_at <= ?4
-            "#,
+            SET lock_token = ?1
+            WHERE instance_id = ?2 AND visible_at <= ?3
+            "#
         )
         .bind(&lock_token)
-        .bind(locked_until)
         .bind(&instance_id)
         .bind(now_ms)
         .execute(&mut *tx)
         .await
         .ok()?;
-
-        // Fetch locked messages
+        
         let messages = sqlx::query(
             r#"
             SELECT id, work_item
@@ -579,10 +623,15 @@ impl Provider for SqliteProvider {
         .fetch_all(&mut *tx)
         .await
         .ok()?;
-        tracing::debug!(target="duroxide::providers::sqlite", locked_count=%messages.len(), instance=%instance_id, "Locked messages for instance");
+        tracing::debug!(target="duroxide::providers::sqlite", message_count=%messages.len(), instance=%instance_id, "Fetched and marked messages for locked instance");
 
         if messages.is_empty() {
-            // No messages were actually locked, rollback
+            // No messages for instance (shouldn't happen), release lock and rollback
+            sqlx::query("DELETE FROM instance_locks WHERE instance_id = ?")
+                .bind(&instance_id)
+                .execute(&mut *tx)
+                .await
+                .ok();
             tx.rollback().await.ok();
             return None;
         }
@@ -692,8 +741,8 @@ impl Provider for SqliteProvider {
     ) -> Result<(), String> {
         let mut tx = self.pool.begin().await.map_err(|e| e.to_string())?;
 
-        // Get instance from lock token
-        let row = sqlx::query("SELECT DISTINCT instance_id FROM orchestrator_queue WHERE lock_token = ?")
+        // Get instance from instance_locks table (we now use instance-level locking)
+        let row = sqlx::query("SELECT instance_id FROM instance_locks WHERE lock_token = ?")
             .bind(lock_token)
             .fetch_optional(&mut *tx)
             .await
@@ -702,7 +751,8 @@ impl Provider for SqliteProvider {
 
         let instance_id: String = row.try_get("instance_id").map_err(|e| e.to_string())?;
 
-        // Delete acknowledged messages
+        // Delete only the messages we fetched (marked with our lock_token)
+        // New messages that arrived after fetch will remain in queue for next turn
         sqlx::query("DELETE FROM orchestrator_queue WHERE lock_token = ?")
             .bind(lock_token)
             .execute(&mut *tx)
@@ -716,25 +766,21 @@ impl Provider for SqliteProvider {
             "Acking with explicit execution_id"
         );
 
-        // For new instances from StartOrchestration, we need to get the orchestration info
-        // from the first history event (OrchestrationStarted)
-        if !history_delta.is_empty() {
-            if let Some(crate::Event::OrchestrationStarted { name, version, .. }) = history_delta.first() {
-                // Update instance with correct orchestration info
-                sqlx::query(
-                    r#"
-                    UPDATE instances 
-                    SET orchestration_name = ?, orchestration_version = ?
-                    WHERE instance_id = ?
-                    "#,
-                )
-                .bind(name)
-                .bind(version)
-                .bind(&instance_id)
-                .execute(&mut *tx)
-                .await
-                .map_err(|e| e.to_string())?;
-            }
+        // Update instance metadata from runtime-provided metadata (no event inspection)
+        if let (Some(name), Some(version)) = (&metadata.orchestration_name, &metadata.orchestration_version) {
+            sqlx::query(
+                r#"
+                UPDATE instances 
+                SET orchestration_name = ?, orchestration_version = ?
+                WHERE instance_id = ?
+                "#,
+            )
+            .bind(name)
+            .bind(version)
+            .bind(&instance_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?;
         }
 
         // Create execution record if it doesn't exist (idempotent)
@@ -890,23 +936,45 @@ impl Provider for SqliteProvider {
                 .map_err(|e| e.to_string())?;
         }
 
-        // After enqueue, print queue size
-        if let Ok((total_count,)) = sqlx::query_as::<_, (i64,)>("SELECT COUNT(*) FROM orchestrator_queue")
-            .fetch_one(&mut *tx)
-            .await
-        {
-            tracing::debug!(
-                target = "duroxide::providers::sqlite",
-                total_count,
-                "orchestrator_queue size after enqueue"
+        // Validate instance lock is still valid before committing
+        let now_ms = Self::now_millis();
+        let lock_valid = sqlx::query_scalar::<_, i64>(
+            r#"
+            SELECT COUNT(*) FROM instance_locks 
+            WHERE instance_id = ? AND lock_token = ? AND locked_until > ?
+            "#
+        )
+        .bind(&instance_id)
+        .bind(lock_token)
+        .bind(now_ms)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+
+        if lock_valid == 0 {
+            // Lock expired or was stolen - abort transaction
+            tracing::warn!(
+                instance = %instance_id,
+                lock_token = %lock_token,
+                "Instance lock expired or invalid, aborting ack"
             );
+            tx.rollback().await.ok();
+            return Err("Instance lock expired".to_string());
         }
+
+        // Remove instance lock (processing complete)
+        sqlx::query("DELETE FROM instance_locks WHERE instance_id = ? AND lock_token = ?")
+            .bind(&instance_id)
+            .bind(lock_token)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?;
 
         tx.commit().await.map_err(|e| e.to_string())?;
 
         debug!(
             instance = %instance_id,
-            "Acknowledged orchestration item"
+            "Acknowledged orchestration item and released lock"
         );
 
         Ok(())
@@ -978,12 +1046,42 @@ impl Provider for SqliteProvider {
         Some((work_item, lock_token))
     }
 
-    async fn ack_timer(&self, token: &str) -> Result<(), String> {
+    async fn ack_timer(&self, token: &str, completion: WorkItem, delay_ms: Option<u64>) -> Result<(), String> {
+        let mut tx = self.pool.begin().await.map_err(|e| e.to_string())?;
+
+        // Extract instance from completion
+        let instance = match &completion {
+            WorkItem::TimerFired { instance, .. } => instance,
+            _ => return Err("Invalid completion type for timer ack".to_string()),
+        };
+
+        // Delete timer item
         sqlx::query("DELETE FROM timer_queue WHERE lock_token = ?")
             .bind(token)
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await
             .map_err(|e| e.to_string())?;
+
+        // Enqueue TimerFired to orchestrator queue with optional delay
+        let work_item = serde_json::to_string(&completion).map_err(|e| e.to_string())?;
+        let now_ms = Self::now_millis();
+        let visible_at = if let Some(delay) = delay_ms {
+            now_ms + delay as i64
+        } else {
+            now_ms
+        };
+        
+        sqlx::query("INSERT INTO orchestrator_queue (instance_id, work_item, visible_at) VALUES (?, ?, ?)")
+            .bind(instance)
+            .bind(work_item)
+            .bind(visible_at)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        tx.commit().await.map_err(|e| e.to_string())?;
+
+        debug!(instance = %instance, delay_ms=?delay_ms, "Atomically acked timer and enqueued completion");
         Ok(())
     }
 
@@ -1100,50 +1198,75 @@ impl Provider for SqliteProvider {
         Some((work_item, lock_token))
     }
 
-    async fn ack_worker(&self, token: &str) -> Result<(), String> {
+    async fn ack_worker(&self, token: &str, completion: WorkItem) -> Result<(), String> {
+        let mut tx = self.pool.begin().await.map_err(|e| e.to_string())?;
+
+        // Extract instance from completion
+        let instance = match &completion {
+            WorkItem::ActivityCompleted { instance, .. } => instance,
+            WorkItem::ActivityFailed { instance, .. } => instance,
+            _ => return Err("Invalid completion type for worker ack".to_string()),
+        };
+
+        // Delete worker item
         sqlx::query("DELETE FROM worker_queue WHERE lock_token = ?")
             .bind(token)
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await
             .map_err(|e| e.to_string())?;
 
+        // Enqueue completion to orchestrator queue
+        let work_item = serde_json::to_string(&completion).map_err(|e| e.to_string())?;
+        let now_ms = Self::now_millis();
+        
+        sqlx::query("INSERT INTO orchestrator_queue (instance_id, work_item, visible_at) VALUES (?, ?, ?)")
+            .bind(instance)
+            .bind(work_item)
+            .bind(now_ms)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        tx.commit().await.map_err(|e| e.to_string())?;
+
+        debug!(instance = %instance, "Atomically acked worker and enqueued completion");
         Ok(())
     }
 
     async fn abandon_orchestration_item(&self, lock_token: &str, delay_ms: Option<u64>) -> Result<(), String> {
-        let result = if let Some(delay_ms) = delay_ms {
-            // Update visible_at to delay visibility
-            let visible_at = Self::now_millis() + delay_ms as i64;
-            sqlx::query(
-                r#"
-                UPDATE orchestrator_queue
-                SET lock_token = NULL, locked_until = NULL, 
-                    visible_at = ?
-                WHERE lock_token = ?
-                "#,
-            )
-            .bind(visible_at)
-            .bind(lock_token)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| e.to_string())?
-        } else {
-            // Clear the lock on all messages with this lock token
-            sqlx::query(
-                r#"
-                UPDATE orchestrator_queue
-                SET lock_token = NULL, locked_until = NULL
-                WHERE lock_token = ?
-                "#,
-            )
-            .bind(lock_token)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| e.to_string())?
-        };
+        // Get instance_id from lock before removing it
+        let instance_id: Option<String> = sqlx::query_scalar(
+            "SELECT instance_id FROM instance_locks WHERE lock_token = ?"
+        )
+        .bind(lock_token)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
 
-        if result.rows_affected() == 0 {
+        if instance_id.is_none() {
             return Err("Invalid lock token".to_string());
+        }
+
+        // Remove instance lock
+        sqlx::query("DELETE FROM instance_locks WHERE lock_token = ?")
+            .bind(lock_token)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        // Optionally delay messages for this instance
+        if let Some(instance_id) = instance_id {
+            if let Some(delay_ms) = delay_ms {
+                let visible_at = Self::now_millis() + delay_ms as i64;
+                let _ = sqlx::query(
+                    "UPDATE orchestrator_queue SET visible_at = ? WHERE instance_id = ? AND visible_at <= ?"
+                )
+                .bind(visible_at)
+                .bind(&instance_id)
+                .bind(Self::now_millis())
+                .execute(&self.pool)
+                .await;
+            }
         }
 
         Ok(())
@@ -1724,9 +1847,19 @@ mod tests {
         // No more work
         assert!(store.dequeue_worker_peek_lock().await.is_none());
 
-        // Ack the work
-        store.ack_worker(&token1).await.unwrap();
-        store.ack_worker(&token2).await.unwrap();
+        // Ack the work with dummy completions
+        store.ack_worker(&token1, WorkItem::ActivityCompleted {
+            instance: "test-atomic".to_string(),
+            execution_id: 1,
+            id: 1,
+            result: "done".to_string(),
+        }).await.unwrap();
+        store.ack_worker(&token2, WorkItem::ActivityCompleted {
+            instance: "test-atomic".to_string(),
+            execution_id: 1,
+            id: 2,
+            result: "done".to_string(),
+        }).await.unwrap();
     }
 
     #[tokio::test]
@@ -1961,8 +2094,13 @@ mod tests {
         // Can't dequeue again while locked
         assert!(store.dequeue_worker_peek_lock().await.is_none());
 
-        // Ack it
-        store.ack_worker(&token).await.unwrap();
+        // Ack it with completion
+        store.ack_worker(&token, WorkItem::ActivityCompleted {
+            instance: "test-worker".to_string(),
+            execution_id: 1,
+            id: 1,
+            result: "done".to_string(),
+        }).await.unwrap();
 
         // Queue should be empty
         assert!(store.dequeue_worker_peek_lock().await.is_none());
@@ -2142,7 +2280,12 @@ mod tests {
         let (dequeued, token) = store.dequeue_timer_peek_lock().await.unwrap();
         assert!(matches!(dequeued, WorkItem::TimerSchedule { id: 2, .. }));
 
-        // Ack it
-        store.ack_timer(&token).await.unwrap();
+        // Ack it with completion
+        store.ack_timer(&token, WorkItem::TimerFired {
+            instance: "test-timer-past".to_string(),
+            execution_id: 1,
+            id: 2,
+            fire_at_ms: 0,
+        }, None).await.unwrap();
     }
 }

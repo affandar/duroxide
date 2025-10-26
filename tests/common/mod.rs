@@ -5,6 +5,7 @@ use std::sync::Arc as StdArc;
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
 
+#[allow(dead_code)]
 pub async fn wait_for_history<F>(store: StdArc<dyn Provider>, instance: &str, predicate: F, timeout_ms: u64) -> bool
 where
     F: Fn(&Vec<Event>) -> bool,
@@ -19,6 +20,7 @@ where
     .is_some()
 }
 
+#[allow(dead_code)]
 pub async fn wait_for_subscription(store: StdArc<dyn Provider>, instance: &str, name: &str, timeout_ms: u64) -> bool {
     wait_for_history(
         store,
@@ -32,6 +34,7 @@ pub async fn wait_for_subscription(store: StdArc<dyn Provider>, instance: &str, 
     .await
 }
 
+#[allow(dead_code)]
 pub async fn wait_for_history_event<T, F>(
     store: StdArc<dyn Provider>,
     instance: &str,
@@ -55,6 +58,7 @@ where
     }
 }
 
+#[allow(dead_code)]
 pub async fn create_sqlite_store_disk() -> (StdArc<dyn Provider>, TempDir) {
     let td = tempfile::tempdir().unwrap();
     let db_path = td.path().join("test.db");
@@ -72,6 +76,7 @@ pub async fn create_sqlite_store_disk() -> (StdArc<dyn Provider>, TempDir) {
 /// 3. Acks with OrchestrationStarted event
 ///
 /// Use this to seed test state without spinning up a full runtime.
+#[allow(dead_code)]
 pub async fn test_create_execution(
     provider: &dyn Provider,
     instance: &str,
