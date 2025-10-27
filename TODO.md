@@ -6,6 +6,7 @@
 
 ### Reliability & Provider API
 
+- export the providers test so it can be run by other crates
 - multi threaded timer/worker dispatchers
 - separate out dispatchers so they can run independently
 - name the dispatchers
