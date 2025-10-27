@@ -6,8 +6,7 @@
 
 ### Reliability & Provider API
 
-- multi threaded timer/worker dispatchers
-- separate out dispatchers so they can run independently
+- reduce the junk in stress tests, make them useful
 - name the dispatchers
 - clients should be able to query registered activities and orchestrations
 - Update provider docs
@@ -50,6 +49,8 @@
 
 ## DONE
 
+- multi threaded timer/worker dispatchers
+- separate out dispatchers so they can run independently
 - multi threaded orchestrator dispatcher
 - Provider cleanup:
   -- create_with_execution (ack_orchestration_item already creates new history)
