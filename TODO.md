@@ -6,7 +6,6 @@
 
 ### Reliability & Provider API
 
-- conventions and changes for exporting and importing orchestration and activity registries across crates
 - activity session management - cancellations, progress report, messaging.
 - reduce the junk in stress tests, make them useful
 - name the dispatchers
@@ -49,6 +48,7 @@
 
 ## DONE
 
+- conventions and changes for exporting and importing orchestration and activity registries across crates
 - make the provider tests usable by outside implementors
 - Add new provider tests
 - prompt files??

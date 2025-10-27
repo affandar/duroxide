@@ -88,8 +88,8 @@ pub async fn run_all_tests<F: ProviderFactory>(factory: F) {
 #[cfg(feature = "provider-test")]
 mod tests {
     use super::*;
-    use crate::{Event, INITIAL_EVENT_ID, INITIAL_EXECUTION_ID};
     use crate::providers::{ExecutionMetadata, WorkItem};
+    use crate::{Event, INITIAL_EVENT_ID, INITIAL_EXECUTION_ID};
     use std::time::Duration;
 
     pub(crate) async fn run_atomicity_tests<F: ProviderFactory>(factory: &F) {
@@ -204,11 +204,7 @@ mod tests {
 
         // Verify state unchanged - history should still have only 1 event
         let after_history = provider.read("instance-A").await;
-        assert_eq!(
-            after_history.len(),
-            1,
-            "History should be unchanged after failed ack"
-        );
+        assert_eq!(after_history.len(), 1, "History should be unchanged after failed ack");
     }
 
     async fn test_atomicity_success_commit<F: ProviderFactory>(factory: &F) {
@@ -251,14 +247,7 @@ mod tests {
 
         // Try to ack with invalid lock token
         let result = provider
-            .ack_orchestration_item(
-                "invalid-token",
-                1,
-                vec![],
-                vec![],
-                vec![],
-                ExecutionMetadata::default(),
-            )
+            .ack_orchestration_item("invalid-token", 1, vec![], vec![], vec![], ExecutionMetadata::default())
             .await;
 
         assert!(result.is_err(), "Should reject invalid lock token");
@@ -508,7 +497,13 @@ mod tests {
         // Verify worker item was enqueued
         let (dequeued, _) = provider.dequeue_worker_peek_lock().await.unwrap();
         match dequeued {
-            WorkItem::ActivityExecute { instance, name, input, execution_id, id } => {
+            WorkItem::ActivityExecute {
+                instance,
+                name,
+                input,
+                execution_id,
+                id,
+            } => {
                 assert_eq!(instance, "instance-J");
                 assert_eq!(name, "TestActivity");
                 assert_eq!(input, "{}");
@@ -519,4 +514,3 @@ mod tests {
         }
     }
 }
-

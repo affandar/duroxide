@@ -1576,6 +1576,7 @@ let result = ctx.schedule_activity("Task", "input").into_activity().await?;
 - **Tests**: `tests/e2e_samples.rs` - comprehensive patterns
 - **API Docs**: Run `cargo doc --open`
 - **Replay Debugging**: Check history with `client.read_execution_history()` (management capability required)
+- **Cross-Crate Composition**: See `docs/cross-crate-registry-pattern.md` for organizing orchestrations across multiple crates
 
 ---
 

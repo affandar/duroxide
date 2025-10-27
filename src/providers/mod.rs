@@ -569,7 +569,7 @@ pub enum WorkItem {
 ///   read("order-123") → Returns Execution 2's events (latest)
 ///   read_with_execution("order-123", 1) → Returns Execution 1's events
 ///   latest_execution_id("order-123") → Returns Some(2)
-///   list_executions("order-123") → Returns vec![1, 2]
+///   list_executions("order-123") → Returns vec!\[1, 2\]
 /// ```
 ///
 /// # Concurrency Model
@@ -1485,12 +1485,12 @@ pub trait Provider: Any + Send + Sync {
     ///
     /// # Default Implementation
     ///
-    /// Returns [1] if instance exists (from read()), empty Vec otherwise.
+    /// Returns `[1]` if instance exists (from read()), empty Vec otherwise.
     /// Override for proper multi-execution support.
     ///
     /// # Return Value
     ///
-    /// Vec of execution IDs in ascending order: [1], [1, 2], [1, 2, 3], etc.
+    /// Vec of execution IDs in ascending order: `[1]`, `[1, 2]`, `[1, 2, 3]`, etc.
     async fn list_executions(&self, instance: &str) -> Vec<u64> {
         let h = self.read(instance).await;
         if h.is_empty() { Vec::new() } else { vec![1] }
@@ -1700,7 +1700,7 @@ pub trait ManagementCapability: Any + Send + Sync {
     ///
     /// # Returns
     ///
-    /// Vector of execution IDs in ascending order: [1], [1, 2], [1, 2, 3], etc.
+    /// Vector of execution IDs in ascending order: `[1]`, `[1, 2]`, `[1, 2, 3]`, etc.
     ///
     /// # Multi-Execution Context
     ///
@@ -1722,7 +1722,7 @@ pub trait ManagementCapability: Any + Send + Sync {
     ///
     /// # Default
     ///
-    /// Returns [1] if instance exists, empty Vec otherwise.
+    /// Returns `[1]` if instance exists, empty Vec otherwise.
     async fn list_executions(&self, instance: &str) -> Result<Vec<u64>, String> {
         // Default assumes single execution if instance exists
         if let Ok(info) = self.get_instance_info(instance).await {
