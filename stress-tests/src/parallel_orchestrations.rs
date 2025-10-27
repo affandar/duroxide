@@ -3,9 +3,29 @@
 /// This test creates multiple orchestration instances that each perform
 /// fan-out/fan-in work, measuring total time and throughput to establish
 /// baseline performance before multi-threaded dispatcher improvements.
+///
+/// ## Scenarios Where Concurrency Helps:
+///
+/// 1. **I/O-bound activities**: When activities involve database queries, API calls,
+///    or file I/O, multiple worker threads allow waiting for I/O in parallel.
+///
+/// 2. **Independent orchestrations**: Multiple orchestration dispatchers enable
+///    processing different orchestration instances concurrently while each waits
+///    for activities to complete.
+///
+/// 3. **Fan-out patterns**: Orchestrations that spawn many activities benefit from
+///    higher worker concurrency to execute activities in parallel.
+///
+/// 4. **Mixed workloads**: Some orchestrations waiting for timers while others
+///    are actively processing activities benefit from balanced concurrency.
+///
+/// 5. **File-based persistence**: With file-based SQLite (WAL mode), writes can
+///    happen concurrently without blocking reads, benefiting from multiple dispatchers.
+///
+/// This test uses file-based SQLite to simulate real-world persistence and I/O overhead.
 use duroxide::providers::sqlite::SqliteProvider;
 use duroxide::runtime::registry::ActivityRegistry;
-use duroxide::runtime::{self, OrchestrationRegistry};
+use duroxide::runtime::{self, OrchestrationRegistry, RuntimeOptions};
 use duroxide::{Client, OrchestrationContext};
 use std::sync::Arc;
 use std::time::Instant;
@@ -58,33 +78,25 @@ struct StressTestConfig {
     tasks_per_instance: usize,
     /// Simulated activity execution time (ms)
     activity_delay_ms: u64,
+    /// Orchestration dispatcher concurrency
+    orch_concurrency: usize,
+    /// Worker dispatcher concurrency
+    worker_concurrency: usize,
 }
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Initialize tracing
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info,duroxide=debug".into()),
-        )
-        .init();
+async fn run_stress_test(config: StressTestConfig) -> Result<(usize, usize, usize, f64, f64), Box<dyn std::error::Error>> {
+    info!("=== Starting test with concurrency: orch={}, worker={} ===", config.orch_concurrency, config.worker_concurrency);
+    info!("Max concurrent: {}, Duration: {}s, Tasks per instance: {}, Activity delay: {}ms", 
+        config.max_concurrent, config.duration_secs, config.tasks_per_instance, config.activity_delay_ms);
 
-    // Test configuration
-    let config = StressTestConfig {
-        max_concurrent: 20,
-        duration_secs: 30,
-        tasks_per_instance: 5,
-        activity_delay_ms: 10,
-    };
-
-    info!("=== Duroxide Parallel Orchestration Stress Test ===");
-    info!("Max concurrent: {}", config.max_concurrent);
-    info!("Duration: {}s", config.duration_secs);
-    info!("Tasks per instance: {}", config.tasks_per_instance);
-    info!("Activity delay: {}ms", config.activity_delay_ms);
-
-    // Create storage provider
-    let store = Arc::new(SqliteProvider::new_in_memory().await?);
+    // Create storage provider (file-based for I/O testing)
+    let db_path = format!("/tmp/duroxide_stress_{}.db", std::process::id());
+    let store_path = db_path.clone();
+    
+    // Create the database file first
+    std::fs::File::create(&db_path)?;
+    
+    let store = Arc::new(SqliteProvider::new(&format!("sqlite:{}", db_path), None).await?);
 
     // Register activities
     let delay_ms = config.activity_delay_ms;
@@ -104,9 +116,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .register("FanoutWorkflow", fanout_orchestration)
         .build();
 
-    // Start runtime
-    info!("Starting runtime...");
-    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activities), orchestrations).await;
+    // Start runtime with custom options
+    let options = RuntimeOptions {
+        dispatcher_idle_sleep_ms: 100,
+        orchestration_concurrency: config.orch_concurrency,
+        worker_concurrency: config.worker_concurrency,
+    };
+    let rt = runtime::Runtime::start_with_options(store.clone(), Arc::new(activities), orchestrations, options).await;
 
     // Create client (wrap in Arc for sharing across tasks)
     let client = Arc::new(Client::new(store.clone()));
@@ -243,13 +259,75 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let total_activities = final_completed * config.tasks_per_instance;
+    let activity_throughput = total_activities as f64 / total_time.as_secs_f64();
     info!(
         "Activity throughput: {:.2} activities/sec",
-        total_activities as f64 / total_time.as_secs_f64()
+        activity_throughput
     );
+
+    let orch_throughput = final_completed as f64 / total_time.as_secs_f64();
 
     // Shutdown
     rt.shutdown(None).await;
+
+    // Cleanup database file
+    if let Err(e) = std::fs::remove_file(&store_path) {
+        tracing::warn!("Failed to remove temp DB file {}: {}", store_path, e);
+    }
+
+    Ok((final_launched, final_completed, final_failed, orch_throughput, activity_throughput))
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Initialize tracing with less verbose output
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
+        )
+        .init();
+
+    info!("=== Duroxide Parallel Orchestration Stress Test Suite ===");
+    
+    // Test different concurrency combinations
+    let concurrency_combos = vec![
+        (1, 1),
+        (2, 2),
+    ];
+
+    let mut results = Vec::new();
+
+    for (orch_conc, worker_conc) in concurrency_combos {
+        let config = StressTestConfig {
+            max_concurrent: 20,
+            duration_secs: 10,
+            tasks_per_instance: 5,
+            activity_delay_ms: 10,
+            orch_concurrency: orch_conc,
+            worker_concurrency: worker_conc,
+        };
+
+        match run_stress_test(config).await {
+            Ok((launched, completed, failed, orch_throughput, activity_throughput)) => {
+                results.push((orch_conc, worker_conc, launched, completed, failed, orch_throughput, activity_throughput));
+                info!("✓ Test completed");
+            }
+            Err(e) => {
+                info!("✗ Test failed: {}", e);
+            }
+        }
+    }
+
+    // Print summary table
+    info!("\n=== Summary Table ===");
+    info!("{:<8} {:<8} {:<10} {:<10} {:<8} {:<18} {:<18}", 
+        "Orch", "Worker", "Launched", "Completed", "Failed", "Orch/sec", "Activity/sec");
+    info!("{}", "-".repeat(92));
+    
+    for (orch, worker, launched, completed, failed, orch_tp, act_tp) in &results {
+        info!("{:<8} {:<8} {:<10} {:<10} {:<8} {:<18.2} {:<18.2}", 
+            orch, worker, launched, completed, failed, orch_tp, act_tp);
+    }
 
     Ok(())
 }

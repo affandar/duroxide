@@ -6,12 +6,12 @@
 
 ### Reliability & Provider API
 
+- make the provider tests usable by outside implementors
+- conventions and changes for exporting and importing orchestration and activity registries across crates
 - reduce the junk in stress tests, make them useful
 - name the dispatchers
 - clients should be able to query registered activities and orchestrations
 - Update provider docs
-- Add new provider tests
-- prompt files??
 - provider layer should have retries built into it and not sprinkled across all the code
 - need to build an azure storage provider
 - should focus on simplification, refactoring and then threading for dispatchers before synatic sugars
@@ -49,6 +49,8 @@
 
 ## DONE
 
+- Add new provider tests
+- prompt files??
 - multi threaded timer/worker dispatchers
 - separate out dispatchers so they can run independently
 - multi threaded orchestrator dispatcher
