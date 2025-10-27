@@ -179,20 +179,20 @@ async fn activity_reliability_after_crash_before_completion_enqueue() {
 
 /// Test multiple activities with crash/recovery
 ///
-/// NOTE: This test is currently ignored because the FS provider has a race condition:
-/// - Activities can be scheduled and written to history
-/// - System crashes before work items are enqueued to worker queue
-/// - On restart, history shows scheduled activities but no work items exist
-/// - Runtime lacks history-driven reconciliation to detect and fix this inconsistency
+/// This test verifies that scheduled activities persist across system crashes and completions
+/// resume correctly after restart. SQLite provider provides transactional guarantees that
+/// ensure history and work items are persisted atomically.
 ///
-/// This would be fixed by either:
-/// 1. Implementing history-driven reconciliation in the runtime
-/// 2. Using a transactional provider like SQLite
+/// Test flow:
+/// 1. Start orchestration with 3 parallel activities
+/// 2. Wait for all activities to be scheduled in history
+/// 3. Crash runtime before any activity completes
+/// 4. Restart runtime and verify all activities complete successfully
 #[tokio::test]
 async fn multiple_activities_reliability_after_crash() {
     // Use SQLite store for persistence across "crash" - SQLite provides atomicity
     // Shorten worker lock lease so redelivery happens quickly after restart
-    // Safety: see note above. We restore it at the end of the test.
+    // We restore the environment variable at the end of the test
     let prev_lease = std::env::var("DUROXIDE_SQLITE_LOCK_TIMEOUT_MS").ok();
     unsafe {
         std::env::set_var("DUROXIDE_SQLITE_LOCK_TIMEOUT_MS", "1000");
