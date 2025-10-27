@@ -223,6 +223,9 @@ async fn test_trace_deterministic_in_history() {
             "trace:ERROR:Error message"
         ]
     );
+
+    // Shutdown runtime to clean up background tasks
+    rt.shutdown(None).await;
 }
 
 // ============================================================================
