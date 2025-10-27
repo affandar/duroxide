@@ -17,7 +17,6 @@ sequenceDiagram
     participant R as Runtime
     participant OD as OrchestrationDispatcher
     participant WD as WorkDispatcher
-    participant TD as TimerDispatcher
     participant P as Provider (persistence + queues)
 
     U->>R: run_turn(history)
@@ -25,9 +24,8 @@ sequenceDiagram
     U-->>R: Decisions (ScheduleActivity/CreateTimer/Subscribe/Start...)
     R->>P: append Events (schedule/subscriptions)
     R->>WD: enqueue ActivityExecute (Worker queue)
-    R->>TD: enqueue TimerSchedule (Timer queue)
+    R->>P: enqueue TimerFired (Orchestrator queue with visible_at delay)
     WD->>P: enqueue ActivityCompleted/Failed (Orchestrator queue)
-    TD->>P: enqueue TimerFired (Orchestrator queue)
     OD->>R: deliver completions to orchestrator loop
     R->>P: append Events (completions)
     R->>U: next run_turn with updated history

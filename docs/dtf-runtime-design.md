@@ -455,34 +455,8 @@ fn start_work_dispatcher(self: Arc<Self>, activities: Arc<ActivityRegistry>) -> 
 ```
 
 ### Timer Dispatcher
-**Handles timer scheduling with real-time delays:**
 
-```rust
-fn start_timer_dispatcher(self: Arc<Self>) -> JoinHandle<()> {
-    tokio::spawn(async move {
-        loop {
-            if let Some((item, token)) = self.history_store.dequeue_peek_lock(QueueKind::Timer).await {
-                match item {
-                    WorkItem::TimerSchedule { instance, id, fire_at_ms } => {
-                        let now = Self::now_ms_static();
-                        let delay = fire_at_ms.saturating_sub(now);
-                        
-                        let rt = self.clone();
-                        tokio::spawn(async move {
-                            tokio::time::sleep(Duration::from_millis(delay)).await;
-                            let execution_id = rt.get_execution_id_for_instance(&instance).await;
-                            rt.history_store.enqueue_work(
-                                QueueKind::Orchestrator,
-                                WorkItem::TimerFired { instance, execution_id, id, fire_at_ms }
-                            ).await;
-                        });
-                    }
-                }
-            }
-        }
-    })
-}
-```
+**Note:** The timer dispatcher has been removed. Timers are now handled directly via the orchestrator queue with delayed visibility. When a timer is scheduled, `WorkItem::TimerFired` is created and enqueued to the orchestrator queue with `visible_at = fire_at_ms`.
 
 ## Replay Mechanics
 

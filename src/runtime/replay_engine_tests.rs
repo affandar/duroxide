@@ -107,13 +107,11 @@ mod tests {
             baseline_history,
         );
 
-        let messages = vec![
-            WorkItem::ExternalRaised {
-                instance: "test-instance".to_string(),
-                name: "test-event".to_string(),
-                data: "event-data".to_string(),
-            },
-        ];
+        let messages = vec![WorkItem::ExternalRaised {
+            instance: "test-instance".to_string(),
+            name: "test-event".to_string(),
+            data: "event-data".to_string(),
+        }];
 
         engine.prep_completions(messages);
 
@@ -241,14 +239,12 @@ mod tests {
         );
 
         // Add completion that won't be consumed by the handler but has a matching schedule
-        let messages = vec![
-            WorkItem::ActivityCompleted {
-                instance: "test-instance".to_string(),
-                execution_id: 1,
-                id: 999, // Scheduled below, not consumed by the mock handler
-                result: "test-result".to_string(),
-            },
-        ];
+        let messages = vec![WorkItem::ActivityCompleted {
+            instance: "test-instance".to_string(),
+            execution_id: 1,
+            id: 999, // Scheduled below, not consumed by the mock handler
+            result: "test-result".to_string(),
+        }];
         // Provide matching schedule for id=999
         engine.baseline_history.push(Event::ActivityScheduled {
             event_id: 999,
@@ -331,14 +327,12 @@ mod tests {
         assert!(!engine.made_progress());
 
         // Add completion - should show progress
-        let messages = vec![
-            WorkItem::ActivityCompleted {
-                instance: "test-instance".to_string(),
-                execution_id: 1,
-                id: 1,
-                result: "result".to_string(),
-            },
-        ];
+        let messages = vec![WorkItem::ActivityCompleted {
+            instance: "test-instance".to_string(),
+            execution_id: 1,
+            id: 1,
+            result: "result".to_string(),
+        }];
 
         engine.prep_completions(messages);
         assert!(engine.made_progress());
@@ -357,5 +351,3 @@ mod tests {
         assert!(!engine.made_progress());
     }
 }
-
-

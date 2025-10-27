@@ -298,49 +298,7 @@ async fn ack_worker_with_completion(
 
 ---
 
-## Q6: ack_timer - Same Issue!
-
-**Current code:**
-```rust
-async fn ack_timer(lock_token: &str) -> Result<()> {
-    DELETE FROM timer_queue WHERE lock_token = lock_token
-    Ok(())
-}
-```
-
-**Same problem as ack_worker!**
-
-Timer dispatcher does:
-```rust
-// Timer fires
-let timer_fired = WorkItem::TimerFired { instance, execution_id, id, fire_at_ms };
-
-store.enqueue_orchestrator_work(timer_fired, None).await?;  // Separate!
-store.ack_timer(&token).await?;  // Separate!
-```
-
-### Solution:
-
-```rust
-async fn ack_timer_with_completion(
-    &self,
-    timer_token: &str,
-    completion: WorkItem,  // TimerFired
-) -> Result<(), String> {
-    BEGIN TRANSACTION
-        // Delete timer item
-        DELETE FROM timer_queue WHERE lock_token = timer_token
-        
-        // Enqueue completion
-        INSERT INTO orchestrator_queue (instance_id, work_item, visible_at)
-        VALUES (extract_instance(completion), serialize(completion), now)
-    COMMIT
-    
-    Ok(())
-}
-```
-
-**TODO**: Implement this fix!
+**Note:** Timer functionality is now handled directly via the orchestrator queue with delayed visibility (`TimerFired` work items). The separate timer queue has been removed.
 
 ---
 

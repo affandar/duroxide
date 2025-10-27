@@ -2,8 +2,8 @@
 use crate::providers::{ExecutionMetadata, Provider, WorkItem};
 use crate::{Event, OrchestrationContext};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tracing::{debug, error, warn};
@@ -16,13 +16,13 @@ pub struct RuntimeOptions {
     /// Higher values = less CPU usage, higher latency when idle.
     /// Default: 100ms (10 Hz)
     pub dispatcher_idle_sleep_ms: u64,
-    
+
     /// Number of concurrent orchestration workers.
     /// Each worker can process one orchestration turn at a time.
     /// Higher values = more parallel orchestration execution.
     /// Default: 2
     pub orchestration_concurrency: usize,
-    
+
     /// Number of concurrent worker dispatchers.
     /// Each worker can execute one activity at a time.
     /// Higher values = more parallel activity execution.
@@ -97,7 +97,6 @@ pub fn kind_of(msg: &WorkItem) -> &'static str {
         WorkItem::ActivityExecute { .. } => "ActivityExecute",
         WorkItem::ActivityCompleted { .. } => "ActivityCompleted",
         WorkItem::ActivityFailed { .. } => "ActivityFailed",
-        WorkItem::TimerSchedule { .. } => "TimerSchedule",
         WorkItem::TimerFired { .. } => "TimerFired",
         WorkItem::ExternalRaised { .. } => "ExternalRaised",
         WorkItem::SubOrchCompleted { .. } => "SubOrchCompleted",
@@ -209,7 +208,10 @@ impl Runtime {
         }
 
         // Fall back to querying the store
-        self.history_store.latest_execution_id(instance).await.unwrap_or(crate::INITIAL_EXECUTION_ID)
+        self.history_store
+            .latest_execution_id(instance)
+            .await
+            .unwrap_or(crate::INITIAL_EXECUTION_ID)
     }
 
     /// Start a new runtime using the in-memory SQLite provider.
@@ -271,11 +273,6 @@ impl Runtime {
         let work_handle = runtime.clone().start_work_dispatcher(activity_registry);
         runtime.joins.lock().await.push(work_handle);
 
-        // background timer dispatcher (scaffold); current implementation handled by run_timer_worker
-        // kept here as an explicit lifecycle hook for provider-backed timer queue
-        let timer_handle = runtime.clone().start_timer_dispatcher();
-        runtime.joins.lock().await.push(timer_handle);
-
         runtime
     }
 
@@ -284,10 +281,10 @@ impl Runtime {
         // Instance-level locking in provider prevents concurrent processing of same instance
         let concurrency = self.options.orchestration_concurrency;
         let shutdown = self.shutdown_flag.clone();
-        
+
         tokio::spawn(async move {
             let mut worker_handles = Vec::new();
-            
+
             for worker_id in 0..concurrency {
                 let rt = self.clone();
                 let shutdown = shutdown.clone();
@@ -299,19 +296,20 @@ impl Runtime {
                             debug!("Orchestration worker {} exiting", worker_id);
                             break;
                         }
-                        
+
                         if let Some(item) = rt.history_store.fetch_orchestration_item().await {
                             // Process orchestration item atomically
                             // Provider ensures no other worker has this instance locked
                             rt.process_orchestration_item(item).await;
                         } else {
-                            tokio::time::sleep(std::time::Duration::from_millis(rt.options.dispatcher_idle_sleep_ms)).await;
+                            tokio::time::sleep(std::time::Duration::from_millis(rt.options.dispatcher_idle_sleep_ms))
+                                .await;
                         }
                     }
                 });
                 worker_handles.push(handle);
             }
-            
+
             // Wait for all workers to complete
             for handle in worker_handles {
                 let _ = handle.await;
@@ -330,12 +328,14 @@ impl Runtime {
         let workitem_reader = WorkItemReader::from_messages(&item.messages, &temp_history_mgr, instance);
 
         // Bail on truly terminal histories (Completed/Failed), or ContinuedAsNew without a CAN start message
-        if temp_history_mgr.is_completed || temp_history_mgr.is_failed || (temp_history_mgr.is_continued_as_new && !workitem_reader.is_continue_as_new) {
+        if temp_history_mgr.is_completed
+            || temp_history_mgr.is_failed
+            || (temp_history_mgr.is_continued_as_new && !workitem_reader.is_continue_as_new)
+        {
             warn!(instance = %instance, "Instance is terminal (completed/failed or CAN without start), acking batch without processing");
             self.ack_orchestration_with_changes(
                 lock_token,
                 item.execution_id,
-                vec![],
                 vec![],
                 vec![],
                 vec![],
@@ -369,30 +369,23 @@ impl Runtime {
         }
 
         // Process the execution (unified path)
-        let (worker_items, timer_items, orchestrator_items, execution_id_for_ack) =
-            if workitem_reader.has_orchestration_name() {
-                let (wi, ti, oi) = self
-                    .handle_orchestration_atomic(
-                        instance,
-                        &mut history_mgr,
-                        &workitem_reader,
-                        execution_id_to_use,
-                    )
-                    .await;
-                (wi, ti, oi, execution_id_to_use)
-            } else {
-                // Empty effective batch
-                (vec![], vec![], vec![], execution_id_to_use)
-            };
+        let (worker_items, orchestrator_items, execution_id_for_ack) = if workitem_reader.has_orchestration_name() {
+            let (wi, oi) = self
+                .handle_orchestration_atomic(instance, &mut history_mgr, &workitem_reader, execution_id_to_use)
+                .await;
+            (wi, oi, execution_id_to_use)
+        } else {
+            // Empty effective batch
+            (vec![], vec![], execution_id_to_use)
+        };
 
         // Atomically commit all changes
         let history_delta = history_mgr.delta();
         debug!(
             instance,
-            "Acking orchestration item: history_delta={}, worker={}, timer={}, orch={}",
+            "Acking orchestration item: history_delta={}, worker={}, orch={}",
             history_delta.len(),
             worker_items.len(),
-            timer_items.len(),
             orchestrator_items.len()
         );
 
@@ -405,7 +398,6 @@ impl Runtime {
             execution_id_for_ack,
             history_delta.to_vec(),
             worker_items,
-            timer_items,
             orchestrator_items,
             metadata,
         )
@@ -419,9 +411,8 @@ impl Runtime {
         history_mgr: &mut HistoryManager,
         workitem_reader: &WorkItemReader,
         execution_id: u64,
-    ) -> (Vec<WorkItem>, Vec<WorkItem>, Vec<WorkItem>) {
+    ) -> (Vec<WorkItem>, Vec<WorkItem>) {
         let mut worker_items = Vec::new();
-        let mut timer_items = Vec::new();
         let mut orchestrator_items = Vec::new();
 
         // Create started event if this is a new instance
@@ -429,7 +420,11 @@ impl Runtime {
             // Resolve version: use provided version or get from registry policy
             let resolved_version = if let Some(v) = &workitem_reader.version {
                 v.to_string()
-            } else if let Some(v) = self.orchestration_registry.resolve_version(&workitem_reader.orchestration_name).await {
+            } else if let Some(v) = self
+                .orchestration_registry
+                .resolve_version(&workitem_reader.orchestration_name)
+                .await
+            {
                 v.to_string()
             } else {
                 // Not found in registry - fail with unregistered error
@@ -443,7 +438,7 @@ impl Runtime {
                 });
 
                 history_mgr.append_failed(format!("unregistered:{}", &workitem_reader.orchestration_name));
-                return (worker_items, timer_items, orchestrator_items);
+                return (worker_items, orchestrator_items);
             };
 
             history_mgr.append(Event::OrchestrationStarted {
@@ -457,22 +452,16 @@ impl Runtime {
         }
 
         // Run the atomic execution to get all changes
-        let (_exec_history_delta, exec_worker_items, exec_timer_items, exec_orchestrator_items, _result) = self
+        let (_exec_history_delta, exec_worker_items, exec_orchestrator_items, _result) = self
             .clone()
-            .run_single_execution_atomic(
-                instance,
-                history_mgr,
-                workitem_reader,
-                execution_id,
-            )
+            .run_single_execution_atomic(instance, history_mgr, workitem_reader, execution_id)
             .await;
 
         // Combine all changes (history already in history_mgr via mutation)
         worker_items.extend(exec_worker_items);
-        timer_items.extend(exec_timer_items);
         orchestrator_items.extend(exec_orchestrator_items);
 
-        (worker_items, timer_items, orchestrator_items)
+        (worker_items, orchestrator_items)
     }
 
     /// Execute a function with retry logic and exponential backoff
@@ -510,7 +499,6 @@ impl Runtime {
         }
     }
 
-
     /// Acknowledge an orchestration item with changes, using retry logic
     async fn ack_orchestration_with_changes(
         &self,
@@ -518,7 +506,6 @@ impl Runtime {
         execution_id: u64,
         history_delta: Vec<Event>,
         worker_items: Vec<WorkItem>,
-        timer_items: Vec<WorkItem>,
         orchestrator_items: Vec<WorkItem>,
         metadata: ExecutionMetadata,
     ) {
@@ -530,7 +517,6 @@ impl Runtime {
                         execution_id,
                         history_delta.clone(),
                         worker_items.clone(),
-                        timer_items.clone(),
                         orchestrator_items.clone(),
                         metadata.clone(),
                     )
@@ -538,7 +524,7 @@ impl Runtime {
             },
             "ack_orchestration_item",
             Some(|| {
-                let _ = self.history_store.abandon_orchestration_item(lock_token, Some(50));
+                drop(self.history_store.abandon_orchestration_item(lock_token, Some(50)));
             }),
         )
         .await;
@@ -549,10 +535,10 @@ impl Runtime {
         // Activities are independent work units that can run in parallel
         let concurrency = self.options.worker_concurrency;
         let shutdown = self.shutdown_flag.clone();
-        
+
         tokio::spawn(async move {
             let mut worker_handles = Vec::new();
-            
+
             for worker_id in 0..concurrency {
                 let rt = self.clone();
                 let activities = activities.clone();
@@ -565,7 +551,7 @@ impl Runtime {
                             debug!("Worker dispatcher {} exiting", worker_id);
                             break;
                         }
-                        
+
                         if let Some((item, token)) = rt.history_store.dequeue_worker_peek_lock().await {
                             match item {
                                 WorkItem::ActivityExecute {
@@ -613,7 +599,7 @@ impl Runtime {
                                                     instance: instance.clone(),
                                                     execution_id,
                                                     id,
-                                                    error: format!("unregistered:{}", name),
+                                                    error: format!("unregistered:{name}"),
                                                 },
                                             )
                                             .await
@@ -630,13 +616,14 @@ impl Runtime {
                                 }
                             }
                         } else {
-                            tokio::time::sleep(std::time::Duration::from_millis(rt.options.dispatcher_idle_sleep_ms)).await;
+                            tokio::time::sleep(std::time::Duration::from_millis(rt.options.dispatcher_idle_sleep_ms))
+                                .await;
                         }
                     }
                 });
                 worker_handles.push(handle);
             }
-            
+
             // Wait for all workers to complete
             for handle in worker_handles {
                 let _ = handle.await;
@@ -645,74 +632,17 @@ impl Runtime {
         })
     }
 
-    fn start_timer_dispatcher(self: Arc<Self>) -> JoinHandle<()> {
-        // EXECUTION: consumes timer queue with provider delayed visibility support
-        let shutdown = self.shutdown_flag.clone();
-        
-        tokio::spawn(async move {
-            loop {
-                // Check shutdown flag before fetching
-                if shutdown.load(Ordering::Relaxed) {
-                    debug!("Timer dispatcher exiting");
-                    break;
-                }
-                
-                if let Some((item, token)) = self.history_store.dequeue_timer_peek_lock().await {
-                    match item {
-                        WorkItem::TimerSchedule {
-                            instance,
-                            execution_id,
-                            id,
-                            fire_at_ms,
-                        } => {
-                            // Calculate delay from now
-                            let current_time_ms = std::time::SystemTime::now()
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .unwrap()
-                                .as_millis() as u64;
-                            let delay_ms = fire_at_ms.saturating_sub(current_time_ms);
-
-                            // Atomically ack timer and enqueue TimerFired with visibility delay
-                            let timer_fired = WorkItem::TimerFired {
-                                instance: instance.clone(),
-                                execution_id,
-                                id,
-                                fire_at_ms,
-                            };
-
-                            // Use atomic ack with delayed visibility support
-                            if let Err(e) = self
-                                .history_store
-                                .ack_timer(&token, timer_fired, Some(delay_ms))
-                                .await
-                            {
-                                warn!(instance=%instance, execution_id, id, error=%e, "timer: atomic ack failed");
-                            }
-                        }
-                        other => {
-                            error!(?other, "unexpected WorkItem in Timer dispatcher; state corruption");
-                            panic!("unexpected WorkItem in Timer dispatcher");
-                        }
-                    }
-                } else {
-                    tokio::time::sleep(std::time::Duration::from_millis(self.options.dispatcher_idle_sleep_ms))
-                        .await;
-                }
-            }
-        })
-    }
-
     /// Shutdown the runtime.
-    /// 
+    ///
     /// # Parameters
-    /// 
+    ///
     /// * `timeout_ms` - How long to wait for graceful shutdown:
     ///   - `None`: Default 1000ms
     ///   - `Some(0)`: Immediate abort
     ///   - `Some(ms)`: Wait specified milliseconds
     pub async fn shutdown(self: Arc<Self>, timeout_ms: Option<u64>) {
         let timeout_ms = timeout_ms.unwrap_or(1000);
-        
+
         if timeout_ms == 0 {
             warn!("Immediate shutdown - aborting all tasks");
             let mut joins = self.joins.lock().await;
@@ -721,23 +651,23 @@ impl Runtime {
             }
             return;
         }
-        
+
         debug!("Graceful shutdown (timeout: {}ms)", timeout_ms);
-        
+
         // Set shutdown flag - workers check this between iterations
         self.shutdown_flag.store(true, Ordering::Relaxed);
-        
+
         // Give workers time to notice and exit gracefully
         tokio::time::sleep(std::time::Duration::from_millis(timeout_ms)).await;
-        
+
         // Check if any tasks are still running (need to be aborted)
         let mut joins = self.joins.lock().await;
-        
+
         // Abort any remaining tasks
         for j in joins.drain(..) {
             j.abort();
         }
-        
+
         debug!("Runtime shut down");
     }
 }

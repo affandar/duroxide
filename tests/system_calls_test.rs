@@ -23,7 +23,7 @@ async fn test_new_guid() {
             assert!(guid1.chars().filter(|c| *c != '-').all(|c| c.is_ascii_hexdigit()));
             assert!(guid2.chars().filter(|c| *c != '-').all(|c| c.is_ascii_hexdigit()));
 
-            Ok(format!("{},{}", guid1, guid2))
+            Ok(format!("{guid1},{guid2}"))
         })
         .build();
 
@@ -42,7 +42,7 @@ async fn test_new_guid() {
         assert_eq!(parts.len(), 2);
         assert_ne!(parts[0], parts[1]);
     } else {
-        panic!("Orchestration did not complete successfully: {:?}", status);
+        panic!("Orchestration did not complete successfully: {status:?}");
     }
 
     rt.shutdown(None).await;
@@ -77,7 +77,7 @@ async fn test_utcnow_ms() {
             // Second time should be after first (since we had a timer in between)
             assert!(t2 >= t1);
 
-            Ok(format!("{},{}", time1, time2))
+            Ok(format!("{time1},{time2}"))
         })
         .build();
 
@@ -95,7 +95,7 @@ async fn test_utcnow_ms() {
         let parts: Vec<&str> = output.split(',').collect();
         assert_eq!(parts.len(), 2);
     } else {
-        panic!("Orchestration did not complete successfully: {:?}", status);
+        panic!("Orchestration did not complete successfully: {status:?}");
     }
 
     rt.shutdown(None).await;
@@ -118,7 +118,7 @@ async fn test_system_calls_deterministic_replay() {
                 let time = ctx.utcnow_ms().await?;
 
                 // Use values in some computation
-                let result = format!("guid:{},time:{}", guid, time);
+                let result = format!("guid:{guid},time:{time}");
 
                 Ok(result)
             },
@@ -143,7 +143,7 @@ async fn test_system_calls_deterministic_replay() {
     let output1 = if let duroxide::runtime::OrchestrationStatus::Completed { output } = status1 {
         output
     } else {
-        panic!("First run did not complete successfully: {:?}", status1);
+        panic!("First run did not complete successfully: {status1:?}");
     };
 
     rt.shutdown(None).await;
@@ -161,7 +161,7 @@ async fn test_system_calls_deterministic_replay() {
     let output2 = if let duroxide::runtime::OrchestrationStatus::Completed { output } = status2 {
         output
     } else {
-        panic!("Second run did not complete successfully: {:?}", status2);
+        panic!("Second run did not complete successfully: {status2:?}");
     };
 
     // Outputs should be identical
@@ -229,14 +229,14 @@ async fn test_system_calls_with_select() {
         .unwrap();
 
     if let duroxide::runtime::OrchestrationStatus::Completed { output } = status {
-        println!("Output: {}", output);
+        println!("Output: {output}");
         // Output should contain winner index, result, guid validation, and time validation
         assert!(output.starts_with("winner:"), "Output should start with 'winner:'");
         assert!(output.contains("result:task_done"), "Output should contain task result");
         assert!(output.contains("guid_len:36"), "GUID should be 36 chars");
         assert!(output.contains("time_valid:true"), "Time should be valid");
     } else {
-        panic!("Orchestration did not complete successfully: {:?}", status);
+        panic!("Orchestration did not complete successfully: {status:?}");
     }
 
     rt.shutdown(None).await;
@@ -253,7 +253,7 @@ async fn test_system_calls_join_with_activities() {
         ActivityRegistry::builder()
             .register(
                 "SlowTask",
-                |input: String| async move { Ok(format!("processed:{}", input)) },
+                |input: String| async move { Ok(format!("processed:{input}")) },
             )
             .build(),
     );
@@ -326,7 +326,7 @@ async fn test_system_calls_join_with_activities() {
         .unwrap();
 
     if let duroxide::runtime::OrchestrationStatus::Completed { output } = status {
-        println!("Output: {}", output);
+        println!("Output: {output}");
         assert!(output.contains("guid_len:36"), "GUID should be 36 chars");
         assert!(
             output.contains("activity:processed:data1"),
@@ -334,7 +334,7 @@ async fn test_system_calls_join_with_activities() {
         );
         assert!(output.contains("winner:"), "Should have winner");
     } else {
-        panic!("Orchestration did not complete successfully: {:?}", status);
+        panic!("Orchestration did not complete successfully: {status:?}");
     }
 
     rt.shutdown(None).await;

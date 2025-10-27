@@ -59,8 +59,8 @@ This document captures the design rules that govern the runtime, with rationale.
   - `ActivityExecute` carries `execution_id` (captured at dispatch time).
   - Worker uses that `execution_id` when emitting `ActivityCompleted/Failed` (no lookups).
 - Timer path:
-  - `TimerSchedule` carries `execution_id` (captured at dispatch time).
-  - Timer dispatcher uses that `execution_id` for `TimerFired` (no lookups).
+  - When timer is scheduled, `WorkItem::TimerFired` is created with `execution_id` (captured at dispatch time).
+  - `TimerFired` is enqueued to orchestrator queue with `visible_at = fire_at_ms`.
 - Rehydration best-effort uses placeholder `execution_id: 1`; orchestrator still validates on completion.
 - Rationale: prevents cross-execution contamination, especially around ContinueAsNew.
 

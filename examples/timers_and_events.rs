@@ -45,7 +45,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let activities = ActivityRegistry::builder()
         .register("SubmitForApproval", |request_json: String| async move {
             let request: ApprovalRequest =
-                serde_json::from_str(&request_json).map_err(|e| format!("JSON parse error: {}", e))?;
+                serde_json::from_str(&request_json).map_err(|e| format!("JSON parse error: {e}"))?;
             // Simulate submitting to an approval system
             tokio::time::sleep(Duration::from_millis(100)).await;
             println!(
@@ -56,7 +56,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         })
         .register("ProcessApproval", |response_json: String| async move {
             let response: ApprovalResponse =
-                serde_json::from_str(&response_json).map_err(|e| format!("JSON parse error: {}", e))?;
+                serde_json::from_str(&response_json).map_err(|e| format!("JSON parse error: {e}"))?;
             // Simulate processing the approval
             tokio::time::sleep(Duration::from_millis(50)).await;
             let status = if response.approved { "APPROVED" } else { "REJECTED" };
@@ -66,8 +66,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .register("SendReminder", |request_id: String| async move {
             // Simulate sending a reminder
             tokio::time::sleep(Duration::from_millis(25)).await;
-            println!("📧 Reminder sent for request: {}", request_id);
-            Ok(format!("Reminder sent for {}", request_id))
+            println!("📧 Reminder sent for request: {request_id}");
+            Ok(format!("Reminder sent for {request_id}"))
         })
         .build();
 
@@ -76,11 +76,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ctx.trace_info("Starting approval workflow orchestration");
 
         let request: ApprovalRequest =
-            serde_json::from_str(&request_json).map_err(|e| format!("JSON parse error: {}", e))?;
+            serde_json::from_str(&request_json).map_err(|e| format!("JSON parse error: {e}"))?;
         ctx.trace_info(format!("Processing approval request: {}", request.request_id));
 
         // Submit the request for approval
-        let request_json = serde_json::to_string(&request).map_err(|e| format!("JSON serialize error: {}", e))?;
+        let request_json = serde_json::to_string(&request).map_err(|e| format!("JSON serialize error: {e}"))?;
         ctx.schedule_activity("SubmitForApproval", request_json)
             .into_activity()
             .await?;
@@ -110,9 +110,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 match result2 {
                     DurableOutput::External(approval_json) => {
                         let response: ApprovalResponse =
-                            serde_json::from_str(&approval_json).map_err(|e| format!("JSON parse error: {}", e))?;
+                            serde_json::from_str(&approval_json).map_err(|e| format!("JSON parse error: {e}"))?;
                         let response_json =
-                            serde_json::to_string(&response).map_err(|e| format!("JSON serialize error: {}", e))?;
+                            serde_json::to_string(&response).map_err(|e| format!("JSON serialize error: {e}"))?;
                         ctx.schedule_activity("ProcessApproval", response_json)
                             .into_activity()
                             .await?;
@@ -128,9 +128,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             (1, DurableOutput::External(approval_json)) => {
                 // Approval received within timeout
                 let response: ApprovalResponse =
-                    serde_json::from_str(&approval_json).map_err(|e| format!("JSON parse error: {}", e))?;
+                    serde_json::from_str(&approval_json).map_err(|e| format!("JSON parse error: {e}"))?;
                 let response_json =
-                    serde_json::to_string(&response).map_err(|e| format!("JSON serialize error: {}", e))?;
+                    serde_json::to_string(&response).map_err(|e| format!("JSON serialize error: {e}"))?;
                 ctx.schedule_activity("ProcessApproval", response_json)
                     .into_activity()
                     .await?;
@@ -184,14 +184,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     match client
         .wait_for_orchestration(instance_id, Duration::from_secs(10))
         .await
-        .map_err(|e| format!("Wait error: {:?}", e))?
+        .map_err(|e| format!("Wait error: {e:?}"))?
     {
         duroxide::OrchestrationStatus::Completed { output } => {
             println!("✅ Approval workflow completed!");
-            println!("Result: {}", output);
+            println!("Result: {output}");
         }
         duroxide::OrchestrationStatus::Failed { error } => {
-            println!("❌ Workflow failed: {}", error);
+            println!("❌ Workflow failed: {error}");
         }
         _ => {
             println!("⏳ Workflow still running");

@@ -39,7 +39,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Register activities for user processing
     let activities = ActivityRegistry::builder()
         .register("FetchUserProfile", |user_json: String| async move {
-            let user: User = serde_json::from_str(&user_json).map_err(|e| format!("JSON parse error: {}", e))?;
+            let user: User = serde_json::from_str(&user_json).map_err(|e| format!("JSON parse error: {e}"))?;
             // Simulate API call delay
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
@@ -48,11 +48,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 email: format!("{}@example.com", user.name.to_lowercase()),
                 preferences: vec!["notifications".to_string(), "dark_mode".to_string()],
             };
-            Ok(serde_json::to_string(&profile).map_err(|e| format!("JSON serialize error: {}", e))?)
+            serde_json::to_string(&profile).map_err(|e| format!("JSON serialize error: {e}"))
         })
         .register("SendWelcomeEmail", |profile_json: String| async move {
             let profile: UserProfile =
-                serde_json::from_str(&profile_json).map_err(|e| format!("JSON parse error: {}", e))?;
+                serde_json::from_str(&profile_json).map_err(|e| format!("JSON parse error: {e}"))?;
             // Simulate email sending
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
             Ok(format!("Welcome email sent to {}", profile.email))
@@ -64,7 +64,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ctx.trace_info("Starting fan-out/fan-in orchestration");
 
         // Parse input users
-        let users: Vec<User> = serde_json::from_str(&users_json).map_err(|e| format!("JSON parse error: {}", e))?;
+        let users: Vec<User> = serde_json::from_str(&users_json).map_err(|e| format!("JSON parse error: {e}"))?;
         ctx.trace_info(format!("Processing {} users in parallel", users.len()));
 
         // Fan-out: Schedule all user profile fetches in parallel
@@ -85,7 +85,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             match result {
                 DurableOutput::Activity(Ok(profile_json)) => {
                     let profile: UserProfile =
-                        serde_json::from_str(&profile_json).map_err(|e| format!("JSON parse error: {}", e))?;
+                        serde_json::from_str(&profile_json).map_err(|e| format!("JSON parse error: {e}"))?;
                     ctx.trace_info(format!("Fetched profile for user {}", profile.user_id));
 
                     // Schedule welcome email
@@ -93,8 +93,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     email_results.push(email_future);
                 }
                 DurableOutput::Activity(Err(e)) => {
-                    ctx.trace_error(format!("Failed to fetch user profile: {}", e));
-                    return Err(format!("Profile fetch failed: {}", e));
+                    ctx.trace_error(format!("Failed to fetch user profile: {e}"));
+                    return Err(format!("Profile fetch failed: {e}"));
                 }
                 _ => return Err("Unexpected result type".to_string()),
             }
@@ -111,13 +111,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     success_count += 1;
                 }
                 DurableOutput::Activity(Err(e)) => {
-                    ctx.trace_error(format!("Email failed: {}", e));
+                    ctx.trace_error(format!("Email failed: {e}"));
                 }
                 _ => {}
             }
         }
 
-        Ok(format!("Successfully processed {} users", success_count))
+        Ok(format!("Successfully processed {success_count} users"))
     };
 
     let orchestrations = OrchestrationRegistry::builder()
@@ -152,14 +152,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     match client
         .wait_for_orchestration(instance_id, std::time::Duration::from_secs(10))
         .await
-        .map_err(|e| format!("Wait error: {:?}", e))?
+        .map_err(|e| format!("Wait error: {e:?}"))?
     {
         duroxide::OrchestrationStatus::Completed { output } => {
             println!("✅ Fan-out/fan-in orchestration completed!");
-            println!("Result: {}", output);
+            println!("Result: {output}");
         }
         duroxide::OrchestrationStatus::Failed { error } => {
-            println!("❌ Orchestration failed: {}", error);
+            println!("❌ Orchestration failed: {error}");
         }
         _ => {
             println!("⏳ Orchestration still running");

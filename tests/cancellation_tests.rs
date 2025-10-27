@@ -28,7 +28,7 @@ async fn cancel_parent_down_propagates_to_child() {
         .register("Parent", parent)
         .build();
     let activity_registry = ActivityRegistry::builder().build();
-    
+
     // Use faster polling for cancellation timing test
     let options = runtime::RuntimeOptions {
         dispatcher_idle_sleep_ms: 10,
@@ -97,7 +97,7 @@ async fn cancel_parent_down_propagates_to_child() {
                 break;
             }
             if std::time::Instant::now() > deadline {
-                panic!("child {} did not cancel in time", child);
+                panic!("child {child} did not cancel in time");
             }
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }

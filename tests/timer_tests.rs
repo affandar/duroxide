@@ -21,7 +21,7 @@ async fn create_sqlite_store() -> (StdArc<dyn Provider>, TempDir) {
 /// Helper to create a SQLite store with specific name
 async fn create_sqlite_store_named(name: &str) -> (StdArc<dyn Provider>, TempDir, String) {
     let td = tempfile::tempdir().unwrap();
-    let db_path = td.path().join(format!("{}.db", name));
+    let db_path = td.path().join(format!("{name}.db"));
     std::fs::File::create(&db_path).unwrap();
     let db_url = format!("sqlite:{}", db_path.display());
     let store = StdArc::new(SqliteProvider::new(&db_url).await.unwrap()) as StdArc<dyn Provider>;
@@ -84,7 +84,7 @@ async fn multiple_timers_fire_in_order() {
 
         // Verify timers fired in correct order (t2, t3, t1)
         let results = vec![t1, t2, t3];
-        Ok(format!("timers: {:?}", results))
+        Ok(format!("timers: {results:?}"))
     };
 
     let reg = OrchestrationRegistry::builder().register("MultiTimer", orch).build();
@@ -122,12 +122,12 @@ async fn timer_with_activity() {
         let timer_result = timer_future.into_timer().await;
         let activity_result = activity_future.into_activity().await.unwrap();
 
-        Ok(format!("timer: {:?}, activity: {}", timer_result, activity_result))
+        Ok(format!("timer: {timer_result:?}, activity: {activity_result}"))
     };
 
     let activity_registry = ActivityRegistry::builder()
         .register("TestActivity", |input: String| async move {
-            Ok(format!("processed: {}", input))
+            Ok(format!("processed: {input}"))
         })
         .build();
 
@@ -188,7 +188,7 @@ async fn timer_recovery_after_crash_before_fire() {
 
     let activity_registry = ActivityRegistry::builder()
         .register("PostTimer", |input: String| async move {
-            Ok(format!("Timer fired, then: {}", input))
+            Ok(format!("Timer fired, then: {input}"))
         })
         .build();
 
@@ -226,7 +226,7 @@ async fn timer_recovery_after_crash_before_fire() {
 
     let activity_registry2 = ActivityRegistry::builder()
         .register("PostTimer", |input: String| async move {
-            Ok(format!("Timer fired, then: {}", input))
+            Ok(format!("Timer fired, then: {input}"))
         })
         .build();
 
@@ -271,7 +271,7 @@ async fn timer_recovery_after_crash_after_fire() {
 
     let activity_registry = ActivityRegistry::builder()
         .register("PostTimer", |input: String| async move {
-            Ok(format!("Timer fired, then: {}", input))
+            Ok(format!("Timer fired, then: {input}"))
         })
         .build();
 
@@ -305,7 +305,7 @@ async fn timer_recovery_after_crash_after_fire() {
 
     let activity_registry2 = ActivityRegistry::builder()
         .register("PostTimer", |input: String| async move {
-            Ok(format!("Timer fired, then: {}", input))
+            Ok(format!("Timer fired, then: {input}"))
         })
         .build();
 

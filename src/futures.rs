@@ -82,8 +82,7 @@ impl Future for DurableFuture {
                                 if n != name || inp != input {
                                     // Record nondeterminism gracefully
                                     inner.nondeterminism_error = Some(format!(
-                                        "nondeterministic: schedule order mismatch: next is ActivityScheduled('{}','{}') but expected ActivityScheduled('{}','{}')",
-                                        n, inp, name, input
+                                        "nondeterministic: schedule order mismatch: next is ActivityScheduled('{n}','{inp}') but expected ActivityScheduled('{name}','{input}')"
                                     ));
                                     return Poll::Pending;
                                 }
@@ -94,8 +93,7 @@ impl Future for DurableFuture {
                                 if !inner.claimed_scheduling_events.contains(event_id) =>
                             {
                                 inner.nondeterminism_error = Some(format!(
-                                    "nondeterministic: schedule order mismatch: next is TimerCreated but expected ActivityScheduled('{}','{}')",
-                                    name, input
+                                    "nondeterministic: schedule order mismatch: next is TimerCreated but expected ActivityScheduled('{name}','{input}')"
                                 ));
                                 return Poll::Pending;
                             }
@@ -103,8 +101,7 @@ impl Future for DurableFuture {
                                 if !inner.claimed_scheduling_events.contains(event_id) =>
                             {
                                 inner.nondeterminism_error = Some(format!(
-                                    "nondeterministic: schedule order mismatch: next is ExternalSubscribed('{}') but expected ActivityScheduled('{}','{}')",
-                                    en, name, input
+                                    "nondeterministic: schedule order mismatch: next is ExternalSubscribed('{en}') but expected ActivityScheduled('{name}','{input}')"
                                 ));
                                 return Poll::Pending;
                             }
@@ -115,8 +112,7 @@ impl Future for DurableFuture {
                                 ..
                             } if !inner.claimed_scheduling_events.contains(event_id) => {
                                 inner.nondeterminism_error = Some(format!(
-                                    "nondeterministic: schedule order mismatch: next is SubOrchestrationScheduled('{}','{}') but expected ActivityScheduled('{}','{}')",
-                                    sn, sin, name, input
+                                    "nondeterministic: schedule order mismatch: next is SubOrchestrationScheduled('{sn}','{sin}') but expected ActivityScheduled('{name}','{input}')"
                                 ));
                                 return Poll::Pending;
                             }
@@ -221,8 +217,7 @@ impl Future for DurableFuture {
                                 ..
                             } if !inner.claimed_scheduling_events.contains(event_id) => {
                                 inner.nondeterminism_error = Some(format!(
-                                    "nondeterministic: schedule order mismatch: next is ActivityScheduled('{}','{}') but expected TimerCreated",
-                                    n, inp
+                                    "nondeterministic: schedule order mismatch: next is ActivityScheduled('{n}','{inp}') but expected TimerCreated"
                                 ));
                                 return Poll::Pending;
                             }
@@ -230,8 +225,7 @@ impl Future for DurableFuture {
                                 if !inner.claimed_scheduling_events.contains(event_id) =>
                             {
                                 inner.nondeterminism_error = Some(format!(
-                                    "nondeterministic: schedule order mismatch: next is ExternalSubscribed('{}') but expected TimerCreated",
-                                    en
+                                    "nondeterministic: schedule order mismatch: next is ExternalSubscribed('{en}') but expected TimerCreated"
                                 ));
                                 return Poll::Pending;
                             }
@@ -242,8 +236,7 @@ impl Future for DurableFuture {
                                 ..
                             } if !inner.claimed_scheduling_events.contains(event_id) => {
                                 inner.nondeterminism_error = Some(format!(
-                                    "nondeterministic: schedule order mismatch: next is SubOrchestrationScheduled('{}','{}') but expected TimerCreated",
-                                    sn, sin
+                                    "nondeterministic: schedule order mismatch: next is SubOrchestrationScheduled('{sn}','{sin}') but expected TimerCreated"
                                 ));
                                 return Poll::Pending;
                             }
@@ -340,8 +333,7 @@ impl Future for DurableFuture {
                             {
                                 if n != name {
                                     inner.nondeterminism_error = Some(format!(
-                                        "nondeterministic: schedule order mismatch: next is ExternalSubscribed('{}') but expected ExternalSubscribed('{}')",
-                                        n, name
+                                        "nondeterministic: schedule order mismatch: next is ExternalSubscribed('{n}') but expected ExternalSubscribed('{name}')"
                                     ));
                                     return Poll::Pending;
                                 }
@@ -355,8 +347,7 @@ impl Future for DurableFuture {
                                 ..
                             } if !inner.claimed_scheduling_events.contains(event_id) => {
                                 inner.nondeterminism_error = Some(format!(
-                                    "nondeterministic: schedule order mismatch: next is ActivityScheduled('{}','{}') but expected ExternalSubscribed('{}')",
-                                    an, ainp, name
+                                    "nondeterministic: schedule order mismatch: next is ActivityScheduled('{an}','{ainp}') but expected ExternalSubscribed('{name}')"
                                 ));
                                 return Poll::Pending;
                             }
@@ -364,8 +355,7 @@ impl Future for DurableFuture {
                                 if !inner.claimed_scheduling_events.contains(event_id) =>
                             {
                                 inner.nondeterminism_error = Some(format!(
-                                    "nondeterministic: schedule order mismatch: next is TimerCreated but expected ExternalSubscribed('{}')",
-                                    name
+                                    "nondeterministic: schedule order mismatch: next is TimerCreated but expected ExternalSubscribed('{name}')"
                                 ));
                                 return Poll::Pending;
                             }
@@ -376,8 +366,7 @@ impl Future for DurableFuture {
                                 ..
                             } if !inner.claimed_scheduling_events.contains(event_id) => {
                                 inner.nondeterminism_error = Some(format!(
-                                    "nondeterministic: schedule order mismatch: next is SubOrchestrationScheduled('{}','{}') but expected ExternalSubscribed('{}')",
-                                    sn, sin, name
+                                    "nondeterministic: schedule order mismatch: next is SubOrchestrationScheduled('{sn}','{sin}') but expected ExternalSubscribed('{name}')"
                                 ));
                                 return Poll::Pending;
                             }
@@ -475,8 +464,7 @@ impl Future for DurableFuture {
                             } if !inner.claimed_scheduling_events.contains(event_id) => {
                                 if n != name || inp != input {
                                     inner.nondeterminism_error = Some(format!(
-                                        "nondeterministic: schedule order mismatch: next is SubOrchestrationScheduled('{}','{}') but expected SubOrchestrationScheduled('{}','{}')",
-                                        n, inp, name, input
+                                        "nondeterministic: schedule order mismatch: next is SubOrchestrationScheduled('{n}','{inp}') but expected SubOrchestrationScheduled('{name}','{input}')"
                                     ));
                                     return Poll::Pending;
                                 }
@@ -491,8 +479,7 @@ impl Future for DurableFuture {
                                 ..
                             } if !inner.claimed_scheduling_events.contains(event_id) => {
                                 inner.nondeterminism_error = Some(format!(
-                                    "nondeterministic: schedule order mismatch: next is ActivityScheduled('{}','{}') but expected SubOrchestrationScheduled('{}','{}')",
-                                    an, ainp, name, input
+                                    "nondeterministic: schedule order mismatch: next is ActivityScheduled('{an}','{ainp}') but expected SubOrchestrationScheduled('{name}','{input}')"
                                 ));
                                 return Poll::Pending;
                             }
@@ -500,8 +487,7 @@ impl Future for DurableFuture {
                                 if !inner.claimed_scheduling_events.contains(event_id) =>
                             {
                                 inner.nondeterminism_error = Some(format!(
-                                    "nondeterministic: schedule order mismatch: next is TimerCreated but expected SubOrchestrationScheduled('{}','{}')",
-                                    name, input
+                                    "nondeterministic: schedule order mismatch: next is TimerCreated but expected SubOrchestrationScheduled('{name}','{input}')"
                                 ));
                                 return Poll::Pending;
                             }
@@ -509,8 +495,7 @@ impl Future for DurableFuture {
                                 if !inner.claimed_scheduling_events.contains(event_id) =>
                             {
                                 inner.nondeterminism_error = Some(format!(
-                                    "nondeterministic: schedule order mismatch: next is ExternalSubscribed('{}') but expected SubOrchestrationScheduled('{}','{}')",
-                                    en, name, input
+                                    "nondeterministic: schedule order mismatch: next is ExternalSubscribed('{en}') but expected SubOrchestrationScheduled('{name}','{input}')"
                                 ));
                                 return Poll::Pending;
                             }
@@ -523,7 +508,7 @@ impl Future for DurableFuture {
                         let new_id = inner.next_event_id;
                         inner.next_event_id += 1;
                         let exec_id = inner.execution_id;
-                        let child_instance = format!("sub::{}", new_id);
+                        let child_instance = format!("sub::{new_id}");
                         *instance.borrow_mut() = child_instance.clone();
 
                         inner.history.push(Event::SubOrchestrationScheduled {
@@ -653,7 +638,7 @@ impl Future for DurableFuture {
                             String::new()
                         }
                         _ => {
-                            inner.nondeterminism_error = Some(format!("unknown system operation: {}", op));
+                            inner.nondeterminism_error = Some(format!("unknown system operation: {op}"));
                             return Poll::Pending;
                         }
                     };

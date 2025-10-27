@@ -40,7 +40,7 @@ async fn orchestration_completes_and_replays_deterministically_with(store: StdAr
         .register("A", |input: String| async move {
             Ok(input.parse::<i32>().unwrap_or(0).saturating_add(1).to_string())
         })
-        .register("B", |input: String| async move { Ok(format!("B({})", input)) })
+        .register("B", |input: String| async move { Ok(format!("B({input})")) })
         .build();
 
     let orchestration_registry = OrchestrationRegistry::builder()
@@ -111,7 +111,7 @@ async fn orchestration_completes_and_replays_deterministically_with(store: StdAr
         .register("A", |input: String| async move {
             Ok(input.parse::<i32>().unwrap_or(0).saturating_add(1).to_string())
         })
-        .register("B", |input: String| async move { Ok(format!("B({})", input)) })
+        .register("B", |input: String| async move { Ok(format!("B({input})")) })
         .build();
 
     let orchestration_registry2 = OrchestrationRegistry::builder()
@@ -263,7 +263,7 @@ async fn deterministic_replay_activity_only() {
     };
 
     let activity_registry = ActivityRegistry::builder()
-        .register("A", |input: String| async move { Ok(format!("A({})", input)) })
+        .register("A", |input: String| async move { Ok(format!("A({input})")) })
         .build();
 
     let orchestration_registry = OrchestrationRegistry::builder()
@@ -325,7 +325,7 @@ async fn test_trace_fire_and_forget() {
         let result2 = future2.into_activity().await?;
 
         ctx.trace_info("Both activities completed");
-        Ok(format!("{} {}", result1, result2))
+        Ok(format!("{result1} {result2}"))
     };
 
     let history_store = Arc::new(

@@ -28,7 +28,7 @@ async fn select2_two_externals_history_order_wins() {
     let rt1 = runtime::Runtime::start_with_store(store.clone(), StdArc::new(acts), reg).await;
     let client = duroxide::Client::new(store.clone());
 
-    let _h = client.start_orchestration("inst-ab2", "ABSelect2", "").await.unwrap();
+    client.start_orchestration("inst-ab2", "ABSelect2", "").await.unwrap();
 
     assert!(
         common::wait_for_history(
@@ -71,7 +71,7 @@ async fn select2_two_externals_history_order_wins() {
 
     let acts2 = ActivityRegistry::builder().build();
     let reg2 = OrchestrationRegistry::builder()
-        .register("ABSelect2", move |ctx, s| orchestrator(ctx, s))
+        .register("ABSelect2", orchestrator)
         .build();
     let rt2 = runtime::Runtime::start_with_store(store.clone(), StdArc::new(acts2), reg2).await;
 
@@ -106,9 +106,7 @@ async fn select2_two_externals_history_order_wins() {
     if let (Some(b_idx), Some(a_idx)) = (b_index, a_index) {
         assert!(
             b_idx < a_idx,
-            "expected B (idx={}) to appear before A (idx={}) in history order: {hist:#?}",
-            b_idx,
-            a_idx
+            "expected B (idx={b_idx}) to appear before A (idx={a_idx}) in history order: {hist:#?}"
         );
     }
 
@@ -142,7 +140,7 @@ async fn select_two_externals_history_order_wins() {
     let rt1 = runtime::Runtime::start_with_store(store.clone(), StdArc::new(acts), reg).await;
     let client = duroxide::Client::new(store.clone());
 
-    let _h = client.start_orchestration("inst-ab", "ABSelect", "").await.unwrap();
+    client.start_orchestration("inst-ab", "ABSelect", "").await.unwrap();
 
     assert!(
         common::wait_for_history(
@@ -185,7 +183,7 @@ async fn select_two_externals_history_order_wins() {
 
     let acts2 = ActivityRegistry::builder().build();
     let reg2 = OrchestrationRegistry::builder()
-        .register("ABSelect", move |ctx, s| orchestrator(ctx, s))
+        .register("ABSelect", orchestrator)
         .build();
     let rt2 = runtime::Runtime::start_with_store(store.clone(), StdArc::new(acts2), reg2).await;
 
@@ -220,9 +218,7 @@ async fn select_two_externals_history_order_wins() {
     if let (Some(b_idx), Some(a_idx)) = (b_index, a_index) {
         assert!(
             b_idx < a_idx,
-            "expected B (idx={}) to appear before A (idx={}) in history order: {hist:#?}",
-            b_idx,
-            a_idx
+            "expected B (idx={b_idx}) to appear before A (idx={a_idx}) in history order: {hist:#?}"
         );
     }
 
@@ -259,7 +255,7 @@ async fn select_three_mixed_history_winner() {
     let rt1 = runtime::Runtime::start_with_store(store.clone(), StdArc::new(acts), reg).await;
     let client = duroxide::Client::new(store.clone());
 
-    let _h = client.start_orchestration("inst-atb", "ATBSelect", "").await.unwrap();
+    client.start_orchestration("inst-atb", "ATBSelect", "").await.unwrap();
     assert!(
         common::wait_for_history(
             store.clone(),
@@ -283,7 +279,7 @@ async fn select_three_mixed_history_winner() {
         )
         .await
     );
-    
+
     // TIMING-SENSITIVE: Use immediate shutdown (no graceful wait) because:
     // - Timer(500ms) is ticking and will fire during rt2 startup if we delay
     // - Graceful shutdown would add 1000ms delay, virtually guaranteeing timer fires first
@@ -306,7 +302,7 @@ async fn select_three_mixed_history_winner() {
 
     let acts2 = ActivityRegistry::builder().build();
     let reg2 = OrchestrationRegistry::builder()
-        .register("ATBSelect", move |ctx, s| orchestrator(ctx, s))
+        .register("ATBSelect", orchestrator)
         .build();
     let rt2 = runtime::Runtime::start_with_store(store.clone(), StdArc::new(acts2), reg2).await;
 
@@ -340,9 +336,7 @@ async fn select_three_mixed_history_winner() {
     if let (Some(b_idx), Some(a_idx)) = (b_index, a_index) {
         assert!(
             b_idx < a_idx,
-            "expected B (idx={}) to appear before A (idx={}) in history order: {hist:#?}",
-            b_idx,
-            a_idx
+            "expected B (idx={b_idx}) to appear before A (idx={a_idx}) in history order: {hist:#?}"
         );
     }
 
@@ -381,7 +375,7 @@ async fn join_returns_history_order() {
     let rt1 = runtime::Runtime::start_with_store(store.clone(), StdArc::new(acts), reg).await;
     let client = duroxide::Client::new(store.clone());
 
-    let _h = client.start_orchestration("inst-join", "JoinAB", "").await.unwrap();
+    client.start_orchestration("inst-join", "JoinAB", "").await.unwrap();
     assert!(
         common::wait_for_history(
             store.clone(),
@@ -423,7 +417,7 @@ async fn join_returns_history_order() {
 
     let acts2 = ActivityRegistry::builder().build();
     let reg2 = OrchestrationRegistry::builder()
-        .register("JoinAB", move |ctx, s| orchestrator(ctx, s))
+        .register("JoinAB", orchestrator)
         .build();
     let rt2 = runtime::Runtime::start_with_store(store.clone(), StdArc::new(acts2), reg2).await;
 

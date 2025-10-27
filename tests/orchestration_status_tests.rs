@@ -17,8 +17,7 @@ async fn test_status_not_found() {
 
     assert!(
         matches!(status, OrchestrationStatus::NotFound),
-        "Expected NotFound, got: {:?}",
-        status
+        "Expected NotFound, got: {status:?}"
     );
 }
 
@@ -57,8 +56,7 @@ async fn test_status_running() {
     let status = client.get_orchestration_status("test-running").await;
     assert!(
         matches!(status, OrchestrationStatus::Running),
-        "Expected Running, got: {:?}",
-        status
+        "Expected Running, got: {status:?}"
     );
 
     rt.shutdown(None).await;
@@ -70,9 +68,10 @@ async fn test_status_completed() {
     let (store, _temp_dir) = common::create_sqlite_store_disk().await;
 
     let activities = ActivityRegistry::builder()
-        .register("ReturnValue", |input: String| async move {
-            Ok(format!("result: {}", input))
-        })
+        .register(
+            "ReturnValue",
+            |input: String| async move { Ok(format!("result: {input}")) },
+        )
         .build();
 
     let orchestration = |ctx: OrchestrationContext, input: String| async move {
@@ -101,7 +100,7 @@ async fn test_status_completed() {
         OrchestrationStatus::Completed { output } => {
             assert_eq!(output, "result: test-input");
         }
-        other => panic!("Expected Completed, got: {:?}", other),
+        other => panic!("Expected Completed, got: {other:?}"),
     }
 
     // Check status again (should still be Completed)
@@ -110,7 +109,7 @@ async fn test_status_completed() {
         OrchestrationStatus::Completed { output } => {
             assert_eq!(output, "result: test-input");
         }
-        other => panic!("Expected Completed on re-check, got: {:?}", other),
+        other => panic!("Expected Completed on re-check, got: {other:?}"),
     }
 
     rt.shutdown(None).await;
@@ -153,7 +152,7 @@ async fn test_status_failed() {
         OrchestrationStatus::Failed { error } => {
             assert_eq!(error, "intentional failure");
         }
-        other => panic!("Expected Failed, got: {:?}", other),
+        other => panic!("Expected Failed, got: {other:?}"),
     }
 
     // Check status again (should still be Failed)
@@ -162,7 +161,7 @@ async fn test_status_failed() {
         OrchestrationStatus::Failed { error } => {
             assert_eq!(error, "intentional failure");
         }
-        other => panic!("Expected Failed on re-check, got: {:?}", other),
+        other => panic!("Expected Failed on re-check, got: {other:?}"),
     }
 
     rt.shutdown(None).await;
@@ -184,7 +183,7 @@ async fn test_status_after_continue_as_new() {
             Ok("continuing".to_string())
         } else {
             // Done
-            Ok(format!("done: {}", n))
+            Ok(format!("done: {n}"))
         }
     };
 
@@ -212,7 +211,7 @@ async fn test_status_after_continue_as_new() {
                 break;
             }
             OrchestrationStatus::Failed { error } => {
-                panic!("Orchestration failed unexpectedly: {}", error);
+                panic!("Orchestration failed unexpectedly: {error}");
             }
             _ => {
                 // Still running or intermediate execution
@@ -285,12 +284,11 @@ async fn test_status_cancelled() {
         OrchestrationStatus::Failed { error } => {
             assert!(
                 error.starts_with("canceled:"),
-                "Cancelled orchestration should have error starting with 'canceled:', got: {}",
-                error
+                "Cancelled orchestration should have error starting with 'canceled:', got: {error}"
             );
             assert!(error.contains("test requested cancellation"));
         }
-        other => panic!("Expected Failed (cancelled), got: {:?}", other),
+        other => panic!("Expected Failed (cancelled), got: {other:?}"),
     }
 
     rt.shutdown(None).await;
@@ -321,12 +319,7 @@ async fn test_status_lifecycle_transitions() {
         dispatcher_idle_sleep_ms: 10,
         ..Default::default()
     };
-    let rt = runtime::Runtime::start_with_options(
-        store.clone(),
-        Arc::new(activities),
-        orchestrations,
-        options,
-    ).await;
+    let rt = runtime::Runtime::start_with_options(store.clone(), Arc::new(activities), orchestrations, options).await;
 
     let client = Client::new(store.clone());
 
@@ -345,8 +338,7 @@ async fn test_status_lifecycle_transitions() {
     let status = client.get_orchestration_status("test-lifecycle").await;
     assert!(
         matches!(status, OrchestrationStatus::Running),
-        "Should be Running after start, got: {:?}",
-        status
+        "Should be Running after start, got: {status:?}"
     );
 
     // Wait for completion: should be Completed
@@ -358,7 +350,7 @@ async fn test_status_lifecycle_transitions() {
         OrchestrationStatus::Completed { output } => {
             assert_eq!(output, "quick");
         }
-        other => panic!("Expected final Completed, got: {:?}", other),
+        other => panic!("Expected final Completed, got: {other:?}"),
     }
 
     // Still Completed on subsequent checks

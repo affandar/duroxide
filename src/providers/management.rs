@@ -168,7 +168,7 @@ pub trait ManagementProvider: Send + Sync {
     ///
     /// Returns error indicating not supported.
     async fn read_execution(&self, instance: &str, _execution_id: u64) -> Result<Vec<Event>, String> {
-        Err(format!("read_execution not supported for instance: {}", instance))
+        Err(format!("read_execution not supported for instance: {instance}"))
     }
 
     /// Get the latest (current) execution ID for an instance.
@@ -230,7 +230,7 @@ pub trait ManagementProvider: Send + Sync {
     ///
     /// Returns error indicating not supported.
     async fn get_instance_info(&self, instance: &str) -> Result<InstanceInfo, String> {
-        Err(format!("get_instance_info not supported for instance: {}", instance))
+        Err(format!("get_instance_info not supported for instance: {instance}"))
     }
 
     /// Get detailed metadata for a specific execution.
@@ -260,7 +260,7 @@ pub trait ManagementProvider: Send + Sync {
     ///
     /// Returns error indicating not supported.
     async fn get_execution_info(&self, instance: &str, _execution_id: u64) -> Result<ExecutionInfo, String> {
-        Err(format!("get_execution_info not supported for instance: {}", instance))
+        Err(format!("get_execution_info not supported for instance: {instance}"))
     }
 
     // ===== System Metrics =====

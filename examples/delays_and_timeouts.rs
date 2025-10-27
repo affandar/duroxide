@@ -29,16 +29,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Register activities - these can do any async operations including delays
     let activities = ActivityRegistry::builder()
         .register("ProcessData", |input: String| async move {
-            println!("Processing data: {}", input);
+            println!("Processing data: {input}");
             // ✅ Activities can be pure business logic
-            Ok(format!("Processed: {}", input))
+            Ok(format!("Processed: {input}"))
         })
         .register("SlowOperation", |input: String| async move {
-            println!("Starting slow operation: {}", input);
+            println!("Starting slow operation: {input}");
             // ✅ Activities can use tokio::time::sleep(), HTTP calls, database queries, etc.
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
             println!("Slow operation completed");
-            Ok(format!("Slow result: {}", input))
+            Ok(format!("Slow result: {input}"))
         })
         .build();
 
@@ -60,7 +60,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // ❌ WRONG: ctx.schedule_activity("ProcessData", input).await;  // Missing .into_activity()!
 
         ctx.trace_info("Processing complete!");
-        Ok(format!("Delayed result: {}", result))
+        Ok(format!("Delayed result: {result}"))
     };
 
     // Orchestration showing CORRECT timeout usage
@@ -80,11 +80,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 match result {
                     DurableOutput::Activity(Ok(value)) => {
                         ctx.trace_info("Work completed within timeout");
-                        Ok(format!("Success: {}", value))
+                        Ok(format!("Success: {value}"))
                     }
                     DurableOutput::Activity(Err(e)) => {
                         ctx.trace_info("Work failed");
-                        Err(format!("Work failed: {}", e))
+                        Err(format!("Work failed: {e}"))
                     }
                     _ => unreachable!(),
                 }
@@ -123,13 +123,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     match client
         .wait_for_orchestration(&delay_instance, std::time::Duration::from_secs(15))
         .await
-        .map_err(|e| format!("Wait error: {:?}", e))?
+        .map_err(|e| format!("Wait error: {e:?}"))?
     {
         OrchestrationStatus::Completed { output } => {
-            println!("✅ Delay example completed: {}", output);
+            println!("✅ Delay example completed: {output}");
         }
         OrchestrationStatus::Failed { error } => {
-            println!("❌ Delay example failed: {}", error);
+            println!("❌ Delay example failed: {error}");
         }
         _ => println!("⏳ Delay example still running..."),
     }
@@ -150,13 +150,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     match client
         .wait_for_orchestration(&timeout_instance, std::time::Duration::from_secs(15))
         .await
-        .map_err(|e| format!("Wait error: {:?}", e))?
+        .map_err(|e| format!("Wait error: {e:?}"))?
     {
         OrchestrationStatus::Completed { output } => {
-            println!("✅ Timeout example completed: {}", output);
+            println!("✅ Timeout example completed: {output}");
         }
         OrchestrationStatus::Failed { error } => {
-            println!("❌ Timeout example failed: {}", error);
+            println!("❌ Timeout example failed: {error}");
         }
         _ => println!("⏳ Timeout example still running..."),
     }

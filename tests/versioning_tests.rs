@@ -95,7 +95,7 @@ async fn sub_orchestration_versioned_explicit_and_policy() {
     let store = StdArc::new(SqliteProvider::new_in_memory().await.unwrap());
     let rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(acts), reg).await;
     let client = Client::new(store.clone());
-    let _h1 = client.start_orchestration("i3-1", "P1", "").await.unwrap();
+    client.start_orchestration("i3-1", "P1", "").await.unwrap();
     match client
         .wait_for_orchestration("i3-1", std::time::Duration::from_secs(5))
         .await
@@ -106,7 +106,7 @@ async fn sub_orchestration_versioned_explicit_and_policy() {
         _ => panic!("unexpected orchestration status"),
     }
 
-    let _h2 = client.start_orchestration("i3-2", "P2", "").await.unwrap();
+    client.start_orchestration("i3-2", "P2", "").await.unwrap();
     match client
         .wait_for_orchestration("i3-2", std::time::Duration::from_secs(5))
         .await
@@ -179,7 +179,7 @@ async fn continue_as_new_versioned_typed_explicit() {
     let rt =
         runtime::Runtime::start_with_store(store.clone(), StdArc::new(ActivityRegistry::builder().build()), reg).await;
     let client = Client::new(store.clone());
-    let _h = client.start_orchestration("i5", "Up", "").await.unwrap();
+    client.start_orchestration("i5", "Up", "").await.unwrap();
     // Use wait helper instead of polling
     match client
         .wait_for_orchestration("i5", std::time::Duration::from_secs(3))
@@ -252,7 +252,7 @@ async fn policy_exact_pins_start() {
     let rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(activities), reg).await;
     let client = Client::new(store.clone());
 
-    let _h = client.start_orchestration("inst-vpin", "OrderFlow", "Y").await.unwrap();
+    client.start_orchestration("inst-vpin", "OrderFlow", "Y").await.unwrap();
 
     match client
         .wait_for_orchestration("inst-vpin", std::time::Duration::from_secs(5))
@@ -293,7 +293,7 @@ async fn sub_orchestration_uses_latest_by_default_and_pinned_when_set() {
     let client = Client::new(store.clone());
 
     // Default latest for child = 1.1.0
-    let _h1 = client
+    client
         .start_orchestration("inst-child-latest", "ParentFlow", "Z")
         .await
         .unwrap();
@@ -314,7 +314,7 @@ async fn sub_orchestration_uses_latest_by_default_and_pinned_when_set() {
         duroxide::runtime::VersionPolicy::Exact(Version::parse("1.0.0").unwrap()),
     )
     .await;
-    let _h2 = client
+    client
         .start_orchestration("inst-child-pinned", "ParentFlow", "Q")
         .await
         .unwrap();
@@ -358,7 +358,7 @@ async fn parent_calls_child_upgrade_child_and_verify_latest_used() {
     let client = Client::new(store.clone());
 
     // Start new parent after both child versions registered => latest child (1.1.0) should be used
-    let _h = client
+    client
         .start_orchestration("inst-parent-child-upgrade", "Parent", "inp")
         .await
         .unwrap();
@@ -410,7 +410,7 @@ async fn continue_as_new_upgrades_version_deterministically() {
     let rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(activities), reg).await;
     let client = duroxide::Client::new(store.clone());
 
-    let _h = client
+    client
         .start_orchestration("inst-can-upgrade", "Upgrader", "seed")
         .await
         .unwrap();

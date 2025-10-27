@@ -195,11 +195,7 @@ BEGIN TRANSACTION (deferred)
   FOR EACH item IN worker_items:
     INSERT INTO worker_queue (work_item) VALUES (serialize(item))
   
-  // Enqueue timer items
-  FOR EACH item IN timer_items:
-    INSERT INTO timer_queue (work_item, fire_at) VALUES (serialize(item), fire_at_ms)
-  
-  // Enqueue orchestrator items (sub-orchestrations, continuations, completions to parent)
+  // Enqueue orchestrator items (sub-orchestrations, timers, continuations, completions to parent)
   FOR EACH item IN orch_items:
     target_instance = extract_instance(item)
     
@@ -350,54 +346,7 @@ RETURN Ok(())
 
 ---
 
-### Timer Queue Methods
-
-#### `dequeue_timer_peek_lock() -> Option<(WorkItem, lock_token)>`
-
-**Purpose**: Peek-lock one timer from timer queue
-
-```
-BEGIN TRANSACTION
-  now = current_timestamp_ms()
-  
-  // Find first unlocked timer
-  row = SELECT id, work_item, fire_at
-        FROM timer_queue
-        WHERE (lock_token IS NULL OR locked_until <= now)
-        ORDER BY id
-        LIMIT 1
-  
-  IF not found:
-    ROLLBACK
-    RETURN None
-  
-  // Acquire message-level lock
-  lock_token = generate_uuid()
-  locked_until = now + lock_timeout
-  
-  UPDATE timer_queue
-  SET lock_token = lock_token, locked_until = locked_until
-  WHERE id = row.id
-  
-  work_item = deserialize(row.work_item)
-
-COMMIT
-
-RETURN Some((work_item, lock_token))
-```
-
----
-
-#### `ack_timer(lock_token) -> Result<()>`
-
-**Purpose**: Remove fired timer from queue
-
-```
-// Simple delete (auto-commit)
-DELETE FROM timer_queue WHERE lock_token = lock_token
-
-RETURN Ok(())
-```
+**Note:** Timer functionality is now handled directly via the orchestrator queue with delayed visibility. The `timer_queue` table and related methods (`dequeue_timer_peek_lock`, `ack_timer`) have been removed. `TimerFired` work items are enqueued to the orchestrator queue with `visible_at = fire_at_ms`.
 
 ---
 

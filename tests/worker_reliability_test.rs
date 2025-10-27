@@ -33,14 +33,14 @@ async fn activity_reliability_after_crash_before_completion_enqueue() {
         let result = ctx.schedule_activity("TestActivity", input).into_activity().await?;
 
         ctx.trace_info("Activity completed successfully");
-        Ok(format!("Activity result: {}", result))
+        Ok(format!("Activity result: {result}"))
     };
 
     let activity_registry = ActivityRegistry::builder()
         .register("TestActivity", |input: String| async move {
-            println!("Executing TestActivity with input: {}", input);
+            println!("Executing TestActivity with input: {input}");
             // Simulate some work
-            Ok(format!("Processed: {}", input))
+            Ok(format!("Processed: {input}"))
         })
         .build();
 
@@ -59,7 +59,7 @@ async fn activity_reliability_after_crash_before_completion_enqueue() {
 
     let instance = "inst-activity-reliability";
     let client1 = duroxide::Client::new(store1.clone());
-    let _ = client1
+    client1
         .start_orchestration(instance, "ActivityReliabilityTest", "test-data")
         .await
         .unwrap();
@@ -122,10 +122,10 @@ async fn activity_reliability_after_crash_before_completion_enqueue() {
             println!("✅ Orchestration completed successfully after restart");
         }
         runtime::OrchestrationStatus::Failed { error } => {
-            panic!("Orchestration failed after restart: {}", error);
+            panic!("Orchestration failed after restart: {error}");
         }
         status => {
-            panic!("Unexpected orchestration status after restart: {:?}", status);
+            panic!("Unexpected orchestration status after restart: {status:?}");
         }
     }
 
@@ -135,7 +135,7 @@ async fn activity_reliability_after_crash_before_completion_enqueue() {
     // Debug: print all events (can be removed in production)
     println!("History after restart:");
     for (i, event) in hist_after.iter().enumerate() {
-        println!("  {}: {:?}", i, event);
+        println!("  {i}: {event:?}");
     }
 
     // Should have exactly one ActivityScheduled and one ActivityCompleted for our TestActivity
@@ -220,13 +220,13 @@ async fn multiple_activities_reliability_after_crash() {
             }
         }
 
-        Ok(format!("All activities completed: {:?}", outputs))
+        Ok(format!("All activities completed: {outputs:?}"))
     };
 
     let activity_registry = ActivityRegistry::builder()
         .register("TestActivity", |input: String| async move {
-            println!("Executing TestActivity with input: {}", input);
-            Ok(format!("Processed: {}", input))
+            println!("Executing TestActivity with input: {input}");
+            Ok(format!("Processed: {input}"))
         })
         .build();
 
@@ -245,7 +245,7 @@ async fn multiple_activities_reliability_after_crash() {
 
     let instance = "inst-multi-activity-reliability";
     let client1 = duroxide::Client::new(store1.clone());
-    let _ = client1
+    client1
         .start_orchestration(instance, "MultiActivityTest", "")
         .await
         .unwrap();
@@ -299,10 +299,10 @@ async fn multiple_activities_reliability_after_crash() {
             assert!(output.contains("All activities completed"));
         }
         runtime::OrchestrationStatus::Failed { error } => {
-            panic!("Orchestration failed: {}", error);
+            panic!("Orchestration failed: {error}");
         }
         status => {
-            panic!("Unexpected status: {:?}", status);
+            panic!("Unexpected status: {status:?}");
         }
     }
 

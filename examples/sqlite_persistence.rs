@@ -67,7 +67,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             ];
 
             provider
-                .ack_orchestration_item(&item.lock_token, 1, history, vec![], vec![], vec![], Default::default())
+                .ack_orchestration_item(&item.lock_token, 1, history, vec![], vec![], Default::default())
                 .await?;
 
             println!("  Added orchestration history");

@@ -41,7 +41,7 @@ async fn dispatcher_enqueues_timer_schedule_then_completes() {
     let client = duroxide::Client::new(store_dyn.clone());
 
     let inst = "inst-disp-timer";
-    let _h = client.start_orchestration(inst, "OneTimer", "").await.unwrap();
+    client.start_orchestration(inst, "OneTimer", "").await.unwrap();
 
     // Orchestration should complete.
     let ok = wait_for_history(
@@ -77,7 +77,7 @@ async fn dispatcher_enqueues_start_orchestration_to_orch_queue() {
     let rt = runtime::Runtime::start_with_store(store_dyn.clone(), StdArc::new(acts), reg).await;
     let client = duroxide::Client::new(store_dyn.clone());
 
-    let _h = client.start_orchestration("inst-parent", "Parent", "").await.unwrap();
+    client.start_orchestration("inst-parent", "Parent", "").await.unwrap();
 
     // Child should complete with input "A".
     let ok = wait_for_history(

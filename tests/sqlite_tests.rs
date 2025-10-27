@@ -19,7 +19,7 @@ async fn create_sqlite_store() -> (Arc<dyn Provider>, TempDir) {
 /// Helper to create a SQLite store with specific name
 async fn create_sqlite_store_named(name: &str) -> (Arc<dyn Provider>, TempDir, String) {
     let td = tempfile::tempdir().unwrap();
-    let db_path = td.path().join(format!("{}.db", name));
+    let db_path = td.path().join(format!("{name}.db"));
     std::fs::File::create(&db_path).unwrap();
     let db_url = format!("sqlite:{}", db_path.display());
     let store = Arc::new(SqliteProvider::new(&db_url).await.unwrap()) as Arc<dyn Provider>;
@@ -92,7 +92,7 @@ async fn test_sqlite_provider_basic() {
     };
 
     store
-        .ack_orchestration_item(&item.lock_token, 1, history_delta, vec![], vec![], vec![], metadata)
+        .ack_orchestration_item(&item.lock_token, 1, history_delta, vec![], vec![], metadata)
         .await
         .expect("Failed to ack orchestration item");
 
@@ -144,7 +144,6 @@ async fn test_execution_status_completed() {
                 event_id: 1,
                 output: "Success".to_string(),
             }],
-            vec![],
             vec![],
             vec![],
             metadata,
@@ -204,7 +203,6 @@ async fn test_execution_status_failed() {
                 event_id: 1,
                 error: "Error occurred".to_string(),
             }],
-            vec![],
             vec![],
             vec![],
             metadata,
@@ -293,18 +291,30 @@ async fn test_sqlite_basic_persistence() {
         }
 
         // Acknowledge items with dummy completions
-        store.ack_worker(&token1, WorkItem::ActivityCompleted {
-            instance: "test-instance".to_string(),
-            execution_id: 1,
-            id: 1,
-            result: "done".to_string(),
-        }).await.expect("Failed to ack worker 1");
-        store.ack_worker(&token2, WorkItem::ActivityCompleted {
-            instance: "test-instance".to_string(),
-            execution_id: 1,
-            id: 2,
-            result: "done".to_string(),
-        }).await.expect("Failed to ack worker 2");
+        store
+            .ack_worker(
+                &token1,
+                WorkItem::ActivityCompleted {
+                    instance: "test-instance".to_string(),
+                    execution_id: 1,
+                    id: 1,
+                    result: "done".to_string(),
+                },
+            )
+            .await
+            .expect("Failed to ack worker 1");
+        store
+            .ack_worker(
+                &token2,
+                WorkItem::ActivityCompleted {
+                    instance: "test-instance".to_string(),
+                    execution_id: 1,
+                    id: 2,
+                    result: "done".to_string(),
+                },
+            )
+            .await
+            .expect("Failed to ack worker 2");
 
         // Verify no more items
         assert!(store.dequeue_worker_peek_lock().await.is_none());
@@ -343,10 +353,10 @@ async fn test_sqlite_file_concurrent_access() {
         let store_clone = store.clone();
         tasks.spawn(async move {
             let work_item = WorkItem::StartOrchestration {
-                instance: format!("concurrent-instance-{}", i),
+                instance: format!("concurrent-instance-{i}"),
                 orchestration: "TestOrch".to_string(),
                 version: Some("1.0.0".to_string()),
-                input: format!("{{\"id\": {}}}", i),
+                input: format!("{{\"id\": {i}}}"),
                 parent_instance: None,
                 parent_id: None,
                 execution_id: duroxide::INITIAL_EXECUTION_ID,
@@ -375,7 +385,6 @@ async fn test_sqlite_file_concurrent_access() {
             .ack_orchestration_item(
                 &item.lock_token,
                 item.execution_id,
-                vec![],
                 vec![],
                 vec![],
                 vec![],
@@ -416,7 +425,7 @@ async fn timer_recovery_after_crash_before_fire() {
 
     let activity_registry = duroxide::runtime::registry::ActivityRegistry::builder()
         .register("PostTimer", |input: String| async move {
-            Ok(format!("Timer fired, then: {}", input))
+            Ok(format!("Timer fired, then: {input}"))
         })
         .build();
 
@@ -458,7 +467,7 @@ async fn timer_recovery_after_crash_before_fire() {
 
     let activity_registry2 = duroxide::runtime::registry::ActivityRegistry::builder()
         .register("PostTimer", |input: String| async move {
-            Ok(format!("Timer fired, then: {}", input))
+            Ok(format!("Timer fired, then: {input}"))
         })
         .build();
 
@@ -578,7 +587,6 @@ async fn test_sqlite_provider_transactional() {
             history_delta,
             worker_items,
             vec![],
-            vec![],
             ExecutionMetadata::default(),
         )
         .await
@@ -597,12 +605,18 @@ async fn test_sqlite_provider_transactional() {
             WorkItem::ActivityExecute { id, .. } => id,
             _ => panic!("Expected ActivityExecute"),
         };
-        store.ack_worker(&token, WorkItem::ActivityCompleted {
-            instance: "test-instance".to_string(),
-            execution_id: 1,
-            id,
-            result: "done".to_string(),
-        }).await.expect("Failed to ack");
+        store
+            .ack_worker(
+                &token,
+                WorkItem::ActivityCompleted {
+                    instance: "test-instance".to_string(),
+                    execution_id: 1,
+                    id,
+                    result: "done".to_string(),
+                },
+            )
+            .await
+            .expect("Failed to ack");
     }
     assert_eq!(worker_count, 3);
 }
@@ -632,19 +646,6 @@ async fn test_sqlite_provider_timer_queue() {
 
     let item = store.fetch_orchestration_item().await.expect("Should have work");
 
-    // Schedule a timer
-    let now_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_millis() as u64;
-
-    let timer_items = vec![WorkItem::TimerSchedule {
-        instance: instance.to_string(),
-        execution_id: 1,
-        id: 1,
-        fire_at_ms: now_ms + 1000, // 1 second from now
-    }];
-
     store
         .ack_orchestration_item(
             &item.lock_token,
@@ -658,7 +659,6 @@ async fn test_sqlite_provider_timer_queue() {
                 parent_id: None,
             }],
             vec![],
-            timer_items,
             vec![],
             ExecutionMetadata::default(),
         )
@@ -716,7 +716,6 @@ async fn test_execution_status_running() {
             history_delta,
             vec![],
             vec![],
-            vec![],
             ExecutionMetadata::default(),
         )
         .await
@@ -771,7 +770,6 @@ async fn test_execution_output_captured_on_continue_as_new() {
             &item.lock_token,
             1,
             history_delta,
-            vec![],
             vec![],
             vec![],
             ExecutionMetadata::default(),

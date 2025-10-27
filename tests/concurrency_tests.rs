@@ -106,7 +106,7 @@ async fn concurrent_orchestrations_different_activities_with(store: StdArc<dyn P
         let hist1 = store.read("inst-multi-1").await;
         println!("inst-multi-1 history ({} events):", hist1.len());
         for (i, e) in hist1.iter().enumerate() {
-            println!("  {}: {:?}", i, e);
+            println!("  {i}: {e:?}");
         }
     }
 
@@ -124,7 +124,7 @@ async fn concurrent_orchestrations_different_activities_with(store: StdArc<dyn P
         let hist2 = store.read("inst-multi-2").await;
         println!("inst-multi-2 history ({} events):", hist2.len());
         for (i, e) in hist2.iter().enumerate() {
-            println!("  {}: {:?}", i, e);
+            println!("  {i}: {e:?}");
         }
     }
 
@@ -396,13 +396,13 @@ async fn single_orchestration_with_join_test() {
         let hist = store.read("inst-single").await;
         println!("❌ Timeout! History ({} events):", hist.len());
         for (i, e) in hist.iter().enumerate() {
-            println!("  {}: {:?}", i, e);
+            println!("  {i}: {e:?}");
         }
     }
 
     match result.unwrap() {
         duroxide::OrchestrationStatus::Completed { output } => {
-            println!("✅ Single orch completed: {}", output);
+            println!("✅ Single orch completed: {output}");
             assert_eq!(output, "o1:a=11;evt=P1");
         }
         duroxide::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),

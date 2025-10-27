@@ -42,7 +42,7 @@ async fn code_swap_triggers_nondeterminism() {
     let reg_a = OrchestrationRegistry::builder().register("SwapTest", orch_a).build();
     let rt_a = runtime::Runtime::start_with_store(store.clone(), StdArc::new(activity_registry.clone()), reg_a).await;
     let client = Client::new(store.clone());
-    let _h = client.start_orchestration("inst-swap", "SwapTest", "").await.unwrap();
+    client.start_orchestration("inst-swap", "SwapTest", "").await.unwrap();
 
     // Wait for ActivityScheduled("A1") to appear in history and capture it
     let evt = common::wait_for_history_event(
@@ -70,12 +70,15 @@ async fn code_swap_triggers_nondeterminism() {
     // Poke the instance so it activates and runs a turn (nondeterminism check occurs before completions)
     // Use a timer that fires immediately to trigger a turn reliably
     let _ = store
-        .enqueue_timer_work(WorkItem::TimerSchedule {
-            instance: "inst-swap".to_string(),
-            execution_id: 1,
-            id: 999,       // Use a high ID that won't conflict with orchestration timers
-            fire_at_ms: 0, // Fire immediately
-        })
+        .enqueue_orchestrator_work(
+            WorkItem::TimerFired {
+                instance: "inst-swap".to_string(),
+                execution_id: 1,
+                id: 999,       // Use a high ID that won't conflict with orchestration timers
+                fire_at_ms: 0, // Fire immediately
+            },
+            Some(0),
+        )
         .await;
 
     // Wait for terminal status using helper
@@ -97,9 +100,10 @@ async fn completion_kind_mismatch_triggers_nondeterminism() {
     let (store, _td) = common::create_sqlite_store_disk().await;
 
     let activity_registry = ActivityRegistry::builder()
-        .register("TestActivity", |input: String| async move {
-            Ok(format!("result:{}", input))
-        })
+        .register(
+            "TestActivity",
+            |input: String| async move { Ok(format!("result:{input}")) },
+        )
         .build();
 
     // Orchestration that creates a timer, then waits for it
@@ -117,7 +121,7 @@ async fn completion_kind_mismatch_triggers_nondeterminism() {
     let client = Client::new(store.clone());
 
     // Start the orchestration
-    let _h = client
+    client
         .start_orchestration("inst-mismatch", "KindMismatchTest", "")
         .await
         .unwrap();
@@ -137,7 +141,7 @@ async fn completion_kind_mismatch_triggers_nondeterminism() {
     .await;
 
     let timer_id = timer_created.expect("Timer should be created");
-    println!("Timer created with ID: {}", timer_id);
+    println!("Timer created with ID: {timer_id}");
 
     // Inject a completion with the WRONG kind - send ActivityCompleted for a timer ID
     let _ = store
@@ -159,7 +163,7 @@ async fn completion_kind_mismatch_triggers_nondeterminism() {
         .unwrap()
     {
         OrchestrationStatus::Failed { error } => {
-            println!("Got expected error: {}", error);
+            println!("Got expected error: {error}");
             assert!(
                 error.contains("nondeterministic")
                     && error.contains("kind mismatch")
@@ -177,9 +181,10 @@ async fn unexpected_completion_id_triggers_nondeterminism() {
     let (store, _td) = common::create_sqlite_store_disk().await;
 
     let activity_registry = ActivityRegistry::builder()
-        .register("TestActivity", |input: String| async move {
-            Ok(format!("result:{}", input))
-        })
+        .register(
+            "TestActivity",
+            |input: String| async move { Ok(format!("result:{input}")) },
+        )
         .build();
 
     // Orchestration that waits for external events (doesn't schedule anything with ID 999)
@@ -195,7 +200,7 @@ async fn unexpected_completion_id_triggers_nondeterminism() {
     let client = Client::new(store.clone());
 
     // Start the orchestration
-    let _h = client
+    client
         .start_orchestration("inst-unexpected", "UnexpectedIdTest", "")
         .await
         .unwrap();
@@ -223,7 +228,7 @@ async fn unexpected_completion_id_triggers_nondeterminism() {
         .unwrap()
     {
         OrchestrationStatus::Failed { error } => {
-            println!("Got expected error: {}", error);
+            println!("Got expected error: {error}");
             assert!(
                 error.contains("nondeterministic") && error.contains("no matching schedule") && error.contains("999"),
                 "Expected nondeterminism error about unexpected completion ID 999, got: {error}"
@@ -251,7 +256,7 @@ async fn unexpected_timer_completion_triggers_nondeterminism() {
     let client = Client::new(store.clone());
 
     // Start the orchestration
-    let _h = client.start_orchestration("inst-timer", "TimerTest", "").await.unwrap();
+    client.start_orchestration("inst-timer", "TimerTest", "").await.unwrap();
 
     // Wait for the orchestration to be waiting for external events
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -276,7 +281,7 @@ async fn unexpected_timer_completion_triggers_nondeterminism() {
         .unwrap()
     {
         OrchestrationStatus::Failed { error } => {
-            println!("Got expected error: {}", error);
+            println!("Got expected error: {error}");
             assert!(
                 error.contains("nondeterministic") && error.contains("timer") && error.contains("123"),
                 "Expected nondeterminism error about timer 123, got: {error}"
@@ -316,10 +321,10 @@ async fn continue_as_new_with_unconsumed_completion_triggers_nondeterminism() {
             // When we get the signal, call continue_as_new
             // The activity is still pending and its completion might be in the batch
             ctx.continue_as_new("1");
-            Ok(format!("continuing with signal: {:?}", signal))
+            Ok(format!("continuing with signal: {signal:?}"))
         } else {
             // Second iteration: just complete
-            Ok(format!("final:iteration_{}", n))
+            Ok(format!("final:iteration_{n}"))
         }
     };
 
@@ -331,7 +336,7 @@ async fn continue_as_new_with_unconsumed_completion_triggers_nondeterminism() {
     let client = Client::new(store.clone());
 
     // Start the orchestration
-    let _h = client
+    client
         .start_orchestration("inst-can-nondet", "CanNondeterminism", "0")
         .await
         .unwrap();
@@ -372,7 +377,7 @@ async fn continue_as_new_with_unconsumed_completion_triggers_nondeterminism() {
         .unwrap()
     {
         OrchestrationStatus::Failed { error } => {
-            println!("Got expected nondeterminism error: {}", error);
+            println!("Got expected nondeterminism error: {error}");
             assert!(
                 error.contains("nondeterministic"),
                 "Expected nondeterminism error, got: {error}"
@@ -427,7 +432,7 @@ async fn execution_id_filtering_without_continue_as_new_triggers_nondeterminism(
     let client = Client::new(store.clone());
 
     // Start orchestration
-    let _handle = client
+    client
         .start_orchestration("inst-exec-id-no-can", "ExecIdNoCanTest", "")
         .await
         .unwrap();
@@ -454,7 +459,7 @@ async fn execution_id_filtering_without_continue_as_new_triggers_nondeterminism(
         .unwrap()
     {
         OrchestrationStatus::Completed { output } => {
-            println!("✓ Orchestration completed successfully: {}", output);
+            println!("✓ Orchestration completed successfully: {output}");
             assert_eq!(output, "activity result", "Should get the normal activity result");
             // The orchestration should complete successfully because:
             // 1. The completion from different execution ID is detected and logged as ERROR
@@ -463,7 +468,7 @@ async fn execution_id_filtering_without_continue_as_new_triggers_nondeterminism(
             // This demonstrates that execution ID filtering prevents cross-execution completions from affecting the orchestration
         }
         OrchestrationStatus::Failed { error } => {
-            panic!("Expected successful completion but got error: {}", error);
+            panic!("Expected successful completion but got error: {error}");
         }
         other => panic!("Unexpected status: {other:?}"),
     }
@@ -490,7 +495,7 @@ async fn duplicate_external_events_are_handled_gracefully() {
     let client = duroxide::Client::new(store.clone());
 
     // Start orchestration
-    let _handle = client
+    client
         .start_orchestration("inst-duplicate-external", "DuplicateExternalTest", "")
         .await
         .unwrap();
@@ -513,7 +518,7 @@ async fn duplicate_external_events_are_handled_gracefully() {
         .unwrap()
     {
         OrchestrationStatus::Completed { output } => {
-            println!("✓ Orchestration completed successfully with output: {}", output);
+            println!("✓ Orchestration completed successfully with output: {output}");
             assert_eq!(output, "first", "Should get the first event");
             // The orchestration should complete successfully because:
             // 1. First external event is processed normally
@@ -521,7 +526,7 @@ async fn duplicate_external_events_are_handled_gracefully() {
             // 3. No nondeterminism error is raised
         }
         OrchestrationStatus::Failed { error } => {
-            panic!("Expected successful completion but got error: {}", error);
+            panic!("Expected successful completion but got error: {error}");
         }
         other => panic!("Unexpected status: {other:?}"),
     }

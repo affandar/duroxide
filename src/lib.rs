@@ -604,7 +604,6 @@ impl OrchestrationContext {
 
     /// Returns the current logical time in milliseconds based on the last
     /// `TimerFired` event in history.
-
     fn take_actions(&self) -> Vec<Action> {
         std::mem::take(&mut self.inner.lock().unwrap().actions)
     }
@@ -626,7 +625,7 @@ impl OrchestrationContext {
         // Schedule and poll system call synchronously for deterministic replay
         // Format: "trace:{level}:{message}"
         // Note: Actual logging happens inside the System future during first execution only
-        let op = format!("{}{}:{}", SYSCALL_OP_TRACE_PREFIX, level_str, msg);
+        let op = format!("{SYSCALL_OP_TRACE_PREFIX}{level_str}:{msg}");
         let mut fut = self.schedule_system_call(&op);
         // Poll immediately to record the event synchronously
         let _ = poll_once(&mut fut);
@@ -816,8 +815,8 @@ impl DurableFuture {
     }
 
     /// Await an external event decoded to a typed value.
-    pub fn into_event_typed<T: serde::de::DeserializeOwned>(self) -> impl Future<Output = T> {
-        async move { crate::_typed_codec::Json::decode::<T>(&Self::into_event(self).await).expect("decode") }
+    pub async fn into_event_typed<T: serde::de::DeserializeOwned>(self) -> T {
+        crate::_typed_codec::Json::decode::<T>(&Self::into_event(self).await).expect("decode")
     }
 
     /// Converts this unified future into a future that resolves only for
@@ -842,14 +841,10 @@ impl DurableFuture {
     }
 
     /// Await a sub-orchestration result decoded to a typed value.
-    pub fn into_sub_orchestration_typed<Out: serde::de::DeserializeOwned>(
-        self,
-    ) -> impl Future<Output = Result<Out, String>> {
-        async move {
-            match Self::into_sub_orchestration(self).await {
-                Ok(s) => crate::_typed_codec::Json::decode::<Out>(&s),
-                Err(e) => Err(e),
-            }
+    pub async fn into_sub_orchestration_typed<Out: serde::de::DeserializeOwned>(self) -> Result<Out, String> {
+        match Self::into_sub_orchestration(self).await {
+            Ok(s) => crate::_typed_codec::Json::decode::<Out>(&s),
+            Err(e) => Err(e),
         }
     }
 }

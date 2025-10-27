@@ -33,7 +33,7 @@ async fn continue_as_new_multiexec() {
     let client = duroxide::Client::new(store.clone());
 
     // The initial start handle will resolve when the first execution continues-as-new.
-    let _h = client.start_orchestration("inst-can-1", "Counter", "0").await.unwrap();
+    client.start_orchestration("inst-can-1", "Counter", "0").await.unwrap();
 
     match client
         .wait_for_orchestration("inst-can-1", std::time::Duration::from_secs(5))
@@ -144,7 +144,7 @@ async fn continue_as_new_event_routes_to_latest() {
         let _ = client_c.raise_event("inst-can-evt", "Go", "ok").await;
     });
 
-    let _h = client
+    client
         .start_orchestration("inst-can-evt", "EvtCAN", "start")
         .await
         .unwrap();
@@ -255,7 +255,7 @@ async fn continue_as_new_event_drop_then_process() {
         let _ = client_c2.raise_event("inst-can-evt-drop", "Go", "late").await;
     });
 
-    let _h = client
+    client
         .start_orchestration("inst-can-evt-drop", "EvtDropThenProcess", "start")
         .await
         .unwrap();
@@ -343,7 +343,7 @@ async fn event_drop_then_retry_after_subscribe() {
     });
 
     let client = duroxide::Client::new(store.clone());
-    let _h = client
+    client
         .start_orchestration("inst-drop-retry", "EvtDropRetry", "x")
         .await
         .unwrap();
@@ -399,7 +399,7 @@ async fn old_execution_completions_are_ignored() {
     let client = duroxide::Client::new(store.clone());
 
     // Start the orchestration
-    let _handle = client
+    client
         .start_orchestration("inst-exec-test", "ExecutionIdTest", "")
         .await
         .unwrap();
@@ -457,7 +457,7 @@ async fn future_execution_completions_are_ignored() {
     let client = duroxide::Client::new(store.clone());
 
     // Start the orchestration
-    let _handle = client
+    client
         .start_orchestration("inst-future", "FutureExecTest", "")
         .await
         .unwrap();

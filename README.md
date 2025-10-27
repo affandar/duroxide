@@ -22,17 +22,16 @@ Getting started samples
 
 What it is
 - Deterministic orchestration core with correlated event IDs and replay safety
-- Message-driven runtime built on Tokio, with three dispatchers:
-  - OrchestrationDispatcher (orchestrator queue) - processes workflow turns
+- Message-driven runtime built on Tokio, with two dispatchers:
+  - OrchestrationDispatcher (orchestrator queue) - processes workflow turns and durable timers
   - WorkDispatcher (worker queue) - executes activities
-  - TimerDispatcher (timer queue) - fires durable timers
 - Storage-agnostic via `Provider` trait (SQLite provider with in-memory and file-based modes)
 - Configurable polling frequency and runtime options
 
 How it works (brief)
 - The orchestrator runs turn-by-turn. Each turn it is polled once, may schedule actions, then the runtime waits for completions.
 - Every operation has a correlation id. Scheduling is recorded as history events (e.g., `ActivityScheduled`) and completions are matched by id (e.g., `ActivityCompleted`).
-- The runtime appends new events and advances turns; work is routed through provider-backed queues per role (Orchestrator/Worker/Timer) using peek-lock semantics.
+- The runtime appends new events and advances turns; work is routed through provider-backed queues (Orchestrator and Worker) using peek-lock semantics. Timers are handled via orchestrator queue with delayed visibility.
 - Deterministic future aggregation: `ctx.select2`, `ctx.select(Vec)`, and `ctx.join(Vec)` resolve by earliest completion index in history (not polling order).
 - Logging is replay-safe via `tracing` and the `ctx.trace_*` helpers (implemented as a deterministic system activity). We do not persist trace events in history.
 - Providers enforce a history cap (default 1024; tests use a smaller cap). If an append would exceed the cap, they return an error; the runtime fails the run to preserve determinism (no truncation).

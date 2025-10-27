@@ -268,7 +268,7 @@ async fn recovery_multiple_orchestrations_sqlite_provider() {
 
     let client1 = Client::new(store1.clone());
     for (inst, name, input) in &cases {
-        let _ = client1.start_orchestration(inst, name, *input).await.unwrap();
+        client1.start_orchestration(inst, name, *input).await.unwrap();
     }
     // Wait for each orchestration to reach its expected pre-shutdown checkpoint
     // EchoWait: timer created but not yet fired

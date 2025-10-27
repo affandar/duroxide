@@ -108,7 +108,7 @@ async fn test_instance_discovery() {
     // Start some orchestrations
     let activities = ActivityRegistry::builder()
         .register("TestActivity", |input: String| async move {
-            Ok(format!("Processed: {}", input))
+            Ok(format!("Processed: {input}"))
         })
         .build();
 
@@ -123,11 +123,12 @@ async fn test_instance_discovery() {
         .build();
 
     let _rt = runtime::Runtime::start_with_options(
-        store.clone(), 
-        Arc::new(activities), 
+        store.clone(),
+        Arc::new(activities),
         orchestrations,
-        fast_runtime_options()
-    ).await;
+        fast_runtime_options(),
+    )
+    .await;
 
     // Start multiple orchestrations
     client
@@ -169,7 +170,7 @@ async fn test_instance_info() {
 
     let activities = ActivityRegistry::builder()
         .register("TestActivity", |input: String| async move {
-            Ok(format!("Processed: {}", input))
+            Ok(format!("Processed: {input}"))
         })
         .build();
 
@@ -184,11 +185,12 @@ async fn test_instance_info() {
         .build();
 
     let _rt = runtime::Runtime::start_with_options(
-        store.clone(), 
-        Arc::new(activities), 
+        store.clone(),
+        Arc::new(activities),
         orchestrations,
-        fast_runtime_options()
-    ).await;
+        fast_runtime_options(),
+    )
+    .await;
 
     // Start orchestration
     client
@@ -224,7 +226,7 @@ async fn test_execution_info() {
 
     let activities = ActivityRegistry::builder()
         .register("TestActivity", |input: String| async move {
-            Ok(format!("Processed: {}", input))
+            Ok(format!("Processed: {input}"))
         })
         .build();
 
@@ -239,11 +241,12 @@ async fn test_execution_info() {
         .build();
 
     let _rt = runtime::Runtime::start_with_options(
-        store.clone(), 
-        Arc::new(activities), 
+        store.clone(),
+        Arc::new(activities),
         orchestrations,
-        fast_runtime_options()
-    ).await;
+        fast_runtime_options(),
+    )
+    .await;
 
     // Start orchestration
     client
@@ -270,7 +273,7 @@ async fn test_execution_info() {
 
     // Read execution history
     let history = client.read_execution_history("test-exec", 1).await.unwrap();
-    assert!(history.len() > 0);
+    assert!(!history.is_empty());
 
     // Should contain at least OrchestrationStarted and OrchestrationCompleted events
     let has_started = history
@@ -300,9 +303,9 @@ async fn test_multi_execution_support() {
                 let count: u32 = count_str.parse().unwrap_or(0);
                 if count < 3 {
                     ctx.continue_as_new((count + 1).to_string());
-                    Ok(format!("Continued: {}", count))
+                    Ok(format!("Continued: {count}"))
                 } else {
-                    Ok(format!("Final: {}", count))
+                    Ok(format!("Final: {count}"))
                 }
             },
         )
@@ -326,8 +329,8 @@ async fn test_multi_execution_support() {
         .wait_for_orchestration("test-continue", std::time::Duration::from_secs(5))
         .await
     {
-        Ok(status) => println!("Orchestration completed with status: {:?}", status),
-        Err(e) => println!("Orchestration failed: {:?}", e),
+        Ok(status) => println!("Orchestration completed with status: {status:?}"),
+        Err(e) => println!("Orchestration failed: {e:?}"),
     }
 
     // Add a small delay to ensure all processing is complete
@@ -368,7 +371,7 @@ async fn test_system_metrics() {
 
     let activities = ActivityRegistry::builder()
         .register("TestActivity", |input: String| async move {
-            Ok(format!("Processed: {}", input))
+            Ok(format!("Processed: {input}"))
         })
         .register("FailingActivity", |_input: String| async move {
             Err("Intentional failure".to_string())
@@ -401,11 +404,12 @@ async fn test_system_metrics() {
         .build();
 
     let _rt = runtime::Runtime::start_with_options(
-        store.clone(), 
-        Arc::new(activities), 
+        store.clone(),
+        Arc::new(activities),
         orchestrations,
-        fast_runtime_options()
-    ).await;
+        fast_runtime_options(),
+    )
+    .await;
 
     // Start orchestrations with different outcomes
     client
@@ -478,19 +482,20 @@ async fn test_queue_depths() {
         .build();
 
     let _rt = runtime::Runtime::start_with_options(
-        store.clone(), 
-        Arc::new(activities), 
+        store.clone(),
+        Arc::new(activities),
         orchestrations,
-        fast_runtime_options()
-    ).await;
+        fast_runtime_options(),
+    )
+    .await;
 
     // Start multiple orchestrations quickly
     for i in 1..=5 {
         client
             .start_orchestration(
-                &format!("queue-test-{}", i),
+                &format!("queue-test-{i}"),
                 "QueueTestOrchestration",
-                &format!("input-{}", i),
+                &format!("input-{i}"),
             )
             .await
             .unwrap();
@@ -549,13 +554,13 @@ async fn test_complex_workflow_management() {
 
     let activities = ActivityRegistry::builder()
         .register("ProcessOrder", |order: String| async move {
-            Ok(format!("Processed order: {}", order))
+            Ok(format!("Processed order: {order}"))
         })
         .register("SendEmail", |email: String| async move {
-            Ok(format!("Sent email: {}", email))
+            Ok(format!("Sent email: {email}"))
         })
         .register("UpdateInventory", |item: String| async move {
-            Ok(format!("Updated inventory for: {}", item))
+            Ok(format!("Updated inventory for: {item}"))
         })
         .build();
 
@@ -571,7 +576,7 @@ async fn test_complex_workflow_management() {
 
                 // Send confirmation email
                 let _email = ctx
-                    .schedule_activity("SendEmail", format!("Order processed: {}", result))
+                    .schedule_activity("SendEmail", format!("Order processed: {result}"))
                     .into_activity()
                     .await?;
 
@@ -584,11 +589,12 @@ async fn test_complex_workflow_management() {
         .build();
 
     let _rt = runtime::Runtime::start_with_options(
-        store.clone(), 
-        Arc::new(activities), 
+        store.clone(),
+        Arc::new(activities),
         orchestrations,
-        fast_runtime_options()
-    ).await;
+        fast_runtime_options(),
+    )
+    .await;
 
     // Start multiple order processing workflows
     let orders = vec!["order-1", "order-2", "order-3", "order-4", "order-5"];
@@ -637,7 +643,7 @@ async fn test_complex_workflow_management() {
         assert!(exec_info.event_count > 0);
 
         let history = client.read_execution_history(order, 1).await.unwrap();
-        assert!(history.len() > 0);
+        assert!(!history.is_empty());
 
         // Should contain OrchestrationStarted, ActivityCompleted, and OrchestrationCompleted events
         let has_started = history

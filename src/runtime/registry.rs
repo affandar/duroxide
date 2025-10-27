@@ -6,9 +6,11 @@ use semver::Version;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+type HandlerMap = HashMap<String, std::collections::BTreeMap<Version, Arc<dyn OrchestrationHandler>>>;
+
 #[derive(Clone, Default)]
 pub struct OrchestrationRegistry {
-    pub(crate) inner: Arc<HashMap<String, std::collections::BTreeMap<Version, Arc<dyn OrchestrationHandler>>>>,
+    pub(crate) inner: Arc<HandlerMap>,
     pub(crate) policy: Arc<tokio::sync::Mutex<HashMap<String, VersionPolicy>>>,
 }
 
@@ -109,7 +111,7 @@ impl OrchestrationRegistryBuilder {
         let entry = self.map.entry(name.clone()).or_default();
         if entry.contains_key(&v) {
             self.errors
-                .push(format!("duplicate orchestration registration: {}@{}", name, v));
+                .push(format!("duplicate orchestration registration: {name}@{v}"));
             return self;
         }
         entry.insert(v, Arc::new(FnOrchestration(f)));
@@ -153,14 +155,13 @@ impl OrchestrationRegistryBuilder {
         let entry = self.map.entry(name.clone()).or_default();
         if entry.contains_key(&v) {
             self.errors
-                .push(format!("duplicate orchestration registration: {}@{}", name, v));
+                .push(format!("duplicate orchestration registration: {name}@{v}"));
             return self;
         }
         if let Some((latest, _)) = entry.iter().next_back() {
             if &v <= latest {
                 panic!(
-                    "non-monotonic orchestration version for {}: {} is not later than existing latest {}",
-                    name, v, latest
+                    "non-monotonic orchestration version for {name}: {v} is not later than existing latest {latest}"
                 );
             }
         }

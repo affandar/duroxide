@@ -20,7 +20,7 @@ async fn external_duplicate_workitems_dedup() {
     let client = duroxide::Client::new(store.clone());
 
     let inst = "inst-ext-dup";
-    let _h = client.start_orchestration(inst, "WaitEvt", "").await.unwrap();
+    client.start_orchestration(inst, "WaitEvt", "").await.unwrap();
     assert!(common::wait_for_subscription(store.clone(), inst, "Evt", 2_000).await);
 
     // enqueue duplicate externals
@@ -76,7 +76,7 @@ async fn timer_duplicate_workitems_dedup() {
     let client = duroxide::Client::new(store.clone());
 
     let inst = "inst-timer-dup";
-    let _h = client.start_orchestration(inst, "OneTimer", "").await.unwrap();
+    client.start_orchestration(inst, "OneTimer", "").await.unwrap();
 
     // wait for TimerCreated and get id
     assert!(
@@ -163,7 +163,7 @@ async fn activity_duplicate_completion_workitems_dedup() {
     let client = duroxide::Client::new(store.clone());
 
     let inst = "inst-act-dup";
-    let _h = client.start_orchestration(inst, "OneSlowAct", "").await.unwrap();
+    client.start_orchestration(inst, "OneSlowAct", "").await.unwrap();
 
     // wait for ActivityScheduled to get id
     assert!(
@@ -251,7 +251,7 @@ async fn crash_after_dequeue_before_append_completion() {
 
     // Start orchestration and wait for subscription
     let inst = "inst-crash-before-append";
-    let _h = client.start_orchestration(inst, "WaitEvt", "").await.unwrap();
+    client.start_orchestration(inst, "WaitEvt", "").await.unwrap();
     assert!(common::wait_for_subscription(store.clone(), inst, "Evt", 2_000).await);
 
     // Enqueue the external work item
@@ -301,7 +301,7 @@ async fn crash_after_append_before_ack_timer() {
     let client = duroxide::Client::new(store.clone());
 
     let inst = "inst-crash-after-append";
-    let _h = client.start_orchestration(inst, "OneTimer", "").await.unwrap();
+    client.start_orchestration(inst, "OneTimer", "").await.unwrap();
 
     assert!(
         common::wait_for_history(

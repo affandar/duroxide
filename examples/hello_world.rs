@@ -27,7 +27,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Register a simple activity that greets users
     let activities = ActivityRegistry::builder()
-        .register("Greet", |name: String| async move { Ok(format!("Hello, {}!", name)) })
+        .register("Greet", |name: String| async move { Ok(format!("Hello, {name}!")) })
         .build();
 
     // Define our orchestration
@@ -37,7 +37,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Schedule and await the greeting activity
         let greeting = ctx.schedule_activity("Greet", name).into_activity().await?;
 
-        ctx.trace_info(format!("Greeting completed: {}", greeting));
+        ctx.trace_info(format!("Greeting completed: {greeting}"));
         Ok(greeting)
     };
 
@@ -62,14 +62,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     match client
         .wait_for_orchestration(instance_id, std::time::Duration::from_secs(10))
         .await
-        .map_err(|e| format!("Wait error: {:?}", e))?
+        .map_err(|e| format!("Wait error: {e:?}"))?
     {
         duroxide::OrchestrationStatus::Completed { output } => {
             println!("✅ Orchestration completed successfully!");
-            println!("Result: {}", output);
+            println!("Result: {output}");
         }
         duroxide::OrchestrationStatus::Failed { error } => {
-            println!("❌ Orchestration failed: {}", error);
+            println!("❌ Orchestration failed: {error}");
         }
         _ => {
             println!("⏳ Orchestration still running or in unexpected state");

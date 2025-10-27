@@ -1,9 +1,8 @@
 /// Stress test: Spin up N orchestrations in parallel and measure throughput
-/// 
+///
 /// This test creates multiple orchestration instances that each perform
 /// fan-out/fan-in work, measuring total time and throughput to establish
 /// baseline performance before multi-threaded dispatcher improvements.
-
 use duroxide::providers::sqlite::SqliteProvider;
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self, OrchestrationRegistry};
@@ -13,12 +12,8 @@ use std::time::Instant;
 use tracing::info;
 
 /// Simple orchestration that fans out to N activities and waits for all
-async fn fanout_orchestration(
-    ctx: OrchestrationContext,
-    input: String,
-) -> Result<String, String> {
-    let config: FanoutConfig = serde_json::from_str(&input)
-        .map_err(|e| format!("Invalid input: {}", e))?;
+async fn fanout_orchestration(ctx: OrchestrationContext, input: String) -> Result<String, String> {
+    let config: FanoutConfig = serde_json::from_str(&input).map_err(|e| format!("Invalid input: {}", e))?;
 
     ctx.trace_info(format!("Starting fanout with {} tasks", config.task_count));
 
@@ -70,8 +65,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize tracing
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info,duroxide=debug".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info,duroxide=debug".into()),
         )
         .init();
 
@@ -112,12 +106,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Start runtime
     info!("Starting runtime...");
-    let rt = runtime::Runtime::start_with_store(
-        store.clone(),
-        Arc::new(activities),
-        orchestrations,
-    )
-    .await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activities), orchestrations).await;
 
     // Create client (wrap in Arc for sharing across tasks)
     let client = Arc::new(Client::new(store.clone()));
@@ -126,18 +115,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Starting continuous orchestration pump...");
     let start_time = Instant::now();
     let end_time = start_time + std::time::Duration::from_secs(config.duration_secs);
-    
+
     let launched = Arc::new(tokio::sync::Mutex::new(0_usize));
     let completed = Arc::new(tokio::sync::Mutex::new(0_usize));
     let failed = Arc::new(tokio::sync::Mutex::new(0_usize));
     let active = Arc::new(tokio::sync::Mutex::new(0_usize));
-    
+
     let input = serde_json::to_string(&FanoutConfig {
         task_count: config.tasks_per_instance,
     })?;
 
     let mut instance_id = 0_usize;
-    
+
     loop {
         let now = Instant::now();
         if now >= end_time {
@@ -156,22 +145,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Launch new orchestration
         instance_id += 1;
         let instance = format!("stress-test-{}", instance_id);
-        
+
         *active.lock().await += 1;
         *launched.lock().await += 1;
-        
+
         let client_clone = Arc::clone(&client);
         let input_clone = input.clone();
         let completed_clone = Arc::clone(&completed);
         let failed_clone = Arc::clone(&failed);
         let active_clone = Arc::clone(&active);
-        
+
         tokio::spawn(async move {
             // Start orchestration
             let start_result = client_clone
                 .start_orchestration(&instance, "FanoutWorkflow", input_clone)
                 .await;
-            
+
             if let Err(e) = start_result {
                 tracing::error!("Failed to start {}: {}", instance, e);
                 *failed_clone.lock().await += 1;
@@ -199,7 +188,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     *failed_clone.lock().await += 1;
                 }
             }
-            
+
             *active_clone.lock().await -= 1;
         });
 
@@ -215,14 +204,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         if current_active == 0 {
             break;
         }
-        
+
         if wait_iterations % 100 == 0 {
             info!("Still waiting for {} active orchestrations...", current_active);
         }
-        
+
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         wait_iterations += 1;
-        
+
         // Timeout after 2 minutes
         if wait_iterations > 1200 {
             info!("Timeout waiting for orchestrations to complete");
@@ -241,21 +230,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Launched: {}", final_launched);
     info!("Completed: {}", final_completed);
     info!("Failed: {}", final_failed);
-    info!("Throughput: {:.2} orchestrations/sec", 
-        final_completed as f64 / total_time.as_secs_f64());
-    
+    info!(
+        "Throughput: {:.2} orchestrations/sec",
+        final_completed as f64 / total_time.as_secs_f64()
+    );
+
     if final_completed > 0 {
-        info!("Average time per orchestration: {:.2}ms", 
-            total_time.as_millis() as f64 / final_completed as f64);
+        info!(
+            "Average time per orchestration: {:.2}ms",
+            total_time.as_millis() as f64 / final_completed as f64
+        );
     }
-    
+
     let total_activities = final_completed * config.tasks_per_instance;
-    info!("Activity throughput: {:.2} activities/sec",
-        total_activities as f64 / total_time.as_secs_f64());
+    info!(
+        "Activity throughput: {:.2} activities/sec",
+        total_activities as f64 / total_time.as_secs_f64()
+    );
 
     // Shutdown
     rt.shutdown(None).await;
 
     Ok(())
 }
-

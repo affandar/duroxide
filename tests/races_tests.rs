@@ -27,11 +27,12 @@ async fn wait_external_completes_with(store: StdArc<dyn Provider>) {
         .build();
 
     let rt = runtime::Runtime::start_with_options(
-        store.clone(), 
-        Arc::new(activity_registry), 
+        store.clone(),
+        Arc::new(activity_registry),
         orchestration_registry,
-        fast_runtime_options()
-    ).await;
+        fast_runtime_options(),
+    )
+    .await;
     let store_for_wait = store.clone();
     let client_for_event = duroxide::Client::new(store.clone());
     tokio::spawn(async move {
@@ -90,11 +91,12 @@ async fn race_external_vs_timer_ordering_with(store: StdArc<dyn Provider>) {
         .build();
 
     let rt = runtime::Runtime::start_with_options(
-        store.clone(), 
-        Arc::new(activity_registry), 
+        store.clone(),
+        Arc::new(activity_registry),
         orchestration_registry,
-        fast_runtime_options()
-    ).await;
+        fast_runtime_options(),
+    )
+    .await;
     let store_for_wait = store.clone();
     let client_for_event = duroxide::Client::new(store.clone());
     tokio::spawn(async move {
@@ -162,11 +164,12 @@ async fn race_event_vs_timer_event_wins_with(store: StdArc<dyn Provider>) {
         .build();
 
     let rt = runtime::Runtime::start_with_options(
-        store.clone(), 
-        Arc::new(activity_registry), 
+        store.clone(),
+        Arc::new(activity_registry),
         orchestration_registry,
-        fast_runtime_options()
-    ).await;
+        fast_runtime_options(),
+    )
+    .await;
     let store_for_wait = store.clone();
     let client_for_event = duroxide::Client::new(store.clone());
     tokio::spawn(async move {

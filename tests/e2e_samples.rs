@@ -247,7 +247,7 @@ async fn sample_timeout_with_timer_race_fs() {
             duroxide::DurableOutput::Timer => Err("timeout".to_string()),
             duroxide::DurableOutput::Activity(Ok(s)) => Ok(s),
             duroxide::DurableOutput::Activity(Err(e)) => Err(e),
-            other => panic!("unexpected output: {:?}", other),
+            other => panic!("unexpected output: {other:?}"),
         }
     };
 
@@ -301,7 +301,7 @@ async fn sample_select2_activity_vs_external_fs() {
             (0, duroxide::DurableOutput::Activity(Ok(s))) => Ok(format!("activity:{s}")),
             (1, duroxide::DurableOutput::External(payload)) => Ok(format!("event:{payload}")),
             (0, duroxide::DurableOutput::Activity(Err(e))) => Err(e),
-            other => panic!("unexpected: {:?}", other),
+            other => panic!("unexpected: {other:?}"),
         }
     };
 
@@ -367,7 +367,7 @@ async fn dtf_legacy_gabbar_greetings_fs() {
             .map(|o| match o {
                 duroxide::DurableOutput::Activity(Ok(s)) => s,
                 duroxide::DurableOutput::Activity(Err(e)) => panic!("activity failed: {e}"),
-                other => panic!("unexpected output: {:?}", other),
+                other => panic!("unexpected output: {other:?}"),
             })
             .collect();
         // For a stable assertion build a canonical order
@@ -571,7 +571,7 @@ async fn sample_sub_orchestration_fanout_fs() {
             .map(|o| match o {
                 duroxide::DurableOutput::SubOrchestration(Ok(s)) => s.parse::<i64>().unwrap(),
                 duroxide::DurableOutput::SubOrchestration(Err(e)) => panic!("child failed: {e}"),
-                other => panic!("unexpected output: {:?}", other),
+                other => panic!("unexpected output: {other:?}"),
             })
             .collect();
         let total: i64 = nums.drain(..).sum();
@@ -753,7 +753,7 @@ async fn sample_continue_as_new_fs() {
     let rt =
         runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
     let client = Client::new(store.clone());
-    let _h = client
+    client
         .start_orchestration("inst-sample-can", "CanSample", "0")
         .await
         .unwrap();
@@ -898,7 +898,7 @@ async fn sample_mixed_string_and_typed_typed_orch_fs() {
                 }
             }
             duroxide::DurableOutput::Activity(Err(e)) => return Err(e),
-            other => panic!("unexpected output: {:?}", other),
+            other => panic!("unexpected output: {other:?}"),
         };
         Ok::<_, String>(s)
     };
@@ -951,7 +951,7 @@ async fn sample_mixed_string_and_typed_string_orch_fs() {
                 }
             }
             duroxide::DurableOutput::Activity(Err(e)) => return Err(e),
-            other => panic!("unexpected output: {:?}", other),
+            other => panic!("unexpected output: {other:?}"),
         };
         Ok::<_, String>(s)
     };
@@ -1201,7 +1201,7 @@ async fn sample_cancellation_parent_cascades_to_children_fs() {
         .register("ParentSample", parent)
         .build();
     let activity_registry = ActivityRegistry::builder().build();
-    
+
     // Use faster polling for cancellation timing test
     let options = runtime::RuntimeOptions {
         dispatcher_idle_sleep_ms: 10,
@@ -1212,7 +1212,8 @@ async fn sample_cancellation_parent_cascades_to_children_fs() {
         Arc::new(activity_registry),
         orchestration_registry,
         options,
-    ).await;
+    )
+    .await;
 
     // Start the parent orchestration
     let client = Client::new(store.clone());
@@ -1469,7 +1470,7 @@ async fn sample_error_recovery_fs() {
             Err(e) => {
                 ctx.trace_info("Processing failed, logging error");
                 let _ = ctx.schedule_activity("LogError", e.clone()).into_activity().await;
-                Err(format!("Failed to process '{}': {}", input, e))
+                Err(format!("Failed to process '{input}': {e}"))
             }
         }
     };
@@ -1483,7 +1484,7 @@ async fn sample_error_recovery_fs() {
     let client = Client::new(store.clone());
 
     // Test successful case
-    let _ = client
+    client
         .start_orchestration("inst-recovery-1", "ErrorRecovery", "test")
         .await
         .unwrap();
@@ -1501,7 +1502,7 @@ async fn sample_error_recovery_fs() {
     }
 
     // Test error recovery case
-    let _ = client
+    client
         .start_orchestration("inst-recovery-2", "ErrorRecovery", "error")
         .await
         .unwrap();

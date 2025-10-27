@@ -1,8 +1,4 @@
-use crate::{
-    Event,
-    providers::WorkItem,
-    runtime::OrchestrationHandler,
-};
+use crate::{Event, providers::WorkItem, runtime::OrchestrationHandler};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
 use tracing::{debug, warn};
@@ -96,7 +92,9 @@ impl ReplayEngine {
                     .any(|e| matches!(e, Event::TimerFired { source_event_id, .. } if source_event_id == id)),
                 WorkItem::SubOrchCompleted { parent_id, .. } | WorkItem::SubOrchFailed { parent_id, .. } => {
                     self.history_delta.iter().any(|e| match e {
-                        Event::SubOrchestrationCompleted { source_event_id, .. } if source_event_id == parent_id => true,
+                        Event::SubOrchestrationCompleted { source_event_id, .. } if source_event_id == parent_id => {
+                            true
+                        }
                         Event::SubOrchestrationFailed { source_event_id, .. } if source_event_id == parent_id => true,
                         _ => false,
                     })
@@ -134,41 +132,32 @@ impl ReplayEngine {
                         Some("activity") => {}
                         Some(other) => {
                             nd_err = Some(format!(
-                                "nondeterministic: completion kind mismatch for id={}, expected '{}', got 'activity'",
-                                id, other
+                                "nondeterministic: completion kind mismatch for id={id}, expected '{other}', got 'activity'"
                             ))
                         }
-                        None => {
-                            nd_err = Some(format!(
-                                "nondeterministic: no matching schedule for completion id={}",
-                                id
-                            ))
-                        }
+                        None => nd_err = Some(format!("nondeterministic: no matching schedule for completion id={id}")),
                     }
                 }
                 WorkItem::TimerFired { id, .. } => match schedule_kind(id) {
                     Some("timer") => {}
                     Some(other) => {
                         nd_err = Some(format!(
-                            "nondeterministic: completion kind mismatch for id={}, expected '{}', got 'timer'",
-                            id, other
+                            "nondeterministic: completion kind mismatch for id={id}, expected '{other}', got 'timer'"
                         ))
                     }
-                    None => nd_err = Some(format!("nondeterministic: no matching schedule for timer id={}", id)),
+                    None => nd_err = Some(format!("nondeterministic: no matching schedule for timer id={id}")),
                 },
                 WorkItem::SubOrchCompleted { parent_id, .. } | WorkItem::SubOrchFailed { parent_id, .. } => {
                     match schedule_kind(parent_id) {
                         Some("suborchestration") => {}
                         Some(other) => {
                             nd_err = Some(format!(
-                                "nondeterministic: completion kind mismatch for id={}, expected '{}', got 'suborchestration'",
-                                parent_id, other
+                                "nondeterministic: completion kind mismatch for id={parent_id}, expected '{other}', got 'suborchestration'"
                             ))
                         }
                         None => {
                             nd_err = Some(format!(
-                                "nondeterministic: no matching schedule for sub-orchestration id={}",
-                                parent_id
+                                "nondeterministic: no matching schedule for sub-orchestration id={parent_id}"
                             ))
                         }
                     }
@@ -277,11 +266,15 @@ impl ReplayEngine {
             WorkItem::ActivityCompleted { execution_id, .. } => *execution_id == current_execution_id,
             WorkItem::ActivityFailed { execution_id, .. } => *execution_id == current_execution_id,
             WorkItem::TimerFired { execution_id, .. } => *execution_id == current_execution_id,
-            WorkItem::SubOrchCompleted { parent_execution_id, .. } => *parent_execution_id == current_execution_id,
-            WorkItem::SubOrchFailed { parent_execution_id, .. } => *parent_execution_id == current_execution_id,
+            WorkItem::SubOrchCompleted {
+                parent_execution_id, ..
+            } => *parent_execution_id == current_execution_id,
+            WorkItem::SubOrchFailed {
+                parent_execution_id, ..
+            } => *parent_execution_id == current_execution_id,
             WorkItem::ExternalRaised { .. } => true, // External events don't have execution IDs
             WorkItem::CancelInstance { .. } => true, // Cancellation applies to current execution
-            _ => false, // Non-completion work items (shouldn't reach here)
+            _ => false,                              // Non-completion work items (shouldn't reach here)
         }
     }
 
@@ -348,9 +341,9 @@ impl ReplayEngine {
             Ok(tuple) => tuple,
             Err(panic_payload) => {
                 let msg = if let Some(s) = panic_payload.downcast_ref::<&str>() {
-                    format!("nondeterministic: {}", s)
+                    format!("nondeterministic: {s}")
                 } else if let Some(s) = panic_payload.downcast_ref::<String>() {
-                    format!("nondeterministic: {}", s)
+                    format!("nondeterministic: {s}")
                 } else {
                     "nondeterministic: orchestration panicked".to_string()
                 };
@@ -384,13 +377,11 @@ impl ReplayEngine {
             h
         };
 
-        if let Some(cancel_event) = full_history
+        if let Some(Event::OrchestrationCancelRequested { reason, .. }) = full_history
             .iter()
             .find(|e| matches!(e, Event::OrchestrationCancelRequested { .. }))
         {
-            if let Event::OrchestrationCancelRequested { reason, .. } = cancel_event {
-                return TurnResult::Cancelled(reason.clone());
-            }
+            return TurnResult::Cancelled(reason.clone());
         }
 
         // Check for continue-as-new decision FIRST (takes precedence over output)
@@ -468,5 +459,3 @@ mod tests {
 // Include comprehensive tests
 #[path = "replay_engine_tests.rs"]
 mod replay_engine_tests;
-
-

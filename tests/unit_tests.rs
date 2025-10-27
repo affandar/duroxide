@@ -119,8 +119,8 @@ async fn runtime_duplicate_orchestration_deduped_single_execution() {
 
     let client = duroxide::Client::new(store.clone());
     // Fire two start requests for the same instance
-    let _h1 = client.start_orchestration(inst, "TestOrch", "").await.unwrap();
-    let _h2 = client.start_orchestration(inst, "TestOrch", "").await.unwrap();
+    client.start_orchestration(inst, "TestOrch", "").await.unwrap();
+    client.start_orchestration(inst, "TestOrch", "").await.unwrap();
 
     // Both should resolve to the same single execution/result
     match client
@@ -178,7 +178,7 @@ async fn orchestration_descriptor_root_and_child() {
     let store = Arc::new(store) as Arc<dyn Provider>;
     let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), reg).await;
     let client = duroxide::Client::new(store.clone());
-    let _h = client
+    client
         .start_orchestration("inst-desc", "ParentDsc", "seed")
         .await
         .unwrap();
@@ -195,7 +195,7 @@ async fn orchestration_descriptor_root_and_child() {
     // Child descriptor (event_id=2 since OrchestrationStarted is event_id=1)
     let dchild = rt.get_orchestration_descriptor("inst-desc::sub::2").await.unwrap();
     assert_eq!(dchild.name, "ChildDsc");
-    assert!(dchild.version.len() > 0);
+    assert!(!dchild.version.is_empty());
     assert_eq!(dchild.parent_instance.as_deref(), Some("inst-desc"));
     assert_eq!(dchild.parent_id, Some(2));
     rt.shutdown(None).await;
@@ -227,7 +227,7 @@ async fn orchestration_status_apis() {
 
     // Start a running orchestration; should be Running after dispatcher processes it
     let inst_running = "inst-status-running";
-    let _handle_running = client
+    client
         .start_orchestration(inst_running, "ShortTimer", "")
         .await
         .unwrap();
@@ -237,8 +237,7 @@ async fn orchestration_status_apis() {
     // The orchestration should be running (waiting for timer)
     assert!(
         matches!(s1, OrchestrationStatus::Running),
-        "expected Running, got {:?}",
-        s1
+        "expected Running, got {s1:?}"
     );
 
     // After completion, should be Completed with output
@@ -259,7 +258,7 @@ async fn orchestration_status_apis() {
 
     // Failed orchestration
     let inst_fail = "inst-status-fail";
-    let _handle_fail = client.start_orchestration(inst_fail, "AlwaysFails", "").await.unwrap();
+    client.start_orchestration(inst_fail, "AlwaysFails", "").await.unwrap();
 
     match client
         .wait_for_orchestration(inst_fail, std::time::Duration::from_secs(5))

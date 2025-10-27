@@ -96,7 +96,6 @@ impl Provider for MyProvider {
         execution_id: u64,
         history_delta: Vec<Event>,
         worker_items: Vec<WorkItem>,
-        timer_items: Vec<WorkItem>,
         orchestrator_items: Vec<WorkItem>,
         metadata: ExecutionMetadata,
     ) -> Result<(), String> {
@@ -106,9 +105,8 @@ impl Provider for MyProvider {
         // 3. Append history_delta to the event log for that execution_id
         // 4. Update execution status/output from metadata (DON'T inspect events!)
         // 5. Enqueue worker_items to worker queue
-        // 6. Enqueue timer_items to timer queue
-        // 7. Enqueue orchestrator_items to orchestrator queue
-        // 8. Delete locked messages (release lock)
+        // 6. Enqueue orchestrator_items to orchestrator queue (may include TimerFired with visible_at delay)
+        // 7. Delete locked messages (release lock)
         
         todo!("See detailed docs below")
     }
@@ -189,29 +187,6 @@ impl Provider for MyProvider {
         // Return events for specific execution_id (not just latest). Used for debugging/testing.
         // Default can delegate to read(); production providers should override.
         self.read(instance).await
-    }
-    
-    // === REQUIRED: Timer Queue ===
-    
-    async fn enqueue_timer_work(&self, item: WorkItem) -> Result<(), String> {
-        // Store timer with fire_at visibility delay
-        
-        todo!()
-    }
-    
-    async fn dequeue_timer_peek_lock(&self) -> Option<(WorkItem, String)> {
-        // Return next timer where fire_at <= now()
-        
-        todo!()
-    }
-    
-    async fn ack_timer(&self, token: &str, completion: WorkItem, delay_ms: Option<u64>) -> Result<(), String> {
-        // Atomically:
-        // 1. Delete timer from queue (WHERE lock_token = token)
-        // 2. Enqueue TimerFired to orchestrator queue with optional visibility delay
-        // MUST be atomic - prevents lost timer completions
-        
-        todo!()
     }
     
     // === OPTIONAL: Management APIs ===
@@ -373,19 +348,16 @@ FOR item IN worker_items:
     INSERT INTO worker_queue (work_item, lock_token, locked_until, created_at)
     VALUES (work_json, NULL, NULL, NOW())
 
-// 5. Enqueue timer items (with fire_at for delayed visibility)
-FOR item IN timer_items:
-    work_json = serialize(item)
-    IF item IS TimerSchedule:
-        fire_at = item.fire_at_ms
-        INSERT INTO timer_queue (work_item, fire_at, lock_token, locked_until, created_at)
-        VALUES (work_json, fire_at, NULL, NULL, NOW())
-
-// 6. Enqueue orchestrator items
+// 5. Enqueue orchestrator items (may include TimerFired with delayed visibility)
 FOR item IN orchestrator_items:
     work_json = serialize(item)
     target_instance = extract_instance(item)  // See WorkItem docs
-    visible_at = NOW()  // Immediate visibility
+    
+    // Set visible_at based on item type
+    visible_at = IF item IS TimerFired:
+                     item.fire_at_ms  // Delayed visibility for timers
+                 ELSE:
+                     NOW()  // Immediate visibility for other items
     
     // Special case: StartOrchestration needs instance creation
     IF item IS StartOrchestration:
@@ -400,7 +372,7 @@ FOR item IN orchestrator_items:
     INSERT INTO orchestrator_queue (instance_id, work_item, visible_at, lock_token, locked_until, created_at)
     VALUES (target_instance, work_json, visible_at, NULL, NULL, NOW())
 
-// 7. Release lock (delete acknowledged messages)
+// 6. Release lock (delete acknowledged messages)
 DELETE FROM orchestrator_queue WHERE lock_token = lock_token
 
 COMMIT TRANSACTION
@@ -408,7 +380,7 @@ RETURN Ok(())
 ```
 
 **Critical:**
-- All 7 steps must be in ONE transaction
+- All 6 steps must be in ONE transaction
 - If ANY step fails, ROLLBACK everything
 - Never partially commit
 
@@ -525,14 +497,8 @@ RETURN Ok(())  // Idempotent
    - PRIMARY KEY: (instance_id, execution_id)
    - Columns: status, output, started_at, completed_at
 
-### Required Tables
-
-6. **timer_queue** - Timer schedules (REQUIRED)
-   - PRIMARY KEY: id (auto-increment)
-   - Columns: work_item (JSON), fire_at, lock_token, locked_until
-   - INDEX: (fire_at, lock_token)
-
 ---
+
 
 ## Common Pitfalls
 
@@ -636,9 +602,6 @@ CREATE INDEX idx_orch_instance ON orchestrator_queue(instance_id);
 
 -- Worker queue
 CREATE INDEX idx_worker_lock ON worker_queue(lock_token);
-
--- Timer queue (if supported)
-CREATE INDEX idx_timer_fire ON timer_queue(fire_at, lock_token);
 
 -- History (for read operations)
 CREATE INDEX idx_history_lookup ON history(instance_id, execution_id, event_id);

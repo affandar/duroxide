@@ -229,7 +229,6 @@ impl Provider for SqliteProvider {
         lock_token: &str,
         history_delta: Vec<Event>,
         worker_items: Vec<WorkItem>,
-        timer_items: Vec<WorkItem>,
         orchestrator_items: Vec<WorkItem>,
     ) -> Result<(), String> {
         self.with_transaction(|tx| async move {
@@ -252,12 +251,7 @@ impl Provider for SqliteProvider {
                 self.enqueue_worker_in_tx(tx, item).await?;
             }
             
-            // 5. Enqueue timer items
-            for item in timer_items {
-                self.enqueue_timer_in_tx(tx, item).await?;
-            }
-            
-            // 6. Enqueue orchestrator items
+            // 5. Enqueue orchestrator items (may include TimerFired with delayed visibility)
             for item in orchestrator_items {
                 self.enqueue_orchestrator_in_tx(tx, item).await?;
             }

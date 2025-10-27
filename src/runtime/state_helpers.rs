@@ -2,48 +2,48 @@ use crate::{Event, providers::WorkItem};
 use tracing::warn;
 
 /// Reader for extracting metadata from orchestration history
-/// 
+///
 /// This struct provides convenient access to key information derived from
 /// the event history without needing to repeatedly scan through events.
 #[derive(Debug, Clone)]
 pub struct HistoryManager {
     /// Orchestration name (from OrchestrationStarted)
     pub orchestration_name: Option<String>,
-    
+
     /// Orchestration version (from OrchestrationStarted)
     pub orchestration_version: Option<String>,
-    
+
     /// Original input (from OrchestrationStarted)
     pub orchestration_input: Option<String>,
-    
+
     /// Parent instance if this is a sub-orchestration
     pub parent_instance: Option<String>,
-    
+
     /// Parent event ID if this is a sub-orchestration
     pub parent_id: Option<u64>,
-    
+
     /// Whether the orchestration has completed successfully
     pub is_completed: bool,
-    
+
     /// Whether the orchestration has failed
     pub is_failed: bool,
-    
+
     /// Whether the orchestration has continued as new
     pub is_continued_as_new: bool,
-    
+
     /// The execution ID from the most recent OrchestrationStarted
     pub current_execution_id: Option<u64>,
-    
+
     /// The complete history being managed
     history: Vec<Event>,
-    
+
     /// New events to be appended (history delta)
     delta: Vec<Event>,
 }
 
 impl HistoryManager {
     /// Extract metadata from orchestration history
-    /// 
+    ///
     /// Scans through the history (in reverse for terminal states) to extract
     /// commonly needed information.
     pub fn from_history(history: &[Event]) -> Self {
@@ -116,7 +116,7 @@ impl HistoryManager {
     pub fn is_terminal(&self) -> bool {
         self.is_completed || self.is_failed || self.is_continued_as_new
     }
-    
+
     /// Check if the history is empty (new instance with no events yet)
     pub fn is_empty(&self) -> bool {
         self.history.is_empty() && self.delta.is_empty()
@@ -134,9 +134,9 @@ impl HistoryManager {
             "Running"
         }
     }
-    
+
     // === Mutation methods for building history delta ===
-    
+
     /// Calculate the next event ID based on existing history and delta
     pub fn next_event_id(&self) -> u64 {
         self.history
@@ -147,12 +147,12 @@ impl HistoryManager {
             .unwrap_or(0)
             + 1
     }
-    
+
     /// Append a single event to the delta
     pub fn append(&mut self, event: Event) {
         self.delta.push(event);
     }
-    
+
     /// Append an OrchestrationFailed event with the next event_id
     pub fn append_failed(&mut self, error: String) {
         let next_id = self.next_event_id();
@@ -161,27 +161,27 @@ impl HistoryManager {
             error,
         });
     }
-    
+
     /// Extend delta with multiple events
     pub fn extend(&mut self, events: Vec<Event>) {
         self.delta.extend(events);
     }
-    
+
     /// Get a reference to the history delta
     pub fn delta(&self) -> &[Event] {
         &self.delta
     }
-    
+
     /// Consume the manager and return the history delta
     pub fn into_delta(self) -> Vec<Event> {
         self.delta
     }
-    
+
     /// Get the complete history (original + delta)
     pub fn full_history(&self) -> Vec<Event> {
         [&self.history[..], &self.delta[..]].concat()
     }
-    
+
     /// Get the version from the most recent OrchestrationStarted event
     /// Checks both existing history (cached) and delta (for newly created instances)
     /// Returns None for "0.0.0" (placeholder/unregistered version)
@@ -193,7 +193,7 @@ impl HistoryManager {
             }
             return Some(v.clone());
         }
-        
+
         // If no cached version, check delta for newly appended OrchestrationStarted
         for e in self.delta.iter().rev() {
             if let Event::OrchestrationStarted { version, .. } = e {
@@ -203,15 +203,15 @@ impl HistoryManager {
                 return Some(version.clone());
             }
         }
-        
+
         None
     }
-    
+
     /// Get the input from the most recent OrchestrationStarted event
     pub fn input(&self) -> Option<&str> {
         self.orchestration_input.as_deref()
     }
-    
+
     /// Extract input and parent linkage from history for orchestration context
     /// This looks at the full history including any newly appended events in the delta
     pub fn extract_context(&self) -> (String, Option<(String, u64)>) {
@@ -224,7 +224,7 @@ impl HistoryManager {
             };
             return (input.clone(), parent_link);
         }
-        
+
         // If no metadata yet (empty initial history), check the delta for OrchestrationStarted
         for e in self.delta.iter().rev() {
             if let Event::OrchestrationStarted {
@@ -242,54 +242,49 @@ impl HistoryManager {
                 return (input.clone(), parent_link);
             }
         }
-        
+
         // Fallback - no OrchestrationStarted found
         (String::new(), None)
     }
-    
 }
 
 /// Reader for extracting information from a batch of work items
-/// 
+///
 /// Separates start/CAN items from completion messages and extracts
 /// execution parameters in a single pass.
 #[derive(Debug)]
 pub struct WorkItemReader {
     /// The start or continue-as-new item, if present
     pub start_item: Option<WorkItem>,
-    
+
     /// All completion messages (ActivityCompleted, TimerFired, etc.)
     pub completion_messages: Vec<WorkItem>,
-    
+
     /// Orchestration name (from start item or fallback)
     pub orchestration_name: String,
-    
+
     /// Input string (from start item or empty)
     pub input: String,
-    
+
     /// Version (from start item or None)
     pub version: Option<String>,
-    
+
     /// Parent instance (from start item or None)
     pub parent_instance: Option<String>,
-    
+
     /// Parent event ID (from start item or None)
     pub parent_id: Option<u64>,
-    
+
     /// Whether this is a ContinueAsNew
     pub is_continue_as_new: bool,
 }
 
 impl WorkItemReader {
     /// Parse a batch of work items
-    /// 
+    ///
     /// Separates start/CAN from completions and extracts parameters.
     /// Falls back to history_reader if no start item is present.
-    pub fn from_messages(
-        messages: &[WorkItem],
-        history_mgr: &HistoryManager,
-        instance: &str,
-    ) -> Self {
+    pub fn from_messages(messages: &[WorkItem], history_mgr: &HistoryManager, instance: &str) -> Self {
         let mut start_item: Option<WorkItem> = None;
         let mut completion_messages: Vec<WorkItem> = Vec::new();
 
@@ -313,8 +308,8 @@ impl WorkItemReader {
                 | WorkItem::CancelInstance { .. } => {
                     completion_messages.push(work_item.clone());
                 }
-                // ActivityExecute and TimerSchedule shouldn't appear in orchestrator queue
-                WorkItem::ActivityExecute { .. } | WorkItem::TimerSchedule { .. } => {}
+                // ActivityExecute shouldn't appear in orchestrator queue
+                WorkItem::ActivityExecute { .. } => {}
             }
         }
 
@@ -342,14 +337,7 @@ impl WorkItemReader {
                         input,
                         version,
                         ..
-                    } => (
-                        orchestration.clone(),
-                        input.clone(),
-                        version.clone(),
-                        None,
-                        None,
-                        true,
-                    ),
+                    } => (orchestration.clone(), input.clone(), version.clone(), None, None, true),
                     _ => unreachable!(),
                 }
             } else {
@@ -508,10 +496,7 @@ mod tests {
         }];
 
         let metadata = HistoryManager::from_history(&history);
-        assert_eq!(
-            metadata.parent_instance,
-            Some("parent-instance".to_string())
-        );
+        assert_eq!(metadata.parent_instance, Some("parent-instance".to_string()));
         assert_eq!(metadata.parent_id, Some(42));
     }
 
@@ -550,14 +535,12 @@ mod tests {
 
     #[test]
     fn test_workitem_reader_with_can() {
-        let messages = vec![
-            WorkItem::ContinueAsNew {
-                instance: "test-inst".to_string(),
-                orchestration: "test-orch".to_string(),
-                input: "new-input".to_string(),
-                version: Some("2.0.0".to_string()),
-            },
-        ];
+        let messages = vec![WorkItem::ContinueAsNew {
+            instance: "test-inst".to_string(),
+            orchestration: "test-orch".to_string(),
+            input: "new-input".to_string(),
+            version: Some("2.0.0".to_string()),
+        }];
 
         let history_mgr = HistoryManager::from_history(&[]);
         let reader = WorkItemReader::from_messages(&messages, &history_mgr, "test-inst");
@@ -649,4 +632,3 @@ mod tests {
         assert_eq!(reader.input, "input1");
     }
 }
-

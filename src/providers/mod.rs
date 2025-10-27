@@ -197,19 +197,10 @@ pub enum WorkItem {
         error: String,
     },
 
-    /// Schedule a timer (goes to timer queue)
-    /// - Provider with delayed_visibility should make this visible at `fire_at_ms`
-    /// - Otherwise, runtime uses in-process timer service
-    TimerSchedule {
-        instance: String,
-        execution_id: u64,
-        id: u64,         // scheduling_event_id from TimerCreated
-        fire_at_ms: u64, // Absolute timestamp (millis since epoch)
-    },
-
-    /// Timer fired (goes to orchestrator queue)
-    /// - Enqueued by timer dispatcher when timer becomes ready
-    /// - `fire_at_ms`: same value from TimerSchedule (for reference)
+    /// Timer fired (goes to orchestrator queue with delayed visibility)
+    /// - Created directly by runtime when timer is scheduled
+    /// - Enqueued to orchestrator queue with `visible_at = fire_at_ms`
+    /// - Orchestrator dispatcher processes when `visible_at <= now()`
     TimerFired {
         instance: String,
         execution_id: u64,
@@ -692,7 +683,7 @@ pub enum WorkItem {
 ///
 /// When implementing a new provider, focus on these core methods:
 ///
-/// ## Required Methods (12 total)
+/// ## Required Methods (9 total)
 ///
 /// 1. **Orchestration Processing (3 methods)**
 ///    - `fetch_orchestration_item()` - Atomic batch processing
@@ -707,12 +698,7 @@ pub enum WorkItem {
 ///    - `ack_worker()` - Acknowledge activity completion
 ///
 /// 4. **Orchestrator Queue (1 method)**
-///    - `enqueue_orchestrator_work()` - Enqueue control messages
-///
-/// 5. **Timer Support (3 methods, REQUIRED)**
-///    - `enqueue_timer_work()` - Schedule delayed messages
-///    - `dequeue_timer_peek_lock()` - Get timer messages
-///    - `ack_timer()` - Acknowledge timer processing
+///    - `enqueue_orchestrator_work()` - Enqueue control messages (including TimerFired with delayed visibility)
 ///
 /// ## Optional Management Methods (2 methods)
 ///
@@ -994,9 +980,14 @@ pub trait Provider: Any + Send + Sync {
     /// * `execution_id` - **The execution ID this history belongs to** (runtime decides this)
     /// * `history_delta` - Events to append to the specified execution
     /// * `worker_items` - Activity work items to enqueue
-    /// * `timer_items` - Timer work items to enqueue
-    /// * `orchestrator_items` - Orchestration work items to enqueue (StartOrchestration, ContinueAsNew, etc.)
+    /// * `orchestrator_items` - Orchestration work items to enqueue (StartOrchestration, ContinueAsNew, TimerFired, etc.)
     /// * `metadata` - Pre-computed execution metadata (status, output)
+    ///
+    /// # TimerFired Items
+    ///
+    /// When `TimerFired` items are present in `orchestrator_items`, they should be enqueued with
+    /// delayed visibility using the `fire_at_ms` field for the `visible_at` timestamp.
+    /// This allows timers to fire at the correct logical time.
     ///
     /// # execution_id Parameter
     ///
@@ -1053,7 +1044,6 @@ pub trait Provider: Any + Send + Sync {
         _execution_id: u64,
         _history_delta: Vec<Event>,
         _worker_items: Vec<WorkItem>,
-        _timer_items: Vec<WorkItem>,
         _orchestrator_items: Vec<WorkItem>,
         _metadata: ExecutionMetadata,
     ) -> Result<(), String>;
@@ -1286,7 +1276,10 @@ pub trait Provider: Any + Send + Sync {
             None
         } else {
             // Count OrchestrationStarted events to determine latest execution_id
-            let count = h.iter().filter(|e| matches!(e, crate::Event::OrchestrationStarted { .. })).count() as u64;
+            let count = h
+                .iter()
+                .filter(|e| matches!(e, crate::Event::OrchestrationStarted { .. }))
+                .count() as u64;
             if count > 0 { Some(count) } else { None }
         }
     }
@@ -1376,96 +1369,6 @@ pub trait Provider: Any + Send + Sync {
         _execution_id: u64,
         new_events: Vec<Event>,
     ) -> Result<(), String>;
-
-
-    // ===== Timer Support (REQUIRED) =====
-
-    /// Enqueue a timer to fire at a specific time.
-    ///
-    /// # What This Does
-    ///
-    /// Store WorkItem::TimerSchedule in timer queue, but make it invisible until `fire_at_ms`.
-    ///
-    /// # Implementation
-    ///
-    /// ```ignore
-    /// async fn enqueue_timer_work(&self, item: WorkItem) -> Result<(), String> {
-    ///     if let WorkItem::TimerSchedule { fire_at_ms, .. } = &item {
-    ///         INSERT INTO timer_queue (work_item, fire_at, lock_token, locked_until)
-    ///         VALUES (serialize(item), fire_at_ms, NULL, NULL)
-    ///     }
-    /// }
-    /// ```
-    ///
-    /// # Visibility
-    ///
-    /// `dequeue_timer_peek_lock()` should only return timers where `fire_at <= now()`.
-    async fn enqueue_timer_work(&self, _item: WorkItem) -> Result<(), String>;
-
-    /// Dequeue a timer that's ready to fire.
-    ///
-    /// # What This Does
-    ///
-    /// Return the next timer where `fire_at_ms <= now()`, using peek-lock semantics.
-    ///
-    /// # Implementation
-    ///
-    /// ```ignore
-    /// async fn dequeue_timer_peek_lock(&self) -> Option<(WorkItem, String)> {
-    ///     let tx = begin_transaction()?;
-    ///     let now = current_timestamp_ms();
-    ///     
-    ///     // Find next ready timer
-    ///     let row = SELECT id, work_item FROM timer_queue
-    ///         WHERE fire_at <= ? AND (lock_token IS NULL OR locked_until <= ?)
-    ///         ORDER BY fire_at, id LIMIT 1;
-    ///     
-    ///     if row.is_none() { return None; }
-    ///     
-    ///     // Lock it
-    ///     let lock_token = generate_uuid();
-    ///     UPDATE timer_queue SET lock_token = ?, locked_until = now() + 30s
-    ///     WHERE id = ?;
-    ///     
-    ///     commit_transaction();
-    ///     Some((deserialize(row.work_item), lock_token))
-    /// }
-    /// ```
-    ///
-    /// # Ordering
-    ///
-    /// Should dequeue timers in fire_at order (earliest first).
-    async fn dequeue_timer_peek_lock(&self) -> Option<(WorkItem, String)>;
-
-    /// Acknowledge a processed timer.
-    ///
-    /// # What This Does
-    ///
-    /// Atomically acknowledge timer item and enqueue completion to orchestrator queue.
-    ///
-    /// # Purpose
-    ///
-    /// Ensures TimerFired delivery and timer ack happen atomically.
-    ///
-    /// # Parameters
-    ///
-    /// * `token` - Lock token from dequeue_timer_peek_lock
-    /// * `completion` - WorkItem::TimerFired
-    /// * `delay_ms` - Optional delay before completion becomes visible (for delayed visibility support)
-    ///
-    /// # Implementation
-    ///
-    /// ```ignore
-    /// async fn ack_timer(&self, token: &str, completion: WorkItem, delay_ms: Option<u64>) -> Result<(), String> {
-    ///     BEGIN TRANSACTION
-    ///         DELETE FROM timer_queue WHERE lock_token = ?token
-    ///         visible_at = if delay_ms { now + delay } else { now }
-    ///         INSERT INTO orchestrator_queue (instance_id, work_item, visible_at)
-    ///         VALUES (completion.instance, serialize(completion), visible_at)
-    ///     COMMIT
-    /// }
-    /// ```
-    async fn ack_timer(&self, token: &str, completion: WorkItem, delay_ms: Option<u64>) -> Result<(), String>;
 
     // ===== Optional Management APIs =====
     // These have default implementations and are primarily used for testing/debugging.
@@ -1905,7 +1808,7 @@ pub trait ManagementCapability: Any + Send + Sync {
     ///
     /// Returns an error indicating not implemented.
     async fn get_instance_info(&self, instance: &str) -> Result<InstanceInfo, String> {
-        Err(format!("get_instance_info not implemented for instance {}", instance))
+        Err(format!("get_instance_info not implemented for instance {instance}"))
     }
 
     /// Get detailed information about a specific execution.

@@ -48,14 +48,14 @@ Flow:
 Rationale:
 - Reliability transitions to the Orchestrator queue, where completion handling follows the history-append-then-ack rule.
 
-## Timer Queue (TimerSchedule)
+## Timer Handling
 Flow:
-1. Timer queue delivers `WorkItem::TimerSchedule { instance, id, fire_at_ms }`.
-2. Dispatcher schedules a delayed task that enqueues `WorkItem::TimerFired` to the Orchestrator queue at the right time.
-3. The Timer token is acked after scheduling the future enqueue.
+1. When a timer is scheduled during orchestration execution, `WorkItem::TimerFired` is created and enqueued to the Orchestrator queue with `visible_at = fire_at_ms`.
+2. The Orchestrator queue respects the `visible_at` timestamp and only delivers the timer when it's ready to fire.
+3. The timer is handled via the standard Orchestrator completion path.
 
 Rationale:
-- As with activities, reliability is carried by the Orchestrator queue’s completion path and durable history.
+- Timers are now handled directly via the Orchestrator queue with delayed visibility, eliminating the need for a separate timer queue and dispatcher.
 
 ## External Events (By Name)
 Flow:
