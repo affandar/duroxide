@@ -1,12 +1,11 @@
-use duroxide::providers::sqlite::{SqliteProvider, SqliteOptions};
-use duroxide::providers::{ExecutionMetadata, Provider, WorkItem};
 use duroxide::Event;
+use duroxide::providers::sqlite::{SqliteOptions, SqliteProvider};
+use duroxide::providers::{ExecutionMetadata, Provider, WorkItem};
 use std::sync::Arc;
 use std::time::Duration;
 
 #[path = "../common/mod.rs"]
 mod common;
-use common::test_create_execution;
 
 const TEST_LOCK_TIMEOUT_MS: u64 = 1000;
 
@@ -39,14 +38,7 @@ async fn test_invalid_lock_token_on_ack() {
 
     // Attempt to ack with non-existent lock token
     let result = provider
-        .ack_orchestration_item(
-            "invalid-token",
-            1,
-            vec![],
-            vec![],
-            vec![],
-            ExecutionMetadata::default(),
-        )
+        .ack_orchestration_item("invalid-token", 1, vec![], vec![], vec![], ExecutionMetadata::default())
         .await;
 
     assert!(result.is_err());
@@ -61,7 +53,10 @@ async fn test_duplicate_event_id_rejection() {
     let provider = create_provider().await;
 
     // Create instance with initial event
-    provider.enqueue_orchestrator_work(start_item("instance-A"), None).await.unwrap();
+    provider
+        .enqueue_orchestrator_work(start_item("instance-A"), None)
+        .await
+        .unwrap();
     let item = provider.fetch_orchestration_item().await.unwrap();
     let lock_token = item.lock_token.clone();
 
@@ -86,7 +81,10 @@ async fn test_duplicate_event_id_rejection() {
         .unwrap();
 
     // Try to append duplicate event_id=1
-    provider.enqueue_orchestrator_work(start_item("instance-A"), None).await.unwrap();
+    provider
+        .enqueue_orchestrator_work(start_item("instance-A"), None)
+        .await
+        .unwrap();
     let item2 = provider.fetch_orchestration_item().await.unwrap();
     let lock_token2 = item2.lock_token.clone();
 
@@ -146,7 +144,10 @@ async fn test_lock_expiration_during_ack() {
     let provider = create_provider().await;
 
     // Create and fetch item
-    provider.enqueue_orchestrator_work(start_item("instance-A"), None).await.unwrap();
+    provider
+        .enqueue_orchestrator_work(start_item("instance-A"), None)
+        .await
+        .unwrap();
     let item = provider.fetch_orchestration_item().await.unwrap();
     let lock_token = item.lock_token.clone();
 

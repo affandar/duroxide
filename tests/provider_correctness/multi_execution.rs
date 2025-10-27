@@ -1,12 +1,11 @@
-use duroxide::providers::sqlite::{SqliteProvider, SqliteOptions};
-use duroxide::providers::{ExecutionMetadata, Provider, WorkItem};
 use duroxide::Event;
+use duroxide::providers::sqlite::{SqliteOptions, SqliteProvider};
+use duroxide::providers::{ExecutionMetadata, Provider, WorkItem};
 use std::sync::Arc;
 use std::time::Duration;
 
 #[path = "../common/mod.rs"]
 mod common;
-use common::test_create_execution;
 
 const TEST_LOCK_TIMEOUT_MS: u64 = 1000;
 
@@ -38,7 +37,10 @@ async fn test_execution_isolation() {
     let provider = create_provider().await;
 
     // Create execution 1 with 3 events
-    provider.enqueue_orchestrator_work(start_item("instance-A", 1), None).await.unwrap();
+    provider
+        .enqueue_orchestrator_work(start_item("instance-A", 1), None)
+        .await
+        .unwrap();
     let item1 = provider.fetch_orchestration_item().await.unwrap();
     provider
         .ack_orchestration_item(
@@ -72,7 +74,10 @@ async fn test_execution_isolation() {
         .unwrap();
 
     // Create execution 2 with 2 events
-    provider.enqueue_orchestrator_work(start_item("instance-A", 2), None).await.unwrap();
+    provider
+        .enqueue_orchestrator_work(start_item("instance-A", 2), None)
+        .await
+        .unwrap();
     let item2 = provider.fetch_orchestration_item().await.unwrap();
     provider
         .ack_orchestration_item(
@@ -126,7 +131,10 @@ async fn test_latest_execution_detection() {
     let provider = create_provider().await;
 
     // Create execution 1 with event "A"
-    provider.enqueue_orchestrator_work(start_item("instance-A", 1), None).await.unwrap();
+    provider
+        .enqueue_orchestrator_work(start_item("instance-A", 1), None)
+        .await
+        .unwrap();
     let item1 = provider.fetch_orchestration_item().await.unwrap();
     provider
         .ack_orchestration_item(
@@ -146,7 +154,10 @@ async fn test_latest_execution_detection() {
         .unwrap();
 
     // Create execution 2 with event "B"
-    provider.enqueue_orchestrator_work(start_item("instance-A", 2), None).await.unwrap();
+    provider
+        .enqueue_orchestrator_work(start_item("instance-A", 2), None)
+        .await
+        .unwrap();
     let item2 = provider.fetch_orchestration_item().await.unwrap();
     provider
         .ack_orchestration_item(
@@ -191,7 +202,10 @@ async fn test_execution_id_sequencing() {
     let provider = create_provider().await;
 
     // First execution should be execution_id = 1
-    provider.enqueue_orchestrator_work(start_item("instance-A", 1), None).await.unwrap();
+    provider
+        .enqueue_orchestrator_work(start_item("instance-A", 1), None)
+        .await
+        .unwrap();
     let item1 = provider.fetch_orchestration_item().await.unwrap();
     assert_eq!(item1.execution_id, 1);
 
@@ -216,7 +230,10 @@ async fn test_execution_id_sequencing() {
         .unwrap();
 
     // Enqueue second execution with explicit execution_id = 2
-    provider.enqueue_orchestrator_work(start_item("instance-A", 2), None).await.unwrap();
+    provider
+        .enqueue_orchestrator_work(start_item("instance-A", 2), None)
+        .await
+        .unwrap();
     let item2 = provider.fetch_orchestration_item().await.unwrap();
     // The fetched item will have execution_id = 1 (from instance's current_execution_id)
     // We need to ack with execution_id = 2 to create the new execution
@@ -240,7 +257,10 @@ async fn test_execution_id_sequencing() {
         .unwrap();
 
     // Now fetch should return execution_id = 2
-    provider.enqueue_orchestrator_work(start_item("instance-A", 3), None).await.unwrap();
+    provider
+        .enqueue_orchestrator_work(start_item("instance-A", 3), None)
+        .await
+        .unwrap();
     let item3 = provider.fetch_orchestration_item().await.unwrap();
     assert_eq!(item3.execution_id, 2, "Current execution should be 2");
 }
@@ -252,7 +272,10 @@ async fn test_continue_as_new_creates_new_execution() {
     let provider = create_provider().await;
 
     // Create execution 1
-    provider.enqueue_orchestrator_work(start_item("instance-A", 1), None).await.unwrap();
+    provider
+        .enqueue_orchestrator_work(start_item("instance-A", 1), None)
+        .await
+        .unwrap();
     let item1 = provider.fetch_orchestration_item().await.unwrap();
     provider
         .ack_orchestration_item(
@@ -324,7 +347,10 @@ async fn test_execution_history_persistence() {
 
     // Create 3 executions with different history
     for exec_id in 1..=3 {
-        provider.enqueue_orchestrator_work(start_item("instance-A", exec_id), None).await.unwrap();
+        provider
+            .enqueue_orchestrator_work(start_item("instance-A", exec_id), None)
+            .await
+            .unwrap();
         let item = provider.fetch_orchestration_item().await.unwrap();
         provider
             .ack_orchestration_item(

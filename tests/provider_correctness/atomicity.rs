@@ -1,12 +1,11 @@
-use duroxide::providers::sqlite::{SqliteProvider, SqliteOptions};
-use duroxide::providers::{ExecutionMetadata, Provider, WorkItem};
 use duroxide::Event;
+use duroxide::providers::sqlite::{SqliteOptions, SqliteProvider};
+use duroxide::providers::{ExecutionMetadata, Provider, WorkItem};
 use std::sync::Arc;
 use std::time::Duration;
 
 #[path = "../common/mod.rs"]
 mod common;
-use common::test_create_execution;
 
 const TEST_LOCK_TIMEOUT_MS: u64 = 1000;
 
@@ -38,7 +37,10 @@ async fn test_atomicity_failure_rollback() {
     let provider = create_provider().await;
 
     // Setup: create instance with some initial state
-    provider.enqueue_orchestrator_work(start_item("instance-A"), None).await.unwrap();
+    provider
+        .enqueue_orchestrator_work(start_item("instance-A"), None)
+        .await
+        .unwrap();
     let item = provider.fetch_orchestration_item().await.unwrap();
     let lock_token = item.lock_token.clone();
 
@@ -67,7 +69,10 @@ async fn test_atomicity_failure_rollback() {
     assert_eq!(initial_history.len(), 1);
 
     // Now enqueue another work item
-    provider.enqueue_orchestrator_work(start_item("instance-A"), None).await.unwrap();
+    provider
+        .enqueue_orchestrator_work(start_item("instance-A"), None)
+        .await
+        .unwrap();
     let item2 = provider.fetch_orchestration_item().await.unwrap();
     let lock_token2 = item2.lock_token.clone();
 
@@ -94,7 +99,11 @@ async fn test_atomicity_failure_rollback() {
 
     // Verify state unchanged - history should still have only 1 event
     let after_history = provider.read("instance-A").await;
-    assert_eq!(after_history.len(), 1, "History should remain unchanged after failed ack");
+    assert_eq!(
+        after_history.len(),
+        1,
+        "History should remain unchanged after failed ack"
+    );
 
     // Lock should still be held, preventing another fetch
     assert!(provider.fetch_orchestration_item().await.is_none());
@@ -107,7 +116,10 @@ async fn test_multi_operation_atomic_ack() {
     let provider = create_provider().await;
 
     // Setup
-    provider.enqueue_orchestrator_work(start_item("instance-A"), None).await.unwrap();
+    provider
+        .enqueue_orchestrator_work(start_item("instance-A"), None)
+        .await
+        .unwrap();
     let item = provider.fetch_orchestration_item().await.unwrap();
     let lock_token = item.lock_token.clone();
 
@@ -222,7 +234,10 @@ async fn test_lock_released_only_on_successful_ack() {
     let provider = create_provider().await;
 
     // Setup
-    provider.enqueue_orchestrator_work(start_item("instance-A"), None).await.unwrap();
+    provider
+        .enqueue_orchestrator_work(start_item("instance-A"), None)
+        .await
+        .unwrap();
     let item = provider.fetch_orchestration_item().await.unwrap();
     let _lock_token = item.lock_token.clone();
 
@@ -269,7 +284,10 @@ async fn test_concurrent_ack_prevention() {
     let provider = Arc::new(create_provider().await);
 
     // Setup
-    provider.enqueue_orchestrator_work(start_item("instance-A"), None).await.unwrap();
+    provider
+        .enqueue_orchestrator_work(start_item("instance-A"), None)
+        .await
+        .unwrap();
     let item = provider.fetch_orchestration_item().await.unwrap();
     let lock_token = item.lock_token.clone();
 
@@ -320,10 +338,7 @@ async fn test_concurrent_ack_prevention() {
     });
 
     let results = futures::future::join_all(vec![handle1, handle2]).await;
-    let results: Vec<_> = results
-        .into_iter()
-        .map(|r| r.unwrap())
-        .collect();
+    let results: Vec<_> = results.into_iter().map(|r| r.unwrap()).collect();
 
     // Exactly one should succeed
     let successes: Vec<_> = results.iter().filter(|r| r.is_ok()).collect();

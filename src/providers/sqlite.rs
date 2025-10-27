@@ -1110,18 +1110,17 @@ impl Provider for SqliteProvider {
             .map_err(|e| e.to_string())?;
 
         // Optionally delay messages for this instance
-        if let Some(instance_id) = instance_id {
-            if let Some(delay_ms) = delay_ms {
-                let visible_at = Self::now_millis() + delay_ms as i64;
-                let _ = sqlx::query(
-                    "UPDATE orchestrator_queue SET visible_at = ? WHERE instance_id = ? AND visible_at <= ?",
-                )
-                .bind(visible_at)
-                .bind(&instance_id)
-                .bind(Self::now_millis())
-                .execute(&self.pool)
-                .await;
-            }
+        if let Some(instance_id) = instance_id
+            && let Some(delay_ms) = delay_ms
+        {
+            let visible_at = Self::now_millis() + delay_ms as i64;
+            let _ =
+                sqlx::query("UPDATE orchestrator_queue SET visible_at = ? WHERE instance_id = ? AND visible_at <= ?")
+                    .bind(visible_at)
+                    .bind(&instance_id)
+                    .bind(Self::now_millis())
+                    .execute(&self.pool)
+                    .await;
         }
 
         Ok(())

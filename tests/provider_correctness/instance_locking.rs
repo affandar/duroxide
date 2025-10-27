@@ -1,11 +1,10 @@
-use duroxide::providers::sqlite::{SqliteProvider, SqliteOptions};
+use duroxide::providers::sqlite::{SqliteOptions, SqliteProvider};
 use duroxide::providers::{ExecutionMetadata, Provider, WorkItem};
 use std::sync::Arc;
 use std::time::Duration;
 
 #[path = "../common/mod.rs"]
 mod common;
-use common::test_create_execution;
 
 /// Helper to create a provider for testing
 async fn create_provider() -> Arc<dyn Provider> {
@@ -39,7 +38,10 @@ async fn test_exclusive_instance_lock() {
     let provider = create_provider().await;
 
     // Enqueue work for instance "A"
-    provider.enqueue_orchestrator_work(start_item("instance-A"), None).await.unwrap();
+    provider
+        .enqueue_orchestrator_work(start_item("instance-A"), None)
+        .await
+        .unwrap();
 
     // Fetch orchestration item (acquires lock)
     let item1 = provider.fetch_orchestration_item().await.unwrap();
@@ -64,7 +66,10 @@ async fn test_lock_token_uniqueness() {
 
     // Enqueue work for multiple instances
     for i in 0..5 {
-        provider.enqueue_orchestrator_work(start_item(&format!("inst-{}", i)), None).await.unwrap();
+        provider
+            .enqueue_orchestrator_work(start_item(&format!("inst-{}", i)), None)
+            .await
+            .unwrap();
     }
 
     // Fetch multiple orchestration items
@@ -86,7 +91,10 @@ async fn test_invalid_lock_token_rejection() {
     let provider = create_provider().await;
 
     // Enqueue and fetch an item
-    provider.enqueue_orchestrator_work(start_item("instance-A"), None).await.unwrap();
+    provider
+        .enqueue_orchestrator_work(start_item("instance-A"), None)
+        .await
+        .unwrap();
     let _item = provider.fetch_orchestration_item().await.unwrap();
 
     // Try to ack with invalid token
@@ -111,7 +119,10 @@ async fn test_concurrent_instance_fetching() {
 
     // Seed 10 instances
     for i in 0..10 {
-        provider.enqueue_orchestrator_work(start_item(&format!("inst-{}", i)), None).await.unwrap();
+        provider
+            .enqueue_orchestrator_work(start_item(&format!("inst-{}", i)), None)
+            .await
+            .unwrap();
     }
 
     // Fetch concurrently with small delay to reduce contention
@@ -149,7 +160,10 @@ async fn test_completions_arriving_during_lock_blocked() {
     let provider = Arc::new(create_provider().await);
 
     // Step 1: Create instance with initial work
-    provider.enqueue_orchestrator_work(start_item("instance-A"), None).await.unwrap();
+    provider
+        .enqueue_orchestrator_work(start_item("instance-A"), None)
+        .await
+        .unwrap();
 
     // Step 2: Fetch and acquire lock
     let item1 = provider.fetch_orchestration_item().await.unwrap();
@@ -183,16 +197,26 @@ async fn test_completions_arriving_during_lock_blocked() {
     let item3 = provider.fetch_orchestration_item().await.unwrap();
     assert_eq!(item3.instance, "instance-A");
     // Should have StartOrchestration + 3 ActivityCompleted messages = 4 total
-    assert_eq!(item3.messages.len(), 4, "Should have StartOrchestration + 3 completions");
+    assert_eq!(
+        item3.messages.len(),
+        4,
+        "Should have StartOrchestration + 3 completions"
+    );
 
     // Verify they're the messages including completions that arrived during lock
-    let activity_completions: Vec<_> = item3.messages.iter()
+    let activity_completions: Vec<_> = item3
+        .messages
+        .iter()
         .filter_map(|msg| match msg {
             WorkItem::ActivityCompleted { id, .. } => Some(*id),
             _ => None,
         })
         .collect();
-    assert_eq!(activity_completions.len(), 3, "Should have 3 ActivityCompleted messages");
+    assert_eq!(
+        activity_completions.len(),
+        3,
+        "Should have 3 ActivityCompleted messages"
+    );
     assert_eq!(activity_completions, vec![1, 2, 3]);
 }
 
@@ -203,8 +227,14 @@ async fn test_cross_instance_lock_isolation() {
     let provider = Arc::new(create_provider().await);
 
     // Enqueue work for two different instances
-    provider.enqueue_orchestrator_work(start_item("instance-A"), None).await.unwrap();
-    provider.enqueue_orchestrator_work(start_item("instance-B"), None).await.unwrap();
+    provider
+        .enqueue_orchestrator_work(start_item("instance-A"), None)
+        .await
+        .unwrap();
+    provider
+        .enqueue_orchestrator_work(start_item("instance-B"), None)
+        .await
+        .unwrap();
 
     // Lock instance A
     let item_a = provider.fetch_orchestration_item().await.unwrap();
@@ -256,18 +286,24 @@ async fn test_message_tagging_during_lock() {
     let provider = Arc::new(create_provider().await);
 
     // Create instance first by enqueuing StartOrchestration
-    provider.enqueue_orchestrator_work(start_item("instance-A"), None).await.unwrap();
-    
+    provider
+        .enqueue_orchestrator_work(start_item("instance-A"), None)
+        .await
+        .unwrap();
+
     // Fetch and ack to create the instance properly
     let initial_item = provider.fetch_orchestration_item().await.unwrap();
-    provider.ack_orchestration_item(
-        &initial_item.lock_token,
-        1,
-        vec![],
-        vec![],
-        vec![],
-        ExecutionMetadata::default(),
-    ).await.unwrap();
+    provider
+        .ack_orchestration_item(
+            &initial_item.lock_token,
+            1,
+            vec![],
+            vec![],
+            vec![],
+            ExecutionMetadata::default(),
+        )
+        .await
+        .unwrap();
 
     // Enqueue initial messages
     provider
@@ -318,14 +354,7 @@ async fn test_message_tagging_during_lock() {
 
     // Ack (deletes only messages with lock_token)
     provider
-        .ack_orchestration_item(
-            &lock_token,
-            1,
-            vec![],
-            vec![],
-            vec![],
-            ExecutionMetadata::default(),
-        )
+        .ack_orchestration_item(&lock_token, 1, vec![], vec![], vec![], ExecutionMetadata::default())
         .await
         .unwrap();
 
@@ -343,16 +372,22 @@ async fn test_ack_only_affects_locked_messages() {
     let provider = Arc::new(create_provider().await);
 
     // Create instance
-    provider.enqueue_orchestrator_work(start_item("instance-A"), None).await.unwrap();
+    provider
+        .enqueue_orchestrator_work(start_item("instance-A"), None)
+        .await
+        .unwrap();
     let initial_item = provider.fetch_orchestration_item().await.unwrap();
-    provider.ack_orchestration_item(
-        &initial_item.lock_token,
-        1,
-        vec![],
-        vec![],
-        vec![],
-        ExecutionMetadata::default(),
-    ).await.unwrap();
+    provider
+        .ack_orchestration_item(
+            &initial_item.lock_token,
+            1,
+            vec![],
+            vec![],
+            vec![],
+            ExecutionMetadata::default(),
+        )
+        .await
+        .unwrap();
 
     // Enqueue message 1
     provider
@@ -405,14 +440,7 @@ async fn test_ack_only_affects_locked_messages() {
 
     // Ack with lock_token - should only delete message 1 (locked messages)
     provider
-        .ack_orchestration_item(
-            &lock_token,
-            1,
-            vec![],
-            vec![],
-            vec![],
-            ExecutionMetadata::default(),
-        )
+        .ack_orchestration_item(&lock_token, 1, vec![], vec![], vec![], ExecutionMetadata::default())
         .await
         .unwrap();
 
@@ -420,9 +448,11 @@ async fn test_ack_only_affects_locked_messages() {
     let item2 = provider.fetch_orchestration_item().await.unwrap();
     assert_eq!(item2.instance, "instance-A");
     assert_eq!(item2.messages.len(), 2, "Should have messages 2 and 3");
-    
+
     // Verify they're messages 2 and 3
-    let ids: Vec<u64> = item2.messages.iter()
+    let ids: Vec<u64> = item2
+        .messages
+        .iter()
         .filter_map(|msg| match msg {
             WorkItem::ActivityCompleted { id, .. } => Some(*id),
             _ => None,
@@ -430,4 +460,3 @@ async fn test_ack_only_affects_locked_messages() {
         .collect();
     assert_eq!(ids, vec![2, 3], "Should only have messages 2 and 3");
 }
-

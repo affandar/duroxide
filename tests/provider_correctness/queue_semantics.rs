@@ -1,12 +1,11 @@
-use duroxide::providers::sqlite::{SqliteProvider, SqliteOptions};
-use duroxide::providers::{ExecutionMetadata, Provider, WorkItem};
 use duroxide::Event;
+use duroxide::providers::sqlite::{SqliteOptions, SqliteProvider};
+use duroxide::providers::{ExecutionMetadata, Provider, WorkItem};
 use std::sync::Arc;
 use std::time::Duration;
 
 #[path = "../common/mod.rs"]
 mod common;
-use common::test_create_execution;
 
 const TEST_LOCK_TIMEOUT_MS: u64 = 1000;
 
@@ -93,12 +92,18 @@ async fn test_worker_peek_lock_semantics() {
     assert!(provider.dequeue_worker_peek_lock().await.is_none());
 
     // Ack with token
-    provider.ack_worker(&token, WorkItem::ActivityCompleted {
-        instance: "instance-A".to_string(),
-        execution_id: 1,
-        id: 1,
-        result: "result1".to_string(),
-    }).await.unwrap();
+    provider
+        .ack_worker(
+            &token,
+            WorkItem::ActivityCompleted {
+                instance: "instance-A".to_string(),
+                execution_id: 1,
+                id: 1,
+                result: "result1".to_string(),
+            },
+        )
+        .await
+        .unwrap();
 
     // Queue should now be empty
     assert!(provider.dequeue_worker_peek_lock().await.is_none());
@@ -111,7 +116,10 @@ async fn test_worker_ack_atomicity() {
     let provider = create_provider().await;
 
     // Create instance first (required for orchestrator queue)
-    provider.enqueue_orchestrator_work(start_item("instance-A"), None).await.unwrap();
+    provider
+        .enqueue_orchestrator_work(start_item("instance-A"), None)
+        .await
+        .unwrap();
     let item = provider.fetch_orchestration_item().await.unwrap();
     provider
         .ack_orchestration_item(
@@ -148,12 +156,18 @@ async fn test_worker_ack_atomicity() {
     let (_item, token) = provider.dequeue_worker_peek_lock().await.unwrap();
 
     // Ack with completion
-    provider.ack_worker(&token, WorkItem::ActivityCompleted {
-        instance: "instance-A".to_string(),
-        execution_id: 1,
-        id: 1,
-        result: "result1".to_string(),
-    }).await.unwrap();
+    provider
+        .ack_worker(
+            &token,
+            WorkItem::ActivityCompleted {
+                instance: "instance-A".to_string(),
+                execution_id: 1,
+                id: 1,
+                result: "result1".to_string(),
+            },
+        )
+        .await
+        .unwrap();
 
     // Verify:
     // 1. Worker queue is empty
@@ -163,7 +177,10 @@ async fn test_worker_ack_atomicity() {
     let orchestration_item = provider.fetch_orchestration_item().await.unwrap();
     assert_eq!(orchestration_item.instance, "instance-A");
     assert_eq!(orchestration_item.messages.len(), 1);
-    assert!(matches!(&orchestration_item.messages[0], WorkItem::ActivityCompleted { .. }));
+    assert!(matches!(
+        &orchestration_item.messages[0],
+        WorkItem::ActivityCompleted { .. }
+    ));
 }
 
 /// Test 5.4: Timer Delayed Visibility
@@ -173,7 +190,10 @@ async fn test_timer_delayed_visibility() {
     let provider = create_provider().await;
 
     // Create instance first
-    provider.enqueue_orchestrator_work(start_item("instance-A"), None).await.unwrap();
+    provider
+        .enqueue_orchestrator_work(start_item("instance-A"), None)
+        .await
+        .unwrap();
     let item = provider.fetch_orchestration_item().await.unwrap();
     provider
         .ack_orchestration_item(

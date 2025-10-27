@@ -300,7 +300,7 @@ async fn orchestration_completes_before_activity_finishes() {
 
     // Activity will be dispatched but orchestration completes without awaiting it (fire-and-forget)
     let orch = |ctx: OrchestrationContext, _input: String| async move {
-        let _ = ctx.schedule_activity("slow", "");
+        drop(ctx.schedule_activity("slow", ""));
         Ok("done".to_string())
     };
 
@@ -351,7 +351,7 @@ async fn orchestration_fails_before_activity_finishes() {
 
     // Activity dispatched; orchestration fails immediately
     let orch = |ctx: OrchestrationContext, _input: String| async move {
-        let _ = ctx.schedule_activity("slow2", "");
+        drop(ctx.schedule_activity("slow2", ""));
         Err("boom".to_string())
     };
 

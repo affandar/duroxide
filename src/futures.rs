@@ -279,10 +279,9 @@ impl Future for DurableFuture {
                         source_event_id,
                         ..
                     } = e
+                        && *source_event_id == our_event_id
                     {
-                        if *source_event_id == our_event_id {
-                            return Some(*event_id);
-                        }
+                        return Some(*event_id);
                     }
                     None
                 });
@@ -400,40 +399,39 @@ impl Future for DurableFuture {
 
                 // Step 2: Look for ExternalEvent (special case - search by name)
                 // External events can arrive in any order
-                if !inner.consumed_external_events.contains(name) {
-                    if let Some((event_id, data)) = inner.history.iter().find_map(|e| {
+                if !inner.consumed_external_events.contains(name)
+                    && let Some((event_id, data)) = inner.history.iter().find_map(|e| {
                         if let Event::ExternalEvent {
                             event_id,
                             name: ext_name,
                             data,
                             ..
                         } = e
+                            && ext_name == name
                         {
-                            if ext_name == name {
-                                return Some((*event_id, data.clone()));
-                            }
+                            return Some((*event_id, data.clone()));
                         }
                         None
-                    }) {
-                        // Check: Are all completions BEFORE ours consumed?
-                        let can_consume = inner.history.iter().all(|e| match e {
-                            Event::ActivityCompleted { event_id: eid, .. }
-                            | Event::ActivityFailed { event_id: eid, .. }
-                            | Event::TimerFired { event_id: eid, .. }
-                            | Event::SubOrchestrationCompleted { event_id: eid, .. }
-                            | Event::SubOrchestrationFailed { event_id: eid, .. }
-                            | Event::ExternalEvent { event_id: eid, .. } => {
-                                *eid >= event_id || inner.consumed_completions.contains(eid)
-                            }
-                            _ => true,
-                        });
-
-                        if can_consume {
-                            inner.consumed_completions.insert(event_id);
-                            inner.consumed_external_events.insert(name.clone());
-                            *result.borrow_mut() = Some(data.clone());
-                            return Poll::Ready(DurableOutput::External(data));
+                    })
+                {
+                    // Check: Are all completions BEFORE ours consumed?
+                    let can_consume = inner.history.iter().all(|e| match e {
+                        Event::ActivityCompleted { event_id: eid, .. }
+                        | Event::ActivityFailed { event_id: eid, .. }
+                        | Event::TimerFired { event_id: eid, .. }
+                        | Event::SubOrchestrationCompleted { event_id: eid, .. }
+                        | Event::SubOrchestrationFailed { event_id: eid, .. }
+                        | Event::ExternalEvent { event_id: eid, .. } => {
+                            *eid >= event_id || inner.consumed_completions.contains(eid)
                         }
+                        _ => true,
+                    });
+
+                    if can_consume {
+                        inner.consumed_completions.insert(event_id);
+                        inner.consumed_external_events.insert(name.clone());
+                        *result.borrow_mut() = Some(data.clone());
+                        return Poll::Ready(DurableOutput::External(data));
                     }
                 }
 
@@ -598,10 +596,10 @@ impl Future for DurableFuture {
                             value: hist_value,
                             ..
                         } = e
+                            && hist_op == op
+                            && !inner.claimed_scheduling_events.contains(event_id)
                         {
-                            if hist_op == op && !inner.claimed_scheduling_events.contains(event_id) {
-                                return Some((*event_id, hist_value.clone()));
-                            }
+                            return Some((*event_id, hist_value.clone()));
                         }
                         None
                     });
