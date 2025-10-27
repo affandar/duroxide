@@ -327,7 +327,7 @@ VALUES (?, datetime('now', '+5 minutes'));
 // Feature flag for provider selection
 let provider: Arc<dyn Provider> = match config.provider {
     ProviderKind::Filesystem => Arc::new(FsProvider::new(path)),
-    ProviderKind::Sqlite => Arc::new(SqliteProvider::new(url).await?),
+    ProviderKind::Sqlite => Arc::new(SqliteProvider::new(url, None).await?),
     ProviderKind::InMemory => Arc::new(InMemoryProvider::default()),
 };
 ```
@@ -336,7 +336,7 @@ let provider: Arc<dyn Provider> = match config.provider {
 ```rust
 pub async fn migrate_fs_to_sqlite(fs_path: &Path, sqlite_url: &str) -> Result<()> {
     let fs_store = FsProvider::new(fs_path, false);
-    let sqlite_store = SqliteProvider::new(sqlite_url).await?;
+    let sqlite_store = SqliteProvider::new(sqlite_url, None).await?;
     
     for instance in fs_store.list_instances().await {
         let history = fs_store.read(&instance).await;

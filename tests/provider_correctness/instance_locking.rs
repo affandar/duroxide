@@ -3,9 +3,6 @@ use duroxide::providers::{ExecutionMetadata, Provider, WorkItem};
 use std::sync::Arc;
 use std::time::Duration;
 
-#[path = "../common/mod.rs"]
-mod common;
-
 /// Helper to create a provider for testing
 async fn create_provider() -> Arc<dyn Provider> {
     let options = SqliteOptions {

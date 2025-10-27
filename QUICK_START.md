@@ -63,7 +63,7 @@ let orchestration = |ctx: OrchestrationContext, name: String| async move {
 };
 
 // 3. Set up and run
-let store = Arc::new(SqliteProvider::new("sqlite:./data.db").await.unwrap());
+let store = Arc::new(SqliteProvider::new("sqlite:./data.db", None).await.unwrap());
 let orchestrations = OrchestrationRegistry::builder()
     .register("HelloWorld", orchestration)
     .build();
@@ -140,7 +140,7 @@ use std::sync::Arc;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Setup
-    let store = Arc::new(SqliteProvider::new("sqlite:./data.db").await?);
+    let store = Arc::new(SqliteProvider::new("sqlite:./data.db", None).await?);
     
     let activities = ActivityRegistry::builder()
         .register("ProcessOrder", |order_id: String| async move {
