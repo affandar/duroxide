@@ -24,7 +24,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let db_path = temp_dir.path().join("delays_and_timeouts.db");
     std::fs::File::create(&db_path)?;
     let db_url = format!("sqlite:{}", db_path.to_str().unwrap());
-    let store = Arc::new(SqliteProvider::new(&db_url).await?);
+    let store = Arc::new(SqliteProvider::new(&db_url, None).await?);
 
     // Register activities - these can do any async operations including delays
     let activities = ActivityRegistry::builder()

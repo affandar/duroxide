@@ -34,7 +34,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let db_path = temp_dir.path().join("fan_out_fan_in.db");
     std::fs::File::create(&db_path)?;
     let db_url = format!("sqlite:{}", db_path.to_str().unwrap());
-    let store = Arc::new(SqliteProvider::new(&db_url).await?);
+    let store = Arc::new(SqliteProvider::new(&db_url, None).await?);
 
     // Register activities for user processing
     let activities = ActivityRegistry::builder()

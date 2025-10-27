@@ -12,7 +12,7 @@ async fn create_sqlite_store() -> (Arc<dyn Provider>, TempDir) {
     let db_path = td.path().join("test.db");
     std::fs::File::create(&db_path).unwrap();
     let db_url = format!("sqlite:{}", db_path.display());
-    let store = Arc::new(SqliteProvider::new(&db_url).await.unwrap()) as Arc<dyn Provider>;
+    let store = Arc::new(SqliteProvider::new(&db_url, None).await.unwrap()) as Arc<dyn Provider>;
     (store, td)
 }
 
@@ -22,7 +22,7 @@ async fn create_sqlite_store_named(name: &str) -> (Arc<dyn Provider>, TempDir, S
     let db_path = td.path().join(format!("{name}.db"));
     std::fs::File::create(&db_path).unwrap();
     let db_url = format!("sqlite:{}", db_path.display());
-    let store = Arc::new(SqliteProvider::new(&db_url).await.unwrap()) as Arc<dyn Provider>;
+    let store = Arc::new(SqliteProvider::new(&db_url, None).await.unwrap()) as Arc<dyn Provider>;
     (store, td, db_url)
 }
 
@@ -232,7 +232,7 @@ async fn test_sqlite_basic_persistence() {
 
     // Phase 1: Create store and add data
     {
-        let store = SqliteProvider::new(&db_url)
+        let store = SqliteProvider::new(&db_url, None)
             .await
             .expect("Failed to create SQLite store");
         let store: Arc<dyn Provider> = Arc::new(store);
@@ -266,7 +266,7 @@ async fn test_sqlite_basic_persistence() {
     // Phase 2: Drop and recreate store, verify persistence
     {
         println!("Phase 2: Recreating store...");
-        let store = SqliteProvider::new(&db_url)
+        let store = SqliteProvider::new(&db_url, None)
             .await
             .expect("Failed to recreate SQLite store");
         let store: Arc<dyn Provider> = Arc::new(store);
@@ -340,7 +340,7 @@ async fn test_sqlite_file_concurrent_access() {
 
     // Create the store
     let store = Arc::new(
-        SqliteProvider::new(&db_url)
+        SqliteProvider::new(&db_url, None)
             .await
             .expect("Failed to create SQLite store"),
     ) as Arc<dyn Provider>;

@@ -23,7 +23,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let db_path = temp_dir.path().join("hello_world.db");
     std::fs::File::create(&db_path)?;
     let db_url = format!("sqlite:{}", db_path.to_str().unwrap());
-    let store = Arc::new(SqliteProvider::new(&db_url).await?);
+    let store = Arc::new(SqliteProvider::new(&db_url, None).await?);
 
     // Register a simple activity that greets users
     let activities = ActivityRegistry::builder()

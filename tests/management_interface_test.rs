@@ -19,7 +19,7 @@ fn fast_runtime_options() -> RuntimeOptions {
 /// Test: Basic capability discovery
 #[tokio::test]
 async fn test_capability_discovery() {
-    let store = Arc::new(SqliteProvider::new("sqlite::memory:").await.unwrap());
+    let store = Arc::new(SqliteProvider::new("sqlite::memory:", None).await.unwrap());
     let client = Client::new(store.clone());
 
     // Test capability discovery
@@ -46,7 +46,7 @@ async fn test_capability_discovery() {
 /// Test: Management features with workflow
 #[tokio::test]
 async fn test_management_features_with_workflow() {
-    let store = Arc::new(SqliteProvider::new("sqlite::memory:").await.unwrap());
+    let store = Arc::new(SqliteProvider::new("sqlite::memory:", None).await.unwrap());
     let client = Client::new(store.clone());
 
     // Set up runtime with orchestrations

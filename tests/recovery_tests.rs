@@ -121,8 +121,8 @@ async fn recovery_across_restart_sqlite_provider() {
     std::fs::File::create(&db).unwrap();
     let url = format!("sqlite:{}", db.display());
 
-    let store1_arc = StdArc::new(SqliteProvider::new(&url).await.unwrap()) as StdArc<dyn Provider>;
-    let store2_arc = StdArc::new(SqliteProvider::new(&url).await.unwrap()) as StdArc<dyn Provider>;
+    let store1_arc = StdArc::new(SqliteProvider::new(&url, None).await.unwrap()) as StdArc<dyn Provider>;
+    let store2_arc = StdArc::new(SqliteProvider::new(&url, None).await.unwrap()) as StdArc<dyn Provider>;
 
     let s1 = store1_arc.clone();
     let s2 = store2_arc.clone();
@@ -250,7 +250,7 @@ async fn recovery_multiple_orchestrations_sqlite_provider() {
     let db1 = dir.join("multi.db");
     std::fs::File::create(&db1).unwrap();
     let url1 = format!("sqlite:{}", db1.display());
-    let store1 = StdArc::new(SqliteProvider::new(&url1).await.unwrap()) as StdArc<dyn Provider>;
+    let store1 = StdArc::new(SqliteProvider::new(&url1, None).await.unwrap()) as StdArc<dyn Provider>;
     let rt1 = runtime::Runtime::start_with_store(
         store1.clone(),
         Arc::new(activity_registry.clone()),
@@ -329,7 +329,7 @@ async fn recovery_multiple_orchestrations_sqlite_provider() {
 
     // Stage 2: restart with same store; runtime should auto-resume non-terminal instances
     // Reopen the same DB file for stage 2 to simulate restart
-    let store2 = StdArc::new(SqliteProvider::new(&url1).await.unwrap()) as StdArc<dyn Provider>;
+    let store2 = StdArc::new(SqliteProvider::new(&url1, None).await.unwrap()) as StdArc<dyn Provider>;
     let store2_for_wait = store2.clone();
     let store2_for_client = store2.clone();
     let rt2 =

@@ -14,7 +14,7 @@ async fn create_sqlite_store() -> (StdArc<dyn Provider>, TempDir) {
     let db_path = td.path().join("test.db");
     std::fs::File::create(&db_path).unwrap();
     let db_url = format!("sqlite:{}", db_path.display());
-    let store = StdArc::new(SqliteProvider::new(&db_url).await.unwrap()) as StdArc<dyn Provider>;
+    let store = StdArc::new(SqliteProvider::new(&db_url, None).await.unwrap()) as StdArc<dyn Provider>;
     (store, td)
 }
 
@@ -24,7 +24,7 @@ async fn create_sqlite_store_named(name: &str) -> (StdArc<dyn Provider>, TempDir
     let db_path = td.path().join(format!("{name}.db"));
     std::fs::File::create(&db_path).unwrap();
     let db_url = format!("sqlite:{}", db_path.display());
-    let store = StdArc::new(SqliteProvider::new(&db_url).await.unwrap()) as StdArc<dyn Provider>;
+    let store = StdArc::new(SqliteProvider::new(&db_url, None).await.unwrap()) as StdArc<dyn Provider>;
     (store, td, db_url)
 }
 

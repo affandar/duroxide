@@ -27,7 +27,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Phase 1: Creating/opening database and adding data...");
     {
         // This will create the database file if it doesn't exist
-        let provider = SqliteProvider::new(&db_url).await?;
+        let provider = SqliteProvider::new(&db_url, None).await?;
 
         let instance_id = "example-instance-1";
 
@@ -84,7 +84,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\nPhase 2: Reopening database and verifying data...");
     {
         // Re-open the existing database
-        let provider = SqliteProvider::new(&db_url).await?;
+        let provider = SqliteProvider::new(&db_url, None).await?;
 
         // Read the history we added in Phase 1
         let history = provider.read("example-instance-1").await;

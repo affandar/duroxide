@@ -13,7 +13,7 @@ async fn test_ignore_work_after_terminal_event() {
     let db_path = td.path().join("test.db");
     std::fs::File::create(&db_path).unwrap();
     let db_url = format!("sqlite:{}", db_path.display());
-    let store: Arc<dyn Provider> = Arc::new(SqliteProvider::new(&db_url).await.unwrap());
+    let store: Arc<dyn Provider> = Arc::new(SqliteProvider::new(&db_url, None).await.unwrap());
 
     let instance = "inst-terminal";
 
@@ -79,7 +79,7 @@ async fn test_fetch_orchestration_item_new_instance() {
     let db_path = td.path().join("test.db");
     std::fs::File::create(&db_path).unwrap();
     let db_url = format!("sqlite:{}", db_path.display());
-    let store: Arc<dyn Provider> = Arc::new(SqliteProvider::new(&db_url).await.unwrap());
+    let store: Arc<dyn Provider> = Arc::new(SqliteProvider::new(&db_url, None).await.unwrap());
 
     // Enqueue start work (provider will create instance lazily on fetch)
     store
@@ -119,7 +119,7 @@ async fn test_fetch_orchestration_item_existing_instance() {
     let db_path = td.path().join("test.db");
     std::fs::File::create(&db_path).unwrap();
     let db_url = format!("sqlite:{}", db_path.display());
-    let store: Arc<dyn Provider> = Arc::new(SqliteProvider::new(&db_url).await.unwrap());
+    let store: Arc<dyn Provider> = Arc::new(SqliteProvider::new(&db_url, None).await.unwrap());
 
     // Seed instance history using test helper
     test_create_execution(
@@ -182,7 +182,7 @@ async fn test_fetch_orchestration_item_no_work() {
     let db_path = td.path().join("test.db");
     std::fs::File::create(&db_path).unwrap();
     let db_url = format!("sqlite:{}", db_path.display());
-    let store: Arc<dyn Provider> = Arc::new(SqliteProvider::new(&db_url).await.unwrap());
+    let store: Arc<dyn Provider> = Arc::new(SqliteProvider::new(&db_url, None).await.unwrap());
 
     // No work items
     let item = store.fetch_orchestration_item().await;
@@ -195,7 +195,7 @@ async fn test_ack_orchestration_item_atomic() {
     let db_path = td.path().join("test.db");
     std::fs::File::create(&db_path).unwrap();
     let db_url = format!("sqlite:{}", db_path.display());
-    let store: Arc<dyn Provider> = Arc::new(SqliteProvider::new(&db_url).await.unwrap());
+    let store: Arc<dyn Provider> = Arc::new(SqliteProvider::new(&db_url, None).await.unwrap());
 
     // Setup: enqueue start work; provider will create instance lazily
     store
@@ -277,7 +277,7 @@ async fn test_ack_orchestration_item_error_handling() {
     let db_path = td.path().join("test.db");
     std::fs::File::create(&db_path).unwrap();
     let db_url = format!("sqlite:{}", db_path.display());
-    let store: Arc<dyn Provider> = Arc::new(SqliteProvider::new(&db_url).await.unwrap());
+    let store: Arc<dyn Provider> = Arc::new(SqliteProvider::new(&db_url, None).await.unwrap());
 
     // Try to ack with invalid token
     let result = store
@@ -294,7 +294,7 @@ async fn test_abandon_orchestration_item() {
     let db_path = td.path().join("test.db");
     std::fs::File::create(&db_path).unwrap();
     let db_url = format!("sqlite:{}", db_path.display());
-    let store: Arc<dyn Provider> = Arc::new(SqliteProvider::new(&db_url).await.unwrap());
+    let store: Arc<dyn Provider> = Arc::new(SqliteProvider::new(&db_url, None).await.unwrap());
 
     // Setup: enqueue start work; provider will create instance lazily
     store
@@ -335,7 +335,7 @@ async fn test_abandon_orchestration_item_with_delay() {
     let db_path = td.path().join("test.db");
     std::fs::File::create(&db_path).unwrap();
     let db_url = format!("sqlite:{}", db_path.display());
-    let store: Arc<dyn Provider> = Arc::new(SqliteProvider::new(&db_url).await.unwrap());
+    let store: Arc<dyn Provider> = Arc::new(SqliteProvider::new(&db_url, None).await.unwrap());
 
     // Setup: enqueue start work; provider will create instance lazily
     store
@@ -374,7 +374,7 @@ async fn test_abandon_orchestration_item_error_handling() {
     let db_path = td.path().join("test.db");
     std::fs::File::create(&db_path).unwrap();
     let db_url = format!("sqlite:{}", db_path.display());
-    let store: Arc<dyn Provider> = Arc::new(SqliteProvider::new(&db_url).await.unwrap());
+    let store: Arc<dyn Provider> = Arc::new(SqliteProvider::new(&db_url, None).await.unwrap());
 
     // Try to abandon with invalid token
     let result = store.abandon_orchestration_item("invalid-token", None).await;

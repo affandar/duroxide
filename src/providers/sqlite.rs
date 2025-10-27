@@ -9,6 +9,21 @@ use super::{
 };
 use crate::Event;
 
+/// Configuration options for SQLiteProvider
+#[derive(Debug, Clone)]
+pub struct SqliteOptions {
+    /// Lock timeout for orchestrator items (default: 30 seconds)
+    pub lock_timeout: Duration,
+}
+
+impl Default for SqliteOptions {
+    fn default() -> Self {
+        Self {
+            lock_timeout: Duration::from_secs(30),
+        }
+    }
+}
+
 /// SQLite-backed provider with full transactional support
 ///
 /// This provider offers true ACID guarantees across all operations,
@@ -93,7 +108,8 @@ impl SqliteProvider {
     ///
     /// # Arguments
     /// * `database_url` - SQLite connection string (e.g., "sqlite:data.db" or "sqlite::memory:")
-    pub async fn new(database_url: &str) -> Result<Self, sqlx::Error> {
+    /// * `options` - Optional configuration (uses defaults if None)
+    pub async fn new(database_url: &str, options: Option<SqliteOptions>) -> Result<Self, sqlx::Error> {
         // Configure SQLite for better concurrency
         let is_memory = database_url.contains(":memory:") || database_url.contains("mode=memory");
         let pool = SqlitePoolOptions::new()
@@ -144,12 +160,10 @@ impl SqliteProvider {
             }
         }
 
-        // Allow overriding worker/timer lock lease via env for tests
-        let lock_timeout = std::env::var("DUROXIDE_SQLITE_LOCK_TIMEOUT_MS")
-            .ok()
-            .and_then(|s| s.parse::<u64>().ok())
-            .map(Duration::from_millis)
-            .unwrap_or(Duration::from_secs(30));
+        // Determine lock timeout: options > default
+        let lock_timeout = options
+            .map(|opts| opts.lock_timeout)
+            .unwrap_or_else(|| SqliteOptions::default().lock_timeout);
 
         Ok(Self { pool, lock_timeout })
     }
@@ -157,10 +171,15 @@ impl SqliteProvider {
     /// Convenience: create a shared in-memory SQLite store for tests
     /// Uses a shared cache so multiple pooled connections see the same DB
     pub async fn new_in_memory() -> Result<Self, sqlx::Error> {
+        Self::new_in_memory_with_options(None).await
+    }
+
+    /// Create an in-memory SQLite store with custom options
+    pub async fn new_in_memory_with_options(options: Option<SqliteOptions>) -> Result<Self, sqlx::Error> {
         // use shared-cache memory to allow pool > 1
         // ref: https://www.sqlite.org/inmemorydb.html
         let url = "sqlite::memory:?cache=shared";
-        Self::new(url).await
+        Self::new(url, options).await
     }
 
     /// Debug helper: dump current queue states and small samples
@@ -1533,7 +1552,7 @@ mod tests {
     }
 
     async fn create_test_store() -> SqliteProvider {
-        SqliteProvider::new("sqlite::memory:")
+        SqliteProvider::new("sqlite::memory:", None)
             .await
             .expect("Failed to create test store")
     }
