@@ -11,6 +11,10 @@ readme = "README.md"
 keywords = ["durable", "execution", "workflow", "orchestration", "deterministic", "replay", "async", "tasks"]
 categories = ["asynchronous", "concurrency", "workflow", "durable"]
 
+[features]
+default = []
+provider-test = []  # Enable stress testing infrastructure for custom providers
+
 [dependencies]
 tokio = { version = "1", features = ["full"] }
 futures = "0.3"
