@@ -7,18 +7,22 @@
 
 ## Quick Start
 
-To run stress tests against your custom provider:
+Duroxide provides two types of tests for custom providers:
 
-1. Add `duroxide` with `provider-test` feature to your project
-2. Create a stress test binary that instantiates your provider
-3. Call `duroxide_stress_tests::run_stress_test()` with your provider
-4. Review the performance metrics and correctness validation
+### 1. Stress Tests (Performance & Throughput)
+- Measures: throughput, latency, success rate
+- Use `provider-test` feature
+- See [Stress Tests](#stress-tests) section below
 
-**What Stress Tests Measure:**
-- Throughput (orchestrations/sec and activities/sec)
-- Latency (average time per orchestration)
-- Success rate (must be 100%)
-- Correctness (deterministic execution)
+### 2. Correctness Tests (Behavior Validation)
+- Validates: atomicity, locking, error handling, queue semantics
+- Use `provider-test` feature (same as stress tests)
+- See [Provider Correctness Tests](#provider-correctness-tests) section below
+
+**Recommended Testing Strategy:**
+1. Run correctness tests first to validate behavior
+2. Run stress tests to measure performance
+3. Both should pass with 100% success rate
 
 ---
 
@@ -35,7 +39,9 @@ The `provider-test` feature enables access to the stress testing infrastructure.
 
 ---
 
-## Basic Example
+## Stress Tests
+
+### Basic Example
 
 Here's a minimal example of running stress tests against a custom provider:
 
@@ -285,6 +291,158 @@ File SQLite          2/2        281        0          100.00     25.98          
 ❌ **Throughput = 0**: Provider not committing work  
 ❌ **Highly Variable Latency**: Lock contention or database issues  
 ❌ **Decreasing Throughput**: Resource exhaustion or contention
+
+---
+
+## Provider Correctness Tests
+
+Duroxide includes a comprehensive suite of correctness tests that validate provider behavior. These tests verify critical correctness properties like atomicity, locking, error handling, and queue semantics.
+
+### Quick Start
+
+To run correctness tests against your custom provider:
+
+1. Add `duroxide` with `provider-test` feature to your project
+2. Implement the `ProviderFactory` trait
+3. Call `run_all_tests()` with your factory
+
+### Adding the Dependency
+
+Add Duroxide with the `provider-test` feature:
+
+```toml
+[dependencies]
+duroxide = { path = "../duroxide", features = ["provider-test"] }
+```
+
+> **Note:** The `provider-test` feature enables both stress tests and correctness tests. Enable this single feature to get all provider testing infrastructure.
+
+### Basic Example
+
+```rust
+use duroxide::providers::Provider;
+use duroxide::provider_correctness_tests::{ProviderFactory, run_all_tests};
+use std::sync::Arc;
+
+struct MyProviderFactory;
+
+#[async_trait::async_trait]
+impl ProviderFactory for MyProviderFactory {
+    async fn create_provider(&self) -> Arc<dyn Provider> {
+        // Create a fresh provider instance for each test
+        Arc::new(MyCustomProvider::new().await?)
+    }
+}
+
+#[tokio::test]
+async fn test_my_provider_correctness() {
+    let factory = MyProviderFactory;
+    run_all_tests(factory).await;
+}
+```
+
+### What the Tests Validate
+
+The correctness test suite includes:
+
+1. **Atomicity Tests**
+   - All-or-nothing commit semantics
+   - Rollback on failure
+   - Single transaction guarantees
+
+2. **Error Handling Tests**
+   - Invalid lock token rejection
+   - Duplicate event ID detection
+   - Error propagation
+
+3. **Instance Locking Tests**
+   - Exclusive access to instances
+   - Lock timeout behavior
+   - Concurrent access prevention
+
+4. **Lock Expiration Tests**
+   - Automatic lock release
+   - Delayed visibility for retries
+   - Reacquisition after expiration
+
+5. **Multi-Execution Tests**
+   - Execution isolation
+   - ContinueAsNew behavior
+   - Execution ID tracking
+
+6. **Queue Semantics Tests**
+   - FIFO ordering
+   - Atomic queue operations
+   - Worker queue isolation
+
+### Advanced Usage
+
+You can also run individual test suites:
+
+```rust
+use duroxide::provider_correctness_tests::{ProviderFactory};
+
+#[tokio::test]
+async fn test_atomicity_only() {
+    let factory = MyProviderFactory;
+    
+    // Run only atomicity tests
+    duroxide::provider_correctness_tests::tests::run_atomicity_tests(&factory).await;
+}
+```
+
+### Creating a Test Provider Factory
+
+Your factory should create fresh, isolated provider instances for each test:
+
+```rust
+use duroxide::providers::Provider;
+use duroxide::provider_correctness_tests::ProviderFactory;
+use std::sync::Arc;
+use tempfile::TempDir;
+
+struct MyProviderFactory {
+    // Keep temp directory alive
+    _temp_dir: TempDir,
+}
+
+#[async_trait::async_trait]
+impl ProviderFactory for MyProviderFactory {
+    async fn create_provider(&self) -> Arc<dyn Provider> {
+        // Create a new provider instance with unique path
+        let db_path = self._temp_dir.path().join(format!("test_{}.db", 
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        std::fs::File::create(&db_path).unwrap();
+        Arc::new(MyProvider::new(&format!("sqlite:{}", db_path.display())).await?)
+    }
+}
+```
+
+### Integration with CI/CD
+
+Add correctness tests to your CI pipeline:
+
+```yaml
+# .github/workflows/provider-tests.yml
+name: Provider Correctness Tests
+
+on: [pull_request]
+
+jobs:
+  correctness-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Setup Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+      
+      - name: Run correctness tests
+        run: |
+          cargo test --features provider-test
+```
 
 ---
 

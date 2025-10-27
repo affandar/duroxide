@@ -13,7 +13,7 @@ categories = ["asynchronous", "concurrency", "workflow", "durable"]
 
 [features]
 default = []
-provider-test = []  # Enable stress testing infrastructure for custom providers
+provider-test = []  # Enable all provider testing infrastructure (stress tests + correctness tests)
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }

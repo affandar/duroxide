@@ -246,6 +246,9 @@ pub mod runtime;
 pub use runtime::OrchestrationDescriptor;
 pub mod providers;
 
+#[cfg(feature = "provider-test")]
+pub mod provider_correctness_tests;
+
 // Re-export key runtime types for convenience
 pub use client::Client;
 pub use runtime::{
