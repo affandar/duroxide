@@ -4,9 +4,6 @@ use duroxide::providers::{ExecutionMetadata, Provider, WorkItem};
 use std::sync::Arc;
 use std::time::Duration;
 
-#[path = "../common/mod.rs"]
-mod common;
-
 const TEST_LOCK_TIMEOUT_MS: u64 = 1000;
 
 /// Helper to create a provider for testing

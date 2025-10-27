@@ -86,10 +86,7 @@ pub async fn run_stress_test(
     );
     info!(
         "Config: max_concurrent={}, duration={}s, tasks_per_instance={}, activity_delay={}ms",
-        config.max_concurrent,
-        config.duration_secs,
-        config.tasks_per_instance,
-        config.activity_delay_ms
+        config.max_concurrent, config.duration_secs, config.tasks_per_instance, config.activity_delay_ms
     );
 
     // Start runtime with custom options
@@ -272,15 +269,17 @@ pub fn print_comparison_table(results: &[(String, String, StressTestResult)]) {
 
 /// Create the default activity registry for stress tests
 pub fn create_default_activities(delay_ms: u64) -> Arc<ActivityRegistry> {
-    Arc::new(ActivityRegistry::builder()
-        .register("ProcessTask", move |input: String| {
-            let delay = delay_ms;
-            async move {
-                tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
-                Ok(format!("processed: {}", input))
-            }
-        })
-        .build())
+    Arc::new(
+        ActivityRegistry::builder()
+            .register("ProcessTask", move |input: String| {
+                let delay = delay_ms;
+                async move {
+                    tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+                    Ok(format!("processed: {}", input))
+                }
+            })
+            .build(),
+    )
 }
 
 /// Create the default orchestration registry for stress tests
@@ -312,14 +311,7 @@ async fn fanout_orchestration(ctx: OrchestrationContext, input: String) -> Resul
         .filter(|r| matches!(r, duroxide::DurableOutput::Activity(Ok(_))))
         .count();
 
-    ctx.trace_info(format!(
-        "Fanout completed: {}/{} succeeded",
-        success_count, task_count
-    ));
+    ctx.trace_info(format!("Fanout completed: {}/{} succeeded", success_count, task_count));
 
-    Ok(format!(
-        "Completed {} tasks ({} succeeded)",
-        task_count, success_count
-    ))
+    Ok(format!("Completed {} tasks ({} succeeded)", task_count, success_count))
 }
-

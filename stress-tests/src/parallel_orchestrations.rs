@@ -2,7 +2,9 @@
 //!
 //! This scenario tests fan-out/fan-in orchestration patterns with concurrent instance execution.
 
-use crate::{print_comparison_table, run_stress_test, create_default_activities, create_default_orchestrations, StressTestConfig};
+use crate::{
+    create_default_activities, create_default_orchestrations, print_comparison_table, run_stress_test, StressTestConfig,
+};
 use duroxide::providers::sqlite::SqliteProvider;
 use std::sync::Arc;
 use tracing::info;
@@ -24,10 +26,7 @@ pub async fn create_file_provider() -> Result<(Arc<SqliteProvider>, String), Box
 pub async fn run_test_suite() -> Result<(), Box<dyn std::error::Error>> {
     info!("=== Duroxide Parallel Orchestration Stress Test Suite ===");
 
-    let concurrency_combos = vec![
-        (1, 1),
-        (2, 2),
-    ];
+    let concurrency_combos = vec![(1, 1), (2, 2)];
 
     let mut results = Vec::new();
 
@@ -48,7 +47,9 @@ pub async fn run_test_suite() -> Result<(), Box<dyn std::error::Error>> {
             create_in_memory_provider().await?,
             create_default_activities(config.activity_delay_ms),
             create_default_orchestrations(),
-        ).await {
+        )
+        .await
+        {
             Ok(result) => {
                 results.push((
                     "In-Memory SQLite".to_string(),
@@ -82,7 +83,9 @@ pub async fn run_test_suite() -> Result<(), Box<dyn std::error::Error>> {
                     provider,
                     create_default_activities(config.activity_delay_ms),
                     create_default_orchestrations(),
-                ).await {
+                )
+                .await
+                {
                     Ok(result) => {
                         results.push((
                             "File SQLite".to_string(),
@@ -90,7 +93,7 @@ pub async fn run_test_suite() -> Result<(), Box<dyn std::error::Error>> {
                             result,
                         ));
                         info!("✓ Test completed");
-                        
+
                         // Cleanup
                         if let Err(e) = std::fs::remove_file(&db_path) {
                             tracing::warn!("Failed to remove temp DB file {}: {}", db_path, e);
@@ -112,4 +115,3 @@ pub async fn run_test_suite() -> Result<(), Box<dyn std::error::Error>> {
 
     Ok(())
 }
-

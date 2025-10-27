@@ -4,3 +4,6 @@ pub mod instance_locking;
 pub mod lock_expiration;
 pub mod multi_execution;
 pub mod queue_semantics;
+
+#[path = "../common/mod.rs"]
+mod common;
