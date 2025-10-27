@@ -19,6 +19,7 @@ Getting started samples
 - **Quick start**: Run `cargo run --example hello_world` to see Duroxide in action
 - **Advanced patterns**: Check `tests/e2e_samples.rs` for comprehensive usage patterns
 - **Provider implementation**: See `docs/provider-implementation-guide.md` for building custom providers
+- **Provider testing**: See `docs/provider-testing-guide.md` for testing custom providers
 
 What it is
 - Deterministic orchestration core with correlated event IDs and replay safety
@@ -65,7 +66,7 @@ use duroxide::providers::sqlite::SqliteProvider;
 
 # #[tokio::main]
 # async fn main() {
-let store = std::sync::Arc::new(SqliteProvider::new("sqlite:./data.db").await.unwrap());
+let store = std::sync::Arc::new(SqliteProvider::new("sqlite:./data.db", None).await.unwrap());
 let activities = ActivityRegistry::builder()
     .register("Hello", |name: String| async move { Ok(format!("Hello, {name}!")) })
     .build();
@@ -147,6 +148,12 @@ Local development
 - Build: `cargo build`
 - Test everything: `cargo test --all -- --nocapture`
 - Run a specific test: `cargo test --test e2e_samples sample_dtf_legacy_gabbar_greetings -- --nocapture`
+
+Stress testing
+- Run stress tests: `./run-stress-tests.sh`
+- Run with result tracking: `./run-stress-tests.sh --track` (saves to `stress-test-results.md`)
+- Tracked results include commit history, performance metrics, and rolling averages
+- See `stress-tests/README.md` for details
 
 Notes
 - Import as `duroxide` in Rust source.

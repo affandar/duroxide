@@ -26,6 +26,8 @@ Welcome to the Duroxide documentation! This guide will help you understand and u
 - **[Persistence Analysis](persistence-failure-analysis.md)** - Failure mode analysis
 - **[Transaction Example](transaction-example.md)** - Transaction implementation
 - **[DTF Runtime Design](dtf-runtime-design.md)** - Runtime implementation details
+- **[Provider Implementation Guide](provider-implementation-guide.md)** - How to implement a custom provider
+- **[Provider Testing Guide](provider-testing-guide.md)** - How to test custom providers
 
 ## 🎯 Learning Path
 

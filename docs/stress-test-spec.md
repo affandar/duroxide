@@ -245,3 +245,8 @@ For parallel orchestrations with file-based SQLite:
 - Tests run in release mode for accurate performance metrics
 - Logging is set to INFO level to reduce noise
 
+## Related Documentation
+
+- **[Provider Testing Guide](provider-testing-guide.md)** - Complete instructions for testing custom providers
+- **[Provider Implementation Guide](provider-implementation-guide.md)** - How to implement a custom provider
+

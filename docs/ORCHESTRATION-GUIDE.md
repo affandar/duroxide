@@ -31,7 +31,7 @@ use std::sync::Arc;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 1. Create storage
-    let store = Arc::new(SqliteProvider::new("sqlite::memory:").await?);
+    let store = Arc::new(SqliteProvider::new("sqlite::memory:", None).await?);
     
     // 2. Register activities (side-effecting work)
     let activities = ActivityRegistry::builder()

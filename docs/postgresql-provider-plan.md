@@ -1490,7 +1490,7 @@ use duroxide::providers::{sqlite::SqliteProvider, postgres::PostgresProvider};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let sqlite = SqliteProvider::new("sqlite:data.db").await?;
+    let sqlite = SqliteProvider::new("sqlite:data.db", None).await?;
     let postgres = PostgresProvider::new(&std::env::var("POSTGRES_URL")?).await?;
     
     postgres.run_migrations().await?;
@@ -1528,7 +1528,7 @@ psql $POSTGRES_URL -c "SELECT * FROM history WHERE instance_id = 'test' ORDER BY
 
 ```rust
 // Before
-let provider = SqliteProvider::new("sqlite:data.db").await?;
+let provider = SqliteProvider::new("sqlite:data.db", None).await?;
 
 // After
 let provider = PostgresProvider::new(&std::env::var("DATABASE_URL")?).await?;

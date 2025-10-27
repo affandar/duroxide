@@ -656,12 +656,24 @@ Before considering your provider production-ready:
 
 ---
 
+## Testing Your Provider
+
+After implementing your provider, follow the **[Provider Testing Guide](provider-testing-guide.md)** to:
+- Run stress tests against your implementation
+- Validate correctness and performance
+- Compare metrics with built-in providers
+- Integrate tests into your CI/CD pipeline
+
+---
+
 ## Getting Help
 
 - **Reference Implementation**: `src/providers/sqlite.rs`
 - **Interface Definition**: `src/providers/mod.rs` (this file, with full docs)
-- **Tests**: `tests/sqlite_provider_test.rs`
+- **Provider Tests**: `tests/sqlite_provider_test.rs`
+- **Stress Tests**: `stress-tests/src/lib.rs`
 - **Schema**: `migrations/20240101000000_initial_schema.sql`
+- **Testing Guide**: `docs/provider-testing-guide.md`
 
 ---
 
