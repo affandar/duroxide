@@ -22,6 +22,12 @@ pub struct RuntimeOptions {
     /// Higher values = more parallel orchestration execution.
     /// Default: 2
     pub orchestration_concurrency: usize,
+    
+    /// Number of concurrent worker dispatchers.
+    /// Each worker can execute one activity at a time.
+    /// Higher values = more parallel activity execution.
+    /// Default: 2
+    pub worker_concurrency: usize,
 }
 
 impl Default for RuntimeOptions {
@@ -29,6 +35,7 @@ impl Default for RuntimeOptions {
         Self {
             dispatcher_idle_sleep_ms: 100,
             orchestration_concurrency: 2,
+            worker_concurrency: 2,
         }
     }
 }
@@ -538,84 +545,103 @@ impl Runtime {
     }
 
     fn start_work_dispatcher(self: Arc<Self>, activities: Arc<registry::ActivityRegistry>) -> JoinHandle<()> {
-        // EXECUTION: consumes worker queue, executes activities, enqueues completions
+        // EXECUTION: spawns N concurrent worker dispatchers
+        // Activities are independent work units that can run in parallel
+        let concurrency = self.options.worker_concurrency;
         let shutdown = self.shutdown_flag.clone();
         
         tokio::spawn(async move {
-            loop {
-                // Check shutdown flag before fetching
-                if shutdown.load(Ordering::Relaxed) {
-                    debug!("Work dispatcher exiting");
-                    break;
-                }
-                
-                if let Some((item, token)) = self.history_store.dequeue_worker_peek_lock().await {
-                    match item {
-                        WorkItem::ActivityExecute {
-                            instance,
-                            execution_id,
-                            id,
-                            name,
-                            input,
-                        } => {
-                            // Execute activity and atomically ack with completion
-                            let ack_result = if let Some(handler) = activities.get(&name) {
-                                match handler.invoke(input).await {
-                                    Ok(result) => {
-                                        self.history_store
-                                            .ack_worker(
-                                                &token,
-                                                WorkItem::ActivityCompleted {
-                                                    instance: instance.clone(),
-                                                    execution_id,
-                                                    id,
-                                                    result,
-                                                },
-                                            )
-                                            .await
-                                    }
-                                    Err(error) => {
-                                        self.history_store
+            let mut worker_handles = Vec::new();
+            
+            for worker_id in 0..concurrency {
+                let rt = self.clone();
+                let activities = activities.clone();
+                let shutdown = shutdown.clone();
+                let handle = tokio::spawn(async move {
+                    debug!("Worker dispatcher {} started", worker_id);
+                    loop {
+                        // Check shutdown flag before fetching
+                        if shutdown.load(Ordering::Relaxed) {
+                            debug!("Worker dispatcher {} exiting", worker_id);
+                            break;
+                        }
+                        
+                        if let Some((item, token)) = rt.history_store.dequeue_worker_peek_lock().await {
+                            match item {
+                                WorkItem::ActivityExecute {
+                                    instance,
+                                    execution_id,
+                                    id,
+                                    name,
+                                    input,
+                                } => {
+                                    // Execute activity and atomically ack with completion
+                                    let ack_result = if let Some(handler) = activities.get(&name) {
+                                        match handler.invoke(input).await {
+                                            Ok(result) => {
+                                                rt.history_store
+                                                    .ack_worker(
+                                                        &token,
+                                                        WorkItem::ActivityCompleted {
+                                                            instance: instance.clone(),
+                                                            execution_id,
+                                                            id,
+                                                            result,
+                                                        },
+                                                    )
+                                                    .await
+                                            }
+                                            Err(error) => {
+                                                rt.history_store
+                                                    .ack_worker(
+                                                        &token,
+                                                        WorkItem::ActivityFailed {
+                                                            instance: instance.clone(),
+                                                            execution_id,
+                                                            id,
+                                                            error,
+                                                        },
+                                                    )
+                                                    .await
+                                            }
+                                        }
+                                    } else {
+                                        rt.history_store
                                             .ack_worker(
                                                 &token,
                                                 WorkItem::ActivityFailed {
                                                     instance: instance.clone(),
                                                     execution_id,
                                                     id,
-                                                    error,
+                                                    error: format!("unregistered:{}", name),
                                                 },
                                             )
                                             .await
+                                    };
+
+                                    // Log if atomic ack failed
+                                    if let Err(e) = ack_result {
+                                        warn!(instance = %instance, execution_id, id, error=%e, "worker: atomic ack failed");
                                     }
                                 }
-                            } else {
-                                self.history_store
-                                    .ack_worker(
-                                        &token,
-                                        WorkItem::ActivityFailed {
-                                            instance: instance.clone(),
-                                            execution_id,
-                                            id,
-                                            error: format!("unregistered:{}", name),
-                                        },
-                                    )
-                                    .await
-                            };
-
-                            // Log if atomic ack failed
-                            if let Err(e) = ack_result {
-                                warn!(instance = %instance, execution_id, id, error=%e, "worker: atomic ack failed");
+                                other => {
+                                    error!(?other, "unexpected WorkItem in Worker dispatcher; state corruption");
+                                    panic!("unexpected WorkItem in Worker dispatcher");
+                                }
                             }
-                        }
-                        other => {
-                            error!(?other, "unexpected WorkItem in Worker dispatcher; state corruption");
-                            panic!("unexpected WorkItem in Worker dispatcher");
+                        } else {
+                            tokio::time::sleep(std::time::Duration::from_millis(rt.options.dispatcher_idle_sleep_ms)).await;
                         }
                     }
-                } else {
-                    tokio::time::sleep(std::time::Duration::from_millis(self.options.dispatcher_idle_sleep_ms)).await;
-                }
+                });
+                worker_handles.push(handle);
             }
+            
+            // Wait for all workers to complete
+            for handle in worker_handles {
+                let _ = handle.await;
+            }
+            debug!("Work dispatcher exited");
         })
     }
 

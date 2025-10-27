@@ -52,7 +52,7 @@ async fn test_status_running() {
         .unwrap();
 
     // Give it a moment to start but not complete
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
     let status = client.get_orchestration_status("test-running").await;
     assert!(
