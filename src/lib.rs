@@ -15,7 +15,7 @@
 //!
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! // 1. Create a storage provider
-//! let store = Arc::new(SqliteProvider::new("sqlite:./data.db").await.unwrap());
+//! let store = Arc::new(SqliteProvider::new("sqlite:./data.db", None).await.unwrap());
 //!
 //! // 2. Register activities (your business logic)
 //! let activities = ActivityRegistry::builder()

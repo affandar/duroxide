@@ -9,7 +9,4 @@ pub mod multi_execution;
 pub use instance_locking::*;
 pub use atomicity::*;
 pub use error_handling::*;
-pub use lock_expiration::*;
-pub use queue_semantics::*;
-pub use multi_execution::*;
 

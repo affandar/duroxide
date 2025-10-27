@@ -33,7 +33,7 @@ async fn create_sqlite_store_named(name: &str) -> (Arc<dyn Provider>, TempDir, S
 #[tokio::test]
 async fn test_sqlite_provider_basic() {
     // Create in-memory SQLite store
-    let store = SqliteProvider::new("sqlite::memory:")
+    let store = SqliteProvider::new("sqlite::memory:", None)
         .await
         .expect("Failed to create SQLite store");
 
