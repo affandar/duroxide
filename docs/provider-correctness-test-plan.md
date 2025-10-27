@@ -232,7 +232,6 @@ async fn test_cross_instance_lock_isolation() {
         vec![],
         vec![],
         vec![],
-        vec![],
         ExecutionMetadata::default(),
     ).await.unwrap();
     
@@ -321,7 +320,6 @@ async fn test_message_tagging_during_lock() {
         vec![],
         vec![],
         vec![],
-        vec![],
         ExecutionMetadata::default(),
     ).await.unwrap();
     
@@ -343,7 +341,7 @@ async fn test_message_tagging_during_lock() {
 **Steps:**
 1. Create provider
 2. Fetch orchestration item
-3. Prepare ack with history, worker items, timer items, orchestrator items
+3. Prepare ack with history, worker items, orchestrator items (may include TimerFired with delayed visibility)
 4. Intentionally corrupt the ack (e.g., duplicate event_id, invalid data)
 5. Attempt ack → should fail
 6. Verify NO changes were persisted (history, queues remain unchanged)
@@ -370,7 +368,6 @@ async fn test_atomicity_failure_rollback() {
         vec![/* corrupt event */],
         vec![],
         vec![],
-        vec![],
         ExecutionMetadata::default(),
     ).await;
     
@@ -394,11 +391,10 @@ async fn test_atomicity_failure_rollback() {
 3. Ack with:
    - 5 history events
    - 3 worker items
-   - 2 timer items
-   - 2 orchestrator items
+   - 2 orchestrator items (may include TimerFired with delayed visibility)
 4. Verify ALL operations succeeded together
 
-**Expected:** All 12 operations committed atomically
+**Expected:** All 10 operations committed atomically
 
 #### Test 2.3: Lock Released Only on Successful Ack
 **Goal:** Ensure lock is only released after successful commit.
@@ -618,31 +614,19 @@ async fn test_duplicate_event_id_rejection() {
 
 **Expected:** Both operations succeed atomically
 
-#### Test 5.4: Timer Queue Visibility Filtering
-**Goal:** Verify timers only dequeued when fire_at <= now.
+#### Test 5.4: Timer Delayed Visibility
+**Goal:** Verify TimerFired items only dequeued when visible_at <= now.
 
 **Steps:**
 1. Create provider supporting delayed visibility
-2. Enqueue timer with fire_at = now + 1 hour
-3. Dequeue immediately → should return None
+2. Enqueue TimerFired work item with visible_at = now + 1 hour
+3. Fetch orchestration item immediately → should return None (timer not visible yet)
 4. Manually advance provider's clock (if possible)
-5. Dequeue → should return timer
+5. Fetch again → should return TimerFired when visible_at <= now
 
-**Expected:** Timer only visible when due
+**Expected:** TimerFired only visible when due
 
-#### Test 5.5: Timer Ack Atomicity
-**Goal:** Verify ack_timer atomically removes timer and enqueues TimerFired.
-
-**Steps:**
-1. Create provider
-2. Enqueue timer item
-3. Dequeue timer
-4. Ack with TimerFired
-5. Verify:
-   - Timer queue empty
-   - Orchestrator queue has TimerFired
-
-**Expected:** Both operations atomic
+**Note:** Timers are now handled via orchestrator queue with delayed visibility. There is no separate timer queue.
 
 #### Test 5.6: Lost Lock Token Handling
 **Goal:** Verify locked items eventually become available if token lost.
