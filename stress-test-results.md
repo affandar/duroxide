@@ -4,6 +4,25 @@ This file tracks all stress test runs, including performance metrics and commit 
 
 ---
 
+## Commit: 5d62b77 - Timestamp: 2025-10-28 00:44:41 UTC
+
+### Changes Since Last Test
+```
+5d62b77 chore: Reduce stress test duration to 3s for faster debugging
+```
+
+### Test Results
+```
+Provider             Config     Completed  Failed     Success %  Orch/sec        Activity/sec    Avg Latency    
+------------------------------------------------------------------------------------------------------------------------
+In-Memory SQLite     1/1        65         0          100.00     1.91            9.57            522.20         ms
+In-Memory SQLite     2/2        93         0          100.00     2.88            14.38           347.66         ms
+File SQLite          1/1        60         0          100.00     14.20           71.02           70.40          ms
+File SQLite          2/2        96         0          100.00     26.57           132.84          37.64          ms
+```
+
+---
+
 ## Commit: 5c19e2a - Timestamp: 2025-10-28 00:25:39 UTC
 
 ### Changes Since Last Test

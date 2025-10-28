@@ -31,6 +31,7 @@ fi
 
 # Run the stress tests and capture output
 echo "Running stress tests..."
+
 # Capture output to a temp file and then display it
 TEMP_OUTPUT=$(mktemp)
 cargo run --release --package duroxide-stress-tests --bin parallel_orchestrations 2>&1 | tee "$TEMP_OUTPUT"
@@ -39,7 +40,12 @@ rm "$TEMP_OUTPUT"
 
 # Extract comparison table from the output, stripping ANSI escape codes
 # Find the table section and extract lines starting with "INFO" that contain the table
-RESULTS=$(echo "$TEST_OUTPUT" | awk '/=== Comparison Table ===/{found=1} found && /INFO.*duroxide_stress_tests:/{print}' | sed 's/.*INFO duroxide_stress_tests: //' | sed 's/\x1b\[[0-9;]*m//g')
+# Extract comparison table lines following the marker; accept lines with or without the INFO prefix
+RESULTS=$(echo "$TEST_OUTPUT" \
+  | awk '/=== Comparison Table ===/{found=1; next} found {print}' \
+  | sed 's/.*INFO duroxide_stress_tests: //' \
+  | sed 's/\x1b\[[0-9;]*m//g' \
+  | sed '/^$/d')
 
 # Create the results entry
 ENTRY_FILE=$(mktemp)

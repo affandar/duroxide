@@ -12,10 +12,12 @@ set -e
 
 TRACK_RESULTS=false
 
-# Parse arguments
-if [ "$1" == "--track" ]; then
-    TRACK_RESULTS=true
-fi
+# Parse arguments (support --track)
+for arg in "$@"; do
+    if [ "$arg" == "--track" ]; then
+        TRACK_RESULTS=true
+    fi
+done
 
 echo "=========================================="
 echo "Duroxide Stress Test Suite"
