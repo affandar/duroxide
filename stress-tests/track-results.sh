@@ -31,7 +31,11 @@ fi
 
 # Run the stress tests and capture output
 echo "Running stress tests..."
-TEST_OUTPUT=$(cargo run --release --package duroxide-stress-tests --bin parallel_orchestrations 2>&1)
+# Capture output to a temp file and then display it
+TEMP_OUTPUT=$(mktemp)
+cargo run --release --package duroxide-stress-tests --bin parallel_orchestrations 2>&1 | tee "$TEMP_OUTPUT"
+TEST_OUTPUT=$(cat "$TEMP_OUTPUT")
+rm "$TEMP_OUTPUT"
 
 # Extract comparison table from the output, stripping ANSI escape codes
 # Find the table section and extract lines starting with "INFO" that contain the table
