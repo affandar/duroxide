@@ -43,7 +43,8 @@ rm "$TEMP_OUTPUT"
 # Extract comparison table lines following the marker; accept lines with or without the INFO prefix
 RESULTS=$(echo "$TEST_OUTPUT" \
   | awk '/=== Comparison Table ===/{found=1; next} found {print}' \
-  | sed 's/.*INFO duroxide_stress_tests: //' \
+  | sed -E 's/^ *[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+Z +INFO +[^:]*: *//' \
+  | sed -E 's/^ *INFO +[^:]*: *//' \
   | sed 's/\x1b\[[0-9;]*m//g' \
   | sed '/^$/d')
 
