@@ -4,6 +4,120 @@ This file tracks all stress test runs, including performance metrics and commit 
 
 ---
 
+## Commit: 65fe385 - Timestamp: 2025-10-28 01:07:05 UTC
+
+### Changes Since Last Test
+```
+
+```
+
+### Test Results
+```
+Provider             Config     Completed  Failed     Success %  Orch/sec        Activity/sec    Avg Latency    
+------------------------------------------------------------------------------------------------------------------------
+In-Memory SQLite     1/1        65         0          100.00     1.91            9.57            522.43         ms
+In-Memory SQLite     2/2        102        0          100.00     3.06            15.30           326.76         ms
+File SQLite          1/1        56         0          100.00     13.57           67.85           73.68          ms
+File SQLite          2/2        84         0          100.00     22.57           112.84          44.31          ms
+```
+
+---
+
+## Commit: 65fe385 - Timestamp: 2025-10-28 01:04:35 UTC
+
+### Changes Since Last Test
+```
+
+```
+
+### Test Results
+```
+Provider             Config     Completed  Failed     Success %  Orch/sec        Activity/sec    Avg Latency    
+------------------------------------------------------------------------------------------------------------------------
+In-Memory SQLite     1/1        62         0          100.00     1.81            9.04            553.16         ms
+In-Memory SQLite     2/2        94         0          100.00     2.80            14.01           356.99         ms
+File SQLite          1/1        62         0          100.00     14.31           71.54           69.89          ms
+File SQLite          2/2        101        0          100.00     25.75           128.75          38.83          ms
+```
+
+---
+
+## Commit: 65fe385 - Timestamp: 2025-10-28 01:02:40 UTC
+
+### Changes Since Last Test
+```
+
+```
+
+### Test Results
+```
+Provider             Config     Completed  Failed     Success %  Orch/sec        Activity/sec    Avg Latency    
+------------------------------------------------------------------------------------------------------------------------
+In-Memory SQLite     1/1        64         0          100.00     15.15           75.76           65.98          ms
+In-Memory SQLite     2/2        91         0          100.00     2.71            13.56           368.70         ms
+File SQLite          1/1        63         0          100.00     14.93           74.63           67.00          ms
+File SQLite          2/2        87         0          100.00     24.77           123.84          40.37          ms
+```
+
+---
+
+## Commit: 65fe385 - Timestamp: 2025-10-28 01:01:02 UTC
+
+### Changes Since Last Test
+```
+
+```
+
+### Test Results
+```
+ Provider             Config     Completed  Failed     Success %  Orch/sec        Activity/sec    Avg Latency    
+ ------------------------------------------------------------------------------------------------------------------------
+ In-Memory SQLite     1/1        63         0          100.00     1.85            9.23            541.63         ms
+ In-Memory SQLite     2/2        96         0          100.00     2.87            14.35           348.51         ms
+ File SQLite          1/1        63         0          100.00     14.91           74.53           67.08          ms
+ File SQLite          2/2        84         0          100.00     23.24           116.19          43.02          ms
+```
+
+---
+
+## Commit: 65fe385 - Timestamp: 2025-10-28 00:59:27 UTC
+
+### Changes Since Last Test
+```
+
+```
+
+### Test Results
+```
+00:48.317392Z  INFO duroxide_stress_tests: Provider             Config     Completed  Failed     Success %  Orch/sec        Activity/sec    Avg Latency    
+00:48.317396Z  INFO duroxide_stress_tests: ------------------------------------------------------------------------------------------------------------------------
+00:48.317398Z  INFO duroxide_stress_tests: In-Memory SQLite     1/1        65         0          100.00     1.92            9.60            520.68         ms
+00:48.317404Z  INFO duroxide_stress_tests: In-Memory SQLite     2/2        102        0          100.00     3.04            15.20           328.96         ms
+00:48.317407Z  INFO duroxide_stress_tests: File SQLite          1/1        65         0          100.00     15.01           75.03           66.63          ms
+00:48.317411Z  INFO duroxide_stress_tests: File SQLite          2/2        89         0          100.00     23.29           116.44          42.93          ms
+```
+
+---
+
+## Commit: 65fe385 - Timestamp: 2025-10-28 00:56:31 UTC
+
+### Changes Since Last Test
+```
+65fe385 chore(tracking): strip timestamps and INFO prefixes from results table output
+```
+
+### Test Results
+```
+2025-10-28T00:57:50.561134Z  INFO duroxide_stress_tests: Provider             Config     Completed  Failed     Success %  Orch/sec        Activity/sec    Avg Latency    
+2025-10-28T00:57:50.561159Z  INFO duroxide_stress_tests: ------------------------------------------------------------------------------------------------------------------------
+2025-10-28T00:57:50.561166Z  INFO duroxide_stress_tests: In-Memory SQLite     1/1        64         0          100.00     2.01            10.03           498.50         ms
+2025-10-28T00:57:50.561177Z  INFO duroxide_stress_tests: In-Memory SQLite     2/2        97         0          100.00     2.89            14.46           345.79         ms
+2025-10-28T00:57:50.561184Z  INFO duroxide_stress_tests: File SQLite          1/1        65         0          100.00     15.01           75.06           66.60          ms
+2025-10-28T00:57:50.561197Z  INFO duroxide_stress_tests: File SQLite          2/2        96         0          100.00     26.53           132.66          37.69          ms
+```
+
+---
+
 ## Commit: 0dedfc2 - Timestamp: 2025-10-28 00:53:29 UTC
 
 ### Changes Since Last Test

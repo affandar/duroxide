@@ -35,7 +35,7 @@ pub async fn run_test_suite() -> Result<(), Box<dyn std::error::Error>> {
     for (orch_conc, worker_conc) in &concurrency_combos {
         let config = StressTestConfig {
             max_concurrent: 20,
-            duration_secs: 3,
+            duration_secs: 30,
             tasks_per_instance: 5,
             activity_delay_ms: 10,
             orch_concurrency: *orch_conc,
@@ -69,7 +69,7 @@ pub async fn run_test_suite() -> Result<(), Box<dyn std::error::Error>> {
     for (orch_conc, worker_conc) in &concurrency_combos {
         let config = StressTestConfig {
             max_concurrent: 20,
-            duration_secs: 3,
+            duration_secs: 30,
             tasks_per_instance: 5,
             activity_delay_ms: 10,
             orch_concurrency: *orch_conc,
