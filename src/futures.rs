@@ -160,9 +160,15 @@ impl Future for DurableFuture {
                     Event::ActivityFailed {
                         event_id,
                         source_event_id,
-                        error,
+                        details,
                         ..
-                    } if *source_event_id == our_event_id => Some((*event_id, Err(error.clone()))),
+                    } if *source_event_id == our_event_id => {
+                        debug_assert!(
+                            matches!(details, crate::ErrorDetails::Application { .. }),
+                            "INVARIANT: Only Application errors should reach orchestration code, got: {details:?}"
+                        );
+                        Some((*event_id, Err(details.display_message())))
+                    }
                     _ => None,
                 });
 
@@ -545,9 +551,15 @@ impl Future for DurableFuture {
                     Event::SubOrchestrationFailed {
                         event_id,
                         source_event_id,
-                        error,
+                        details,
                         ..
-                    } if *source_event_id == our_event_id => Some((*event_id, Err(error.clone()))),
+                    } if *source_event_id == our_event_id => {
+                        debug_assert!(
+                            matches!(details, crate::ErrorDetails::Application { .. }),
+                            "INVARIANT: Only Application errors should reach orchestration code, got: {details:?}"
+                        );
+                        Some((*event_id, Err(details.display_message())))
+                    }
                     _ => None,
                 });
 

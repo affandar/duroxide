@@ -214,8 +214,15 @@ mod tests {
         let result = engine.execute_orchestration(handler, "test-input".to_string());
 
         match result {
-            TurnResult::Failed(error) => {
-                assert_eq!(error, "orchestration-error");
+            TurnResult::Failed(details) => {
+                assert!(matches!(
+                    details,
+                    crate::ErrorDetails::Application {
+                        kind: crate::AppErrorKind::OrchestrationFailed,
+                        message,
+                        ..
+                    } if message == "orchestration-error"
+                ));
             }
             _ => panic!("Expected TurnResult::Failed"),
         }

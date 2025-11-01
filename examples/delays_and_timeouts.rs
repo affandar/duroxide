@@ -128,8 +128,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         OrchestrationStatus::Completed { output } => {
             println!("✅ Delay example completed: {output}");
         }
-        OrchestrationStatus::Failed { error } => {
-            println!("❌ Delay example failed: {error}");
+        OrchestrationStatus::Failed { details } => {
+            println!("❌ Delay example failed: {}", details.display_message());
         }
         _ => println!("⏳ Delay example still running..."),
     }
@@ -155,8 +155,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         OrchestrationStatus::Completed { output } => {
             println!("✅ Timeout example completed: {output}");
         }
-        OrchestrationStatus::Failed { error } => {
-            println!("❌ Timeout example failed: {error}");
+        OrchestrationStatus::Failed { details } => {
+            println!("❌ Timeout example failed: {}", details.display_message());
         }
         _ => println!("⏳ Timeout example still running..."),
     }

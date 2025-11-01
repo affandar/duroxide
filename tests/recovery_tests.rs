@@ -90,7 +90,7 @@ where
         .unwrap()
     {
         runtime::OrchestrationStatus::Completed { output } => assert_eq!(output, "1234"),
-        runtime::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        runtime::OrchestrationStatus::Failed { details } => panic!("orchestration failed: {}", details.display_message()),
         _ => panic!("unexpected orchestration status"),
     }
 
@@ -359,7 +359,7 @@ async fn recovery_multiple_orchestrations_sqlite_provider() {
                 "TwoTimers" => assert_eq!(output, format!("twodone:{input}")),
                 _ => unreachable!(),
             },
-            OrchestrationStatus::Failed { error } => panic!("{inst} failed: {error}"),
+            OrchestrationStatus::Failed { details } => panic!("{inst} failed: {}", details.display_message()),
             OrchestrationStatus::Running | OrchestrationStatus::NotFound => unreachable!(),
         }
     }

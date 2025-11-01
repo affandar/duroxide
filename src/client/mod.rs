@@ -357,7 +357,7 @@ impl Client {
     ///     OrchestrationStatus::NotFound => println!("Instance not found"),
     ///     OrchestrationStatus::Running => println!("Still processing"),
     ///     OrchestrationStatus::Completed { output } => println!("Done: {}", output),
-    ///     OrchestrationStatus::Failed { error } => eprintln!("Error: {}", error),
+    ///     OrchestrationStatus::Failed { details } => eprintln!("Error: {}", details.display_message()),
     /// }
     /// # Ok(())
     /// # }
@@ -370,8 +370,8 @@ impl Client {
                 Event::OrchestrationCompleted { output, .. } => {
                     return OrchestrationStatus::Completed { output: output.clone() };
                 }
-                Event::OrchestrationFailed { error, .. } => {
-                    return OrchestrationStatus::Failed { error: error.clone() };
+                Event::OrchestrationFailed { details, .. } => {
+                    return OrchestrationStatus::Failed { details: details.clone() };
                 }
                 _ => {}
             }
@@ -467,7 +467,7 @@ impl Client {
         // quick path
         match self.get_orchestration_status(instance).await {
             OrchestrationStatus::Completed { output } => return Ok(OrchestrationStatus::Completed { output }),
-            OrchestrationStatus::Failed { error } => return Ok(OrchestrationStatus::Failed { error }),
+            OrchestrationStatus::Failed { details } => return Ok(OrchestrationStatus::Failed { details }),
             _ => {}
         }
         // poll with backoff
@@ -475,7 +475,7 @@ impl Client {
         while std::time::Instant::now() < deadline {
             match self.get_orchestration_status(instance).await {
                 OrchestrationStatus::Completed { output } => return Ok(OrchestrationStatus::Completed { output }),
-                OrchestrationStatus::Failed { error } => return Ok(OrchestrationStatus::Failed { error }),
+                OrchestrationStatus::Failed { details } => return Ok(OrchestrationStatus::Failed { details }),
                 _ => {
                     tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
                     delay_ms = (delay_ms.saturating_mul(2)).min(100);
@@ -496,7 +496,7 @@ impl Client {
                 Ok(v) => Ok(Ok(v)),
                 Err(e) => Err(crate::runtime::WaitError::Other(format!("decode failed: {e}"))),
             },
-            OrchestrationStatus::Failed { error } => Ok(Err(error)),
+            OrchestrationStatus::Failed { details } => Ok(Err(details.display_message())),
             _ => unreachable!("wait_for_orchestration returns only terminal or timeout"),
         }
     }

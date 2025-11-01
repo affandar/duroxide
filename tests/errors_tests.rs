@@ -75,7 +75,7 @@ async fn error_handling_compensation_on_ship_failure_with(store: StdArc<dyn Prov
         duroxide::OrchestrationStatus::Completed { output } => {
             assert!(output.starts_with("rolled_back:credited:"));
         }
-        duroxide::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        duroxide::OrchestrationStatus::Failed { details } => panic!("orchestration failed: {}", details.display_message()),
         _ => panic!("unexpected orchestration status"),
     }
     rt.shutdown(None).await;
@@ -125,7 +125,7 @@ async fn error_handling_success_path_with(store: StdArc<dyn Provider>) {
         .unwrap()
     {
         duroxide::OrchestrationStatus::Completed { output } => assert_eq!(output, "ok"),
-        duroxide::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        duroxide::OrchestrationStatus::Failed { details } => panic!("orchestration failed: {}", details.display_message()),
         _ => panic!("unexpected orchestration status"),
     }
     rt.shutdown(None).await;
@@ -178,7 +178,7 @@ async fn error_handling_early_debit_failure_with(store: StdArc<dyn Provider>) {
         duroxide::OrchestrationStatus::Completed { output } => {
             assert!(output.starts_with("debit_failed:"));
         }
-        duroxide::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        duroxide::OrchestrationStatus::Failed { details } => panic!("orchestration failed: {}", details.display_message()),
         _ => panic!("unexpected orchestration status"),
     }
     rt.shutdown(None).await;
@@ -196,7 +196,7 @@ async fn error_handling_early_debit_failure_fs() {
     error_handling_early_debit_failure_with(store).await;
 }
 
-// 5) Unknown activity handler: should fail with unregistered error
+// 5) Unknown activity handler: should fail with configuration error (turn aborts)
 async fn unknown_activity_fails_with(store: StdArc<dyn Provider>) {
     let activity_registry = ActivityRegistry::builder().build();
     let orchestration = |ctx: OrchestrationContext, _input: String| async move {
@@ -223,10 +223,19 @@ async fn unknown_activity_fails_with(store: StdArc<dyn Provider>) {
         .await
         .unwrap()
     {
-        duroxide::OrchestrationStatus::Completed { output } => {
-            assert!(output.starts_with("err=unregistered:Missing"));
+        duroxide::OrchestrationStatus::Failed { details } => {
+            assert!(matches!(
+                details,
+                duroxide::ErrorDetails::Configuration {
+                    kind: duroxide::ConfigErrorKind::UnregisteredActivity,
+                    resource,
+                    ..
+                } if resource == "Missing"
+            ));
         }
-        duroxide::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        duroxide::OrchestrationStatus::Completed { output } => {
+            panic!("expected configuration failure, got success: {output}");
+        }
         _ => panic!("unexpected orchestration status"),
     }
     rt.shutdown(None).await;
@@ -275,7 +284,7 @@ async fn event_after_completion_is_ignored_fs() {
         .unwrap()
     {
         duroxide::OrchestrationStatus::Completed { output } => assert_eq!(output, "done"),
-        duroxide::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        duroxide::OrchestrationStatus::Failed { details } => panic!("orchestration failed: {}", details.display_message()),
         _ => panic!("unexpected orchestration status"),
     }
     // Allow runtime to append OrchestrationCompleted terminal event
@@ -355,7 +364,7 @@ async fn event_before_subscription_after_start_is_ignored() {
         .unwrap()
     {
         duroxide::OrchestrationStatus::Completed { output } => assert_eq!(output, "late"),
-        duroxide::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        duroxide::OrchestrationStatus::Failed { details } => panic!("orchestration failed: {}", details.display_message()),
         _ => panic!("unexpected orchestration status"),
     }
     rt.shutdown(None).await;
@@ -393,7 +402,7 @@ async fn history_cap_exceeded_with(store: StdArc<dyn Provider>) {
         .wait_for_orchestration("inst-cap-exceed", std::time::Duration::from_secs(10))
         .await
     {
-        Ok(duroxide::OrchestrationStatus::Failed { error: _ }) => {} // Expected failure due to history capacity
+        Ok(duroxide::OrchestrationStatus::Failed { details: _ }) => {} // Expected failure due to history capacity
         Ok(duroxide::OrchestrationStatus::Completed { output }) => {
             panic!("expected failure due to history capacity, got: {output}")
         }
@@ -443,7 +452,7 @@ async fn orchestration_immediate_fail_fs() {
         .await
         .unwrap()
     {
-        duroxide::OrchestrationStatus::Failed { error: _ } => {} // Expected failure
+        duroxide::OrchestrationStatus::Failed { details: _ } => {} // Expected failure
         duroxide::OrchestrationStatus::Completed { output } => panic!("expected failure, got: {output}"),
         _ => panic!("unexpected orchestration status"),
     }
@@ -462,7 +471,16 @@ async fn orchestration_immediate_fail_fs() {
     ));
     // Status API should report Failed with same error
     match client.get_orchestration_status("inst-fail-imm").await {
-        duroxide::OrchestrationStatus::Failed { error } => assert_eq!(error, "oops"),
+        duroxide::OrchestrationStatus::Failed { details } => {
+            assert!(matches!(
+                details,
+                duroxide::ErrorDetails::Application {
+                    kind: duroxide::AppErrorKind::OrchestrationFailed,
+                    message,
+                    ..
+                } if message == "oops"
+            ));
+        }
         other => panic!("unexpected status: {other:?}"),
     }
     rt.shutdown(None).await;
@@ -495,7 +513,16 @@ async fn orchestration_propagates_activity_failure_fs() {
         .await
         .unwrap()
     {
-        duroxide::OrchestrationStatus::Failed { error } => assert_eq!(error, "bad"),
+        duroxide::OrchestrationStatus::Failed { details } => {
+            assert!(matches!(
+                details,
+                duroxide::ErrorDetails::Application {
+                    kind: duroxide::AppErrorKind::OrchestrationFailed,
+                    message,
+                    ..
+                } if message == "bad"
+            ));
+        }
         duroxide::OrchestrationStatus::Completed { output } => panic!("expected failure, got: {output}"),
         _ => panic!("unexpected orchestration status"),
     }
@@ -507,7 +534,16 @@ async fn orchestration_propagates_activity_failure_fs() {
         duroxide::Event::OrchestrationFailed { .. }
     ));
     match client.get_orchestration_status("inst-fail-prop").await {
-        duroxide::OrchestrationStatus::Failed { error } => assert_eq!(error, "bad"),
+        duroxide::OrchestrationStatus::Failed { details } => {
+            assert!(matches!(
+                details,
+                duroxide::ErrorDetails::Application {
+                    kind: duroxide::AppErrorKind::OrchestrationFailed,
+                    message,
+                    ..
+                } if message == "bad"
+            ));
+        }
         other => panic!("unexpected status: {other:?}"),
     }
     rt.shutdown(None).await;
@@ -544,7 +580,7 @@ async fn typed_activity_decode_error_fs() {
         .unwrap();
     let output = match status {
         duroxide::OrchestrationStatus::Completed { output } => output,
-        duroxide::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        duroxide::OrchestrationStatus::Failed { details } => panic!("orchestration failed: {}", details.display_message()),
         _ => panic!("unexpected orchestration status"),
     };
     assert_eq!(output, "ok");

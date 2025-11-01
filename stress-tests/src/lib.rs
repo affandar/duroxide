@@ -53,6 +53,12 @@ pub struct StressTestResult {
     pub completed: usize,
     /// Number of orchestrations that failed
     pub failed: usize,
+    /// Number of orchestrations that failed due to infrastructure errors
+    pub failed_infrastructure: usize,
+    /// Number of orchestrations that failed due to configuration errors
+    pub failed_configuration: usize,
+    /// Number of orchestrations that failed due to application errors
+    pub failed_application: usize,
     /// Total test duration
     pub total_time: std::time::Duration,
     /// Orchestration throughput (orchestrations per second)
@@ -104,6 +110,9 @@ pub async fn run_stress_test(
     let launched = Arc::new(tokio::sync::Mutex::new(0_usize));
     let completed = Arc::new(tokio::sync::Mutex::new(0_usize));
     let failed = Arc::new(tokio::sync::Mutex::new(0_usize));
+    let failed_infrastructure = Arc::new(tokio::sync::Mutex::new(0_usize));
+    let failed_configuration = Arc::new(tokio::sync::Mutex::new(0_usize));
+    let failed_application = Arc::new(tokio::sync::Mutex::new(0_usize));
     let active = Arc::new(tokio::sync::Mutex::new(0_usize));
 
     // Test input
@@ -142,6 +151,9 @@ pub async fn run_stress_test(
         let input_clone = input.clone();
         let completed_clone = Arc::clone(&completed);
         let failed_clone = Arc::clone(&failed);
+        let failed_infrastructure_clone = Arc::clone(&failed_infrastructure);
+        let failed_configuration_clone = Arc::clone(&failed_configuration);
+        let failed_application_clone = Arc::clone(&failed_application);
         let active_clone = Arc::clone(&active);
 
         tokio::spawn(async move {
@@ -165,9 +177,28 @@ pub async fn run_stress_test(
                 Ok(duroxide::OrchestrationStatus::Completed { .. }) => {
                     *completed_clone.lock().await += 1;
                 }
-                Ok(duroxide::OrchestrationStatus::Failed { error }) => {
-                    tracing::warn!("Orchestration {} failed: {}", instance, error);
+                Ok(duroxide::OrchestrationStatus::Failed { details }) => {
+                    let category = details.category();
+                    tracing::warn!(
+                        category = category,
+                        error = %details.display_message(),
+                        "Orchestration {} failed", 
+                        instance
+                    );
+                    
                     *failed_clone.lock().await += 1;
+                    
+                    match details {
+                        duroxide::ErrorDetails::Infrastructure { .. } => {
+                            *failed_infrastructure_clone.lock().await += 1;
+                        }
+                        duroxide::ErrorDetails::Configuration { .. } => {
+                            *failed_configuration_clone.lock().await += 1;
+                        }
+                        duroxide::ErrorDetails::Application { .. } => {
+                            *failed_application_clone.lock().await += 1;
+                        }
+                    }
                 }
                 Err(e) => {
                     tracing::warn!("Wait error for {}: {:?}", instance, e);
@@ -211,6 +242,9 @@ pub async fn run_stress_test(
     let final_launched = *launched.lock().await;
     let final_completed = *completed.lock().await;
     let final_failed = *failed.lock().await;
+    let final_failed_infrastructure = *failed_infrastructure.lock().await;
+    let final_failed_configuration = *failed_configuration.lock().await;
+    let final_failed_application = *failed_application.lock().await;
 
     let orch_throughput = final_completed as f64 / total_time.as_secs_f64();
     let activity_throughput = (final_completed * config.tasks_per_instance) as f64 / total_time.as_secs_f64();
@@ -223,6 +257,9 @@ pub async fn run_stress_test(
         launched: final_launched,
         completed: final_completed,
         failed: final_failed,
+        failed_infrastructure: final_failed_infrastructure,
+        failed_configuration: final_failed_configuration,
+        failed_application: final_failed_application,
         total_time,
         orch_throughput,
         activity_throughput,
@@ -234,7 +271,12 @@ pub async fn run_stress_test(
     info!("Total time: {:?}", result.total_time);
     info!("Launched: {}", result.launched);
     info!("Completed: {}", result.completed);
-    info!("Failed: {}", result.failed);
+    info!("Failed: {} (infra: {}, config: {}, app: {})", 
+        result.failed, 
+        result.failed_infrastructure, 
+        result.failed_configuration, 
+        result.failed_application
+    );
     info!("Success rate: {:.2}%", result.success_rate());
     info!("Throughput: {:.2} orchestrations/sec", result.orch_throughput);
     info!("Activity throughput: {:.2} activities/sec", result.activity_throughput);
@@ -247,18 +289,21 @@ pub async fn run_stress_test(
 pub fn print_comparison_table(results: &[(String, String, StressTestResult)]) {
     info!("\n=== Comparison Table ===");
     info!(
-        "{:<20} {:<10} {:<10} {:<10} {:<10} {:<15} {:<15} {:<15}",
-        "Provider", "Config", "Completed", "Failed", "Success %", "Orch/sec", "Activity/sec", "Avg Latency"
+        "{:<20} {:<10} {:<10} {:<10} {:<8} {:<8} {:<8} {:<10} {:<15} {:<15} {:<15}",
+        "Provider", "Config", "Completed", "Failed", "Infra", "Config", "App", "Success %", "Orch/sec", "Activity/sec", "Avg Latency"
     );
-    info!("{}", "-".repeat(120));
+    info!("{}", "-".repeat(150));
 
     for (provider, config, result) in results {
         info!(
-            "{:<20} {:<10} {:<10} {:<10} {:<10.2} {:<15.2} {:<15.2} {:<15.2}ms",
+            "{:<20} {:<10} {:<10} {:<10} {:<8} {:<8} {:<8} {:<10.2} {:<15.2} {:<15.2} {:<15.2}ms",
             provider,
             config,
             result.completed,
             result.failed,
+            result.failed_infrastructure,
+            result.failed_configuration,
+            result.failed_application,
             result.success_rate(),
             result.orch_throughput,
             result.activity_throughput,

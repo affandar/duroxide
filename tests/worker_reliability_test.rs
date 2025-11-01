@@ -121,8 +121,8 @@ async fn activity_reliability_after_crash_before_completion_enqueue() {
             assert_eq!(output, "Activity result: Processed: test-data");
             println!("✅ Orchestration completed successfully after restart");
         }
-        runtime::OrchestrationStatus::Failed { error } => {
-            panic!("Orchestration failed after restart: {error}");
+        runtime::OrchestrationStatus::Failed { details } => {
+            panic!("Orchestration failed after restart: {}", details.display_message());
         }
         status => {
             panic!("Unexpected orchestration status after restart: {status:?}");
@@ -298,8 +298,8 @@ async fn multiple_activities_reliability_after_crash() {
             println!("✅ All activities completed after recovery");
             assert!(output.contains("All activities completed"));
         }
-        runtime::OrchestrationStatus::Failed { error } => {
-            panic!("Orchestration failed: {error}");
+        runtime::OrchestrationStatus::Failed { details } => {
+            panic!("Orchestration failed: {}", details.display_message());
         }
         status => {
             panic!("Unexpected status: {status:?}");

@@ -190,8 +190,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("✅ Approval workflow completed!");
             println!("Result: {output}");
         }
-        duroxide::OrchestrationStatus::Failed { error } => {
-            println!("❌ Workflow failed: {error}");
+        duroxide::OrchestrationStatus::Failed { details } => {
+            println!("❌ Workflow failed: {}", details.display_message());
         }
         _ => {
             println!("⏳ Workflow still running");

@@ -112,7 +112,7 @@ async fn concurrent_orchestrations_different_activities_with(store: StdArc<dyn P
 
     let out1 = match out1_result.unwrap() {
         duroxide::OrchestrationStatus::Completed { output } => Ok(output),
-        duroxide::OrchestrationStatus::Failed { error } => Err(error),
+        duroxide::OrchestrationStatus::Failed { details } => Err(details.display_message()),
         _ => panic!("unexpected orchestration status"),
     };
 
@@ -130,7 +130,7 @@ async fn concurrent_orchestrations_different_activities_with(store: StdArc<dyn P
 
     let out2 = match out2_result.unwrap() {
         duroxide::OrchestrationStatus::Completed { output } => Ok(output),
-        duroxide::OrchestrationStatus::Failed { error } => Err(error),
+        duroxide::OrchestrationStatus::Failed { details } => Err(details.display_message()),
         _ => panic!("unexpected orchestration status"),
     };
 
@@ -277,7 +277,7 @@ async fn concurrent_orchestrations_same_activities_with(store: StdArc<dyn Provid
         .unwrap()
     {
         duroxide::OrchestrationStatus::Completed { output } => assert_eq!(output, "o1:a=11;evt=P1"),
-        duroxide::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        duroxide::OrchestrationStatus::Failed { details } => panic!("orchestration failed: {}", details.display_message()),
         _ => panic!("unexpected orchestration status"),
     }
 
@@ -287,7 +287,7 @@ async fn concurrent_orchestrations_same_activities_with(store: StdArc<dyn Provid
         .unwrap()
     {
         duroxide::OrchestrationStatus::Completed { output } => assert_eq!(output, "o2:a=21;evt=P2"),
-        duroxide::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        duroxide::OrchestrationStatus::Failed { details } => panic!("orchestration failed: {}", details.display_message()),
         _ => panic!("unexpected orchestration status"),
     }
 
@@ -405,7 +405,7 @@ async fn single_orchestration_with_join_test() {
             println!("✅ Single orch completed: {output}");
             assert_eq!(output, "o1:a=11;evt=P1");
         }
-        duroxide::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        duroxide::OrchestrationStatus::Failed { details } => panic!("orchestration failed: {}", details.display_message()),
         _ => panic!("unexpected orchestration status"),
     }
 

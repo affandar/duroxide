@@ -19,7 +19,7 @@ impl Runtime {
         &self,
         orchestration_name: &str,
         history_mgr: &crate::runtime::state_helpers::HistoryManager,
-    ) -> Result<Arc<dyn OrchestrationHandler>, String> {
+    ) -> Result<Arc<dyn OrchestrationHandler>, crate::ErrorDetails> {
         // Get version from history (includes delta for new instances)
         let version_from_history = history_mgr.version();
 
@@ -38,9 +38,19 @@ impl Runtime {
 
         handler_opt.ok_or_else(|| {
             if let Some(v) = version_from_history {
-                format!("canceled: missing version {orchestration_name}@{v}")
+                crate::ErrorDetails::Configuration {
+                    kind: crate::ConfigErrorKind::MissingVersion {
+                        requested_version: v.clone(),
+                    },
+                    resource: orchestration_name.to_string(),
+                    message: None,
+                }
             } else {
-                format!("unregistered:{orchestration_name}")
+                crate::ErrorDetails::Configuration {
+                    kind: crate::ConfigErrorKind::UnregisteredOrchestration,
+                    resource: orchestration_name.to_string(),
+                    message: None,
+                }
             }
         })
     }
@@ -100,7 +110,7 @@ impl Runtime {
                     history_mgr.delta().to_vec(),
                     worker_items,
                     orchestrator_items,
-                    Err(error),
+                    Err(error.display_message()),
                 );
             }
         };
@@ -247,12 +257,12 @@ impl Runtime {
 
                 Ok(output)
             }
-            TurnResult::Failed(error) => {
+            TurnResult::Failed(details) => {
                 // Honor detached orchestration starts at terminal state
                 enqueue_detached_from_pending(turn.pending_actions());
 
                 // Add failure event
-                history_mgr.append_failed(error.clone());
+                history_mgr.append_failed(details.clone());
 
                 // Notify parent if this is a sub-orchestration
                 if let Some((parent_instance, parent_id)) = parent_link {
@@ -261,11 +271,11 @@ impl Runtime {
                         parent_instance: parent_instance.clone(),
                         parent_execution_id: self.get_execution_id_for_instance(&parent_instance).await,
                         parent_id,
-                        error: error.clone(),
+                        details: details.clone(),
                     });
                 }
 
-                Err(error)
+                Err(details.display_message())
             }
             TurnResult::ContinueAsNew { input, version } => {
                 // Add ContinuedAsNew terminal event to history
@@ -286,8 +296,14 @@ impl Runtime {
                 Ok("continued as new".to_string())
             }
             TurnResult::Cancelled(reason) => {
-                let error = format!("canceled: {reason}");
-                history_mgr.append_failed(error.clone());
+                let details = crate::ErrorDetails::Application {
+                    kind: crate::AppErrorKind::Cancelled {
+                        reason: reason.clone(),
+                    },
+                    message: String::new(),
+                    retryable: false,
+                };
+                history_mgr.append_failed(details.clone());
 
                 // Propagate cancellation to children
                 let full_history = history_mgr.full_history();
@@ -300,11 +316,11 @@ impl Runtime {
                         parent_instance: parent_instance.clone(),
                         parent_execution_id: self.get_execution_id_for_instance(&parent_instance).await,
                         parent_id,
-                        error: error.clone(),
+                        details: details.clone(),
                     });
                 }
 
-                Err(error)
+                Err(details.display_message())
             }
         };
 

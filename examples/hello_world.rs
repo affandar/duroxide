@@ -68,8 +68,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("✅ Orchestration completed successfully!");
             println!("Result: {output}");
         }
-        duroxide::OrchestrationStatus::Failed { error } => {
-            println!("❌ Orchestration failed: {error}");
+        duroxide::OrchestrationStatus::Failed { details } => {
+            println!("❌ Orchestration failed: {}", details.display_message());
         }
         _ => {
             println!("⏳ Orchestration still running or in unexpected state");
