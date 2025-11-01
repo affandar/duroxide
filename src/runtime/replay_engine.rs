@@ -392,14 +392,31 @@ impl ReplayEngine {
         let mut working_history = self.baseline_history.clone();
         working_history.extend(self.history_delta.clone());
 
+        // Extract orchestration metadata from history
+        let (orchestration_name, orchestration_version) = working_history.iter().find_map(|e| {
+            if let Event::OrchestrationStarted { name, version, .. } = e {
+                Some((Some(name.clone()), Some(version.clone())))
+            } else {
+                None
+            }
+        }).unwrap_or((None, None));
+
         // Run orchestration with unified cursor model
         let execution_id = self.get_current_execution_id();
+        let instance_id = self.instance.clone();
         let run_result = catch_unwind(AssertUnwindSafe(|| {
-            crate::run_turn_with_status(working_history, execution_id, move |ctx| {
-                let h = handler.clone();
-                let inp = input.clone();
-                async move { h.invoke(ctx, inp).await }
-            })
+            crate::run_turn_with_status(
+                working_history,
+                execution_id,
+                instance_id,
+                orchestration_name,
+                orchestration_version,
+                move |ctx| {
+                    let h = handler.clone();
+                    let inp = input.clone();
+                    async move { h.invoke(ctx, inp).await }
+                }
+            )
         }));
 
         let (updated_history, decisions, output_opt, nondet_flag) = match run_result {

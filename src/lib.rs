@@ -639,13 +639,22 @@ struct CtxInner {
 
     // Execution metadata
     execution_id: u64,
+    instance_id: String,
+    orchestration_name: Option<String>,
+    orchestration_version: Option<String>,
     logging_enabled_this_poll: bool,
     // When set, indicates a nondeterminism condition detected by futures during polling
     nondeterminism_error: Option<String>,
 }
 
 impl CtxInner {
-    fn new(history: Vec<Event>, execution_id: u64) -> Self {
+    fn new(
+        history: Vec<Event>,
+        execution_id: u64,
+        instance_id: String,
+        orchestration_name: Option<String>,
+        orchestration_version: Option<String>,
+    ) -> Self {
         // Compute next event_id based on maximum event_id in history
         // (skip event_id=0 which are placeholders)
         let next_event_id = history
@@ -664,6 +673,9 @@ impl CtxInner {
             consumed_completions: Default::default(),
             consumed_external_events: Default::default(),
             execution_id,
+            instance_id,
+            orchestration_name,
+            orchestration_version,
             logging_enabled_this_poll: false,
             nondeterminism_error: None,
         }
@@ -693,9 +705,21 @@ pub struct OrchestrationContext {
 
 impl OrchestrationContext {
     /// Construct a new context from an existing history vector.
-    pub fn new(history: Vec<Event>, execution_id: u64) -> Self {
+    pub fn new(
+        history: Vec<Event>,
+        execution_id: u64,
+        instance_id: String,
+        orchestration_name: Option<String>,
+        orchestration_version: Option<String>,
+    ) -> Self {
         Self {
-            inner: Arc::new(Mutex::new(CtxInner::new(history, execution_id))),
+            inner: Arc::new(Mutex::new(CtxInner::new(
+                history,
+                execution_id,
+                instance_id,
+                orchestration_name,
+                orchestration_version,
+            ))),
         }
     }
 
@@ -713,8 +737,39 @@ impl OrchestrationContext {
     }
     // log_buffer removed - not used
 
-    /// Emit a structured trace entry.
+    /// Emit a structured trace entry with automatic context correlation.
+    ///
     /// Creates a system call event for deterministic replay and logs to tracing.
+    /// The log entry automatically includes correlation fields:
+    /// - `instance_id` - The orchestration instance identifier
+    /// - `execution_id` - The current execution number
+    /// - `orchestration_name` - Name of the orchestration
+    /// - `orchestration_version` - Semantic version
+    ///
+    /// # Determinism
+    ///
+    /// This method is replay-safe: logs are only emitted on first execution,
+    /// not during replay. A `SystemCall` event is created in history to ensure
+    /// deterministic replay behavior.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use duroxide::OrchestrationContext;
+    /// # async fn example(ctx: OrchestrationContext) {
+    /// ctx.trace("INFO", "Processing started");
+    /// ctx.trace("WARN", format!("Retry attempt: {}", 3));
+    /// ctx.trace("ERROR", "Payment validation failed");
+    /// # }
+    /// ```
+    ///
+    /// # Output
+    ///
+    /// ```text
+    /// 2024-10-30T10:15:23.456Z INFO duroxide::orchestration [order-123] Processing started
+    /// ```
+    ///
+    /// All logs include instance_id, execution_id, orchestration_name for correlation.
     pub fn trace(&self, level: impl Into<String>, message: impl Into<String>) {
         let level_str = level.into();
         let msg = message.into();
@@ -729,18 +784,68 @@ impl OrchestrationContext {
     }
 
     /// Convenience wrapper for INFO level tracing.
+    ///
+    /// Logs with INFO level and includes instance context automatically.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use duroxide::OrchestrationContext;
+    /// # async fn example(ctx: OrchestrationContext) {
+    /// ctx.trace_info("Order validation successful");
+    /// ctx.trace_info(format!("Processing {} items", 42));
+    /// # }
+    /// ```
     pub fn trace_info(&self, message: impl Into<String>) {
         self.trace("INFO", message.into())
     }
+
     /// Convenience wrapper for WARN level tracing.
+    ///
+    /// Logs with WARN level and includes instance context automatically.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use duroxide::OrchestrationContext;
+    /// # async fn example(ctx: OrchestrationContext) {
+    /// ctx.trace_warn("Retrying failed operation");
+    /// ctx.trace_warn(format!("Attempt {}/5", 3));
+    /// # }
+    /// ```
     pub fn trace_warn(&self, message: impl Into<String>) {
         self.trace("WARN", message.into())
     }
     /// Convenience wrapper for ERROR level tracing.
+    ///
+    /// Logs with ERROR level and includes instance context automatically.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use duroxide::OrchestrationContext;
+    /// # async fn example(ctx: OrchestrationContext) {
+    /// ctx.trace_error("Payment processing failed");
+    /// ctx.trace_error(format!("Critical error: {}", "timeout"));
+    /// # }
+    /// ```
     pub fn trace_error(&self, message: impl Into<String>) {
         self.trace("ERROR", message.into())
     }
+
     /// Convenience wrapper for DEBUG level tracing.
+    ///
+    /// Logs with DEBUG level and includes instance context automatically.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use duroxide::OrchestrationContext;
+    /// # async fn example(ctx: OrchestrationContext) {
+    /// ctx.trace_debug("Detailed state information");
+    /// ctx.trace_debug(format!("Variable value: {:?}", 42));
+    /// # }
+    /// ```
     pub fn trace_debug(&self, message: impl Into<String>) {
         self.trace("DEBUG", message.into())
     }
@@ -1250,12 +1355,21 @@ pub type TurnResult<O> = (Vec<Event>, Vec<Action>, Option<O>);
 pub fn run_turn_with<O, F>(
     history: Vec<Event>,
     execution_id: u64,
+    instance_id: String,
+    orchestration_name: Option<String>,
+    orchestration_version: Option<String>,
     orchestrator: impl Fn(OrchestrationContext) -> F,
 ) -> (Vec<Event>, Vec<Action>, Option<O>)
 where
     F: Future<Output = O>,
 {
-    let ctx = OrchestrationContext::new(history, execution_id);
+    let ctx = OrchestrationContext::new(
+        history,
+        execution_id,
+        instance_id,
+        orchestration_name,
+        orchestration_version,
+    );
     ctx.inner.lock().unwrap().logging_enabled_this_poll = false;
     let mut fut = orchestrator(ctx.clone());
     match poll_once(&mut fut) {
@@ -1279,12 +1393,21 @@ where
 pub fn run_turn_with_status<O, F>(
     history: Vec<Event>,
     execution_id: u64,
+    instance_id: String,
+    orchestration_name: Option<String>,
+    orchestration_version: Option<String>,
     orchestrator: impl Fn(OrchestrationContext) -> F,
 ) -> (Vec<Event>, Vec<Action>, Option<O>, Option<String>)
 where
     F: Future<Output = O>,
 {
-    let ctx = OrchestrationContext::new(history, execution_id);
+    let ctx = OrchestrationContext::new(
+        history,
+        execution_id,
+        instance_id,
+        orchestration_name,
+        orchestration_version,
+    );
     ctx.inner.lock().unwrap().logging_enabled_this_poll = false;
     let mut fut = orchestrator(ctx.clone());
     match poll_once(&mut fut) {
@@ -1304,10 +1427,17 @@ where
     }
 }
 
-/// Simple run_turn for tests. Uses default execution_id=1.
+/// Simple run_turn for tests. Uses default execution_id=1 and placeholder instance metadata.
 pub fn run_turn<O, F>(history: Vec<Event>, orchestrator: impl Fn(OrchestrationContext) -> F) -> TurnResult<O>
 where
     F: Future<Output = O>,
 {
-    run_turn_with(history, 1, orchestrator)
+    run_turn_with(
+        history,
+        1,
+        "test-instance".to_string(),
+        Some("TestOrch".to_string()),
+        Some("1.0.0".to_string()),
+        orchestrator,
+    )
 }

@@ -20,6 +20,7 @@ Getting started samples
 - **Advanced patterns**: Check `tests/e2e_samples.rs` for comprehensive usage patterns
 - **Provider implementation**: See `docs/provider-implementation-guide.md` for building custom providers
 - **Provider testing**: See `docs/provider-testing-guide.md` for testing custom providers
+- **Observability**: See `docs/observability-guide.md` for structured logging and metrics
 
 What it is
 - Deterministic orchestration core with correlated event IDs and replay safety
@@ -161,6 +162,14 @@ Stress testing
 - Run with result tracking: `./run-stress-tests.sh --track` (saves to `stress-test-results.md`)
 - Tracked results include commit history, performance metrics, and rolling averages
 - See `stress-tests/README.md` for details
+
+Observability
+- Enable structured logging: `RuntimeOptions { observability: ObservabilityConfig { log_format: LogFormat::Compact, ... }, ... }`
+- All logs include `instance_id`, `execution_id`, `orchestration_name`, `activity_name` for correlation
+- Optional OpenTelemetry metrics via `observability` feature flag
+- Run `cargo run --example with_observability` to see structured logging in action
+- Run `cargo run --example metrics_cli` to see observability dashboard
+- See `docs/observability-guide.md` for complete guide
 
 Notes
 - Import as `duroxide` in Rust source.
