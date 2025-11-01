@@ -154,11 +154,11 @@ impl HistoryManager {
     }
 
     /// Append an OrchestrationFailed event with the next event_id
-    pub fn append_failed(&mut self, error: String) {
+    pub fn append_failed(&mut self, details: crate::ErrorDetails) {
         let next_id = self.next_event_id();
         self.append(Event::OrchestrationFailed {
             event_id: next_id,
-            error,
+            details,
         });
     }
 
@@ -442,7 +442,11 @@ mod tests {
             },
             Event::OrchestrationFailed {
                 event_id: 2,
-                error: "boom".to_string(),
+                details: crate::ErrorDetails::Application {
+                    kind: crate::AppErrorKind::OrchestrationFailed,
+                    message: "boom".to_string(),
+                    retryable: false,
+                },
             },
         ];
 

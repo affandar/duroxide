@@ -201,7 +201,11 @@ async fn test_execution_status_failed() {
             execution_id,
             vec![Event::OrchestrationFailed {
                 event_id: 1,
-                error: "Error occurred".to_string(),
+                details: duroxide::ErrorDetails::Application {
+                    kind: duroxide::AppErrorKind::OrchestrationFailed,
+                    message: "Error occurred".to_string(),
+                    retryable: false,
+                },
             }],
             vec![],
             vec![],

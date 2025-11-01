@@ -52,10 +52,15 @@ pub mod replay_engine;
 /// High-level orchestration status derived from history.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OrchestrationStatus {
+    /// Instance does not exist
     NotFound,
+    /// Instance is currently executing
     Running,
+    /// Instance completed successfully with output
     Completed { output: String },
-    Failed { error: String },
+    /// Instance failed with structured error details.
+    /// Use `details.category()` to distinguish infrastructure/configuration/application errors.
+    Failed { details: crate::ErrorDetails },
 }
 
 /// Error type returned by orchestration wait helpers.
@@ -153,9 +158,9 @@ impl Runtime {
                     metadata.output = Some(output.clone());
                     break;
                 }
-                Event::OrchestrationFailed { error, .. } => {
+                Event::OrchestrationFailed { details, .. } => {
                     metadata.status = Some("Failed".to_string());
-                    metadata.output = Some(error.clone());
+                    metadata.output = Some(details.display_message());
                     break;
                 }
                 Event::OrchestrationContinuedAsNew { input, .. } => {
@@ -437,7 +442,11 @@ impl Runtime {
                     parent_id: workitem_reader.parent_id,
                 });
 
-                history_mgr.append_failed(format!("unregistered:{}", &workitem_reader.orchestration_name));
+                history_mgr.append_failed(crate::ErrorDetails::Configuration {
+                    kind: crate::ConfigErrorKind::UnregisteredOrchestration,
+                    resource: workitem_reader.orchestration_name.clone(),
+                    message: None,
+                });
                 return (worker_items, orchestrator_items);
             };
 
@@ -578,6 +587,7 @@ impl Runtime {
                                                     .await
                                             }
                                             Err(error) => {
+                                                // Application error from activity
                                                 rt.history_store
                                                     .ack_worker(
                                                         &token,
@@ -585,13 +595,18 @@ impl Runtime {
                                                             instance: instance.clone(),
                                                             execution_id,
                                                             id,
-                                                            error,
+                                                            details: crate::ErrorDetails::Application {
+                                                                kind: crate::AppErrorKind::ActivityFailed,
+                                                                message: error,
+                                                                retryable: false,
+                                                            },
                                                         },
                                                     )
                                                     .await
                                             }
                                         }
                                     } else {
+                                        // Configuration error - activity not registered
                                         rt.history_store
                                             .ack_worker(
                                                 &token,
@@ -599,7 +614,11 @@ impl Runtime {
                                                     instance: instance.clone(),
                                                     execution_id,
                                                     id,
-                                                    error: format!("unregistered:{name}"),
+                                                    details: crate::ErrorDetails::Configuration {
+                                                        kind: crate::ConfigErrorKind::UnregisteredActivity,
+                                                        resource: name.clone(),
+                                                        message: None,
+                                                    },
                                                 },
                                             )
                                             .await

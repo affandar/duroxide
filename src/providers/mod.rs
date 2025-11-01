@@ -194,7 +194,7 @@ pub enum WorkItem {
         instance: String,
         execution_id: u64,
         id: u64, // source_event_id referencing ActivityScheduled
-        error: String,
+        details: crate::ErrorDetails,
     },
 
     /// Timer fired (goes to orchestrator queue with delayed visibility)
@@ -227,14 +227,14 @@ pub enum WorkItem {
         result: String,
     },
 
-    /// Sub-orchestration failed (goes to parent's orchestrator queue)
+    /// Sub-orchestration failed (goes to parent's orchestration queue)
     /// - Routes to `parent_instance`, not the child
     /// - `parent_id`: event_id from parent's SubOrchestrationScheduled event
     SubOrchFailed {
         parent_instance: String,
         parent_execution_id: u64,
         parent_id: u64, // source_event_id referencing SubOrchestrationScheduled
-        error: String,
+        details: crate::ErrorDetails,
     },
 
     /// Request orchestration cancellation (goes to orchestrator queue)

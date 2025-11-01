@@ -129,7 +129,7 @@ async fn runtime_duplicate_orchestration_deduped_single_execution() {
         .unwrap()
     {
         duroxide::OrchestrationStatus::Completed { output } => assert_eq!(output, "ok"),
-        duroxide::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        duroxide::OrchestrationStatus::Failed { details } => panic!("orchestration failed: {}", details.display_message()),
         _ => panic!("unexpected orchestration status"),
     }
 
@@ -247,7 +247,7 @@ async fn orchestration_status_apis() {
         .unwrap()
     {
         duroxide::OrchestrationStatus::Completed { output } => assert_eq!(output, "ok"),
-        duroxide::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        duroxide::OrchestrationStatus::Failed { details } => panic!("orchestration failed: {}", details.display_message()),
         _ => panic!("unexpected orchestration status"),
     }
     let s2 = client.get_orchestration_status(inst_running).await;
@@ -265,14 +265,14 @@ async fn orchestration_status_apis() {
         .await
         .unwrap()
     {
-        duroxide::OrchestrationStatus::Failed { error: _ } => {} // Expected failure
+        duroxide::OrchestrationStatus::Failed { details: _ } => {} // Expected failure
         duroxide::OrchestrationStatus::Completed { output } => panic!("expected failure, got: {output}"),
         _ => panic!("unexpected orchestration status"),
     }
     let s3 = client.get_orchestration_status(inst_fail).await;
     assert!(matches!(s3, OrchestrationStatus::Failed { .. }));
-    if let OrchestrationStatus::Failed { error } = s3 {
-        assert_eq!(error, "boom");
+    if let OrchestrationStatus::Failed { details } = s3 {
+        assert_eq!(details.display_message(), "boom");
     }
 
     rt.shutdown(None).await;

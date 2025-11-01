@@ -1,5 +1,15 @@
 ## Durable Task Rust Core – TODOs
 
+### Error Handling
+
+- [ ] **Infrastructure error handling from provider operations**
+  - Currently: Provider errors (append/enqueue failures) cause retries via lock expiration
+  - Future: Implement visibility timeout to push failed instances to back of queue
+  - Related: May need abandon with delay for persistent infrastructure failures
+  - Priority: Medium (current retry mechanism works but could be more sophisticated)
+
+### Features
+
 - Drop crates/dependencies that aren't needed
 - Add orchestrator functions
 - Macros for syntactic sugar [DESIGNED - see docs/proposals/MACRO-FINAL-DESIGN.md]

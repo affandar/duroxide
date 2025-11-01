@@ -149,8 +149,15 @@ async fn test_status_failed() {
         .unwrap();
 
     match status {
-        OrchestrationStatus::Failed { error } => {
-            assert_eq!(error, "intentional failure");
+        OrchestrationStatus::Failed { details } => {
+            assert!(matches!(
+                details,
+                duroxide::ErrorDetails::Application {
+                    kind: duroxide::AppErrorKind::OrchestrationFailed,
+                    message,
+                    ..
+                } if message == "intentional failure"
+            ));
         }
         other => panic!("Expected Failed, got: {other:?}"),
     }
@@ -158,8 +165,15 @@ async fn test_status_failed() {
     // Check status again (should still be Failed)
     let status = client.get_orchestration_status("test-failed").await;
     match status {
-        OrchestrationStatus::Failed { error } => {
-            assert_eq!(error, "intentional failure");
+        OrchestrationStatus::Failed { details } => {
+            assert!(matches!(
+                details,
+                duroxide::ErrorDetails::Application {
+                    kind: duroxide::AppErrorKind::OrchestrationFailed,
+                    message,
+                    ..
+                } if message == "intentional failure"
+            ));
         }
         other => panic!("Expected Failed on re-check, got: {other:?}"),
     }
@@ -210,8 +224,8 @@ async fn test_status_after_continue_as_new() {
                 final_status = Some(output);
                 break;
             }
-            OrchestrationStatus::Failed { error } => {
-                panic!("Orchestration failed unexpectedly: {error}");
+            OrchestrationStatus::Failed { details } => {
+                panic!("Orchestration failed unexpectedly: {}", details.display_message());
             }
             _ => {
                 // Still running or intermediate execution
@@ -279,14 +293,16 @@ async fn test_status_cancelled() {
         .await
         .unwrap();
 
-    // Cancellation results in Failed status with "canceled:" prefix
+    // Cancellation results in Failed status with Cancelled error
     match status {
-        OrchestrationStatus::Failed { error } => {
-            assert!(
-                error.starts_with("canceled:"),
-                "Cancelled orchestration should have error starting with 'canceled:', got: {error}"
-            );
-            assert!(error.contains("test requested cancellation"));
+        OrchestrationStatus::Failed { details } => {
+            assert!(matches!(
+                &details,
+                duroxide::ErrorDetails::Application {
+                    kind: duroxide::AppErrorKind::Cancelled { reason },
+                    ..
+                } if reason.contains("test requested cancellation")
+            ), "Cancelled orchestration should have Cancelled error, got: {details:?}");
         }
         other => panic!("Expected Failed (cancelled), got: {other:?}"),
     }

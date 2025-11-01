@@ -88,8 +88,14 @@ async fn code_swap_triggers_nondeterminism() {
         .await
         .unwrap()
     {
-        OrchestrationStatus::Failed { error } => {
-            assert!(error.contains("nondeterministic"), "error: {error}")
+        OrchestrationStatus::Failed { details } => {
+            assert!(matches!(
+                details,
+                duroxide::ErrorDetails::Configuration {
+                    kind: duroxide::ConfigErrorKind::Nondeterminism,
+                    ..
+                }
+            ), "expected nondeterminism error, got: {details:?}");
         }
         other => panic!("expected failure with nondeterminism, got: {other:?}"),
     }
@@ -162,15 +168,16 @@ async fn completion_kind_mismatch_triggers_nondeterminism() {
         .await
         .unwrap()
     {
-        OrchestrationStatus::Failed { error } => {
-            println!("Got expected error: {error}");
-            assert!(
-                error.contains("nondeterministic")
-                    && error.contains("kind mismatch")
-                    && error.contains("timer")
-                    && error.contains("activity"),
-                "Expected nondeterminism error about kind mismatch between timer and activity, got: {error}"
-            );
+        OrchestrationStatus::Failed { details } => {
+            println!("Got expected error: {}", details.display_message());
+            assert!(matches!(
+                details,
+                duroxide::ErrorDetails::Configuration {
+                    kind: duroxide::ConfigErrorKind::Nondeterminism,
+                    message: Some(ref msg),
+                    ..
+                } if msg.contains("kind mismatch") && msg.contains("timer") && msg.contains("activity")
+            ), "Expected nondeterminism error about kind mismatch between timer and activity, got: {details:?}");
         }
         other => panic!("Expected failure with nondeterminism, got: {other:?}"),
     }
@@ -227,12 +234,16 @@ async fn unexpected_completion_id_triggers_nondeterminism() {
         .await
         .unwrap()
     {
-        OrchestrationStatus::Failed { error } => {
-            println!("Got expected error: {error}");
-            assert!(
-                error.contains("nondeterministic") && error.contains("no matching schedule") && error.contains("999"),
-                "Expected nondeterminism error about unexpected completion ID 999, got: {error}"
-            );
+        OrchestrationStatus::Failed { details } => {
+            println!("Got expected error: {}", details.display_message());
+            assert!(matches!(
+                details,
+                duroxide::ErrorDetails::Configuration {
+                    kind: duroxide::ConfigErrorKind::Nondeterminism,
+                    message: Some(ref msg),
+                    ..
+                } if msg.contains("no matching schedule") && msg.contains("999")
+            ), "Expected nondeterminism error about unexpected completion ID 999, got: {details:?}");
         }
         other => panic!("Expected failure with nondeterminism, got: {other:?}"),
     }
@@ -280,12 +291,16 @@ async fn unexpected_timer_completion_triggers_nondeterminism() {
         .await
         .unwrap()
     {
-        OrchestrationStatus::Failed { error } => {
-            println!("Got expected error: {error}");
-            assert!(
-                error.contains("nondeterministic") && error.contains("timer") && error.contains("123"),
-                "Expected nondeterminism error about timer 123, got: {error}"
-            );
+        OrchestrationStatus::Failed { details } => {
+            println!("Got expected error: {}", details.display_message());
+            assert!(matches!(
+                details,
+                duroxide::ErrorDetails::Configuration {
+                    kind: duroxide::ConfigErrorKind::Nondeterminism,
+                    message: Some(ref msg),
+                    ..
+                } if msg.contains("timer") && msg.contains("123")
+            ), "Expected nondeterminism error about timer 123, got: {details:?}");
         }
         other => panic!("Expected failure with nondeterminism, got: {other:?}"),
     }
@@ -376,12 +391,15 @@ async fn continue_as_new_with_unconsumed_completion_triggers_nondeterminism() {
         .await
         .unwrap()
     {
-        OrchestrationStatus::Failed { error } => {
-            println!("Got expected nondeterminism error: {error}");
-            assert!(
-                error.contains("nondeterministic"),
-                "Expected nondeterminism error, got: {error}"
-            );
+        OrchestrationStatus::Failed { details } => {
+            println!("Got expected nondeterminism error: {}", details.display_message());
+            assert!(matches!(
+                details,
+                duroxide::ErrorDetails::Configuration {
+                    kind: duroxide::ConfigErrorKind::Nondeterminism,
+                    ..
+                }
+            ), "Expected nondeterminism error, got: {details:?}");
         }
         OrchestrationStatus::Completed { output } => {
             panic!("Expected nondeterminism failure but orchestration completed: {output}");
@@ -468,8 +486,8 @@ async fn execution_id_filtering_without_continue_as_new_triggers_nondeterminism(
             // 3. The orchestration continues with its normal flow and gets the real activity result
             // This demonstrates that execution ID filtering prevents cross-execution completions from affecting the orchestration
         }
-        OrchestrationStatus::Failed { error } => {
-            panic!("Expected successful completion but got error: {error}");
+        OrchestrationStatus::Failed { details } => {
+            panic!("Expected successful completion but got error: {}", details.display_message());
         }
         other => panic!("Unexpected status: {other:?}"),
     }
@@ -526,8 +544,8 @@ async fn duplicate_external_events_are_handled_gracefully() {
             // 2. Duplicate external event is detected and ignored with a warning
             // 3. No nondeterminism error is raised
         }
-        OrchestrationStatus::Failed { error } => {
-            panic!("Expected successful completion but got error: {error}");
+        OrchestrationStatus::Failed { details } => {
+            panic!("Expected successful completion but got error: {}", details.display_message());
         }
         other => panic!("Unexpected status: {other:?}"),
     }

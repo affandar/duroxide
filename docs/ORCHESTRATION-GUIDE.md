@@ -596,7 +596,57 @@ async fn retry_orchestration(ctx: OrchestrationContext, task_input: String) -> R
 }
 ```
 
-### 6. Loop and Accumulate
+### 6. Understanding Error Types
+
+Duroxide classifies errors into three categories for proper handling and metrics:
+
+**Application Errors** - Business logic failures that your orchestration code sees and handles:
+```rust
+async fn order_workflow(ctx: OrchestrationContext, input: String) -> Result<String, String> {
+    match ctx.schedule_activity("ProcessPayment", input).into_activity().await {
+        Ok(txn_id) => Ok(format!("paid:{txn_id}")),
+        Err(e) => {
+            // This is an Application error - you handle it
+            // Examples: "insufficient_funds", "invalid_card"
+            ctx.trace_warn(format!("Payment failed: {e}"));
+            Err(format!("payment_error:{e}"))
+        }
+    }
+}
+```
+
+**Configuration Errors** - Deployment issues that abort orchestration execution before your code runs:
+- Unregistered orchestrations/activities
+- Nondeterminism (code changed between replays)
+- Missing versions
+
+Your orchestration code **never sees** these errors. The runtime:
+1. Records the failure in history (ActivityFailed + OrchestrationFailed events)
+2. Marks the orchestration as failed with ErrorDetails::Configuration
+3. Requires deployment fix (register missing activity, fix nondeterministic code)
+
+**Infrastructure Errors** - Provider/system failures that abort execution:
+- Database connection failures
+- Data corruption
+- Queue operation failures
+
+These also abort before your code runs, may be retryable by the runtime.
+
+**Checking Error Category** (for metrics/logging):
+```rust
+match client.get_orchestration_status("inst-1").await {
+    OrchestrationStatus::Failed { details } => {
+        match details.category() {
+            "infrastructure" => alert_ops_team(),      // System issue
+            "configuration" => alert_dev_team(),       // Deployment issue  
+            "application" => log_business_error(),     // Expected failures
+        }
+    }
+    _ => {}
+}
+```
+
+### 7. Loop and Accumulate
 
 ```rust
 async fn accumulate_results(ctx: OrchestrationContext, items_json: String) -> Result<String, String> {

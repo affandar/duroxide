@@ -41,7 +41,7 @@ async fn continue_as_new_multiexec() {
         .unwrap()
     {
         duroxide::OrchestrationStatus::Completed { output } => assert_eq!(output, "done:2"),
-        duroxide::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        duroxide::OrchestrationStatus::Failed { details } => panic!("orchestration failed: {}", details.display_message()),
         _ => panic!("unexpected orchestration status"),
     }
 
@@ -155,7 +155,7 @@ async fn continue_as_new_event_routes_to_latest() {
         .unwrap()
     {
         duroxide::OrchestrationStatus::Completed { output } => assert_eq!(output, "ok"),
-        duroxide::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        duroxide::OrchestrationStatus::Failed { details } => panic!("orchestration failed: {}", details.display_message()),
         _ => panic!("unexpected orchestration status"),
     }
 
@@ -266,7 +266,7 @@ async fn continue_as_new_event_drop_then_process() {
         .unwrap()
     {
         duroxide::OrchestrationStatus::Completed { output } => assert_eq!(output, "late"),
-        duroxide::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        duroxide::OrchestrationStatus::Failed { details } => panic!("orchestration failed: {}", details.display_message()),
         _ => panic!("unexpected orchestration status"),
     }
 
@@ -354,7 +354,7 @@ async fn event_drop_then_retry_after_subscribe() {
         .unwrap()
     {
         duroxide::OrchestrationStatus::Completed { output } => assert_eq!(output, "ok"),
-        duroxide::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        duroxide::OrchestrationStatus::Failed { details } => panic!("orchestration failed: {}", details.display_message()),
         _ => panic!("unexpected orchestration status"),
     }
 

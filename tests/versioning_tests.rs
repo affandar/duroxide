@@ -28,7 +28,7 @@ async fn runtime_start_versioned_string_uses_explicit_version() {
         .unwrap()
     {
         runtime::OrchestrationStatus::Completed { output } => assert_eq!(output, "v1"),
-        runtime::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        runtime::OrchestrationStatus::Failed { details } => panic!("orchestration failed: {}", details.display_message()),
         _ => panic!("unexpected orchestration status"),
     }
     rt.shutdown(None).await;
@@ -102,7 +102,7 @@ async fn sub_orchestration_versioned_explicit_and_policy() {
         .unwrap()
     {
         runtime::OrchestrationStatus::Completed { output } => assert_eq!(output, "c1"),
-        runtime::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        runtime::OrchestrationStatus::Failed { details } => panic!("orchestration failed: {}", details.display_message()),
         _ => panic!("unexpected orchestration status"),
     }
 
@@ -113,7 +113,7 @@ async fn sub_orchestration_versioned_explicit_and_policy() {
         .unwrap()
     {
         runtime::OrchestrationStatus::Completed { output } => assert_eq!(output, "c2"),
-        runtime::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        runtime::OrchestrationStatus::Failed { details } => panic!("orchestration failed: {}", details.display_message()),
         _ => panic!("unexpected orchestration status"),
     }
     rt.shutdown(None).await;
@@ -145,7 +145,7 @@ async fn detached_versioned_uses_policy_latest() {
         .unwrap()
     {
         runtime::OrchestrationStatus::Completed { output } => assert_eq!(output, "ok"),
-        runtime::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        runtime::OrchestrationStatus::Failed { details } => panic!("orchestration failed: {}", details.display_message()),
         _ => panic!("unexpected orchestration status"),
     }
     // Start the detached child directly to observe its versioned output
@@ -157,7 +157,7 @@ async fn detached_versioned_uses_policy_latest() {
         .unwrap();
     let out_child = match child_status {
         duroxide::OrchestrationStatus::Completed { output } => output,
-        duroxide::OrchestrationStatus::Failed { error } => panic!("child orchestration failed: {error}"),
+        duroxide::OrchestrationStatus::Failed { details } => panic!("child orchestration failed: {}", details.display_message()),
         _ => panic!("unexpected child orchestration status"),
     };
     assert_eq!(out_child, "l2");
@@ -187,7 +187,7 @@ async fn continue_as_new_versioned_typed_explicit() {
         .unwrap()
     {
         runtime::OrchestrationStatus::Completed { output } => assert_eq!(output.as_str(), "done"),
-        runtime::OrchestrationStatus::Failed { error } => panic!("unexpected failure: {error}"),
+        runtime::OrchestrationStatus::Failed { details } => panic!("unexpected failure: {}", details.display_message()),
         _ => unreachable!(),
     }
     rt.shutdown(None).await;
@@ -221,7 +221,7 @@ async fn start_uses_latest_version() {
         .unwrap()
     {
         runtime::OrchestrationStatus::Completed { output } => assert_eq!(output, "v1.1:X"),
-        runtime::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        runtime::OrchestrationStatus::Failed { details } => panic!("orchestration failed: {}", details.display_message()),
         _ => panic!("unexpected orchestration status"),
     }
 
@@ -260,7 +260,7 @@ async fn policy_exact_pins_start() {
         .unwrap()
     {
         runtime::OrchestrationStatus::Completed { output } => assert_eq!(output, "v1:Y"),
-        runtime::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        runtime::OrchestrationStatus::Failed { details } => panic!("orchestration failed: {}", details.display_message()),
         _ => panic!("unexpected orchestration status"),
     }
     rt.shutdown(None).await;
@@ -304,7 +304,7 @@ async fn sub_orchestration_uses_latest_by_default_and_pinned_when_set() {
         .unwrap()
     {
         runtime::OrchestrationStatus::Completed { output } => assert_eq!(output, "c1.1:Z"),
-        runtime::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        runtime::OrchestrationStatus::Failed { details } => panic!("orchestration failed: {}", details.display_message()),
         _ => panic!("unexpected orchestration status"),
     }
 
@@ -325,7 +325,7 @@ async fn sub_orchestration_uses_latest_by_default_and_pinned_when_set() {
         .unwrap()
     {
         runtime::OrchestrationStatus::Completed { output } => assert_eq!(output, "c1:Q"),
-        runtime::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        runtime::OrchestrationStatus::Failed { details } => panic!("orchestration failed: {}", details.display_message()),
         _ => panic!("unexpected orchestration status"),
     }
 
@@ -369,7 +369,7 @@ async fn parent_calls_child_upgrade_child_and_verify_latest_used() {
         .unwrap()
     {
         runtime::OrchestrationStatus::Completed { output } => assert_eq!(output, "cv1.1:inp"),
-        runtime::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        runtime::OrchestrationStatus::Failed { details } => panic!("orchestration failed: {}", details.display_message()),
         _ => panic!("unexpected orchestration status"),
     }
 
@@ -422,7 +422,7 @@ async fn continue_as_new_upgrades_version_deterministically() {
         .unwrap()
     {
         runtime::OrchestrationStatus::Completed { output } => assert_eq!(output, "v2_done:from_v1_to_v2"),
-        runtime::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        runtime::OrchestrationStatus::Failed { details } => panic!("orchestration failed: {}", details.display_message()),
         _ => panic!("unexpected orchestration status"),
     }
 
@@ -439,7 +439,7 @@ async fn continue_as_new_upgrades_version_deterministically() {
         runtime::OrchestrationStatus::Completed { output } => {
             assert_eq!(output, "v2_done:from_v1_to_v2")
         }
-        runtime::OrchestrationStatus::Failed { error } => panic!("unexpected failure: {error}"),
+        runtime::OrchestrationStatus::Failed { details } => panic!("unexpected failure: {}", details.display_message()),
         _ => unreachable!(),
     }
     rt.shutdown(None).await;

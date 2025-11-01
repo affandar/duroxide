@@ -58,7 +58,16 @@ async fn cancel_parent_down_propagates_to_child() {
         let hist = store.read("inst-cancel-1").await;
         if hist
             .iter()
-            .any(|e| matches!(e, Event::OrchestrationFailed { error, .. } if error.starts_with("canceled: by_test")))
+            .any(|e| matches!(
+                e,
+                Event::OrchestrationFailed { details, .. } if matches!(
+                    details,
+                    duroxide::ErrorDetails::Application {
+                        kind: duroxide::AppErrorKind::Cancelled { reason },
+                        ..
+                    } if reason == "by_test"
+                )
+            ))
         {
             assert!(
                 hist.iter()
@@ -91,7 +100,16 @@ async fn cancel_parent_down_propagates_to_child() {
                 .iter()
                 .any(|e| matches!(e, Event::OrchestrationCancelRequested { .. }));
             let has_failed = hist.iter().any(
-                |e| matches!(e, Event::OrchestrationFailed { error, .. } if error.starts_with("canceled: parent canceled")),
+                |e| matches!(
+                    e,
+                    Event::OrchestrationFailed { details, .. } if matches!(
+                        details,
+                        duroxide::ErrorDetails::Application {
+                            kind: duroxide::AppErrorKind::Cancelled { reason },
+                            ..
+                        } if reason == "parent canceled"
+                    )
+                )
             );
             if has_cancel && has_failed {
                 break;
@@ -133,7 +151,7 @@ async fn cancel_after_completion_is_noop() {
         .unwrap()
     {
         runtime::OrchestrationStatus::Completed { output } => assert_eq!(output, "ok"),
-        runtime::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        runtime::OrchestrationStatus::Failed { details } => panic!("orchestration failed: {}", details.display_message()),
         _ => panic!("unexpected orchestration status"),
     }
 
@@ -203,7 +221,7 @@ async fn cancel_child_directly_signals_parent() {
         .unwrap()
     {
         runtime::OrchestrationStatus::Completed { output } => output,
-        runtime::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        runtime::OrchestrationStatus::Failed { details } => panic!("orchestration failed: {}", details.display_message()),
         _ => panic!("unexpected orchestration status"),
     };
     assert!(
@@ -211,9 +229,19 @@ async fn cancel_child_directly_signals_parent() {
         "unexpected parent out: {s}"
     );
 
-    // Parent should have SubOrchestrationFailed for the child id 1
+    // Parent should have SubOrchestrationFailed for the child id 2
     let ph = store.read("inst-chdirect").await;
-    assert!(ph.iter().any(|e| matches!(e, Event::SubOrchestrationFailed { source_event_id, error, .. } if *source_event_id == 2 && error.starts_with("canceled: by_test"))));
+    assert!(ph.iter().any(|e| matches!(
+        e,
+        Event::SubOrchestrationFailed { source_event_id, details, .. }
+        if *source_event_id == 2 && matches!(
+            details,
+            duroxide::ErrorDetails::Application {
+                kind: duroxide::AppErrorKind::Cancelled { reason },
+                ..
+            } if reason == "by_test_child"
+        )
+    )));
 
     rt.shutdown(None).await;
 }
@@ -263,8 +291,14 @@ async fn cancel_continue_as_new_second_exec() {
         .await
         .unwrap()
     {
-        runtime::OrchestrationStatus::Failed { error } => {
-            assert!(error.starts_with("canceled: by_test_can"));
+        runtime::OrchestrationStatus::Failed { details } => {
+            assert!(matches!(
+                details,
+                duroxide::ErrorDetails::Application {
+                    kind: duroxide::AppErrorKind::Cancelled { reason },
+                    ..
+                } if reason == "by_test_can"
+            ));
         }
         runtime::OrchestrationStatus::Completed { output } => panic!("expected cancellation, got: {output}"),
         _ => panic!("unexpected orchestration status"),
@@ -276,7 +310,16 @@ async fn cancel_continue_as_new_second_exec() {
         "inst-can-can",
         |hist| {
             hist.iter().rev().any(
-                |e| matches!(e, Event::OrchestrationFailed { error, .. } if error.starts_with("canceled: by_test_can")),
+                |e| matches!(
+                    e,
+                    Event::OrchestrationFailed { details, .. } if matches!(
+                        details,
+                        duroxide::ErrorDetails::Application {
+                            kind: duroxide::AppErrorKind::Cancelled { reason },
+                            ..
+                        } if reason == "by_test_can"
+                    )
+                )
             )
         },
         5000,
@@ -330,7 +373,7 @@ async fn orchestration_completes_before_activity_finishes() {
         .unwrap()
     {
         runtime::OrchestrationStatus::Completed { output } => assert_eq!(output, "done"),
-        runtime::OrchestrationStatus::Failed { error } => panic!("orchestration failed: {error}"),
+        runtime::OrchestrationStatus::Failed { details } => panic!("orchestration failed: {}", details.display_message()),
         _ => panic!("unexpected orchestration status"),
     }
 
@@ -380,7 +423,7 @@ async fn orchestration_fails_before_activity_finishes() {
         .await
         .unwrap()
     {
-        runtime::OrchestrationStatus::Failed { error: _ } => {} // Expected failure
+        runtime::OrchestrationStatus::Failed { details: _ } => {} // Expected failure
         runtime::OrchestrationStatus::Completed { output } => panic!("expected failure, got: {output}"),
         _ => panic!("unexpected orchestration status"),
     }
@@ -390,7 +433,17 @@ async fn orchestration_fails_before_activity_finishes() {
     let hist = store.read("inst-orch-fail-first").await;
     assert!(
         hist.iter()
-            .any(|e| matches!(e, Event::OrchestrationFailed { error, .. } if error == "boom"))
+            .any(|e| matches!(
+                e,
+                Event::OrchestrationFailed { details, .. } if matches!(
+                    details,
+                    duroxide::ErrorDetails::Application {
+                        kind: duroxide::AppErrorKind::OrchestrationFailed,
+                        message,
+                        ..
+                    } if message == "boom"
+                )
+            ))
     );
 
     rt.shutdown(None).await;

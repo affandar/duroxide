@@ -308,6 +308,100 @@ pub const INITIAL_EXECUTION_ID: u64 = 1;
 /// The first event (OrchestrationStarted) always has event_id = 1.
 pub const INITIAL_EVENT_ID: u64 = 1;
 
+/// Structured error details for orchestration failures.
+///
+/// Errors are categorized into three types for proper metrics and logging:
+/// - **Infrastructure**: Provider failures, data corruption (abort turn, never reach user code)
+/// - **Configuration**: Deployment issues like unregistered activities, nondeterminism (abort turn)
+/// - **Application**: Business logic failures (flow through normal orchestration code)
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ErrorDetails {
+    /// Infrastructure failure (provider errors, data corruption).
+    /// These errors abort orchestration execution and never reach user code.
+    Infrastructure {
+        operation: String,
+        message: String,
+        retryable: bool,
+    },
+
+    /// Configuration error (unregistered orchestrations/activities, nondeterminism).
+    /// These errors abort orchestration execution and never reach user code.
+    Configuration {
+        kind: ConfigErrorKind,
+        resource: String,
+        message: Option<String>,
+    },
+
+    /// Application error (business logic failures).
+    /// These are the ONLY errors that orchestration code sees.
+    Application {
+        kind: AppErrorKind,
+        message: String,
+        retryable: bool,
+    },
+}
+
+/// Configuration error kinds.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ConfigErrorKind {
+    UnregisteredOrchestration,
+    UnregisteredActivity,
+    MissingVersion { requested_version: String },
+    Nondeterminism,
+}
+
+/// Application error kinds.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum AppErrorKind {
+    ActivityFailed,
+    OrchestrationFailed,
+    Cancelled { reason: String },
+}
+
+impl ErrorDetails {
+    /// Get failure category for metrics/logging.
+    pub fn category(&self) -> &'static str {
+        match self {
+            ErrorDetails::Infrastructure { .. } => "infrastructure",
+            ErrorDetails::Configuration { .. } => "configuration",
+            ErrorDetails::Application { .. } => "application",
+        }
+    }
+
+    /// Check if failure is retryable.
+    pub fn is_retryable(&self) -> bool {
+        match self {
+            ErrorDetails::Infrastructure { retryable, .. } => *retryable,
+            ErrorDetails::Application { retryable, .. } => *retryable,
+            ErrorDetails::Configuration { .. } => false,
+        }
+    }
+
+    /// Get display message for logging/UI (backward compatible format).
+    pub fn display_message(&self) -> String {
+        match self {
+            ErrorDetails::Infrastructure { operation, message, .. } => {
+                format!("infrastructure:{operation}: {message}")
+            }
+            ErrorDetails::Configuration { kind, resource, message } => match kind {
+                ConfigErrorKind::UnregisteredOrchestration => format!("unregistered:{resource}"),
+                ConfigErrorKind::UnregisteredActivity => format!("unregistered:{resource}"),
+                ConfigErrorKind::MissingVersion { requested_version } => {
+                    format!("canceled: missing version {resource}@{requested_version}")
+                }
+                ConfigErrorKind::Nondeterminism => message
+                    .as_ref()
+                    .map(|m| format!("nondeterministic: {m}"))
+                    .unwrap_or_else(|| format!("nondeterministic in {resource}")),
+            },
+            ErrorDetails::Application { kind, message, .. } => match kind {
+                AppErrorKind::Cancelled { reason } => format!("canceled: {reason}"),
+                _ => message.clone(),
+            },
+        }
+    }
+}
+
 /// Append-only orchestration history entries persisted by a provider and
 /// consumed during replay. All events have a monotonically increasing event_id
 /// representing their position in history. Scheduling and completion events
@@ -327,7 +421,7 @@ pub enum Event {
     /// Orchestration completed with a final result.
     OrchestrationCompleted { event_id: u64, output: String },
     /// Orchestration failed with a final error.
-    OrchestrationFailed { event_id: u64, error: String },
+    OrchestrationFailed { event_id: u64, details: ErrorDetails },
     /// Activity was scheduled. event_id is THE id for this operation.
     ActivityScheduled {
         event_id: u64,
@@ -341,11 +435,11 @@ pub enum Event {
         source_event_id: u64,
         result: String,
     },
-    /// Activity failed with an error string.
+    /// Activity failed with error details.
     ActivityFailed {
         event_id: u64,
         source_event_id: u64,
-        error: String,
+        details: ErrorDetails,
     },
 
     /// Timer was created and will logically fire at `fire_at_ms`.
@@ -388,11 +482,11 @@ pub enum Event {
         source_event_id: u64,
         result: String,
     },
-    /// Sub-orchestration failed and returned an error to the parent.
+    /// Sub-orchestration failed and returned error details to the parent.
     SubOrchestrationFailed {
         event_id: u64,
         source_event_id: u64,
-        error: String,
+        details: ErrorDetails,
     },
 
     /// Orchestration continued as new with fresh input (terminal for this execution).

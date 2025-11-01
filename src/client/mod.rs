@@ -67,7 +67,9 @@ use serde::Serialize;
 /// let result = client.wait_for_orchestration("order-123", std::time::Duration::from_secs(30)).await.unwrap();
 /// match result {
 ///     OrchestrationStatus::Completed { output } => println!("Done: {}", output),
-///     OrchestrationStatus::Failed { error } => eprintln!("Failed: {}", error),
+///     OrchestrationStatus::Failed { details } => {
+///         eprintln!("Failed ({}): {}", details.category(), details.display_message());
+///     }
 ///     _ => {}
 /// }
 /// ```
@@ -278,7 +280,7 @@ impl Client {
     /// 1. Enqueues CancelInstance work item
     /// 2. Runtime appends OrchestrationCancelRequested event
     /// 3. Next turn, orchestration sees cancellation and fails deterministically
-    /// 4. Final status: `OrchestrationStatus::Failed { error: "canceled: {reason}" }`
+    /// 4. Final status: `OrchestrationStatus::Failed { details: Application::Cancelled }`
     ///
     /// # Deterministic Cancellation
     ///
@@ -300,7 +302,13 @@ impl Client {
     /// // Wait for cancellation to complete
     /// let status = client.wait_for_orchestration("order-123", std::time::Duration::from_secs(5)).await?;
     /// match status {
-    ///     OrchestrationStatus::Failed { error } if error.starts_with("canceled:") => {
+    ///     OrchestrationStatus::Failed { details } if matches!(
+    ///         details,
+    ///         duroxide::ErrorDetails::Application {
+    ///             kind: duroxide::AppErrorKind::Cancelled { .. },
+    ///             ..
+    ///         }
+    ///     ) => {
     ///         println!("Successfully cancelled");
     ///     }
     ///     _ => {}
@@ -357,7 +365,7 @@ impl Client {
     ///     OrchestrationStatus::NotFound => println!("Instance not found"),
     ///     OrchestrationStatus::Running => println!("Still processing"),
     ///     OrchestrationStatus::Completed { output } => println!("Done: {}", output),
-    ///     OrchestrationStatus::Failed { error } => eprintln!("Error: {}", error),
+    ///     OrchestrationStatus::Failed { details } => eprintln!("Error: {}", details.display_message()),
     /// }
     /// # Ok(())
     /// # }
@@ -370,8 +378,8 @@ impl Client {
                 Event::OrchestrationCompleted { output, .. } => {
                     return OrchestrationStatus::Completed { output: output.clone() };
                 }
-                Event::OrchestrationFailed { error, .. } => {
-                    return OrchestrationStatus::Failed { error: error.clone() };
+                Event::OrchestrationFailed { details, .. } => {
+                    return OrchestrationStatus::Failed { details: details.clone() };
                 }
                 _ => {}
             }
@@ -398,7 +406,7 @@ impl Client {
     /// # Returns
     ///
     /// * `Ok(OrchestrationStatus::Completed { output })` - Orchestration completed successfully
-    /// * `Ok(OrchestrationStatus::Failed { error })` - Orchestration failed (includes cancellations)
+    /// * `Ok(OrchestrationStatus::Failed { details })` - Orchestration failed (includes cancellations)
     /// * `Err(WaitError::Timeout)` - Timeout elapsed while still Running
     /// * `Err(WaitError::Other(msg))` - Unexpected error
     ///
@@ -421,8 +429,8 @@ impl Client {
     ///     Ok(OrchestrationStatus::Completed { output }) => {
     ///         println!("Success: {}", output);
     ///     }
-    ///     Ok(OrchestrationStatus::Failed { error }) => {
-    ///         eprintln!("Orchestration failed: {}", error);
+    ///     Ok(OrchestrationStatus::Failed { details }) => {
+    ///         eprintln!("Failed ({}): {}", details.category(), details.display_message());
     ///     }
     ///     Err(WaitError::Timeout) => {
     ///         println!("Still running after 30s, instance: order-123");
@@ -467,7 +475,7 @@ impl Client {
         // quick path
         match self.get_orchestration_status(instance).await {
             OrchestrationStatus::Completed { output } => return Ok(OrchestrationStatus::Completed { output }),
-            OrchestrationStatus::Failed { error } => return Ok(OrchestrationStatus::Failed { error }),
+            OrchestrationStatus::Failed { details } => return Ok(OrchestrationStatus::Failed { details }),
             _ => {}
         }
         // poll with backoff
@@ -475,7 +483,7 @@ impl Client {
         while std::time::Instant::now() < deadline {
             match self.get_orchestration_status(instance).await {
                 OrchestrationStatus::Completed { output } => return Ok(OrchestrationStatus::Completed { output }),
-                OrchestrationStatus::Failed { error } => return Ok(OrchestrationStatus::Failed { error }),
+                OrchestrationStatus::Failed { details } => return Ok(OrchestrationStatus::Failed { details }),
                 _ => {
                     tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
                     delay_ms = (delay_ms.saturating_mul(2)).min(100);
@@ -496,7 +504,7 @@ impl Client {
                 Ok(v) => Ok(Ok(v)),
                 Err(e) => Err(crate::runtime::WaitError::Other(format!("decode failed: {e}"))),
             },
-            OrchestrationStatus::Failed { error } => Ok(Err(error)),
+            OrchestrationStatus::Failed { details } => Ok(Err(details.display_message())),
             _ => unreachable!("wait_for_orchestration returns only terminal or timeout"),
         }
     }

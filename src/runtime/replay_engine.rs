@@ -10,8 +10,8 @@ pub enum TurnResult {
     Continue,
     /// Orchestration completed with output
     Completed(String),
-    /// Orchestration failed with error
-    Failed(String),
+    /// Orchestration failed with error details
+    Failed(crate::ErrorDetails),
     /// Orchestration requested continue-as-new
     ContinueAsNew { input: String, version: Option<String> },
     /// Orchestration was cancelled
@@ -33,8 +33,8 @@ pub struct ReplayEngine {
     pub(crate) baseline_history: Vec<Event>,
     /// Next event_id for new events added this run
     pub(crate) next_event_id: u64,
-    /// If set, indicates a nondeterminism error detected during this run
-    pub(crate) nondet_error: Option<String>,
+    /// Unified error collector for system-level errors that abort the turn
+    pub(crate) abort_error: Option<crate::ErrorDetails>,
 }
 
 impl ReplayEngine {
@@ -49,7 +49,7 @@ impl ReplayEngine {
             pending_actions: Vec::new(),
             baseline_history,
             next_event_id,
-            nondet_error: None,
+            abort_error: None,
         }
     }
 
@@ -125,40 +125,68 @@ impl ReplayEngine {
                 }
                 None
             };
-            let mut nd_err: Option<String> = None;
+            let mut nd_err: Option<crate::ErrorDetails> = None;
             match &msg {
                 WorkItem::ActivityCompleted { id, .. } | WorkItem::ActivityFailed { id, .. } => {
                     match schedule_kind(id) {
                         Some("activity") => {}
                         Some(other) => {
-                            nd_err = Some(format!(
-                                "nondeterministic: completion kind mismatch for id={id}, expected '{other}', got 'activity'"
-                            ))
+                            nd_err = Some(crate::ErrorDetails::Configuration {
+                                kind: crate::ConfigErrorKind::Nondeterminism,
+                                resource: String::new(),
+                                message: Some(format!(
+                                    "completion kind mismatch for id={id}, expected '{other}', got 'activity'"
+                                )),
+                            })
                         }
-                        None => nd_err = Some(format!("nondeterministic: no matching schedule for completion id={id}")),
+                        None => {
+                            nd_err = Some(crate::ErrorDetails::Configuration {
+                                kind: crate::ConfigErrorKind::Nondeterminism,
+                                resource: String::new(),
+                                message: Some(format!("no matching schedule for completion id={id}")),
+                            })
+                        }
                     }
                 }
                 WorkItem::TimerFired { id, .. } => match schedule_kind(id) {
                     Some("timer") => {}
                     Some(other) => {
-                        nd_err = Some(format!(
-                            "nondeterministic: completion kind mismatch for id={id}, expected '{other}', got 'timer'"
-                        ))
+                        nd_err = Some(crate::ErrorDetails::Configuration {
+                            kind: crate::ConfigErrorKind::Nondeterminism,
+                            resource: String::new(),
+                            message: Some(format!(
+                                "completion kind mismatch for id={id}, expected '{other}', got 'timer'"
+                            )),
+                        })
                     }
-                    None => nd_err = Some(format!("nondeterministic: no matching schedule for timer id={id}")),
+                    None => {
+                        nd_err = Some(crate::ErrorDetails::Configuration {
+                            kind: crate::ConfigErrorKind::Nondeterminism,
+                            resource: String::new(),
+                            message: Some(format!("no matching schedule for timer id={id}")),
+                        })
+                    }
                 },
                 WorkItem::SubOrchCompleted { parent_id, .. } | WorkItem::SubOrchFailed { parent_id, .. } => {
                     match schedule_kind(parent_id) {
                         Some("suborchestration") => {}
                         Some(other) => {
-                            nd_err = Some(format!(
-                                "nondeterministic: completion kind mismatch for id={parent_id}, expected '{other}', got 'suborchestration'"
-                            ))
+                            nd_err = Some(crate::ErrorDetails::Configuration {
+                                kind: crate::ConfigErrorKind::Nondeterminism,
+                                resource: String::new(),
+                                message: Some(format!(
+                                    "completion kind mismatch for id={parent_id}, expected '{other}', got 'suborchestration'"
+                                )),
+                            })
                         }
                         None => {
-                            nd_err = Some(format!(
-                                "nondeterministic: no matching schedule for sub-orchestration id={parent_id}"
-                            ))
+                            nd_err = Some(crate::ErrorDetails::Configuration {
+                                kind: crate::ConfigErrorKind::Nondeterminism,
+                                resource: String::new(),
+                                message: Some(format!(
+                                    "no matching schedule for sub-orchestration id={parent_id}"
+                                )),
+                            })
                         }
                     }
                 }
@@ -166,8 +194,8 @@ impl ReplayEngine {
                 _ => {} // Non-completion work items
             }
             if let Some(err) = nd_err {
-                warn!(instance = %self.instance, error=%err, "detected nondeterminism in completion batch");
-                self.nondet_error = Some(err);
+                warn!(instance = %self.instance, error = %err.display_message(), "detected nondeterminism in completion batch");
+                self.abort_error = Some(err);
                 continue;
             }
 
@@ -180,11 +208,29 @@ impl ReplayEngine {
                         result,
                     })
                 }
-                WorkItem::ActivityFailed { id, error, .. } => Some(Event::ActivityFailed {
-                    event_id: 0,
-                    source_event_id: id,
-                    error,
-                }),
+                WorkItem::ActivityFailed { id, details, .. } => {
+                    // Always create event in history for audit trail
+                    let event = Event::ActivityFailed {
+                        event_id: 0,
+                        source_event_id: id,
+                        details: details.clone(),
+                    };
+                    
+                    // Check if system error (abort turn)
+                    match &details {
+                        crate::ErrorDetails::Configuration { .. } | crate::ErrorDetails::Infrastructure { .. } => {
+                            warn!(instance = %self.instance, id, ?details, "System error aborts turn");
+                            if self.abort_error.is_none() {
+                                self.abort_error = Some(details);
+                            }
+                        }
+                        crate::ErrorDetails::Application { .. } => {
+                            // Normal flow
+                        }
+                    }
+                    
+                    Some(event)
+                }
                 WorkItem::TimerFired { id, fire_at_ms, .. } => Some(Event::TimerFired {
                     event_id: 0,
                     source_event_id: id,
@@ -212,11 +258,29 @@ impl ReplayEngine {
                     source_event_id: parent_id,
                     result,
                 }),
-                WorkItem::SubOrchFailed { parent_id, error, .. } => Some(Event::SubOrchestrationFailed {
-                    event_id: 0,
-                    source_event_id: parent_id,
-                    error,
-                }),
+                WorkItem::SubOrchFailed { parent_id, details, .. } => {
+                    // Always create event in history for audit trail
+                    let event = Event::SubOrchestrationFailed {
+                        event_id: 0,
+                        source_event_id: parent_id,
+                        details: details.clone(),
+                    };
+                    
+                    // Check if system error (abort parent turn)
+                    match &details {
+                        crate::ErrorDetails::Configuration { .. } | crate::ErrorDetails::Infrastructure { .. } => {
+                            warn!(instance = %self.instance, parent_id, ?details, "Child system error aborts parent");
+                            if self.abort_error.is_none() {
+                                self.abort_error = Some(details);
+                            }
+                        }
+                        crate::ErrorDetails::Application { .. } => {
+                            // Normal flow
+                        }
+                    }
+                    
+                    Some(event)
+                }
                 WorkItem::CancelInstance { reason, .. } => {
                     let already_terminated = self.baseline_history.iter().any(|e| {
                         matches!(
@@ -318,7 +382,8 @@ impl ReplayEngine {
             instance = %self.instance,
             "executing orchestration turn"
         );
-        if let Some(err) = self.nondet_error.clone() {
+        // Check abort_error FIRST - before running user code
+        if let Some(err) = self.abort_error.clone() {
             return TurnResult::Failed(err);
         }
 
@@ -341,19 +406,27 @@ impl ReplayEngine {
             Ok(tuple) => tuple,
             Err(panic_payload) => {
                 let msg = if let Some(s) = panic_payload.downcast_ref::<&str>() {
-                    format!("nondeterministic: {s}")
+                    s.to_string()
                 } else if let Some(s) = panic_payload.downcast_ref::<String>() {
-                    format!("nondeterministic: {s}")
+                    s.clone()
                 } else {
-                    "nondeterministic: orchestration panicked".to_string()
+                    "orchestration panicked".to_string()
                 };
-                return TurnResult::Failed(msg);
+                return TurnResult::Failed(crate::ErrorDetails::Configuration {
+                    kind: crate::ConfigErrorKind::Nondeterminism,
+                    resource: String::new(),
+                    message: Some(msg),
+                });
             }
         };
 
         // If futures flagged nondeterminism (scheduling-order mismatch), fail gracefully
         if let Some(err) = nondet_flag.clone() {
-            return TurnResult::Failed(err);
+            return TurnResult::Failed(crate::ErrorDetails::Configuration {
+                kind: crate::ConfigErrorKind::Nondeterminism,
+                resource: String::new(),
+                message: Some(err),
+            });
         }
 
         // If futures recorded nondeterminism, fail gracefully
@@ -398,7 +471,11 @@ impl ReplayEngine {
         if let Some(output) = output_opt {
             return match output {
                 Ok(result) => TurnResult::Completed(result),
-                Err(error) => TurnResult::Failed(error),
+                Err(error) => TurnResult::Failed(crate::ErrorDetails::Application {
+                    kind: crate::AppErrorKind::OrchestrationFailed,
+                    message: error,
+                    retryable: false,
+                }),
             };
         }
 
