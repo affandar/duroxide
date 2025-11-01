@@ -18,7 +18,7 @@ pub enum LogFormat {
 
 impl Default for LogFormat {
     fn default() -> Self {
-        LogFormat::Pretty
+        LogFormat::Compact
     }
 }
 

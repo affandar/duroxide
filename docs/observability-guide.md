@@ -32,14 +32,16 @@ let rt = Runtime::start_with_options(store, activities, orchestrations, options)
 
 **Output Format**:
 ```
-2024-10-30T10:15:23.456Z INFO duroxide::runtime [order-123] Orchestration started
-2024-10-30T10:15:23.512Z INFO duroxide::runtime [order-123] Activity ValidatePayment started
-2024-10-30T10:15:23.678Z INFO duroxide::runtime [order-123] Activity ValidatePayment completed
-2024-10-30T10:15:23.690Z INFO duroxide::orchestration [order-123] Payment validated successfully
-2024-10-30T10:15:23.701Z INFO duroxide::runtime [order-123] Orchestration completed
+2025-11-01T17:22:04.494Z INFO duroxide::runtime Orchestration started instance_id=order-123 execution_id=1 orchestration_name=ProcessOrder worker_id=orch-cd541
+2025-11-01T17:22:04.596Z INFO duroxide::runtime Activity started instance_id=order-123 execution_id=1 activity_name=ValidatePayment activity_id=3 worker_id=work-cd541
+2025-11-01T17:22:04.698Z INFO duroxide::runtime Activity completed instance_id=order-123 execution_id=1 activity_name=ValidatePayment worker_id=work-cd541 outcome="success" duration_ms=102
+2025-11-01T17:22:04.806Z INFO duroxide::orchestration Payment validated successfully instance_id=order-123 execution_id=1 orchestration_name=ProcessOrder
+2025-11-01T17:22:05.010Z INFO duroxide::runtime Orchestration completed instance_id=order-123 execution_id=1 worker_id=orch-cd541 history_events=9
 ```
 
-Format: `timestamp level module [instance_id] message`
+Format: `timestamp level module message field1=value1 field2=value2 ...`
+
+All correlation fields are included directly on each log line (flat structure, no span nesting).
 
 ## Log Formats
 

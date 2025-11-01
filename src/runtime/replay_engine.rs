@@ -377,7 +377,13 @@ impl ReplayEngine {
 
     /// Stage 2: Execute one turn of the orchestration using the replay engine
     /// This stage runs the orchestration logic and generates history deltas and actions
-    pub fn execute_orchestration(&mut self, handler: Arc<dyn OrchestrationHandler>, input: String) -> TurnResult {
+    pub fn execute_orchestration(
+        &mut self,
+        handler: Arc<dyn OrchestrationHandler>,
+        input: String,
+        orchestration_name: Option<String>,
+        orchestration_version: Option<String>,
+    ) -> TurnResult {
         debug!(
             instance = %self.instance,
             "executing orchestration turn"
@@ -392,16 +398,7 @@ impl ReplayEngine {
         let mut working_history = self.baseline_history.clone();
         working_history.extend(self.history_delta.clone());
 
-        // Extract orchestration metadata from history
-        let (orchestration_name, orchestration_version) = working_history.iter().find_map(|e| {
-            if let Event::OrchestrationStarted { name, version, .. } = e {
-                Some((Some(name.clone()), Some(version.clone())))
-            } else {
-                None
-            }
-        }).unwrap_or((None, None));
-
-        // Run orchestration with unified cursor model
+        // Run orchestration with unified cursor model (metadata passed from caller)
         let execution_id = self.get_current_execution_id();
         let instance_id = self.instance.clone();
         let run_result = catch_unwind(AssertUnwindSafe(|| {

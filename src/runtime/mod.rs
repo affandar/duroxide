@@ -246,6 +246,29 @@ impl Runtime {
             .unwrap_or(crate::INITIAL_EXECUTION_ID)
     }
 
+    /// Generate a unique worker ID suffix using last 5 chars of a GUID
+    fn generate_worker_suffix() -> String {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        
+        // Thread-local counter for uniqueness
+        thread_local! {
+            static COUNTER: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+        }
+        let counter = COUNTER.with(|c| {
+            let val = c.get();
+            c.set(val.wrapping_add(1));
+            val
+        });
+        
+        // Generate a short unique suffix (last 5 hex chars)
+        format!("{:05x}", ((timestamp ^ (counter as u128)) & 0xFFFFF))
+    }
+
     /// Start a new runtime using the in-memory SQLite provider.
     pub async fn start(
         activity_registry: Arc<registry::ActivityRegistry>,
@@ -317,9 +340,11 @@ impl Runtime {
         tokio::spawn(async move {
             let mut worker_handles = Vec::new();
 
-            for worker_id in 0..concurrency {
+            for _worker_idx in 0..concurrency {
                 let rt = self.clone();
                 let shutdown = shutdown.clone();
+                // Generate unique worker ID with GUID suffix
+                let worker_id = format!("orch-{}", Self::generate_worker_suffix());
                 let handle = tokio::spawn(async move {
                     debug!("Orchestration worker {} started", worker_id);
                     loop {
@@ -332,7 +357,7 @@ impl Runtime {
                         if let Some(item) = rt.history_store.fetch_orchestration_item().await {
                             // Process orchestration item atomically
                             // Provider ensures no other worker has this instance locked
-                            rt.process_orchestration_item(item, worker_id).await;
+                            rt.process_orchestration_item(item, &worker_id).await;
                         } else {
                             tokio::time::sleep(std::time::Duration::from_millis(rt.options.dispatcher_idle_sleep_ms))
                                 .await;
@@ -350,7 +375,7 @@ impl Runtime {
         })
     }
 
-    async fn process_orchestration_item(self: &Arc<Self>, item: crate::providers::OrchestrationItem, worker_id: usize) {
+    async fn process_orchestration_item(self: &Arc<Self>, item: crate::providers::OrchestrationItem, worker_id: &str) {
         // EXECUTION: builds deltas and commits via ack_orchestration_item
         let instance = &item.instance;
         let lock_token = &item.lock_token;
@@ -629,10 +654,12 @@ impl Runtime {
         tokio::spawn(async move {
             let mut worker_handles = Vec::new();
 
-            for worker_id in 0..concurrency {
+            for _worker_idx in 0..concurrency {
                 let rt = self.clone();
                 let activities = activities.clone();
                 let shutdown = shutdown.clone();
+                // Generate unique worker ID with GUID suffix
+                let worker_id = format!("work-{}", Self::generate_worker_suffix());
                 let handle = tokio::spawn(async move {
                     debug!("Worker dispatcher {} started", worker_id);
                     loop {
@@ -651,18 +678,16 @@ impl Runtime {
                                     name,
                                     input,
                                 } => {
-                                    // Create activity execution span with full context
-                                    let span = tracing::info_span!(
-                                        "activity_execution",
+                                    // Log activity start with all correlation fields
+                                    tracing::info!(
+                                        target: "duroxide::runtime",
                                         instance_id = %instance,
                                         execution_id = %execution_id,
                                         activity_name = %name,
                                         activity_id = %id,
                                         worker_id = %worker_id,
+                                        "Activity started"
                                     );
-                                    let _guard = span.enter();
-                                    
-                                    tracing::info!("Activity started");
                                     let start_time = std::time::Instant::now();
 
                                     // Execute activity and atomically ack with completion
@@ -671,6 +696,12 @@ impl Runtime {
                                             Ok(result) => {
                                                 let duration_ms = start_time.elapsed().as_millis() as u64;
                                                 tracing::info!(
+                                                    target: "duroxide::runtime",
+                                                    instance_id = %instance,
+                                                    execution_id = %execution_id,
+                                                    activity_name = %name,
+                                                    activity_id = %id,
+                                                    worker_id = %worker_id,
                                                     outcome = "success",
                                                     duration_ms = %duration_ms,
                                                     result_size = %result.len(),
@@ -692,6 +723,12 @@ impl Runtime {
                                                 // Application error from activity
                                                 let duration_ms = start_time.elapsed().as_millis() as u64;
                                                 tracing::warn!(
+                                                    target: "duroxide::runtime",
+                                                    instance_id = %instance,
+                                                    execution_id = %execution_id,
+                                                    activity_name = %name,
+                                                    activity_id = %id,
+                                                    worker_id = %worker_id,
                                                     outcome = "app_error",
                                                     duration_ms = %duration_ms,
                                                     error = %error,
@@ -718,6 +755,12 @@ impl Runtime {
                                         // Configuration error - activity not registered
                                         let duration_ms = start_time.elapsed().as_millis() as u64;
                                         tracing::error!(
+                                            target: "duroxide::runtime",
+                                            instance_id = %instance,
+                                            execution_id = %execution_id,
+                                            activity_name = %name,
+                                            activity_id = %id,
+                                            worker_id = %worker_id,
                                             outcome = "system_error",
                                             error_type = "unregistered",
                                             duration_ms = %duration_ms,

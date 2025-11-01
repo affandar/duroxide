@@ -142,8 +142,12 @@ impl Runtime {
             turn.prep_completions(messages.to_vec());
         }
 
+        // Extract orchestration metadata to pass to engine (avoids duplicate history lookup)
+        let orch_name = Some(orchestration_name.to_string());
+        let orch_version = history_mgr.version();
+
         // Execute the orchestration logic
-        let turn_result = turn.execute_orchestration(handler.clone(), input.clone());
+        let turn_result = turn.execute_orchestration(handler.clone(), input.clone(), orch_name, orch_version);
 
         // Collect history delta from turn
         history_mgr.extend(turn.history_delta().to_vec());

@@ -180,7 +180,12 @@ mod tests {
             result: Ok("orchestration-result".to_string()),
         });
 
-        let result = engine.execute_orchestration(handler, "test-input".to_string());
+        let result = engine.execute_orchestration(
+            handler,
+            "test-input".to_string(),
+            Some("test-orch".to_string()),
+            Some("1.0.0".to_string()),
+        );
 
         match result {
             TurnResult::Completed(output) => {
@@ -211,7 +216,12 @@ mod tests {
             result: Err("orchestration-error".to_string()),
         });
 
-        let result = engine.execute_orchestration(handler, "test-input".to_string());
+        let result = engine.execute_orchestration(
+            handler,
+            "test-input".to_string(),
+            Some("test-orch".to_string()),
+            Some("1.0.0".to_string()),
+        );
 
         match result {
             TurnResult::Failed(details) => {
@@ -265,7 +275,12 @@ mod tests {
             result: Ok("orchestration-result".to_string()),
         });
 
-        let result = engine.execute_orchestration(handler, "test-input".to_string());
+        let result = engine.execute_orchestration(
+            handler,
+            "test-input".to_string(),
+            Some("test-orch".to_string()),
+            Some("1.0.0".to_string()),
+        );
 
         // With the mock handler, the orchestration completes successfully
         // The cursor model handles non-determinism naturally
