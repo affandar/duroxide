@@ -52,9 +52,14 @@ pub mod replay_engine;
 /// High-level orchestration status derived from history.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OrchestrationStatus {
+    /// Instance does not exist
     NotFound,
+    /// Instance is currently executing
     Running,
+    /// Instance completed successfully with output
     Completed { output: String },
+    /// Instance failed with structured error details.
+    /// Use `details.category()` to distinguish infrastructure/configuration/application errors.
     Failed { details: crate::ErrorDetails },
 }
 

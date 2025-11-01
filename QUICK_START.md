@@ -181,8 +181,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         OrchestrationStatus::Completed { output } => {
             println!("✅ Success: {}", output);
         }
-        OrchestrationStatus::Failed { error } => {
-            println!("❌ Failed: {}", error);
+        OrchestrationStatus::Failed { details } => {
+            println!("❌ Failed ({}): {}", details.category(), details.display_message());
         }
         _ => println!("⏳ Still running..."),
     }

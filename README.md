@@ -81,7 +81,8 @@ let client = Client::new(store);
 client.start_orchestration("inst-hello-1", "HelloWorld", "Rust").await.unwrap();
 match client.wait_for_orchestration("inst-hello-1", std::time::Duration::from_secs(5)).await.unwrap() {
     OrchestrationStatus::Completed { output } => assert_eq!(output, "Hello, Rust!"),
-    _ => panic!("Orchestration failed"),
+    OrchestrationStatus::Failed { details } => panic!("Failed: {}", details.display_message()),
+    _ => panic!("Unexpected status"),
 }
 rt.shutdown(None).await;  // Graceful shutdown with 1s timeout
 # }
@@ -140,9 +141,15 @@ ContinueAsNew and multi-execution
 - The initial `start_orchestration` handle resolves with an empty success when `ContinueAsNew` occurs; the latest execution can be observed via status APIs.
 
 Status and control-plane
-- `Client::get_orchestration_status(instance)` -> Running | Completed { output } | Failed { error } | NotFound
+- `Client::get_orchestration_status(instance)` -> Running | Completed { output } | Failed { details: ErrorDetails } | NotFound
 - `Client::wait_for_orchestration(instance, timeout)` -> Wait for completion with timeout
 - SQLite provider exposes execution-aware methods (`list_executions`, `read_with_execution`, etc.) for diagnostics.
+
+Error classification
+- **Infrastructure** errors: Provider failures, data corruption (retryable by runtime, abort turn)
+- **Configuration** errors: Unregistered orchestrations/activities, nondeterminism (require deployment fix, abort turn)
+- **Application** errors: Business logic failures (handled by orchestration code, propagate normally)
+- Use `ErrorDetails::category()` for metrics, `is_retryable()` for retry logic, `display_message()` for logging
 
 Local development
 - Build: `cargo build`
