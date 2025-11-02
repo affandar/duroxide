@@ -2,7 +2,8 @@ use std::sync::Arc;
 
 use crate::_typed_codec::{Codec, Json};
 use crate::providers::{
-    ExecutionInfo, InstanceInfo, ManagementCapability, Provider, QueueDepths, SystemMetrics, WorkItem,
+    ExecutionInfo, InstanceInfo, ManagementCapability, Provider, QueueDepths, RegistrySnapshot,
+    SystemMetrics, WorkItem,
 };
 use crate::{Event, OrchestrationStatus};
 use serde::Serialize;
@@ -777,4 +778,41 @@ impl Client {
     pub async fn get_queue_depths(&self) -> Result<QueueDepths, String> {
         self.discover_management()?.get_queue_depths().await
     }
+
+    /// Get the current registry snapshot showing all registered orchestrations and activities.
+    ///
+    /// This allows clients to discover what orchestrations and activities are available
+    /// in the runtime, including their versions and which runtime instance registered them.
+    ///
+    /// # Returns
+    ///
+    /// A snapshot containing all registered orchestrations and activities.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err("Management features not available")` if the provider doesn't implement `ManagementCapability`.
+    ///
+    /// # Usage
+    ///
+    /// ```ignore
+    /// let client = Client::new(provider);
+    /// if client.has_management_capability() {
+    ///     let registry = client.get_registry_snapshot().await?;
+    ///     
+    ///     println!("Registered Orchestrations:");
+    ///     for orch in registry.orchestrations {
+    ///         println!("  {} (versions: {:?}) - Runtime: {}", 
+    ///             orch.name, orch.versions, orch.runtime_id);
+    ///     }
+    ///     
+    ///     println!("\nRegistered Activities:");
+    ///     for activity in registry.activities {
+    ///         println!("  {} - Runtime: {}", activity.name, activity.runtime_id);
+    ///     }
+    /// }
+    /// ```
+    pub async fn get_registry_snapshot(&self) -> Result<RegistrySnapshot, String> {
+        self.discover_management()?.get_registry_snapshot().await
+    }
 }
+

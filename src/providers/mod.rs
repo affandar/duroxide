@@ -1545,7 +1545,10 @@ pub mod management;
 pub mod sqlite;
 
 // Re-export management types for convenience
-pub use management::{ExecutionInfo, InstanceInfo, ManagementProvider, QueueDepths, SystemMetrics};
+pub use management::{
+    ExecutionInfo, InstanceInfo, ManagementProvider, QueueDepths, RegisteredActivity,
+    RegisteredOrchestration, RegistrySnapshot, SystemMetrics,
+};
 
 /// Management capability trait for observability and administrative operations.
 ///
@@ -1661,9 +1664,9 @@ pub trait ManagementCapability: Any + Send + Sync {
     ///
     /// # Default
     ///
-    /// Returns empty Vec if not supported.
+    /// Returns an error indicating not implemented.
     async fn list_instances(&self) -> Result<Vec<String>, String> {
-        Ok(Vec::new())
+        Err("list_instances not implemented".to_string())
     }
 
     /// List instances matching a status filter.
@@ -1689,9 +1692,9 @@ pub trait ManagementCapability: Any + Send + Sync {
     ///
     /// # Default
     ///
-    /// Returns empty Vec if not supported.
+    /// Returns an error indicating not implemented.
     async fn list_instances_by_status(&self, _status: &str) -> Result<Vec<String>, String> {
-        Ok(Vec::new())
+        Err("list_instances_by_status not implemented".to_string())
     }
 
     // ===== Execution Inspection =====
@@ -1722,14 +1725,9 @@ pub trait ManagementCapability: Any + Send + Sync {
     ///
     /// # Default
     ///
-    /// Returns `[1]` if instance exists, empty Vec otherwise.
-    async fn list_executions(&self, instance: &str) -> Result<Vec<u64>, String> {
-        // Default assumes single execution if instance exists
-        if let Ok(info) = self.get_instance_info(instance).await {
-            Ok(vec![info.current_execution_id])
-        } else {
-            Ok(Vec::new())
-        }
+    /// Returns an error indicating not implemented.
+    async fn list_executions(&self, _instance: &str) -> Result<Vec<u64>, String> {
+        Err("list_executions not implemented".to_string())
     }
 
     /// Read the full event history for a specific execution within an instance.
@@ -1755,9 +1753,9 @@ pub trait ManagementCapability: Any + Send + Sync {
     ///
     /// # Default
     ///
-    /// Returns empty vector.
+    /// Returns an error indicating not implemented.
     async fn read_execution(&self, _instance: &str, _execution_id: u64) -> Result<Vec<Event>, String> {
-        Ok(Vec::new())
+        Err("read_execution not implemented".to_string())
     }
 
     /// Get the latest (current) execution ID for an instance.
@@ -1776,9 +1774,9 @@ pub trait ManagementCapability: Any + Send + Sync {
     ///
     /// # Default
     ///
-    /// Returns 1 (assumes single execution).
+    /// Returns an error indicating not implemented.
     async fn latest_execution_id(&self, _instance: &str) -> Result<u64, String> {
-        Ok(1)
+        Err("latest_execution_id not implemented".to_string())
     }
 
     // ===== Instance Metadata =====
@@ -1865,9 +1863,9 @@ pub trait ManagementCapability: Any + Send + Sync {
     ///
     /// # Default
     ///
-    /// Returns default `SystemMetrics`.
+    /// Returns an error indicating not implemented.
     async fn get_system_metrics(&self) -> Result<SystemMetrics, String> {
-        Ok(SystemMetrics::default())
+        Err("get_system_metrics not implemented".to_string())
     }
 
     /// Get the current depths of the internal work queues.
@@ -1889,8 +1887,95 @@ pub trait ManagementCapability: Any + Send + Sync {
     ///
     /// # Default
     ///
-    /// Returns default `QueueDepths`.
+    /// Returns an error indicating not implemented.
     async fn get_queue_depths(&self) -> Result<QueueDepths, String> {
-        Ok(QueueDepths::default())
+        Err("get_queue_depths not implemented".to_string())
+    }
+
+    // ===== Registry Discovery =====
+
+    /// Update the registry snapshot with currently registered orchestrations and activities.
+    ///
+    /// This method is called by the runtime when it starts, allowing clients to discover
+    /// what orchestrations and activities are available. The provider should deduplicate
+    /// entries by name, updating timestamps for existing entries.
+    ///
+    /// # Parameters
+    ///
+    /// * `orchestrations` - List of (name, versions) for registered orchestrations
+    /// * `activities` - List of activity names registered in this runtime
+    /// * `timestamp` - The registration timestamp in milliseconds since UNIX_EPOCH
+    ///
+    /// # Implementation Example
+    ///
+    /// ```ignore
+    /// async fn update_registry_snapshot(
+    ///     &self,
+    ///     orchestrations: Vec<(String, Vec<String>)>,
+    ///     activities: Vec<String>,
+    ///     timestamp: u64,
+    /// ) -> Result<(), String> {
+    ///     // Upsert orchestrations (deduplicate by name)
+    ///     for (name, versions) in orchestrations {
+    ///         INSERT INTO registered_orchestrations (name, versions, registered_at)
+    ///         VALUES (?, ?, ?)
+    ///         ON CONFLICT(name) DO UPDATE SET 
+    ///           versions = excluded.versions,
+    ///           registered_at = excluded.registered_at;
+    ///     }
+    ///     
+    ///     // Upsert activities (deduplicate by name)
+    ///     for name in activities {
+    ///         INSERT INTO registered_activities (name, registered_at)
+    ///         VALUES (?, ?)
+    ///         ON CONFLICT(name) DO UPDATE SET 
+    ///           registered_at = excluded.registered_at;
+    ///     }
+    /// }
+    /// ```
+    ///
+    /// # Default
+    ///
+    /// Returns an error indicating not implemented.
+    async fn update_registry_snapshot(
+        &self,
+        _orchestrations: Vec<(String, Vec<String>)>,
+        _activities: Vec<String>,
+        _timestamp: u64,
+    ) -> Result<(), String> {
+        Err("update_registry_snapshot not implemented".to_string())
+    }
+
+    /// Get the current registry snapshot showing all registered orchestrations and activities.
+    ///
+    /// # Returns
+    ///
+    /// A snapshot of all orchestrations and activities registered by all runtime instances,
+    /// including their versions, runtime IDs, and registration timestamps.
+    ///
+    /// # Implementation Example
+    ///
+    /// ```ignore
+    /// async fn get_registry_snapshot(&self) -> Result<RegistrySnapshot, String> {
+    ///     let orchestrations: Vec<RegisteredOrchestration> =
+    ///         SELECT name, versions, runtime_id, registered_at
+    ///         FROM registered_orchestrations
+    ///         ORDER BY name;
+    ///     
+    ///     let activities: Vec<RegisteredActivity> =
+    ///         SELECT name, runtime_id, registered_at
+    ///         FROM registered_activities
+    ///         ORDER BY name;
+    ///     
+    ///     Ok(RegistrySnapshot { orchestrations, activities })
+    /// }
+    /// ```
+    ///
+    /// # Default
+    ///
+    /// Returns an error indicating not implemented.
+    async fn get_registry_snapshot(&self) -> Result<RegistrySnapshot, String> {
+        Err("get_registry_snapshot not implemented".to_string())
     }
 }
+

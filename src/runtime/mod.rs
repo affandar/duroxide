@@ -224,6 +224,50 @@ impl Runtime {
             .and_then(|handle| handle.metrics_snapshot())
     }
 
+    /// Register the runtime's orchestrations and activities with the provider.
+    ///
+    /// This allows clients to discover what orchestrations and activities are available.
+    /// The provider will deduplicate entries by name.
+    async fn register_with_provider(
+        &self,
+        history_store: &Arc<dyn Provider>,
+        activity_registry: &Arc<registry::ActivityRegistry>,
+    ) {
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+
+        // Collect orchestration names and versions
+        let orchestrations: Vec<(String, Vec<String>)> = self
+            .orchestration_registry
+            .list_orchestration_names()
+            .into_iter()
+            .map(|name| {
+                let versions = self
+                    .orchestration_registry
+                    .list_orchestration_versions(&name)
+                    .into_iter()
+                    .map(|v| v.to_string())
+                    .collect();
+                (name, versions)
+            })
+            .collect();
+
+        // Collect activity names
+        let activities = activity_registry.list_activity_names();
+
+        // Try to get management capability and update registry
+        if let Some(mgmt) = history_store.as_management_capability()
+            && let Err(e) = mgmt
+                .update_registry_snapshot(orchestrations, activities, timestamp)
+                .await
+            {
+                tracing::warn!("Failed to update registry snapshot: {}", e);
+            }
+        // Silently fail if management capability is not available
+    }
+
     /// Compute execution metadata from history delta without inspecting event contents.
     /// This allows the runtime to extract semantic information and pass it to the provider
     /// as pre-computed metadata, preventing the provider from needing orchestration knowledge.
@@ -371,7 +415,7 @@ impl Runtime {
         // start request queue + worker
         let runtime = Arc::new(Self {
             joins: Mutex::new(joins),
-            history_store,
+            history_store: history_store.clone(),
 
             orchestration_registry,
             current_execution_ids: Mutex::new(HashMap::new()),
@@ -380,6 +424,9 @@ impl Runtime {
             options,
             observability_handle,
         });
+
+        // Register orchestrations and activities with the provider (for discovery)
+        runtime.register_with_provider(&history_store, &activity_registry).await;
 
         // background orchestrator dispatcher (extracted from inline poller)
         let handle = runtime.clone().start_orchestration_dispatcher();

@@ -1,11 +1,12 @@
 use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
+use sqlx::types::chrono::{TimeZone, Utc};
 use sqlx::{Row, Sqlite, Transaction};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tracing::debug;
 
 use super::{
-    ExecutionInfo, InstanceInfo, ManagementCapability, OrchestrationItem, Provider, QueueDepths, SystemMetrics,
-    WorkItem,
+    ExecutionInfo, InstanceInfo, ManagementCapability, OrchestrationItem, Provider, QueueDepths,
+    RegisteredActivity, RegisteredOrchestration, RegistrySnapshot, SystemMetrics, WorkItem,
 };
 use crate::Event;
 
@@ -339,6 +340,30 @@ impl SqliteProvider {
                 lock_token TEXT NOT NULL,
                 locked_until INTEGER NOT NULL,
                 locked_at INTEGER NOT NULL
+            )
+            "#,
+        )
+        .execute(pool)
+        .await?;
+
+        // Registry discovery tables
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS registered_orchestrations (
+                name TEXT PRIMARY KEY NOT NULL,
+                versions TEXT NOT NULL, -- JSON array of version strings
+                registered_at INTEGER NOT NULL
+            )
+            "#,
+        )
+        .execute(pool)
+        .await?;
+
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS registered_activities (
+                name TEXT PRIMARY KEY NOT NULL,
+                registered_at INTEGER NOT NULL
             )
             "#,
         )
@@ -1484,6 +1509,123 @@ impl ManagementCapability for SqliteProvider {
             worker_queue,
             timer_queue: 0, // Timer queue no longer exists - timers handled by orchestrator queue
         })
+    }
+
+    async fn update_registry_snapshot(
+        &self,
+        orchestrations: Vec<(String, Vec<String>)>,
+        activities: Vec<String>,
+        timestamp: u64,
+    ) -> Result<(), String> {
+        // Upsert orchestrations (deduplicate by name, merge versions)
+        for (name, new_versions) in orchestrations {
+            // First, get existing versions if any
+            let existing_row = sqlx::query("SELECT versions FROM registered_orchestrations WHERE name = ?")
+                .bind(&name)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(|e| e.to_string())?;
+            
+            // Merge versions (union of existing and new)
+            let merged_versions = if let Some(row) = existing_row {
+                let existing_json: String = row.try_get("versions").map_err(|e| e.to_string())?;
+                let mut existing_versions: Vec<String> = serde_json::from_str(&existing_json)
+                    .map_err(|e| e.to_string())?;
+                
+                // Add new versions that don't already exist
+                for version in new_versions {
+                    if !existing_versions.contains(&version) {
+                        existing_versions.push(version);
+                    }
+                }
+                existing_versions
+            } else {
+                new_versions
+            };
+            
+            let versions_json = serde_json::to_string(&merged_versions).map_err(|e| e.to_string())?;
+            sqlx::query(
+                "INSERT INTO registered_orchestrations (name, versions, registered_at) 
+                 VALUES (?, ?, ?)
+                 ON CONFLICT(name) DO UPDATE SET 
+                   versions = excluded.versions,
+                   registered_at = excluded.registered_at",
+            )
+            .bind(&name)
+            .bind(&versions_json)
+            .bind(timestamp as i64)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+        }
+
+        // Upsert activities (deduplicate by name)
+        for name in activities {
+            sqlx::query(
+                "INSERT INTO registered_activities (name, registered_at) 
+                 VALUES (?, ?)
+                 ON CONFLICT(name) DO UPDATE SET 
+                   registered_at = excluded.registered_at",
+            )
+            .bind(&name)
+            .bind(timestamp as i64)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+        }
+
+        Ok(())
+    }
+
+    async fn get_registry_snapshot(&self) -> Result<RegistrySnapshot, String> {
+        // Fetch orchestrations
+        let orch_rows = sqlx::query("SELECT name, versions, registered_at FROM registered_orchestrations ORDER BY name")
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        let mut orchestrations = Vec::new();
+        for row in orch_rows {
+            let name: String = row.try_get("name").map_err(|e| e.to_string())?;
+            let versions_json: String = row.try_get("versions").map_err(|e| e.to_string())?;
+            let versions: Vec<String> = serde_json::from_str(&versions_json).map_err(|e| e.to_string())?;
+            let timestamp_ms: i64 = row.try_get("registered_at").map_err(|e| e.to_string())?;
+            
+            // Convert i64 milliseconds to DateTime<Utc>
+            let registered_at = Utc.timestamp_millis_opt(timestamp_ms)
+                .single()
+                .ok_or_else(|| format!("Invalid timestamp: {}", timestamp_ms))?;
+
+            orchestrations.push(RegisteredOrchestration {
+                name,
+                versions,
+                registered_at,
+            });
+        }
+
+        // Fetch activities
+        let activity_rows = sqlx::query("SELECT name, registered_at FROM registered_activities ORDER BY name")
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        let mut activities = Vec::new();
+        for row in activity_rows {
+            let name: String = row.try_get("name").map_err(|e| e.to_string())?;
+            let timestamp_ms: i64 = row.try_get("registered_at").map_err(|e| e.to_string())?;
+            
+            // Convert i64 milliseconds to DateTime<Utc>
+            let registered_at = Utc.timestamp_millis_opt(timestamp_ms)
+                .single()
+                .ok_or_else(|| format!("Invalid timestamp: {}", timestamp_ms))?;
+
+            activities.push(RegisteredActivity {
+                name,
+                registered_at,
+            });
+        }
+
+        Ok(RegistrySnapshot { orchestrations, activities })
     }
 }
 

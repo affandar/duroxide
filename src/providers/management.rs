@@ -4,6 +4,7 @@
 //! administrative and debugging capabilities.
 
 use crate::Event;
+use sqlx::types::chrono::{DateTime, Utc};
 
 /// Management provider for observability and administrative operations.
 ///
@@ -374,3 +375,31 @@ pub struct QueueDepths {
     pub worker_queue: usize,       // Unlocked worker messages
     pub timer_queue: usize,        // Unlocked timer messages
 }
+
+/// Represents a registered orchestration in the runtime.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RegisteredOrchestration {
+    /// The name of the orchestration.
+    pub name: String,
+    /// The versions of the orchestration that are registered.
+    pub versions: Vec<String>,
+    /// The timestamp when this orchestration was last registered.
+    pub registered_at: DateTime<Utc>,
+}
+
+/// Represents a registered activity in the runtime.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RegisteredActivity {
+    /// The name of the activity.
+    pub name: String,
+    /// The timestamp when this activity was last registered.
+    pub registered_at: DateTime<Utc>,
+}
+
+/// Registry snapshot containing all registered orchestrations and activities.
+#[derive(Debug, Clone, Default)]
+pub struct RegistrySnapshot {
+    pub orchestrations: Vec<RegisteredOrchestration>,
+    pub activities: Vec<RegisteredActivity>,
+}
+

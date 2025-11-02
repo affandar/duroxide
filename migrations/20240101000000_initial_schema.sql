@@ -80,3 +80,17 @@ CREATE TABLE IF NOT EXISTS instance_locks (
     locked_until INTEGER NOT NULL,
     locked_at INTEGER NOT NULL
 );
+
+-- Registry discovery: registered orchestrations
+CREATE TABLE IF NOT EXISTS registered_orchestrations (
+    name TEXT PRIMARY KEY NOT NULL,
+    versions TEXT NOT NULL, -- JSON array of version strings
+    registered_at INTEGER NOT NULL -- milliseconds since UNIX_EPOCH
+);
+
+-- Registry discovery: registered activities
+CREATE TABLE IF NOT EXISTS registered_activities (
+    name TEXT PRIMARY KEY NOT NULL,
+    registered_at INTEGER NOT NULL -- milliseconds since UNIX_EPOCH
+);
+
