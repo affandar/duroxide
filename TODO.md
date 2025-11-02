@@ -1,8 +1,10 @@
 ## Durable Task Rust Core – TODOs
 
 
+- Metrics/logging dashboard 
 - Refactor tests, figure out what are the unit tests vs not
 - clients should be able to query registered activities and orchestrations
+- some failure stress tests. 
 - [ ] **Infrastructure error handling from provider operations**
   - Currently: Provider errors (append/enqueue failures) cause retries via lock expiration
   - Future: Implement visibility timeout to push failed instances to back of queue
