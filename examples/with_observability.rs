@@ -11,14 +11,14 @@
 use duroxide::providers::sqlite::SqliteProvider;
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self, LogFormat, ObservabilityConfig, RuntimeOptions};
-use duroxide::{Client, OrchestrationContext, OrchestrationRegistry, OrchestrationStatus};
+use duroxide::{ActivityContext, Client, OrchestrationContext, OrchestrationRegistry, OrchestrationStatus};
 use std::sync::Arc;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Configure observability with compact logging format
     let observability = ObservabilityConfig {
-        metrics_enabled: false, // Enable if you have an OTLP collector running
+        metrics_enabled: false,        // Enable if you have an OTLP collector running
         metrics_export_endpoint: None, // Some("http://localhost:4317".to_string()),
         metrics_export_interval_ms: 10000,
         log_format: LogFormat::Compact,
@@ -38,13 +38,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Register activities
     let activities = ActivityRegistry::builder()
-        .register("Greet", |name: String| async move {
+        .register("Greet", |ctx: ActivityContext, name: String| async move {
+            ctx.trace_info("Greeting activity started");
             // Simulate some work
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            ctx.trace_info("Greeting activity complete");
             Ok(format!("Hello, {}!", name))
         })
-        .register("Farewell", |name: String| async move {
+        .register("Farewell", |ctx: ActivityContext, name: String| async move {
+            ctx.trace_info("Farewell activity started");
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            ctx.trace_info("Farewell activity complete");
             Ok(format!("Goodbye, {}!", name))
         })
         .build();
@@ -52,19 +56,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Define orchestration
     let greeting_orch = |ctx: OrchestrationContext, name: String| async move {
         ctx.trace_info("Starting greeting orchestration");
-        
-        let greeting = ctx
-            .schedule_activity("Greet", name.clone())
-            .into_activity()
-            .await?;
-        
+
+        let greeting = ctx.schedule_activity("Greet", name.clone()).into_activity().await?;
+
         ctx.trace_info(format!("Got greeting: {}", greeting));
-        
-        let farewell = ctx
-            .schedule_activity("Farewell", name)
-            .into_activity()
-            .await?;
-        
+
+        let farewell = ctx.schedule_activity("Farewell", name).into_activity().await?;
+
         ctx.trace_info("Orchestration completing");
         Ok::<_, String>(format!("{} | {}", greeting, farewell))
     };
@@ -74,24 +72,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .build();
 
     // Start runtime with observability
-    let rt = runtime::Runtime::start_with_options(
-        store.clone(),
-        Arc::new(activities),
-        orchestrations,
-        options,
-    )
-    .await;
+    let rt = runtime::Runtime::start_with_options(store.clone(), Arc::new(activities), orchestrations, options).await;
 
     println!("Runtime started with observability enabled");
     println!("Watch the logs below with structured context fields:\n");
 
     // Create client and start orchestration
     let client = Client::new(store);
-    
-    client.start_orchestration("greeting-1", "GreetingWorkflow", "World").await?;
-    
+
+    client
+        .start_orchestration("greeting-1", "GreetingWorkflow", "World")
+        .await?;
+
     // Wait for completion
-    match client.wait_for_orchestration("greeting-1", std::time::Duration::from_secs(5)).await {
+    match client
+        .wait_for_orchestration("greeting-1", std::time::Duration::from_secs(5))
+        .await
+    {
         Ok(OrchestrationStatus::Completed { output }) => {
             println!("\n✅ Orchestration completed successfully!");
             println!("Output: {}", output);
@@ -109,9 +106,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Shutdown gracefully
     rt.shutdown(None).await;
-    
+
     println!("\nRuntime shut down");
 
     Ok(())
 }
-

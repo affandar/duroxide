@@ -3,23 +3,21 @@
 //! This module provides OpenTelemetry-based metrics and structured logging
 //! for production observability. It can be enabled via the `observability` feature flag.
 
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
+};
 
 /// Log format options for structured logging
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum LogFormat {
     /// Structured JSON output for log aggregators
     Json,
     /// Human-readable format for development (with all fields)
     Pretty,
     /// Compact format: timestamp level module [instance_id] message
+    #[default]
     Compact,
-}
-
-impl Default for LogFormat {
-    fn default() -> Self {
-        LogFormat::Compact
-    }
 }
 
 /// Observability configuration for metrics and logging.
@@ -101,28 +99,46 @@ impl Default for ObservabilityConfig {
     }
 }
 
+fn default_filter_expression(level: &str) -> String {
+    format!("warn,duroxide::orchestrator={level},duroxide::activity={level}")
+}
+
+/// Snapshot of key observability metrics counters for tests and diagnostics.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct MetricsSnapshot {
+    pub orch_completions: u64,
+    pub orch_failures: u64,
+    pub orch_application_errors: u64,
+    pub orch_infrastructure_errors: u64,
+    pub orch_configuration_errors: u64,
+    pub activity_success: u64,
+    pub activity_app_errors: u64,
+    pub activity_infra_errors: u64,
+    pub activity_config_errors: u64,
+}
+
 #[cfg(feature = "observability")]
 mod otel_impl {
     use super::*;
     use opentelemetry::KeyValue;
     use opentelemetry::metrics::{Counter, Histogram, Meter, MeterProvider as _};
-    use opentelemetry_sdk::metrics::{PeriodicReader, SdkMeterProvider};
-    use opentelemetry_sdk::Resource;
     use opentelemetry_otlp::WithExportConfig;
+    use opentelemetry_sdk::Resource;
+    use opentelemetry_sdk::metrics::{ManualReader, PeriodicReader, SdkMeterProvider};
     use std::time::Duration;
-    use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+    use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
     /// OpenTelemetry metrics provider with all instrumentation
     pub struct MetricsProvider {
         meter_provider: SdkMeterProvider,
         meter: Meter,
-        
+
         // Dispatcher metrics
         pub orch_dispatcher_items_fetched: Counter<u64>,
         pub orch_dispatcher_processing_duration: Histogram<u64>,
         pub worker_dispatcher_items_fetched: Counter<u64>,
         pub worker_dispatcher_execution_duration: Histogram<u64>,
-        
+
         // Orchestration execution metrics
         pub orch_completions: Counter<u64>,
         pub orch_failures: Counter<u64>,
@@ -131,7 +147,7 @@ mod otel_impl {
         pub orch_history_size_events: Histogram<u64>,
         pub orch_history_size_bytes: Histogram<u64>,
         pub orch_turns: Histogram<u64>,
-        
+
         // Provider metrics
         pub provider_fetch_duration: Histogram<u64>,
         pub provider_ack_orch_duration: Histogram<u64>,
@@ -140,19 +156,30 @@ mod otel_impl {
         pub provider_enqueue_orch_duration: Histogram<u64>,
         pub provider_ack_retries: Counter<u64>,
         pub provider_infra_errors: Counter<u64>,
-        
+
         // Activity metrics
         pub activity_executions: Counter<u64>,
         pub activity_duration: Histogram<u64>,
         pub activity_app_errors: Counter<u64>,
         pub activity_infra_errors: Counter<u64>,
         pub activity_config_errors: Counter<u64>,
-        
+
         // Client metrics
         pub client_orch_starts: Counter<u64>,
         pub client_events_raised: Counter<u64>,
         pub client_cancellations: Counter<u64>,
         pub client_wait_duration: Histogram<u64>,
+
+        // Test-observable counters
+        orch_completions_total: AtomicU64,
+        orch_failures_total: AtomicU64,
+        orch_application_errors_total: AtomicU64,
+        orch_infrastructure_errors_total: AtomicU64,
+        orch_configuration_errors_total: AtomicU64,
+        activity_success_total: AtomicU64,
+        activity_app_errors_total: AtomicU64,
+        activity_infra_errors_total: AtomicU64,
+        activity_config_errors_total: AtomicU64,
     }
 
     impl MetricsProvider {
@@ -166,28 +193,28 @@ mod otel_impl {
                 ),
             ]);
 
-            let exporter = if let Some(ref endpoint) = config.metrics_export_endpoint {
-                opentelemetry_otlp::MetricExporter::builder()
+            let meter_provider = if let Some(ref endpoint) = config.metrics_export_endpoint {
+                let exporter = opentelemetry_otlp::MetricExporter::builder()
                     .with_tonic()
                     .with_endpoint(endpoint)
                     .build()
-                    .map_err(|e| format!("Failed to create metrics exporter: {}", e))?
+                    .map_err(|e| format!("Failed to create metrics exporter: {}", e))?;
+
+                let reader = PeriodicReader::builder(exporter, opentelemetry_sdk::runtime::Tokio)
+                    .with_interval(Duration::from_millis(config.metrics_export_interval_ms))
+                    .build();
+
+                SdkMeterProvider::builder()
+                    .with_reader(reader)
+                    .with_resource(resource)
+                    .build()
             } else {
-                // If no endpoint, we still create the provider but metrics won't be exported
-                return Err("No metrics export endpoint configured".to_string());
+                let reader = ManualReader::builder().build();
+                SdkMeterProvider::builder()
+                    .with_reader(reader)
+                    .with_resource(resource)
+                    .build()
             };
-
-            let reader = PeriodicReader::builder(
-                exporter,
-                opentelemetry_sdk::runtime::Tokio,
-            )
-            .with_interval(Duration::from_millis(config.metrics_export_interval_ms))
-            .build();
-
-            let meter_provider = SdkMeterProvider::builder()
-                .with_reader(reader)
-                .with_resource(resource)
-                .build();
 
             let meter = meter_provider.meter("duroxide");
 
@@ -357,6 +384,15 @@ mod otel_impl {
                 client_events_raised,
                 client_cancellations,
                 client_wait_duration,
+                orch_completions_total: AtomicU64::new(0),
+                orch_failures_total: AtomicU64::new(0),
+                orch_application_errors_total: AtomicU64::new(0),
+                orch_infrastructure_errors_total: AtomicU64::new(0),
+                orch_configuration_errors_total: AtomicU64::new(0),
+                activity_success_total: AtomicU64::new(0),
+                activity_app_errors_total: AtomicU64::new(0),
+                activity_infra_errors_total: AtomicU64::new(0),
+                activity_config_errors_total: AtomicU64::new(0),
             })
         }
 
@@ -371,12 +407,79 @@ mod otel_impl {
                 .shutdown()
                 .map_err(|e| format!("Failed to shutdown metrics provider: {}", e))
         }
+
+        #[inline]
+        pub fn record_orchestration_completion(&self) {
+            self.orch_completions.add(1, &[]);
+            self.orch_completions_total.fetch_add(1, Ordering::Relaxed);
+        }
+
+        #[inline]
+        pub fn record_orchestration_application_error(&self) {
+            self.orch_failures.add(1, &[]);
+            self.orch_application_errors.add(1, &[]);
+            self.orch_failures_total.fetch_add(1, Ordering::Relaxed);
+            self.orch_application_errors_total.fetch_add(1, Ordering::Relaxed);
+        }
+
+        #[inline]
+        pub fn record_orchestration_infrastructure_error(&self) {
+            self.orch_failures.add(1, &[]);
+            self.orch_infrastructure_errors.add(1, &[]);
+            self.orch_failures_total.fetch_add(1, Ordering::Relaxed);
+            self.orch_infrastructure_errors_total.fetch_add(1, Ordering::Relaxed);
+        }
+
+        #[inline]
+        pub fn record_orchestration_configuration_error(&self) {
+            self.orch_failures.add(1, &[]);
+            self.orch_configuration_errors.add(1, &[]);
+            self.orch_failures_total.fetch_add(1, Ordering::Relaxed);
+            self.orch_configuration_errors_total.fetch_add(1, Ordering::Relaxed);
+        }
+
+        #[inline]
+        pub fn record_activity_success(&self) {
+            self.activity_executions.add(1, &[]);
+            self.activity_success_total.fetch_add(1, Ordering::Relaxed);
+        }
+
+        #[inline]
+        pub fn record_activity_app_error(&self) {
+            self.activity_app_errors.add(1, &[]);
+            self.activity_app_errors_total.fetch_add(1, Ordering::Relaxed);
+        }
+
+        #[inline]
+        pub fn record_activity_infra_error(&self) {
+            self.activity_infra_errors.add(1, &[]);
+            self.activity_infra_errors_total.fetch_add(1, Ordering::Relaxed);
+        }
+
+        #[inline]
+        pub fn record_activity_config_error(&self) {
+            self.activity_config_errors.add(1, &[]);
+            self.activity_config_errors_total.fetch_add(1, Ordering::Relaxed);
+        }
+
+        pub fn snapshot(&self) -> MetricsSnapshot {
+            MetricsSnapshot {
+                orch_completions: self.orch_completions_total.load(Ordering::Relaxed),
+                orch_failures: self.orch_failures_total.load(Ordering::Relaxed),
+                orch_application_errors: self.orch_application_errors_total.load(Ordering::Relaxed),
+                orch_infrastructure_errors: self.orch_infrastructure_errors_total.load(Ordering::Relaxed),
+                orch_configuration_errors: self.orch_configuration_errors_total.load(Ordering::Relaxed),
+                activity_success: self.activity_success_total.load(Ordering::Relaxed),
+                activity_app_errors: self.activity_app_errors_total.load(Ordering::Relaxed),
+                activity_infra_errors: self.activity_infra_errors_total.load(Ordering::Relaxed),
+                activity_config_errors: self.activity_config_errors_total.load(Ordering::Relaxed),
+            }
+        }
     }
 
-    /// Initialize structured logging with the specified configuration
     pub fn init_logging(config: &ObservabilityConfig) -> Result<(), String> {
         let env_filter = EnvFilter::try_from_default_env()
-            .unwrap_or_else(|_| EnvFilter::new(&config.log_level));
+            .unwrap_or_else(|_| EnvFilter::new(default_filter_expression(&config.log_level)));
 
         match config.log_format {
             LogFormat::Json => {
@@ -412,15 +515,92 @@ mod stub_impl {
     use super::*;
 
     /// Stub metrics provider when observability feature is disabled
-    pub struct MetricsProvider;
+    pub struct MetricsProvider {
+        orch_completions_total: AtomicU64,
+        orch_failures_total: AtomicU64,
+        orch_application_errors_total: AtomicU64,
+        orch_infrastructure_errors_total: AtomicU64,
+        orch_configuration_errors_total: AtomicU64,
+        activity_success_total: AtomicU64,
+        activity_app_errors_total: AtomicU64,
+        activity_infra_errors_total: AtomicU64,
+        activity_config_errors_total: AtomicU64,
+    }
 
     impl MetricsProvider {
         pub fn new(_config: &ObservabilityConfig) -> Result<Self, String> {
-            Ok(Self)
+            Ok(Self {
+                orch_completions_total: AtomicU64::new(0),
+                orch_failures_total: AtomicU64::new(0),
+                orch_application_errors_total: AtomicU64::new(0),
+                orch_infrastructure_errors_total: AtomicU64::new(0),
+                orch_configuration_errors_total: AtomicU64::new(0),
+                activity_success_total: AtomicU64::new(0),
+                activity_app_errors_total: AtomicU64::new(0),
+                activity_infra_errors_total: AtomicU64::new(0),
+                activity_config_errors_total: AtomicU64::new(0),
+            })
         }
 
         pub async fn shutdown(self) -> Result<(), String> {
             Ok(())
+        }
+
+        #[inline]
+        pub fn record_orchestration_completion(&self) {
+            self.orch_completions_total.fetch_add(1, Ordering::Relaxed);
+        }
+
+        #[inline]
+        pub fn record_orchestration_application_error(&self) {
+            self.orch_failures_total.fetch_add(1, Ordering::Relaxed);
+            self.orch_application_errors_total.fetch_add(1, Ordering::Relaxed);
+        }
+
+        #[inline]
+        pub fn record_orchestration_infrastructure_error(&self) {
+            self.orch_failures_total.fetch_add(1, Ordering::Relaxed);
+            self.orch_infrastructure_errors_total.fetch_add(1, Ordering::Relaxed);
+        }
+
+        #[inline]
+        pub fn record_orchestration_configuration_error(&self) {
+            self.orch_failures_total.fetch_add(1, Ordering::Relaxed);
+            self.orch_configuration_errors_total.fetch_add(1, Ordering::Relaxed);
+        }
+
+        #[inline]
+        pub fn record_activity_success(&self) {
+            self.activity_success_total.fetch_add(1, Ordering::Relaxed);
+        }
+
+        #[inline]
+        pub fn record_activity_app_error(&self) {
+            self.activity_app_errors_total.fetch_add(1, Ordering::Relaxed);
+        }
+
+        #[inline]
+        pub fn record_activity_infra_error(&self) {
+            self.activity_infra_errors_total.fetch_add(1, Ordering::Relaxed);
+        }
+
+        #[inline]
+        pub fn record_activity_config_error(&self) {
+            self.activity_config_errors_total.fetch_add(1, Ordering::Relaxed);
+        }
+
+        pub fn snapshot(&self) -> MetricsSnapshot {
+            MetricsSnapshot {
+                orch_completions: self.orch_completions_total.load(Ordering::Relaxed),
+                orch_failures: self.orch_failures_total.load(Ordering::Relaxed),
+                orch_application_errors: self.orch_application_errors_total.load(Ordering::Relaxed),
+                orch_infrastructure_errors: self.orch_infrastructure_errors_total.load(Ordering::Relaxed),
+                orch_configuration_errors: self.orch_configuration_errors_total.load(Ordering::Relaxed),
+                activity_success: self.activity_success_total.load(Ordering::Relaxed),
+                activity_app_errors: self.activity_app_errors_total.load(Ordering::Relaxed),
+                activity_infra_errors: self.activity_infra_errors_total.load(Ordering::Relaxed),
+                activity_config_errors: self.activity_config_errors_total.load(Ordering::Relaxed),
+            }
         }
     }
 
@@ -428,7 +608,7 @@ mod stub_impl {
     pub fn init_logging(config: &ObservabilityConfig) -> Result<(), String> {
         // Fall back to basic tracing subscriber
         let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
-            .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(&config.log_level));
+            .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(default_filter_expression(&config.log_level)));
 
         tracing_subscriber::fmt()
             .with_env_filter(env_filter)
@@ -454,8 +634,10 @@ pub struct ObservabilityHandle {
 impl ObservabilityHandle {
     /// Initialize observability with the given configuration
     pub fn init(config: &ObservabilityConfig) -> Result<Self, String> {
-        // Initialize logging first
-        init_logging(config)?;
+        // Initialize logging first, but tolerate failures (e.g., global subscriber already set)
+        if let Err(err) = init_logging(config) {
+            eprintln!("duroxide observability logging init failed: {err}");
+        }
 
         // Initialize metrics if enabled
         let metrics_provider = if config.metrics_enabled {
@@ -481,5 +663,65 @@ impl ObservabilityHandle {
             }
         }
         Ok(())
+    }
+
+    #[inline]
+    pub fn record_orchestration_completion(&self) {
+        if let Some(provider) = &self.metrics_provider {
+            provider.record_orchestration_completion();
+        }
+    }
+
+    #[inline]
+    pub fn record_orchestration_application_error(&self) {
+        if let Some(provider) = &self.metrics_provider {
+            provider.record_orchestration_application_error();
+        }
+    }
+
+    #[inline]
+    pub fn record_orchestration_infrastructure_error(&self) {
+        if let Some(provider) = &self.metrics_provider {
+            provider.record_orchestration_infrastructure_error();
+        }
+    }
+
+    #[inline]
+    pub fn record_orchestration_configuration_error(&self) {
+        if let Some(provider) = &self.metrics_provider {
+            provider.record_orchestration_configuration_error();
+        }
+    }
+
+    #[inline]
+    pub fn record_activity_success(&self) {
+        if let Some(provider) = &self.metrics_provider {
+            provider.record_activity_success();
+        }
+    }
+
+    #[inline]
+    pub fn record_activity_app_error(&self) {
+        if let Some(provider) = &self.metrics_provider {
+            provider.record_activity_app_error();
+        }
+    }
+
+    #[inline]
+    pub fn record_activity_infra_error(&self) {
+        if let Some(provider) = &self.metrics_provider {
+            provider.record_activity_infra_error();
+        }
+    }
+
+    #[inline]
+    pub fn record_activity_config_error(&self) {
+        if let Some(provider) = &self.metrics_provider {
+            provider.record_activity_config_error();
+        }
+    }
+
+    pub fn metrics_snapshot(&self) -> Option<MetricsSnapshot> {
+        self.metrics_provider.as_ref().map(|p| p.snapshot())
     }
 }

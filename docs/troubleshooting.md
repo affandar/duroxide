@@ -15,7 +15,7 @@ Activity 'MyActivity' not found in registry
 - **Activity not registered**: Ensure you've registered the activity in the `ActivityRegistry`
   ```rust
   let activities = ActivityRegistry::builder()
-      .register("MyActivity", |input: String| async move {
+      .register("MyActivity", |ctx: ActivityContext, input: String| async move {
           // Activity logic
           Ok(result)
       })
@@ -61,7 +61,7 @@ Orchestration 'MyOrchestration' not found in registry
 2. **Activity implementation hangs**:
    ```rust
    // Bad: This blocks forever
-   .register("BadActivity", |_| async move {
+   .register("BadActivity", |ctx: ActivityContext, _| async move {
        loop { tokio::time::sleep(Duration::from_secs(1)).await; }
        Ok("never happens".to_string())
    })

@@ -1,7 +1,7 @@
 use duroxide::providers::Provider;
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
-use duroxide::{Action, DurableOutput, Event, OrchestrationContext, OrchestrationRegistry, run_turn};
+use duroxide::{Action, ActivityContext, DurableOutput, Event, OrchestrationContext, OrchestrationRegistry, run_turn};
 use std::sync::Arc as StdArc;
 use std::sync::Arc;
 mod common;
@@ -37,10 +37,12 @@ async fn orchestration_completes_and_replays_deterministically_with(store: StdAr
     };
 
     let activity_registry = ActivityRegistry::builder()
-        .register("A", |input: String| async move {
+        .register("A", |_ctx: ActivityContext, input: String| async move {
             Ok(input.parse::<i32>().unwrap_or(0).saturating_add(1).to_string())
         })
-        .register("B", |input: String| async move { Ok(format!("B({input})")) })
+        .register("B", |_ctx: ActivityContext, input: String| async move {
+            Ok(format!("B({input})"))
+        })
         .build();
 
     let orchestration_registry = OrchestrationRegistry::builder()
@@ -108,10 +110,12 @@ async fn orchestration_completes_and_replays_deterministically_with(store: StdAr
     };
 
     let activity_registry2 = ActivityRegistry::builder()
-        .register("A", |input: String| async move {
+        .register("A", |_ctx: ActivityContext, input: String| async move {
             Ok(input.parse::<i32>().unwrap_or(0).saturating_add(1).to_string())
         })
-        .register("B", |input: String| async move { Ok(format!("B({input})")) })
+        .register("B", |_ctx: ActivityContext, input: String| async move {
+            Ok(format!("B({input})"))
+        })
         .build();
 
     let orchestration_registry2 = OrchestrationRegistry::builder()
@@ -163,7 +167,9 @@ async fn test_deterministic_replay_with_sqlite() {
 #[tokio::test]
 async fn test_trace_deterministic_in_history() {
     let activities = ActivityRegistry::builder()
-        .register("GetValue", |_: String| async move { Ok("test".to_string()) })
+        .register("GetValue", |_ctx: ActivityContext, _: String| async move {
+            Ok("test".to_string())
+        })
         .build();
 
     let orch = |ctx: OrchestrationContext, _: String| async move {
@@ -263,7 +269,9 @@ async fn deterministic_replay_activity_only() {
     };
 
     let activity_registry = ActivityRegistry::builder()
-        .register("A", |input: String| async move { Ok(format!("A({input})")) })
+        .register("A", |_ctx: ActivityContext, input: String| async move {
+            Ok(format!("A({input})"))
+        })
         .build();
 
     let orchestration_registry = OrchestrationRegistry::builder()
@@ -306,7 +314,7 @@ async fn deterministic_replay_activity_only() {
 #[tokio::test]
 async fn test_trace_fire_and_forget() {
     let activities = ActivityRegistry::builder()
-        .register("DoWork", |_: String| async move {
+        .register("DoWork", |_ctx: ActivityContext, _: String| async move {
             tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
             Ok("done".to_string())
         })

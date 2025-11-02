@@ -183,9 +183,7 @@ impl ReplayEngine {
                             nd_err = Some(crate::ErrorDetails::Configuration {
                                 kind: crate::ConfigErrorKind::Nondeterminism,
                                 resource: String::new(),
-                                message: Some(format!(
-                                    "no matching schedule for sub-orchestration id={parent_id}"
-                                )),
+                                message: Some(format!("no matching schedule for sub-orchestration id={parent_id}")),
                             })
                         }
                     }
@@ -215,7 +213,7 @@ impl ReplayEngine {
                         source_event_id: id,
                         details: details.clone(),
                     };
-                    
+
                     // Check if system error (abort turn)
                     match &details {
                         crate::ErrorDetails::Configuration { .. } | crate::ErrorDetails::Infrastructure { .. } => {
@@ -228,7 +226,7 @@ impl ReplayEngine {
                             // Normal flow
                         }
                     }
-                    
+
                     Some(event)
                 }
                 WorkItem::TimerFired { id, fire_at_ms, .. } => Some(Event::TimerFired {
@@ -265,7 +263,7 @@ impl ReplayEngine {
                         source_event_id: parent_id,
                         details: details.clone(),
                     };
-                    
+
                     // Check if system error (abort parent turn)
                     match &details {
                         crate::ErrorDetails::Configuration { .. } | crate::ErrorDetails::Infrastructure { .. } => {
@@ -278,7 +276,7 @@ impl ReplayEngine {
                             // Normal flow
                         }
                     }
-                    
+
                     Some(event)
                 }
                 WorkItem::CancelInstance { reason, .. } => {
@@ -412,7 +410,7 @@ impl ReplayEngine {
                     let h = handler.clone();
                     let inp = input.clone();
                     async move { h.invoke(ctx, inp).await }
-                }
+                },
             )
         }));
 

@@ -641,7 +641,7 @@ impl Future for DurableFuture {
                                 let execution_id = inner.execution_id;
                                 let orch_name = inner.orchestration_name.as_deref().unwrap_or("unknown");
                                 let orch_version = inner.orchestration_version.as_deref().unwrap_or("unknown");
-                                
+
                                 // Log to tracing only on first execution (not during replay)
                                 // Include instance context for correlation
                                 match level {

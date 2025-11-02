@@ -4,6 +4,31 @@ This file tracks all stress test runs, including performance metrics and commit 
 
 ---
 
+## Commit: 6d3d3ce - Timestamp: 2025-11-02 02:23:11 UTC
+
+### Changes Since Last Test
+```
+6d3d3ce plan for activitycontext ready, going into execution mode
+a4a595a checkpoint 2. going to add activity tracing now and then figure out how to separate infra traces from user traces
+12f7da5 checkpoint 1
+5325fe3 Merge error-types branch: Implement comprehensive error classification system
+ad4664b docs: Update documentation for ErrorDetails error classification
+8ddde6e Implement structured error classification system
+87d8c71 final stress test updates
+```
+
+### Test Results
+```
+Provider             Config     Completed  Failed     Infra    Config   App      Success %  Orch/sec        Activity/sec    Avg Latency    
+------------------------------------------------------------------------------------------------------------------------------------------------------
+In-Memory SQLite     1/1        452        0          0        0        0        100.00     7.97            39.87           125.41         ms
+In-Memory SQLite     2/2        367        0          0        0        0        100.00     6.90            34.48           145.01         ms
+File SQLite          1/1        496        0          0        0        0        100.00     15.83           79.17           63.15          ms
+File SQLite          2/2        821        0          0        0        0        100.00     18.94           94.72           52.79          ms
+```
+
+---
+
 ## Commit: 100693b - Timestamp: 2025-10-28 01:12:53 UTC
 
 ### Changes Since Last Test

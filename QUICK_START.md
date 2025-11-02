@@ -9,8 +9,8 @@ Duroxide is a framework for building **reliable, long-running workflows** that c
 ## Core Concepts (30 seconds)
 
 - **Orchestrations**: Your main workflow logic (async functions)
-- **Activities**: Stateless functions that do actual work (NO delays/sleeps!)
-- **Timers**: Use `ctx.schedule_timer(ms)` for delays, timeouts, scheduling
+- **Activities**: Stateless functions that do actual work (can use sleep/polling/HTTP internally)
+- **Timers**: Use `ctx.schedule_timer(ms)` for orchestration-level delays
 - **Deterministic Replay**: If something fails, Duroxide replays your code to get back to the same state
 - **Durable Futures**: Special futures that remember their state across restarts
 
@@ -50,7 +50,7 @@ use std::sync::Arc;
 
 // 1. Define an activity (your business logic)
 let activities = ActivityRegistry::builder()
-    .register("Greet", |name: String| async move {
+    .register("Greet", |ctx: ActivityContext, name: String| async move {
         Ok(format!("Hello, {}!", name))
     })
     .build();
@@ -143,7 +143,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let store = Arc::new(SqliteProvider::new("sqlite:./data.db", None).await?);
     
     let activities = ActivityRegistry::builder()
-        .register("ProcessOrder", |order_id: String| async move {
+        .register("ProcessOrder", |ctx: ActivityContext, order_id: String| async move {
             println!("Processing order: {}", order_id);
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
             Ok(format!("Order {} processed", order_id))

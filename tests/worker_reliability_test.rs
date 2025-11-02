@@ -37,7 +37,7 @@ async fn activity_reliability_after_crash_before_completion_enqueue() {
     };
 
     let activity_registry = ActivityRegistry::builder()
-        .register("TestActivity", |input: String| async move {
+        .register("TestActivity", |_ctx: ActivityContext, input: String| async move {
             println!("Executing TestActivity with input: {input}");
             // Simulate some work
             Ok(format!("Processed: {input}"))
@@ -224,7 +224,7 @@ async fn multiple_activities_reliability_after_crash() {
     };
 
     let activity_registry = ActivityRegistry::builder()
-        .register("TestActivity", |input: String| async move {
+        .register("TestActivity", |_ctx: ActivityContext, input: String| async move {
             println!("Executing TestActivity with input: {input}");
             Ok(format!("Processed: {input}"))
         })

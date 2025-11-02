@@ -202,11 +202,14 @@ Create activity functions in `src/activities/`:
 ```rust
 // src/activities/provision_vm.rs
 
+use duroxide::ActivityContext;
 use crate::types::*;
 
-pub async fn provision_vm_activity(input: String) -> Result<String, String> {
+pub async fn provision_vm_activity(ctx: ActivityContext, input: String) -> Result<String, String> {
     let input: ProvisionVMInput = serde_json::from_str(&input)
         .map_err(|e| format!("Invalid input: {}", e))?;
+    
+    ctx.trace_info(format!("Provisioning VM: {}", input.name));
     
     // Implement your activity logic
     // Best practice: Make idempotent
@@ -217,16 +220,20 @@ pub async fn provision_vm_activity(input: String) -> Result<String, String> {
         admin_password: generate_password(),
     };
     
+    ctx.trace_info("VM provisioned successfully");
+    
     serde_json::to_string(&output).map_err(|e| format!("Failed to serialize output: {}", e))
 }
 ```
 
 **Requirements:**
-- Accept `String` input, return `Result<String, String>`
+- Accept `ActivityContext` as first parameter, then `String` input
+- Return `Result<String, String>`
 - Deserialize input, serialize output
 - Make activities idempotent when possible
 - Handle errors gracefully
 - Activities can use any async operations (sleep, HTTP, database, etc.)
+- Use `ctx.trace_*()` for logging with automatic correlation IDs
 
 ### 6. Create Registry Builders
 
@@ -815,9 +822,10 @@ Pass configuration to orchestrations through dependency injection:
 // Library provides a factory
 pub fn create_activity_registry_with_config(azure_config: AzureConfig) -> ActivityRegistry {
     ActivityRegistry::builder()
-        .register(activities::PROVISION_VM, move |input: String| {
+        .register(activities::PROVISION_VM, move |ctx: ActivityContext, input: String| {
             let config = azure_config.clone();
             async move {
+                ctx.trace_info("Provisioning VM with Azure SDK");
                 let client = AzureClient::new(config);
                 // Use client...
             }
@@ -843,8 +851,9 @@ pub enum AzureError {
 }
 
 // Activities return Result<String, String> but can serialize rich errors
-pub async fn provision_vm_activity(input: String) -> Result<String, String> {
+pub async fn provision_vm_activity(ctx: ActivityContext, input: String) -> Result<String, String> {
     // ... on error:
+    ctx.trace_error("Quota exceeded for VM provisioning");
     Err(serde_json::to_string(&AzureError::QuotaExceeded {
         resource_type: "VM".to_string(),
     }).unwrap())
@@ -856,15 +865,17 @@ pub async fn provision_vm_activity(input: String) -> Result<String, String> {
 Use instance IDs for idempotency:
 
 ```rust
-pub async fn provision_vm_activity(input: String) -> Result<String, String> {
+pub async fn provision_vm_activity(ctx: ActivityContext, input: String) -> Result<String, String> {
     let input: ProvisionVMInput = serde_json::from_str(&input)?;
     
     // Check if VM already exists (idempotency)
     if let Some(existing_vm) = azure_client.get_vm(&input.name).await? {
+        ctx.trace_info("VM already exists, returning existing");
         return Ok(serde_json::to_string(&existing_vm)?);
     }
     
     // Create only if it doesn't exist
+    ctx.trace_info(format!("Creating new VM: {}", input.name));
     let vm = azure_client.create_vm(input).await?;
     Ok(serde_json::to_string(&vm)?)
 }

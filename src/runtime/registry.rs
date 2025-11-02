@@ -326,22 +326,22 @@ impl OrchestrationRegistryBuilder {
 
 #[async_trait]
 pub trait ActivityHandler: Send + Sync {
-    async fn invoke(&self, input: String) -> Result<String, String>;
+    async fn invoke(&self, ctx: crate::ActivityContext, input: String) -> Result<String, String>;
 }
 
 pub struct FnActivity<F, Fut>(pub F)
 where
-    F: Fn(String) -> Fut + Send + Sync + 'static,
+    F: Fn(crate::ActivityContext, String) -> Fut + Send + Sync + 'static,
     Fut: std::future::Future<Output = Result<String, String>> + Send + 'static;
 
 #[async_trait]
 impl<F, Fut> ActivityHandler for FnActivity<F, Fut>
 where
-    F: Fn(String) -> Fut + Send + Sync + 'static,
+    F: Fn(crate::ActivityContext, String) -> Fut + Send + Sync + 'static,
     Fut: std::future::Future<Output = Result<String, String>> + Send + 'static,
 {
-    async fn invoke(&self, input: String) -> Result<String, String> {
-        (self.0)(input).await
+    async fn invoke(&self, ctx: crate::ActivityContext, input: String) -> Result<String, String> {
+        (self.0)(ctx, input).await
     }
 }
 
@@ -374,8 +374,9 @@ impl ActivityRegistry {
     ///
     /// ```rust,no_run
     /// # use duroxide::runtime::registry::ActivityRegistry;
+    /// # use duroxide::ActivityContext;
     /// let registry = ActivityRegistry::builder()
-    ///     .register("activity1", |_| async { Ok("result".to_string()) })
+    ///     .register("activity1", |_ctx: ActivityContext, _| async { Ok("result".to_string()) })
     ///     .build();
     ///
     /// let names = registry.list_activity_names();
@@ -391,8 +392,9 @@ impl ActivityRegistry {
     ///
     /// ```rust,no_run
     /// # use duroxide::runtime::registry::ActivityRegistry;
+    /// # use duroxide::ActivityContext;
     /// let registry = ActivityRegistry::builder()
-    ///     .register("my-activity", |_| async { Ok("result".to_string()) })
+    ///     .register("my-activity", |_ctx: ActivityContext, _| async { Ok("result".to_string()) })
     ///     .build();
     ///
     /// assert!(registry.has("my-activity"));
@@ -408,9 +410,10 @@ impl ActivityRegistry {
     ///
     /// ```rust,no_run
     /// # use duroxide::runtime::registry::ActivityRegistry;
+    /// # use duroxide::ActivityContext;
     /// let registry = ActivityRegistry::builder()
-    ///     .register("activity1", |_| async { Ok("result".to_string()) })
-    ///     .register("activity2", |_| async { Ok("result".to_string()) })
+    ///     .register("activity1", |_ctx: ActivityContext, _| async { Ok("result".to_string()) })
+    ///     .register("activity2", |_ctx: ActivityContext, _| async { Ok("result".to_string()) })
     ///     .build();
     ///
     /// assert_eq!(registry.count(), 2);
@@ -430,7 +433,7 @@ impl ActivityRegistryBuilder {
     }
     pub fn register<F, Fut>(mut self, name: impl Into<String>, f: F) -> Self
     where
-        F: Fn(String) -> Fut + Send + Sync + 'static,
+        F: Fn(crate::ActivityContext, String) -> Fut + Send + Sync + 'static,
         Fut: std::future::Future<Output = Result<String, String>> + Send + 'static,
     {
         self.map.insert(name.into(), Arc::new(FnActivity(f)));
@@ -440,15 +443,15 @@ impl ActivityRegistryBuilder {
     where
         In: serde::de::DeserializeOwned + Send + 'static,
         Out: serde::Serialize + Send + 'static,
-        F: Fn(In) -> Fut + Send + Sync + 'static,
+        F: Fn(crate::ActivityContext, In) -> Fut + Send + Sync + 'static,
         Fut: std::future::Future<Output = Result<Out, String>> + Send + 'static,
     {
         let f_clone = std::sync::Arc::new(f);
-        let wrapper = move |input_s: String| {
+        let wrapper = move |ctx: crate::ActivityContext, input_s: String| {
             let f_inner = f_clone.clone();
             async move {
                 let input: In = crate::_typed_codec::Json::decode(&input_s)?;
-                let out: Out = (f_inner)(input).await?;
+                let out: Out = (f_inner)(ctx, input).await?;
                 crate::_typed_codec::Json::encode(&out)
             }
         };
@@ -491,8 +494,9 @@ impl ActivityRegistryBuilder {
     ///
     /// ```rust,no_run
     /// # use duroxide::runtime::registry::ActivityRegistry;
+    /// # use duroxide::ActivityContext;
     /// // Works when all functions have the same type
-    /// let handler = |input: String| async move {
+    /// let handler = |_ctx: ActivityContext, input: String| async move {
     ///     Ok(format!("processed: {}", input))
     /// };
     ///
@@ -510,7 +514,7 @@ impl ActivityRegistryBuilder {
     /// ```
     pub fn register_all<F, Fut>(mut self, items: Vec<(&str, F)>) -> Self
     where
-        F: Fn(String) -> Fut + Send + Sync + 'static + Clone,
+        F: Fn(crate::ActivityContext, String) -> Fut + Send + Sync + 'static + Clone,
         Fut: std::future::Future<Output = Result<String, String>> + Send + 'static,
     {
         for (name, f) in items {

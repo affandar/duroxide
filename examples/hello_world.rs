@@ -10,7 +10,7 @@
 use duroxide::providers::sqlite::SqliteProvider;
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
-use duroxide::{Client, OrchestrationContext, OrchestrationRegistry};
+use duroxide::{ActivityContext, Client, OrchestrationContext, OrchestrationRegistry};
 use std::sync::Arc;
 
 #[tokio::main]
@@ -27,7 +27,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Register a simple activity that greets users
     let activities = ActivityRegistry::builder()
-        .register("Greet", |name: String| async move { Ok(format!("Hello, {name}!")) })
+        .register("Greet", |ctx: ActivityContext, name: String| async move {
+            ctx.trace_info(format!("Greeting user: {name}"));
+            Ok(format!("Hello, {name}!"))
+        })
         .build();
 
     // Define our orchestration

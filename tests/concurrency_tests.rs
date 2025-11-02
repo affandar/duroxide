@@ -3,7 +3,7 @@ use std::sync::Arc;
 mod common;
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
-use duroxide::{Client, Event, OrchestrationContext, OrchestrationRegistry};
+use duroxide::{ActivityContext, Client, Event, OrchestrationContext, OrchestrationRegistry};
 use std::sync::Arc as StdArc;
 
 async fn concurrent_orchestrations_different_activities_with(store: StdArc<dyn Provider>) {
@@ -61,13 +61,15 @@ async fn concurrent_orchestrations_different_activities_with(store: StdArc<dyn P
     };
 
     let activity_registry = ActivityRegistry::builder()
-        .register("Add", |input: String| async move {
+        .register("Add", |_ctx: ActivityContext, input: String| async move {
             let mut parts = input.split(',');
             let a = parts.next().unwrap_or("0").parse::<i64>().unwrap_or(0);
             let b = parts.next().unwrap_or("0").parse::<i64>().unwrap_or(0);
             Ok((a + b).to_string())
         })
-        .register("Upper", |input: String| async move { Ok(input.to_uppercase()) })
+        .register("Upper", |_ctx: ActivityContext, input: String| async move {
+            Ok(input.to_uppercase())
+        })
         .build();
 
     let orchestration_registry = OrchestrationRegistry::builder()
@@ -235,7 +237,7 @@ async fn concurrent_orchestrations_same_activities_with(store: StdArc<dyn Provid
     };
 
     let activity_registry = ActivityRegistry::builder()
-        .register("Proc", |input: String| async move {
+        .register("Proc", |_ctx: ActivityContext, input: String| async move {
             let n = input.parse::<i64>().unwrap_or(0);
             Ok((n + 1).to_string())
         })
@@ -277,7 +279,9 @@ async fn concurrent_orchestrations_same_activities_with(store: StdArc<dyn Provid
         .unwrap()
     {
         duroxide::OrchestrationStatus::Completed { output } => assert_eq!(output, "o1:a=11;evt=P1"),
-        duroxide::OrchestrationStatus::Failed { details } => panic!("orchestration failed: {}", details.display_message()),
+        duroxide::OrchestrationStatus::Failed { details } => {
+            panic!("orchestration failed: {}", details.display_message())
+        }
         _ => panic!("unexpected orchestration status"),
     }
 
@@ -287,7 +291,9 @@ async fn concurrent_orchestrations_same_activities_with(store: StdArc<dyn Provid
         .unwrap()
     {
         duroxide::OrchestrationStatus::Completed { output } => assert_eq!(output, "o2:a=21;evt=P2"),
-        duroxide::OrchestrationStatus::Failed { details } => panic!("orchestration failed: {}", details.display_message()),
+        duroxide::OrchestrationStatus::Failed { details } => {
+            panic!("orchestration failed: {}", details.display_message())
+        }
         _ => panic!("unexpected orchestration status"),
     }
 
@@ -360,7 +366,7 @@ async fn single_orchestration_with_join_test() {
     };
 
     let activity_registry = ActivityRegistry::builder()
-        .register("Proc", |input: String| async move {
+        .register("Proc", |_ctx: ActivityContext, input: String| async move {
             let n = input.parse::<i64>().unwrap_or(0);
             Ok((n + 1).to_string())
         })
@@ -405,7 +411,9 @@ async fn single_orchestration_with_join_test() {
             println!("✅ Single orch completed: {output}");
             assert_eq!(output, "o1:a=11;evt=P1");
         }
-        duroxide::OrchestrationStatus::Failed { details } => panic!("orchestration failed: {}", details.display_message()),
+        duroxide::OrchestrationStatus::Failed { details } => {
+            panic!("orchestration failed: {}", details.display_message())
+        }
         _ => panic!("unexpected orchestration status"),
     }
 

@@ -1,6 +1,6 @@
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
-use duroxide::{Event, OrchestrationContext, OrchestrationRegistry};
+use duroxide::{ActivityContext, Event, OrchestrationContext, OrchestrationRegistry};
 use std::sync::Arc as StdArc;
 mod common;
 
@@ -41,7 +41,9 @@ async fn continue_as_new_multiexec() {
         .unwrap()
     {
         duroxide::OrchestrationStatus::Completed { output } => assert_eq!(output, "done:2"),
-        duroxide::OrchestrationStatus::Failed { details } => panic!("orchestration failed: {}", details.display_message()),
+        duroxide::OrchestrationStatus::Failed { details } => {
+            panic!("orchestration failed: {}", details.display_message())
+        }
         _ => panic!("unexpected orchestration status"),
     }
 
@@ -155,7 +157,9 @@ async fn continue_as_new_event_routes_to_latest() {
         .unwrap()
     {
         duroxide::OrchestrationStatus::Completed { output } => assert_eq!(output, "ok"),
-        duroxide::OrchestrationStatus::Failed { details } => panic!("orchestration failed: {}", details.display_message()),
+        duroxide::OrchestrationStatus::Failed { details } => {
+            panic!("orchestration failed: {}", details.display_message())
+        }
         _ => panic!("unexpected orchestration status"),
     }
 
@@ -266,7 +270,9 @@ async fn continue_as_new_event_drop_then_process() {
         .unwrap()
     {
         duroxide::OrchestrationStatus::Completed { output } => assert_eq!(output, "late"),
-        duroxide::OrchestrationStatus::Failed { details } => panic!("orchestration failed: {}", details.display_message()),
+        duroxide::OrchestrationStatus::Failed { details } => {
+            panic!("orchestration failed: {}", details.display_message())
+        }
         _ => panic!("unexpected orchestration status"),
     }
 
@@ -354,7 +360,9 @@ async fn event_drop_then_retry_after_subscribe() {
         .unwrap()
     {
         duroxide::OrchestrationStatus::Completed { output } => assert_eq!(output, "ok"),
-        duroxide::OrchestrationStatus::Failed { details } => panic!("orchestration failed: {}", details.display_message()),
+        duroxide::OrchestrationStatus::Failed { details } => {
+            panic!("orchestration failed: {}", details.display_message())
+        }
         _ => panic!("unexpected orchestration status"),
     }
 
@@ -379,7 +387,7 @@ async fn old_execution_completions_are_ignored() {
     let (store, _td) = common::create_sqlite_store_disk().await;
 
     let activity_registry = ActivityRegistry::builder()
-        .register("TestActivity", |_input: String| async move {
+        .register("TestActivity", |_ctx: ActivityContext, _input: String| async move {
             // Activity that completes quickly
             Ok("activity_result".to_string())
         })

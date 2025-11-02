@@ -11,7 +11,7 @@
 use duroxide::providers::sqlite::SqliteProvider;
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self, LogFormat, ObservabilityConfig, RuntimeOptions};
-use duroxide::{Client, OrchestrationContext, OrchestrationRegistry};
+use duroxide::{ActivityContext, Client, OrchestrationContext, OrchestrationRegistry};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -43,18 +43,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Register sample activities with varying characteristics
     let activities = ActivityRegistry::builder()
-        .register("FastTask", |_input: String| async move {
+        .register("FastTask", |ctx: ActivityContext, _input: String| async move {
+            ctx.trace_debug("Fast task executing");
             tokio::time::sleep(Duration::from_millis(10)).await;
+            ctx.trace_debug("Fast task complete");
             Ok("fast_complete".to_string())
         })
-        .register("SlowTask", |_input: String| async move {
+        .register("SlowTask", |ctx: ActivityContext, _input: String| async move {
+            ctx.trace_info("Slow task started");
             tokio::time::sleep(Duration::from_millis(200)).await;
+            ctx.trace_info("Slow task finished");
             Ok("slow_complete".to_string())
         })
-        .register("FailingTask", |input: String| async move {
+        .register("FailingTask", |ctx: ActivityContext, input: String| async move {
+            ctx.trace_info("Failing task invoked");
             if input == "fail" {
+                ctx.trace_error("Failing task returning deliberate failure");
                 Err("deliberate_failure".to_string())
             } else {
+                ctx.trace_info("Failing task succeeded");
                 Ok("success".to_string())
             }
         })
@@ -63,29 +70,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Sample orchestrations
     let fast_orch = |ctx: OrchestrationContext, _input: String| async move {
         ctx.trace_info("Fast orchestration started");
-        let result = ctx.schedule_activity("FastTask", "data".to_string())
-            .into_activity().await?;
+        let result = ctx
+            .schedule_activity("FastTask", "data".to_string())
+            .into_activity()
+            .await?;
         ctx.trace_info("Fast orchestration completed");
         Ok::<_, String>(result)
     };
 
     let slow_orch = |ctx: OrchestrationContext, _input: String| async move {
         ctx.trace_info("Slow orchestration started");
-        
+
         let r1 = ctx.schedule_activity("SlowTask", "data".to_string());
         let r2 = ctx.schedule_activity("SlowTask", "data".to_string());
-        
-        let results = ctx.join(vec![r1, r2]).await;
-        
+
+        let _results = ctx.join(vec![r1, r2]).await;
+
         ctx.trace_info("All tasks completed");
         Ok::<_, String>("done".to_string())
     };
 
     let failing_orch = |ctx: OrchestrationContext, _input: String| async move {
         ctx.trace_info("Orchestration with potential failure");
-        
-        match ctx.schedule_activity("FailingTask", "fail".to_string())
-            .into_activity().await {
+
+        match ctx
+            .schedule_activity("FailingTask", "fail".to_string())
+            .into_activity()
+            .await
+        {
             Ok(r) => Ok::<_, String>(r),
             Err(e) => {
                 ctx.trace_error(format!("Activity failed: {}", e));
@@ -101,13 +113,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .build();
 
     // Start runtime
-    let rt = runtime::Runtime::start_with_options(
-        store.clone(),
-        Arc::new(activities),
-        orchestrations,
-        options,
-    )
-    .await;
+    let rt = runtime::Runtime::start_with_options(store.clone(), Arc::new(activities), orchestrations, options).await;
 
     let client = Client::new(store.clone());
 
@@ -116,11 +122,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Run a mix of orchestrations
     for i in 1..=3 {
-        client.start_orchestration(&format!("fast-{}", i), "FastWorkflow", "data").await?;
+        client
+            .start_orchestration(&format!("fast-{}", i), "FastWorkflow", "data")
+            .await?;
     }
 
     for i in 1..=2 {
-        client.start_orchestration(&format!("slow-{}", i), "SlowWorkflow", "data").await?;
+        client
+            .start_orchestration(&format!("slow-{}", i), "SlowWorkflow", "data")
+            .await?;
     }
 
     client.start_orchestration("fail-1", "FailingWorkflow", "data").await?;
@@ -154,7 +164,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("  • Turn count distributions");
         println!("  • Provider operation latencies");
         println!("  • Error breakdowns by type");
-        
+
         println!("\n💡 Enable metrics by setting:");
         println!("   observability.metrics_enabled = true");
         println!("   observability.metrics_export_endpoint = Some(\"http://localhost:4317\")");
@@ -171,4 +181,3 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     Ok(())
 }
-

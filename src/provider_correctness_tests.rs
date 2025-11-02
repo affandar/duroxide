@@ -5,7 +5,7 @@
 //!
 //! # Example
 //!
-//! ```rust,no_run
+//! ```rust,ignore
 //! use duroxide::providers::Provider;
 //! use duroxide::provider_correctness_tests::ProviderFactory;
 //! use std::sync::Arc;
@@ -15,7 +15,7 @@
 //! #[async_trait::async_trait]
 //! impl ProviderFactory for MyProviderFactory {
 //!     async fn create_provider(&self) -> Arc<dyn Provider> {
-//!         Arc::new(MyProvider::new().await?)
+//!         Arc::new(MyProvider::new().await.unwrap())
 //!     }
 //! }
 //!
@@ -57,15 +57,17 @@ pub trait ProviderFactory: Send + Sync {
 ///
 /// # Example
 ///
-/// ```rust,no_run
+/// ```rust,ignore
 /// use duroxide::provider_correctness_tests::{ProviderFactory, run_all_tests};
+/// use duroxide::providers::Provider;
+/// use std::sync::Arc;
 ///
 /// struct MyFactory;
 ///
 /// #[async_trait::async_trait]
 /// impl ProviderFactory for MyFactory {
 ///     async fn create_provider(&self) -> Arc<dyn Provider> {
-///         Arc::new(MyProvider::new().await?)
+///         Arc::new(MyProvider::new().await.unwrap())
 ///     }
 /// }
 ///

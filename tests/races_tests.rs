@@ -51,7 +51,9 @@ async fn wait_external_completes_with(store: StdArc<dyn Provider>) {
         .unwrap()
     {
         duroxide::OrchestrationStatus::Completed { output } => assert_eq!(output, "only=payload"),
-        duroxide::OrchestrationStatus::Failed { details } => panic!("orchestration failed: {}", details.display_message()),
+        duroxide::OrchestrationStatus::Failed { details } => {
+            panic!("orchestration failed: {}", details.display_message())
+        }
         _ => panic!("unexpected orchestration status"),
     }
 
@@ -117,7 +119,9 @@ async fn race_external_vs_timer_ordering_with(store: StdArc<dyn Provider>) {
         .unwrap()
     {
         duroxide::OrchestrationStatus::Completed { output } => assert_eq!(output, "timer"),
-        duroxide::OrchestrationStatus::Failed { details } => panic!("orchestration failed: {}", details.display_message()),
+        duroxide::OrchestrationStatus::Failed { details } => {
+            panic!("orchestration failed: {}", details.display_message())
+        }
         _ => panic!("unexpected orchestration status"),
     }
 
@@ -188,7 +192,9 @@ async fn race_event_vs_timer_event_wins_with(store: StdArc<dyn Provider>) {
         .unwrap()
     {
         duroxide::OrchestrationStatus::Completed { output } => output,
-        duroxide::OrchestrationStatus::Failed { details } => panic!("orchestration failed: {}", details.display_message()),
+        duroxide::OrchestrationStatus::Failed { details } => {
+            panic!("orchestration failed: {}", details.display_message())
+        }
         _ => panic!("unexpected orchestration status"),
     };
 

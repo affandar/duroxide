@@ -1,25 +1,19 @@
 ## Durable Task Rust Core – TODOs
 
-### Error Handling
 
+- Refactor tests, figure out what are the unit tests vs not
+- clients should be able to query registered activities and orchestrations
 - [ ] **Infrastructure error handling from provider operations**
   - Currently: Provider errors (append/enqueue failures) cause retries via lock expiration
   - Future: Implement visibility timeout to push failed instances to back of queue
   - Related: May need abandon with delay for persistent infrastructure failures
   - Priority: Medium (current retry mechanism works but could be more sophisticated)
-
-### Features
-
 - Drop crates/dependencies that aren't needed
 - Add orchestrator functions
 - Macros for syntactic sugar [DESIGNED - see docs/proposals/MACRO-FINAL-DESIGN.md]
-
-### Reliability & Provider API
-
 - activity session management - cancellations, progress report, messaging.
 - reduce the junk in stress tests, make them useful
 - name the dispatchers
-- clients should be able to query registered activities and orchestrations
 - Update provider docs
 - provider layer should have retries built into it and not sprinkled across all the code
 - need to build an azure storage provider
@@ -58,6 +52,7 @@
 
 ## DONE
 
+- Disable infra logs by default
 - conventions and changes for exporting and importing orchestration and activity registries across crates
 - make the provider tests usable by outside implementors
 - Add new provider tests

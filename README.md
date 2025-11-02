@@ -60,7 +60,7 @@ duroxide = "0.1"
 Hello world (activities + runtime)
 ```rust
 use std::sync::Arc;
-use duroxide::{Client, OrchestrationContext, OrchestrationRegistry, OrchestrationStatus};
+use duroxide::{ActivityContext, Client, OrchestrationContext, OrchestrationRegistry, OrchestrationStatus};
 use duroxide::runtime::{self};
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::providers::sqlite::SqliteProvider;
@@ -69,7 +69,7 @@ use duroxide::providers::sqlite::SqliteProvider;
 # async fn main() {
 let store = std::sync::Arc::new(SqliteProvider::new("sqlite:./data.db", None).await.unwrap());
 let activities = ActivityRegistry::builder()
-    .register("Hello", |name: String| async move { Ok(format!("Hello, {name}!")) })
+    .register("Hello", |_ctx: ActivityContext, name: String| async move { Ok(format!("Hello, {name}!")) })
     .build();
 let orch = |ctx: OrchestrationContext, name: String| async move {
     ctx.trace_info("hello started");
@@ -165,6 +165,8 @@ Stress testing
 
 Observability
 - Enable structured logging: `RuntimeOptions { observability: ObservabilityConfig { log_format: LogFormat::Compact, ... }, ... }`
+- Default logs show only orchestration/activity traces at configured level; runtime internals at warn+
+- Override with `RUST_LOG` for additional targets (e.g., `RUST_LOG=duroxide::runtime=debug`)
 - All logs include `instance_id`, `execution_id`, `orchestration_name`, `activity_name` for correlation
 - Optional OpenTelemetry metrics via `observability` feature flag
 - Run `cargo run --example with_observability` to see structured logging in action

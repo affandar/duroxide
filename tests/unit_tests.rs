@@ -2,7 +2,7 @@ use duroxide::providers::Provider;
 use duroxide::providers::sqlite::SqliteProvider;
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
-use duroxide::{Action, Event, OrchestrationContext, OrchestrationRegistry, run_turn};
+use duroxide::{Action, ActivityContext, Event, OrchestrationContext, OrchestrationRegistry, run_turn};
 use std::sync::Arc;
 
 mod common;
@@ -55,7 +55,7 @@ async fn deterministic_replay_activity_only() {
     };
 
     let activity_registry = ActivityRegistry::builder()
-        .register("A", |input: String| async move {
+        .register("A", |_ctx: ActivityContext, input: String| async move {
             Ok(input.parse::<i32>().unwrap_or(0).saturating_add(1).to_string())
         })
         .build();
@@ -129,7 +129,9 @@ async fn runtime_duplicate_orchestration_deduped_single_execution() {
         .unwrap()
     {
         duroxide::OrchestrationStatus::Completed { output } => assert_eq!(output, "ok"),
-        duroxide::OrchestrationStatus::Failed { details } => panic!("orchestration failed: {}", details.display_message()),
+        duroxide::OrchestrationStatus::Failed { details } => {
+            panic!("orchestration failed: {}", details.display_message())
+        }
         _ => panic!("unexpected orchestration status"),
     }
 
@@ -231,10 +233,15 @@ async fn orchestration_status_apis() {
         .start_orchestration(inst_running, "ShortTimer", "")
         .await
         .unwrap();
-    // Wait a bit for the orchestrator dispatcher to process the queued work item
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    let s1 = client.get_orchestration_status(inst_running).await;
-    // The orchestration should be running (waiting for timer)
+    // Wait for the orchestrator dispatcher to process the queued work item
+    let mut s1 = OrchestrationStatus::NotFound;
+    for _ in 0..10 {
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        s1 = client.get_orchestration_status(inst_running).await;
+        if matches!(s1, OrchestrationStatus::Running) {
+            break;
+        }
+    }
     assert!(
         matches!(s1, OrchestrationStatus::Running),
         "expected Running, got {s1:?}"
@@ -247,7 +254,9 @@ async fn orchestration_status_apis() {
         .unwrap()
     {
         duroxide::OrchestrationStatus::Completed { output } => assert_eq!(output, "ok"),
-        duroxide::OrchestrationStatus::Failed { details } => panic!("orchestration failed: {}", details.display_message()),
+        duroxide::OrchestrationStatus::Failed { details } => {
+            panic!("orchestration failed: {}", details.display_message())
+        }
         _ => panic!("unexpected orchestration status"),
     }
     let s2 = client.get_orchestration_status(inst_running).await;

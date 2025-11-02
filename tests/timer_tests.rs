@@ -2,7 +2,7 @@ use duroxide::providers::Provider;
 use duroxide::providers::sqlite::SqliteProvider;
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
-use duroxide::{OrchestrationContext, OrchestrationRegistry};
+use duroxide::{ActivityContext, OrchestrationContext, OrchestrationRegistry};
 use std::sync::Arc as StdArc;
 use tempfile::TempDir;
 
@@ -126,7 +126,7 @@ async fn timer_with_activity() {
     };
 
     let activity_registry = ActivityRegistry::builder()
-        .register("TestActivity", |input: String| async move {
+        .register("TestActivity", |_ctx: ActivityContext, input: String| async move {
             Ok(format!("processed: {input}"))
         })
         .build();
@@ -187,7 +187,7 @@ async fn timer_recovery_after_crash_before_fire() {
     };
 
     let activity_registry = ActivityRegistry::builder()
-        .register("PostTimer", |input: String| async move {
+        .register("PostTimer", |_ctx: ActivityContext, input: String| async move {
             Ok(format!("Timer fired, then: {input}"))
         })
         .build();
@@ -225,7 +225,7 @@ async fn timer_recovery_after_crash_before_fire() {
     };
 
     let activity_registry2 = ActivityRegistry::builder()
-        .register("PostTimer", |input: String| async move {
+        .register("PostTimer", |_ctx: ActivityContext, input: String| async move {
             Ok(format!("Timer fired, then: {input}"))
         })
         .build();
@@ -270,7 +270,7 @@ async fn timer_recovery_after_crash_after_fire() {
     };
 
     let activity_registry = ActivityRegistry::builder()
-        .register("PostTimer", |input: String| async move {
+        .register("PostTimer", |_ctx: ActivityContext, input: String| async move {
             Ok(format!("Timer fired, then: {input}"))
         })
         .build();
@@ -304,7 +304,7 @@ async fn timer_recovery_after_crash_after_fire() {
     };
 
     let activity_registry2 = ActivityRegistry::builder()
-        .register("PostTimer", |input: String| async move {
+        .register("PostTimer", |_ctx: ActivityContext, input: String| async move {
             Ok(format!("Timer fired, then: {input}"))
         })
         .build();

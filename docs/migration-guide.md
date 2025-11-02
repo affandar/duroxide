@@ -75,10 +75,10 @@ ctx.continue_as_new_versioned("2.0.0", new_input);
 1. **Activity Registration**:
    ```rust
    // Old (0.1.0)
-   .register("MyActivity", |input: String| async move { Ok(result) })
+   .register("MyActivity", |ctx: ActivityContext, input: String| async move { Ok(result) })
    
    // New (0.2.0) - Explicit error type
-   .register("MyActivity", |input: String| async move -> Result<String, ActivityError> { 
+   .register("MyActivity", |ctx: ActivityContext, input: String| async move -> Result<String, ActivityError> { 
        Ok(result) 
    })
    ```

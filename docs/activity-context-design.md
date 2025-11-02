@@ -318,7 +318,7 @@ This is the breaking change - every activity registration needs updating:
 **Examples**:
 ```rust
 // Before
-.register("Greet", |name: String| async move {
+.register("Greet", |ctx: ActivityContext, name: String| async move {
     Ok(format!("Hello, {}!", name))
 })
 
