@@ -304,7 +304,7 @@ To run validation tests against your custom provider:
 
 1. Add `duroxide` with `provider-test` feature to your project
 2. Implement the `ProviderFactory` trait
-3. Call individual test suite functions with your factory
+3. Run individual test suite functions for each validation category
 
 ### Adding the Dependency
 
@@ -319,9 +319,11 @@ duroxide = { path = "../duroxide", features = ["provider-test"] }
 
 ### Basic Example
 
+Run validation tests by calling individual test suite functions:
+
 ```rust
 use duroxide::providers::Provider;
-use duroxide::provider_validations::{ProviderFactory, run_atomicity_tests, run_error_handling_tests};
+use duroxide::provider_validations::{ProviderFactory, run_atomicity_tests, run_error_handling_tests, run_instance_locking_tests, run_lock_expiration_tests, run_multi_execution_tests, run_queue_semantics_tests, run_management_tests};
 use std::sync::Arc;
 
 struct MyProviderFactory;
@@ -335,19 +337,49 @@ impl ProviderFactory for MyProviderFactory {
 }
 
 #[tokio::test]
-async fn test_my_provider_validation() {
+async fn test_my_provider_atomicity() {
     let factory = MyProviderFactory;
-    
-    // Run all test suites
     run_atomicity_tests(&factory).await;
+}
+
+#[tokio::test]
+async fn test_my_provider_error_handling() {
+    let factory = MyProviderFactory;
     run_error_handling_tests(&factory).await;
+}
+
+#[tokio::test]
+async fn test_my_provider_instance_locking() {
+    let factory = MyProviderFactory;
     run_instance_locking_tests(&factory).await;
+}
+
+#[tokio::test]
+async fn test_my_provider_lock_expiration() {
+    let factory = MyProviderFactory;
     run_lock_expiration_tests(&factory).await;
+}
+
+#[tokio::test]
+async fn test_my_provider_multi_execution() {
+    let factory = MyProviderFactory;
     run_multi_execution_tests(&factory).await;
+}
+
+#[tokio::test]
+async fn test_my_provider_queue_semantics() {
+    let factory = MyProviderFactory;
     run_queue_semantics_tests(&factory).await;
+}
+
+#[tokio::test]
+async fn test_my_provider_management() {
+    let factory = MyProviderFactory;
     run_management_tests(&factory).await;
 }
 ```
+
+> **Important:** Run each test suite separately. This provides better test isolation, clearer failure reporting, and allows parallel execution in CI/CD pipelines.
 
 ### What the Tests Validate
 
@@ -389,9 +421,14 @@ The validation test suite includes:
    - System metrics
    - Queue depth reporting
 
-### Advanced Usage: Running Individual Test Suites
+### Running Individual Test Suites
 
-You can run individual test suites to isolate failures:
+Each validation category should be tested in its own test function. This provides:
+
+- **Better isolation**: Failures are clearly attributed to specific categories
+- **Clearer reporting**: Test output shows which category failed
+- **Parallel execution**: CI/CD can run test suites in parallel
+- **Focused debugging**: Fix one category at a time
 
 ```rust
 use duroxide::provider_validations::{ProviderFactory, run_atomicity_tests, run_instance_locking_tests};
@@ -399,16 +436,12 @@ use duroxide::provider_validations::{ProviderFactory, run_atomicity_tests, run_i
 #[tokio::test]
 async fn test_my_provider_atomicity() {
     let factory = MyProviderFactory;
-    
-    // Run only atomicity tests
     run_atomicity_tests(&factory).await;
 }
 
 #[tokio::test]
 async fn test_my_provider_locking() {
     let factory = MyProviderFactory;
-    
-    // Run only instance locking tests
     run_instance_locking_tests(&factory).await;
 }
 ```
@@ -421,12 +454,6 @@ async fn test_my_provider_locking() {
 - `run_multi_execution_tests()` - ContinueAsNew support
 - `run_queue_semantics_tests()` - Queue behavior
 - `run_management_tests()` - Management API tests
-
-**When to run individual suites:**
-- Debugging a specific failure category
-- Verifying a fix for one aspect
-- Iterative development (test one thing at a time)
-- CI/CD pipeline with parallel test execution
 
 ### Creating a Test Provider Factory
 
