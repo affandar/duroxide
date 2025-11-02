@@ -88,38 +88,57 @@ pub async fn run_all_tests<F: ProviderFactory>(factory: F) {
 }
 
 #[cfg(feature = "provider-test")]
-mod tests {
+pub mod tests {
     use super::*;
     use crate::providers::{ExecutionMetadata, WorkItem};
     use crate::{Event, INITIAL_EVENT_ID, INITIAL_EXECUTION_ID};
     use std::time::Duration;
 
-    pub(crate) async fn run_atomicity_tests<F: ProviderFactory>(factory: &F) {
+    /// Run atomicity tests to verify transactional guarantees.
+    ///
+    /// Tests that ack_orchestration_item is truly atomic - all operations
+    /// succeed together or all fail together.
+    pub async fn run_atomicity_tests<F: ProviderFactory>(factory: &F) {
         test_atomicity_failure_rollback(factory).await;
         test_atomicity_success_commit(factory).await;
     }
 
-    pub(crate) async fn run_error_handling_tests<F: ProviderFactory>(factory: &F) {
+    /// Run error handling tests to verify graceful failure modes.
+    ///
+    /// Tests invalid inputs, duplicate events, and other error scenarios.
+    pub async fn run_error_handling_tests<F: ProviderFactory>(factory: &F) {
         test_invalid_lock_token(factory).await;
         test_duplicate_event_id(factory).await;
     }
 
-    pub(crate) async fn run_instance_locking_tests<F: ProviderFactory>(factory: &F) {
+    /// Run instance locking tests to verify exclusive access guarantees.
+    ///
+    /// Tests that only one dispatcher can process an instance at a time.
+    pub async fn run_instance_locking_tests<F: ProviderFactory>(factory: &F) {
         test_locking_exclusive_access(factory).await;
         test_locking_timeout(factory).await;
     }
 
-    pub(crate) async fn run_lock_expiration_tests<F: ProviderFactory>(factory: &F) {
+    /// Run lock expiration tests to verify peek-lock timeout behavior.
+    ///
+    /// Tests that locks expire and messages become available for retry.
+    pub async fn run_lock_expiration_tests<F: ProviderFactory>(factory: &F) {
         test_lock_expiration_release(factory).await;
         test_lock_expiration_reacquire(factory).await;
     }
 
-    pub(crate) async fn run_multi_execution_tests<F: ProviderFactory>(factory: &F) {
+    /// Run multi-execution tests to verify ContinueAsNew support.
+    ///
+    /// Tests execution isolation and history partitioning.
+    pub async fn run_multi_execution_tests<F: ProviderFactory>(factory: &F) {
         test_multi_execution_isolation(factory).await;
         test_continue_as_new_execution(factory).await;
     }
 
-    pub(crate) async fn run_queue_semantics_tests<F: ProviderFactory>(factory: &F) {
+    /// Run queue semantics tests to verify work queue behavior.
+    ///
+    /// Tests FIFO ordering, peek-lock semantics, and atomic acks.
+    pub async fn run_queue_semantics_tests<F: ProviderFactory>(factory: &F) {
         test_queue_fifo_order(factory).await;
         test_queue_atomicity(factory).await;
     }

@@ -375,21 +375,43 @@ The correctness test suite includes:
    - Atomic queue operations
    - Worker queue isolation
 
-### Advanced Usage
+### Advanced Usage: Running Individual Test Suites
 
-You can also run individual test suites:
+You can run individual test suites to isolate failures:
 
 ```rust
-use duroxide::provider_correctness_tests::{ProviderFactory};
+use duroxide::provider_correctness_tests::{ProviderFactory, tests};
 
 #[tokio::test]
-async fn test_atomicity_only() {
-    let factory = MyProviderFactory;
+async fn test_my_provider_atomicity() {
+    let factory = MyProviderFactory::new();
     
     // Run only atomicity tests
-    duroxide::provider_correctness_tests::tests::run_atomicity_tests(&factory).await;
+    tests::run_atomicity_tests(&factory).await;
+}
+
+#[tokio::test]
+async fn test_my_provider_locking() {
+    let factory = MyProviderFactory::new();
+    
+    // Run only instance locking tests
+    tests::run_instance_locking_tests(&factory).await;
 }
 ```
+
+**Available test suites:**
+- `tests::run_atomicity_tests()` - Transactional guarantees
+- `tests::run_error_handling_tests()` - Graceful failure modes
+- `tests::run_instance_locking_tests()` - Exclusive access
+- `tests::run_lock_expiration_tests()` - Peek-lock timeouts
+- `tests::run_multi_execution_tests()` - ContinueAsNew support
+- `tests::run_queue_semantics_tests()` - Queue behavior
+
+**When to run individual suites:**
+- Debugging a specific failure category
+- Verifying a fix for one aspect
+- Iterative development (test one thing at a time)
+- CI/CD pipeline with parallel test execution
 
 ### Creating a Test Provider Factory
 
