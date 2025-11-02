@@ -1,7 +1,7 @@
 use duroxide::Client;
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
-use duroxide::{Event, OrchestrationContext, OrchestrationRegistry};
+use duroxide::{ActivityContext, Event, OrchestrationContext, OrchestrationRegistry};
 mod common;
 
 #[tokio::test]
@@ -56,9 +56,8 @@ async fn cancel_parent_down_propagates_to_child() {
     let deadline = std::time::Instant::now() + std::time::Duration::from_millis(5000);
     loop {
         let hist = store.read("inst-cancel-1").await;
-        if hist
-            .iter()
-            .any(|e| matches!(
+        if hist.iter().any(|e| {
+            matches!(
                 e,
                 Event::OrchestrationFailed { details, .. } if matches!(
                     details,
@@ -67,8 +66,8 @@ async fn cancel_parent_down_propagates_to_child() {
                         ..
                     } if reason == "by_test"
                 )
-            ))
-        {
+            )
+        }) {
             assert!(
                 hist.iter()
                     .any(|e| matches!(e, Event::OrchestrationCancelRequested { .. })),
@@ -99,8 +98,8 @@ async fn cancel_parent_down_propagates_to_child() {
             let has_cancel = hist
                 .iter()
                 .any(|e| matches!(e, Event::OrchestrationCancelRequested { .. }));
-            let has_failed = hist.iter().any(
-                |e| matches!(
+            let has_failed = hist.iter().any(|e| {
+                matches!(
                     e,
                     Event::OrchestrationFailed { details, .. } if matches!(
                         details,
@@ -110,7 +109,7 @@ async fn cancel_parent_down_propagates_to_child() {
                         } if reason == "parent canceled"
                     )
                 )
-            );
+            });
             if has_cancel && has_failed {
                 break;
             }
@@ -151,7 +150,9 @@ async fn cancel_after_completion_is_noop() {
         .unwrap()
     {
         runtime::OrchestrationStatus::Completed { output } => assert_eq!(output, "ok"),
-        runtime::OrchestrationStatus::Failed { details } => panic!("orchestration failed: {}", details.display_message()),
+        runtime::OrchestrationStatus::Failed { details } => {
+            panic!("orchestration failed: {}", details.display_message())
+        }
         _ => panic!("unexpected orchestration status"),
     }
 
@@ -221,7 +222,9 @@ async fn cancel_child_directly_signals_parent() {
         .unwrap()
     {
         runtime::OrchestrationStatus::Completed { output } => output,
-        runtime::OrchestrationStatus::Failed { details } => panic!("orchestration failed: {}", details.display_message()),
+        runtime::OrchestrationStatus::Failed { details } => {
+            panic!("orchestration failed: {}", details.display_message())
+        }
         _ => panic!("unexpected orchestration status"),
     };
     assert!(
@@ -309,8 +312,8 @@ async fn cancel_continue_as_new_second_exec() {
         store.clone(),
         "inst-can-can",
         |hist| {
-            hist.iter().rev().any(
-                |e| matches!(
+            hist.iter().rev().any(|e| {
+                matches!(
                     e,
                     Event::OrchestrationFailed { details, .. } if matches!(
                         details,
@@ -320,7 +323,7 @@ async fn cancel_continue_as_new_second_exec() {
                         } if reason == "by_test_can"
                     )
                 )
-            )
+            })
         },
         5000,
     )
@@ -348,7 +351,7 @@ async fn orchestration_completes_before_activity_finishes() {
     };
 
     let mut ab = ActivityRegistry::builder();
-    ab = ab.register("slow", |_s: String| async move {
+    ab = ab.register("slow", |_ctx: ActivityContext, _s: String| async move {
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
         Ok("ok".to_string())
     });
@@ -373,7 +376,9 @@ async fn orchestration_completes_before_activity_finishes() {
         .unwrap()
     {
         runtime::OrchestrationStatus::Completed { output } => assert_eq!(output, "done"),
-        runtime::OrchestrationStatus::Failed { details } => panic!("orchestration failed: {}", details.display_message()),
+        runtime::OrchestrationStatus::Failed { details } => {
+            panic!("orchestration failed: {}", details.display_message())
+        }
         _ => panic!("unexpected orchestration status"),
     }
 
@@ -399,7 +404,7 @@ async fn orchestration_fails_before_activity_finishes() {
     };
 
     let mut ab = ActivityRegistry::builder();
-    ab = ab.register("slow2", |_s: String| async move {
+    ab = ab.register("slow2", |_ctx: ActivityContext, _s: String| async move {
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
         Ok("ok".to_string())
     });
@@ -431,20 +436,17 @@ async fn orchestration_fails_before_activity_finishes() {
     // Give activity time to finish; no change to terminal failure
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
     let hist = store.read("inst-orch-fail-first").await;
-    assert!(
-        hist.iter()
-            .any(|e| matches!(
-                e,
-                Event::OrchestrationFailed { details, .. } if matches!(
-                    details,
-                    duroxide::ErrorDetails::Application {
-                        kind: duroxide::AppErrorKind::OrchestrationFailed,
-                        message,
-                        ..
-                    } if message == "boom"
-                )
-            ))
-    );
+    assert!(hist.iter().any(|e| matches!(
+        e,
+        Event::OrchestrationFailed { details, .. } if matches!(
+            details,
+            duroxide::ErrorDetails::Application {
+                kind: duroxide::AppErrorKind::OrchestrationFailed,
+                message,
+                ..
+            } if message == "boom"
+        )
+    )));
 
     rt.shutdown(None).await;
 }

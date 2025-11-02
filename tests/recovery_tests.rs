@@ -3,7 +3,7 @@ use duroxide::providers::Provider;
 use duroxide::providers::sqlite::SqliteProvider;
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
-use duroxide::{Client, Event, OrchestrationContext, OrchestrationRegistry};
+use duroxide::{ActivityContext, Client, Event, OrchestrationContext, OrchestrationRegistry};
 use std::sync::Arc;
 use std::sync::Arc as StdArc;
 mod common;
@@ -33,7 +33,7 @@ where
 
     let store1 = make_store_stage1();
     let activity_registry = ActivityRegistry::builder()
-        .register("Step", |input: String| async move { Ok(input) })
+        .register("Step", |_ctx: ActivityContext, input: String| async move { Ok(input) })
         .build();
     let orchestration_registry = OrchestrationRegistry::builder()
         .register("RecoveryTest", orchestrator)
@@ -90,7 +90,9 @@ where
         .unwrap()
     {
         runtime::OrchestrationStatus::Completed { output } => assert_eq!(output, "1234"),
-        runtime::OrchestrationStatus::Failed { details } => panic!("orchestration failed: {}", details.display_message()),
+        runtime::OrchestrationStatus::Failed { details } => {
+            panic!("orchestration failed: {}", details.display_message())
+        }
         _ => panic!("unexpected orchestration status"),
     }
 
@@ -228,9 +230,11 @@ async fn recovery_multiple_orchestrations_sqlite_provider() {
     };
 
     let activity_registry = ActivityRegistry::builder()
-        .register("Echo", |input: String| async move { Ok(input) })
-        .register("Upper", |input: String| async move { Ok(input.to_uppercase()) })
-        .register("Add", |input: String| async move {
+        .register("Echo", |_ctx: ActivityContext, input: String| async move { Ok(input) })
+        .register("Upper", |_ctx: ActivityContext, input: String| async move {
+            Ok(input.to_uppercase())
+        })
+        .register("Add", |_ctx: ActivityContext, input: String| async move {
             let mut it = input.split(',');
             let a = it.next().unwrap_or("0").parse::<i64>().unwrap_or(0);
             let b = it.next().unwrap_or("0").parse::<i64>().unwrap_or(0);

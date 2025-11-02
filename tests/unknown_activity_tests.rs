@@ -1,7 +1,7 @@
 mod common;
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
-use duroxide::{Event, OrchestrationContext, OrchestrationRegistry, OrchestrationStatus};
+use duroxide::{ActivityContext, Event, OrchestrationContext, OrchestrationRegistry, OrchestrationStatus};
 use std::sync::Arc as StdArc;
 
 #[tokio::test]
@@ -10,7 +10,7 @@ async fn unknown_activity_is_isolated_from_other_orchestrations_fs() {
 
     // Register only a known-good activity; intentionally omit the one we'll call ("Missing")
     let activity_registry = ActivityRegistry::builder()
-        .register("Echo", |input: String| async move { Ok(input) })
+        .register("Echo", |_ctx: ActivityContext, input: String| async move { Ok(input) })
         .build();
 
     // Orchestrator that attempts to call a non-existent activity and propagates the error
@@ -52,7 +52,9 @@ async fn unknown_activity_is_isolated_from_other_orchestrations_fs() {
         .unwrap();
     let out_ok = match status_ok {
         duroxide::OrchestrationStatus::Completed { output } => output,
-        duroxide::OrchestrationStatus::Failed { details } => panic!("healthy orchestration failed: {}", details.display_message()),
+        duroxide::OrchestrationStatus::Failed { details } => {
+            panic!("healthy orchestration failed: {}", details.display_message())
+        }
         _ => panic!("unexpected orchestration status"),
     };
     assert_eq!(out_ok, "healthy:yo");
@@ -83,34 +85,28 @@ async fn unknown_activity_is_isolated_from_other_orchestrations_fs() {
     ));
 
     let hist_fail = client.read_execution_history("inst-missing-1", 1).await.unwrap();
-    assert!(
-        hist_fail
-            .iter()
-            .any(|e| matches!(
-                e,
-                Event::ActivityFailed { details, .. } if matches!(
-                    details,
-                    duroxide::ErrorDetails::Configuration {
-                        kind: duroxide::ConfigErrorKind::UnregisteredActivity,
-                        resource,
-                        ..
-                    } if resource == "Missing"
-                )
-            ))
-    );
-    assert!(
-        matches!(
-            hist_fail.last().unwrap(),
-            Event::OrchestrationFailed { details, .. } if matches!(
-                details,
-                duroxide::ErrorDetails::Configuration {
-                    kind: duroxide::ConfigErrorKind::UnregisteredActivity,
-                    resource,
-                    ..
-                } if resource == "Missing"
-            )
+    assert!(hist_fail.iter().any(|e| matches!(
+        e,
+        Event::ActivityFailed { details, .. } if matches!(
+            details,
+            duroxide::ErrorDetails::Configuration {
+                kind: duroxide::ConfigErrorKind::UnregisteredActivity,
+                resource,
+                ..
+            } if resource == "Missing"
         )
-    );
+    )));
+    assert!(matches!(
+        hist_fail.last().unwrap(),
+        Event::OrchestrationFailed { details, .. } if matches!(
+            details,
+            duroxide::ErrorDetails::Configuration {
+                kind: duroxide::ConfigErrorKind::UnregisteredActivity,
+                resource,
+                ..
+            } if resource == "Missing"
+        )
+    ));
 
     // Status API should reflect isolation as well
     match client.get_orchestration_status("inst-healthy-1").await {
@@ -139,7 +135,7 @@ async fn unknown_activity_is_isolated_from_other_orchestrations_inmem() {
     let (store, _temp_dir) = common::create_sqlite_store_disk().await;
 
     let activity_registry = ActivityRegistry::builder()
-        .register("Echo", |input: String| async move { Ok(input) })
+        .register("Echo", |_ctx: ActivityContext, input: String| async move { Ok(input) })
         .build();
 
     let uses_missing = |ctx: OrchestrationContext, _input: String| async move {
@@ -175,7 +171,9 @@ async fn unknown_activity_is_isolated_from_other_orchestrations_inmem() {
         .unwrap();
     let out_ok = match status_ok {
         duroxide::OrchestrationStatus::Completed { output } => output,
-        duroxide::OrchestrationStatus::Failed { details } => panic!("healthy orchestration failed: {}", details.display_message()),
+        duroxide::OrchestrationStatus::Failed { details } => {
+            panic!("healthy orchestration failed: {}", details.display_message())
+        }
         _ => panic!("unexpected orchestration status"),
     };
     assert_eq!(out_ok, "healthy:yo");

@@ -2,7 +2,7 @@
 
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self, OrchestrationStatus};
-use duroxide::{Client, OrchestrationContext, OrchestrationRegistry};
+use duroxide::{ActivityContext, Client, OrchestrationContext, OrchestrationRegistry};
 use std::sync::Arc;
 
 mod common;
@@ -27,7 +27,7 @@ async fn test_status_running() {
     let (store, _temp_dir) = common::create_sqlite_store_disk().await;
 
     let activities = ActivityRegistry::builder()
-        .register("BlockForever", |_: String| async move {
+        .register("BlockForever", |_ctx: ActivityContext, _: String| async move {
             // Never completes
             tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
             Ok("never".to_string())
@@ -68,10 +68,9 @@ async fn test_status_completed() {
     let (store, _temp_dir) = common::create_sqlite_store_disk().await;
 
     let activities = ActivityRegistry::builder()
-        .register(
-            "ReturnValue",
-            |input: String| async move { Ok(format!("result: {input}")) },
-        )
+        .register("ReturnValue", |_ctx: ActivityContext, input: String| async move {
+            Ok(format!("result: {input}"))
+        })
         .build();
 
     let orchestration = |ctx: OrchestrationContext, input: String| async move {
@@ -121,7 +120,7 @@ async fn test_status_failed() {
     let (store, _temp_dir) = common::create_sqlite_store_disk().await;
 
     let activities = ActivityRegistry::builder()
-        .register("FailActivity", |_: String| async move {
+        .register("FailActivity", |_ctx: ActivityContext, _: String| async move {
             Err("intentional failure".to_string())
         })
         .build();
@@ -257,7 +256,7 @@ async fn test_status_cancelled() {
     let (store, _temp_dir) = common::create_sqlite_store_disk().await;
 
     let activities = ActivityRegistry::builder()
-        .register("LongTask", |_: String| async move {
+        .register("LongTask", |_ctx: ActivityContext, _: String| async move {
             tokio::time::sleep(std::time::Duration::from_secs(10)).await;
             Ok("done".to_string())
         })
@@ -296,13 +295,16 @@ async fn test_status_cancelled() {
     // Cancellation results in Failed status with Cancelled error
     match status {
         OrchestrationStatus::Failed { details } => {
-            assert!(matches!(
-                &details,
-                duroxide::ErrorDetails::Application {
-                    kind: duroxide::AppErrorKind::Cancelled { reason },
-                    ..
-                } if reason.contains("test requested cancellation")
-            ), "Cancelled orchestration should have Cancelled error, got: {details:?}");
+            assert!(
+                matches!(
+                    &details,
+                    duroxide::ErrorDetails::Application {
+                        kind: duroxide::AppErrorKind::Cancelled { reason },
+                        ..
+                    } if reason.contains("test requested cancellation")
+                ),
+                "Cancelled orchestration should have Cancelled error, got: {details:?}"
+            );
         }
         other => panic!("Expected Failed (cancelled), got: {other:?}"),
     }
@@ -316,7 +318,7 @@ async fn test_status_lifecycle_transitions() {
     let (store, _temp_dir) = common::create_sqlite_store_disk().await;
 
     let activities = ActivityRegistry::builder()
-        .register("QuickTask", |_: String| async move {
+        .register("QuickTask", |_ctx: ActivityContext, _: String| async move {
             tokio::time::sleep(std::time::Duration::from_millis(200)).await;
             Ok("quick".to_string())
         })
@@ -382,8 +384,12 @@ async fn test_status_independence() {
     let (store, _temp_dir) = common::create_sqlite_store_disk().await;
 
     let activities = ActivityRegistry::builder()
-        .register("SuccessTask", |_: String| async move { Ok("success".to_string()) })
-        .register("FailTask", |_: String| async move { Err("failed".to_string()) })
+        .register("SuccessTask", |_ctx: ActivityContext, _: String| async move {
+            Ok("success".to_string())
+        })
+        .register("FailTask", |_ctx: ActivityContext, _: String| async move {
+            Err("failed".to_string())
+        })
         .build();
 
     let success_orch = |ctx: OrchestrationContext, _input: String| async move {

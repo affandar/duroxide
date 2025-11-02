@@ -23,8 +23,9 @@ pub async fn create_file_provider() -> Result<(Arc<SqliteProvider>, String), Box
 }
 
 /// Run the parallel orchestrations stress test across multiple providers and configurations
-pub async fn run_test_suite() -> Result<(), Box<dyn std::error::Error>> {
+pub async fn run_test_suite(duration_secs: u64) -> Result<(), Box<dyn std::error::Error>> {
     info!("=== Duroxide Parallel Orchestration Stress Test Suite ===");
+    info!("Duration: {} seconds per test", duration_secs);
 
     let concurrency_combos = vec![(1, 1), (2, 2)];
 
@@ -35,7 +36,7 @@ pub async fn run_test_suite() -> Result<(), Box<dyn std::error::Error>> {
     for (orch_conc, worker_conc) in &concurrency_combos {
         let config = StressTestConfig {
             max_concurrent: 20,
-            duration_secs: 30,
+            duration_secs,
             tasks_per_instance: 5,
             activity_delay_ms: 10,
             orch_concurrency: *orch_conc,
@@ -69,7 +70,7 @@ pub async fn run_test_suite() -> Result<(), Box<dyn std::error::Error>> {
     for (orch_conc, worker_conc) in &concurrency_combos {
         let config = StressTestConfig {
             max_concurrent: 20,
-            duration_secs: 30,
+            duration_secs,
             tasks_per_instance: 5,
             activity_delay_ms: 10,
             orch_concurrency: *orch_conc,

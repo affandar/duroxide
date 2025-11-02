@@ -636,12 +636,47 @@ impl Future for DurableFuture {
                             if parts.len() == 3 {
                                 let level = parts[1];
                                 let message = parts[2];
+                                // Extract context for structured logging
+                                let instance_id = &inner.instance_id;
+                                let execution_id = inner.execution_id;
+                                let orch_name = inner.orchestration_name.as_deref().unwrap_or("unknown");
+                                let orch_version = inner.orchestration_version.as_deref().unwrap_or("unknown");
+
                                 // Log to tracing only on first execution (not during replay)
+                                // Include instance context for correlation
                                 match level {
-                                    "ERROR" => tracing::error!(target: "duroxide::trace", "{}", message),
-                                    "WARN" => tracing::warn!(target: "duroxide::trace", "{}", message),
-                                    "DEBUG" => tracing::debug!(target: "duroxide::trace", "{}", message),
-                                    _ => tracing::info!(target: "duroxide::trace", "{}", message),
+                                    "ERROR" => tracing::error!(
+                                        target: "duroxide::orchestration",
+                                        instance_id = %instance_id,
+                                        execution_id = %execution_id,
+                                        orchestration_name = %orch_name,
+                                        orchestration_version = %orch_version,
+                                        "{}", message
+                                    ),
+                                    "WARN" => tracing::warn!(
+                                        target: "duroxide::orchestration",
+                                        instance_id = %instance_id,
+                                        execution_id = %execution_id,
+                                        orchestration_name = %orch_name,
+                                        orchestration_version = %orch_version,
+                                        "{}", message
+                                    ),
+                                    "DEBUG" => tracing::debug!(
+                                        target: "duroxide::orchestration",
+                                        instance_id = %instance_id,
+                                        execution_id = %execution_id,
+                                        orchestration_name = %orch_name,
+                                        orchestration_version = %orch_version,
+                                        "{}", message
+                                    ),
+                                    _ => tracing::info!(
+                                        target: "duroxide::orchestration",
+                                        instance_id = %instance_id,
+                                        execution_id = %execution_id,
+                                        orchestration_name = %orch_name,
+                                        orchestration_version = %orch_version,
+                                        "{}", message
+                                    ),
                                 }
                             }
                             // trace operations don't return values, just empty string

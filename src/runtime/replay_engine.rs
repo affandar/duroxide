@@ -183,9 +183,7 @@ impl ReplayEngine {
                             nd_err = Some(crate::ErrorDetails::Configuration {
                                 kind: crate::ConfigErrorKind::Nondeterminism,
                                 resource: String::new(),
-                                message: Some(format!(
-                                    "no matching schedule for sub-orchestration id={parent_id}"
-                                )),
+                                message: Some(format!("no matching schedule for sub-orchestration id={parent_id}")),
                             })
                         }
                     }
@@ -215,7 +213,7 @@ impl ReplayEngine {
                         source_event_id: id,
                         details: details.clone(),
                     };
-                    
+
                     // Check if system error (abort turn)
                     match &details {
                         crate::ErrorDetails::Configuration { .. } | crate::ErrorDetails::Infrastructure { .. } => {
@@ -228,7 +226,7 @@ impl ReplayEngine {
                             // Normal flow
                         }
                     }
-                    
+
                     Some(event)
                 }
                 WorkItem::TimerFired { id, fire_at_ms, .. } => Some(Event::TimerFired {
@@ -265,7 +263,7 @@ impl ReplayEngine {
                         source_event_id: parent_id,
                         details: details.clone(),
                     };
-                    
+
                     // Check if system error (abort parent turn)
                     match &details {
                         crate::ErrorDetails::Configuration { .. } | crate::ErrorDetails::Infrastructure { .. } => {
@@ -278,7 +276,7 @@ impl ReplayEngine {
                             // Normal flow
                         }
                     }
-                    
+
                     Some(event)
                 }
                 WorkItem::CancelInstance { reason, .. } => {
@@ -377,7 +375,13 @@ impl ReplayEngine {
 
     /// Stage 2: Execute one turn of the orchestration using the replay engine
     /// This stage runs the orchestration logic and generates history deltas and actions
-    pub fn execute_orchestration(&mut self, handler: Arc<dyn OrchestrationHandler>, input: String) -> TurnResult {
+    pub fn execute_orchestration(
+        &mut self,
+        handler: Arc<dyn OrchestrationHandler>,
+        input: String,
+        orchestration_name: Option<String>,
+        orchestration_version: Option<String>,
+    ) -> TurnResult {
         debug!(
             instance = %self.instance,
             "executing orchestration turn"
@@ -392,14 +396,22 @@ impl ReplayEngine {
         let mut working_history = self.baseline_history.clone();
         working_history.extend(self.history_delta.clone());
 
-        // Run orchestration with unified cursor model
+        // Run orchestration with unified cursor model (metadata passed from caller)
         let execution_id = self.get_current_execution_id();
+        let instance_id = self.instance.clone();
         let run_result = catch_unwind(AssertUnwindSafe(|| {
-            crate::run_turn_with_status(working_history, execution_id, move |ctx| {
-                let h = handler.clone();
-                let inp = input.clone();
-                async move { h.invoke(ctx, inp).await }
-            })
+            crate::run_turn_with_status(
+                working_history,
+                execution_id,
+                instance_id,
+                orchestration_name,
+                orchestration_version,
+                move |ctx| {
+                    let h = handler.clone();
+                    let inp = input.clone();
+                    async move { h.invoke(ctx, inp).await }
+                },
+            )
         }));
 
         let (updated_history, decisions, output_opt, nondet_flag) = match run_result {

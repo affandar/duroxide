@@ -5,7 +5,7 @@ use duroxide::providers::WorkItem;
 // Use SQLite provider via common helper
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
-use duroxide::{Client, Event, OrchestrationContext, OrchestrationRegistry, OrchestrationStatus};
+use duroxide::{ActivityContext, Client, Event, OrchestrationContext, OrchestrationRegistry, OrchestrationStatus};
 use std::sync::Arc as StdArc;
 mod common;
 
@@ -16,7 +16,7 @@ async fn code_swap_triggers_nondeterminism() {
     // Register both A1 and B1 activities at all times
     let activity_registry = ActivityRegistry::builder()
         // A1 never completes (simulate long-running or blocked work)
-        .register("A1", |_input: String| async move {
+        .register("A1", |_ctx: ActivityContext, _input: String| async move {
             loop {
                 tokio::time::sleep(std::time::Duration::from_secs(60)).await;
             }
@@ -24,7 +24,9 @@ async fn code_swap_triggers_nondeterminism() {
             Ok(String::new())
         })
         // B1 completes quickly
-        .register("B1", |input: String| async move { Ok(format!("B1:{{{input}}}")) })
+        .register("B1", |_ctx: ActivityContext, input: String| async move {
+            Ok(format!("B1:{{{input}}}"))
+        })
         .build();
 
     // Code A: schedules activity "A1" then waits for completion
@@ -89,13 +91,16 @@ async fn code_swap_triggers_nondeterminism() {
         .unwrap()
     {
         OrchestrationStatus::Failed { details } => {
-            assert!(matches!(
-                details,
-                duroxide::ErrorDetails::Configuration {
-                    kind: duroxide::ConfigErrorKind::Nondeterminism,
-                    ..
-                }
-            ), "expected nondeterminism error, got: {details:?}");
+            assert!(
+                matches!(
+                    details,
+                    duroxide::ErrorDetails::Configuration {
+                        kind: duroxide::ConfigErrorKind::Nondeterminism,
+                        ..
+                    }
+                ),
+                "expected nondeterminism error, got: {details:?}"
+            );
         }
         other => panic!("expected failure with nondeterminism, got: {other:?}"),
     }
@@ -106,10 +111,9 @@ async fn completion_kind_mismatch_triggers_nondeterminism() {
     let (store, _td) = common::create_sqlite_store_disk().await;
 
     let activity_registry = ActivityRegistry::builder()
-        .register(
-            "TestActivity",
-            |input: String| async move { Ok(format!("result:{input}")) },
-        )
+        .register("TestActivity", |_ctx: ActivityContext, input: String| async move {
+            Ok(format!("result:{input}"))
+        })
         .build();
 
     // Orchestration that creates a timer, then waits for it
@@ -170,14 +174,17 @@ async fn completion_kind_mismatch_triggers_nondeterminism() {
     {
         OrchestrationStatus::Failed { details } => {
             println!("Got expected error: {}", details.display_message());
-            assert!(matches!(
-                details,
-                duroxide::ErrorDetails::Configuration {
-                    kind: duroxide::ConfigErrorKind::Nondeterminism,
-                    message: Some(ref msg),
-                    ..
-                } if msg.contains("kind mismatch") && msg.contains("timer") && msg.contains("activity")
-            ), "Expected nondeterminism error about kind mismatch between timer and activity, got: {details:?}");
+            assert!(
+                matches!(
+                    details,
+                    duroxide::ErrorDetails::Configuration {
+                        kind: duroxide::ConfigErrorKind::Nondeterminism,
+                        message: Some(ref msg),
+                        ..
+                    } if msg.contains("kind mismatch") && msg.contains("timer") && msg.contains("activity")
+                ),
+                "Expected nondeterminism error about kind mismatch between timer and activity, got: {details:?}"
+            );
         }
         other => panic!("Expected failure with nondeterminism, got: {other:?}"),
     }
@@ -188,10 +195,9 @@ async fn unexpected_completion_id_triggers_nondeterminism() {
     let (store, _td) = common::create_sqlite_store_disk().await;
 
     let activity_registry = ActivityRegistry::builder()
-        .register(
-            "TestActivity",
-            |input: String| async move { Ok(format!("result:{input}")) },
-        )
+        .register("TestActivity", |_ctx: ActivityContext, input: String| async move {
+            Ok(format!("result:{input}"))
+        })
         .build();
 
     // Orchestration that waits for external events (doesn't schedule anything with ID 999)
@@ -236,14 +242,17 @@ async fn unexpected_completion_id_triggers_nondeterminism() {
     {
         OrchestrationStatus::Failed { details } => {
             println!("Got expected error: {}", details.display_message());
-            assert!(matches!(
-                details,
-                duroxide::ErrorDetails::Configuration {
-                    kind: duroxide::ConfigErrorKind::Nondeterminism,
-                    message: Some(ref msg),
-                    ..
-                } if msg.contains("no matching schedule") && msg.contains("999")
-            ), "Expected nondeterminism error about unexpected completion ID 999, got: {details:?}");
+            assert!(
+                matches!(
+                    details,
+                    duroxide::ErrorDetails::Configuration {
+                        kind: duroxide::ConfigErrorKind::Nondeterminism,
+                        message: Some(ref msg),
+                        ..
+                    } if msg.contains("no matching schedule") && msg.contains("999")
+                ),
+                "Expected nondeterminism error about unexpected completion ID 999, got: {details:?}"
+            );
         }
         other => panic!("Expected failure with nondeterminism, got: {other:?}"),
     }
@@ -293,14 +302,17 @@ async fn unexpected_timer_completion_triggers_nondeterminism() {
     {
         OrchestrationStatus::Failed { details } => {
             println!("Got expected error: {}", details.display_message());
-            assert!(matches!(
-                details,
-                duroxide::ErrorDetails::Configuration {
-                    kind: duroxide::ConfigErrorKind::Nondeterminism,
-                    message: Some(ref msg),
-                    ..
-                } if msg.contains("timer") && msg.contains("123")
-            ), "Expected nondeterminism error about timer 123, got: {details:?}");
+            assert!(
+                matches!(
+                    details,
+                    duroxide::ErrorDetails::Configuration {
+                        kind: duroxide::ConfigErrorKind::Nondeterminism,
+                        message: Some(ref msg),
+                        ..
+                    } if msg.contains("timer") && msg.contains("123")
+                ),
+                "Expected nondeterminism error about timer 123, got: {details:?}"
+            );
         }
         other => panic!("Expected failure with nondeterminism, got: {other:?}"),
     }
@@ -311,7 +323,7 @@ async fn continue_as_new_with_unconsumed_completion_triggers_nondeterminism() {
     let (store, _td) = common::create_sqlite_store_disk().await;
 
     let activity_registry = ActivityRegistry::builder()
-        .register("MyActivity", |_input: String| async move {
+        .register("MyActivity", |_ctx: ActivityContext, _input: String| async move {
             // Activity that never completes on its own
             loop {
                 tokio::time::sleep(std::time::Duration::from_secs(60)).await;
@@ -393,13 +405,16 @@ async fn continue_as_new_with_unconsumed_completion_triggers_nondeterminism() {
     {
         OrchestrationStatus::Failed { details } => {
             println!("Got expected nondeterminism error: {}", details.display_message());
-            assert!(matches!(
-                details,
-                duroxide::ErrorDetails::Configuration {
-                    kind: duroxide::ConfigErrorKind::Nondeterminism,
-                    ..
-                }
-            ), "Expected nondeterminism error, got: {details:?}");
+            assert!(
+                matches!(
+                    details,
+                    duroxide::ErrorDetails::Configuration {
+                        kind: duroxide::ConfigErrorKind::Nondeterminism,
+                        ..
+                    }
+                ),
+                "Expected nondeterminism error, got: {details:?}"
+            );
         }
         OrchestrationStatus::Completed { output } => {
             panic!("Expected nondeterminism failure but orchestration completed: {output}");
@@ -443,7 +458,7 @@ async fn execution_id_filtering_without_continue_as_new_triggers_nondeterminism(
         .register("ExecIdNoCanTest", orch)
         .build();
     let activity_registry = ActivityRegistry::builder()
-        .register("TestActivity", |_input: String| async {
+        .register("TestActivity", |_ctx: ActivityContext, _input: String| async {
             Ok("activity result".to_string())
         })
         .build();
@@ -487,7 +502,10 @@ async fn execution_id_filtering_without_continue_as_new_triggers_nondeterminism(
             // This demonstrates that execution ID filtering prevents cross-execution completions from affecting the orchestration
         }
         OrchestrationStatus::Failed { details } => {
-            panic!("Expected successful completion but got error: {}", details.display_message());
+            panic!(
+                "Expected successful completion but got error: {}",
+                details.display_message()
+            );
         }
         other => panic!("Unexpected status: {other:?}"),
     }
@@ -545,7 +563,10 @@ async fn duplicate_external_events_are_handled_gracefully() {
             // 3. No nondeterminism error is raised
         }
         OrchestrationStatus::Failed { details } => {
-            panic!("Expected successful completion but got error: {}", details.display_message());
+            panic!(
+                "Expected successful completion but got error: {}",
+                details.display_message()
+            );
         }
         other => panic!("Unexpected status: {other:?}"),
     }

@@ -8,7 +8,7 @@ pub mod parallel_orchestrations;
 use duroxide::providers::Provider;
 use duroxide::runtime::registry::{ActivityRegistry, OrchestrationRegistry};
 use duroxide::runtime::{self, RuntimeOptions};
-use duroxide::{Client, OrchestrationContext};
+use duroxide::{ActivityContext, Client, OrchestrationContext};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Instant;
@@ -100,6 +100,7 @@ pub async fn run_stress_test(
         dispatcher_idle_sleep_ms: 100,
         orchestration_concurrency: config.orch_concurrency,
         worker_concurrency: config.worker_concurrency,
+        ..Default::default()
     };
     let rt = runtime::Runtime::start_with_options(provider.clone(), activities, orchestrations, options).await;
 
@@ -182,12 +183,12 @@ pub async fn run_stress_test(
                     tracing::warn!(
                         category = category,
                         error = %details.display_message(),
-                        "Orchestration {} failed", 
+                        "Orchestration {} failed",
                         instance
                     );
-                    
+
                     *failed_clone.lock().await += 1;
-                    
+
                     match details {
                         duroxide::ErrorDetails::Infrastructure { .. } => {
                             *failed_infrastructure_clone.lock().await += 1;
@@ -271,11 +272,9 @@ pub async fn run_stress_test(
     info!("Total time: {:?}", result.total_time);
     info!("Launched: {}", result.launched);
     info!("Completed: {}", result.completed);
-    info!("Failed: {} (infra: {}, config: {}, app: {})", 
-        result.failed, 
-        result.failed_infrastructure, 
-        result.failed_configuration, 
-        result.failed_application
+    info!(
+        "Failed: {} (infra: {}, config: {}, app: {})",
+        result.failed, result.failed_infrastructure, result.failed_configuration, result.failed_application
     );
     info!("Success rate: {:.2}%", result.success_rate());
     info!("Throughput: {:.2} orchestrations/sec", result.orch_throughput);
@@ -290,7 +289,17 @@ pub fn print_comparison_table(results: &[(String, String, StressTestResult)]) {
     info!("\n=== Comparison Table ===");
     info!(
         "{:<20} {:<10} {:<10} {:<10} {:<8} {:<8} {:<8} {:<10} {:<15} {:<15} {:<15}",
-        "Provider", "Config", "Completed", "Failed", "Infra", "Config", "App", "Success %", "Orch/sec", "Activity/sec", "Avg Latency"
+        "Provider",
+        "Config",
+        "Completed",
+        "Failed",
+        "Infra",
+        "Config",
+        "App",
+        "Success %",
+        "Orch/sec",
+        "Activity/sec",
+        "Avg Latency"
     );
     info!("{}", "-".repeat(150));
 
@@ -316,7 +325,7 @@ pub fn print_comparison_table(results: &[(String, String, StressTestResult)]) {
 pub fn create_default_activities(delay_ms: u64) -> Arc<ActivityRegistry> {
     Arc::new(
         ActivityRegistry::builder()
-            .register("ProcessTask", move |input: String| {
+            .register("ProcessTask", move |_ctx: ActivityContext, input: String| {
                 let delay = delay_ms;
                 async move {
                     tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
@@ -339,8 +348,6 @@ async fn fanout_orchestration(ctx: OrchestrationContext, input: String) -> Resul
     let config: serde_json::Value = serde_json::from_str(&input).map_err(|e| format!("Invalid input: {}", e))?;
     let task_count = config["task_count"].as_u64().unwrap_or(5) as usize;
 
-    ctx.trace_info(format!("Starting fanout with {} tasks", task_count));
-
     // Fan-out: schedule all activities in parallel
     let mut futures = Vec::new();
     for i in 0..task_count {
@@ -355,8 +362,6 @@ async fn fanout_orchestration(ctx: OrchestrationContext, input: String) -> Resul
         .iter()
         .filter(|r| matches!(r, duroxide::DurableOutput::Activity(Ok(_))))
         .count();
-
-    ctx.trace_info(format!("Fanout completed: {}/{} succeeded", success_count, task_count));
 
     Ok(format!("Completed {} tasks ({} succeeded)", task_count, success_count))
 }

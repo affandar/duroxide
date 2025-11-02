@@ -4,7 +4,7 @@
 //! `OrchestrationContext` and the in-process `Runtime`.
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
-use duroxide::{Client, OrchestrationContext, OrchestrationRegistry};
+use duroxide::{ActivityContext, Client, OrchestrationContext, OrchestrationRegistry};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 mod common;
@@ -21,7 +21,12 @@ async fn sample_hello_world_fs() {
 
     // Register a simple activity: "Hello" -> format a greeting
     let activity_registry = ActivityRegistry::builder()
-        .register("Hello", |input: String| async move { Ok(format!("Hello, {input}!")) })
+        .register("Hello", |ctx: ActivityContext, input: String| async move {
+            ctx.trace_info("Hello activity started");
+            let greeting = format!("Hello, {input}!");
+            ctx.trace_info(format!("Hello activity completed -> {greeting}"));
+            Ok(greeting)
+        })
         .build();
 
     // Orchestrator: emit a trace, call Hello twice, return result using input
@@ -52,7 +57,9 @@ async fn sample_hello_world_fs() {
         .unwrap()
     {
         runtime::OrchestrationStatus::Completed { output } => assert_eq!(output, "Hello, World!"),
-        runtime::OrchestrationStatus::Failed { details } => panic!("orchestration failed: {}", details.display_message()),
+        runtime::OrchestrationStatus::Failed { details } => {
+            panic!("orchestration failed: {}", details.display_message())
+        }
         _ => panic!("unexpected orchestration status"),
     }
     rt.shutdown(None).await;
@@ -69,9 +76,15 @@ async fn sample_basic_control_flow_fs() {
 
     // Register activities that return a flag and branch outcomes
     let activity_registry = ActivityRegistry::builder()
-        .register("GetFlag", |_input: String| async move { Ok("yes".to_string()) })
-        .register("SayYes", |_in: String| async move { Ok("picked_yes".to_string()) })
-        .register("SayNo", |_in: String| async move { Ok("picked_no".to_string()) })
+        .register("GetFlag", |_ctx: ActivityContext, _input: String| async move {
+            Ok("yes".to_string())
+        })
+        .register("SayYes", |_ctx: ActivityContext, _in: String| async move {
+            Ok("picked_yes".to_string())
+        })
+        .register("SayNo", |_ctx: ActivityContext, _in: String| async move {
+            Ok("picked_no".to_string())
+        })
         .build();
 
     // Orchestrator: get a flag and branch
@@ -103,7 +116,9 @@ async fn sample_basic_control_flow_fs() {
         .unwrap()
     {
         runtime::OrchestrationStatus::Completed { output } => assert_eq!(output, "picked_yes"),
-        runtime::OrchestrationStatus::Failed { details } => panic!("orchestration failed: {}", details.display_message()),
+        runtime::OrchestrationStatus::Failed { details } => {
+            panic!("orchestration failed: {}", details.display_message())
+        }
         _ => panic!("unexpected orchestration status"),
     }
     rt.shutdown(None).await;
@@ -120,7 +135,9 @@ async fn sample_loop_fs() {
 
     // Register an activity that appends "x" to its input
     let activity_registry = ActivityRegistry::builder()
-        .register("Append", |input: String| async move { Ok(format!("{input}x")) })
+        .register("Append", |_ctx: ActivityContext, input: String| async move {
+            Ok(format!("{input}x"))
+        })
         .build();
 
     // Orchestrator: loop three times, updating an accumulator
@@ -151,7 +168,9 @@ async fn sample_loop_fs() {
         .unwrap()
     {
         runtime::OrchestrationStatus::Completed { output } => assert_eq!(output, "startxxx"),
-        runtime::OrchestrationStatus::Failed { details } => panic!("orchestration failed: {}", details.display_message()),
+        runtime::OrchestrationStatus::Failed { details } => {
+            panic!("orchestration failed: {}", details.display_message())
+        }
         _ => panic!("unexpected orchestration status"),
     }
     rt.shutdown(None).await;
@@ -168,14 +187,16 @@ async fn sample_error_handling_fs() {
 
     // Register a fragile activity that may fail, and a recovery activity
     let activity_registry = ActivityRegistry::builder()
-        .register("Fragile", |input: String| async move {
+        .register("Fragile", |_ctx: ActivityContext, input: String| async move {
             if input == "bad" {
                 Err("boom".to_string())
             } else {
                 Ok("ok".to_string())
             }
         })
-        .register("Recover", |_input: String| async move { Ok("recovered".to_string()) })
+        .register("Recover", |_ctx: ActivityContext, _input: String| async move {
+            Ok("recovered".to_string())
+        })
         .build();
 
     // Orchestrator: try fragile, on error call Recover
@@ -214,7 +235,9 @@ async fn sample_error_handling_fs() {
         .unwrap()
     {
         runtime::OrchestrationStatus::Completed { output } => assert_eq!(output, "recovered"),
-        runtime::OrchestrationStatus::Failed { details } => panic!("orchestration failed: {}", details.display_message()),
+        runtime::OrchestrationStatus::Failed { details } => {
+            panic!("orchestration failed: {}", details.display_message())
+        }
         _ => panic!("unexpected orchestration status"),
     }
     rt.shutdown(None).await;
@@ -232,8 +255,10 @@ async fn sample_timeout_with_timer_race_fs() {
 
     // Register a long-running activity that sleeps before returning
     let activity_registry = ActivityRegistry::builder()
-        .register("LongOp", |_input: String| async move {
+        .register("LongOp", |ctx: ActivityContext, _input: String| async move {
+            ctx.trace_info("LongOp started");
             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            ctx.trace_info("LongOp finished");
             Ok("done".to_string())
         })
         .build();
@@ -286,8 +311,9 @@ async fn sample_select2_activity_vs_external_fs() {
     let (store, _temp_dir) = common::create_sqlite_store_disk().await;
 
     let activity_registry = ActivityRegistry::builder()
-        .register("Sleep", |_input: String| async move {
+        .register("Sleep", |ctx: ActivityContext, _input: String| async move {
             tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+            ctx.trace_info("Sleep activity finished");
             Ok("slept".to_string())
         })
         .build();
@@ -332,7 +358,9 @@ async fn sample_select2_activity_vs_external_fs() {
         .unwrap()
     {
         runtime::OrchestrationStatus::Completed { output } => output,
-        runtime::OrchestrationStatus::Failed { details } => panic!("orchestration failed: {}", details.display_message()),
+        runtime::OrchestrationStatus::Failed { details } => {
+            panic!("orchestration failed: {}", details.display_message())
+        }
         _ => panic!("unexpected orchestration status"),
     };
     // External event should win (idx==1) because activity sleeps 300ms
@@ -351,10 +379,13 @@ async fn dtf_legacy_gabbar_greetings_fs() {
 
     // Register a greeting activity used by both branches
     let activity_registry = ActivityRegistry::builder()
-        .register(
-            "Greetings",
-            |input: String| async move { Ok(format!("Hello, {input}!")) },
-        )
+        .register("Greetings", |ctx: ActivityContext, input: String| async move {
+            ctx.trace_info("Greeting activity started");
+            ctx.trace_debug(format!("Original input: {input}"));
+            let output = format!("Hello, {input}!");
+            ctx.trace_info(format!("Greeting activity completed -> {output}"));
+            Ok(output)
+        })
         .build();
 
     let orchestration = |ctx: OrchestrationContext, _input: String| async move {
@@ -393,7 +424,9 @@ async fn dtf_legacy_gabbar_greetings_fs() {
         .unwrap()
     {
         runtime::OrchestrationStatus::Completed { output } => assert_eq!(output, "Hello, Gabbar!, Hello, Samba!"),
-        runtime::OrchestrationStatus::Failed { details } => panic!("orchestration failed: {}", details.display_message()),
+        runtime::OrchestrationStatus::Failed { details } => {
+            panic!("orchestration failed: {}", details.display_message())
+        }
         _ => panic!("unexpected orchestration status"),
     }
     rt.shutdown(None).await;
@@ -435,7 +468,9 @@ async fn sample_system_activities_fs() {
         .unwrap()
     {
         runtime::OrchestrationStatus::Completed { output } => output,
-        runtime::OrchestrationStatus::Failed { details } => panic!("orchestration failed: {}", details.display_message()),
+        runtime::OrchestrationStatus::Failed { details } => {
+            panic!("orchestration failed: {}", details.display_message())
+        }
         _ => panic!("unexpected orchestration status"),
     };
     // Basic assertions
@@ -499,7 +534,12 @@ async fn sample_sub_orchestration_basic_fs() {
     let (store, _temp_dir) = common::create_sqlite_store_disk().await;
 
     let activity_registry = ActivityRegistry::builder()
-        .register("Upper", |input: String| async move { Ok(input.to_uppercase()) })
+        .register("Upper", |ctx: ActivityContext, input: String| async move {
+            ctx.trace_info("Upper activity converting string");
+            let result = input.to_uppercase();
+            ctx.trace_info(format!("Upper activity result -> {result}"));
+            Ok(result)
+        })
         .build();
 
     let child_upper = |ctx: OrchestrationContext, input: String| async move {
@@ -534,7 +574,9 @@ async fn sample_sub_orchestration_basic_fs() {
         .unwrap()
     {
         runtime::OrchestrationStatus::Completed { output } => assert_eq!(output, "parent:HI"),
-        runtime::OrchestrationStatus::Failed { details } => panic!("orchestration failed: {}", details.display_message()),
+        runtime::OrchestrationStatus::Failed { details } => {
+            panic!("orchestration failed: {}", details.display_message())
+        }
         _ => panic!("unexpected orchestration status"),
     }
     rt.shutdown(None).await;
@@ -550,7 +592,7 @@ async fn sample_sub_orchestration_fanout_fs() {
     let (store, _temp_dir) = common::create_sqlite_store_disk().await;
 
     let activity_registry = ActivityRegistry::builder()
-        .register("Add", |input: String| async move {
+        .register("Add", |_ctx: ActivityContext, input: String| async move {
             let mut it = input.split(',');
             let a = it.next().unwrap_or("0").parse::<i64>().unwrap_or(0);
             let b = it.next().unwrap_or("0").parse::<i64>().unwrap_or(0);
@@ -597,7 +639,9 @@ async fn sample_sub_orchestration_fanout_fs() {
         .unwrap()
     {
         runtime::OrchestrationStatus::Completed { output } => assert_eq!(output, "total=10"),
-        runtime::OrchestrationStatus::Failed { details } => panic!("orchestration failed: {}", details.display_message()),
+        runtime::OrchestrationStatus::Failed { details } => {
+            panic!("orchestration failed: {}", details.display_message())
+        }
         _ => panic!("unexpected orchestration status"),
     }
     rt.shutdown(None).await;
@@ -613,7 +657,9 @@ async fn sample_sub_orchestration_chained_fs() {
     let (store, _temp_dir) = common::create_sqlite_store_disk().await;
 
     let activity_registry = ActivityRegistry::builder()
-        .register("AppendX", |input: String| async move { Ok(format!("{input}x")) })
+        .register("AppendX", |_ctx: ActivityContext, input: String| async move {
+            Ok(format!("{input}x"))
+        })
         .build();
 
     let leaf = |ctx: OrchestrationContext, input: String| async move {
@@ -653,7 +699,9 @@ async fn sample_sub_orchestration_chained_fs() {
         .unwrap()
     {
         runtime::OrchestrationStatus::Completed { output } => assert_eq!(output, "root:ax-mid"),
-        runtime::OrchestrationStatus::Failed { details } => panic!("orchestration failed: {}", details.display_message()),
+        runtime::OrchestrationStatus::Failed { details } => {
+            panic!("orchestration failed: {}", details.display_message())
+        }
         _ => panic!("unexpected orchestration status"),
     }
     rt.shutdown(None).await;
@@ -671,7 +719,7 @@ async fn sample_detached_orchestration_scheduling_fs() {
     let (store, _temp_dir) = common::create_sqlite_store_disk().await;
 
     let activity_registry = ActivityRegistry::builder()
-        .register("Echo", |input: String| async move { Ok(input) })
+        .register("Echo", |_ctx: ActivityContext, input: String| async move { Ok(input) })
         .build();
 
     let chained = |ctx: OrchestrationContext, input: String| async move {
@@ -703,7 +751,9 @@ async fn sample_detached_orchestration_scheduling_fs() {
         .unwrap()
     {
         runtime::OrchestrationStatus::Completed { output } => assert_eq!(output, "scheduled"),
-        runtime::OrchestrationStatus::Failed { details } => panic!("orchestration failed: {}", details.display_message()),
+        runtime::OrchestrationStatus::Failed { details } => {
+            panic!("orchestration failed: {}", details.display_message())
+        }
         _ => panic!("unexpected orchestration status"),
     }
 
@@ -764,7 +814,9 @@ async fn sample_continue_as_new_fs() {
         .unwrap()
     {
         runtime::OrchestrationStatus::Completed { output } => assert_eq!(output, "final:3"),
-        runtime::OrchestrationStatus::Failed { details } => panic!("orchestration failed: {}", details.display_message()),
+        runtime::OrchestrationStatus::Failed { details } => {
+            panic!("orchestration failed: {}", details.display_message())
+        }
         _ => panic!("unexpected orchestration status"),
     }
     // Check executions exist
@@ -795,7 +847,9 @@ async fn sample_typed_activity_and_orchestration_fs() {
     let (store, _temp_dir) = common::create_sqlite_store_disk().await;
 
     let activity_registry = ActivityRegistry::builder()
-        .register_typed::<AddReq, AddRes, _, _>("Add", |req| async move { Ok(AddRes { sum: req.a + req.b }) })
+        .register_typed::<AddReq, AddRes, _, _>("Add", |_ctx: ActivityContext, req| async move {
+            Ok(AddRes { sum: req.a + req.b })
+        })
         .build();
 
     let orchestration = |ctx: OrchestrationContext, req: AddReq| async move {
@@ -878,8 +932,12 @@ async fn sample_mixed_string_and_typed_typed_orch_fs() {
     // String activity: returns uppercased string
     // Typed activity: Add two numbers
     let activity_registry = ActivityRegistry::builder()
-        .register("Upper", |input: String| async move { Ok(input.to_uppercase()) })
-        .register_typed::<AddReq, AddRes, _, _>("Add", |req| async move { Ok(AddRes { sum: req.a + req.b }) })
+        .register("Upper", |_ctx: ActivityContext, input: String| async move {
+            Ok(input.to_uppercase())
+        })
+        .register_typed::<AddReq, AddRes, _, _>("Add", |_ctx: ActivityContext, req| async move {
+            Ok(AddRes { sum: req.a + req.b })
+        })
         .build();
 
     // Typed orchestrator input/output
@@ -933,8 +991,12 @@ async fn sample_mixed_string_and_typed_string_orch_fs() {
     let (store, _temp_dir) = common::create_sqlite_store_disk().await;
 
     let activity_registry = ActivityRegistry::builder()
-        .register("Upper", |input: String| async move { Ok(input.to_uppercase()) })
-        .register_typed::<AddReq, AddRes, _, _>("Add", |req| async move { Ok(AddRes { sum: req.a + req.b }) })
+        .register("Upper", |_ctx: ActivityContext, input: String| async move {
+            Ok(input.to_uppercase())
+        })
+        .register_typed::<AddReq, AddRes, _, _>("Add", |_ctx: ActivityContext, req| async move {
+            Ok(AddRes { sum: req.a + req.b })
+        })
         .build();
 
     // String orchestrator mixes typed and string activity calls
@@ -972,7 +1034,9 @@ async fn sample_mixed_string_and_typed_string_orch_fs() {
         .unwrap()
     {
         runtime::OrchestrationStatus::Completed { output } => output,
-        runtime::OrchestrationStatus::Failed { details } => panic!("orchestration failed: {}", details.display_message()),
+        runtime::OrchestrationStatus::Failed { details } => {
+            panic!("orchestration failed: {}", details.display_message())
+        }
         _ => panic!("unexpected orchestration status"),
     };
     assert!(s == "sum=12" || s == "up=RACE");
@@ -1015,7 +1079,9 @@ async fn sample_versioning_start_latest_vs_exact_fs() {
         .unwrap()
     {
         runtime::OrchestrationStatus::Completed { output } => assert_eq!(output, "v2"),
-        runtime::OrchestrationStatus::Failed { details } => panic!("orchestration failed: {}", details.display_message()),
+        runtime::OrchestrationStatus::Failed { details } => {
+            panic!("orchestration failed: {}", details.display_message())
+        }
         _ => panic!("unexpected orchestration status"),
     }
 
@@ -1036,7 +1102,9 @@ async fn sample_versioning_start_latest_vs_exact_fs() {
         .unwrap()
     {
         runtime::OrchestrationStatus::Completed { output } => assert_eq!(output, "v1"),
-        runtime::OrchestrationStatus::Failed { details } => panic!("orchestration failed: {}", details.display_message()),
+        runtime::OrchestrationStatus::Failed { details } => {
+            panic!("orchestration failed: {}", details.display_message())
+        }
         _ => panic!("unexpected orchestration status"),
     }
 
@@ -1089,7 +1157,9 @@ async fn sample_versioning_sub_orchestration_explicit_vs_policy_fs() {
         .unwrap()
     {
         runtime::OrchestrationStatus::Completed { output } => assert_eq!(output, "c1-c2"),
-        runtime::OrchestrationStatus::Failed { details } => panic!("orchestration failed: {}", details.display_message()),
+        runtime::OrchestrationStatus::Failed { details } => {
+            panic!("orchestration failed: {}", details.display_message())
+        }
         _ => panic!("unexpected orchestration status"),
     }
 
@@ -1233,8 +1303,8 @@ async fn sample_cancellation_parent_cascades_to_children_fs() {
         store.clone(),
         "inst-sample-cancel",
         |hist| {
-            hist.iter().rev().any(
-                |e| matches!(
+            hist.iter().rev().any(|e| {
+                matches!(
                     e,
                     Event::OrchestrationFailed { details, .. } if matches!(
                         details,
@@ -1244,7 +1314,7 @@ async fn sample_cancellation_parent_cascades_to_children_fs() {
                         } if reason == "user_request"
                     )
                 )
-            )
+            })
         },
         5_000,
     )
@@ -1260,19 +1330,28 @@ async fn sample_cancellation_parent_cascades_to_children_fs() {
         .collect();
     assert!(!children.is_empty());
     for child in children {
-        let ok_child = common::wait_for_history(store.clone(), &child, |hist| {
-            hist.iter().any(|e| matches!(e, Event::OrchestrationCancelRequested { .. })) &&
-            hist.iter().any(|e| matches!(
-                e,
-                Event::OrchestrationFailed { details, .. } if matches!(
-                    details,
-                    duroxide::ErrorDetails::Application {
-                        kind: duroxide::AppErrorKind::Cancelled { reason },
-                        ..
-                    } if reason == "parent canceled"
-                )
-            ))
-        }, 5_000).await;
+        let ok_child = common::wait_for_history(
+            store.clone(),
+            &child,
+            |hist| {
+                hist.iter()
+                    .any(|e| matches!(e, Event::OrchestrationCancelRequested { .. }))
+                    && hist.iter().any(|e| {
+                        matches!(
+                            e,
+                            Event::OrchestrationFailed { details, .. } if matches!(
+                                details,
+                                duroxide::ErrorDetails::Application {
+                                    kind: duroxide::AppErrorKind::Cancelled { reason },
+                                    ..
+                                } if reason == "parent canceled"
+                            )
+                        )
+                    })
+            },
+            5_000,
+        )
+        .await;
         assert!(ok_child, "timeout waiting for child cancel for {child}");
     }
 
@@ -1291,7 +1370,7 @@ async fn sample_basic_error_handling_fs() {
 
     // Register an activity that can fail
     let activity_registry = ActivityRegistry::builder()
-        .register("ValidateInput", |input: String| async move {
+        .register("ValidateInput", |_ctx: ActivityContext, input: String| async move {
             if input.is_empty() {
                 Err("Input cannot be empty".to_string())
             } else {
@@ -1330,7 +1409,9 @@ async fn sample_basic_error_handling_fs() {
         runtime::OrchestrationStatus::Completed { output } => {
             assert_eq!(output, "Valid: test");
         }
-        runtime::OrchestrationStatus::Failed { details } => panic!("orchestration failed: {}", details.display_message()),
+        runtime::OrchestrationStatus::Failed { details } => {
+            panic!("orchestration failed: {}", details.display_message())
+        }
         _ => panic!("unexpected orchestration status"),
     }
 
@@ -1367,17 +1448,16 @@ async fn sample_nested_function_error_handling_fs() {
 
     // Register activities
     let activity_registry = ActivityRegistry::builder()
-        .register("ProcessData", |input: String| async move {
+        .register("ProcessData", |_ctx: ActivityContext, input: String| async move {
             if input.contains("error") {
                 Err("Processing failed".to_string())
             } else {
                 Ok(format!("Processed: {input}"))
             }
         })
-        .register(
-            "FormatOutput",
-            |input: String| async move { Ok(format!("Final: {input}")) },
-        )
+        .register("FormatOutput", |_ctx: ActivityContext, input: String| async move {
+            Ok(format!("Final: {input}"))
+        })
         .build();
 
     // Nested function that can fail with `?`
@@ -1422,7 +1502,9 @@ async fn sample_nested_function_error_handling_fs() {
         runtime::OrchestrationStatus::Completed { output } => {
             assert_eq!(output, "Final: Processed: test");
         }
-        runtime::OrchestrationStatus::Failed { details } => panic!("orchestration failed: {}", details.display_message()),
+        runtime::OrchestrationStatus::Failed { details } => {
+            panic!("orchestration failed: {}", details.display_message())
+        }
         _ => panic!("unexpected orchestration status"),
     }
 
@@ -1459,17 +1541,16 @@ async fn sample_error_recovery_fs() {
 
     // Register activities
     let activity_registry = ActivityRegistry::builder()
-        .register("ProcessData", |input: String| async move {
+        .register("ProcessData", |_ctx: ActivityContext, input: String| async move {
             if input.contains("error") {
                 Err("Processing failed".to_string())
             } else {
                 Ok(format!("Processed: {input}"))
             }
         })
-        .register(
-            "LogError",
-            |error: String| async move { Ok(format!("Logged: {error}")) },
-        )
+        .register("LogError", |_ctx: ActivityContext, error: String| async move {
+            Ok(format!("Logged: {error}"))
+        })
         .build();
 
     // Orchestration with explicit error recovery
@@ -1515,7 +1596,9 @@ async fn sample_error_recovery_fs() {
         runtime::OrchestrationStatus::Completed { output } => {
             assert_eq!(output, "Processed: test");
         }
-        runtime::OrchestrationStatus::Failed { details } => panic!("orchestration failed: {}", details.display_message()),
+        runtime::OrchestrationStatus::Failed { details } => {
+            panic!("orchestration failed: {}", details.display_message())
+        }
         _ => panic!("unexpected orchestration status"),
     }
 

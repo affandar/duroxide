@@ -11,7 +11,7 @@
 use duroxide::providers::sqlite::SqliteProvider;
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
-use duroxide::{Client, DurableOutput, OrchestrationContext, OrchestrationRegistry};
+use duroxide::{ActivityContext, Client, DurableOutput, OrchestrationContext, OrchestrationRegistry};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Duration;
@@ -43,30 +43,39 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Register activities for the approval workflow
     let activities = ActivityRegistry::builder()
-        .register("SubmitForApproval", |request_json: String| async move {
-            let request: ApprovalRequest =
-                serde_json::from_str(&request_json).map_err(|e| format!("JSON parse error: {e}"))?;
-            // Simulate submitting to an approval system
-            tokio::time::sleep(Duration::from_millis(100)).await;
-            println!(
-                "📋 Approval request submitted: {} for ${:.2}",
-                request.request_id, request.amount
-            );
-            Ok(format!("Request {} submitted for approval", request.request_id))
-        })
-        .register("ProcessApproval", |response_json: String| async move {
-            let response: ApprovalResponse =
-                serde_json::from_str(&response_json).map_err(|e| format!("JSON parse error: {e}"))?;
-            // Simulate processing the approval
-            tokio::time::sleep(Duration::from_millis(50)).await;
-            let status = if response.approved { "APPROVED" } else { "REJECTED" };
-            println!("✅ Approval processed: {} - {}", response.request_id, status);
-            Ok(format!("Request {} {}", response.request_id, status))
-        })
-        .register("SendReminder", |request_id: String| async move {
+        .register(
+            "SubmitForApproval",
+            |ctx: ActivityContext, request_json: String| async move {
+                let request: ApprovalRequest =
+                    serde_json::from_str(&request_json).map_err(|e| format!("JSON parse error: {e}"))?;
+                // Simulate submitting to an approval system
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                println!(
+                    "📋 Approval request submitted: {} for ${:.2}",
+                    request.request_id, request.amount
+                );
+                ctx.trace_info(format!("Approval request {} submitted", request.request_id));
+                Ok(format!("Request {} submitted for approval", request.request_id))
+            },
+        )
+        .register(
+            "ProcessApproval",
+            |ctx: ActivityContext, response_json: String| async move {
+                let response: ApprovalResponse =
+                    serde_json::from_str(&response_json).map_err(|e| format!("JSON parse error: {e}"))?;
+                // Simulate processing the approval
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                let status = if response.approved { "APPROVED" } else { "REJECTED" };
+                println!("✅ Approval processed: {} - {}", response.request_id, status);
+                ctx.trace_info(format!("Processed approval {} -> {}", response.request_id, status));
+                Ok(format!("Request {} {}", response.request_id, status))
+            },
+        )
+        .register("SendReminder", |ctx: ActivityContext, request_id: String| async move {
             // Simulate sending a reminder
             tokio::time::sleep(Duration::from_millis(25)).await;
             println!("📧 Reminder sent for request: {request_id}");
+            ctx.trace_warn(format!("Reminder sent for request {}", request_id));
             Ok(format!("Reminder sent for {request_id}"))
         })
         .build();

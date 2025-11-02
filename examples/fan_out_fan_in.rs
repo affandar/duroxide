@@ -9,7 +9,7 @@
 use duroxide::providers::sqlite::SqliteProvider;
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
-use duroxide::{Client, DurableOutput, OrchestrationContext, OrchestrationRegistry};
+use duroxide::{ActivityContext, Client, DurableOutput, OrchestrationContext, OrchestrationRegistry};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -38,25 +38,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Register activities for user processing
     let activities = ActivityRegistry::builder()
-        .register("FetchUserProfile", |user_json: String| async move {
-            let user: User = serde_json::from_str(&user_json).map_err(|e| format!("JSON parse error: {e}"))?;
-            // Simulate API call delay
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        .register(
+            "FetchUserProfile",
+            |ctx: ActivityContext, user_json: String| async move {
+                let user: User = serde_json::from_str(&user_json).map_err(|e| format!("JSON parse error: {e}"))?;
+                // Simulate API call delay
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                ctx.trace_info(format!("Fetched user {}", user.id));
 
-            let profile = UserProfile {
-                user_id: user.id,
-                email: format!("{}@example.com", user.name.to_lowercase()),
-                preferences: vec!["notifications".to_string(), "dark_mode".to_string()],
-            };
-            serde_json::to_string(&profile).map_err(|e| format!("JSON serialize error: {e}"))
-        })
-        .register("SendWelcomeEmail", |profile_json: String| async move {
-            let profile: UserProfile =
-                serde_json::from_str(&profile_json).map_err(|e| format!("JSON parse error: {e}"))?;
-            // Simulate email sending
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-            Ok(format!("Welcome email sent to {}", profile.email))
-        })
+                let profile = UserProfile {
+                    user_id: user.id,
+                    email: format!("{}@example.com", user.name.to_lowercase()),
+                    preferences: vec!["notifications".to_string(), "dark_mode".to_string()],
+                };
+                serde_json::to_string(&profile).map_err(|e| format!("JSON serialize error: {e}"))
+            },
+        )
+        .register(
+            "SendWelcomeEmail",
+            |ctx: ActivityContext, profile_json: String| async move {
+                let profile: UserProfile =
+                    serde_json::from_str(&profile_json).map_err(|e| format!("JSON parse error: {e}"))?;
+                // Simulate email sending
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                ctx.trace_info(format!("Sent welcome email to {}", profile.email));
+                Ok(format!("Welcome email sent to {}", profile.email))
+            },
+        )
         .build();
 
     // Fan-out/fan-in orchestration

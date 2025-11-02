@@ -28,16 +28,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Register activities - these can do any async operations including delays
     let activities = ActivityRegistry::builder()
-        .register("ProcessData", |input: String| async move {
+        .register("ProcessData", |_ctx: ActivityContext, input: String| async move {
             println!("Processing data: {input}");
             // ✅ Activities can be pure business logic
             Ok(format!("Processed: {input}"))
         })
-        .register("SlowOperation", |input: String| async move {
+        .register("SlowOperation", |ctx: ActivityContext, input: String| async move {
             println!("Starting slow operation: {input}");
             // ✅ Activities can use tokio::time::sleep(), HTTP calls, database queries, etc.
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
             println!("Slow operation completed");
+            ctx.trace_info("Slow operation complete inside activity");
             Ok(format!("Slow result: {input}"))
         })
         .build();

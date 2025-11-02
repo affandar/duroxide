@@ -1,7 +1,7 @@
 use duroxide::providers::WorkItem;
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
-use duroxide::{Event, OrchestrationContext, OrchestrationRegistry};
+use duroxide::{ActivityContext, Event, OrchestrationContext, OrchestrationRegistry};
 use std::sync::Arc as StdArc;
 mod common;
 
@@ -144,7 +144,7 @@ async fn activity_duplicate_completion_workitems_dedup() {
 
     // Activity sleeps to give us time to inject duplicates
     let activity_registry = ActivityRegistry::builder()
-        .register("SlowEcho", |input: String| async move {
+        .register("SlowEcho", |_ctx: ActivityContext, input: String| async move {
             tokio::time::sleep(std::time::Duration::from_millis(200)).await;
             Ok(input)
         })

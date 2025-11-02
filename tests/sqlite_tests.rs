@@ -1,6 +1,6 @@
-use duroxide::Event;
 use duroxide::providers::sqlite::SqliteProvider;
 use duroxide::providers::{ExecutionMetadata, ManagementCapability, Provider, WorkItem};
+use duroxide::{ActivityContext, Event};
 use std::sync::Arc;
 use tempfile::TempDir;
 use tokio::task::JoinSet;
@@ -428,7 +428,7 @@ async fn timer_recovery_after_crash_before_fire() {
     };
 
     let activity_registry = duroxide::runtime::registry::ActivityRegistry::builder()
-        .register("PostTimer", |input: String| async move {
+        .register("PostTimer", |_ctx: ActivityContext, input: String| async move {
             Ok(format!("Timer fired, then: {input}"))
         })
         .build();
@@ -470,7 +470,7 @@ async fn timer_recovery_after_crash_before_fire() {
     };
 
     let activity_registry2 = duroxide::runtime::registry::ActivityRegistry::builder()
-        .register("PostTimer", |input: String| async move {
+        .register("PostTimer", |_ctx: ActivityContext, input: String| async move {
             Ok(format!("Timer fired, then: {input}"))
         })
         .build();

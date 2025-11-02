@@ -2,7 +2,7 @@
 
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self, RuntimeOptions};
-use duroxide::{Client, OrchestrationContext, OrchestrationRegistry};
+use duroxide::{ActivityContext, Client, OrchestrationContext, OrchestrationRegistry};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -14,7 +14,9 @@ async fn test_default_polling_frequency() {
     let (store, _temp_dir) = common::create_sqlite_store_disk().await;
 
     let activities = ActivityRegistry::builder()
-        .register("QuickTask", |_: String| async move { Ok("done".to_string()) })
+        .register("QuickTask", |_ctx: ActivityContext, _: String| async move {
+            Ok("done".to_string())
+        })
         .build();
 
     let orch = |ctx: OrchestrationContext, _: String| async move {
@@ -54,7 +56,9 @@ async fn test_custom_polling_frequency() {
     let (store, _temp_dir) = common::create_sqlite_store_disk().await;
 
     let activities = ActivityRegistry::builder()
-        .register("QuickTask", |_: String| async move { Ok("done".to_string()) })
+        .register("QuickTask", |_ctx: ActivityContext, _: String| async move {
+            Ok("done".to_string())
+        })
         .build();
 
     let orch = |ctx: OrchestrationContext, _: String| async move {
@@ -91,7 +95,9 @@ async fn test_fast_polling() {
     let (store, _temp_dir) = common::create_sqlite_store_disk().await;
 
     let activities = ActivityRegistry::builder()
-        .register("Task", |_: String| async move { Ok("done".to_string()) })
+        .register("Task", |_ctx: ActivityContext, _: String| async move {
+            Ok("done".to_string())
+        })
         .build();
 
     let orch =

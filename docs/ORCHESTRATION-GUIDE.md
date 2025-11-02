@@ -35,7 +35,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     // 2. Register activities (side-effecting work)
     let activities = ActivityRegistry::builder()
-        .register("Greet", |name: String| async move {
+        .register("Greet", |ctx: ActivityContext, name: String| async move {
             Ok(format!("Hello, {}!", name))
         })
         .build();
@@ -90,13 +90,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 - **Purpose:** Coordinate multi-step workflows, contain business logic
 
 **Activities** (single-purpose execution units):
-- Stateless async functions: `|input: T| async move { ... }`
+- Stateless async functions: `|ctx: ActivityContext, input: T| async move { ... }`
 - Can do **anything**: database, HTTP, file I/O, polling, VM provisioning, etc.
 - **CAN sleep/poll** internally as part of their work (e.g., waiting for VM to provision)
 - Should be **idempotent** (tolerate retries)
 - Should be **single-purpose** (do ONE thing well)
 - Executed by worker dispatcher (can fail and retry)
 - Return `Result<String, String>` (success or error)
+- First parameter `ActivityContext` provides logging and metadata access
 
 **Key Principle: Separation of Concerns**
 - **Activities** = What to do (execution)
@@ -110,7 +111,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 **Example:**
 ```rust
 // ✅ GOOD: Activity polls for VM readiness (single-purpose: provision VM)
-activities.register("ProvisionVM", |config| async move {
+activities.register("ProvisionVM", |ctx: ActivityContext, config| async move {
     let vm = create_vm(config).await?;
     while !vm_ready(&vm).await {
         tokio::time::sleep(Duration::from_secs(5)).await;  // ✅ Internal polling is fine
@@ -416,6 +417,15 @@ ctx.trace_info("Processing order 12345");
 ctx.trace_warn(format!("Retry attempt {}", attempt));
 ctx.trace_error("Payment failed");
 ```
+
+> **Default log targets**
+> The runtime installs a filter equivalent to `error,duroxide::orchestration={level},duroxide::activity={level}` (where `{level}` comes from `ObservabilityConfig.log_level`). This keeps stdout focused on orchestration and activity trace helpers. To opt into additional targets—such as the internal runtime dispatcher logs—override `RUST_LOG` before starting your app:
+>
+> ```bash
+> RUST_LOG=error,duroxide::orchestration=info,duroxide::activity=info,duroxide::runtime=debug cargo run --example with_observability
+> ```
+>
+> You can add any other targets in the same way (for example `duroxide::providers::sqlite=trace`). Setting `RUST_LOG` always takes precedence over the runtime defaults.
 
 #### System Calls (Deterministic Non-Determinism)
 
@@ -752,7 +762,7 @@ async fn eternal_monitor(ctx: OrchestrationContext, state_json: String) -> Resul
 
 ```rust
 // WRONG - Activity contains business logic and branching
-activities.register("ProcessOrderComplex", |order_json: String| async move {
+activities.register("ProcessOrderComplex", |ctx: ActivityContext, order_json: String| async move {
     let order: Order = serde_json::from_str(&order_json)?;
     
     // ❌ Business logic in activity
@@ -776,18 +786,18 @@ activities.register("ProcessOrderComplex", |order_json: String| async move {
 ```rust
 // CORRECT - Business logic in orchestration, activities are single-purpose
 // Activities: single-purpose, can sleep/poll internally if needed
-activities.register("GetOrderValue", |order_json: String| async move {
+activities.register("GetOrderValue", |ctx: ActivityContext, order_json: String| async move {
     let order: Order = serde_json::from_str(&order_json)?;
     Ok(order.total.to_string())
 });
 
-activities.register("SendApprovalRequest", |order_json: String| async move {
+activities.register("SendApprovalRequest", |ctx: ActivityContext, order_json: String| async move {
     let order: Order = serde_json::from_str(&order_json)?;
     send_to_approval_system(&order).await?;
     Ok(order.id)
 });
 
-activities.register("ProcessPremiumOrder", |order_json: String| async move {
+activities.register("ProcessPremiumOrder", |ctx: ActivityContext, order_json: String| async move {
     let order: Order = serde_json::from_str(&order_json)?;
     // Activity can poll/sleep internally - that's fine!
     let vm = provision_vm(&order).await?;
@@ -888,7 +898,7 @@ async fn good_orch(ctx: OrchestrationContext) -> Result<String, String> {
 
 ```rust
 // WRONG - Activity that only sleeps (no business logic)
-activities.register("Wait30Seconds", |_: String| async move {
+activities.register("Wait30Seconds", |ctx: ActivityContext, _: String| async move {
     tokio::time::sleep(std::time::Duration::from_secs(30)).await;
     Ok("done".to_string())
 });
@@ -915,7 +925,7 @@ async fn good_delay(ctx: OrchestrationContext) -> Result<String, String> {
 - **BUT:** It's perfectly fine for an activity to sleep/poll AS PART of doing work:
   ```rust
   // ✅ FINE - Activity polls as part of provisioning work
-  activities.register("ProvisionVM", |config: String| async move {
+  activities.register("ProvisionVM", |ctx: ActivityContext, config: String| async move {
       let vm_id = start_vm_creation(config).await?;
       
       // Polling is part of the provisioning logic
@@ -1227,7 +1237,7 @@ async fn test_full_workflow() {
     let store = Arc::new(SqliteProvider::new_in_memory().await.unwrap());
     
     let activities = ActivityRegistry::builder()
-        .register("Task", |input: String| async move {
+        .register("Task", |ctx: ActivityContext, input: String| async move {
             Ok(format!("processed: {}", input))
         })
         .build();
@@ -1272,7 +1282,7 @@ async fn test_full_workflow() {
 
 ```rust
 // Good: Idempotent database update
-activities.register("UpdateUserStatus", |user_json: String| async move {
+activities.register("UpdateUserStatus", |ctx: ActivityContext, user_json: String| async move {
     let user: User = serde_json::from_str(&user_json)?;
     
     // Upsert is idempotent
@@ -1566,22 +1576,22 @@ let result = ctx.schedule_activity("Task", "input").into_activity().await?;
 
 **Fix:** Base all decisions on activity results or external events, never on time/random
 
-### 4. Activities That Sleep
+### 4. Activities That Only Sleep
 
-**Symptom:** Timeouts work but waste worker resources
+**Symptom:** Activity that only sleeps without doing actual work
 
-**Fix:** Move timers to orchestration code, keep activities pure
+**Fix:** Use `ctx.schedule_timer()` in orchestration; activities can sleep/poll as part of their work (e.g., provisioning resources)
 
 ---
 
 ## Checklist for Production Orchestrations
 
 - [ ] All side effects in activities (no I/O in orchestration code)
-- [ ] All delays use `schedule_timer()` (no sleep in activities)
+- [ ] Orchestration delays use `schedule_timer()` (activities can sleep/poll as needed)
 - [ ] All branching is deterministic (based on activity results)
 - [ ] Activities are idempotent (can retry safely)
 - [ ] Error handling for all activities (match on Result)
-- [ ] Trace statements for observability
+- [ ] Trace statements for observability (`ctx.trace_*()` in both orchestrations and activities)
 - [ ] Continue As New for long-running workflows (avoid unbounded history)
 - [ ] Timeouts on external events (use select2 with timer)
 - [ ] Compensation logic for failures (saga pattern)

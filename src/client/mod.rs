@@ -379,7 +379,9 @@ impl Client {
                     return OrchestrationStatus::Completed { output: output.clone() };
                 }
                 Event::OrchestrationFailed { details, .. } => {
-                    return OrchestrationStatus::Failed { details: details.clone() };
+                    return OrchestrationStatus::Failed {
+                        details: details.clone(),
+                    };
                 }
                 _ => {}
             }

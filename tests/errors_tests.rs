@@ -3,7 +3,7 @@ use std::sync::Arc;
 mod common;
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
-use duroxide::{OrchestrationContext, OrchestrationRegistry};
+use duroxide::{ActivityContext, OrchestrationContext, OrchestrationRegistry};
 use std::sync::Arc as StdArc;
 
 use serde::{Deserialize, Serialize};
@@ -20,21 +20,23 @@ fn parse_activity_result(s: &Result<String, String>) -> Result<String, String> {
 
 async fn error_handling_compensation_on_ship_failure_with(store: StdArc<dyn Provider>) {
     let activity_registry = ActivityRegistry::builder()
-        .register("Debit", |input: String| async move {
+        .register("Debit", |_ctx: ActivityContext, input: String| async move {
             if input == "fail" {
                 Err("insufficient".to_string())
             } else {
                 Ok(format!("debited:{input}"))
             }
         })
-        .register("Ship", |input: String| async move {
+        .register("Ship", |_ctx: ActivityContext, input: String| async move {
             if input == "fail_ship" {
                 Err("courier_down".to_string())
             } else {
                 Ok("shipped".to_string())
             }
         })
-        .register("Credit", |input: String| async move { Ok(format!("credited:{input}")) })
+        .register("Credit", |_ctx: ActivityContext, input: String| async move {
+            Ok(format!("credited:{input}"))
+        })
         .build();
 
     let orchestration = |ctx: OrchestrationContext, _input: String| async move {
@@ -75,7 +77,9 @@ async fn error_handling_compensation_on_ship_failure_with(store: StdArc<dyn Prov
         duroxide::OrchestrationStatus::Completed { output } => {
             assert!(output.starts_with("rolled_back:credited:"));
         }
-        duroxide::OrchestrationStatus::Failed { details } => panic!("orchestration failed: {}", details.display_message()),
+        duroxide::OrchestrationStatus::Failed { details } => {
+            panic!("orchestration failed: {}", details.display_message())
+        }
         _ => panic!("unexpected orchestration status"),
     }
     rt.shutdown(None).await;
@@ -95,8 +99,12 @@ async fn error_handling_compensation_on_ship_failure_fs() {
 
 async fn error_handling_success_path_with(store: StdArc<dyn Provider>) {
     let activity_registry = ActivityRegistry::builder()
-        .register("Debit", |input: String| async move { Ok(format!("debited:{input}")) })
-        .register("Ship", |_input: String| async move { Ok("shipped".to_string()) })
+        .register("Debit", |_ctx: ActivityContext, input: String| async move {
+            Ok(format!("debited:{input}"))
+        })
+        .register("Ship", |_ctx: ActivityContext, _input: String| async move {
+            Ok("shipped".to_string())
+        })
         .build();
 
     let orchestration = |ctx: OrchestrationContext, _input: String| async move {
@@ -125,7 +133,9 @@ async fn error_handling_success_path_with(store: StdArc<dyn Provider>) {
         .unwrap()
     {
         duroxide::OrchestrationStatus::Completed { output } => assert_eq!(output, "ok"),
-        duroxide::OrchestrationStatus::Failed { details } => panic!("orchestration failed: {}", details.display_message()),
+        duroxide::OrchestrationStatus::Failed { details } => {
+            panic!("orchestration failed: {}", details.display_message())
+        }
         _ => panic!("unexpected orchestration status"),
     }
     rt.shutdown(None).await;
@@ -145,9 +155,15 @@ async fn error_handling_success_path_fs() {
 
 async fn error_handling_early_debit_failure_with(store: StdArc<dyn Provider>) {
     let activity_registry = ActivityRegistry::builder()
-        .register("Debit", |input: String| async move { Err(format!("bad:{input}")) })
-        .register("Ship", |_input: String| async move { Ok("shipped".to_string()) })
-        .register("Credit", |_input: String| async move { Ok("credited".to_string()) })
+        .register("Debit", |_ctx: ActivityContext, input: String| async move {
+            Err(format!("bad:{input}"))
+        })
+        .register("Ship", |_ctx: ActivityContext, _input: String| async move {
+            Ok("shipped".to_string())
+        })
+        .register("Credit", |_ctx: ActivityContext, _input: String| async move {
+            Ok("credited".to_string())
+        })
         .build();
 
     let orchestration = |ctx: OrchestrationContext, _input: String| async move {
@@ -178,7 +194,9 @@ async fn error_handling_early_debit_failure_with(store: StdArc<dyn Provider>) {
         duroxide::OrchestrationStatus::Completed { output } => {
             assert!(output.starts_with("debit_failed:"));
         }
-        duroxide::OrchestrationStatus::Failed { details } => panic!("orchestration failed: {}", details.display_message()),
+        duroxide::OrchestrationStatus::Failed { details } => {
+            panic!("orchestration failed: {}", details.display_message())
+        }
         _ => panic!("unexpected orchestration status"),
     }
     rt.shutdown(None).await;
@@ -284,7 +302,9 @@ async fn event_after_completion_is_ignored_fs() {
         .unwrap()
     {
         duroxide::OrchestrationStatus::Completed { output } => assert_eq!(output, "done"),
-        duroxide::OrchestrationStatus::Failed { details } => panic!("orchestration failed: {}", details.display_message()),
+        duroxide::OrchestrationStatus::Failed { details } => {
+            panic!("orchestration failed: {}", details.display_message())
+        }
         _ => panic!("unexpected orchestration status"),
     }
     // Allow runtime to append OrchestrationCompleted terminal event
@@ -364,7 +384,9 @@ async fn event_before_subscription_after_start_is_ignored() {
         .unwrap()
     {
         duroxide::OrchestrationStatus::Completed { output } => assert_eq!(output, "late"),
-        duroxide::OrchestrationStatus::Failed { details } => panic!("orchestration failed: {}", details.display_message()),
+        duroxide::OrchestrationStatus::Failed { details } => {
+            panic!("orchestration failed: {}", details.display_message())
+        }
         _ => panic!("unexpected orchestration status"),
     }
     rt.shutdown(None).await;
@@ -373,7 +395,10 @@ async fn event_before_subscription_after_start_is_ignored() {
 // 8) History cap exceeded triggers a hard error (no truncation) for both providers
 async fn history_cap_exceeded_with(store: StdArc<dyn Provider>) {
     let activity_registry = ActivityRegistry::builder()
-        .register("Noop", |_in: String| async move { Ok(String::new()) })
+        .register(
+            "Noop",
+            |_ctx: ActivityContext, _in: String| async move { Ok(String::new()) },
+        )
         .build();
 
     // Orchestration that schedules more than CAP events.
@@ -436,7 +461,9 @@ async fn orchestration_immediate_fail_fs() {
     let activity_registry = ActivityRegistry::builder().build();
 
     let orchestration_registry = OrchestrationRegistry::builder()
-        .register("AlwaysErr", |_ctx, _| async move { Err("oops".to_string()) })
+        .register("AlwaysErr", |_ctx: OrchestrationContext, _| async move {
+            Err("oops".to_string())
+        })
         .build();
 
     let rt =
@@ -490,7 +517,9 @@ async fn orchestration_immediate_fail_fs() {
 async fn orchestration_propagates_activity_failure_fs() {
     let (store, _temp_dir) = common::create_sqlite_store_disk().await;
     let activity_registry = ActivityRegistry::builder()
-        .register("Fail", |_in: String| async move { Err("bad".to_string()) })
+        .register("Fail", |_ctx: ActivityContext, _in: String| async move {
+            Err("bad".to_string())
+        })
         .build();
 
     let orchestration_registry = OrchestrationRegistry::builder()
@@ -554,7 +583,9 @@ async fn typed_activity_decode_error_fs() {
     let (store, _temp_dir) = common::create_sqlite_store_disk().await;
     // activity expects AOnly, returns stringified 'a'
     let activity_registry = ActivityRegistry::builder()
-        .register_typed::<AOnly, String, _, _>("FmtA", |req| async move { Ok(format!("a={}", req.a)) })
+        .register_typed::<AOnly, String, _, _>("FmtA", |_ctx: ActivityContext, req| async move {
+            Ok(format!("a={}", req.a))
+        })
         .build();
     let orch = |ctx: OrchestrationContext, _in: String| async move {
         // Pass invalid payload (not JSON for AOnly)
@@ -580,7 +611,9 @@ async fn typed_activity_decode_error_fs() {
         .unwrap();
     let output = match status {
         duroxide::OrchestrationStatus::Completed { output } => output,
-        duroxide::OrchestrationStatus::Failed { details } => panic!("orchestration failed: {}", details.display_message()),
+        duroxide::OrchestrationStatus::Failed { details } => {
+            panic!("orchestration failed: {}", details.display_message())
+        }
         _ => panic!("unexpected orchestration status"),
     };
     assert_eq!(output, "ok");

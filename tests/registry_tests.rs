@@ -1,7 +1,10 @@
 //! Tests for registry composition features (merge, builder_from, register_all)
 
+use duroxide::providers::sqlite::SqliteProvider;
+use duroxide::runtime;
 use duroxide::runtime::registry::{ActivityRegistry, ActivityRegistryBuilder};
-use duroxide::{OrchestrationContext, OrchestrationRegistry};
+use duroxide::{ActivityContext, Client, OrchestrationContext, OrchestrationRegistry, OrchestrationStatus};
+use std::sync::{Arc, Mutex};
 
 // Helper orchestrations
 async fn orch1(_ctx: OrchestrationContext, input: String) -> Result<String, String> {
@@ -17,15 +20,15 @@ async fn orch3(_ctx: OrchestrationContext, input: String) -> Result<String, Stri
 }
 
 // Helper activities
-async fn activity1(input: String) -> Result<String, String> {
+async fn activity1(_ctx: ActivityContext, input: String) -> Result<String, String> {
     Ok(format!("activity1: {}", input))
 }
 
-async fn activity2(input: String) -> Result<String, String> {
+async fn activity2(_ctx: ActivityContext, input: String) -> Result<String, String> {
     Ok(format!("activity2: {}", input))
 }
 
-async fn activity3(input: String) -> Result<String, String> {
+async fn activity3(_ctx: ActivityContext, input: String) -> Result<String, String> {
     Ok(format!("activity3: {}", input))
 }
 
@@ -214,6 +217,73 @@ async fn test_register_versioned_typed() {
     let versions = registry.list_orchestration_versions("typed-orch");
     assert_eq!(versions.len(), 1);
     assert_eq!(versions[0].to_string(), "2.0.0");
+}
+
+#[tokio::test]
+async fn activity_context_metadata() {
+    #[derive(Debug, PartialEq, Eq)]
+    struct RecordedMetadata {
+        instance_id: String,
+        execution_id: u64,
+        orchestration_name: String,
+        orchestration_version: String,
+        activity_name: String,
+    }
+
+    let recorded = Arc::new(Mutex::new(Vec::<RecordedMetadata>::new()));
+    let recorded_for_activity = recorded.clone();
+
+    let store = Arc::new(SqliteProvider::new_in_memory().await.unwrap());
+    let activities = ActivityRegistry::builder()
+        .register("Inspect", move |ctx: ActivityContext, _input: String| {
+            let recorded_for_activity = recorded_for_activity.clone();
+            async move {
+                recorded_for_activity.lock().unwrap().push(RecordedMetadata {
+                    instance_id: ctx.instance_id().to_string(),
+                    execution_id: ctx.execution_id(),
+                    orchestration_name: ctx.orchestration_name().to_string(),
+                    orchestration_version: ctx.orchestration_version().to_string(),
+                    activity_name: ctx.activity_name().to_string(),
+                });
+                Ok("ok".to_string())
+            }
+        })
+        .build();
+
+    let orchestrations = OrchestrationRegistry::builder()
+        .register("InspectOrch", |ctx: OrchestrationContext, _input: String| async move {
+            ctx.schedule_activity("Inspect", "payload").into_activity().await
+        })
+        .build();
+
+    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activities), orchestrations).await;
+    let client = Client::new(store.clone());
+    client
+        .start_orchestration("registry-test-instance", "InspectOrch", "")
+        .await
+        .unwrap();
+    match client
+        .wait_for_orchestration("registry-test-instance", std::time::Duration::from_secs(5))
+        .await
+        .unwrap()
+    {
+        OrchestrationStatus::Completed { output } => assert_eq!(output, "ok"),
+        OrchestrationStatus::Failed { details } => {
+            panic!("orchestration failed: {}", details.display_message())
+        }
+        other => panic!("unexpected orchestration status: {other:?}"),
+    }
+
+    rt.shutdown(None).await;
+
+    let records = recorded.lock().unwrap();
+    assert_eq!(records.len(), 1, "expected exactly one activity execution");
+    let record = &records[0];
+    assert_eq!(record.instance_id, "registry-test-instance");
+    assert_eq!(record.execution_id, 1);
+    assert_eq!(record.orchestration_name, "InspectOrch");
+    assert_eq!(record.orchestration_version, "1.0.0");
+    assert_eq!(record.activity_name, "Inspect");
 }
 
 #[tokio::test]

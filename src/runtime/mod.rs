@@ -6,9 +6,25 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
-use tracing::{debug, error, warn};
+use tracing::{error, warn};
 
 /// Configuration options for the Runtime.
+///
+/// # Example
+///
+/// ```rust,no_run
+/// # use duroxide::runtime::{RuntimeOptions, ObservabilityConfig, LogFormat};
+/// let options = RuntimeOptions {
+///     orchestration_concurrency: 4,
+///     worker_concurrency: 8,
+///     observability: ObservabilityConfig {
+///         log_format: LogFormat::Compact,
+///         log_level: "info".to_string(),
+///         ..Default::default()
+///     },
+///     ..Default::default()
+/// };
+/// ```
 #[derive(Debug, Clone)]
 pub struct RuntimeOptions {
     /// Polling interval in milliseconds when dispatcher queues are empty.
@@ -28,6 +44,11 @@ pub struct RuntimeOptions {
     /// Higher values = more parallel activity execution.
     /// Default: 2
     pub worker_concurrency: usize,
+
+    /// Observability configuration for metrics and logging.
+    /// Requires the `observability` feature flag for full functionality.
+    /// Default: Disabled with basic logging
+    pub observability: ObservabilityConfig,
 }
 
 impl Default for RuntimeOptions {
@@ -36,10 +57,12 @@ impl Default for RuntimeOptions {
             dispatcher_idle_sleep_ms: 100,
             orchestration_concurrency: 2,
             worker_concurrency: 2,
+            observability: ObservabilityConfig::default(),
         }
     }
 }
 
+pub mod observability;
 pub mod registry;
 mod state_helpers;
 
@@ -48,6 +71,8 @@ pub use state_helpers::{HistoryManager, WorkItemReader};
 
 pub mod execution;
 pub mod replay_engine;
+
+pub use observability::{LogFormat, ObservabilityConfig};
 
 /// High-level orchestration status derived from history.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -123,6 +148,8 @@ pub struct Runtime {
     shutdown_flag: Arc<AtomicBool>,
     /// Runtime configuration options
     options: RuntimeOptions,
+    /// Observability handle for metrics and logging
+    observability_handle: Option<observability::ObservabilityHandle>,
 }
 
 /// Introspection: descriptor of an orchestration derived from history.
@@ -135,6 +162,68 @@ pub struct OrchestrationDescriptor {
 }
 
 impl Runtime {
+    #[inline]
+    fn record_orchestration_completion(&self) {
+        if let Some(handle) = &self.observability_handle {
+            handle.record_orchestration_completion();
+        }
+    }
+
+    #[inline]
+    fn record_orchestration_application_error(&self) {
+        if let Some(handle) = &self.observability_handle {
+            handle.record_orchestration_application_error();
+        }
+    }
+
+    #[inline]
+    fn record_orchestration_infrastructure_error(&self) {
+        if let Some(handle) = &self.observability_handle {
+            handle.record_orchestration_infrastructure_error();
+        }
+    }
+
+    #[inline]
+    fn record_orchestration_configuration_error(&self) {
+        if let Some(handle) = &self.observability_handle {
+            handle.record_orchestration_configuration_error();
+        }
+    }
+
+    #[inline]
+    fn record_activity_success(&self) {
+        if let Some(handle) = &self.observability_handle {
+            handle.record_activity_success();
+        }
+    }
+
+    #[inline]
+    fn record_activity_app_error(&self) {
+        if let Some(handle) = &self.observability_handle {
+            handle.record_activity_app_error();
+        }
+    }
+
+    #[inline]
+    fn record_activity_config_error(&self) {
+        if let Some(handle) = &self.observability_handle {
+            handle.record_activity_config_error();
+        }
+    }
+
+    #[inline]
+    fn record_activity_infra_error(&self) {
+        if let Some(handle) = &self.observability_handle {
+            handle.record_activity_infra_error();
+        }
+    }
+
+    pub fn metrics_snapshot(&self) -> Option<observability::MetricsSnapshot> {
+        self.observability_handle
+            .as_ref()
+            .and_then(|handle| handle.metrics_snapshot())
+    }
+
     /// Compute execution metadata from history delta without inspecting event contents.
     /// This allows the runtime to extract semantic information and pass it to the provider
     /// as pre-computed metadata, preventing the provider from needing orchestration knowledge.
@@ -219,6 +308,29 @@ impl Runtime {
             .unwrap_or(crate::INITIAL_EXECUTION_ID)
     }
 
+    /// Generate a unique worker ID suffix using last 5 chars of a GUID
+    fn generate_worker_suffix() -> String {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+
+        // Thread-local counter for uniqueness
+        thread_local! {
+            static COUNTER: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+        }
+        let counter = COUNTER.with(|c| {
+            let val = c.get();
+            c.set(val.wrapping_add(1));
+            val
+        });
+
+        // Generate a short unique suffix (last 5 hex chars)
+        format!("{:05x}", ((timestamp ^ (counter as u128)) & 0xFFFFF))
+    }
+
     /// Start a new runtime using the in-memory SQLite provider.
     pub async fn start(
         activity_registry: Arc<registry::ActivityRegistry>,
@@ -251,10 +363,8 @@ impl Runtime {
         orchestration_registry: OrchestrationRegistry,
         options: RuntimeOptions,
     ) -> Arc<Self> {
-        // Install a default subscriber if none set (ok to call many times)
-        let _ = tracing_subscriber::fmt()
-            .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
-            .try_init();
+        // Initialize observability (metrics + structured logging)
+        let observability_handle = observability::ObservabilityHandle::init(&options.observability).ok(); // Gracefully degrade if observability fails to initialize
 
         let joins: Vec<JoinHandle<()>> = Vec::new();
 
@@ -268,6 +378,7 @@ impl Runtime {
             shutdown_flag: Arc::new(AtomicBool::new(false)),
 
             options,
+            observability_handle,
         });
 
         // background orchestrator dispatcher (extracted from inline poller)
@@ -290,22 +401,24 @@ impl Runtime {
         tokio::spawn(async move {
             let mut worker_handles = Vec::new();
 
-            for worker_id in 0..concurrency {
+            for _worker_idx in 0..concurrency {
                 let rt = self.clone();
                 let shutdown = shutdown.clone();
+                // Generate unique worker ID with GUID suffix
+                let worker_id = format!("orch-{}", Self::generate_worker_suffix());
                 let handle = tokio::spawn(async move {
-                    debug!("Orchestration worker {} started", worker_id);
+                    // debug!("Orchestration worker {} started", worker_id);
                     loop {
                         // Check shutdown flag before fetching
                         if shutdown.load(Ordering::Relaxed) {
-                            debug!("Orchestration worker {} exiting", worker_id);
+                            // debug!("Orchestration worker {} exiting", worker_id);
                             break;
                         }
 
                         if let Some(item) = rt.history_store.fetch_orchestration_item().await {
                             // Process orchestration item atomically
                             // Provider ensures no other worker has this instance locked
-                            rt.process_orchestration_item(item).await;
+                            rt.process_orchestration_item(item, &worker_id).await;
                         } else {
                             tokio::time::sleep(std::time::Duration::from_millis(rt.options.dispatcher_idle_sleep_ms))
                                 .await;
@@ -319,11 +432,11 @@ impl Runtime {
             for handle in worker_handles {
                 let _ = handle.await;
             }
-            debug!("Orchestration dispatcher exited");
+            // debug!("Orchestration dispatcher exited");
         })
     }
 
-    async fn process_orchestration_item(self: &Arc<Self>, item: crate::providers::OrchestrationItem) {
+    async fn process_orchestration_item(self: &Arc<Self>, item: crate::providers::OrchestrationItem, worker_id: &str) {
         // EXECUTION: builds deltas and commits via ack_orchestration_item
         let instance = &item.instance;
         let lock_token = &item.lock_token;
@@ -350,6 +463,9 @@ impl Runtime {
             return;
         }
 
+        // Extract version before moving temp_history_mgr
+        let version = temp_history_mgr.version().unwrap_or_else(|| "unknown".to_string());
+
         // Decide execution id and history to use for this execution
         let (execution_id_to_use, mut history_mgr) = if workitem_reader.is_continue_as_new {
             // ContinueAsNew - start with empty history for new execution
@@ -359,14 +475,17 @@ impl Runtime {
             (item.execution_id, temp_history_mgr)
         };
 
-        // Log execution start
+        // Log execution start with structured context
         if workitem_reader.has_orchestration_name() {
-            debug!(
-                instance,
-                orchestration = %workitem_reader.orchestration_name,
+            tracing::debug!(
+                target: "duroxide::runtime",
+                instance_id = %instance,
                 execution_id = %execution_id_to_use,
-                is_continue_as_new = workitem_reader.is_continue_as_new,
-                "Starting execution"
+                orchestration_name = %workitem_reader.orchestration_name,
+                orchestration_version = %version,
+                worker_id = %worker_id,
+                is_continue_as_new = %workitem_reader.is_continue_as_new,
+                "Orchestration started"
             );
         } else if !workitem_reader.completion_messages.is_empty() {
             // Empty orchestration name with completion messages - just warn and skip
@@ -386,16 +505,64 @@ impl Runtime {
 
         // Atomically commit all changes
         let history_delta = history_mgr.delta();
-        debug!(
-            instance,
-            "Acking orchestration item: history_delta={}, worker={}, orch={}",
-            history_delta.len(),
-            worker_items.len(),
-            orchestrator_items.len()
-        );
+        // debug!(
+        //     instance,
+        //     "Acking orchestration item: history_delta={}, worker={}, orch={}",
+        //     history_delta.len(),
+        //     worker_items.len(),
+        //     orchestrator_items.len()
+        // );
 
         // Compute execution metadata from history_delta (runtime responsibility)
         let metadata = Runtime::compute_execution_metadata(history_delta, &orchestrator_items, item.execution_id);
+
+        // Log orchestration completion/failure
+        if let Some(ref status) = metadata.status {
+            let version = metadata.orchestration_version.as_deref().unwrap_or("unknown");
+            let orch_name = metadata.orchestration_name.as_deref().unwrap_or("unknown");
+            let event_count = history_mgr.full_history().len();
+
+            match status.as_str() {
+                "Completed" => {
+                    tracing::debug!(
+                        target: "duroxide::runtime",
+                        instance_id = %instance,
+                        execution_id = %execution_id_for_ack,
+                        orchestration_name = %orch_name,
+                        orchestration_version = %version,
+                        worker_id = %worker_id,
+                        history_events = %event_count,
+                        "Orchestration completed"
+                    );
+                }
+                "Failed" => {
+                    tracing::error!(
+                        target: "duroxide::runtime",
+                        instance_id = %instance,
+                        execution_id = %execution_id_for_ack,
+                        orchestration_name = %orch_name,
+                        orchestration_version = %version,
+                        worker_id = %worker_id,
+                        history_events = %event_count,
+                        error = metadata.output.as_deref().unwrap_or("unknown"),
+                        "Orchestration failed"
+                    );
+                }
+                "ContinuedAsNew" => {
+                    tracing::debug!(
+                        target: "duroxide::runtime",
+                        instance_id = %instance,
+                        execution_id = %execution_id_for_ack,
+                        orchestration_name = %orch_name,
+                        orchestration_version = %version,
+                        worker_id = %worker_id,
+                        history_events = %event_count,
+                        "Orchestration continued as new"
+                    );
+                }
+                _ => {}
+            }
+        }
 
         // Robust ack with basic retry on any provider error
         self.ack_orchestration_with_changes(
@@ -447,6 +614,7 @@ impl Runtime {
                     resource: workitem_reader.orchestration_name.clone(),
                     message: None,
                 });
+                self.record_orchestration_configuration_error();
                 return (worker_items, orchestrator_items);
             };
 
@@ -486,7 +654,7 @@ impl Runtime {
         loop {
             match operation().await {
                 Ok(()) => {
-                    debug!("{} succeeded", operation_tag);
+                    // debug!("{} succeeded", operation_tag);
                     break;
                 }
                 Err(e) => {
@@ -548,16 +716,18 @@ impl Runtime {
         tokio::spawn(async move {
             let mut worker_handles = Vec::new();
 
-            for worker_id in 0..concurrency {
+            for _worker_idx in 0..concurrency {
                 let rt = self.clone();
                 let activities = activities.clone();
                 let shutdown = shutdown.clone();
+                // Generate unique worker ID with GUID suffix
+                let worker_id = format!("work-{}", Self::generate_worker_suffix());
                 let handle = tokio::spawn(async move {
-                    debug!("Worker dispatcher {} started", worker_id);
+                    // debug!("Worker dispatcher {} started", worker_id);
                     loop {
                         // Check shutdown flag before fetching
                         if shutdown.load(Ordering::Relaxed) {
-                            debug!("Worker dispatcher {} exiting", worker_id);
+                            // debug!("Worker dispatcher {} exiting", worker_id);
                             break;
                         }
 
@@ -570,63 +740,156 @@ impl Runtime {
                                     name,
                                     input,
                                 } => {
+                                    let descriptor = rt.get_orchestration_descriptor(&instance).await;
+                                    let (orch_name, orch_version) = if let Some(desc) = descriptor {
+                                        (desc.name, desc.version)
+                                    } else {
+                                        ("unknown".to_string(), "unknown".to_string())
+                                    };
+                                    let activity_ctx = crate::ActivityContext::new(
+                                        instance.clone(),
+                                        execution_id,
+                                        orch_name,
+                                        orch_version,
+                                        name.clone(),
+                                        id,
+                                    );
+
+                                    // Log activity start with all correlation fields
+                                    tracing::debug!(
+                                        target: "duroxide::runtime",
+                                        instance_id = %instance,
+                                        execution_id = %execution_id,
+                                        activity_name = %name,
+                                        activity_id = %id,
+                                        worker_id = %worker_id,
+                                        "Activity started"
+                                    );
+                                    let start_time = std::time::Instant::now();
+
                                     // Execute activity and atomically ack with completion
-                                    let ack_result = if let Some(handler) = activities.get(&name) {
-                                        match handler.invoke(input).await {
+                                    enum ActivityOutcome {
+                                        Success,
+                                        AppError,
+                                        ConfigError,
+                                    }
+
+                                    let (ack_result, outcome) = if let Some(handler) = activities.get(&name) {
+                                        match handler.invoke(activity_ctx, input).await {
                                             Ok(result) => {
-                                                rt.history_store
-                                                    .ack_worker(
-                                                        &token,
-                                                        WorkItem::ActivityCompleted {
-                                                            instance: instance.clone(),
-                                                            execution_id,
-                                                            id,
-                                                            result,
-                                                        },
-                                                    )
-                                                    .await
+                                                let duration_ms = start_time.elapsed().as_millis() as u64;
+                                                tracing::debug!(
+                                                    target: "duroxide::runtime",
+                                                    instance_id = %instance,
+                                                    execution_id = %execution_id,
+                                                    activity_name = %name,
+                                                    activity_id = %id,
+                                                    worker_id = %worker_id,
+                                                    outcome = "success",
+                                                    duration_ms = %duration_ms,
+                                                    result_size = %result.len(),
+                                                    "Activity completed"
+                                                );
+                                                (
+                                                    rt.history_store
+                                                        .ack_worker(
+                                                            &token,
+                                                            WorkItem::ActivityCompleted {
+                                                                instance: instance.clone(),
+                                                                execution_id,
+                                                                id,
+                                                                result,
+                                                            },
+                                                        )
+                                                        .await,
+                                                    ActivityOutcome::Success,
+                                                )
                                             }
                                             Err(error) => {
-                                                // Application error from activity
-                                                rt.history_store
-                                                    .ack_worker(
-                                                        &token,
-                                                        WorkItem::ActivityFailed {
-                                                            instance: instance.clone(),
-                                                            execution_id,
-                                                            id,
-                                                            details: crate::ErrorDetails::Application {
-                                                                kind: crate::AppErrorKind::ActivityFailed,
-                                                                message: error,
-                                                                retryable: false,
+                                                let duration_ms = start_time.elapsed().as_millis() as u64;
+                                                tracing::warn!(
+                                                    target: "duroxide::runtime",
+                                                    instance_id = %instance,
+                                                    execution_id = %execution_id,
+                                                    activity_name = %name,
+                                                    activity_id = %id,
+                                                    worker_id = %worker_id,
+                                                    outcome = "app_error",
+                                                    duration_ms = %duration_ms,
+                                                    error = %error,
+                                                    "Activity failed (application error)"
+                                                );
+                                                (
+                                                    rt.history_store
+                                                        .ack_worker(
+                                                            &token,
+                                                            WorkItem::ActivityFailed {
+                                                                instance: instance.clone(),
+                                                                execution_id,
+                                                                id,
+                                                                details: crate::ErrorDetails::Application {
+                                                                    kind: crate::AppErrorKind::ActivityFailed,
+                                                                    message: error,
+                                                                    retryable: false,
+                                                                },
                                                             },
-                                                        },
-                                                    )
-                                                    .await
+                                                        )
+                                                        .await,
+                                                    ActivityOutcome::AppError,
+                                                )
                                             }
                                         }
                                     } else {
-                                        // Configuration error - activity not registered
-                                        rt.history_store
-                                            .ack_worker(
-                                                &token,
-                                                WorkItem::ActivityFailed {
-                                                    instance: instance.clone(),
-                                                    execution_id,
-                                                    id,
-                                                    details: crate::ErrorDetails::Configuration {
-                                                        kind: crate::ConfigErrorKind::UnregisteredActivity,
-                                                        resource: name.clone(),
-                                                        message: None,
+                                        let duration_ms = start_time.elapsed().as_millis() as u64;
+                                        tracing::error!(
+                                            target: "duroxide::runtime",
+                                            instance_id = %instance,
+                                            execution_id = %execution_id,
+                                            activity_name = %name,
+                                            activity_id = %id,
+                                            worker_id = %worker_id,
+                                            outcome = "system_error",
+                                            error_type = "unregistered",
+                                            duration_ms = %duration_ms,
+                                            "Activity failed (unregistered)"
+                                        );
+                                        (
+                                            rt.history_store
+                                                .ack_worker(
+                                                    &token,
+                                                    WorkItem::ActivityFailed {
+                                                        instance: instance.clone(),
+                                                        execution_id,
+                                                        id,
+                                                        details: crate::ErrorDetails::Configuration {
+                                                            kind: crate::ConfigErrorKind::UnregisteredActivity,
+                                                            resource: name.clone(),
+                                                            message: None,
+                                                        },
                                                     },
-                                                },
-                                            )
-                                            .await
+                                                )
+                                                .await,
+                                            ActivityOutcome::ConfigError,
+                                        )
                                     };
 
-                                    // Log if atomic ack failed
-                                    if let Err(e) = ack_result {
-                                        warn!(instance = %instance, execution_id, id, error=%e, "worker: atomic ack failed");
+                                    match ack_result {
+                                        Ok(()) => match outcome {
+                                            ActivityOutcome::Success => rt.record_activity_success(),
+                                            ActivityOutcome::AppError => rt.record_activity_app_error(),
+                                            ActivityOutcome::ConfigError => rt.record_activity_config_error(),
+                                        },
+                                        Err(e) => {
+                                            warn!(
+                                                instance = %instance,
+                                                execution_id,
+                                                id,
+                                                worker_id = %worker_id,
+                                                error = %e,
+                                                "worker: atomic ack failed"
+                                            );
+                                            rt.record_activity_infra_error();
+                                        }
                                     }
                                 }
                                 other => {
@@ -647,7 +910,8 @@ impl Runtime {
             for handle in worker_handles {
                 let _ = handle.await;
             }
-            debug!("Work dispatcher exited");
+
+            // debug!("Work dispatcher exited");
         })
     }
 
@@ -671,7 +935,7 @@ impl Runtime {
             return;
         }
 
-        debug!("Graceful shutdown (timeout: {}ms)", timeout_ms);
+        // debug!("Graceful shutdown (timeout: {}ms)", timeout_ms);
 
         // Set shutdown flag - workers check this between iterations
         self.shutdown_flag.store(true, Ordering::Relaxed);
@@ -687,6 +951,10 @@ impl Runtime {
             j.abort();
         }
 
-        debug!("Runtime shut down");
+        // debug!("Runtime shut down");
+
+        // Shutdown observability last (after all workers stopped)
+        // Note: We can't move out of Arc here, so observability shutdown happens when Runtime is dropped
+        // or if we could restructure to take ownership in shutdown
     }
 }

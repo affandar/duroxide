@@ -106,6 +106,11 @@ impl Runtime {
             Err(error) => {
                 // Handle unregistered orchestration
                 history_mgr.append_failed(error.clone());
+                match error {
+                    crate::ErrorDetails::Application { .. } => self.record_orchestration_application_error(),
+                    crate::ErrorDetails::Infrastructure { .. } => self.record_orchestration_infrastructure_error(),
+                    crate::ErrorDetails::Configuration { .. } => self.record_orchestration_configuration_error(),
+                }
                 return (
                     history_mgr.delta().to_vec(),
                     worker_items,
@@ -142,8 +147,12 @@ impl Runtime {
             turn.prep_completions(messages.to_vec());
         }
 
+        // Extract orchestration metadata to pass to engine (avoids duplicate history lookup)
+        let orch_name = Some(orchestration_name.to_string());
+        let orch_version = history_mgr.version();
+
         // Execute the orchestration logic
-        let turn_result = turn.execute_orchestration(handler.clone(), input.clone());
+        let turn_result = turn.execute_orchestration(handler.clone(), input.clone(), orch_name, orch_version);
 
         // Collect history delta from turn
         history_mgr.extend(turn.history_delta().to_vec());
@@ -243,6 +252,7 @@ impl Runtime {
                     event_id: next_id,
                     output: output.clone(),
                 });
+                self.record_orchestration_completion();
 
                 // Notify parent if this is a sub-orchestration
                 if let Some((parent_instance, parent_id)) = parent_link {
@@ -262,6 +272,11 @@ impl Runtime {
                 enqueue_detached_from_pending(turn.pending_actions());
 
                 // Add failure event
+                match &details {
+                    crate::ErrorDetails::Application { .. } => self.record_orchestration_application_error(),
+                    crate::ErrorDetails::Infrastructure { .. } => self.record_orchestration_infrastructure_error(),
+                    crate::ErrorDetails::Configuration { .. } => self.record_orchestration_configuration_error(),
+                }
                 history_mgr.append_failed(details.clone());
 
                 // Notify parent if this is a sub-orchestration
@@ -297,9 +312,7 @@ impl Runtime {
             }
             TurnResult::Cancelled(reason) => {
                 let details = crate::ErrorDetails::Application {
-                    kind: crate::AppErrorKind::Cancelled {
-                        reason: reason.clone(),
-                    },
+                    kind: crate::AppErrorKind::Cancelled { reason: reason.clone() },
                     message: String::new(),
                     retryable: false,
                 };

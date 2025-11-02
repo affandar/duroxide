@@ -3,7 +3,7 @@
 use duroxide::providers::sqlite::SqliteProvider;
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self, RuntimeOptions};
-use duroxide::{Client, OrchestrationContext, OrchestrationRegistry};
+use duroxide::{ActivityContext, Client, OrchestrationContext, OrchestrationRegistry};
 use std::sync::Arc;
 
 mod common;
@@ -107,7 +107,7 @@ async fn test_instance_discovery() {
 
     // Start some orchestrations
     let activities = ActivityRegistry::builder()
-        .register("TestActivity", |input: String| async move {
+        .register("TestActivity", |_ctx: ActivityContext, input: String| async move {
             Ok(format!("Processed: {input}"))
         })
         .build();
@@ -169,7 +169,7 @@ async fn test_instance_info() {
     let client = Client::new(store.clone());
 
     let activities = ActivityRegistry::builder()
-        .register("TestActivity", |input: String| async move {
+        .register("TestActivity", |_ctx: ActivityContext, input: String| async move {
             Ok(format!("Processed: {input}"))
         })
         .build();
@@ -225,7 +225,7 @@ async fn test_execution_info() {
     let client = Client::new(store.clone());
 
     let activities = ActivityRegistry::builder()
-        .register("TestActivity", |input: String| async move {
+        .register("TestActivity", |_ctx: ActivityContext, input: String| async move {
             Ok(format!("Processed: {input}"))
         })
         .build();
@@ -370,10 +370,10 @@ async fn test_system_metrics() {
     let client = Client::new(store.clone());
 
     let activities = ActivityRegistry::builder()
-        .register("TestActivity", |input: String| async move {
+        .register("TestActivity", |_ctx: ActivityContext, input: String| async move {
             Ok(format!("Processed: {input}"))
         })
-        .register("FailingActivity", |_input: String| async move {
+        .register("FailingActivity", |_ctx: ActivityContext, _input: String| async move {
             Err("Intentional failure".to_string())
         })
         .build();
@@ -464,7 +464,7 @@ async fn test_queue_depths() {
     let client = Client::new(store.clone());
 
     let activities = ActivityRegistry::builder()
-        .register("SlowActivity", |_input: String| async move {
+        .register("SlowActivity", |_ctx: ActivityContext, _input: String| async move {
             // Simulate slow activity
             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
             Ok("Slow result".to_string())
@@ -553,13 +553,13 @@ async fn test_complex_workflow_management() {
     let client = Client::new(store.clone());
 
     let activities = ActivityRegistry::builder()
-        .register("ProcessOrder", |order: String| async move {
+        .register("ProcessOrder", |_ctx: ActivityContext, order: String| async move {
             Ok(format!("Processed order: {order}"))
         })
-        .register("SendEmail", |email: String| async move {
+        .register("SendEmail", |_ctx: ActivityContext, email: String| async move {
             Ok(format!("Sent email: {email}"))
         })
-        .register("UpdateInventory", |item: String| async move {
+        .register("UpdateInventory", |_ctx: ActivityContext, item: String| async move {
             Ok(format!("Updated inventory for: {item}"))
         })
         .build();

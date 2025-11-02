@@ -1,5 +1,5 @@
 use duroxide::runtime::{self, registry::ActivityRegistry};
-use duroxide::{OrchestrationContext, OrchestrationRegistry};
+use duroxide::{ActivityContext, OrchestrationContext, OrchestrationRegistry};
 use std::sync::Arc;
 
 #[tokio::test]
@@ -179,7 +179,9 @@ async fn test_system_calls_with_select() {
     );
     let activities = Arc::new(
         ActivityRegistry::builder()
-            .register("QuickTask", |_: String| async move { Ok("task_done".to_string()) })
+            .register("QuickTask", |_ctx: ActivityContext, _: String| async move {
+                Ok("task_done".to_string())
+            })
             .build(),
     );
 
@@ -251,10 +253,9 @@ async fn test_system_calls_join_with_activities() {
     );
     let activities = Arc::new(
         ActivityRegistry::builder()
-            .register(
-                "SlowTask",
-                |input: String| async move { Ok(format!("processed:{input}")) },
-            )
+            .register("SlowTask", |_ctx: ActivityContext, input: String| async move {
+                Ok(format!("processed:{input}"))
+            })
             .build(),
     );
 
