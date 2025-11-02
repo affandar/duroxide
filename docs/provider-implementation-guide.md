@@ -656,6 +656,366 @@ Before considering your provider production-ready:
 
 ---
 
+## Implementing ManagementCapability (Optional)
+
+The `ManagementCapability` trait provides rich management and observability features for your provider. While optional, implementing it enables powerful introspection and monitoring capabilities.
+
+### When to Implement
+
+**Implement ManagementCapability if:**
+- Your provider is for production use
+- You need instance/execution discovery
+- You want system metrics and monitoring
+- You need debugging/troubleshooting capabilities
+
+**Skip if:**
+- Building a minimal/test provider
+- Storage backend doesn't support efficient queries
+- Only need core orchestration execution
+
+### The Trait
+
+```rust
+#[async_trait::async_trait]
+pub trait ManagementCapability: Send + Sync {
+    // Discovery
+    async fn list_instances(&self) -> Result<Vec<String>, String>;
+    async fn list_instances_by_status(&self, status: &str) -> Result<Vec<String>, String>;
+    async fn list_executions(&self, instance: &str) -> Result<Vec<u64>, String>;
+    
+    // History access
+    async fn read_execution(&self, instance: &str, execution_id: u64) -> Result<Vec<Event>, String>;
+    async fn latest_execution_id(&self, instance: &str) -> Result<u64, String>;
+    
+    // Metadata
+    async fn get_instance_info(&self, instance: &str) -> Result<InstanceInfo, String>;
+    async fn get_execution_info(&self, instance: &str, execution_id: u64) -> Result<ExecutionInfo, String>;
+    
+    // System metrics
+    async fn get_system_metrics(&self) -> Result<SystemMetrics, String>;
+    async fn get_queue_depths(&self) -> Result<QueueDepths, String>;
+}
+```
+
+### Implementing the Trait
+
+```rust
+use duroxide::providers::{Provider, ManagementCapability, InstanceInfo, ExecutionInfo, SystemMetrics, QueueDepths};
+
+#[async_trait::async_trait]
+impl Provider for MyProvider {
+    // ... core Provider methods ...
+    
+    fn as_management_capability(&self) -> Option<&dyn ManagementCapability> {
+        Some(self)  // Enable management features
+    }
+}
+
+#[async_trait::async_trait]
+impl ManagementCapability for MyProvider {
+    async fn list_instances(&self) -> Result<Vec<String>, String> {
+        // Return all instance IDs
+        let rows = sqlx::query!("SELECT instance_id FROM instances ORDER BY created_at")
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| format!("Failed to list instances: {}", e))?;
+        
+        Ok(rows.into_iter().map(|r| r.instance_id).collect())
+    }
+    
+    async fn list_instances_by_status(&self, status: &str) -> Result<Vec<String>, String> {
+        // Return instances with specific status (Running, Completed, Failed)
+        let rows = sqlx::query!(
+            "SELECT DISTINCT i.instance_id 
+             FROM instances i
+             JOIN executions e ON i.instance_id = e.instance_id 
+               AND i.current_execution_id = e.execution_id
+             WHERE e.status = ?
+             ORDER BY i.created_at",
+            status
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| format!("Failed to list instances by status: {}", e))?;
+        
+        Ok(rows.into_iter().map(|r| r.instance_id).collect())
+    }
+    
+    async fn list_executions(&self, instance: &str) -> Result<Vec<u64>, String> {
+        // Return all execution IDs for an instance
+        let rows = sqlx::query!(
+            "SELECT execution_id FROM executions 
+             WHERE instance_id = ? 
+             ORDER BY execution_id",
+            instance
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| format!("Failed to list executions: {}", e))?;
+        
+        Ok(rows.into_iter().map(|r| r.execution_id as u64).collect())
+    }
+    
+    async fn read_execution(&self, instance: &str, execution_id: u64) -> Result<Vec<Event>, String> {
+        // Return history for specific execution (not just latest)
+        let rows = sqlx::query!(
+            "SELECT event_data FROM history 
+             WHERE instance_id = ? AND execution_id = ? 
+             ORDER BY event_id",
+            instance,
+            execution_id as i64
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| format!("Failed to read execution: {}", e))?;
+        
+        rows.into_iter()
+            .filter_map(|row| serde_json::from_str(&row.event_data).ok())
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("Failed to deserialize events: {}", e))
+    }
+    
+    async fn latest_execution_id(&self, instance: &str) -> Result<u64, String> {
+        // Return highest execution ID
+        let row = sqlx::query!(
+            "SELECT current_execution_id FROM instances WHERE instance_id = ?",
+            instance
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| format!("Failed to get latest execution: {}", e))?;
+        
+        row.map(|r| r.current_execution_id as u64)
+            .ok_or_else(|| "Instance not found".to_string())
+    }
+    
+    async fn get_instance_info(&self, instance: &str) -> Result<InstanceInfo, String> {
+        // Return instance metadata
+        let row = sqlx::query!(
+            "SELECT i.orchestration_name, i.orchestration_version, 
+                    i.current_execution_id, i.created_at,
+                    e.status, e.output
+             FROM instances i
+             LEFT JOIN executions e ON i.instance_id = e.instance_id 
+               AND i.current_execution_id = e.execution_id
+             WHERE i.instance_id = ?",
+            instance
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| format!("Failed to get instance info: {}", e))?
+        .ok_or_else(|| "Instance not found".to_string())?;
+        
+        Ok(InstanceInfo {
+            instance_id: instance.to_string(),
+            orchestration_name: row.orchestration_name,
+            orchestration_version: row.orchestration_version,
+            current_execution_id: row.current_execution_id as u64,
+            status: row.status.unwrap_or_else(|| "Running".to_string()),
+            output: row.output,
+            created_at: row.created_at,
+        })
+    }
+    
+    async fn get_execution_info(&self, instance: &str, execution_id: u64) -> Result<ExecutionInfo, String> {
+        // Return execution-specific metadata
+        let row = sqlx::query!(
+            "SELECT status, output, started_at, completed_at 
+             FROM executions 
+             WHERE instance_id = ? AND execution_id = ?",
+            instance,
+            execution_id as i64
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| format!("Failed to get execution info: {}", e))?
+        .ok_or_else(|| "Execution not found".to_string())?;
+        
+        Ok(ExecutionInfo {
+            instance_id: instance.to_string(),
+            execution_id,
+            status: row.status,
+            output: row.output,
+            started_at: row.started_at,
+            completed_at: row.completed_at,
+        })
+    }
+    
+    async fn get_system_metrics(&self) -> Result<SystemMetrics, String> {
+        // Return system-wide statistics
+        let total_instances = sqlx::query!("SELECT COUNT(*) as count FROM instances")
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| format!("Failed to get metrics: {}", e))?
+            .count as usize;
+        
+        let total_executions = sqlx::query!("SELECT COUNT(*) as count FROM executions")
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| format!("Failed to get metrics: {}", e))?
+            .count as usize;
+        
+        let running = sqlx::query!("SELECT COUNT(*) as count FROM executions WHERE status = 'Running'")
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| format!("Failed to get metrics: {}", e))?
+            .count as usize;
+        
+        let completed = sqlx::query!("SELECT COUNT(*) as count FROM executions WHERE status = 'Completed'")
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| format!("Failed to get metrics: {}", e))?
+            .count as usize;
+        
+        let failed = sqlx::query!("SELECT COUNT(*) as count FROM executions WHERE status = 'Failed'")
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| format!("Failed to get metrics: {}", e))?
+            .count as usize;
+        
+        let total_events = sqlx::query!("SELECT COUNT(*) as count FROM history")
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| format!("Failed to get metrics: {}", e))?
+            .count as usize;
+        
+        Ok(SystemMetrics {
+            total_instances,
+            total_executions,
+            running_instances: running,
+            completed_instances: completed,
+            failed_instances: failed,
+            total_events,
+        })
+    }
+    
+    async fn get_queue_depths(&self) -> Result<QueueDepths, String> {
+        // Return current queue depths
+        let orch = sqlx::query!("SELECT COUNT(*) as count FROM orchestrator_queue")
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| format!("Failed to get queue depths: {}", e))?
+            .count as usize;
+        
+        let worker = sqlx::query!("SELECT COUNT(*) as count FROM worker_queue")
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| format!("Failed to get queue depths: {}", e))?
+            .count as usize;
+        
+        Ok(QueueDepths {
+            orchestrator_queue: orch,
+            worker_queue: worker,
+            timer_queue: 0,  // Timers go to orchestrator queue with delayed visibility
+        })
+    }
+}
+```
+
+### Client Auto-Discovery
+
+When you implement `ManagementCapability`, the Client automatically discovers it:
+
+```rust
+use duroxide::Client;
+
+let client = Client::new(provider);
+
+// Check if management features are available
+if client.has_management_capability() {
+    // Use management APIs
+    let instances = client.list_all_instances().await?;
+    let metrics = client.get_system_metrics().await?;
+    let info = client.get_instance_info("my-instance").await?;
+} else {
+    println!("Provider doesn't support management features");
+}
+```
+
+### Return Types
+
+```rust
+pub struct InstanceInfo {
+    pub instance_id: String,
+    pub orchestration_name: String,
+    pub orchestration_version: String,
+    pub current_execution_id: u64,
+    pub status: String,              // "Running", "Completed", "Failed"
+    pub output: Option<String>,      // Final output/error
+    pub created_at: String,          // Timestamp
+}
+
+pub struct ExecutionInfo {
+    pub instance_id: String,
+    pub execution_id: u64,
+    pub status: String,
+    pub output: Option<String>,
+    pub started_at: String,
+    pub completed_at: Option<String>,
+}
+
+pub struct SystemMetrics {
+    pub total_instances: usize,
+    pub total_executions: usize,
+    pub running_instances: usize,
+    pub completed_instances: usize,
+    pub failed_instances: usize,
+    pub total_events: usize,
+}
+
+pub struct QueueDepths {
+    pub orchestrator_queue: usize,
+    pub worker_queue: usize,
+    pub timer_queue: usize,  // Usually 0 (timers in orch queue)
+}
+```
+
+### Performance Tips
+
+**Efficient Status Queries:**
+```sql
+-- Use JOIN to get current execution status
+SELECT i.instance_id, e.status
+FROM instances i
+JOIN executions e ON i.instance_id = e.instance_id 
+  AND i.current_execution_id = e.execution_id
+WHERE e.status = 'Running'
+```
+
+**Cached Metrics:**
+```rust
+// For high-traffic systems, consider caching metrics
+struct MyProvider {
+    pool: SqlitePool,
+    metrics_cache: Arc<RwLock<Option<(SystemMetrics, Instant)>>>,
+}
+
+async fn get_system_metrics(&self) -> Result<SystemMetrics, String> {
+    // Check cache (refresh every 30 seconds)
+    if let Some((metrics, cached_at)) = &*self.metrics_cache.read().await {
+        if cached_at.elapsed() < Duration::from_secs(30) {
+            return Ok(metrics.clone());
+        }
+    }
+    
+    // Compute fresh metrics
+    let metrics = self.compute_metrics().await?;
+    *self.metrics_cache.write().await = Some((metrics.clone(), Instant::now()));
+    Ok(metrics)
+}
+```
+
+### Default Implementations
+
+If you don't implement `ManagementCapability`, clients will get:
+- `list_instances()` → Empty list
+- `get_system_metrics()` → Default/zero metrics
+- `has_management_capability()` → `false`
+
+Core orchestration execution still works normally.
+
+---
+
 ## Testing Your Provider
 
 After implementing your provider, follow the **[Provider Testing Guide](provider-testing-guide.md)** to:
