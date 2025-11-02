@@ -16,6 +16,9 @@ pub async fn run_tests<F: ProviderFactory>(factory: &F) {
     test_cross_instance_lock_isolation(factory).await;
     test_message_tagging_during_lock(factory).await;
     test_ack_only_affects_locked_messages(factory).await;
+    test_multi_threaded_lock_contention(factory).await;
+    test_multi_threaded_no_duplicate_processing(factory).await;
+    test_multi_threaded_lock_expiration_recovery(factory).await;
 }
 
 /// Test 1.1: Exclusive Instance Lock Acquisition
@@ -454,4 +457,183 @@ pub async fn test_ack_only_affects_locked_messages<F: ProviderFactory>(factory: 
         .collect();
     assert_eq!(ids, vec![2, 3], "Should only have messages 2 and 3");
     tracing::info!("✓ Test passed: ack only affects locked messages verified");
+}
+
+/// Test 1.9: Multi-Threaded Lock Contention
+/// Goal: Verify instance locks prevent concurrent processing across multiple threads.
+pub async fn test_multi_threaded_lock_contention<F: ProviderFactory>(factory: &F) {
+    tracing::info!("→ Testing instance locking: multi-threaded lock contention");
+    let provider = Arc::new(factory.create_provider().await);
+
+    // Create a single instance with work
+    provider
+        .enqueue_orchestrator_work(start_item("contention-instance"), None)
+        .await
+        .unwrap();
+
+    // Spawn multiple threads attempting to fetch the same instance
+    let num_threads = 10;
+    let handles: Vec<_> = (0..num_threads)
+        .map(|i| {
+            let p = provider.clone();
+            tokio::spawn(async move {
+                // Small delay to stagger attempts
+                tokio::time::sleep(Duration::from_millis(i * 5)).await;
+                let result = p.fetch_orchestration_item().await;
+                (i, result)
+            })
+        })
+        .collect();
+
+    let results: Vec<_> = futures::future::join_all(handles)
+        .await
+        .into_iter()
+        .map(|r| r.unwrap())
+        .collect();
+
+    // Only ONE thread should have successfully fetched the instance
+    let successful_fetches: Vec<_> = results
+        .iter()
+        .filter_map(|(thread_id, result)| {
+            if let Some(item) = result {
+                Some((*thread_id, item.instance.clone(), item.lock_token.clone()))
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    assert_eq!(
+        successful_fetches.len(),
+        1,
+        "Only one thread should successfully acquire lock for the same instance"
+    );
+
+    // Verify no other thread can fetch the same instance
+    let (winner_thread, winner_instance, _winner_token) = &successful_fetches[0];
+    assert_eq!(winner_instance, "contention-instance");
+
+    // Try fetching again - should fail (instance still locked)
+    assert!(provider.fetch_orchestration_item().await.is_none());
+
+    tracing::info!(
+        "✓ Test passed: multi-threaded lock contention verified (thread {} won)",
+        winner_thread
+    );
+}
+
+/// Test 1.10: Multi-Threaded No Duplicate Processing
+/// Goal: Verify that even under high contention, no instance is processed by multiple threads.
+pub async fn test_multi_threaded_no_duplicate_processing<F: ProviderFactory>(factory: &F) {
+    tracing::info!("→ Testing instance locking: multi-threaded no duplicate processing");
+    let provider = Arc::new(factory.create_provider().await);
+
+    // Create multiple instances
+    let num_instances: usize = 20;
+    for i in 0..num_instances {
+        provider
+            .enqueue_orchestrator_work(start_item(&format!("dup-test-{}", i)), None)
+            .await
+            .unwrap();
+    }
+
+    // Spawn many threads (more than instances) to create contention
+    let num_threads = num_instances * 2; // 40 threads for 20 instances
+    let handles: Vec<_> = (0..num_threads)
+        .map(|i| {
+            let p = provider.clone();
+            tokio::spawn(async move {
+                // Stagger delays to increase contention
+                let delay = (i * 3) % 50; // Cycle through delays without random
+                tokio::time::sleep(Duration::from_millis(delay as u64)).await;
+                p.fetch_orchestration_item().await.map(|item| item.instance.clone())
+            })
+        })
+        .collect();
+
+    let results: Vec<_> = futures::future::join_all(handles)
+        .await
+        .into_iter()
+        .filter_map(|r| r.unwrap())
+        .collect();
+
+    // Collect unique instances that were fetched
+    let fetched_instances: std::collections::HashSet<_> = results.iter().collect();
+
+    // Verify:
+    // 1. Each instance fetched at most once
+    assert_eq!(
+        fetched_instances.len(),
+        results.len(),
+        "No duplicate instances should be fetched"
+    );
+
+    // 2. Number of successful fetches doesn't exceed number of instances
+    assert!(results.len() <= num_instances, "Cannot fetch more instances than exist");
+
+    // 3. All fetched instances are unique
+    assert_eq!(
+        fetched_instances.len(),
+        results.len(),
+        "All fetched instances should be unique"
+    );
+
+    tracing::info!(
+        "✓ Test passed: multi-threaded no duplicate processing verified ({} instances fetched by {} threads)",
+        fetched_instances.len(),
+        num_threads
+    );
+}
+
+/// Test 1.11: Multi-Threaded Lock Expiration Recovery
+/// Goal: Verify that after lock expiration, other threads can acquire the lock.
+pub async fn test_multi_threaded_lock_expiration_recovery<F: ProviderFactory>(factory: &F) {
+    tracing::info!("→ Testing instance locking: multi-threaded lock expiration recovery");
+    let provider = Arc::new(factory.create_provider().await);
+
+    // Create instance
+    provider
+        .enqueue_orchestrator_work(start_item("expiration-instance"), None)
+        .await
+        .unwrap();
+
+    // Thread 1: Fetch and hold lock (don't ack)
+    let provider1 = provider.clone();
+    let handle1 = tokio::spawn(async move {
+        let item = provider1.fetch_orchestration_item().await.unwrap();
+        assert_eq!(item.instance, "expiration-instance");
+        let lock_token = item.lock_token;
+        // Hold lock but don't ack - simulate crashed worker
+        tokio::time::sleep(Duration::from_millis(TEST_LOCK_TIMEOUT_MS + 200)).await;
+        lock_token
+    });
+
+    // Thread 2: Try to fetch immediately (should fail)
+    let provider2 = provider.clone();
+    let handle2 = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        let result = provider2.fetch_orchestration_item().await;
+        assert!(result.is_none(), "Instance should be locked");
+        result
+    });
+
+    // Thread 3: Wait for expiration and then fetch (should succeed)
+    let provider3 = provider.clone();
+    let handle3 = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(TEST_LOCK_TIMEOUT_MS + 100)).await;
+        let result = provider3.fetch_orchestration_item().await;
+        result
+    });
+
+    // Wait for all threads
+    let (lock_token1, result2, result3) = futures::future::join3(handle1, handle2, handle3).await;
+    let _lock_token1 = lock_token1.unwrap();
+    assert!(result2.unwrap().is_none());
+    let item3 = result3.unwrap().unwrap();
+
+    // Thread 3 should have successfully acquired the lock after expiration
+    assert_eq!(item3.instance, "expiration-instance");
+    assert_ne!(item3.lock_token, "expired-token"); // Should be a new token
+
+    tracing::info!("✓ Test passed: multi-threaded lock expiration recovery verified");
 }

@@ -210,15 +210,45 @@ impl Provider for MyProvider {
 
 **Purpose:** Atomically fetch and lock work for one instance.
 
+**⚠️ CRITICAL: Instance-Level Locking**
+
+Before fetching messages, you MUST acquire an instance-level lock. This prevents concurrent dispatchers from processing the same instance simultaneously, which would cause data corruption and race conditions.
+
+**Instance Lock Schema:**
+```sql
+CREATE TABLE instance_locks (
+    instance_id TEXT PRIMARY KEY,
+    lock_token TEXT NOT NULL,
+    locked_until INTEGER NOT NULL,  -- Unix timestamp (milliseconds)
+    locked_at INTEGER NOT NULL      -- Unix timestamp (milliseconds)
+);
+```
+
+**Lock Acquisition Logic:**
+1. **Find available instance**: Select an instance that has work AND is not currently locked
+2. **Atomically acquire lock**: Use `INSERT ... ON CONFLICT` to atomically claim the lock
+3. **Verify lock acquired**: Check rows_affected to ensure lock was actually acquired
+4. **Fetch messages**: Only after lock is confirmed, fetch messages for that instance
+
+**Why Instance-Level Locking?**
+
+- **Prevents race conditions**: Without instance locks, two dispatchers could fetch the same instance simultaneously
+- **Ensures atomicity**: All messages for an instance are processed together in one turn
+- **Prevents duplicate processing**: Lock token validates that only the lock holder can ack
+- **Handles crashes**: Lock expiration allows automatic recovery when dispatchers crash
+
 **Pseudo-code:**
 ```
 BEGIN TRANSACTION
 
-// Find next work (visibility + lock filtering)
-row = SELECT id, instance_id FROM orchestrator_queue
-      WHERE visible_at <= current_timestamp()
-        AND (lock_token IS NULL OR locked_until <= current_timestamp())
-      ORDER BY id ASC
+// Step 1: Find an instance that has work AND is not locked
+// Join orchestrator_queue with instance_locks to check lock status
+row = SELECT q.instance_id
+      FROM orchestrator_queue q
+      LEFT JOIN instance_locks il ON q.instance_id = il.instance_id
+      WHERE q.visible_at <= current_timestamp()
+        AND (il.instance_id IS NULL OR il.locked_until <= current_timestamp())
+      ORDER BY q.id ASC
       LIMIT 1
 
 IF row IS NULL:
@@ -227,23 +257,40 @@ IF row IS NULL:
 
 instance_id = row.instance_id
 
-// Lock ALL messages for this instance
+// Step 2: Generate lock token and calculate expiration
 lock_token = generate_uuid()
-locked_until = current_timestamp() + lock_timeout_ms
+now_ms = current_timestamp_millis()
+locked_until = now_ms + lock_timeout_ms  // e.g., now + 30000 (30 seconds)
 
+// Step 3: Atomically acquire instance lock
+// This is CRITICAL - must be atomic to prevent race conditions
+lock_result = INSERT INTO instance_locks (instance_id, lock_token, locked_until, locked_at)
+              VALUES (instance_id, lock_token, locked_until, now_ms)
+              ON CONFLICT(instance_id) DO UPDATE
+              SET lock_token = lock_token, locked_until = locked_until, locked_at = now_ms
+              WHERE locked_until <= now_ms  // Only update if lock expired
+
+IF lock_result.rows_affected == 0:
+    // Lock acquisition failed - another dispatcher has the lock
+    ROLLBACK
+    RETURN None
+
+// Step 4: Mark ALL messages for this instance with our lock_token
+// This "tags" messages so we know which ones to delete on ack
 UPDATE orchestrator_queue
 SET lock_token = lock_token, locked_until = locked_until
 WHERE instance_id = instance_id
+  AND visible_at <= current_timestamp()
   AND (lock_token IS NULL OR locked_until <= current_timestamp())
 
-// Fetch all locked messages
+// Step 5: Fetch all locked messages
 messages = SELECT work_item FROM orchestrator_queue
            WHERE lock_token = lock_token
            ORDER BY id ASC
 
 messages = messages.map(|m| deserialize_workitem(m))
 
-// Load instance metadata
+// Step 6: Load instance metadata
 metadata = SELECT orchestration_name, orchestration_version, current_execution_id
            FROM instances
            WHERE instance_id = instance_id
@@ -262,7 +309,7 @@ orchestration_name = metadata.orchestration_name
 orchestration_version = metadata.orchestration_version  
 current_execution_id = metadata.current_execution_id
 
-// Load history for current execution
+// Step 7: Load history for current execution
 history_rows = SELECT event_data FROM history
                WHERE instance_id = instance_id
                  AND execution_id = current_execution_id
@@ -285,9 +332,56 @@ RETURN Some(OrchestrationItem {
 
 **Edge Cases:**
 - No work available → Return None (dispatcher will sleep)
-- Lock contention → Transaction retry or return None
+- Lock contention → Transaction retry or return None (another dispatcher has lock)
+- Lock acquisition failed → Return None (try again later)
 - Missing instance metadata → Derive from messages or history
 - Empty history → Valid (new instance)
+
+**Lock Expiration:**
+- Locks must expire after `lock_timeout_ms` (recommended: 30 seconds)
+- Expired locks allow automatic recovery from crashed dispatchers
+- Check `locked_until <= current_timestamp()` when acquiring locks
+- Always validate lock token on ack to ensure lock hasn't expired
+
+**Multi-Thread Safety:**
+- Instance locks MUST be acquired atomically (single SQL statement)
+- Use database-level locking (e.g., SQLite row locks, PostgreSQL SELECT FOR UPDATE)
+- Never check-then-set - always use atomic operations
+- Verify lock acquisition with `rows_affected` check
+
+**Example SQLite Implementation:**
+```sql
+-- Atomic lock acquisition with conflict handling
+INSERT INTO instance_locks (instance_id, lock_token, locked_until, locked_at)
+VALUES (?, ?, ?, ?)
+ON CONFLICT(instance_id) DO UPDATE
+SET lock_token = excluded.lock_token,
+    locked_until = excluded.locked_until,
+    locked_at = excluded.locked_at
+WHERE locked_until <= excluded.locked_at  -- Only update if expired
+```
+
+**Example PostgreSQL Implementation:**
+```sql
+-- Use SELECT FOR UPDATE SKIP LOCKED for atomic lock acquisition
+SELECT instance_id FROM orchestrator_queue
+WHERE visible_at <= NOW()
+  AND instance_id NOT IN (
+    SELECT instance_id FROM instance_locks WHERE locked_until > NOW()
+  )
+ORDER BY id
+LIMIT 1
+FOR UPDATE SKIP LOCKED;
+
+-- Then insert lock
+INSERT INTO instance_locks (instance_id, lock_token, locked_until, locked_at)
+VALUES (?, ?, ?, ?)
+ON CONFLICT (instance_id) DO UPDATE
+SET lock_token = excluded.lock_token,
+    locked_until = excluded.locked_until,
+    locked_at = excluded.locked_at
+WHERE instance_locks.locked_until <= excluded.locked_at;
+```
 
 ---
 
@@ -299,17 +393,35 @@ RETURN Some(OrchestrationItem {
 ```
 BEGIN TRANSACTION
 
-// Get instance_id from lock_token
-instance_id = SELECT DISTINCT instance_id FROM orchestrator_queue
+// Step 1: Validate lock token and get instance_id
+// MUST check instance_locks table to verify lock is still valid
+instance_id = SELECT instance_id FROM instance_locks
               WHERE lock_token = lock_token
+                AND locked_until > current_timestamp()
 
 IF instance_id IS NULL:
     ROLLBACK
-    RETURN Err("Invalid lock token")
+    RETURN Err("Invalid or expired lock token")
+
+// Step 2: Verify lock token matches instance
+// This prevents using a lock token from a different instance
+lock_valid = SELECT COUNT(*) FROM instance_locks 
+             WHERE instance_id = instance_id 
+               AND lock_token = lock_token 
+               AND locked_until > current_timestamp()
+
+IF lock_valid == 0:
+    ROLLBACK
+    RETURN Err("Instance lock expired or invalid")
+
+// Step 3: Remove instance lock (processing complete)
+DELETE FROM instance_locks 
+WHERE instance_id = instance_id 
+  AND lock_token = lock_token
 
 // Use the explicit execution_id provided by the runtime
 
-// 1. Idempotently create execution row and update instance pointer
+// 4. Idempotently create execution row and update instance pointer
 INSERT INTO executions (instance_id, execution_id, status, started_at)
 VALUES (instance_id, execution_id, 'Running', CURRENT_TIMESTAMP)
 ON CONFLICT DO NOTHING;
@@ -318,7 +430,7 @@ UPDATE instances
 SET current_execution_id = MAX(current_execution_id, execution_id)
 WHERE instance_id = instance_id;
 
-// 2. Append history_delta (DO NOT inspect events!)
+// 5. Append history_delta (DO NOT inspect events!)
 FOR event IN history_delta:
     // Validate event_id was set by runtime
     IF event.event_id() == 0:
@@ -331,7 +443,7 @@ FOR event IN history_delta:
     VALUES (instance_id, execution_id, event.event_id(), event_type, event_json, NOW())
     ON CONFLICT DO NOTHING  // Idempotent
 
-// 3. Update execution metadata (NO event inspection!)
+// 6. Update execution metadata (NO event inspection!)
 IF metadata.status IS NOT NULL:
     UPDATE executions
     SET status = metadata.status,
@@ -342,13 +454,13 @@ IF metadata.status IS NOT NULL:
 
 // (No implicit next-execution creation here; runtime controls execution_id explicitly)
 
-// 4. Enqueue worker items
+// 7. Enqueue worker items
 FOR item IN worker_items:
     work_json = serialize(item)
     INSERT INTO worker_queue (work_item, lock_token, locked_until, created_at)
     VALUES (work_json, NULL, NULL, NOW())
 
-// 5. Enqueue orchestrator items (may include TimerFired with delayed visibility)
+// 8. Enqueue orchestrator items (may include TimerFired with delayed visibility)
 FOR item IN orchestrator_items:
     work_json = serialize(item)
     target_instance = extract_instance(item)  // See WorkItem docs
@@ -372,7 +484,8 @@ FOR item IN orchestrator_items:
     INSERT INTO orchestrator_queue (instance_id, work_item, visible_at, lock_token, locked_until, created_at)
     VALUES (target_instance, work_json, visible_at, NULL, NULL, NOW())
 
-// 6. Release lock (delete acknowledged messages)
+// 9. Release lock (delete acknowledged messages)
+// Delete messages that were tagged with our lock_token
 DELETE FROM orchestrator_queue WHERE lock_token = lock_token
 
 COMMIT TRANSACTION
@@ -380,7 +493,10 @@ RETURN Ok(())
 ```
 
 **Critical:**
-- All 6 steps must be in ONE transaction
+- All 9 steps must be in ONE transaction
+- Lock validation MUST occur before any other operations
+- If lock expired or invalid, ROLLBACK immediately
+- Instance lock MUST be deleted before committing (prevents stale locks)
 - If ANY step fails, ROLLBACK everything
 - Never partially commit
 
@@ -388,8 +504,22 @@ RETURN Ok(())
 
 ### 3. abandon_orchestration_item() - Release Lock for Retry
 
+**Purpose:** Release instance lock and optionally delay visibility for backoff.
+
 **Pseudo-code:**
 ```
+BEGIN TRANSACTION
+
+// Step 1: Validate lock token
+instance_id = SELECT instance_id FROM instance_locks
+              WHERE lock_token = lock_token
+
+IF instance_id IS NULL:
+    // Lock already released or expired - idempotent, return Ok
+    ROLLBACK
+    RETURN Ok(())
+
+// Step 2: Clear lock_token from messages (unlock them)
 visible_at = IF delay_ms IS NOT NULL:
                  current_timestamp() + delay_ms
              ELSE:
@@ -401,7 +531,12 @@ SET lock_token = NULL,
     visible_at = visible_at
 WHERE lock_token = lock_token
 
-// Idempotent - Ok if no rows updated
+// Step 3: Remove instance lock
+DELETE FROM instance_locks WHERE lock_token = lock_token
+
+COMMIT TRANSACTION
+
+// Idempotent - Ok if no rows updated (lock already released)
 RETURN Ok(())
 ```
 
@@ -496,6 +631,13 @@ RETURN Ok(())  // Idempotent
 5. **executions** - Execution tracking
    - PRIMARY KEY: (instance_id, execution_id)
    - Columns: status, output, started_at, completed_at
+
+6. **instance_locks** - ⚠️ CRITICAL: Instance-level locking table
+   - PRIMARY KEY: instance_id
+   - Columns: lock_token (unique UUID), locked_until (Unix timestamp milliseconds), locked_at (Unix timestamp milliseconds)
+   - **Purpose**: Prevents concurrent dispatchers from processing the same instance
+   - **Required**: Must be implemented for correct provider behavior
+   - **Index**: Consider adding index on (locked_until) for efficient lock expiration checks
 
 ---
 
