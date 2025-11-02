@@ -1,37 +1,23 @@
-use duroxide::Event;
-use duroxide::providers::sqlite::{SqliteOptions, SqliteProvider};
-use duroxide::providers::{ExecutionMetadata, Provider, WorkItem};
+use crate::provider_validation::{Event, ExecutionMetadata, start_item};
+use crate::provider_validations::ProviderFactory;
 use std::sync::Arc;
 use std::time::Duration;
 
 const TEST_LOCK_TIMEOUT_MS: u64 = 1000;
 
-/// Helper to create a provider for testing
-async fn create_provider() -> Arc<dyn Provider> {
-    let options = SqliteOptions {
-        lock_timeout: Duration::from_millis(TEST_LOCK_TIMEOUT_MS),
-    };
-    Arc::new(SqliteProvider::new_in_memory_with_options(Some(options)).await.unwrap())
-}
-
-/// Helper to create a start item for an instance
-fn start_item(instance: &str) -> WorkItem {
-    WorkItem::StartOrchestration {
-        instance: instance.to_string(),
-        orchestration: "TestOrch".to_string(),
-        input: "{}".to_string(),
-        version: Some("1.0.0".to_string()),
-        parent_instance: None,
-        parent_id: None,
-        execution_id: duroxide::INITIAL_EXECUTION_ID,
-    }
+/// Run all lock expiration tests
+pub async fn run_tests<F: ProviderFactory>(factory: &F) {
+    test_lock_expires_after_timeout(factory).await;
+    test_abandon_releases_lock_immediately(factory).await;
+    test_lock_renewal_on_ack(factory).await;
+    test_concurrent_lock_attempts_respect_expiration(factory).await;
 }
 
 /// Test 4.1: Lock Expires After Timeout
 /// Goal: Verify locks expire and instance becomes available again.
-#[tokio::test]
-async fn test_lock_expires_after_timeout() {
-    let provider = create_provider().await;
+pub async fn test_lock_expires_after_timeout<F: ProviderFactory>(factory: &F) {
+    tracing::info!("→ Testing lock expiration: lock expires after timeout");
+    let provider = factory.create_provider().await;
 
     // Setup: create and fetch item
     provider
@@ -57,13 +43,14 @@ async fn test_lock_expires_after_timeout() {
         .ack_orchestration_item(&lock_token, 1, vec![], vec![], vec![], ExecutionMetadata::default())
         .await;
     assert!(result.is_err());
+    tracing::info!("✓ Test passed: lock expiration verified");
 }
 
 /// Test 4.2: Abandon Releases Lock Immediately
 /// Goal: Verify abandon releases lock without waiting for expiration.
-#[tokio::test]
-async fn test_abandon_releases_lock_immediately() {
-    let provider = create_provider().await;
+pub async fn test_abandon_releases_lock_immediately<F: ProviderFactory>(factory: &F) {
+    tracing::info!("→ Testing lock expiration: abandon releases lock immediately");
+    let provider = factory.create_provider().await;
 
     // Setup: create and fetch item
     provider
@@ -82,13 +69,14 @@ async fn test_abandon_releases_lock_immediately() {
     // Lock should be released immediately (don't need to wait for expiration)
     let item2 = provider.fetch_orchestration_item().await.unwrap();
     assert_eq!(item2.instance, "instance-A");
+    tracing::info!("✓ Test passed: abandon releases lock verified");
 }
 
 /// Test 4.3: Lock Renewal on Ack
 /// Goal: Verify successful ack releases lock immediately.
-#[tokio::test]
-async fn test_lock_renewal_on_ack() {
-    let provider = create_provider().await;
+pub async fn test_lock_renewal_on_ack<F: ProviderFactory>(factory: &F) {
+    tracing::info!("→ Testing lock expiration: lock renewal on ack");
+    let provider = factory.create_provider().await;
 
     // Setup: create and fetch item
     provider
@@ -133,13 +121,14 @@ async fn test_lock_renewal_on_ack() {
     // The new item should be available immediately after ack
     let item2 = provider.fetch_orchestration_item().await.unwrap();
     assert_eq!(item2.instance, "instance-A");
+    tracing::info!("✓ Test passed: lock renewal on ack verified");
 }
 
 /// Test 4.4: Concurrent Lock Attempts Respect Expiration
 /// Goal: Verify multiple dispatchers respect lock expiration times.
-#[tokio::test]
-async fn test_concurrent_lock_attempts_respect_expiration() {
-    let provider = Arc::new(create_provider().await);
+pub async fn test_concurrent_lock_attempts_respect_expiration<F: ProviderFactory>(factory: &F) {
+    tracing::info!("→ Testing lock expiration: concurrent lock attempts respect expiration");
+    let provider = Arc::new(factory.create_provider().await);
 
     // Setup: create and fetch item
     provider
@@ -176,4 +165,5 @@ async fn test_concurrent_lock_attempts_respect_expiration() {
     // Now one should succeed
     let item2 = provider.fetch_orchestration_item().await.unwrap();
     assert_eq!(item2.instance, "instance-A");
+    tracing::info!("✓ Test passed: concurrent lock attempts respect expiration verified");
 }

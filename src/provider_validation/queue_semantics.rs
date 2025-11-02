@@ -1,37 +1,24 @@
-use duroxide::Event;
-use duroxide::providers::sqlite::{SqliteOptions, SqliteProvider};
-use duroxide::providers::{ExecutionMetadata, Provider, WorkItem};
-use std::sync::Arc;
+use crate::provider_validation::{Event, ExecutionMetadata, start_item};
+use crate::provider_validations::ProviderFactory;
+use crate::providers::WorkItem;
 use std::time::Duration;
 
 const TEST_LOCK_TIMEOUT_MS: u64 = 1000;
 
-/// Helper to create a provider for testing
-async fn create_provider() -> Arc<dyn Provider> {
-    let options = SqliteOptions {
-        lock_timeout: Duration::from_millis(TEST_LOCK_TIMEOUT_MS),
-    };
-    Arc::new(SqliteProvider::new_in_memory_with_options(Some(options)).await.unwrap())
-}
-
-/// Helper to create a start item for an instance
-fn start_item(instance: &str) -> WorkItem {
-    WorkItem::StartOrchestration {
-        instance: instance.to_string(),
-        orchestration: "TestOrch".to_string(),
-        input: "{}".to_string(),
-        version: Some("1.0.0".to_string()),
-        parent_instance: None,
-        parent_id: None,
-        execution_id: duroxide::INITIAL_EXECUTION_ID,
-    }
+/// Run all queue semantics tests
+pub async fn run_tests<F: ProviderFactory>(factory: &F) {
+    test_worker_queue_fifo_ordering(factory).await;
+    test_worker_peek_lock_semantics(factory).await;
+    test_worker_ack_atomicity(factory).await;
+    test_timer_delayed_visibility(factory).await;
+    test_lost_lock_token_handling(factory).await;
 }
 
 /// Test 5.1: Worker Queue FIFO Ordering
 /// Goal: Verify worker items dequeued in order.
-#[tokio::test]
-async fn test_worker_queue_fifo_ordering() {
-    let provider = create_provider().await;
+pub async fn test_worker_queue_fifo_ordering<F: ProviderFactory>(factory: &F) {
+    tracing::info!("→ Testing queue semantics: worker queue FIFO ordering");
+    let provider = factory.create_provider().await;
 
     // Enqueue 5 worker items
     for i in 0..5 {
@@ -61,13 +48,14 @@ async fn test_worker_queue_fifo_ordering() {
 
     // Queue should be empty
     assert!(provider.dequeue_worker_peek_lock().await.is_none());
+    tracing::info!("✓ Test passed: worker queue FIFO ordering verified");
 }
 
 /// Test 5.2: Worker Peek-Lock Semantics
 /// Goal: Verify dequeue doesn't remove item until ack.
-#[tokio::test]
-async fn test_worker_peek_lock_semantics() {
-    let provider = create_provider().await;
+pub async fn test_worker_peek_lock_semantics<F: ProviderFactory>(factory: &F) {
+    tracing::info!("→ Testing queue semantics: worker peek-lock semantics");
+    let provider = factory.create_provider().await;
 
     // Enqueue worker item
     provider
@@ -104,13 +92,14 @@ async fn test_worker_peek_lock_semantics() {
 
     // Queue should now be empty
     assert!(provider.dequeue_worker_peek_lock().await.is_none());
+    tracing::info!("✓ Test passed: worker peek-lock semantics verified");
 }
 
 /// Test 5.3: Worker Ack Atomicity
 /// Goal: Verify ack_worker atomically removes item and enqueues completion.
-#[tokio::test]
-async fn test_worker_ack_atomicity() {
-    let provider = create_provider().await;
+pub async fn test_worker_ack_atomicity<F: ProviderFactory>(factory: &F) {
+    tracing::info!("→ Testing queue semantics: worker ack atomicity");
+    let provider = factory.create_provider().await;
 
     // Create instance first (required for orchestrator queue)
     provider
@@ -178,13 +167,14 @@ async fn test_worker_ack_atomicity() {
         &orchestration_item.messages[0],
         WorkItem::ActivityCompleted { .. }
     ));
+    tracing::info!("✓ Test passed: worker ack atomicity verified");
 }
 
 /// Test 5.4: Timer Delayed Visibility
 /// Goal: Verify TimerFired items only dequeued when visible_at <= now.
-#[tokio::test]
-async fn test_timer_delayed_visibility() {
-    let provider = create_provider().await;
+pub async fn test_timer_delayed_visibility<F: ProviderFactory>(factory: &F) {
+    tracing::info!("→ Testing queue semantics: timer delayed visibility");
+    let provider = factory.create_provider().await;
 
     // Create instance first
     provider
@@ -238,13 +228,14 @@ async fn test_timer_delayed_visibility() {
     assert_eq!(item2.instance, "instance-A");
     assert_eq!(item2.messages.len(), 1);
     assert!(matches!(&item2.messages[0], WorkItem::TimerFired { .. }));
+    tracing::info!("✓ Test passed: timer delayed visibility verified");
 }
 
 /// Test 5.6: Lost Lock Token Handling
 /// Goal: Verify locked items eventually become available if token lost.
-#[tokio::test]
-async fn test_lost_lock_token_handling() {
-    let provider = create_provider().await;
+pub async fn test_lost_lock_token_handling<F: ProviderFactory>(factory: &F) {
+    tracing::info!("→ Testing queue semantics: lost lock token handling");
+    let provider = factory.create_provider().await;
 
     // Enqueue worker item
     provider
@@ -273,4 +264,5 @@ async fn test_lost_lock_token_handling() {
     // Dequeue again → should succeed → item redelivered
     let (item2, _token2) = provider.dequeue_worker_peek_lock().await.unwrap();
     assert!(matches!(item2, WorkItem::ActivityExecute { .. }));
+    tracing::info!("✓ Test passed: lost lock token handling verified");
 }

@@ -1,38 +1,28 @@
-use duroxide::providers::sqlite::{SqliteOptions, SqliteProvider};
-use duroxide::providers::{ExecutionMetadata, Provider, WorkItem};
+use crate::provider_validation::{ExecutionMetadata, start_item};
+use crate::provider_validations::ProviderFactory;
+use crate::providers::WorkItem;
 use std::sync::Arc;
 use std::time::Duration;
 
-/// Helper to create a provider for testing
-async fn create_provider() -> Arc<dyn Provider> {
-    let options = SqliteOptions {
-        lock_timeout: Duration::from_millis(TEST_LOCK_TIMEOUT_MS),
-    };
-    Arc::new(SqliteProvider::new_in_memory_with_options(Some(options)).await.unwrap())
-}
-
-/// Helper to create a start item for an instance
-fn start_item(instance: &str) -> WorkItem {
-    WorkItem::StartOrchestration {
-        instance: instance.to_string(),
-        orchestration: "TestOrch".to_string(),
-        input: "{}".to_string(),
-        version: Some("1.0.0".to_string()),
-        parent_instance: None,
-        parent_id: None,
-        execution_id: duroxide::INITIAL_EXECUTION_ID,
-    }
-}
-
-// Default SQLite lock timeout is 30 seconds (30000ms)
-// Tests use 1 second for faster execution
 const TEST_LOCK_TIMEOUT_MS: u64 = 1000;
+
+/// Run all instance locking tests
+pub async fn run_tests<F: ProviderFactory>(factory: &F) {
+    test_exclusive_instance_lock(factory).await;
+    test_lock_token_uniqueness(factory).await;
+    test_invalid_lock_token_rejection(factory).await;
+    test_concurrent_instance_fetching(factory).await;
+    test_completions_arriving_during_lock_blocked(factory).await;
+    test_cross_instance_lock_isolation(factory).await;
+    test_message_tagging_during_lock(factory).await;
+    test_ack_only_affects_locked_messages(factory).await;
+}
 
 /// Test 1.1: Exclusive Instance Lock Acquisition
 /// Goal: Verify only one dispatcher can process an instance at a time.
-#[tokio::test]
-async fn test_exclusive_instance_lock() {
-    let provider = create_provider().await;
+pub async fn test_exclusive_instance_lock<F: ProviderFactory>(factory: &F) {
+    tracing::info!("→ Testing instance locking: exclusive lock acquisition");
+    let provider = factory.create_provider().await;
 
     // Enqueue work for instance "A"
     provider
@@ -53,13 +43,14 @@ async fn test_exclusive_instance_lock() {
     // Now should be able to fetch again
     let item2 = provider.fetch_orchestration_item().await.unwrap();
     assert_ne!(item2.lock_token, lock_token1);
+    tracing::info!("✓ Test passed: exclusive lock verified");
 }
 
 /// Test 1.2: Lock Token Uniqueness
 /// Goal: Ensure each fetch generates a unique lock token.
-#[tokio::test]
-async fn test_lock_token_uniqueness() {
-    let provider = create_provider().await;
+pub async fn test_lock_token_uniqueness<F: ProviderFactory>(factory: &F) {
+    tracing::info!("→ Testing instance locking: lock token uniqueness");
+    let provider = factory.create_provider().await;
 
     // Enqueue work for multiple instances
     for i in 0..5 {
@@ -79,13 +70,14 @@ async fn test_lock_token_uniqueness() {
     // Verify all lock tokens are unique
     let unique_tokens: std::collections::HashSet<_> = tokens.iter().collect();
     assert_eq!(unique_tokens.len(), 5, "All lock tokens should be unique");
+    tracing::info!("✓ Test passed: lock token uniqueness verified");
 }
 
 /// Test 1.3: Invalid Lock Token Rejection
 /// Goal: Verify ack/abandon reject invalid lock tokens.
-#[tokio::test]
-async fn test_invalid_lock_token_rejection() {
-    let provider = create_provider().await;
+pub async fn test_invalid_lock_token_rejection<F: ProviderFactory>(factory: &F) {
+    tracing::info!("→ Testing instance locking: invalid lock token rejection");
+    let provider = factory.create_provider().await;
 
     // Enqueue and fetch an item
     provider
@@ -106,13 +98,14 @@ async fn test_invalid_lock_token_rejection() {
 
     // Original item should still be locked
     assert!(provider.fetch_orchestration_item().await.is_none());
+    tracing::info!("✓ Test passed: invalid lock token rejection verified");
 }
 
 /// Test 1.4: Concurrent Fetch Attempts
 /// Goal: Test provider under concurrent access from multiple dispatchers.
-#[tokio::test]
-async fn test_concurrent_instance_fetching() {
-    let provider = Arc::new(create_provider().await);
+pub async fn test_concurrent_instance_fetching<F: ProviderFactory>(factory: &F) {
+    tracing::info!("→ Testing instance locking: concurrent fetch attempts");
+    let provider = Arc::new(factory.create_provider().await);
 
     // Seed 10 instances
     for i in 0..10 {
@@ -148,13 +141,14 @@ async fn test_concurrent_instance_fetching() {
         .collect();
 
     assert_eq!(instances.len(), 10, "Each instance should be fetched exactly once");
+    tracing::info!("✓ Test passed: concurrent fetching verified");
 }
 
 /// Test 1.5: Message Arrival During Lock (Critical)
 /// Goal: Verify completions arriving during a lock cannot be fetched by other dispatchers.
-#[tokio::test]
-async fn test_completions_arriving_during_lock_blocked() {
-    let provider = Arc::new(create_provider().await);
+pub async fn test_completions_arriving_during_lock_blocked<F: ProviderFactory>(factory: &F) {
+    tracing::info!("→ Testing instance locking: completions arriving during lock blocked");
+    let provider = Arc::new(factory.create_provider().await);
 
     // Step 1: Create instance with initial work
     provider
@@ -215,13 +209,14 @@ async fn test_completions_arriving_during_lock_blocked() {
         "Should have 3 ActivityCompleted messages"
     );
     assert_eq!(activity_completions, vec![1, 2, 3]);
+    tracing::info!("✓ Test passed: completions during lock blocked verified");
 }
 
 /// Test 1.6: Cross-Instance Lock Isolation
 /// Goal: Verify locks on one instance don't block other instances.
-#[tokio::test]
-async fn test_cross_instance_lock_isolation() {
-    let provider = Arc::new(create_provider().await);
+pub async fn test_cross_instance_lock_isolation<F: ProviderFactory>(factory: &F) {
+    tracing::info!("→ Testing instance locking: cross-instance lock isolation");
+    let provider = Arc::new(factory.create_provider().await);
 
     // Enqueue work for two different instances
     provider
@@ -274,13 +269,14 @@ async fn test_cross_instance_lock_isolation() {
 
     // Key assertion: instance-level locks don't block other instances
     assert_ne!(item_a.instance, item_b.instance);
+    tracing::info!("✓ Test passed: cross-instance lock isolation verified");
 }
 
 /// Test 1.7: Completing Messages During Lock (Message Tagging)
 /// Goal: Verify only messages present at fetch time are deleted on ack.
-#[tokio::test]
-async fn test_message_tagging_during_lock() {
-    let provider = Arc::new(create_provider().await);
+pub async fn test_message_tagging_during_lock<F: ProviderFactory>(factory: &F) {
+    tracing::info!("→ Testing instance locking: message tagging during lock");
+    let provider = Arc::new(factory.create_provider().await);
 
     // Create instance first by enqueuing StartOrchestration
     provider
@@ -360,13 +356,14 @@ async fn test_message_tagging_during_lock() {
     assert_eq!(item2.instance, "instance-A");
     assert_eq!(item2.messages.len(), 1);
     assert!(matches!(&item2.messages[0], WorkItem::ActivityCompleted { id: 3, .. }));
+    tracing::info!("✓ Test passed: message tagging during lock verified");
 }
 
 /// Test 1.8: Ack Only Affects Locked Messages
 /// Goal: Verify ack_orchestration_item only acks messages that were locked by the lock_token.
-#[tokio::test]
-async fn test_ack_only_affects_locked_messages() {
-    let provider = Arc::new(create_provider().await);
+pub async fn test_ack_only_affects_locked_messages<F: ProviderFactory>(factory: &F) {
+    tracing::info!("→ Testing instance locking: ack only affects locked messages");
+    let provider = Arc::new(factory.create_provider().await);
 
     // Create instance
     provider
@@ -456,4 +453,5 @@ async fn test_ack_only_affects_locked_messages() {
         })
         .collect();
     assert_eq!(ids, vec![2, 3], "Should only have messages 2 and 3");
+    tracing::info!("✓ Test passed: ack only affects locked messages verified");
 }

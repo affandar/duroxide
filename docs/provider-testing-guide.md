@@ -14,13 +14,13 @@ Duroxide provides two types of tests for custom providers:
 - Use `provider-test` feature
 - See [Stress Tests](#stress-tests) section below
 
-### 2. Correctness Tests (Behavior Validation)
-- Validates: atomicity, locking, error handling, queue semantics
+### 2. Validation Tests (Behavior Validation)
+- Validates: atomicity, locking, error handling, queue semantics, management capabilities
 - Use `provider-test` feature (same as stress tests)
-- See [Provider Correctness Tests](#provider-correctness-tests) section below
+- See [Provider Validation Tests](#provider-validation-tests) section below
 
 **Recommended Testing Strategy:**
-1. Run correctness tests first to validate behavior
+1. Run validation tests first to validate behavior
 2. Run stress tests to measure performance
 3. Both should pass with 100% success rate
 
@@ -294,17 +294,17 @@ File SQLite          2/2        281        0          100.00     25.98          
 
 ---
 
-## Provider Correctness Tests
+## Provider Validation Tests
 
-Duroxide includes a comprehensive suite of correctness tests that validate provider behavior. These tests verify critical correctness properties like atomicity, locking, error handling, and queue semantics.
+Duroxide includes a comprehensive suite of validation tests that validate provider behavior. These tests verify critical correctness properties like atomicity, locking, error handling, queue semantics, and management capabilities.
 
 ### Quick Start
 
-To run correctness tests against your custom provider:
+To run validation tests against your custom provider:
 
 1. Add `duroxide` with `provider-test` feature to your project
 2. Implement the `ProviderFactory` trait
-3. Call `run_all_tests()` with your factory
+3. Call individual test suite functions with your factory
 
 ### Adding the Dependency
 
@@ -315,13 +315,13 @@ Add Duroxide with the `provider-test` feature:
 duroxide = { path = "../duroxide", features = ["provider-test"] }
 ```
 
-> **Note:** The `provider-test` feature enables both stress tests and correctness tests. Enable this single feature to get all provider testing infrastructure.
+> **Note:** The `provider-test` feature enables both stress tests and validation tests. Enable this single feature to get all provider testing infrastructure.
 
 ### Basic Example
 
 ```rust
 use duroxide::providers::Provider;
-use duroxide::provider_correctness_tests::{ProviderFactory, run_all_tests};
+use duroxide::provider_validations::{ProviderFactory, run_atomicity_tests, run_error_handling_tests};
 use std::sync::Arc;
 
 struct MyProviderFactory;
@@ -335,15 +335,23 @@ impl ProviderFactory for MyProviderFactory {
 }
 
 #[tokio::test]
-async fn test_my_provider_correctness() {
+async fn test_my_provider_validation() {
     let factory = MyProviderFactory;
-    run_all_tests(factory).await;
+    
+    // Run all test suites
+    run_atomicity_tests(&factory).await;
+    run_error_handling_tests(&factory).await;
+    run_instance_locking_tests(&factory).await;
+    run_lock_expiration_tests(&factory).await;
+    run_multi_execution_tests(&factory).await;
+    run_queue_semantics_tests(&factory).await;
+    run_management_tests(&factory).await;
 }
 ```
 
 ### What the Tests Validate
 
-The correctness test suite includes:
+The validation test suite includes:
 
 1. **Atomicity Tests**
    - All-or-nothing commit semantics
@@ -375,37 +383,44 @@ The correctness test suite includes:
    - Atomic queue operations
    - Worker queue isolation
 
+7. **Management Capability Tests**
+   - Instance listing and filtering
+   - Execution queries
+   - System metrics
+   - Queue depth reporting
+
 ### Advanced Usage: Running Individual Test Suites
 
 You can run individual test suites to isolate failures:
 
 ```rust
-use duroxide::provider_correctness_tests::{ProviderFactory, tests};
+use duroxide::provider_validations::{ProviderFactory, run_atomicity_tests, run_instance_locking_tests};
 
 #[tokio::test]
 async fn test_my_provider_atomicity() {
-    let factory = MyProviderFactory::new();
+    let factory = MyProviderFactory;
     
     // Run only atomicity tests
-    tests::run_atomicity_tests(&factory).await;
+    run_atomicity_tests(&factory).await;
 }
 
 #[tokio::test]
 async fn test_my_provider_locking() {
-    let factory = MyProviderFactory::new();
+    let factory = MyProviderFactory;
     
     // Run only instance locking tests
-    tests::run_instance_locking_tests(&factory).await;
+    run_instance_locking_tests(&factory).await;
 }
 ```
 
-**Available test suites:**
-- `tests::run_atomicity_tests()` - Transactional guarantees
-- `tests::run_error_handling_tests()` - Graceful failure modes
-- `tests::run_instance_locking_tests()` - Exclusive access
-- `tests::run_lock_expiration_tests()` - Peek-lock timeouts
-- `tests::run_multi_execution_tests()` - ContinueAsNew support
-- `tests::run_queue_semantics_tests()` - Queue behavior
+**Available test suite functions:**
+- `run_atomicity_tests()` - Transactional guarantees
+- `run_error_handling_tests()` - Graceful failure modes
+- `run_instance_locking_tests()` - Exclusive access
+- `run_lock_expiration_tests()` - Peek-lock timeouts
+- `run_multi_execution_tests()` - ContinueAsNew support
+- `run_queue_semantics_tests()` - Queue behavior
+- `run_management_tests()` - Management API tests
 
 **When to run individual suites:**
 - Debugging a specific failure category
@@ -419,7 +434,7 @@ Your factory should create fresh, isolated provider instances for each test:
 
 ```rust
 use duroxide::providers::Provider;
-use duroxide::provider_correctness_tests::ProviderFactory;
+use duroxide::provider_validations::ProviderFactory;
 use std::sync::Arc;
 use tempfile::TempDir;
 
@@ -442,16 +457,16 @@ impl ProviderFactory for MyProviderFactory {
 
 ### Integration with CI/CD
 
-Add correctness tests to your CI pipeline:
+Add validation tests to your CI pipeline:
 
 ```yaml
 # .github/workflows/provider-tests.yml
-name: Provider Correctness Tests
+name: Provider Validation Tests
 
 on: [pull_request]
 
 jobs:
-  correctness-tests:
+  validation-tests:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
@@ -461,7 +476,7 @@ jobs:
         with:
           toolchain: stable
       
-      - name: Run correctness tests
+      - name: Run validation tests
         run: |
           cargo test --features provider-test
 ```

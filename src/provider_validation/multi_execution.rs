@@ -1,21 +1,9 @@
-use duroxide::Event;
-use duroxide::providers::sqlite::{SqliteOptions, SqliteProvider};
-use duroxide::providers::{ExecutionMetadata, Provider, WorkItem};
-use std::sync::Arc;
-use std::time::Duration;
+use crate::provider_validation::{Event, ExecutionMetadata};
+use crate::provider_validations::ProviderFactory;
+use crate::providers::WorkItem;
 
-const TEST_LOCK_TIMEOUT_MS: u64 = 1000;
-
-/// Helper to create a provider for testing
-async fn create_provider() -> Arc<dyn Provider> {
-    let options = SqliteOptions {
-        lock_timeout: Duration::from_millis(TEST_LOCK_TIMEOUT_MS),
-    };
-    Arc::new(SqliteProvider::new_in_memory_with_options(Some(options)).await.unwrap())
-}
-
-/// Helper to create a start item for an instance
-fn start_item(instance: &str, execution_id: u64) -> WorkItem {
+/// Helper to create a start item for an instance with specific execution_id
+fn start_item_with_execution(instance: &str, execution_id: u64) -> WorkItem {
     WorkItem::StartOrchestration {
         instance: instance.to_string(),
         orchestration: "TestOrch".to_string(),
@@ -27,15 +15,24 @@ fn start_item(instance: &str, execution_id: u64) -> WorkItem {
     }
 }
 
+/// Run all multi-execution tests
+pub async fn run_tests<F: ProviderFactory>(factory: &F) {
+    test_execution_isolation(factory).await;
+    test_latest_execution_detection(factory).await;
+    test_execution_id_sequencing(factory).await;
+    test_continue_as_new_creates_new_execution(factory).await;
+    test_execution_history_persistence(factory).await;
+}
+
 /// Test 6.1: Execution Isolation
 /// Goal: Verify each execution has separate history.
-#[tokio::test]
-async fn test_execution_isolation() {
-    let provider = create_provider().await;
+pub async fn test_execution_isolation<F: ProviderFactory>(factory: &F) {
+    tracing::info!("→ Testing multi-execution: execution isolation");
+    let provider = factory.create_provider().await;
 
     // Create execution 1 with 3 events
     provider
-        .enqueue_orchestrator_work(start_item("instance-A", 1), None)
+        .enqueue_orchestrator_work(start_item_with_execution("instance-A", 1), None)
         .await
         .unwrap();
     let item1 = provider.fetch_orchestration_item().await.unwrap();
@@ -72,7 +69,7 @@ async fn test_execution_isolation() {
 
     // Create execution 2 with 2 events
     provider
-        .enqueue_orchestrator_work(start_item("instance-A", 2), None)
+        .enqueue_orchestrator_work(start_item_with_execution("instance-A", 2), None)
         .await
         .unwrap();
     let item2 = provider.fetch_orchestration_item().await.unwrap();
@@ -119,17 +116,18 @@ async fn test_execution_isolation() {
     assert_eq!(latest.len(), 2);
     assert!(matches!(latest[0], Event::OrchestrationStarted { .. }));
     assert!(matches!(latest[1], Event::OrchestrationCompleted { .. }));
+    tracing::info!("✓ Test passed: execution isolation verified");
 }
 
 /// Test 6.2: Latest Execution Detection
 /// Goal: Verify read() returns latest execution's history.
-#[tokio::test]
-async fn test_latest_execution_detection() {
-    let provider = create_provider().await;
+pub async fn test_latest_execution_detection<F: ProviderFactory>(factory: &F) {
+    tracing::info!("→ Testing multi-execution: latest execution detection");
+    let provider = factory.create_provider().await;
 
     // Create execution 1 with event "A"
     provider
-        .enqueue_orchestrator_work(start_item("instance-A", 1), None)
+        .enqueue_orchestrator_work(start_item_with_execution("instance-A", 1), None)
         .await
         .unwrap();
     let item1 = provider.fetch_orchestration_item().await.unwrap();
@@ -152,7 +150,7 @@ async fn test_latest_execution_detection() {
 
     // Create execution 2 with event "B"
     provider
-        .enqueue_orchestrator_work(start_item("instance-A", 2), None)
+        .enqueue_orchestrator_work(start_item_with_execution("instance-A", 2), None)
         .await
         .unwrap();
     let item2 = provider.fetch_orchestration_item().await.unwrap();
@@ -190,17 +188,18 @@ async fn test_latest_execution_detection() {
     } else {
         panic!("Expected ActivityScheduled");
     }
+    tracing::info!("✓ Test passed: latest execution detection verified");
 }
 
 /// Test 6.3: Execution ID Sequencing
 /// Goal: Verify execution IDs increment correctly.
-#[tokio::test]
-async fn test_execution_id_sequencing() {
-    let provider = create_provider().await;
+pub async fn test_execution_id_sequencing<F: ProviderFactory>(factory: &F) {
+    tracing::info!("→ Testing multi-execution: execution ID sequencing");
+    let provider = factory.create_provider().await;
 
     // First execution should be execution_id = 1
     provider
-        .enqueue_orchestrator_work(start_item("instance-A", 1), None)
+        .enqueue_orchestrator_work(start_item_with_execution("instance-A", 1), None)
         .await
         .unwrap();
     let item1 = provider.fetch_orchestration_item().await.unwrap();
@@ -228,7 +227,7 @@ async fn test_execution_id_sequencing() {
 
     // Enqueue second execution with explicit execution_id = 2
     provider
-        .enqueue_orchestrator_work(start_item("instance-A", 2), None)
+        .enqueue_orchestrator_work(start_item_with_execution("instance-A", 2), None)
         .await
         .unwrap();
     let item2 = provider.fetch_orchestration_item().await.unwrap();
@@ -255,22 +254,23 @@ async fn test_execution_id_sequencing() {
 
     // Now fetch should return execution_id = 2
     provider
-        .enqueue_orchestrator_work(start_item("instance-A", 3), None)
+        .enqueue_orchestrator_work(start_item_with_execution("instance-A", 3), None)
         .await
         .unwrap();
     let item3 = provider.fetch_orchestration_item().await.unwrap();
     assert_eq!(item3.execution_id, 2, "Current execution should be 2");
+    tracing::info!("✓ Test passed: execution ID sequencing verified");
 }
 
 /// Test 6.4: Continue-As-New Creates New Execution
 /// Goal: Verify continue-as-new creates new execution with incremented ID.
-#[tokio::test]
-async fn test_continue_as_new_creates_new_execution() {
-    let provider = create_provider().await;
+pub async fn test_continue_as_new_creates_new_execution<F: ProviderFactory>(factory: &F) {
+    tracing::info!("→ Testing multi-execution: continue-as-new creates new execution");
+    let provider = factory.create_provider().await;
 
     // Create execution 1
     provider
-        .enqueue_orchestrator_work(start_item("instance-A", 1), None)
+        .enqueue_orchestrator_work(start_item_with_execution("instance-A", 1), None)
         .await
         .unwrap();
     let item1 = provider.fetch_orchestration_item().await.unwrap();
@@ -334,18 +334,19 @@ async fn test_continue_as_new_creates_new_execution() {
     if let Some(item) = item3 {
         assert_eq!(item.execution_id, 2, "Continue-as-new should create execution 2");
     }
+    tracing::info!("✓ Test passed: continue-as-new creates new execution verified");
 }
 
 /// Test 6.5: Execution History Persistence
 /// Goal: Verify all executions' history persists independently.
-#[tokio::test]
-async fn test_execution_history_persistence() {
-    let provider = create_provider().await;
+pub async fn test_execution_history_persistence<F: ProviderFactory>(factory: &F) {
+    tracing::info!("→ Testing multi-execution: execution history persistence");
+    let provider = factory.create_provider().await;
 
     // Create 3 executions with different history
     for exec_id in 1..=3 {
         provider
-            .enqueue_orchestrator_work(start_item("instance-A", exec_id), None)
+            .enqueue_orchestrator_work(start_item_with_execution("instance-A", exec_id), None)
             .await
             .unwrap();
         let item = provider.fetch_orchestration_item().await.unwrap();
@@ -386,4 +387,5 @@ async fn test_execution_history_persistence() {
     } else {
         panic!("Expected ActivityScheduled");
     }
+    tracing::info!("✓ Test passed: execution history persistence verified");
 }

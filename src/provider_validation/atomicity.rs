@@ -1,37 +1,24 @@
-use duroxide::Event;
-use duroxide::providers::sqlite::{SqliteOptions, SqliteProvider};
-use duroxide::providers::{ExecutionMetadata, Provider, WorkItem};
+use crate::provider_validation::{Event, ExecutionMetadata, start_item};
+use crate::provider_validations::ProviderFactory;
+use crate::providers::WorkItem;
 use std::sync::Arc;
 use std::time::Duration;
 
 const TEST_LOCK_TIMEOUT_MS: u64 = 1000;
 
-/// Helper to create a provider for testing
-async fn create_provider() -> Arc<dyn Provider> {
-    let options = SqliteOptions {
-        lock_timeout: Duration::from_millis(TEST_LOCK_TIMEOUT_MS),
-    };
-    Arc::new(SqliteProvider::new_in_memory_with_options(Some(options)).await.unwrap())
-}
-
-/// Helper to create a start item for an instance
-fn start_item(instance: &str) -> WorkItem {
-    WorkItem::StartOrchestration {
-        instance: instance.to_string(),
-        orchestration: "TestOrch".to_string(),
-        input: "{}".to_string(),
-        version: Some("1.0.0".to_string()),
-        parent_instance: None,
-        parent_id: None,
-        execution_id: duroxide::INITIAL_EXECUTION_ID,
-    }
+/// Run all atomicity tests
+pub async fn run_tests<F: ProviderFactory>(factory: &F) {
+    test_atomicity_failure_rollback(factory).await;
+    test_multi_operation_atomic_ack(factory).await;
+    test_lock_released_only_on_successful_ack(factory).await;
+    test_concurrent_ack_prevention(factory).await;
 }
 
 /// Test 2.1: All-or-Nothing Ack
 /// Goal: Verify `ack_orchestration_item` commits everything atomically.
-#[tokio::test]
-async fn test_atomicity_failure_rollback() {
-    let provider = create_provider().await;
+pub async fn test_atomicity_failure_rollback<F: ProviderFactory>(factory: &F) {
+    tracing::info!("→ Testing atomicity: ack failure should rollback all operations");
+    let provider = factory.create_provider().await;
 
     // Setup: create instance with some initial state
     provider
@@ -104,13 +91,14 @@ async fn test_atomicity_failure_rollback() {
 
     // Lock should still be held, preventing another fetch
     assert!(provider.fetch_orchestration_item().await.is_none());
+    tracing::info!("✓ Test passed: atomicity rollback verified");
 }
 
 /// Test 2.2: Multi-Operation Atomic Ack
 /// Goal: Verify complex ack with multiple outputs succeeds atomically.
-#[tokio::test]
-async fn test_multi_operation_atomic_ack() {
-    let provider = create_provider().await;
+pub async fn test_multi_operation_atomic_ack<F: ProviderFactory>(factory: &F) {
+    tracing::info!("→ Testing atomicity: complex ack with multiple operations succeeds atomically");
+    let provider = factory.create_provider().await;
 
     // Setup
     provider
@@ -222,13 +210,14 @@ async fn test_multi_operation_atomic_ack() {
     assert_eq!(item1.messages.len(), 2, "Should have TimerFired and ExternalRaised");
     assert!(matches!(&item1.messages[0], WorkItem::TimerFired { .. }));
     assert!(matches!(&item1.messages[1], WorkItem::ExternalRaised { .. }));
+    tracing::info!("✓ Test passed: multi-operation atomic ack verified");
 }
 
 /// Test 2.3: Lock Released Only on Successful Ack
 /// Goal: Ensure lock is only released after successful commit.
-#[tokio::test]
-async fn test_lock_released_only_on_successful_ack() {
-    let provider = create_provider().await;
+pub async fn test_lock_released_only_on_successful_ack<F: ProviderFactory>(factory: &F) {
+    tracing::info!("→ Testing atomicity: lock released only on successful ack");
+    let provider = factory.create_provider().await;
 
     // Setup
     provider
@@ -272,13 +261,14 @@ async fn test_lock_released_only_on_successful_ack() {
     // Now should be able to fetch again
     let item2 = provider.fetch_orchestration_item().await.unwrap();
     assert_eq!(item2.instance, "instance-A");
+    tracing::info!("✓ Test passed: lock release on successful ack verified");
 }
 
 /// Test 2.4: Concurrent Ack Prevention
 /// Goal: Ensure two acks with same lock token don't both succeed.
-#[tokio::test]
-async fn test_concurrent_ack_prevention() {
-    let provider = Arc::new(create_provider().await);
+pub async fn test_concurrent_ack_prevention<F: ProviderFactory>(factory: &F) {
+    tracing::info!("→ Testing atomicity: concurrent ack prevention");
+    let provider = Arc::new(factory.create_provider().await);
 
     // Setup
     provider
@@ -344,4 +334,5 @@ async fn test_concurrent_ack_prevention() {
     // The other should fail
     let failures: Vec<_> = results.iter().filter(|r| r.is_err()).collect();
     assert_eq!(failures.len(), 1, "Exactly one ack should fail");
+    tracing::info!("✓ Test passed: concurrent ack prevention verified");
 }

@@ -1,37 +1,23 @@
-use duroxide::Event;
-use duroxide::providers::sqlite::{SqliteOptions, SqliteProvider};
-use duroxide::providers::{ExecutionMetadata, Provider, WorkItem};
-use std::sync::Arc;
+use crate::provider_validation::{Event, ExecutionMetadata, start_item};
+use crate::provider_validations::ProviderFactory;
 use std::time::Duration;
 
 const TEST_LOCK_TIMEOUT_MS: u64 = 1000;
 
-/// Helper to create a provider for testing
-async fn create_provider() -> Arc<dyn Provider> {
-    let options = SqliteOptions {
-        lock_timeout: Duration::from_millis(TEST_LOCK_TIMEOUT_MS),
-    };
-    Arc::new(SqliteProvider::new_in_memory_with_options(Some(options)).await.unwrap())
-}
-
-/// Helper to create a start item for an instance
-fn start_item(instance: &str) -> WorkItem {
-    WorkItem::StartOrchestration {
-        instance: instance.to_string(),
-        orchestration: "TestOrch".to_string(),
-        input: "{}".to_string(),
-        version: Some("1.0.0".to_string()),
-        parent_instance: None,
-        parent_id: None,
-        execution_id: duroxide::INITIAL_EXECUTION_ID,
-    }
+/// Run all error handling tests
+pub async fn run_tests<F: ProviderFactory>(factory: &F) {
+    test_invalid_lock_token_on_ack(factory).await;
+    test_duplicate_event_id_rejection(factory).await;
+    test_missing_instance_metadata(factory).await;
+    test_corrupted_serialization_data(factory).await;
+    test_lock_expiration_during_ack(factory).await;
 }
 
 /// Test 3.1: Invalid Lock Token on Ack
 /// Goal: Provider should reject invalid lock tokens.
-#[tokio::test]
-async fn test_invalid_lock_token_on_ack() {
-    let provider = create_provider().await;
+pub async fn test_invalid_lock_token_on_ack<F: ProviderFactory>(factory: &F) {
+    tracing::info!("→ Testing error handling: invalid lock token on ack");
+    let provider = factory.create_provider().await;
 
     // Attempt to ack with non-existent lock token
     let result = provider
@@ -41,13 +27,14 @@ async fn test_invalid_lock_token_on_ack() {
     assert!(result.is_err());
     let err_msg = result.unwrap_err();
     assert!(err_msg.contains("Invalid lock token") || err_msg.contains("lock_token"));
+    tracing::info!("✓ Test passed: invalid lock token rejected");
 }
 
 /// Test 3.2: Duplicate Event ID Handling
 /// Goal: Provider should detect and handle duplicate event_ids.
-#[tokio::test]
-async fn test_duplicate_event_id_rejection() {
-    let provider = create_provider().await;
+pub async fn test_duplicate_event_id_rejection<F: ProviderFactory>(factory: &F) {
+    tracing::info!("→ Testing error handling: duplicate event_id rejection");
+    let provider = factory.create_provider().await;
 
     // Create instance with initial event
     provider
@@ -108,37 +95,40 @@ async fn test_duplicate_event_id_rejection() {
     let history = provider.read("instance-A").await;
     assert_eq!(history.len(), 1);
     assert!(matches!(history[0], Event::OrchestrationStarted { .. }));
+    tracing::info!("✓ Test passed: duplicate event_id rejected");
 }
 
 /// Test 3.3: Missing Instance Metadata
 /// Goal: Provider should handle missing instance gracefully.
-#[tokio::test]
-async fn test_missing_instance_metadata() {
-    let provider = create_provider().await;
+pub async fn test_missing_instance_metadata<F: ProviderFactory>(factory: &F) {
+    tracing::info!("→ Testing error handling: missing instance metadata");
+    let provider = factory.create_provider().await;
 
     // Attempt to read history for non-existent instance
     let history = provider.read("non-existent-instance").await;
     assert_eq!(history.len(), 0);
+    tracing::info!("✓ Test passed: missing instance handled gracefully");
 }
 
 /// Test 3.4: Corrupted Serialization Data
 /// Goal: Provider should handle corrupted JSON in queue/work items gracefully.
-#[tokio::test]
-async fn test_corrupted_serialization_data() {
-    let provider = create_provider().await;
+pub async fn test_corrupted_serialization_data<F: ProviderFactory>(factory: &F) {
+    tracing::info!("→ Testing error handling: corrupted serialization data");
+    let provider = factory.create_provider().await;
 
     // This test is primarily about graceful degradation
     // SQLite provider will handle corrupted data by returning None on deserialization failure
     // Test that provider doesn't panic
     let item = provider.fetch_orchestration_item().await;
     assert!(item.is_none() || item.is_some(), "Should not panic");
+    tracing::info!("✓ Test passed: corrupted data handled gracefully");
 }
 
 /// Test 3.5: Lock Expiration During Ack
 /// Goal: Provider should detect and reject expired locks.
-#[tokio::test]
-async fn test_lock_expiration_during_ack() {
-    let provider = create_provider().await;
+pub async fn test_lock_expiration_during_ack<F: ProviderFactory>(factory: &F) {
+    tracing::info!("→ Testing error handling: lock expiration during ack");
+    let provider = factory.create_provider().await;
 
     // Create and fetch item
     provider
@@ -172,4 +162,5 @@ async fn test_lock_expiration_during_ack() {
 
     // Should fail - lock expired (or item already consumed by another fetch)
     assert!(result.is_err());
+    tracing::info!("✓ Test passed: expired lock rejected");
 }
