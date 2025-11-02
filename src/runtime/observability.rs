@@ -121,7 +121,7 @@ pub struct MetricsSnapshot {
 mod otel_impl {
     use super::*;
     use opentelemetry::KeyValue;
-    use opentelemetry::metrics::{Counter, Histogram, Meter, MeterProvider as _};
+    use opentelemetry::metrics::{Counter, Histogram, MeterProvider as _};
     use opentelemetry_otlp::WithExportConfig;
     use opentelemetry_sdk::Resource;
     use opentelemetry_sdk::metrics::{ManualReader, PeriodicReader, SdkMeterProvider};
@@ -131,7 +131,6 @@ mod otel_impl {
     /// OpenTelemetry metrics provider with all instrumentation
     pub struct MetricsProvider {
         meter_provider: SdkMeterProvider,
-        meter: Meter,
 
         // Dispatcher metrics
         pub orch_dispatcher_items_fetched: Counter<u64>,
@@ -356,7 +355,6 @@ mod otel_impl {
 
             Ok(Self {
                 meter_provider,
-                meter,
                 orch_dispatcher_items_fetched,
                 orch_dispatcher_processing_duration,
                 worker_dispatcher_items_fetched,
@@ -417,7 +415,6 @@ mod otel_impl {
         #[inline]
         pub fn record_orchestration_application_error(&self) {
             self.orch_failures.add(1, &[]);
-            self.orch_application_errors.add(1, &[]);
             self.orch_failures_total.fetch_add(1, Ordering::Relaxed);
             self.orch_application_errors_total.fetch_add(1, Ordering::Relaxed);
         }
