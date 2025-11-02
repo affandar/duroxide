@@ -3,7 +3,6 @@
 
 - Metrics/logging dashboard 
 - Refactor tests, figure out what are the unit tests vs not
-- clients should be able to query registered activities and orchestrations
 - some failure stress tests. 
 - [ ] **Infrastructure error handling from provider operations**
   - Currently: Provider errors (append/enqueue failures) cause retries via lock expiration
@@ -121,6 +120,8 @@
 
 ## POSTPONED
 
+- clients should be able to query registered activities and orchestrations
+  - implemented in branch runtime-registry, but it needs much more than just the orch name/version
 - implement Unpin typed future wrappers for `_typed` adapters
 - redo the orchestration registry change with gpt5 and compare
 - mermaid diagrams for orchestrations???
