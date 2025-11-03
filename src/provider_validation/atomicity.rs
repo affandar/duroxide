@@ -4,8 +4,6 @@ use crate::providers::WorkItem;
 use std::sync::Arc;
 use std::time::Duration;
 
-const TEST_LOCK_TIMEOUT_MS: u64 = 1000;
-
 /// Run all atomicity tests
 pub async fn run_tests<F: ProviderFactory>(factory: &F) {
     test_atomicity_failure_rollback(factory).await;
@@ -256,7 +254,7 @@ pub async fn test_lock_released_only_on_successful_ack<F: ProviderFactory>(facto
     assert!(provider.fetch_orchestration_item().await.is_none());
 
     // Wait for lock expiration
-    tokio::time::sleep(Duration::from_millis(TEST_LOCK_TIMEOUT_MS + 100)).await;
+    tokio::time::sleep(Duration::from_millis(factory.lock_timeout_ms() + 100)).await;
 
     // Now should be able to fetch again
     let item2 = provider.fetch_orchestration_item().await.unwrap();

@@ -3,8 +3,6 @@ use crate::provider_validations::ProviderFactory;
 use std::sync::Arc;
 use std::time::Duration;
 
-const TEST_LOCK_TIMEOUT_MS: u64 = 1000;
-
 /// Run all lock expiration tests
 pub async fn run_tests<F: ProviderFactory>(factory: &F) {
     test_lock_expires_after_timeout(factory).await;
@@ -31,7 +29,7 @@ pub async fn test_lock_expires_after_timeout<F: ProviderFactory>(factory: &F) {
     assert!(provider.fetch_orchestration_item().await.is_none());
 
     // Wait for lock to expire
-    tokio::time::sleep(Duration::from_millis(TEST_LOCK_TIMEOUT_MS + 100)).await;
+    tokio::time::sleep(Duration::from_millis(factory.lock_timeout_ms() + 100)).await;
 
     // Instance should be available again
     let item2 = provider.fetch_orchestration_item().await.unwrap();
@@ -160,7 +158,7 @@ pub async fn test_concurrent_lock_attempts_respect_expiration<F: ProviderFactory
     }
 
     // Wait for lock expiration
-    tokio::time::sleep(Duration::from_millis(TEST_LOCK_TIMEOUT_MS - 200 + 100)).await;
+    tokio::time::sleep(Duration::from_millis(factory.lock_timeout_ms() - 200 + 100)).await;
 
     // Now one should succeed
     let item2 = provider.fetch_orchestration_item().await.unwrap();

@@ -29,6 +29,10 @@ mod tests {
             };
             Arc::new(SqliteProvider::new_in_memory_with_options(Some(options)).await.unwrap())
         }
+
+        fn lock_timeout_ms(&self) -> u64 {
+            TEST_LOCK_TIMEOUT_MS
+        }
     }
 
     #[tokio::test]

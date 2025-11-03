@@ -2,8 +2,6 @@ use crate::provider_validation::{Event, ExecutionMetadata, start_item};
 use crate::provider_validations::ProviderFactory;
 use std::time::Duration;
 
-const TEST_LOCK_TIMEOUT_MS: u64 = 1000;
-
 /// Run all error handling tests
 pub async fn run_tests<F: ProviderFactory>(factory: &F) {
     test_invalid_lock_token_on_ack(factory).await;
@@ -139,7 +137,7 @@ pub async fn test_lock_expiration_during_ack<F: ProviderFactory>(factory: &F) {
     let lock_token = item.lock_token.clone();
 
     // Wait for lock to expire
-    tokio::time::sleep(Duration::from_millis(TEST_LOCK_TIMEOUT_MS + 100)).await;
+    tokio::time::sleep(Duration::from_millis(factory.lock_timeout_ms() + 100)).await;
 
     // Attempt to ack with expired token
     let result = provider

@@ -43,6 +43,19 @@ pub trait ProviderFactory: Send + Sync {
     /// Typically this means creating a new in-memory provider or a
     /// file-based provider with a unique temporary path.
     async fn create_provider(&self) -> Arc<dyn Provider>;
+
+    /// Get the lock timeout in milliseconds configured for this provider.
+    ///
+    /// This is used by validation tests to determine sleep durations
+    /// when waiting for lock expiration. The timeout should match
+    /// the lock timeout configured in `create_provider()`.
+    ///
+    /// # Default Implementation
+    ///
+    /// Returns 1000ms (1 second) if not overridden.
+    fn lock_timeout_ms(&self) -> u64 {
+        1000
+    }
 }
 
 /// ## Individual Test Suites

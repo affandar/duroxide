@@ -3,8 +3,6 @@ use crate::provider_validations::ProviderFactory;
 use crate::providers::WorkItem;
 use std::time::Duration;
 
-const TEST_LOCK_TIMEOUT_MS: u64 = 1000;
-
 /// Run all queue semantics tests
 pub async fn run_tests<F: ProviderFactory>(factory: &F) {
     test_worker_queue_fifo_ordering(factory).await;
@@ -259,7 +257,7 @@ pub async fn test_lost_lock_token_handling<F: ProviderFactory>(factory: &F) {
     assert!(provider.dequeue_worker_peek_lock().await.is_none());
 
     // Wait for lock expiration
-    tokio::time::sleep(Duration::from_millis(TEST_LOCK_TIMEOUT_MS + 100)).await;
+    tokio::time::sleep(Duration::from_millis(factory.lock_timeout_ms() + 100)).await;
 
     // Dequeue again → should succeed → item redelivered
     let (item2, _token2) = provider.dequeue_worker_peek_lock().await.unwrap();

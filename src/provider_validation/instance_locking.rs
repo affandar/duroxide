@@ -4,8 +4,6 @@ use crate::providers::WorkItem;
 use std::sync::Arc;
 use std::time::Duration;
 
-const TEST_LOCK_TIMEOUT_MS: u64 = 1000;
-
 /// Run all instance locking tests
 pub async fn run_tests<F: ProviderFactory>(factory: &F) {
     test_exclusive_instance_lock(factory).await;
@@ -41,7 +39,7 @@ pub async fn test_exclusive_instance_lock<F: ProviderFactory>(factory: &F) {
     assert!(provider.fetch_orchestration_item().await.is_none());
 
     // Wait for lock to expire
-    tokio::time::sleep(Duration::from_millis(TEST_LOCK_TIMEOUT_MS + 100)).await;
+    tokio::time::sleep(Duration::from_millis(factory.lock_timeout_ms() + 100)).await;
 
     // Now should be able to fetch again
     let item2 = provider.fetch_orchestration_item().await.unwrap();
@@ -185,7 +183,7 @@ pub async fn test_completions_arriving_during_lock_blocked<F: ProviderFactory>(f
     assert!(item2.is_none(), "Instance still locked, no fetch possible");
 
     // Step 5: Wait for lock expiration
-    tokio::time::sleep(Duration::from_millis(TEST_LOCK_TIMEOUT_MS + 100)).await;
+    tokio::time::sleep(Duration::from_millis(factory.lock_timeout_ms() + 100)).await;
 
     // Step 6: Now completions should be fetchable
     let item3 = provider.fetch_orchestration_item().await.unwrap();
@@ -597,6 +595,9 @@ pub async fn test_multi_threaded_lock_expiration_recovery<F: ProviderFactory>(fa
         .await
         .unwrap();
 
+    // Capture timeout value before spawning tasks
+    let lock_timeout_ms = factory.lock_timeout_ms();
+
     // Thread 1: Fetch and hold lock (don't ack)
     let provider1 = provider.clone();
     let handle1 = tokio::spawn(async move {
@@ -604,7 +605,7 @@ pub async fn test_multi_threaded_lock_expiration_recovery<F: ProviderFactory>(fa
         assert_eq!(item.instance, "expiration-instance");
         let lock_token = item.lock_token;
         // Hold lock but don't ack - simulate crashed worker
-        tokio::time::sleep(Duration::from_millis(TEST_LOCK_TIMEOUT_MS + 200)).await;
+        tokio::time::sleep(Duration::from_millis(lock_timeout_ms + 200)).await;
         lock_token
     });
 
@@ -620,7 +621,7 @@ pub async fn test_multi_threaded_lock_expiration_recovery<F: ProviderFactory>(fa
     // Thread 3: Wait for expiration and then fetch (should succeed)
     let provider3 = provider.clone();
     let handle3 = tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(TEST_LOCK_TIMEOUT_MS + 100)).await;
+        tokio::time::sleep(Duration::from_millis(lock_timeout_ms + 100)).await;
         let result = provider3.fetch_orchestration_item().await;
         result
     });

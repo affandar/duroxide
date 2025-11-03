@@ -325,6 +325,7 @@ Run validation tests by calling individual test suite functions:
 use duroxide::providers::Provider;
 use duroxide::provider_validations::{ProviderFactory, run_atomicity_tests, run_error_handling_tests, run_instance_locking_tests, run_lock_expiration_tests, run_multi_execution_tests, run_queue_semantics_tests, run_management_tests};
 use std::sync::Arc;
+use std::time::Duration;
 
 struct MyProviderFactory;
 
@@ -333,6 +334,13 @@ impl ProviderFactory for MyProviderFactory {
     async fn create_provider(&self) -> Arc<dyn Provider> {
         // Create a fresh provider instance for each test
         Arc::new(MyCustomProvider::new().await?)
+    }
+
+    fn lock_timeout_ms(&self) -> u64 {
+        // Return the lock timeout configured in your provider
+        // This must match the timeout used when creating the provider
+        // Default is 1000ms if not overridden
+        1000
     }
 }
 
@@ -457,13 +465,15 @@ async fn test_my_provider_locking() {
 
 ### Creating a Test Provider Factory
 
-Your factory should create fresh, isolated provider instances for each test:
+Your factory should create fresh, isolated provider instances for each test. **Importantly, you must implement `lock_timeout_ms()` to return the lock timeout configured in your provider** - this ensures validation tests wait for the correct duration when testing lock expiration behavior.
 
 ```rust
 use duroxide::providers::Provider;
 use duroxide::provider_validations::ProviderFactory;
 use std::sync::Arc;
-use tempfile::TempDir;
+use std::time::Duration;
+
+const TEST_LOCK_TIMEOUT_MS: u64 = 1000;
 
 struct MyProviderFactory {
     // Keep temp directory alive
@@ -474,13 +484,28 @@ struct MyProviderFactory {
 impl ProviderFactory for MyProviderFactory {
     async fn create_provider(&self) -> Arc<dyn Provider> {
         // Create a new provider instance with unique path
+        // Configure the provider with the same lock timeout
         let db_path = self._temp_dir.path().join(format!("test_{}.db", 
             std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
         std::fs::File::create(&db_path).unwrap();
-        Arc::new(MyProvider::new(&format!("sqlite:{}", db_path.display())).await?)
+        
+        let options = MyProviderOptions {
+            lock_timeout: Duration::from_millis(TEST_LOCK_TIMEOUT_MS),
+        };
+        Arc::new(MyProvider::new(&format!("sqlite:{}", db_path.display()), Some(options)).await?)
+    }
+
+    fn lock_timeout_ms(&self) -> u64 {
+        // CRITICAL: This must match the lock_timeout configured in create_provider()
+        // Validation tests use this value to determine sleep durations when waiting
+        // for lock expiration. If this doesn't match your provider's timeout,
+        // tests will fail with timing issues.
+        TEST_LOCK_TIMEOUT_MS
     }
 }
 ```
+
+**Important:** The `lock_timeout_ms()` value must match the lock timeout configured in your provider's options. If they don't match, validation tests that check lock expiration will fail because they'll wait for the wrong duration.
 
 ### Integration with CI/CD
 
