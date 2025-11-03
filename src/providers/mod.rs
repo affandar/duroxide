@@ -28,20 +28,34 @@ use std::any::Any;
 /// # Example from SQLite Provider
 ///
 /// ```text
-/// // 1. Lock all visible messages for an instance
-/// UPDATE orchestrator_queue SET lock_token = ?, locked_until = ?
-/// WHERE instance_id = ? AND lock_token IS NULL
+/// // 1. Find available instance (check instance_locks for active locks)
+/// SELECT q.instance_id FROM orchestrator_queue q
+/// LEFT JOIN instance_locks il ON q.instance_id = il.instance_id
+/// WHERE q.visible_at <= now() 
+///   AND (il.instance_id IS NULL OR il.locked_until <= now())
+/// ORDER BY q.id LIMIT 1
 ///
-/// // 2. Load instance metadata
+/// // 2. Atomically acquire instance-level lock
+/// INSERT INTO instance_locks (instance_id, lock_token, locked_until, locked_at)
+/// VALUES (?, ?, ?, ?)
+/// ON CONFLICT(instance_id) DO UPDATE
+/// SET lock_token = excluded.lock_token, locked_until = excluded.locked_until
+/// WHERE locked_until <= excluded.locked_at
+///
+/// // 3. Lock all visible messages for that instance
+/// UPDATE orchestrator_queue SET lock_token = ?, locked_until = ?
+/// WHERE instance_id = ? AND visible_at <= now()
+///
+/// // 4. Load instance metadata
 /// SELECT orchestration_name, orchestration_version, current_execution_id
 /// FROM instances WHERE instance_id = ?
 ///
-/// // 3. Load history for current execution
+/// // 5. Load history for current execution
 /// SELECT event_data FROM history
 /// WHERE instance_id = ? AND execution_id = ?
 /// ORDER BY event_id
 ///
-/// // 4. Return OrchestrationItem with lock_token
+/// // 6. Return OrchestrationItem with lock_token
 /// ```
 #[derive(Debug, Clone)]
 pub struct OrchestrationItem {
@@ -126,8 +140,8 @@ pub struct ExecutionMetadata {
 ///
 /// Different WorkItem types go to different queues:
 /// - `StartOrchestration, ContinueAsNew, ActivityCompleted/Failed, TimerFired, ExternalRaised, SubOrchCompleted/Failed, CancelInstance` → **Orchestrator queue**
+///   - TimerFired items use `visible_at = fire_at_ms` for delayed visibility
 /// - `ActivityExecute` → **Worker queue**
-/// - `TimerSchedule` → **Timer queue**
 ///
 /// # Instance ID Extraction
 ///
@@ -260,15 +274,15 @@ pub enum WorkItem {
 ///
 /// A Provider is responsible for:
 /// 1. **Persistence**: Storing orchestration history (append-only event log)
-/// 2. **Queueing**: Managing three work queues (orchestrator, worker, timer)
+/// 2. **Queueing**: Managing two work queues (orchestrator, worker)
 /// 3. **Locking**: Implementing peek-lock semantics to prevent concurrent processing
 /// 4. **Atomicity**: Ensuring transactional consistency across operations
 ///
-/// # Architecture: Three-Queue Model
+/// # Architecture: Two-Queue Model
 ///
 /// ```text
 /// ┌─────────────────────────────────────────────────────────────┐
-/// │                     RUNTIME (3 Dispatchers)                 │
+/// │                     RUNTIME (2 Dispatchers)                 │
 /// ├─────────────────────────────────────────────────────────────┤
 /// │                                                             │
 /// │  [Orchestration Dispatcher]  ←─── fetch_orchestration_item │
@@ -276,18 +290,14 @@ pub enum WorkItem {
 /// │      Process Turn                                           │
 /// │           ↓                                                 │
 /// │  ack_orchestration_item ────┬──► Orchestrator Queue        │
-/// │                             ├──► Worker Queue              │
-/// │                             └──► Timer Queue                │
+/// │                             │   (TimerFired with delayed   │
+/// │                             │    visibility for timers)   │
+/// │                             └──► Worker Queue              │
 /// │                                                             │
 /// │  [Worker Dispatcher]  ←────────── dequeue_worker_peek_lock │
 /// │       Execute Activity                                      │
 /// │           ↓                                                 │
 /// │  Completion ────────────────────► Orchestrator Queue        │
-/// │                                                             │
-/// │  [Timer Dispatcher]  ←─────────── dequeue_timer_peek_lock  │
-/// │       Fire Timer                                            │
-/// │           ↓                                                 │
-/// │  TimerFired ────────────────────► Orchestrator Queue        │
 /// │                                                             │
 /// └─────────────────────────────────────────────────────────────┘
 ///                           ↕
@@ -298,7 +308,6 @@ pub enum WorkItem {
 ///              │  ├──────────────────┤  │
 ///              │  │ Orch Queue       │  │
 ///              │  │ Worker Queue     │  │
-///              │  │ Timer Queue      │  │
 ///              │  └──────────────────┘  │
 ///              └────────────────────────┘
 /// ```
@@ -368,16 +377,16 @@ pub enum WorkItem {
 /// - Inputs: StartOrchestration, ActivityCompleted/Failed, TimerFired, ExternalRaised, SubOrchCompleted/Failed, CancelInstance, ContinueAsNew
 /// - Output: Processed by orchestration dispatcher → ack_orchestration_item
 /// - Batching: All messages for an instance processed together
+/// - Timers: TimerFired items are enqueued with `visible_at = fire_at_ms` for delayed visibility
 ///
 /// **Worker Queue:**
 /// - Inputs: ActivityExecute (from ack_orchestration_item)
 /// - Output: Processed by work dispatcher → ActivityCompleted/Failed to orch queue
 /// - Batching: One message at a time (activities executed independently)
 ///
-/// **Timer Queue:**
-/// - Inputs: TimerSchedule (from ack_orchestration_item)
-/// - Output: Processed by timer dispatcher → TimerFired to orch queue
-/// - Visibility: Messages become visible at fire_at_ms (if supported)
+/// **Note:** There is no separate timer queue. Timers are handled by enqueuing TimerFired items
+/// directly to the orchestrator queue with delayed visibility (`visible_at` set to `fire_at_ms`).
+/// The orchestrator dispatcher processes them when `visible_at <= now()`.
 ///
 /// # Instance Metadata Management
 ///
@@ -459,14 +468,12 @@ pub enum WorkItem {
 ///     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 /// );
 ///
-/// -- Timer queue (peek-lock with fire_at)
-/// CREATE TABLE timer_queue (
-///     id INTEGER PRIMARY KEY AUTOINCREMENT,
-///     work_item TEXT NOT NULL,
-///     fire_at TIMESTAMP NOT NULL,
-///     lock_token TEXT,
-///     locked_until TIMESTAMP,
-///     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+/// -- Instance-level locks (CRITICAL: Prevents concurrent processing)
+/// CREATE TABLE instance_locks (
+///     instance_id TEXT PRIMARY KEY,
+///     lock_token TEXT NOT NULL,
+///     locked_until INTEGER NOT NULL,  -- Unix timestamp (milliseconds)
+///     locked_at INTEGER NOT NULL      -- Unix timestamp (milliseconds)
 /// );
 /// ```
 ///
@@ -474,14 +481,16 @@ pub enum WorkItem {
 ///
 /// 1. ✅ **Storage Layer**: Choose backing store (PostgreSQL, Redis, DynamoDB, etc.)
 /// 2. ✅ **Serialization**: Use serde_json for Event and WorkItem (or compatible format)
-/// 3. ✅ **Locking**: Implement peek-lock with unique tokens and expiration
-/// 4. ✅ **Transactions**: Ensure `ack_orchestration_item` is atomic
-/// 5. ✅ **Indexes**: Add indexes on `instance_id`, `lock_token`, `visible_at`, `fire_at`
-/// 6. ✅ **Testing**: Use `tests/sqlite_provider_test.rs` as a template
-/// 7. ✅ **Multi-execution**: Support execution_id partitioning for ContinueAsNew
-/// 8. ⚠️ **DO NOT**: Inspect event contents (use ExecutionMetadata)
-/// 9. ⚠️ **DO NOT**: Create events (runtime owns event creation)
-/// 10. ⚠️ **DO NOT**: Make orchestration decisions (runtime owns logic)
+/// 3. ✅ **Instance Locking**: Implement instance-level locks to prevent concurrent processing
+/// 4. ✅ **Locking**: Implement peek-lock with unique tokens and expiration
+/// 5. ✅ **Transactions**: Ensure `ack_orchestration_item` is atomic
+/// 6. ✅ **Indexes**: Add indexes on `instance_id`, `lock_token`, `visible_at` for orchestrator queue
+/// 7. ✅ **Delayed Visibility**: Support `visible_at` timestamps for TimerFired items in orchestrator queue
+/// 8. ✅ **Testing**: Use `tests/sqlite_provider_validations.rs` as a template, or see `docs/provider-implementation-guide.md`
+/// 9. ✅ **Multi-execution**: Support execution_id partitioning for ContinueAsNew
+/// 10. ⚠️ **DO NOT**: Inspect event contents (use ExecutionMetadata)
+/// 11. ⚠️ **DO NOT**: Create events (runtime owns event creation)
+/// 12. ⚠️ **DO NOT**: Make orchestration decisions (runtime owns logic)
 ///
 /// # Example: Minimal Redis Provider Sketch
 ///
@@ -527,10 +536,15 @@ pub enum WorkItem {
 ///             pipe.incr(&format!("instance:{instance}:exec_id"), 1);
 ///         }
 ///         
-///         // Enqueue worker/timer/orch items
+///         // Enqueue worker/orchestrator items
 ///         for item in worker_items { pipe.lpush("worker_queue", serialize(item)); }
-///         for item in timer_items { pipe.zadd("timer_queue", serialize(item), item.fire_at_ms); }
-///         for item in orch_items { pipe.lpush("orch_queue", serialize(item)); }
+///         for item in orch_items { 
+///             let visible_at = match &item {
+///                 WorkItem::TimerFired { fire_at_ms, .. } => *fire_at_ms,
+///                 _ => now()
+///             };
+///             pipe.zadd("orch_queue", serialize(item), visible_at); 
+///         }
 ///         
 ///         // Release lock
 ///         pipe.del(&format!("lock:{lock_token}"));
@@ -609,6 +623,7 @@ pub enum WorkItem {
 /// - Output: Processed by orchestration dispatcher → ack_orchestration_item
 /// - Batching: All messages for an instance processed together
 /// - Ordering: FIFO per instance preferred
+/// - Timers: TimerFired items are enqueued with `visible_at = fire_at_ms` for delayed visibility
 ///
 /// **Worker Queue:**
 /// - Inputs: ActivityExecute (from ack_orchestration_item)
@@ -616,11 +631,9 @@ pub enum WorkItem {
 /// - Batching: One message at a time (activities executed independently)
 /// - Ordering: FIFO preferred but not required
 ///
-/// **Timer Queue:**
-/// - Inputs: TimerSchedule (from ack_orchestration_item)
-/// - Output: Processed by timer dispatcher → TimerFired to orch queue
-/// - Visibility: Messages become visible at fire_at_ms (if supported)
-/// - Ordering: By fire_at_ms (earliest first)
+/// **Note:** There is no separate timer queue. Timers are handled by enqueuing TimerFired items
+/// directly to the orchestrator queue with delayed visibility (`visible_at` set to `fire_at_ms`).
+/// The orchestrator dispatcher processes them when `visible_at <= now()`.
 ///
 /// # Instance Metadata Management
 ///
@@ -657,14 +670,16 @@ pub enum WorkItem {
 ///
 /// # Testing Your Provider
 ///
-/// See `tests/sqlite_provider_test.rs` for comprehensive provider tests:
+/// See `tests/sqlite_provider_validations.rs` for comprehensive provider validation tests:
 /// - Basic enqueue/dequeue operations
 /// - Transactional atomicity
+/// - Instance locking correctness (including multi-threaded tests)
 /// - Lock expiration and redelivery
 /// - Multi-execution support
 /// - Execution status and output persistence
 ///
 /// All tests use the Provider trait directly (not runtime), so they're portable to new providers.
+/// See `docs/provider-implementation-guide.md` for detailed implementation guidance including instance locks.
 ///
 /// Core provider trait for runtime orchestration operations.
 ///
@@ -728,14 +743,16 @@ pub enum WorkItem {
 ///
 /// # Testing Your Provider
 ///
-/// See `tests/sqlite_provider_test.rs` for comprehensive provider tests:
+/// See `tests/sqlite_provider_validations.rs` for comprehensive provider validation tests:
 /// - Basic enqueue/dequeue operations
 /// - Transactional atomicity
+/// - Instance locking correctness (including multi-threaded tests)
 /// - Lock expiration and redelivery
 /// - Multi-execution support
 /// - Execution status and output persistence
 ///
 /// All tests use the Provider trait directly (not runtime), so they're portable to new providers.
+/// See `docs/provider-implementation-guide.md` for detailed implementation guidance including instance locks.
 ///
 #[async_trait::async_trait]
 pub trait Provider: Any + Send + Sync {
@@ -755,11 +772,26 @@ pub trait Provider: Any + Send + Sync {
     ///
     /// # What This Does
     ///
-    /// 1. **Select an instance to process**: Find the next available message in orchestrator queue
-    /// 2. **Lock ALL messages** for that instance (batch processing)
-    /// 3. **Load history**: Get complete event history for the current execution
-    /// 4. **Load metadata**: Get orchestration_name, version, execution_id
-    /// 5. **Return locked batch**: Provider must prevent other processes from touching this instance
+    /// 1. **Select an instance to process**: Find the next available message in orchestrator queue that is not locked
+    /// 2. **Acquire instance-level lock**: Atomically claim the instance lock to prevent concurrent processing
+    /// 3. **Lock ALL messages** for that instance (batch processing)
+    /// 4. **Load history**: Get complete event history for the current execution
+    /// 5. **Load metadata**: Get orchestration_name, version, execution_id
+    /// 6. **Return locked batch**: Provider must prevent other processes from touching this instance
+    ///
+    /// # ⚠️ CRITICAL: Instance-Level Locking
+    ///
+    /// **You MUST acquire an instance-level lock BEFORE fetching messages.** This prevents concurrent
+    /// dispatchers from processing the same instance simultaneously, which would cause race conditions
+    /// and data corruption.
+    ///
+    /// **Required Implementation Pattern:**
+    /// 1. Find available instance (join with `instance_locks` table to check lock status)
+    /// 2. Atomically acquire instance lock (INSERT into `instance_locks` with conflict handling)
+    /// 3. Verify lock acquisition succeeded (check rows_affected)
+    /// 4. Only then proceed to lock and fetch messages
+    ///
+    /// See `docs/provider-implementation-guide.md` for detailed implementation guidance.
     ///
     /// # Peek-Lock Semantics
     ///
@@ -779,9 +811,10 @@ pub trait Provider: Any + Send + Sync {
     /// **CRITICAL:** All messages in the batch must belong to the SAME instance.
     ///
     /// SQLite implementation:
-    /// 1. Find first visible unlocked message: `SELECT instance_id FROM orchestrator_queue WHERE visible_at <= now ORDER BY id LIMIT 1`
-    /// 2. Lock ALL messages for that instance: `UPDATE orchestrator_queue SET lock_token = ? WHERE instance_id = ?`
-    /// 3. Fetch all locked messages: `SELECT * FROM orchestrator_queue WHERE lock_token = ?`
+    /// 1. Find first visible unlocked instance: `SELECT q.instance_id FROM orchestrator_queue q LEFT JOIN instance_locks il ON q.instance_id = il.instance_id WHERE q.visible_at <= now() AND (il.instance_id IS NULL OR il.locked_until <= now()) ORDER BY q.id LIMIT 1`
+    /// 2. Atomically acquire instance lock: `INSERT INTO instance_locks (instance_id, lock_token, locked_until, locked_at) VALUES (?, ?, ?, ?) ON CONFLICT(instance_id) DO UPDATE SET ... WHERE locked_until <= ?`
+    /// 3. Lock ALL messages for that instance: `UPDATE orchestrator_queue SET lock_token = ? WHERE instance_id = ? AND visible_at <= now()`
+    /// 4. Fetch all locked messages: `SELECT * FROM orchestrator_queue WHERE lock_token = ?`
     ///
     /// # History Loading
     ///
@@ -815,39 +848,53 @@ pub trait Provider: Any + Send + Sync {
     /// This method is called continuously by the orchestration dispatcher.
     /// Must be thread-safe and handle concurrent calls gracefully.
     ///
-    /// # Example Implementation Pattern
-    ///
-    /// ```ignore
-    /// async fn fetch_orchestration_item(&self) -> Option<OrchestrationItem> {
-    ///     let tx = begin_transaction()?;
-    ///     
-    ///     // Find next work
-    ///     let instance_id = SELECT instance_id FROM orch_queue
-    ///         WHERE visible_at <= now() AND lock_token IS NULL
-    ///         ORDER BY id LIMIT 1;
-    ///     
-    ///     if instance_id.is_none() { return None; }
-    ///     
-    ///     // Lock all messages for this instance
-    ///     let lock_token = generate_uuid();
-    ///     UPDATE orch_queue SET lock_token = ?, locked_until = now() + 30s
-    ///         WHERE instance_id = ?;
-    ///     
-    ///     // Fetch locked messages
-    ///     let messages = SELECT work_item FROM orch_queue WHERE lock_token = ?;
-    ///     
-    ///     // Load instance metadata
-    ///     let (name, version, exec_id) = SELECT ... FROM instances WHERE instance_id = ?;
-    ///     
-    ///     // Load history for current execution
-    ///     let history = SELECT event_data FROM history
-    ///         WHERE instance_id = ? AND execution_id = ?
-    ///         ORDER BY event_id;
-    ///     
-    ///     commit_transaction();
-    ///     Some(OrchestrationItem { instance, orchestration_name, execution_id, version, history, messages, lock_token })
-    /// }
-    /// ```
+/// # Example Implementation Pattern
+///
+/// ```ignore
+/// async fn fetch_orchestration_item(&self) -> Option<OrchestrationItem> {
+///     let tx = begin_transaction()?;
+///     
+///     // Step 1: Find next available instance (check instance_locks)
+///     let instance_id = SELECT q.instance_id FROM orch_queue q
+///         LEFT JOIN instance_locks il ON q.instance_id = il.instance_id
+///         WHERE q.visible_at <= now() 
+///           AND (il.instance_id IS NULL OR il.locked_until <= now())
+///         ORDER BY q.id LIMIT 1;
+///     
+///     if instance_id.is_none() { return None; }
+///     
+///     // Step 2: Atomically acquire instance lock
+///     let lock_token = generate_uuid();
+///     let lock_result = INSERT INTO instance_locks (instance_id, lock_token, locked_until, locked_at)
+///         VALUES (?, ?, ?, ?)
+///         ON CONFLICT(instance_id) DO UPDATE
+///         SET lock_token = excluded.lock_token, locked_until = excluded.locked_until
+///         WHERE locked_until <= excluded.locked_at;
+///     
+///     if lock_result.rows_affected == 0 {
+///         // Lock acquisition failed - another dispatcher has the lock
+///         return None;
+///     }
+///     
+///     // Step 3: Lock all messages for this instance
+///     UPDATE orch_queue SET lock_token = ?, locked_until = now() + 30s
+///         WHERE instance_id = ? AND visible_at <= now();
+///     
+///     // Step 4: Fetch locked messages
+///     let messages = SELECT work_item FROM orch_queue WHERE lock_token = ?;
+///     
+///     // Step 5: Load instance metadata
+///     let (name, version, exec_id) = SELECT ... FROM instances WHERE instance_id = ?;
+///     
+///     // Step 6: Load history for current execution
+///     let history = SELECT event_data FROM history
+///         WHERE instance_id = ? AND execution_id = ?
+///         ORDER BY event_id;
+///     
+///     commit_transaction();
+///     Some(OrchestrationItem { instance, orchestration_name, execution_id, version, history, messages, lock_token })
+/// }
+/// ```
     async fn fetch_orchestration_item(&self) -> Option<OrchestrationItem>;
 
     /// Acknowledge successful orchestration processing atomically.
@@ -856,17 +903,18 @@ pub trait Provider: Any + Send + Sync {
     ///
     /// # What This Does (ALL must be atomic)
     ///
-    /// 1. **Append new events** to history for current execution
-    /// 2. **Update execution metadata** (status, output) using pre-computed metadata
-    /// 3. **Create new execution** if metadata.create_next_execution=true (ContinueAsNew)
-    /// 4. **Enqueue worker_items** to worker queue (activity executions)
-    /// 5. **Enqueue timer_items** to timer queue (timer schedules)
-    /// 6. **Enqueue orchestrator_items** to orchestrator queue (completions, new instances)
-    /// 7. **Delete acknowledged messages** from orchestrator queue (release lock)
+    /// 1. **Validate lock token**: Verify instance lock is still valid and matches lock_token
+    /// 2. **Remove instance lock**: Delete from `instance_locks` table (processing complete)
+    /// 3. **Append new events** to history for current execution
+    /// 4. **Update execution metadata** (status, output) using pre-computed metadata
+    /// 5. **Create new execution** if metadata.create_next_execution=true (ContinueAsNew)
+    /// 6. **Enqueue worker_items** to worker queue (activity executions)
+    /// 7. **Enqueue orchestrator_items** to orchestrator queue (completions, new instances, TimerFired with delayed visibility)
+    /// 8. **Delete acknowledged messages** from orchestrator queue (release lock)
     ///
     /// # Atomicity Requirements
     ///
-    /// **CRITICAL:** All 7 operations above must succeed or fail together.
+    /// **CRITICAL:** All 8 operations above must succeed or fail together.
     ///
     /// - **If ANY operation fails**: Roll back the entire transaction
     /// - **If commit succeeds**: All changes are durable and visible
@@ -875,14 +923,14 @@ pub trait Provider: Any + Send + Sync {
     /// - Duplicate activity execution (history saved but worker item lost)
     /// - Lost completions (worker item enqueued but history not saved)
     /// - Orphaned locks (messages deleted but history append failed)
+    /// - Stale instance locks (instance lock not removed)
     ///
     /// # Parameters
     ///
     /// * `lock_token` - Token from fetch_orchestration_item() - identifies locked messages
     /// * `history_delta` - New events to append (runtime assigns event_ids, provider stores as-is)
     /// * `worker_items` - Activity executions to enqueue (WorkItem::ActivityExecute)
-    /// * `timer_items` - Timer schedules to enqueue (WorkItem::TimerSchedule)
-    /// * `orchestrator_items` - Orchestrator messages to enqueue (completions, starts, events)
+    /// * `orchestrator_items` - Orchestrator messages to enqueue (completions, starts, TimerFired with delayed visibility)
     /// * `metadata` - Pre-computed execution state (DO NOT inspect events yourself!)
     ///
     /// # Event Storage (history_delta)
@@ -928,28 +976,25 @@ pub trait Provider: Any + Send + Sync {
     ///
     /// # Queue Item Enqueuing
     ///
-    /// Worker items, timer items, and orchestrator items must be enqueued within the same transaction:
-    ///
-    /// ```ignore
-    /// // Worker queue (no special handling)
-    /// for item in worker_items {
-    ///     INSERT INTO worker_queue (work_item) VALUES (serde_json::to_string(&item))
-    /// }
-    ///
-    /// // Timer queue (with delayed visibility if supported)
-    /// for item in timer_items {
-    ///     if let WorkItem::TimerSchedule { fire_at_ms, .. } = &item {
-    ///         INSERT INTO timer_queue (work_item, fire_at)
-    ///         VALUES (serde_json::to_string(&item), fire_at_ms)
-    ///     }
-    /// }
-    ///
-    /// // Orchestrator queue (may have delayed visibility)
-    /// for item in orchestrator_items {
-    ///     INSERT INTO orchestrator_queue (instance_id, work_item, visible_at)
-    ///     VALUES (extract_instance(&item), serde_json::to_string(&item), now())
-    /// }
-    /// ```
+/// Worker items and orchestrator items must be enqueued within the same transaction:
+///
+/// ```ignore
+/// // Worker queue (no special handling)
+/// for item in worker_items {
+///     INSERT INTO worker_queue (work_item) VALUES (serde_json::to_string(&item))
+/// }
+///
+/// // Orchestrator queue (may have delayed visibility for TimerFired)
+/// for item in orchestrator_items {
+///     let visible_at = match &item {
+///         WorkItem::TimerFired { fire_at_ms, .. } => *fire_at_ms,  // Delayed visibility
+///         _ => now()  // Immediate visibility
+///     };
+///     
+///     INSERT INTO orchestrator_queue (instance_id, work_item, visible_at)
+///     VALUES (extract_instance(&item), serde_json::to_string(&item), visible_at)
+/// }
+/// ```
     ///
     /// # Lock Release
     ///
@@ -981,6 +1026,7 @@ pub trait Provider: Any + Send + Sync {
     /// * `history_delta` - Events to append to the specified execution
     /// * `worker_items` - Activity work items to enqueue
     /// * `orchestrator_items` - Orchestration work items to enqueue (StartOrchestration, ContinueAsNew, TimerFired, etc.)
+    ///   - TimerFired items should be enqueued with `visible_at = fire_at_ms` for delayed visibility
     /// * `metadata` - Pre-computed execution metadata (status, output)
     ///
     /// # TimerFired Items
@@ -1009,30 +1055,52 @@ pub trait Provider: Any + Send + Sync {
     /// async fn ack_orchestration_item(execution_id, ...) -> Result<(), String> {
     ///     let tx = begin_transaction()?;
     ///     
-    ///     // Get instance_id from lock_token
-    ///     let instance_id = SELECT instance_id FROM orch_queue WHERE lock_token = ?;
+    ///     // Step 1: Validate lock token and get instance_id from instance_locks
+    ///     let instance_id = SELECT instance_id FROM instance_locks
+    ///         WHERE lock_token = ? AND locked_until > now();
+    ///     if instance_id.is_none() {
+    ///         return Err("Invalid or expired lock token");
+    ///     }
     ///     
-    ///     // Create execution record if it doesn't exist (idempotent)
+    ///     // Step 2: Remove instance lock (processing complete)
+    ///     DELETE FROM instance_locks WHERE instance_id = ? AND lock_token = ?;
+    ///     
+    ///     // Step 3: Create execution record if it doesn't exist (idempotent)
     ///     INSERT OR IGNORE INTO executions (instance_id, execution_id, status)
     ///     VALUES (?, ?, 'Running');
     ///     
-    ///     // Append history to the SPECIFIED execution_id
+    ///     // Step 4: Append history to the SPECIFIED execution_id
     ///     for event in history_delta {
     ///         INSERT INTO history (...) VALUES (instance_id, execution_id, event.event_id(), ...)
     ///     }
     ///     
-    ///     // Update execution metadata (no event inspection!)
+    ///     // Step 5: Update execution metadata (no event inspection!)
     ///     if let Some(status) = &metadata.status {
     ///         UPDATE executions SET status = ?, output = ?, completed_at = NOW()
     ///         WHERE instance_id = ? AND execution_id = ?
     ///     }
     ///     
-    ///     // Update current_execution_id if this is a newer execution
+    ///     // Step 6: Update current_execution_id if this is a newer execution
     ///     UPDATE instances SET current_execution_id = GREATEST(current_execution_id, ?)
     ///     WHERE instance_id = ?;
     ///     
-    ///     // Enqueue worker/timer/orchestrator items...
-    ///     // Release lock: DELETE FROM orch_queue WHERE lock_token = ?;
+///     // Step 7: Enqueue worker/orchestrator items
+///     // Worker items go to worker queue
+///     for item in worker_items {
+///         INSERT INTO worker_queue (work_item) VALUES (serialize(item))
+///     }
+///     
+///     // Orchestrator items go to orchestrator queue (TimerFired uses fire_at_ms for visible_at)
+///     for item in orchestrator_items {
+///         let visible_at = match &item {
+///             WorkItem::TimerFired { fire_at_ms, .. } => *fire_at_ms,
+///             _ => now()
+///         };
+///         INSERT INTO orchestrator_queue (instance_id, work_item, visible_at)
+///         VALUES (extract_instance(&item), serialize(item), visible_at)
+///     }
+///     
+///     // Step 8: Release lock: DELETE FROM orch_queue WHERE lock_token = ?;
     ///     
     ///     commit_transaction()?;
     ///     Ok(())
@@ -1056,8 +1124,9 @@ pub trait Provider: Any + Send + Sync {
     /// # What This Does
     ///
     /// 1. **Clear lock_token** from messages (make available again)
-    /// 2. **Optionally delay** retry by setting visibility timestamp
-    /// 3. **Preserve message order** (don't reorder or modify messages)
+    /// 2. **Remove instance lock** from `instance_locks` table
+    /// 3. **Optionally delay** retry by setting visibility timestamp
+    /// 4. **Preserve message order** (don't reorder or modify messages)
     ///
     /// # Parameters
     ///
@@ -1076,9 +1145,18 @@ pub trait Provider: Any + Send + Sync {
     ///         now()
     ///     };
     ///     
-    ///     UPDATE orchestrator_queue
-    ///     SET lock_token = NULL, locked_until = NULL, visible_at = ?
-    ///     WHERE lock_token = ?;
+    ///     BEGIN TRANSACTION
+    ///         // Get instance_id from instance_locks
+    ///         let instance_id = SELECT instance_id FROM instance_locks WHERE lock_token = ?;
+    ///         
+    ///         // Clear lock_token from messages
+    ///         UPDATE orchestrator_queue
+    ///         SET lock_token = NULL, locked_until = NULL, visible_at = ?
+    ///         WHERE lock_token = ?;
+    ///         
+    ///         // Remove instance lock
+    ///         DELETE FROM instance_locks WHERE lock_token = ?;
+    ///     COMMIT
     ///     
     ///     Ok(())
     /// }
@@ -1874,7 +1952,10 @@ pub trait ManagementCapability: Any + Send + Sync {
     ///
     /// # Returns
     ///
-    /// Queue depths for orchestrator, worker, and timer queues.
+    /// Queue depths for orchestrator and worker queues.
+    ///
+    /// **Note:** Timer queue depth is not applicable since timers are handled via
+    /// delayed visibility in the orchestrator queue.
     ///
     /// # Implementation Example
     ///
@@ -1882,14 +1963,13 @@ pub trait ManagementCapability: Any + Send + Sync {
     /// async fn get_queue_depths(&self) -> Result<QueueDepths, String> {
     ///     SELECT
     ///         (SELECT COUNT(*) FROM orchestrator_queue WHERE lock_token IS NULL) as orchestrator_queue,
-    ///         (SELECT COUNT(*) FROM worker_queue WHERE lock_token IS NULL) as worker_queue,
-    ///         (SELECT COUNT(*) FROM timer_queue WHERE lock_token IS NULL) as timer_queue
+    ///         (SELECT COUNT(*) FROM worker_queue WHERE lock_token IS NULL) as worker_queue
     /// }
     /// ```
     ///
     /// # Default
     ///
-    /// Returns default `QueueDepths`.
+    /// Returns default `QueueDepths` (timer_queue will be 0).
     async fn get_queue_depths(&self) -> Result<QueueDepths, String> {
         Ok(QueueDepths::default())
     }

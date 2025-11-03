@@ -5,7 +5,7 @@ Ensure all documentation is accurate, complete, and helpful for both humans and 
 
 ## Documentation Hierarchy
 
-### 1. User-Facing Guides (Priority: High)
+### 1. User-Facing Guides (Priority: High, these MUST be scanned and updated)
 Review and update these guides for accuracy and clarity:
 
 - **`README.md`** - Project overview, quick examples, getting started
@@ -15,13 +15,14 @@ Review and update these guides for accuracy and clarity:
 - **`docs/cross-crate-registry-pattern.md`** - Guide for building reusable libraries
 
 **Review criteria:**
+- Read all of the docs, look through the code for accuracy and relevance
 - Examples compile and use current API signatures
 - Terminology is consistent with codebase
 - Code patterns match what's in working examples
 - Instructions are prescriptive and actionable
 - Examples are succinct but complete
 
-### 2. API Documentation (Priority: High)
+### 2. API Documentation (Priority: High, these MUST be scanned and updated)
 Review doc comments in public-facing modules:
 
 - **`src/lib.rs`** - Core types: `OrchestrationContext`, `ActivityContext`, `Event`, `Action`
@@ -31,6 +32,7 @@ Review doc comments in public-facing modules:
 - **`src/runtime/registry.rs`** - `ActivityRegistry`, `OrchestrationRegistry`
 
 **Review criteria:**
+- Read all of the docs, look through the code for accuracy and relevance
 - Every public struct/enum has a doc comment
 - Every public method has examples or usage notes
 - Doc examples compile (`cargo test --doc`)
