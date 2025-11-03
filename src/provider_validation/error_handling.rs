@@ -2,14 +2,6 @@ use crate::provider_validation::{Event, ExecutionMetadata, start_item};
 use crate::provider_validations::ProviderFactory;
 use std::time::Duration;
 
-/// Run all error handling tests
-pub async fn run_tests<F: ProviderFactory>(factory: &F) {
-    test_invalid_lock_token_on_ack(factory).await;
-    test_duplicate_event_id_rejection(factory).await;
-    test_missing_instance_metadata(factory).await;
-    test_corrupted_serialization_data(factory).await;
-    test_lock_expiration_during_ack(factory).await;
-}
 
 /// Test 3.1: Invalid Lock Token on Ack
 /// Goal: Provider should reject invalid lock tokens.

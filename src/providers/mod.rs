@@ -1137,30 +1137,35 @@ pub trait Provider: Any + Send + Sync {
     ///
     /// # Implementation Pattern
     ///
-    /// ```ignore
-    /// async fn abandon_orchestration_item(lock_token: &str, delay_ms: Option<u64>) -> Result<(), String> {
-    ///     let visible_at = if let Some(delay) = delay_ms {
-    ///         now() + delay
-    ///     } else {
-    ///         now()
-    ///     };
-    ///     
-    ///     BEGIN TRANSACTION
-    ///         // Get instance_id from instance_locks
-    ///         let instance_id = SELECT instance_id FROM instance_locks WHERE lock_token = ?;
-    ///         
-    ///         // Clear lock_token from messages
-    ///         UPDATE orchestrator_queue
-    ///         SET lock_token = NULL, locked_until = NULL, visible_at = ?
-    ///         WHERE lock_token = ?;
-    ///         
-    ///         // Remove instance lock
-    ///         DELETE FROM instance_locks WHERE lock_token = ?;
-    ///     COMMIT
-    ///     
-    ///     Ok(())
-    /// }
-    /// ```
+/// ```ignore
+/// async fn abandon_orchestration_item(lock_token: &str, delay_ms: Option<u64>) -> Result<(), String> {
+///     let visible_at = if let Some(delay) = delay_ms {
+///         now() + delay
+///     } else {
+///         now()
+///     };
+///     
+///     BEGIN TRANSACTION
+///         // Get instance_id from instance_locks
+///         let instance_id = SELECT instance_id FROM instance_locks WHERE lock_token = ?;
+///         
+///         IF instance_id IS NULL:
+///             // Invalid lock token - return error
+///             ROLLBACK
+///             RETURN Err("Invalid lock token")
+///         
+///         // Clear lock_token from messages
+///         UPDATE orchestrator_queue
+///         SET lock_token = NULL, locked_until = NULL, visible_at = ?
+///         WHERE lock_token = ?;
+///         
+///         // Remove instance lock
+///         DELETE FROM instance_locks WHERE lock_token = ?;
+///     COMMIT
+///     
+///     Ok(())
+/// }
+/// ```
     ///
     /// # Use Cases
     ///
@@ -1168,9 +1173,13 @@ pub trait Provider: Any + Send + Sync {
     /// - Orchestration turn failed → delay_ms = None for immediate retry
     /// - Runtime shutdown during processing → messages auto-recover when lock expires
     ///
-    /// # Error Handling
-    ///
-    /// Should not fail - if lock_token is invalid, just return Ok (idempotent).
+/// # Error Handling
+///
+/// **Invalid lock tokens MUST return an error.** Unlike `ack_orchestration_item()`, this method
+/// should not be idempotent for invalid tokens. Invalid tokens indicate a programming error or
+/// state corruption and should be surfaced as errors.
+///
+/// Return `Err("Invalid lock token")` if the lock token is not found in `instance_locks`.
     async fn abandon_orchestration_item(&self, _lock_token: &str, _delay_ms: Option<u64>) -> Result<(), String>;
 
     // ===== Basic History Access (REQUIRED) =====

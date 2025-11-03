@@ -15,14 +15,6 @@ fn start_item_with_execution(instance: &str, execution_id: u64) -> WorkItem {
     }
 }
 
-/// Run all multi-execution tests
-pub async fn run_tests<F: ProviderFactory>(factory: &F) {
-    test_execution_isolation(factory).await;
-    test_latest_execution_detection(factory).await;
-    test_execution_id_sequencing(factory).await;
-    test_continue_as_new_creates_new_execution(factory).await;
-    test_execution_history_persistence(factory).await;
-}
 
 /// Test 6.1: Execution Isolation
 /// Goal: Verify each execution has separate history.

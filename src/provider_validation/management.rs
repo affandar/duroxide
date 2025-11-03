@@ -1,16 +1,6 @@
 use crate::provider_validation::{Event, ExecutionMetadata, start_item};
 use crate::provider_validations::ProviderFactory;
 
-/// Run all management capability tests
-pub async fn run_tests<F: ProviderFactory>(factory: &F) {
-    test_list_instances(factory).await;
-    test_list_instances_by_status(factory).await;
-    test_list_executions(factory).await;
-    test_get_instance_info(factory).await;
-    test_get_execution_info(factory).await;
-    test_get_system_metrics(factory).await;
-    test_get_queue_depths(factory).await;
-}
 
 /// Test management: list_instances returns all instance IDs
 pub async fn test_list_instances<F: ProviderFactory>(factory: &F) {

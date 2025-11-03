@@ -3,14 +3,6 @@ use crate::provider_validations::ProviderFactory;
 use crate::providers::WorkItem;
 use std::time::Duration;
 
-/// Run all queue semantics tests
-pub async fn run_tests<F: ProviderFactory>(factory: &F) {
-    test_worker_queue_fifo_ordering(factory).await;
-    test_worker_peek_lock_semantics(factory).await;
-    test_worker_ack_atomicity(factory).await;
-    test_timer_delayed_visibility(factory).await;
-    test_lost_lock_token_handling(factory).await;
-}
 
 /// Test 5.1: Worker Queue FIFO Ordering
 /// Goal: Verify worker items dequeued in order.

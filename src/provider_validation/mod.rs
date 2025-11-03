@@ -19,8 +19,6 @@ pub mod queue_semantics;
 pub mod management;
 
 #[cfg(feature = "provider-test")]
-use crate::provider_validations::ProviderFactory;
-#[cfg(feature = "provider-test")]
 use crate::INITIAL_EXECUTION_ID;
 #[cfg(feature = "provider-test")]
 use crate::providers::WorkItem;
@@ -43,16 +41,4 @@ pub(crate) fn start_item(instance: &str) -> WorkItem {
         parent_id: None,
         execution_id: INITIAL_EXECUTION_ID,
     }
-}
-
-/// Run all validation tests
-#[cfg(feature = "provider-test")]
-pub async fn run_all_tests<F: ProviderFactory>(factory: &F) {
-    atomicity::run_tests(factory).await;
-    error_handling::run_tests(factory).await;
-    instance_locking::run_tests(factory).await;
-    lock_expiration::run_tests(factory).await;
-    multi_execution::run_tests(factory).await;
-    queue_semantics::run_tests(factory).await;
-    management::run_tests(factory).await;
 }

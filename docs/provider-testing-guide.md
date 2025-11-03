@@ -304,7 +304,7 @@ To run validation tests against your custom provider:
 
 1. Add `duroxide` with `provider-test` feature to your project
 2. Implement the `ProviderFactory` trait
-3. Run individual test suite functions for each validation category
+3. Run individual test functions for each validation test
 
 ### Adding the Dependency
 
@@ -319,13 +319,22 @@ duroxide = { path = "../duroxide", features = ["provider-test"] }
 
 ### Basic Example
 
-Run validation tests by calling individual test suite functions:
+Run validation tests by calling individual test functions:
 
 ```rust
 use duroxide::providers::Provider;
-use duroxide::provider_validations::{ProviderFactory, run_atomicity_tests, run_error_handling_tests, run_instance_locking_tests, run_lock_expiration_tests, run_multi_execution_tests, run_queue_semantics_tests, run_management_tests};
+use duroxide::provider_validations::{
+    ProviderFactory,
+    test_atomicity_failure_rollback,
+    test_multi_operation_atomic_ack,
+    test_exclusive_instance_lock,
+    test_worker_queue_fifo_ordering,
+    // ... import other tests as needed
+};
 use std::sync::Arc;
 use std::time::Duration;
+
+const TEST_LOCK_TIMEOUT_MS: u64 = 1000;
 
 struct MyProviderFactory;
 
@@ -339,129 +348,128 @@ impl ProviderFactory for MyProviderFactory {
     fn lock_timeout_ms(&self) -> u64 {
         // Return the lock timeout configured in your provider
         // This must match the timeout used when creating the provider
-        // Default is 1000ms if not overridden
-        1000
+        TEST_LOCK_TIMEOUT_MS
     }
 }
 
 #[tokio::test]
-async fn test_my_provider_atomicity() {
+async fn test_my_provider_atomicity_failure_rollback() {
     let factory = MyProviderFactory;
-    run_atomicity_tests(&factory).await;
+    test_atomicity_failure_rollback(&factory).await;
 }
 
 #[tokio::test]
-async fn test_my_provider_error_handling() {
+async fn test_my_provider_exclusive_instance_lock() {
     let factory = MyProviderFactory;
-    run_error_handling_tests(&factory).await;
+    test_exclusive_instance_lock(&factory).await;
 }
 
 #[tokio::test]
-async fn test_my_provider_instance_locking() {
+async fn test_my_provider_worker_queue_fifo_ordering() {
     let factory = MyProviderFactory;
-    run_instance_locking_tests(&factory).await;
-}
-
-#[tokio::test]
-async fn test_my_provider_lock_expiration() {
-    let factory = MyProviderFactory;
-    run_lock_expiration_tests(&factory).await;
-}
-
-#[tokio::test]
-async fn test_my_provider_multi_execution() {
-    let factory = MyProviderFactory;
-    run_multi_execution_tests(&factory).await;
-}
-
-#[tokio::test]
-async fn test_my_provider_queue_semantics() {
-    let factory = MyProviderFactory;
-    run_queue_semantics_tests(&factory).await;
-}
-
-#[tokio::test]
-async fn test_my_provider_management() {
-    let factory = MyProviderFactory;
-    run_management_tests(&factory).await;
+    test_worker_queue_fifo_ordering(&factory).await;
 }
 ```
 
-> **Important:** Run each test suite separately. This provides better test isolation, clearer failure reporting, and allows parallel execution in CI/CD pipelines.
+> **Important:** Run each test function individually. This provides better test isolation, clearer failure reporting, and allows parallel execution in CI/CD pipelines. When a test fails, you'll know exactly which behavior is broken.
 
 ### What the Tests Validate
 
-The validation test suite includes:
+The validation test suite includes **41 individual test functions** organized into 7 categories:
 
-1. **Atomicity Tests**
-   - All-or-nothing commit semantics
-   - Rollback on failure
-   - Single transaction guarantees
+1. **Atomicity Tests (4 tests)**
+   - `test_atomicity_failure_rollback` - All-or-nothing commit semantics, rollback on failure
+   - `test_multi_operation_atomic_ack` - Complex ack succeeds atomically
+   - `test_lock_released_only_on_successful_ack` - Lock only released on success
+   - `test_concurrent_ack_prevention` - Only one ack succeeds with same token
 
-2. **Error Handling Tests**
-   - Invalid lock token rejection
-   - Duplicate event ID detection
-   - Error propagation
+2. **Error Handling Tests (5 tests)**
+   - `test_invalid_lock_token_on_ack` - Invalid lock token rejection
+   - `test_duplicate_event_id_rejection` - Duplicate event ID detection
+   - `test_missing_instance_metadata` - Missing instances handled gracefully
+   - `test_corrupted_serialization_data` - Corrupted data handled gracefully
+   - `test_lock_expiration_during_ack` - Expired locks are rejected
 
-3. **Instance Locking Tests**
-   - Exclusive access to instances
-   - Lock timeout behavior
-   - Concurrent access prevention
+3. **Instance Locking Tests (11 tests)**
+   - `test_exclusive_instance_lock` - Exclusive access to instances
+   - `test_lock_token_uniqueness` - Each fetch generates unique lock token
+   - `test_invalid_lock_token_rejection` - Invalid tokens rejected for ack/abandon
+   - `test_concurrent_instance_fetching` - Concurrent fetches don't duplicate instances
+   - `test_completions_arriving_during_lock_blocked` - New messages blocked during lock
+   - `test_cross_instance_lock_isolation` - Locks don't block other instances
+   - `test_message_tagging_during_lock` - Only fetched messages deleted on ack
+   - `test_ack_only_affects_locked_messages` - Ack only affects locked messages
+   - `test_multi_threaded_lock_contention` - Locks prevent concurrent processing (multi-threaded)
+   - `test_multi_threaded_no_duplicate_processing` - No duplicate processing (multi-threaded)
+   - `test_multi_threaded_lock_expiration_recovery` - Lock expiration recovery (multi-threaded)
 
-4. **Lock Expiration Tests**
-   - Automatic lock release
-   - Delayed visibility for retries
-   - Reacquisition after expiration
+4. **Lock Expiration Tests (4 tests)**
+   - `test_lock_expires_after_timeout` - Automatic lock release after timeout
+   - `test_abandon_releases_lock_immediately` - Abandon releases lock immediately
+   - `test_lock_renewal_on_ack` - Successful ack releases lock immediately
+   - `test_concurrent_lock_attempts_respect_expiration` - Concurrent attempts respect expiration
 
-5. **Multi-Execution Tests**
-   - Execution isolation
-   - ContinueAsNew behavior
-   - Execution ID tracking
+5. **Multi-Execution Tests (5 tests)**
+   - `test_execution_isolation` - Each execution has separate history
+   - `test_latest_execution_detection` - read() returns latest execution
+   - `test_execution_id_sequencing` - Execution IDs increment correctly
+   - `test_continue_as_new_creates_new_execution` - ContinueAsNew creates new execution
+   - `test_execution_history_persistence` - All executions' history persists independently
 
-6. **Queue Semantics Tests**
-   - FIFO ordering
-   - Atomic queue operations
-   - Worker queue isolation
+6. **Queue Semantics Tests (5 tests)**
+   - `test_worker_queue_fifo_ordering` - Worker items dequeued in FIFO order
+   - `test_worker_peek_lock_semantics` - Dequeue doesn't remove item until ack
+   - `test_worker_ack_atomicity` - Ack_worker atomically removes item and enqueues completion
+   - `test_timer_delayed_visibility` - TimerFired items only dequeued when visible
+   - `test_lost_lock_token_handling` - Locked items become available after expiration
 
-7. **Management Capability Tests**
-   - Instance listing and filtering
-   - Execution queries
-   - System metrics
-   - Queue depth reporting
+7. **Management Capability Tests (7 tests)**
+   - `test_list_instances` - Instance listing returns all instance IDs
+   - `test_list_instances_by_status` - Instance filtering by status works correctly
+   - `test_list_executions` - Execution queries return all execution IDs
+   - `test_get_instance_info` - Instance metadata retrieval
+   - `test_get_execution_info` - Execution metadata retrieval
+   - `test_get_system_metrics` - System metrics are accurate
+   - `test_get_queue_depths` - Queue depth reporting is correct
 
-### Running Individual Test Suites
+### Running Individual Test Functions
 
-Each validation category should be tested in its own test function. This provides:
+Each validation test should be run individually. This provides:
 
-- **Better isolation**: Failures are clearly attributed to specific categories
-- **Clearer reporting**: Test output shows which category failed
-- **Parallel execution**: CI/CD can run test suites in parallel
-- **Focused debugging**: Fix one category at a time
+- **Better isolation**: Failures are clearly attributed to specific behaviors
+- **Clearer reporting**: Test output shows exactly which test failed
+- **Parallel execution**: CI/CD can run tests in parallel
+- **Focused debugging**: Fix one behavior at a time without running unrelated tests
+- **Easier debugging**: When a test fails, you know exactly which behavior is broken
 
 ```rust
-use duroxide::provider_validations::{ProviderFactory, run_atomicity_tests, run_instance_locking_tests};
+use duroxide::provider_validations::{
+    ProviderFactory,
+    test_atomicity_failure_rollback,
+    test_exclusive_instance_lock,
+    test_worker_queue_fifo_ordering,
+};
 
 #[tokio::test]
-async fn test_my_provider_atomicity() {
+async fn test_my_provider_atomicity_failure_rollback() {
     let factory = MyProviderFactory;
-    run_atomicity_tests(&factory).await;
+    test_atomicity_failure_rollback(&factory).await;
 }
 
 #[tokio::test]
-async fn test_my_provider_locking() {
+async fn test_my_provider_exclusive_instance_lock() {
     let factory = MyProviderFactory;
-    run_instance_locking_tests(&factory).await;
+    test_exclusive_instance_lock(&factory).await;
+}
+
+#[tokio::test]
+async fn test_my_provider_worker_queue_fifo_ordering() {
+    let factory = MyProviderFactory;
+    test_worker_queue_fifo_ordering(&factory).await;
 }
 ```
 
-**Available test suite functions:**
-- `run_atomicity_tests()` - Transactional guarantees
-- `run_error_handling_tests()` - Graceful failure modes
-- `run_instance_locking_tests()` - Exclusive access
-- `run_lock_expiration_tests()` - Peek-lock timeouts
-- `run_multi_execution_tests()` - ContinueAsNew support
-- `run_queue_semantics_tests()` - Queue behavior
-- `run_management_tests()` - Management API tests
+**Available test functions:** See `duroxide::provider_validations` module documentation for the complete list of all 41 test functions, or refer to `tests/sqlite_provider_validations.rs` for a complete example using all tests.
 
 ### Creating a Test Provider Factory
 
@@ -531,6 +539,19 @@ jobs:
       - name: Run validation tests
         run: |
           cargo test --features provider-test
+```
+
+The tests will run individually, providing granular failure reporting. You can also run specific tests:
+
+```bash
+# Run a specific test
+cargo test --features provider-test test_my_provider_atomicity_failure_rollback
+
+# Run all atomicity tests
+cargo test --features provider-test test_my_provider_atomicity
+
+# Run tests in parallel
+cargo test --features provider-test -- --test-threads=4
 ```
 
 ---
@@ -746,9 +767,10 @@ This generates `stress-test-results.md` with:
 
 ## Reference
 
-- **Test Implementation**: `stress-tests/src/lib.rs`
-- **Binary Entry Point**: `stress-tests/src/bin/parallel_orchestrations.rs`
-- **Test Specification**: `docs/stress-test-spec.md`
+- **Test Implementation**: `src/provider_validation/` (individual test modules)
+- **Test API**: `src/provider_validations.rs` (test function exports)
+- **Example Usage**: `tests/sqlite_provider_validations.rs` (complete example with all 41 tests)
+- **Test Specification**: See individual test function documentation
 - **Provider Guide**: `docs/provider-implementation-guide.md`
 - **Built-in Providers**: `src/providers/sqlite.rs`
 

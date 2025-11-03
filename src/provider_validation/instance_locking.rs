@@ -4,20 +4,6 @@ use crate::providers::WorkItem;
 use std::sync::Arc;
 use std::time::Duration;
 
-/// Run all instance locking tests
-pub async fn run_tests<F: ProviderFactory>(factory: &F) {
-    test_exclusive_instance_lock(factory).await;
-    test_lock_token_uniqueness(factory).await;
-    test_invalid_lock_token_rejection(factory).await;
-    test_concurrent_instance_fetching(factory).await;
-    test_completions_arriving_during_lock_blocked(factory).await;
-    test_cross_instance_lock_isolation(factory).await;
-    test_message_tagging_during_lock(factory).await;
-    test_ack_only_affects_locked_messages(factory).await;
-    test_multi_threaded_lock_contention(factory).await;
-    test_multi_threaded_no_duplicate_processing(factory).await;
-    test_multi_threaded_lock_expiration_recovery(factory).await;
-}
 
 /// Test 1.1: Exclusive Instance Lock Acquisition
 /// Goal: Verify only one dispatcher can process an instance at a time.

@@ -58,82 +58,143 @@ pub trait ProviderFactory: Send + Sync {
     }
 }
 
-/// ## Individual Test Suites
+/// ## Individual Test Functions
 ///
-/// For more granular control, you can run individual test suites:
+/// For granular control and easier debugging, you can run individual test functions:
 ///
 /// ```rust,ignore
-/// use duroxide::provider_validations::{ProviderFactory, run_atomicity_tests};
+/// use duroxide::provider_validations::{ProviderFactory, test_atomicity_failure_rollback};
 ///
 /// #[tokio::test]
-/// async fn test_atomicity_only() {
+/// async fn test_atomicity_failure_rollback_only() {
 ///     let factory = MyFactory;
-///     run_atomicity_tests(&factory).await;
+///     test_atomicity_failure_rollback(&factory).await;
 /// }
 /// ```
 ///
-/// Available test suite functions:
-/// - `run_atomicity_tests` - Transactional guarantees
-/// - `run_error_handling_tests` - Error handling and validation
-/// - `run_instance_locking_tests` - Exclusive access guarantees
-/// - `run_lock_expiration_tests` - Lock timeout behavior
-/// - `run_multi_execution_tests` - ContinueAsNew and execution isolation
-/// - `run_queue_semantics_tests` - Work queue behavior
-/// - `run_management_tests` - Management API tests
-
-/// Run atomicity tests to verify transactional guarantees.
+/// Available test functions:
 ///
-/// Tests that ack_orchestration_item is truly atomic - all operations
-/// succeed together or all fail together.
-#[cfg(feature = "provider-test")]
-pub async fn run_atomicity_tests<F: ProviderFactory>(factory: &F) {
-    crate::provider_validation::atomicity::run_tests(factory).await;
-}
-
-/// Run error handling tests to verify graceful failure modes.
+/// **Atomicity Tests:**
+/// - `test_atomicity_failure_rollback` - Verify ack failure rolls back all operations
+/// - `test_multi_operation_atomic_ack` - Verify complex ack succeeds atomically
+/// - `test_lock_released_only_on_successful_ack` - Verify lock only released on success
+/// - `test_concurrent_ack_prevention` - Verify only one ack succeeds with same token
 ///
-/// Tests invalid inputs, duplicate events, and other error scenarios.
-#[cfg(feature = "provider-test")]
-pub async fn run_error_handling_tests<F: ProviderFactory>(factory: &F) {
-    crate::provider_validation::error_handling::run_tests(factory).await;
-}
-
-/// Run instance locking tests to verify exclusive access guarantees.
+/// **Error Handling Tests:**
+/// - `test_invalid_lock_token_on_ack` - Verify invalid lock tokens are rejected
+/// - `test_duplicate_event_id_rejection` - Verify duplicate events are rejected
+/// - `test_missing_instance_metadata` - Verify missing instances handled gracefully
+/// - `test_corrupted_serialization_data` - Verify corrupted data handled gracefully
+/// - `test_lock_expiration_during_ack` - Verify expired locks are rejected
 ///
-/// Tests that only one dispatcher can process an instance at a time.
-#[cfg(feature = "provider-test")]
-pub async fn run_instance_locking_tests<F: ProviderFactory>(factory: &F) {
-    crate::provider_validation::instance_locking::run_tests(factory).await;
-}
-
-/// Run lock expiration tests to verify peek-lock timeout behavior.
+/// **Instance Locking Tests:**
+/// - `test_exclusive_instance_lock` - Verify only one dispatcher can process an instance
+/// - `test_lock_token_uniqueness` - Verify each fetch generates unique lock token
+/// - `test_invalid_lock_token_rejection` - Verify invalid tokens rejected for ack/abandon
+/// - `test_concurrent_instance_fetching` - Verify concurrent fetches don't duplicate instances
+/// - `test_completions_arriving_during_lock_blocked` - Verify new messages blocked during lock
+/// - `test_cross_instance_lock_isolation` - Verify locks don't block other instances
+/// - `test_message_tagging_during_lock` - Verify only fetched messages deleted on ack
+/// - `test_ack_only_affects_locked_messages` - Verify ack only affects locked messages
+/// - `test_multi_threaded_lock_contention` - Verify locks prevent concurrent processing (multi-threaded)
+/// - `test_multi_threaded_no_duplicate_processing` - Verify no duplicate processing (multi-threaded)
+/// - `test_multi_threaded_lock_expiration_recovery` - Verify lock expiration recovery (multi-threaded)
 ///
-/// Tests that locks expire and messages become available for retry.
-#[cfg(feature = "provider-test")]
-pub async fn run_lock_expiration_tests<F: ProviderFactory>(factory: &F) {
-    crate::provider_validation::lock_expiration::run_tests(factory).await;
-}
-
-/// Run multi-execution tests to verify ContinueAsNew support.
+/// **Lock Expiration Tests:**
+/// - `test_lock_expires_after_timeout` - Verify locks expire after timeout
+/// - `test_abandon_releases_lock_immediately` - Verify abandon releases lock immediately
+/// - `test_lock_renewal_on_ack` - Verify successful ack releases lock immediately
+/// - `test_concurrent_lock_attempts_respect_expiration` - Verify concurrent attempts respect expiration
 ///
-/// Tests execution isolation and history partitioning.
-#[cfg(feature = "provider-test")]
-pub async fn run_multi_execution_tests<F: ProviderFactory>(factory: &F) {
-    crate::provider_validation::multi_execution::run_tests(factory).await;
-}
-
-/// Run queue semantics tests to verify work queue behavior.
+/// **Multi-Execution Tests:**
+/// - `test_execution_isolation` - Verify each execution has separate history
+/// - `test_latest_execution_detection` - Verify read() returns latest execution
+/// - `test_execution_id_sequencing` - Verify execution IDs increment correctly
+/// - `test_continue_as_new_creates_new_execution` - Verify ContinueAsNew creates new execution
+/// - `test_execution_history_persistence` - Verify all executions' history persists independently
 ///
-/// Tests FIFO ordering, peek-lock semantics, and atomic acks.
-#[cfg(feature = "provider-test")]
-pub async fn run_queue_semantics_tests<F: ProviderFactory>(factory: &F) {
-    crate::provider_validation::queue_semantics::run_tests(factory).await;
-}
-
-/// Run management capability tests to verify provider management APIs.
+/// **Queue Semantics Tests:**
+/// - `test_worker_queue_fifo_ordering` - Verify worker items dequeued in FIFO order
+/// - `test_worker_peek_lock_semantics` - Verify dequeue doesn't remove item until ack
+/// - `test_worker_ack_atomicity` - Verify ack_worker atomically removes item and enqueues completion
+/// - `test_timer_delayed_visibility` - Verify TimerFired items only dequeued when visible
+/// - `test_lost_lock_token_handling` - Verify locked items become available after expiration
 ///
-/// Tests instance listing, execution queries, and system metrics.
+/// **Management Tests:**
+/// - `test_list_instances` - Verify list_instances returns all instance IDs
+/// - `test_list_instances_by_status` - Verify list_instances_by_status filters correctly
+/// - `test_list_executions` - Verify list_executions returns all execution IDs
+/// - `test_get_instance_info` - Verify get_instance_info returns metadata
+/// - `test_get_execution_info` - Verify get_execution_info returns execution metadata
+/// - `test_get_system_metrics` - Verify get_system_metrics returns accurate counts
+/// - `test_get_queue_depths` - Verify get_queue_depths returns current queue sizes
+
+// Re-export individual test functions for granular testing
 #[cfg(feature = "provider-test")]
-pub async fn run_management_tests<F: ProviderFactory>(factory: &F) {
-    crate::provider_validation::management::run_tests(factory).await;
-}
+pub use crate::provider_validation::atomicity::{
+    test_atomicity_failure_rollback,
+    test_multi_operation_atomic_ack,
+    test_lock_released_only_on_successful_ack,
+    test_concurrent_ack_prevention,
+};
+
+#[cfg(feature = "provider-test")]
+pub use crate::provider_validation::error_handling::{
+    test_invalid_lock_token_on_ack,
+    test_duplicate_event_id_rejection,
+    test_missing_instance_metadata,
+    test_corrupted_serialization_data,
+    test_lock_expiration_during_ack,
+};
+
+#[cfg(feature = "provider-test")]
+pub use crate::provider_validation::instance_locking::{
+    test_exclusive_instance_lock,
+    test_lock_token_uniqueness,
+    test_invalid_lock_token_rejection,
+    test_concurrent_instance_fetching,
+    test_completions_arriving_during_lock_blocked,
+    test_cross_instance_lock_isolation,
+    test_message_tagging_during_lock,
+    test_ack_only_affects_locked_messages,
+    test_multi_threaded_lock_contention,
+    test_multi_threaded_no_duplicate_processing,
+    test_multi_threaded_lock_expiration_recovery,
+};
+
+#[cfg(feature = "provider-test")]
+pub use crate::provider_validation::lock_expiration::{
+    test_lock_expires_after_timeout,
+    test_abandon_releases_lock_immediately,
+    test_lock_renewal_on_ack,
+    test_concurrent_lock_attempts_respect_expiration,
+};
+
+#[cfg(feature = "provider-test")]
+pub use crate::provider_validation::multi_execution::{
+    test_execution_isolation,
+    test_latest_execution_detection,
+    test_execution_id_sequencing,
+    test_continue_as_new_creates_new_execution,
+    test_execution_history_persistence,
+};
+
+#[cfg(feature = "provider-test")]
+pub use crate::provider_validation::queue_semantics::{
+    test_worker_queue_fifo_ordering,
+    test_worker_peek_lock_semantics,
+    test_worker_ack_atomicity,
+    test_timer_delayed_visibility,
+    test_lost_lock_token_handling,
+};
+
+#[cfg(feature = "provider-test")]
+pub use crate::provider_validation::management::{
+    test_list_instances,
+    test_list_instances_by_status,
+    test_list_executions,
+    test_get_instance_info,
+    test_get_execution_info,
+    test_get_system_metrics,
+    test_get_queue_depths,
+};

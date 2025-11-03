@@ -343,11 +343,88 @@ RETURN Some(OrchestrationItem {
 - Check `locked_until <= current_timestamp()` when acquiring locks
 - Always validate lock token on ack to ensure lock hasn't expired
 
+**⚠️ CRITICAL: Successful Ack Releases Lock Immediately**
+
+When `ack_orchestration_item()` succeeds, it MUST immediately release the instance lock (delete from `instance_locks` table). This happens BEFORE the transaction commits, ensuring the lock is released atomically with the ack.
+
+**Why this matters:**
+- Allows new messages to be fetched immediately after ack
+- Prevents unnecessary lock expiration waits
+- Enables efficient processing pipeline
+
+**⚠️ CRITICAL: Lock Expiration During Ack**
+
+If a lock expires while `ack_orchestration_item()` is executing, the ack MUST fail with an error. The lock validation step (Step 1-2) must check `locked_until > current_timestamp()`.
+
+**Why this matters:**
+- Prevents acks with expired locks from succeeding
+- Detects race conditions where lock expired during processing
+- Ensures proper lock ownership semantics
+
 **Multi-Thread Safety:**
 - Instance locks MUST be acquired atomically (single SQL statement)
 - Use database-level locking (e.g., SQLite row locks, PostgreSQL SELECT FOR UPDATE)
 - Never check-then-set - always use atomic operations
 - Verify lock acquisition with `rows_affected` check
+
+**⚠️ CRITICAL: Lock Token Uniqueness**
+
+Each call to `fetch_orchestration_item()` MUST generate a unique lock token. Lock tokens must be:
+- Unique across all instances and dispatchers
+- Cryptographically random (use UUID v4 or similar)
+- Never reused, even after lock expiration
+
+**Why this matters:**
+- Prevents lock token collisions
+- Enables proper lock validation
+- Allows tracking which dispatcher owns which lock
+
+**⚠️ CRITICAL: Message Tagging During Lock**
+
+When `fetch_orchestration_item()` locks an instance, it MUST mark ALL visible messages for that instance with the lock_token. This "tags" messages so that only these messages are deleted during `ack_orchestration_item()`.
+
+**Critical behavior:**
+- Messages that arrive AFTER fetch are NOT tagged with the lock_token
+- Only messages present at fetch time are deleted on ack
+- New messages remain in queue for the next fetch after lock is released
+- This ensures no messages are lost and no duplicate processing occurs
+
+**Why this matters:**
+- Prevents losing messages that arrive during processing
+- Ensures each message is processed exactly once
+- Allows incremental message processing across multiple turns
+
+**Example:**
+```
+1. Instance has messages [A, B] visible
+2. fetch_orchestration_item() tags [A, B] with lock_token "abc"
+3. During processing, message C arrives (not tagged)
+4. ack_orchestration_item() deletes only [A, B] (those with lock_token "abc")
+5. Next fetch gets message C
+```
+
+**⚠️ CRITICAL: Cross-Instance Lock Isolation**
+
+Locks on one instance MUST NOT block fetching work for other instances. Each instance has its own independent lock.
+
+**Why this matters:**
+- Enables parallel processing of different instances
+- Prevents one slow instance from blocking all work
+- Essential for scalability
+
+**⚠️ CRITICAL: Completions Arriving During Lock Are Blocked**
+
+If a completion (e.g., ActivityCompleted) arrives for an instance that is currently locked, it MUST NOT be fetchable by other dispatchers until the lock is released (via ack or expiration).
+
+**Why this matters:**
+- Ensures all messages for an instance are processed together
+- Prevents race conditions from concurrent dispatchers
+- Maintains message ordering guarantees
+
+**Implementation:**
+- Instance-level lock prevents ANY fetch for that instance
+- New messages are enqueued but not visible until lock released
+- Lock release happens via successful ack or expiration
 
 **Example SQLite Implementation:**
 ```sql
@@ -388,6 +465,46 @@ WHERE instance_locks.locked_until <= excluded.locked_at;
 ### 2. ack_orchestration_item() - The Atomic Commit
 
 **Purpose:** Atomically commit all changes from an orchestration turn.
+
+**⚠️ CRITICAL: Duplicate Event Detection**
+
+The provider **MUST** reject duplicate events. Events with the same `(instance_id, execution_id, event_id)` tuple should cause `ack_orchestration_item()` to return an error.
+
+**Why this matters:**
+- Prevents data corruption from retry attempts
+- Ensures idempotency guarantees
+- Detects runtime bugs or provider implementation issues
+
+**Why duplicates are invalid:**
+- The runtime performs duplicate detection before calling `ack_orchestration_item()` by checking the existing history
+- If a duplicate event reaches the provider, it indicates a serious problem (runtime bug, retry logic failure, or provider state corruption)
+- Providers should treat duplicates as errors, not silently ignore them
+
+**Implementation Pattern:**
+- Use a PRIMARY KEY constraint on `(instance_id, execution_id, event_id)` in your history table
+- When inserting events, allow the database to enforce uniqueness
+- If a duplicate is detected (constraint violation), return an error from `ack_orchestration_item()`
+
+**SQLite Example:**
+```sql
+CREATE TABLE history (
+    instance_id TEXT NOT NULL,
+    execution_id INTEGER NOT NULL,
+    event_id INTEGER NOT NULL,
+    event_data TEXT NOT NULL,
+    PRIMARY KEY (instance_id, execution_id, event_id)  -- Enforces uniqueness
+);
+
+-- When inserting:
+INSERT INTO history (instance_id, execution_id, event_id, event_data)
+VALUES (?, ?, ?, ?)
+-- If duplicate exists, database returns constraint violation error
+```
+
+**Error Handling:**
+- Return `Err("duplicate event_id")` or similar when duplicate detected
+- Do NOT silently ignore duplicates (`ON CONFLICT DO NOTHING` is wrong for history)
+- Do NOT update existing events (history is append-only)
 
 **Pseudo-code:**
 ```
@@ -441,7 +558,9 @@ FOR event IN history_delta:
     
     INSERT INTO history (instance_id, execution_id, event_id, event_type, event_data, created_at)
     VALUES (instance_id, execution_id, event.event_id(), event_type, event_json, NOW())
-    ON CONFLICT DO NOTHING  // Idempotent
+    // If duplicate exists, PRIMARY KEY constraint will cause INSERT to fail
+    // This is CORRECT - providers should error on duplicate events
+    // DO NOT use ON CONFLICT DO NOTHING for history table
 
 // 6. Update execution metadata (NO event inspection!)
 IF metadata.status IS NOT NULL:
@@ -500,11 +619,52 @@ RETURN Ok(())
 - If ANY step fails, ROLLBACK everything
 - Never partially commit
 
+**⚠️ CRITICAL: Lock Released Only on Successful Ack**
+
+The instance lock MUST only be released if the entire ack operation succeeds. If any step fails (e.g., duplicate event, constraint violation, database error), the transaction must rollback AND the lock must remain held.
+
+**Why this matters:**
+- Prevents partial state if ack fails mid-way
+- Ensures failed acks don't silently lose work
+- Allows retry of failed operations with same lock token
+- Prevents other dispatchers from fetching work while ack is in progress
+
+**Implementation:**
+- Instance lock deletion (Step 3) must be INSIDE the transaction
+- If transaction rolls back, lock remains held
+- Lock expiration allows automatic recovery if dispatcher crashes during ack
+- Subsequent fetches will block until lock expires or is released via successful ack
+
+**⚠️ CRITICAL: Concurrent Ack Prevention**
+
+If multiple dispatchers attempt to ack with the same lock token simultaneously, only ONE should succeed. The others must fail with an error indicating the lock token is invalid or expired.
+
+**Why this matters:**
+- Prevents duplicate processing if same lock token is reused
+- Ensures idempotency guarantees
+- Detects programming errors (same lock token used twice)
+
+**Implementation:**
+- Lock validation (Step 1-2) must check lock_token AND locked_until
+- After lock validation, immediately delete the instance lock
+- This prevents second ack from succeeding (lock no longer exists)
+- Use database-level locking to ensure atomicity across concurrent attempts
+
 ---
 
 ### 3. abandon_orchestration_item() - Release Lock for Retry
 
 **Purpose:** Release instance lock and optionally delay visibility for backoff.
+
+**⚠️ CRITICAL: Invalid Lock Token Handling**
+
+The provider **MUST** return an error if the lock token is invalid (not found in `instance_locks` table). This is the same behavior as `ack_orchestration_item()`.
+
+**Why errors on invalid tokens:**
+- Invalid lock tokens indicate a programming error or state corruption
+- Both `ack_orchestration_item()` and `abandon_orchestration_item()` return errors on invalid tokens
+- Invalid tokens suggest the lock was already released or never existed, which indicates a bug
+- Returning an error helps detect and debug race conditions or state corruption
 
 **Pseudo-code:**
 ```
@@ -515,9 +675,9 @@ instance_id = SELECT instance_id FROM instance_locks
               WHERE lock_token = lock_token
 
 IF instance_id IS NULL:
-    // Lock already released or expired - idempotent, return Ok
+    // Invalid lock token - this is an error condition
     ROLLBACK
-    RETURN Ok(())
+    RETURN Err("Invalid lock token")
 
 // Step 2: Clear lock_token from messages (unlock them)
 visible_at = IF delay_ms IS NOT NULL:
@@ -535,10 +695,14 @@ WHERE lock_token = lock_token
 DELETE FROM instance_locks WHERE lock_token = lock_token
 
 COMMIT TRANSACTION
-
-// Idempotent - Ok if no rows updated (lock already released)
 RETURN Ok(())
 ```
+
+**Critical:**
+- Invalid lock tokens MUST return an error (same as `ack_orchestration_item()`)
+- This helps detect programming errors and state corruption
+- If lock token is valid, proceed with unlocking messages and removing the instance lock
+- Optional delay applies to messages for the instance (useful for backoff strategies)
 
 ---
 
@@ -562,6 +726,27 @@ events = rows.map(|row| deserialize_event(row.event_data))
 
 RETURN events  // Empty Vec if instance doesn't exist
 ```
+
+**⚠️ CRITICAL: Missing Instance Handling**
+
+If an instance doesn't exist, `read()` MUST return an empty `Vec<Event>`, not an error. This allows graceful handling of non-existent instances.
+
+**Why this matters:**
+- Enables runtime to check if instance exists without error handling
+- Consistent behavior across all providers
+- Allows creation of instances on first read attempt
+
+**⚠️ CRITICAL: Graceful Handling of Corrupted Data**
+
+If deserialization fails for queue items or history events, the provider MUST handle it gracefully:
+- Corrupted queue items should be skipped (return None for fetch/dequeue)
+- Corrupted history events should be skipped or logged (don't crash)
+- Consider logging corruption for debugging
+
+**Why this matters:**
+- Prevents single corrupted item from crashing entire system
+- Allows recovery from data corruption
+- Maintains system availability
 
 ---
 
@@ -599,11 +784,66 @@ item = deserialize_workitem(row.work_item)
 RETURN Some((item, lock_token))
 ```
 
+**⚠️ CRITICAL: Worker Queue FIFO Ordering**
+
+Worker items MUST be dequeued in FIFO (first-in-first-out) order based on insertion order. This ensures fair processing and maintains execution order.
+
+**Why this matters:**
+- Prevents starvation of older work items
+- Maintains predictable processing order
+- Essential for fairness in multi-worker systems
+
+**⚠️ CRITICAL: Worker Peek-Lock Semantics**
+
+When `dequeue_worker_peek_lock()` returns an item, it MUST:
+- Lock the item (set lock_token and locked_until)
+- Keep the item in the queue (don't delete it)
+- Return item + lock_token
+- Only delete the item when `ack_worker()` is called with the lock_token
+
+**Why this matters:**
+- Prevents item loss if worker crashes before ack
+- Allows lock expiration to recover lost items
+- Enables at-least-once processing semantics
+
 **ack_worker():**
 ```
+BEGIN TRANSACTION
+
+// Step 1: Delete item from worker queue
 DELETE FROM worker_queue WHERE lock_token = lock_token
+
+// Step 2: Enqueue completion to orchestrator queue
+work_json = serialize(completion)
+target_instance = extract_instance(completion)
+
+INSERT INTO orchestrator_queue (instance_id, work_item, visible_at, lock_token, locked_until)
+VALUES (target_instance, work_json, NOW(), NULL, NULL)
+
+COMMIT TRANSACTION
 RETURN Ok(())  // Idempotent
 ```
+
+**⚠️ CRITICAL: Worker Ack Atomicity**
+
+`ack_worker()` MUST atomically delete the worker item AND enqueue the completion. Both operations must succeed or both must fail.
+
+**Why this matters:**
+- Prevents lost completions if enqueue fails
+- Prevents duplicate work if delete fails
+- Ensures exactly-once completion semantics
+
+**⚠️ CRITICAL: Lost Lock Token Handling**
+
+If a worker dequeues an item but crashes before acking (loses the lock token), the item MUST eventually become available again after lock expiration. This requires:
+- Lock timeout on worker queue items
+- Expired locks allow item to be dequeued again
+- Items are redelivered when lock expires
+
+**Why this matters:**
+- Recovers from worker crashes
+- Prevents permanent loss of work items
+- Enables at-least-once processing semantics
 
 ---
 
@@ -612,8 +852,9 @@ RETURN Ok(())  // Idempotent
 ### Minimum Required Tables
 
 1. **history** - Append-only event log
-   - PRIMARY KEY: (instance_id, execution_id, event_id)
+   - PRIMARY KEY: (instance_id, execution_id, event_id) - **Enforces uniqueness, must error on duplicates**
    - Columns: event_data (JSON), event_type (for indexing), created_at
+   - **Important:** The PRIMARY KEY constraint ensures duplicate events are rejected. Providers should return an error when duplicate events are detected (database constraint violation), not silently ignore them.
 
 2. **orchestrator_queue** - Orchestration work items
    - PRIMARY KEY: id (auto-increment)
@@ -684,6 +925,29 @@ for event in &history_delta {
 }
 ```
 
+### ❌ DON'T: Silently Ignore Duplicate Events
+
+```rust
+// WRONG - Silently ignoring duplicates
+INSERT INTO history (...) VALUES (...)
+ON CONFLICT DO NOTHING  // DON'T DO THIS!
+```
+
+```rust
+// CORRECT - Error on duplicates
+INSERT INTO history (...) VALUES (...)
+// PRIMARY KEY constraint will cause error if duplicate exists
+// Provider should return error when constraint violation occurs
+match db.execute(query).await {
+    Err(e) if e.is_constraint_violation() => {
+        Err("duplicate event_id detected".to_string())
+    }
+    result => result
+}
+```
+
+**Why:** Duplicate events indicate a serious problem (retry bug, runtime issue, or provider corruption). Silent ignoring hides the problem and can lead to data inconsistency. The runtime already performs duplicate detection based on history before calling `ack_orchestration_item()`, so duplicates reaching the provider represent an invalid state that must be surfaced as an error.
+
 ### ❌ DON'T: Break Atomicity
 
 ```rust
@@ -706,30 +970,129 @@ tx.commit().await?;  // All or nothing
 
 ## Testing Your Provider
 
-Use `tests/sqlite_provider_test.rs` as a template. Key tests:
+After implementing your provider, use the **Provider Validation Test Suite** to validate correctness. The test suite provides granular test functions that you can run individually for easier debugging.
 
-1. **Basic workflow** (test_sqlite_provider_basic)
-   - Enqueue StartOrchestration
-   - Fetch and verify OrchestrationItem
-   - Ack with history
-   - Verify history saved
+### Quick Start
 
-2. **Atomicity** (test_sqlite_provider_transactional)
-   - Ack with multiple operations
-   - Verify all succeeded or all failed
+1. **Create a `ProviderFactory`** that implements `duroxide::provider_validations::ProviderFactory`:
 
-3. **Lock expiration** (test_lock_expiration)
-   - Fetch but don't ack
-   - Wait for lock timeout
-   - Verify message redelivered
+```rust
+use duroxide::providers::Provider;
+use duroxide::provider_validations::ProviderFactory;
+use std::sync::Arc;
+use std::time::Duration;
 
-4. **Execution status persistence** (test_execution_status_*)
-   - Verify metadata properly stored
-   - Test Completed, Failed, ContinuedAsNew states
+const TEST_LOCK_TIMEOUT_MS: u64 = 1000;
 
-5. **Multi-execution** (test_execution_status_continued_as_new)
-   - ContinueAsNew is runtime-owned; provider persists explicit execution_id on ack
-   - Verify `current_execution_id` and statuses updated via metadata
+struct MyProviderFactory;
+
+#[async_trait::async_trait]
+impl ProviderFactory for MyProviderFactory {
+    async fn create_provider(&self) -> Arc<dyn Provider> {
+        // Create a fresh provider instance for each test
+        Arc::new(MyProvider::new().await.unwrap())
+    }
+
+    fn lock_timeout_ms(&self) -> u64 {
+        TEST_LOCK_TIMEOUT_MS  // Must match your provider's lock timeout
+    }
+}
+```
+
+2. **Write individual test functions** for each validation test:
+
+```rust
+use duroxide::provider_validations::{
+    ProviderFactory,
+    test_atomicity_failure_rollback,
+    test_exclusive_instance_lock,
+    test_worker_queue_fifo_ordering,
+    // ... import other tests as needed
+};
+
+#[tokio::test]
+async fn test_my_provider_atomicity_failure_rollback() {
+    let factory = MyProviderFactory;
+    test_atomicity_failure_rollback(&factory).await;
+}
+
+#[tokio::test]
+async fn test_my_provider_exclusive_instance_lock() {
+    let factory = MyProviderFactory;
+    test_exclusive_instance_lock(&factory).await;
+}
+```
+
+### Available Test Functions
+
+The validation suite provides **41 individual test functions** organized into 7 categories:
+
+**Atomicity Tests (4 tests):**
+- `test_atomicity_failure_rollback` - Verify ack failure rolls back all operations
+- `test_multi_operation_atomic_ack` - Verify complex ack succeeds atomically
+- `test_lock_released_only_on_successful_ack` - Verify lock only released on success
+- `test_concurrent_ack_prevention` - Verify only one ack succeeds with same token
+
+**Error Handling Tests (5 tests):**
+- `test_invalid_lock_token_on_ack` - Verify invalid lock tokens are rejected
+- `test_duplicate_event_id_rejection` - Verify duplicate events are rejected
+- `test_missing_instance_metadata` - Verify missing instances handled gracefully
+- `test_corrupted_serialization_data` - Verify corrupted data handled gracefully
+- `test_lock_expiration_during_ack` - Verify expired locks are rejected
+
+**Instance Locking Tests (11 tests):**
+- `test_exclusive_instance_lock` - Verify only one dispatcher can process an instance
+- `test_lock_token_uniqueness` - Verify each fetch generates unique lock token
+- `test_invalid_lock_token_rejection` - Verify invalid tokens rejected for ack/abandon
+- `test_concurrent_instance_fetching` - Verify concurrent fetches don't duplicate instances
+- `test_completions_arriving_during_lock_blocked` - Verify new messages blocked during lock
+- `test_cross_instance_lock_isolation` - Verify locks don't block other instances
+- `test_message_tagging_during_lock` - Verify only fetched messages deleted on ack
+- `test_ack_only_affects_locked_messages` - Verify ack only affects locked messages
+- `test_multi_threaded_lock_contention` - Verify locks prevent concurrent processing (multi-threaded)
+- `test_multi_threaded_no_duplicate_processing` - Verify no duplicate processing (multi-threaded)
+- `test_multi_threaded_lock_expiration_recovery` - Verify lock expiration recovery (multi-threaded)
+
+**Lock Expiration Tests (4 tests):**
+- `test_lock_expires_after_timeout` - Verify locks expire after timeout
+- `test_abandon_releases_lock_immediately` - Verify abandon releases lock immediately
+- `test_lock_renewal_on_ack` - Verify successful ack releases lock immediately
+- `test_concurrent_lock_attempts_respect_expiration` - Verify concurrent attempts respect expiration
+
+**Multi-Execution Tests (5 tests):**
+- `test_execution_isolation` - Verify each execution has separate history
+- `test_latest_execution_detection` - Verify read() returns latest execution
+- `test_execution_id_sequencing` - Verify execution IDs increment correctly
+- `test_continue_as_new_creates_new_execution` - Verify ContinueAsNew creates new execution
+- `test_execution_history_persistence` - Verify all executions' history persists independently
+
+**Queue Semantics Tests (5 tests):**
+- `test_worker_queue_fifo_ordering` - Verify worker items dequeued in FIFO order
+- `test_worker_peek_lock_semantics` - Verify dequeue doesn't remove item until ack
+- `test_worker_ack_atomicity` - Verify ack_worker atomically removes item and enqueues completion
+- `test_timer_delayed_visibility` - Verify TimerFired items only dequeued when visible
+- `test_lost_lock_token_handling` - Verify locked items become available after expiration
+
+**Management Tests (7 tests):**
+- `test_list_instances` - Verify list_instances returns all instance IDs
+- `test_list_instances_by_status` - Verify list_instances_by_status filters correctly
+- `test_list_executions` - Verify list_executions returns all execution IDs
+- `test_get_instance_info` - Verify get_instance_info returns metadata
+- `test_get_execution_info` - Verify get_execution_info returns execution metadata
+- `test_get_system_metrics` - Verify get_system_metrics returns accurate counts
+- `test_get_queue_depths` - Verify get_queue_depths returns current queue sizes
+
+### Benefits of Granular Tests
+
+**Easier debugging:** When a test fails, you know exactly which behavior is broken. You can run a single test function to quickly isolate the issue.
+
+**Better CI/CD integration:** Run tests in parallel, skip known failures, or focus on specific test categories during development.
+
+**Incremental development:** Implement your provider incrementally, testing one behavior at a time.
+
+### Example: Complete Test File
+
+See `tests/sqlite_provider_validations.rs` for a complete example that runs all 41 validation tests individually.
 
 ---
 
