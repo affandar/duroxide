@@ -536,17 +536,64 @@ impl Runtime {
                     );
                 }
                 "Failed" => {
-                    tracing::error!(
-                        target: "duroxide::runtime",
-                        instance_id = %instance,
-                        execution_id = %execution_id_for_ack,
-                        orchestration_name = %orch_name,
-                        orchestration_version = %version,
-                        worker_id = %worker_id,
-                        history_events = %event_count,
-                        error = metadata.output.as_deref().unwrap_or("unknown"),
-                        "Orchestration failed"
-                    );
+                    // Extract error type from history_delta to determine log level
+                    let error_type = history_delta
+                        .iter()
+                        .find_map(|event| {
+                            if let Event::OrchestrationFailed { details, .. } = event {
+                                Some(details.category())
+                            } else {
+                                None
+                            }
+                        })
+                        .unwrap_or("unknown");
+
+                    // Only log as ERROR for infrastructure/configuration errors
+                    // Application errors are expected business logic failures
+                    match error_type {
+                        "infrastructure" | "configuration" => {
+                            tracing::error!(
+                                target: "duroxide::runtime",
+                                instance_id = %instance,
+                                execution_id = %execution_id_for_ack,
+                                orchestration_name = %orch_name,
+                                orchestration_version = %version,
+                                worker_id = %worker_id,
+                                history_events = %event_count,
+                                error_type = %error_type,
+                                error = metadata.output.as_deref().unwrap_or("unknown"),
+                                "Orchestration failed"
+                            );
+                        }
+                        "application" => {
+                            tracing::warn!(
+                                target: "duroxide::runtime",
+                                instance_id = %instance,
+                                execution_id = %execution_id_for_ack,
+                                orchestration_name = %orch_name,
+                                orchestration_version = %version,
+                                worker_id = %worker_id,
+                                history_events = %event_count,
+                                error_type = %error_type,
+                                error = metadata.output.as_deref().unwrap_or("unknown"),
+                                "Orchestration failed (application error)"
+                            );
+                        }
+                        _ => {
+                            tracing::error!(
+                                target: "duroxide::runtime",
+                                instance_id = %instance,
+                                execution_id = %execution_id_for_ack,
+                                orchestration_name = %orch_name,
+                                orchestration_version = %version,
+                                worker_id = %worker_id,
+                                history_events = %event_count,
+                                error_type = %error_type,
+                                error = metadata.output.as_deref().unwrap_or("unknown"),
+                                "Orchestration failed (unknown error type)"
+                            );
+                        }
+                    }
                 }
                 "ContinuedAsNew" => {
                     tracing::debug!(
