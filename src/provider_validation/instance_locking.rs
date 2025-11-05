@@ -108,7 +108,7 @@ pub async fn test_concurrent_instance_fetching<F: ProviderFactory>(factory: &F) 
             let p = provider.clone();
             tokio::spawn(async move {
                 // Add small random delay to reduce contention
-                tokio::time::sleep(Duration::from_millis(i * 10)).await;
+                tokio::time::sleep(Duration::from_millis(i * 30)).await;
                 p.fetch_orchestration_item().await
             })
         })
