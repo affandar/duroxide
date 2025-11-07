@@ -167,9 +167,9 @@ pub struct ExecutionMetadata {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub enum WorkItem {
     /// Start a new orchestration instance
-    /// - Creates instance metadata (if doesn't exist)
+    /// - Instance metadata is created by runtime via ack_orchestration_item metadata (not on enqueue)
     /// - `execution_id`: The execution ID for this start (usually INITIAL_EXECUTION_ID=1)
-    /// - `version`: None means use provider default (e.g., "1.0.0")
+    /// - `version`: None means runtime will resolve from registry
     StartOrchestration {
         instance: String,
         orchestration: String,
@@ -421,7 +421,7 @@ pub enum WorkItem {
 /// CREATE TABLE instances (
 ///     instance_id TEXT PRIMARY KEY,
 ///     orchestration_name TEXT NOT NULL,
-///     orchestration_version TEXT NOT NULL,
+///     orchestration_version TEXT,  -- NULLable, set by runtime via metadata
 ///     current_execution_id INTEGER DEFAULT 1,
 ///     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 /// );

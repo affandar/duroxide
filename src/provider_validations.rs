@@ -74,6 +74,12 @@ pub trait ProviderFactory: Send + Sync {
 ///
 /// Available test functions:
 ///
+/// **Instance Creation Tests:**
+/// - `test_instance_creation_via_metadata` - Verify instances created via ack metadata, not on enqueue
+/// - `test_no_instance_creation_on_enqueue` - Verify no instance created when enqueueing
+/// - `test_null_version_handling` - Verify NULL version handled correctly
+/// - `test_sub_orchestration_instance_creation` - Verify sub-orchestrations follow same pattern
+///
 /// **Atomicity Tests:**
 /// - `test_atomicity_failure_rollback` - Verify ack failure rolls back all operations
 /// - `test_multi_operation_atomic_ack` - Verify complex ack succeeds atomically
@@ -129,7 +135,14 @@ pub trait ProviderFactory: Send + Sync {
 /// - `test_get_system_metrics` - Verify get_system_metrics returns accurate counts
 /// - `test_get_queue_depths` - Verify get_queue_depths returns current queue sizes
 
-// Re-export individual test functions for granular testing
+#[cfg(feature = "provider-test")]
+pub use crate::provider_validation::instance_creation::{
+    test_instance_creation_via_metadata,
+    test_no_instance_creation_on_enqueue,
+    test_null_version_handling,
+    test_sub_orchestration_instance_creation,
+};
+
 #[cfg(feature = "provider-test")]
 pub use crate::provider_validation::atomicity::{
     test_atomicity_failure_rollback,

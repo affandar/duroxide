@@ -329,6 +329,10 @@ use duroxide::provider_validations::{
     test_multi_operation_atomic_ack,
     test_exclusive_instance_lock,
     test_worker_queue_fifo_ordering,
+    test_instance_creation_via_metadata,
+    test_no_instance_creation_on_enqueue,
+    test_null_version_handling,
+    test_sub_orchestration_instance_creation,
     // ... import other tests as needed
 };
 use std::sync::Arc;
@@ -375,7 +379,7 @@ async fn test_my_provider_worker_queue_fifo_ordering() {
 
 ### What the Tests Validate
 
-The validation test suite includes **41 individual test functions** organized into 7 categories:
+The validation test suite includes **45 individual test functions** organized into 8 categories:
 
 1. **Atomicity Tests (4 tests)**
    - `test_atomicity_failure_rollback` - All-or-nothing commit semantics, rollback on failure
@@ -423,7 +427,13 @@ The validation test suite includes **41 individual test functions** organized in
    - `test_timer_delayed_visibility` - TimerFired items only dequeued when visible
    - `test_lost_lock_token_handling` - Locked items become available after expiration
 
-7. **Management Capability Tests (7 tests)**
+7. **Instance Creation Tests (4 tests)**
+   - `test_instance_creation_via_metadata` - Instances created via ack metadata, not on enqueue
+   - `test_no_instance_creation_on_enqueue` - No instance created when enqueueing work items
+   - `test_null_version_handling` - NULL version handled correctly
+   - `test_sub_orchestration_instance_creation` - Sub-orchestrations follow same pattern
+
+8. **Management Capability Tests (7 tests)**
    - `test_list_instances` - Instance listing returns all instance IDs
    - `test_list_instances_by_status` - Instance filtering by status works correctly
    - `test_list_executions` - Execution queries return all execution IDs

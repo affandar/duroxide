@@ -39,6 +39,9 @@ mod tests {
         test_list_instances, test_list_instances_by_status, test_list_executions,
         test_get_instance_info, test_get_execution_info, test_get_system_metrics,
         test_get_queue_depths,
+        // Instance creation tests
+        test_instance_creation_via_metadata, test_no_instance_creation_on_enqueue,
+        test_null_version_handling, test_sub_orchestration_instance_creation,
     };
     use duroxide::providers::Provider;
     use duroxide::providers::sqlite::{SqliteOptions, SqliteProvider};
@@ -273,5 +276,26 @@ mod tests {
     #[tokio::test]
     async fn test_sqlite_get_queue_depths() {
         test_get_queue_depths(&SqliteTestFactory).await;
+    }
+
+    // Instance creation tests
+    #[tokio::test]
+    async fn test_sqlite_instance_creation_via_metadata() {
+        test_instance_creation_via_metadata(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_no_instance_creation_on_enqueue() {
+        test_no_instance_creation_on_enqueue(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_null_version_handling() {
+        test_null_version_handling(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_sub_orchestration_instance_creation() {
+        test_sub_orchestration_instance_creation(&SqliteTestFactory).await;
     }
 }

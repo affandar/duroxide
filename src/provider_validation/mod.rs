@@ -4,6 +4,8 @@
 //! These tests are designed to work with any provider through the `ProviderFactory` trait.
 
 #[cfg(feature = "provider-test")]
+pub mod instance_creation;
+#[cfg(feature = "provider-test")]
 pub mod atomicity;
 #[cfg(feature = "provider-test")]
 pub mod error_handling;

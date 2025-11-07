@@ -171,7 +171,8 @@ impl Provider for MyProvider {
     async fn enqueue_orchestrator_work(&self, item: WorkItem, delay_ms: Option<u64>) -> Result<(), String> {
         // Extract instance from item (see WorkItem docs)
         // Set visible_at = now() + delay_ms.unwrap_or(0)
-        // For StartOrchestration, create instance+execution rows
+        // Enqueue work item to orchestrator_queue
+        // DO NOT create instance here - runtime will create it via ack_orchestration_item metadata
         
         todo!()
     }
@@ -299,7 +300,12 @@ IF metadata IS NULL:
     // New instance - derive from first message or history
     IF messages.first() IS StartOrchestration:
         orchestration_name = messages.first().orchestration
-        orchestration_version = messages.first().version.unwrap_or("1.0.0")
+        orchestration_version = messages.first().version  // May be None - runtime will resolve
+        current_execution_id = 1
+    ELSE IF history is not empty:
+        // Extract from OrchestrationStarted event in history
+        orchestration_name = extract_from_history(history)
+        orchestration_version = extract_from_history(history)  // May be NULL
         current_execution_id = 1
     ELSE:
         // Shouldn't happen - check history as fallback
@@ -466,6 +472,48 @@ WHERE instance_locks.locked_until <= excluded.locked_at;
 
 **Purpose:** Atomically commit all changes from an orchestration turn.
 
+**⚠️ CRITICAL: Instance Creation via Metadata**
+
+**Providers MUST NOT create instances when enqueueing work items.** Instead, instances are created by the runtime through `ack_orchestration_item()` using `ExecutionMetadata`.
+
+**Why this design:**
+- **Single source of truth**: Runtime resolves version from registry, provider stores it
+- **No premature creation**: Instances created only when runtime acknowledges first turn
+- **Version resolution**: Runtime determines correct version, not provider
+- **Consistent behavior**: All instance creation follows same pattern (via metadata)
+
+**Instance creation flow:**
+1. Client enqueues `StartOrchestration` work item (no instance created)
+2. Runtime fetches work item via `fetch_orchestration_item()` (instance doesn't exist yet)
+3. Runtime resolves version from registry and creates `OrchestrationStarted` event
+4. Runtime computes `ExecutionMetadata` with `orchestration_name` and `orchestration_version`
+5. Runtime calls `ack_orchestration_item()` with metadata
+6. Provider creates instance from metadata (INSERT OR IGNORE + UPDATE pattern)
+
+**Implementation pattern:**
+```rust
+// In ack_orchestration_item(), after lock validation:
+
+if let (Some(name), Some(version)) = (&metadata.orchestration_name, &metadata.orchestration_version) {
+    // Create instance if it doesn't exist (first ack)
+    INSERT OR IGNORE INTO instances 
+    (instance_id, orchestration_name, orchestration_version, current_execution_id)
+    VALUES (instance_id, name, version, execution_id)
+    
+    // Update instance with resolved version
+    UPDATE instances 
+    SET orchestration_name = name, orchestration_version = version
+    WHERE instance_id = instance_id
+}
+```
+
+**Important:**
+- `orchestration_version` may be NULL initially (before first ack)
+- Runtime always provides version in metadata for new instances
+- Sub-orchestrations follow same pattern - instance created on their first ack
+
+---
+
 **⚠️ CRITICAL: Duplicate Event Detection**
 
 The provider **MUST** reject duplicate events. Events with the same `(instance_id, execution_id, event_id)` tuple should cause `ack_orchestration_item()` to return an error.
@@ -538,7 +586,21 @@ WHERE instance_id = instance_id
 
 // Use the explicit execution_id provided by the runtime
 
-// 4. Idempotently create execution row and update instance pointer
+// 4. Create or update instance metadata from runtime-provided metadata
+// Runtime resolves version from registry and provides it via metadata
+IF metadata.orchestration_name IS NOT NULL AND metadata.orchestration_version IS NOT NULL:
+    // Ensure instance exists (creates if new, ignores if exists)
+    INSERT OR IGNORE INTO instances 
+    (instance_id, orchestration_name, orchestration_version, current_execution_id)
+    VALUES (instance_id, metadata.orchestration_name, metadata.orchestration_version, execution_id)
+    
+    // Update instance with resolved version (will update if instance exists)
+    UPDATE instances 
+    SET orchestration_name = metadata.orchestration_name,
+        orchestration_version = metadata.orchestration_version
+    WHERE instance_id = instance_id
+
+// 5. Idempotently create execution row and update instance pointer
 INSERT INTO executions (instance_id, execution_id, status, started_at)
 VALUES (instance_id, execution_id, 'Running', CURRENT_TIMESTAMP)
 ON CONFLICT DO NOTHING;
@@ -547,7 +609,7 @@ UPDATE instances
 SET current_execution_id = MAX(current_execution_id, execution_id)
 WHERE instance_id = instance_id;
 
-// 5. Append history_delta (DO NOT inspect events!)
+// 6. Append history_delta (DO NOT inspect events!)
 FOR event IN history_delta:
     // Validate event_id was set by runtime
     IF event.event_id() == 0:
@@ -562,7 +624,7 @@ FOR event IN history_delta:
     // This is CORRECT - providers should error on duplicate events
     // DO NOT use ON CONFLICT DO NOTHING for history table
 
-// 6. Update execution metadata (NO event inspection!)
+// 7. Update execution metadata (NO event inspection!)
 IF metadata.status IS NOT NULL:
     UPDATE executions
     SET status = metadata.status,
@@ -573,13 +635,13 @@ IF metadata.status IS NOT NULL:
 
 // (No implicit next-execution creation here; runtime controls execution_id explicitly)
 
-// 7. Enqueue worker items
+// 8. Enqueue worker items
 FOR item IN worker_items:
     work_json = serialize(item)
     INSERT INTO worker_queue (work_item, lock_token, locked_until, created_at)
     VALUES (work_json, NULL, NULL, NOW())
 
-// 8. Enqueue orchestrator items (may include TimerFired with delayed visibility)
+// 9. Enqueue orchestrator items (may include TimerFired with delayed visibility)
 FOR item IN orchestrator_items:
     work_json = serialize(item)
     target_instance = extract_instance(item)  // See WorkItem docs
@@ -590,20 +652,13 @@ FOR item IN orchestrator_items:
                  ELSE:
                      NOW()  // Immediate visibility for other items
     
-    // Special case: StartOrchestration needs instance creation
-    IF item IS StartOrchestration:
-        INSERT INTO instances (instance_id, orchestration_name, orchestration_version, current_execution_id)
-        VALUES (target_instance, item.orchestration, item.version.unwrap_or("1.0.0"), 1)
-        ON CONFLICT DO NOTHING
-        
-        INSERT INTO executions (instance_id, execution_id, status)
-        VALUES (target_instance, 1, 'Running')
-        ON CONFLICT DO NOTHING
+    // DO NOT create instance here - runtime will create it when processing this work item
+    // Instance creation happens via ack_orchestration_item metadata (step 4 above)
     
     INSERT INTO orchestrator_queue (instance_id, work_item, visible_at, lock_token, locked_until, created_at)
     VALUES (target_instance, work_json, visible_at, NULL, NULL, NOW())
 
-// 9. Release lock (delete acknowledged messages)
+// 10. Release lock (delete acknowledged messages)
 // Delete messages that were tagged with our lock_token
 DELETE FROM orchestrator_queue WHERE lock_token = lock_token
 
@@ -612,7 +667,7 @@ RETURN Ok(())
 ```
 
 **Critical:**
-- All 9 steps must be in ONE transaction
+- All 10 steps must be in ONE transaction
 - Lock validation MUST occur before any other operations
 - If lock expired or invalid, ROLLBACK immediately
 - Instance lock MUST be deleted before committing (prevents stale locks)
@@ -867,7 +922,8 @@ If a worker dequeues an item but crashes before acking (loses the lock token), t
 
 4. **instances** - Instance metadata
    - PRIMARY KEY: instance_id
-   - Columns: orchestration_name, orchestration_version, current_execution_id
+   - Columns: orchestration_name, orchestration_version (NULLable), current_execution_id
+   - **Note**: orchestration_version may be NULL initially, then set by runtime via metadata
 
 5. **executions** - Execution tracking
    - PRIMARY KEY: (instance_id, execution_id)
@@ -1025,7 +1081,7 @@ async fn test_my_provider_exclusive_instance_lock() {
 
 ### Available Test Functions
 
-The validation suite provides **41 individual test functions** organized into 7 categories:
+The validation suite provides **45 individual test functions** organized into 8 categories:
 
 **Atomicity Tests (4 tests):**
 - `test_atomicity_failure_rollback` - Verify ack failure rolls back all operations
@@ -1073,6 +1129,12 @@ The validation suite provides **41 individual test functions** organized into 7 
 - `test_timer_delayed_visibility` - Verify TimerFired items only dequeued when visible
 - `test_lost_lock_token_handling` - Verify locked items become available after expiration
 
+**Instance Creation Tests (4 tests):**
+- `test_instance_creation_via_metadata` - Verify instances created via ack metadata, not on enqueue
+- `test_no_instance_creation_on_enqueue` - Verify no instance created when enqueueing
+- `test_null_version_handling` - Verify NULL version handled correctly
+- `test_sub_orchestration_instance_creation` - Verify sub-orchestrations follow same pattern
+
 **Management Tests (7 tests):**
 - `test_list_instances` - Verify list_instances returns all instance IDs
 - `test_list_instances_by_status` - Verify list_instances_by_status filters correctly
@@ -1092,7 +1154,7 @@ The validation suite provides **41 individual test functions** organized into 7 
 
 ### Example: Complete Test File
 
-See `tests/sqlite_provider_validations.rs` for a complete example that runs all 41 validation tests individually.
+See `tests/sqlite_provider_validations.rs` for a complete example that runs all 45 validation tests individually.
 
 ---
 
@@ -1138,9 +1200,8 @@ Before considering your provider production-ready:
 - [ ] Execution metadata stored correctly (status, output)
 - [ ] History ordering preserved (events returned in event_id order)
 - [ ] Concurrent access safe (run with RUST_TEST_THREADS=10)
-- [ ] No event content inspection (use ExecutionMetadata only)
-- [ ] Worker queue FIFO behavior
-- [ ] No duplicate event IDs (PRIMARY KEY enforced)
+- [ ] No instance creation on enqueue (instances created via ack metadata)
+- [ ] NULL version handling works correctly
 
 ---
 
