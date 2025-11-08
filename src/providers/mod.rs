@@ -2,6 +2,7 @@ use crate::Event;
 use std::any::Any;
 
 pub mod error;
+pub use error::ProviderError;
 
 /// Orchestration item containing all data needed to process an instance atomically.
 ///
@@ -1118,7 +1119,7 @@ pub trait Provider: Any + Send + Sync {
         _worker_items: Vec<WorkItem>,
         _orchestrator_items: Vec<WorkItem>,
         _metadata: ExecutionMetadata,
-    ) -> Result<(), String>;
+    ) -> Result<(), ProviderError>;
 
     /// Abandon orchestration processing (used for errors/retries).
     ///
@@ -1184,7 +1185,7 @@ pub trait Provider: Any + Send + Sync {
     /// state corruption and should be surfaced as errors.
     ///
     /// Return `Err("Invalid lock token")` if the lock token is not found in `instance_locks`.
-    async fn abandon_orchestration_item(&self, _lock_token: &str, _delay_ms: Option<u64>) -> Result<(), String>;
+    async fn abandon_orchestration_item(&self, _lock_token: &str, _delay_ms: Option<u64>) -> Result<(), ProviderError>;
 
     // ===== Basic History Access (REQUIRED) =====
 
@@ -1259,7 +1260,7 @@ pub trait Provider: Any + Send + Sync {
     /// # Ordering
     ///
     /// FIFO order preferred but not strictly required.
-    async fn enqueue_worker_work(&self, _item: WorkItem) -> Result<(), String>;
+    async fn enqueue_worker_work(&self, _item: WorkItem) -> Result<(), ProviderError>;
 
     /// Dequeue a single work item with peek-lock semantics.
     ///
@@ -1332,7 +1333,7 @@ pub trait Provider: Any + Send + Sync {
     ///     COMMIT
     /// }
     /// ```
-    async fn ack_worker(&self, token: &str, completion: WorkItem) -> Result<(), String>;
+    async fn ack_worker(&self, token: &str, completion: WorkItem) -> Result<(), ProviderError>;
 
     // ===== Multi-Execution Support (REQUIRED for ContinueAsNew) =====
     // These methods enable orchestrations to continue with new input while maintaining history.
@@ -1459,7 +1460,7 @@ pub trait Provider: Any + Send + Sync {
         instance: &str,
         _execution_id: u64,
         new_events: Vec<Event>,
-    ) -> Result<(), String>;
+    ) -> Result<(), ProviderError>;
 
     // ===== Optional Management APIs =====
     // These have default implementations and are primarily used for testing/debugging.
@@ -1519,7 +1520,7 @@ pub trait Provider: Any + Send + Sync {
     /// # Error Handling
     ///
     /// Return Err if storage fails. Return Ok if item was enqueued successfully.
-    async fn enqueue_orchestrator_work(&self, _item: WorkItem, _delay_ms: Option<u64>) -> Result<(), String>;
+    async fn enqueue_orchestrator_work(&self, _item: WorkItem, _delay_ms: Option<u64>) -> Result<(), ProviderError>;
 
     /// List all known instance IDs.
     ///
@@ -1629,8 +1630,7 @@ pub mod management;
 /// SQLite-backed provider with full transactional support.
 pub mod sqlite;
 
-// Re-export error type for convenience
-pub use error::ProviderError;
+// Re-export management types for convenience
 pub use management::{ExecutionInfo, InstanceInfo, ManagementProvider, QueueDepths, SystemMetrics};
 
 /// Management capability trait for observability and administrative operations.
@@ -1748,7 +1748,7 @@ pub trait ManagementCapability: Any + Send + Sync {
     /// # Default
     ///
     /// Returns empty Vec if not supported.
-    async fn list_instances(&self) -> Result<Vec<String>, String> {
+    async fn list_instances(&self) -> Result<Vec<String>, ProviderError> {
         Ok(Vec::new())
     }
 
@@ -1776,7 +1776,7 @@ pub trait ManagementCapability: Any + Send + Sync {
     /// # Default
     ///
     /// Returns empty Vec if not supported.
-    async fn list_instances_by_status(&self, _status: &str) -> Result<Vec<String>, String> {
+    async fn list_instances_by_status(&self, _status: &str) -> Result<Vec<String>, ProviderError> {
         Ok(Vec::new())
     }
 
@@ -1809,7 +1809,7 @@ pub trait ManagementCapability: Any + Send + Sync {
     /// # Default
     ///
     /// Returns `[1]` if instance exists, empty Vec otherwise.
-    async fn list_executions(&self, instance: &str) -> Result<Vec<u64>, String> {
+    async fn list_executions(&self, instance: &str) -> Result<Vec<u64>, ProviderError> {
         // Default assumes single execution if instance exists
         if let Ok(info) = self.get_instance_info(instance).await {
             Ok(vec![info.current_execution_id])
@@ -1842,7 +1842,7 @@ pub trait ManagementCapability: Any + Send + Sync {
     /// # Default
     ///
     /// Returns empty vector.
-    async fn read_execution(&self, _instance: &str, _execution_id: u64) -> Result<Vec<Event>, String> {
+    async fn read_execution(&self, _instance: &str, _execution_id: u64) -> Result<Vec<Event>, ProviderError> {
         Ok(Vec::new())
     }
 
@@ -1863,7 +1863,7 @@ pub trait ManagementCapability: Any + Send + Sync {
     /// # Default
     ///
     /// Returns 1 (assumes single execution).
-    async fn latest_execution_id(&self, _instance: &str) -> Result<u64, String> {
+    async fn latest_execution_id(&self, _instance: &str) -> Result<u64, ProviderError> {
         Ok(1)
     }
 
@@ -1893,8 +1893,11 @@ pub trait ManagementCapability: Any + Send + Sync {
     /// # Default
     ///
     /// Returns an error indicating not implemented.
-    async fn get_instance_info(&self, instance: &str) -> Result<InstanceInfo, String> {
-        Err(format!("get_instance_info not implemented for instance {instance}"))
+    async fn get_instance_info(&self, instance: &str) -> Result<InstanceInfo, ProviderError> {
+        Err(ProviderError::permanent(
+            "get_instance_info",
+            format!("not implemented for instance {instance}"),
+        ))
     }
 
     /// Get detailed information about a specific execution.
@@ -1923,8 +1926,8 @@ pub trait ManagementCapability: Any + Send + Sync {
     /// # Default
     ///
     /// Returns an error indicating not implemented.
-    async fn get_execution_info(&self, _instance: &str, _execution_id: u64) -> Result<ExecutionInfo, String> {
-        Err("get_execution_info not implemented".to_string())
+    async fn get_execution_info(&self, _instance: &str, _execution_id: u64) -> Result<ExecutionInfo, ProviderError> {
+        Err(ProviderError::permanent("get_execution_info", "not implemented"))
     }
 
     // ===== System Metrics =====
@@ -1952,7 +1955,7 @@ pub trait ManagementCapability: Any + Send + Sync {
     /// # Default
     ///
     /// Returns default `SystemMetrics`.
-    async fn get_system_metrics(&self) -> Result<SystemMetrics, String> {
+    async fn get_system_metrics(&self) -> Result<SystemMetrics, ProviderError> {
         Ok(SystemMetrics::default())
     }
 
@@ -1978,7 +1981,7 @@ pub trait ManagementCapability: Any + Send + Sync {
     /// # Default
     ///
     /// Returns default `QueueDepths` (timer_queue will be 0).
-    async fn get_queue_depths(&self) -> Result<QueueDepths, String> {
+    async fn get_queue_depths(&self) -> Result<QueueDepths, ProviderError> {
         Ok(QueueDepths::default())
     }
 }

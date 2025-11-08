@@ -441,6 +441,75 @@ store.ack_orchestration_item(
 
 ---
 
+### Step 9: Update Error Handling to Use ProviderError
+
+**Change:** All provider methods now return `Result<..., ProviderError>` instead of `Result<..., String>`.
+
+**Before:**
+```rust
+async fn ack_orchestration_item(
+    &self,
+    lock_token: &str,
+    execution_id: u64,
+    history_delta: Vec<Event>,
+    worker_items: Vec<WorkItem>,
+    orchestrator_items: Vec<WorkItem>,
+    metadata: ExecutionMetadata,
+) -> Result<(), String> {
+    // ...
+    .map_err(|e| e.to_string())?;
+}
+```
+
+**After:**
+```rust
+use duroxide::providers::ProviderError;
+
+async fn ack_orchestration_item(
+    &self,
+    lock_token: &str,
+    execution_id: u64,
+    history_delta: Vec<Event>,
+    worker_items: Vec<WorkItem>,
+    orchestrator_items: Vec<WorkItem>,
+    metadata: ExecutionMetadata,
+) -> Result<(), ProviderError> {
+    // Convert database errors to ProviderError
+    .map_err(|e| Self::sqlx_to_provider_error("ack_orchestration_item", e))?;
+}
+
+// Helper function to classify errors
+fn sqlx_to_provider_error(operation: &str, e: sqlx::Error) -> ProviderError {
+    match e {
+        sqlx::Error::Database(db_err) => {
+            if db_err.code() == Some("SQLITE_BUSY") {
+                ProviderError::retryable(operation, format!("Database busy: {}", e))
+            } else if db_err.message().contains("UNIQUE constraint") {
+                ProviderError::permanent(operation, format!("Duplicate detected: {}", e))
+            } else {
+                ProviderError::permanent(operation, format!("Database error: {}", e))
+            }
+        }
+        sqlx::Error::PoolClosed | sqlx::Error::PoolTimedOut => {
+            ProviderError::retryable(operation, format!("Connection pool error: {}", e))
+        }
+        _ => ProviderError::permanent(operation, format!("Unexpected error: {}", e)),
+    }
+}
+```
+
+**Error Classification:**
+- **Retryable**: Database busy/locked, connection timeouts, network failures
+- **Non-retryable**: Data corruption, duplicate events, invalid input, configuration errors, invalid lock tokens
+
+**Checklist:**
+- [ ] Update all method signatures to return `Result<..., ProviderError>`
+- [ ] Replace `.map_err(|e| e.to_string())` with `.map_err(|e| sqlx_to_provider_error(...))`
+- [ ] Add helper function to classify database errors
+- [ ] Update error messages to use `ProviderError::permanent()` or `ProviderError::retryable()`
+
+---
+
 ## Verification Checklist
 
 After completing the migration, verify:
@@ -454,6 +523,9 @@ After completing the migration, verify:
 - [ ] `get_instance_info()`: Handles NULL versions, uses "unknown" fallback
 - [ ] All tests pass with proper `ExecutionMetadata`
 - [ ] Provider validation tests pass (especially instance creation tests)
+- [ ] All methods return `Result<..., ProviderError>` instead of `Result<..., String>`
+- [ ] Error classification is correct (retryable vs non-retryable)
+- [ ] Tests updated to handle `ProviderError` (access `.message` field for assertions)
 
 ---
 
@@ -488,6 +560,19 @@ ExecutionMetadata {
 }
 ```
 
+### Issue: Tests fail with "no method named contains found for struct ProviderError"
+
+**Cause:** Tests are checking error messages using `err.contains(...)` but `ProviderError` is a struct with a `message` field.
+
+**Fix:** Update tests to access the `message` field:
+```rust
+// Before
+assert!(result.unwrap_err().contains("duplicate"));
+
+// After
+assert!(result.unwrap_err().message.contains("duplicate"));
+```
+
 ### Issue: `fetch_orchestration_item()` returns None when StartOrchestration exists
 
 **Cause:** Only checking first work item, but external events might arrive first.
@@ -517,6 +602,7 @@ This migration:
 5. ✅ Updates `fetch_orchestration_item()` to handle NULL versions
 6. ✅ Updates `get_instance_info()` to handle NULL versions
 7. ✅ Updates tests to provide proper metadata
+8. ✅ Updates error handling to use `ProviderError` with retry classification
 
-**Result:** Instance creation is now runtime-driven via `ack_orchestration_item` metadata, providing better separation of concerns and consistent version resolution.
+**Result:** Instance creation is now runtime-driven via `ack_orchestration_item` metadata, providing better separation of concerns and consistent version resolution. Error handling uses `ProviderError` to enable smart retry logic in the runtime.
 

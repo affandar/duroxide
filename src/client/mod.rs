@@ -151,7 +151,10 @@ impl Client {
             parent_id: None,
             execution_id: crate::INITIAL_EXECUTION_ID,
         };
-        self.store.enqueue_orchestrator_work(item, None).await
+        self.store
+            .enqueue_orchestrator_work(item, None)
+            .await
+            .map_err(|e| e.to_string())
     }
 
     /// Start an orchestration instance pinned to a specific version.
@@ -171,7 +174,10 @@ impl Client {
             parent_id: None,
             execution_id: crate::INITIAL_EXECUTION_ID,
         };
-        self.store.enqueue_orchestrator_work(item, None).await
+        self.store
+            .enqueue_orchestrator_work(item, None)
+            .await
+            .map_err(|e| e.to_string())
     }
 
     // Note: No delayed scheduling API. Clients should use normal start APIs.
@@ -260,7 +266,10 @@ impl Client {
             name: event_name.into(),
             data: data.into(),
         };
-        self.store.enqueue_orchestrator_work(item, None).await
+        self.store
+            .enqueue_orchestrator_work(item, None)
+            .await
+            .map_err(|e| e.to_string())
     }
 
     /// Request cancellation of an orchestration instance.
@@ -324,7 +333,10 @@ impl Client {
             instance: instance.to_string(),
             reason: reason.into(),
         };
-        self.store.enqueue_orchestrator_work(item, None).await
+        self.store
+            .enqueue_orchestrator_work(item, None)
+            .await
+            .map_err(|e| e.to_string())
     }
 
     /// Get the current status of an orchestration by inspecting its history.
@@ -572,7 +584,10 @@ impl Client {
     /// }
     /// ```
     pub async fn list_all_instances(&self) -> Result<Vec<String>, String> {
-        self.discover_management()?.list_instances().await
+        self.discover_management()?
+            .list_instances()
+            .await
+            .map_err(|e| e.to_string())
     }
 
     /// List instances matching a status filter.
@@ -600,7 +615,10 @@ impl Client {
     /// }
     /// ```
     pub async fn list_instances_by_status(&self, status: &str) -> Result<Vec<String>, String> {
-        self.discover_management()?.list_instances_by_status(status).await
+        self.discover_management()?
+            .list_instances_by_status(status)
+            .await
+            .map_err(|e| e.to_string())
     }
 
     /// Get comprehensive information about an instance.
@@ -627,7 +645,10 @@ impl Client {
     /// }
     /// ```
     pub async fn get_instance_info(&self, instance: &str) -> Result<InstanceInfo, String> {
-        self.discover_management()?.get_instance_info(instance).await
+        self.discover_management()?
+            .get_instance_info(instance)
+            .await
+            .map_err(|e| e.to_string())
     }
 
     /// Get detailed information about a specific execution.
@@ -658,6 +679,7 @@ impl Client {
         self.discover_management()?
             .get_execution_info(instance, execution_id)
             .await
+            .map_err(|e| e.to_string())
     }
 
     /// List all execution IDs for an instance.
@@ -690,7 +712,7 @@ impl Client {
     /// ```
     pub async fn list_executions(&self, instance: &str) -> Result<Vec<u64>, String> {
         let mgmt = self.discover_management()?;
-        mgmt.list_executions(instance).await
+        mgmt.list_executions(instance).await.map_err(|e| e.to_string())
     }
 
     /// Read the full event history for a specific execution within an instance.
@@ -727,7 +749,9 @@ impl Client {
     /// ```
     pub async fn read_execution_history(&self, instance: &str, execution_id: u64) -> Result<Vec<crate::Event>, String> {
         let mgmt = self.discover_management()?;
-        mgmt.read_execution(instance, execution_id).await
+        mgmt.read_execution(instance, execution_id)
+            .await
+            .map_err(|e| e.to_string())
     }
 
     /// Get system-wide metrics for the orchestration engine.
@@ -751,7 +775,10 @@ impl Client {
     /// }
     /// ```
     pub async fn get_system_metrics(&self) -> Result<SystemMetrics, String> {
-        self.discover_management()?.get_system_metrics().await
+        self.discover_management()?
+            .get_system_metrics()
+            .await
+            .map_err(|e| e.to_string())
     }
 
     /// Get the current depths of the internal work queues.
@@ -775,6 +802,9 @@ impl Client {
     /// }
     /// ```
     pub async fn get_queue_depths(&self) -> Result<QueueDepths, String> {
-        self.discover_management()?.get_queue_depths().await
+        self.discover_management()?
+            .get_queue_depths()
+            .await
+            .map_err(|e| e.to_string())
     }
 }

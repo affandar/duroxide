@@ -20,12 +20,18 @@
 ///
 /// # Example Usage
 ///
-/// ```rust
+/// ```rust,no_run
+/// use duroxide::providers::ProviderError;
+///
 /// // Transient error - retryable
+/// # fn example() -> Result<(), ProviderError> {
 /// return Err(ProviderError::retryable("ack_orchestration_item", "Database is busy"));
+/// # }
 ///
 /// // Permanent error - not retryable
+/// # fn example2() -> Result<(), ProviderError> {
 /// return Err(ProviderError::permanent("ack_orchestration_item", "Duplicate event detected"));
+/// # }
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderError {
@@ -94,7 +100,7 @@ impl std::error::Error for ProviderError {}
 /// Conversion from String for backward compatibility
 impl From<String> for ProviderError {
     /// Convert String error to retryable ProviderError
-    /// 
+    ///
     /// This allows existing code that returns `Err(String)` to work.
     /// By default, String errors are treated as retryable (conservative approach).
     fn from(s: String) -> Self {
@@ -111,4 +117,3 @@ impl From<&str> for ProviderError {
         s.to_string().into()
     }
 }
-

@@ -377,6 +377,8 @@ async fn test_my_provider_worker_queue_fifo_ordering() {
 
 > **Important:** Run each test function individually. This provides better test isolation, clearer failure reporting, and allows parallel execution in CI/CD pipelines. When a test fails, you'll know exactly which behavior is broken.
 
+**Note:** All provider methods return `Result<..., ProviderError>` instead of `Result<..., String>`. Tests that check error messages should access the `message` field: `err.message.contains(...)` instead of `err.contains(...)`.
+
 ### What the Tests Validate
 
 The validation test suite includes **45 individual test functions** organized into 8 categories:

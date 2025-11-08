@@ -4,8 +4,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tracing::debug;
 
 use super::{
-    ExecutionInfo, InstanceInfo, ManagementCapability, OrchestrationItem, Provider, QueueDepths, SystemMetrics,
-    WorkItem,
+    ExecutionInfo, InstanceInfo, ManagementCapability, OrchestrationItem, Provider, ProviderError, QueueDepths,
+    SystemMetrics, WorkItem,
 };
 use crate::Event;
 
@@ -34,9 +34,38 @@ pub struct SqliteProvider {
 }
 
 impl SqliteProvider {
+    /// Convert sqlx error to ProviderError with appropriate retry classification
+    fn sqlx_to_provider_error(operation: &str, e: sqlx::Error) -> ProviderError {
+        let error_msg = e.to_string();
+
+        // Check for SQLITE_BUSY (database locked) - retryable
+        if error_msg.contains("database is locked") || error_msg.contains("SQLITE_BUSY") {
+            return ProviderError::retryable(operation, format!("Database locked: {}", error_msg));
+        }
+
+        // Check for constraint violations (duplicate events, etc.) - permanent
+        if error_msg.contains("UNIQUE constraint") || error_msg.contains("PRIMARY KEY") {
+            return ProviderError::permanent(operation, format!("Constraint violation: {}", error_msg));
+        }
+
+        // Check for connection errors - retryable
+        if error_msg.contains("connection") || error_msg.contains("timeout") {
+            return ProviderError::retryable(operation, format!("Connection error: {}", error_msg));
+        }
+
+        // Default: treat as retryable (conservative approach)
+        ProviderError::retryable(operation, error_msg)
+    }
+
     /// Internal method to enqueue orchestrator work with optional visibility delay
-    async fn enqueue_orchestrator_work_with_delay(&self, item: WorkItem, delay_ms: Option<u64>) -> Result<(), String> {
-        let work_item = serde_json::to_string(&item).map_err(|e| e.to_string())?;
+    async fn enqueue_orchestrator_work_with_delay(
+        &self,
+        item: WorkItem,
+        delay_ms: Option<u64>,
+    ) -> Result<(), ProviderError> {
+        let work_item = serde_json::to_string(&item).map_err(|e| {
+            ProviderError::permanent("enqueue_orchestrator_work", format!("Serialization error: {}", e))
+        })?;
         let instance = match &item {
             WorkItem::StartOrchestration { instance, .. }
             | WorkItem::ActivityCompleted { instance, .. }
@@ -48,7 +77,12 @@ impl SqliteProvider {
             WorkItem::SubOrchCompleted { parent_instance, .. } | WorkItem::SubOrchFailed { parent_instance, .. } => {
                 parent_instance
             }
-            _ => return Err("Invalid work item type".to_string()),
+            _ => {
+                return Err(ProviderError::permanent(
+                    "enqueue_orchestrator_work",
+                    "Invalid work item type",
+                ));
+            }
         };
         tracing::debug!(target: "duroxide::providers::sqlite", ?item, instance=%instance, delay_ms=?delay_ms, "enqueue_orchestrator_work_with_delay");
 
@@ -65,7 +99,7 @@ impl SqliteProvider {
             .bind(visible_at)
             .execute(&self.pool)
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| Self::sqlx_to_provider_error("enqueue_orchestrator_work", e))?;
 
         Ok(())
     }
@@ -696,18 +730,24 @@ impl Provider for SqliteProvider {
         worker_items: Vec<WorkItem>,
         orchestrator_items: Vec<WorkItem>,
         metadata: crate::providers::ExecutionMetadata,
-    ) -> Result<(), String> {
-        let mut tx = self.pool.begin().await.map_err(|e| e.to_string())?;
+    ) -> Result<(), ProviderError> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| Self::sqlx_to_provider_error("list_instances", e))?;
 
         // Get instance from instance_locks table (we now use instance-level locking)
         let row = sqlx::query("SELECT instance_id FROM instance_locks WHERE lock_token = ?")
             .bind(lock_token)
             .fetch_optional(&mut *tx)
             .await
-            .map_err(|e| e.to_string())?
-            .ok_or_else(|| "Invalid lock token".to_string())?;
+            .map_err(|e| Self::sqlx_to_provider_error("list_instances", e))?
+            .ok_or_else(|| ProviderError::permanent("ack_orchestration_item", "Invalid lock token"))?;
 
-        let instance_id: String = row.try_get("instance_id").map_err(|e| e.to_string())?;
+        let instance_id: String = row.try_get("instance_id").map_err(|e| {
+            ProviderError::permanent("ack_orchestration_item", format!("Failed to decode instance_id: {}", e))
+        })?;
 
         // Delete only the messages we fetched (marked with our lock_token)
         // New messages that arrived after fetch will remain in queue for next turn
@@ -715,7 +755,7 @@ impl Provider for SqliteProvider {
             .bind(lock_token)
             .execute(&mut *tx)
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| Self::sqlx_to_provider_error("list_instances", e))?;
 
         debug!(
             instance = %instance_id,
@@ -741,7 +781,7 @@ impl Provider for SqliteProvider {
             .bind(execution_id as i64)
             .execute(&mut *tx)
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| Self::sqlx_to_provider_error("list_instances", e))?;
 
             // Then update with resolved version (will update if instance exists, no-op if just created)
             sqlx::query(
@@ -756,7 +796,7 @@ impl Provider for SqliteProvider {
             .bind(&instance_id)
             .execute(&mut *tx)
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| Self::sqlx_to_provider_error("list_instances", e))?;
         }
 
         // Create execution record if it doesn't exist (idempotent)
@@ -770,7 +810,7 @@ impl Provider for SqliteProvider {
         .bind(execution_id as i64)
         .execute(&mut *tx)
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| Self::sqlx_to_provider_error("list_instances", e))?;
 
         // Update instances.current_execution_id if this is a newer execution
         sqlx::query(
@@ -784,7 +824,7 @@ impl Provider for SqliteProvider {
         .bind(&instance_id)
         .execute(&mut *tx)
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| Self::sqlx_to_provider_error("list_instances", e))?;
 
         // Always append history_delta to the specified execution
         if !history_delta.is_empty() {
@@ -796,7 +836,9 @@ impl Provider for SqliteProvider {
             );
             self.append_history_in_tx(&mut tx, &instance_id, execution_id, history_delta.clone())
                 .await
-                .map_err(|e| format!("Failed to append history: {e}"))?;
+                .map_err(|e| {
+                    ProviderError::permanent("ack_orchestration_item", format!("Failed to append history: {}", e))
+                })?;
 
             // Update execution status and output from pre-computed metadata (no event inspection!)
             if let Some(status) = &metadata.status {
@@ -813,7 +855,7 @@ impl Provider for SqliteProvider {
                 .bind(execution_id as i64)
                 .execute(&mut *tx)
                 .await
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| Self::sqlx_to_provider_error("list_instances", e))?;
 
                 debug!(
                     instance = %instance_id,
@@ -831,17 +873,21 @@ impl Provider for SqliteProvider {
             "Enqueuing worker items"
         );
         for item in worker_items {
-            let work_item = serde_json::to_string(&item).map_err(|e| e.to_string())?;
+            let work_item = serde_json::to_string(&item).map_err(|e| {
+                ProviderError::permanent("enqueue_orchestrator_work", format!("Serialization error: {}", e))
+            })?;
             sqlx::query("INSERT INTO worker_queue (work_item) VALUES (?)")
                 .bind(work_item)
                 .execute(&mut *tx)
                 .await
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| Self::sqlx_to_provider_error("list_instances", e))?;
         }
 
         // Enqueue orchestrator items within the transaction
         for item in orchestrator_items {
-            let work_item = serde_json::to_string(&item).map_err(|e| e.to_string())?;
+            let work_item = serde_json::to_string(&item).map_err(|e| {
+                ProviderError::permanent("enqueue_orchestrator_work", format!("Serialization error: {}", e))
+            })?;
             let instance = match &item {
                 WorkItem::StartOrchestration { instance, .. }
                 | WorkItem::ActivityCompleted { instance, .. }
@@ -869,7 +915,7 @@ impl Provider for SqliteProvider {
                 .bind(visible_at)
                 .execute(&mut *tx)
                 .await
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| Self::sqlx_to_provider_error("list_instances", e))?;
         }
 
         // Validate instance lock is still valid before committing
@@ -885,7 +931,7 @@ impl Provider for SqliteProvider {
         .bind(now_ms)
         .fetch_one(&mut *tx)
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| Self::sqlx_to_provider_error("list_instances", e))?;
 
         if lock_valid == 0 {
             // Lock expired or was stolen - abort transaction
@@ -895,7 +941,10 @@ impl Provider for SqliteProvider {
                 "Instance lock expired or invalid, aborting ack"
             );
             tx.rollback().await.ok();
-            return Err("Instance lock expired".to_string());
+            return Err(ProviderError::permanent(
+                "ack_orchestration_item",
+                "Instance lock expired",
+            ));
         }
 
         // Remove instance lock (processing complete)
@@ -904,9 +953,11 @@ impl Provider for SqliteProvider {
             .bind(lock_token)
             .execute(&mut *tx)
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| Self::sqlx_to_provider_error("list_instances", e))?;
 
-        tx.commit().await.map_err(|e| e.to_string())?;
+        tx.commit()
+            .await
+            .map_err(|e| Self::sqlx_to_provider_error("list_instances", e))?;
 
         debug!(
             instance = %instance_id,
@@ -952,19 +1003,20 @@ impl Provider for SqliteProvider {
             .collect()
     }
 
-    async fn enqueue_orchestrator_work(&self, item: WorkItem, delay_ms: Option<u64>) -> Result<(), String> {
+    async fn enqueue_orchestrator_work(&self, item: WorkItem, delay_ms: Option<u64>) -> Result<(), ProviderError> {
         self.enqueue_orchestrator_work_with_delay(item, delay_ms).await
     }
 
-    async fn enqueue_worker_work(&self, item: WorkItem) -> Result<(), String> {
+    async fn enqueue_worker_work(&self, item: WorkItem) -> Result<(), ProviderError> {
         tracing::debug!(target: "duroxide::providers::sqlite", ?item, "enqueue_worker_work");
-        let work_item = serde_json::to_string(&item).map_err(|e| e.to_string())?;
+        let work_item = serde_json::to_string(&item)
+            .map_err(|e| ProviderError::permanent("enqueue_worker_work", format!("Serialization error: {}", e)))?;
 
         sqlx::query("INSERT INTO worker_queue (work_item) VALUES (?)")
             .bind(work_item)
             .execute(&self.pool)
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| Self::sqlx_to_provider_error("enqueue_worker_work", e))?;
 
         Ok(())
     }
@@ -1029,14 +1081,23 @@ impl Provider for SqliteProvider {
         Some((work_item, lock_token))
     }
 
-    async fn ack_worker(&self, token: &str, completion: WorkItem) -> Result<(), String> {
-        let mut tx = self.pool.begin().await.map_err(|e| e.to_string())?;
+    async fn ack_worker(&self, token: &str, completion: WorkItem) -> Result<(), ProviderError> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| Self::sqlx_to_provider_error("ack_worker", e))?;
 
         // Extract instance from completion
         let instance = match &completion {
             WorkItem::ActivityCompleted { instance, .. } => instance,
             WorkItem::ActivityFailed { instance, .. } => instance,
-            _ => return Err("Invalid completion type for worker ack".to_string()),
+            _ => {
+                return Err(ProviderError::permanent(
+                    "ack_worker",
+                    "Invalid completion type for worker ack",
+                ));
+            }
         };
 
         // Delete worker item
@@ -1044,10 +1105,11 @@ impl Provider for SqliteProvider {
             .bind(token)
             .execute(&mut *tx)
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| Self::sqlx_to_provider_error("ack_worker", e))?;
 
         // Enqueue completion to orchestrator queue
-        let work_item = serde_json::to_string(&completion).map_err(|e| e.to_string())?;
+        let work_item = serde_json::to_string(&completion)
+            .map_err(|e| ProviderError::permanent("ack_worker", format!("Serialization error: {}", e)))?;
         let now_ms = Self::now_millis();
 
         sqlx::query("INSERT INTO orchestrator_queue (instance_id, work_item, visible_at) VALUES (?, ?, ?)")
@@ -1056,25 +1118,30 @@ impl Provider for SqliteProvider {
             .bind(now_ms)
             .execute(&mut *tx)
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| Self::sqlx_to_provider_error("ack_worker", e))?;
 
-        tx.commit().await.map_err(|e| e.to_string())?;
+        tx.commit()
+            .await
+            .map_err(|e| Self::sqlx_to_provider_error("ack_worker", e))?;
 
         debug!(instance = %instance, "Atomically acked worker and enqueued completion");
         Ok(())
     }
 
-    async fn abandon_orchestration_item(&self, lock_token: &str, delay_ms: Option<u64>) -> Result<(), String> {
+    async fn abandon_orchestration_item(&self, lock_token: &str, delay_ms: Option<u64>) -> Result<(), ProviderError> {
         // Get instance_id from lock before removing it
         let instance_id: Option<String> =
             sqlx::query_scalar("SELECT instance_id FROM instance_locks WHERE lock_token = ?")
                 .bind(lock_token)
                 .fetch_optional(&self.pool)
                 .await
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| Self::sqlx_to_provider_error("abandon_orchestration_item", e))?;
 
         if instance_id.is_none() {
-            return Err("Invalid lock token".to_string());
+            return Err(ProviderError::permanent(
+                "abandon_orchestration_item",
+                "Invalid lock token",
+            ));
         }
 
         // Remove instance lock
@@ -1082,7 +1149,7 @@ impl Provider for SqliteProvider {
             .bind(lock_token)
             .execute(&self.pool)
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| Self::sqlx_to_provider_error("abandon_orchestration_item", e))?;
 
         // Optionally delay messages for this instance
         if let Some(instance_id) = instance_id
@@ -1149,14 +1216,22 @@ impl Provider for SqliteProvider {
         instance: &str,
         execution_id: u64,
         new_events: Vec<Event>,
-    ) -> Result<(), String> {
-        let mut tx = self.pool.begin().await.map_err(|e| e.to_string())?;
+    ) -> Result<(), ProviderError> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| Self::sqlx_to_provider_error("append_with_execution", e))?;
 
         self.append_history_in_tx(&mut tx, instance, execution_id, new_events)
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| {
+                ProviderError::permanent("append_with_execution", format!("Failed to append history: {}", e))
+            })?;
 
-        tx.commit().await.map_err(|e| e.to_string())?;
+        tx.commit()
+            .await
+            .map_err(|e| Self::sqlx_to_provider_error("append_with_execution", e))?;
         Ok(())
     }
 
@@ -1195,11 +1270,11 @@ impl Provider for SqliteProvider {
 
 #[async_trait::async_trait]
 impl ManagementCapability for SqliteProvider {
-    async fn list_instances(&self) -> Result<Vec<String>, String> {
+    async fn list_instances(&self) -> Result<Vec<String>, ProviderError> {
         let rows = sqlx::query("SELECT instance_id FROM instances ORDER BY created_at DESC")
             .fetch_all(&self.pool)
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| Self::sqlx_to_provider_error("latest_execution_id", e))?;
 
         let instances: Vec<String> = rows
             .into_iter()
@@ -1209,7 +1284,7 @@ impl ManagementCapability for SqliteProvider {
         Ok(instances)
     }
 
-    async fn list_instances_by_status(&self, status: &str) -> Result<Vec<String>, String> {
+    async fn list_instances_by_status(&self, status: &str) -> Result<Vec<String>, ProviderError> {
         let rows = sqlx::query(
             r#"
             SELECT i.instance_id 
@@ -1222,7 +1297,7 @@ impl ManagementCapability for SqliteProvider {
         .bind(status)
         .fetch_all(&self.pool)
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| Self::sqlx_to_provider_error("list_instances_by_status", e))?;
 
         let instances: Vec<String> = rows
             .into_iter()
@@ -1232,12 +1307,12 @@ impl ManagementCapability for SqliteProvider {
         Ok(instances)
     }
 
-    async fn list_executions(&self, instance: &str) -> Result<Vec<u64>, String> {
+    async fn list_executions(&self, instance: &str) -> Result<Vec<u64>, ProviderError> {
         let rows = sqlx::query("SELECT execution_id FROM executions WHERE instance_id = ? ORDER BY execution_id")
             .bind(instance)
             .fetch_all(&self.pool)
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| Self::sqlx_to_provider_error("list_executions", e))?;
 
         let executions: Vec<u64> = rows
             .into_iter()
@@ -1247,7 +1322,7 @@ impl ManagementCapability for SqliteProvider {
         Ok(executions)
     }
 
-    async fn read_execution(&self, instance: &str, execution_id: u64) -> Result<Vec<Event>, String> {
+    async fn read_execution(&self, instance: &str, execution_id: u64) -> Result<Vec<Event>, ProviderError> {
         let rows = sqlx::query(
             r#"
             SELECT event_data 
@@ -1260,26 +1335,30 @@ impl ManagementCapability for SqliteProvider {
         .bind(execution_id as i64)
         .fetch_all(&self.pool)
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| Self::sqlx_to_provider_error("read_execution", e))?;
 
         let mut events = Vec::new();
         for row in rows {
-            let event_data: String = row.try_get("event_data").map_err(|e| e.to_string())?;
-            let event: Event = serde_json::from_str(&event_data).map_err(|e| e.to_string())?;
+            let event_data: String = row
+                .try_get("event_data")
+                .map_err(|e| Self::sqlx_to_provider_error("read_execution", e))?;
+            let event: Event = serde_json::from_str(&event_data).map_err(|e| {
+                ProviderError::permanent("read_execution", format!("Failed to deserialize event: {}", e))
+            })?;
             events.push(event);
         }
 
         Ok(events)
     }
 
-    async fn latest_execution_id(&self, instance: &str) -> Result<u64, String> {
+    async fn latest_execution_id(&self, instance: &str) -> Result<u64, ProviderError> {
         let row = sqlx::query(
             "SELECT COALESCE(MAX(execution_id), 1) as max_execution_id FROM executions WHERE instance_id = ?",
         )
         .bind(instance)
         .fetch_optional(&self.pool)
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| Self::sqlx_to_provider_error("latest_execution_id", e))?;
 
         match row {
             Some(row) => {
@@ -1290,7 +1369,7 @@ impl ManagementCapability for SqliteProvider {
         }
     }
 
-    async fn get_instance_info(&self, instance: &str) -> Result<InstanceInfo, String> {
+    async fn get_instance_info(&self, instance: &str) -> Result<InstanceInfo, ProviderError> {
         let row = sqlx::query(
             r#"
             SELECT 
@@ -1310,12 +1389,16 @@ impl ManagementCapability for SqliteProvider {
         .bind(instance)
         .fetch_optional(&self.pool)
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| Self::sqlx_to_provider_error("get_instance_info", e))?;
 
         match row {
             Some(row) => {
-                let instance_id: String = row.try_get("instance_id").map_err(|e| e.to_string())?;
-                let orchestration_name: String = row.try_get("orchestration_name").map_err(|e| e.to_string())?;
+                let instance_id: String = row
+                    .try_get("instance_id")
+                    .map_err(|e| Self::sqlx_to_provider_error("get_instance_info", e))?;
+                let orchestration_name: String = row
+                    .try_get("orchestration_name")
+                    .map_err(|e| Self::sqlx_to_provider_error("get_instance_info", e))?;
                 let orchestration_version: Option<String> = row.try_get("orchestration_version").ok();
                 let orchestration_version = orchestration_version.unwrap_or_else(|| {
                     // Could fetch from history, but for management API, "unknown" is acceptable
@@ -1338,11 +1421,14 @@ impl ManagementCapability for SqliteProvider {
                     updated_at: updated_at as u64,
                 })
             }
-            None => Err(format!("Instance {instance} not found")),
+            None => Err(ProviderError::permanent(
+                "get_instance_info",
+                format!("Instance {instance} not found"),
+            )),
         }
     }
 
-    async fn get_execution_info(&self, instance: &str, execution_id: u64) -> Result<ExecutionInfo, String> {
+    async fn get_execution_info(&self, instance: &str, execution_id: u64) -> Result<ExecutionInfo, ProviderError> {
         let row = sqlx::query(
             r#"
             SELECT 
@@ -1362,12 +1448,16 @@ impl ManagementCapability for SqliteProvider {
         .bind(execution_id as i64)
         .fetch_optional(&self.pool)
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| Self::sqlx_to_provider_error("get_execution_info", e))?;
 
         match row {
             Some(row) => {
-                let execution_id: i64 = row.try_get("execution_id").map_err(|e| e.to_string())?;
-                let status: String = row.try_get("status").map_err(|e| e.to_string())?;
+                let execution_id: i64 = row
+                    .try_get("execution_id")
+                    .map_err(|e| Self::sqlx_to_provider_error("get_execution_info", e))?;
+                let status: String = row
+                    .try_get("status")
+                    .map_err(|e| Self::sqlx_to_provider_error("get_execution_info", e))?;
                 let output: Option<String> = row.try_get("output").ok();
                 let started_at: i64 = row.try_get("started_at").unwrap_or(0);
                 let completed_at: Option<i64> = row.try_get("completed_at").ok();
@@ -1382,11 +1472,14 @@ impl ManagementCapability for SqliteProvider {
                     event_count: event_count as usize,
                 })
             }
-            None => Err(format!("Execution {execution_id} not found for instance {instance}")),
+            None => Err(ProviderError::permanent(
+                "get_execution_info",
+                format!("Execution {execution_id} not found for instance {instance}"),
+            )),
         }
     }
 
-    async fn get_system_metrics(&self) -> Result<SystemMetrics, String> {
+    async fn get_system_metrics(&self) -> Result<SystemMetrics, ProviderError> {
         let row = sqlx::query(
             r#"
             SELECT 
@@ -1401,7 +1494,7 @@ impl ManagementCapability for SqliteProvider {
         )
         .fetch_optional(&self.pool)
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| Self::sqlx_to_provider_error("get_system_metrics", e))?;
 
         match row {
             Some(row) => {
@@ -1415,7 +1508,7 @@ impl ManagementCapability for SqliteProvider {
                 let total_executions_row = sqlx::query("SELECT COUNT(*) as total_executions FROM executions")
                     .fetch_optional(&self.pool)
                     .await
-                    .map_err(|e| e.to_string())?;
+                    .map_err(|e| Self::sqlx_to_provider_error("get_system_metrics", e))?;
                 let total_executions: i64 = total_executions_row
                     .and_then(|row| row.try_get("total_executions").ok())
                     .unwrap_or(0);
@@ -1424,7 +1517,7 @@ impl ManagementCapability for SqliteProvider {
                 let total_events_row = sqlx::query("SELECT COUNT(*) as total_events FROM history")
                     .fetch_optional(&self.pool)
                     .await
-                    .map_err(|e| e.to_string())?;
+                    .map_err(|e| Self::sqlx_to_provider_error("get_system_metrics", e))?;
                 let total_events: i64 = total_events_row
                     .and_then(|row| row.try_get("total_events").ok())
                     .unwrap_or(0);
@@ -1442,12 +1535,12 @@ impl ManagementCapability for SqliteProvider {
         }
     }
 
-    async fn get_queue_depths(&self) -> Result<QueueDepths, String> {
+    async fn get_queue_depths(&self) -> Result<QueueDepths, ProviderError> {
         // Get orchestrator queue depth
         let orchestrator_row = sqlx::query("SELECT COUNT(*) as count FROM orchestrator_queue WHERE lock_token IS NULL")
             .fetch_optional(&self.pool)
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| Self::sqlx_to_provider_error("get_queue_depths", e))?;
         let orchestrator_queue: usize =
             orchestrator_row.and_then(|row| row.try_get("count").ok()).unwrap_or(0) as usize;
 
@@ -1455,7 +1548,7 @@ impl ManagementCapability for SqliteProvider {
         let worker_row = sqlx::query("SELECT COUNT(*) as count FROM worker_queue WHERE lock_token IS NULL")
             .fetch_optional(&self.pool)
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| Self::sqlx_to_provider_error("get_queue_depths", e))?;
         let worker_queue: usize = worker_row.and_then(|row| row.try_get("count").ok()).unwrap_or(0) as usize;
 
         Ok(QueueDepths {
@@ -1480,7 +1573,7 @@ mod tests {
         input: &str,
         parent_instance: Option<&str>,
         parent_id: Option<u64>,
-    ) -> Result<u64, String> {
+    ) -> Result<u64, ProviderError> {
         let execs = provider.list_executions(instance).await;
         let next_execution_id = if execs.is_empty() {
             crate::INITIAL_EXECUTION_ID
