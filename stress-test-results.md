@@ -4,6 +4,44 @@ This file tracks all stress test runs, including performance metrics and commit 
 
 ---
 
+## Commit: e0cbfce - Timestamp: 2025-11-08 18:22:01 UTC
+
+### Changes Since Last Test
+```
+e0cbfce docs: Update provider documentation for ProviderError and fix warnings
+c3ca1e7 commit and some scaffolding
+996a6a5 Defer instance creation to runtime via ack_orchestration_item metadata
+a838659 advanced tests and proposal docs
+89cea0e increase timeout for a test
+81b514d fix error reporting in runtime, omit app errors
+f28f606 Refactor provider validation tests to expose individual test functions
+2ea72ca Continued fixes in provider validation tests
+1f68ff1 doc updates
+540d428 Add comprehensive instance locks documentation and multi-threaded tests
+2b2e659 Update provider testing guide: individual test suites are standard
+9984b66 Refactor provider validation tests into main crate
+10cfc63 updated with management provider trait info
+a769563 Add tracing to provider correctness tests for better debugging
+f810c04 Expose individual provider correctness test suites
+070e43d TODO update
+1a56994 some cleanup
+1c81706 TODO changes
+1047d2f Merge observability branch: Comprehensive metrics, logging, and ActivityContext
+c172db3 Add comprehensive observability with metrics and ActivityContext
+```
+
+### Test Results
+```
+Provider             Config     Completed  Failed     Infra    Config   App      Success %  Orch/sec        Activity/sec    Avg Latency    
+------------------------------------------------------------------------------------------------------------------------------------------------------
+In-Memory SQLite     1/1        493        0          0        0        0        100.00     8.55            42.73           117.02         ms
+In-Memory SQLite     2/2        437        0          0        0        0        100.00     8.80            43.99           113.67         ms
+File SQLite          1/1        482        0          0        0        0        100.00     15.39           76.94           64.98          ms
+File SQLite          2/2        802        0          0        0        0        100.00     26.11           130.55          38.30          ms
+```
+
+---
+
 ## Commit: 6d3d3ce - Timestamp: 2025-11-02 02:23:11 UTC
 
 ### Changes Since Last Test
