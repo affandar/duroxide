@@ -172,7 +172,10 @@ impl Provider for MyProvider {
         // Extract instance from item (see WorkItem docs)
         // Set visible_at = now() + delay_ms.unwrap_or(0)
         // Enqueue work item to orchestrator_queue
-        // DO NOT create instance here - runtime will create it via ack_orchestration_item metadata
+        // 
+        // ⚠️ CRITICAL: DO NOT create instance here - runtime will create it via ack_orchestration_item metadata
+        // This applies to ALL work items: StartOrchestration, ContinueAsNew, and sub-orchestrations
+        // Instance creation happens ONLY in ack_orchestration_item() when metadata is provided
         
         todo!()
     }
@@ -297,10 +300,15 @@ metadata = SELECT orchestration_name, orchestration_version, current_execution_i
            WHERE instance_id = instance_id
 
 IF metadata IS NULL:
-    // New instance - derive from first message or history
-    IF messages.first() IS StartOrchestration:
-        orchestration_name = messages.first().orchestration
-        orchestration_version = messages.first().version  // May be None - runtime will resolve
+    // New instance - derive from work items or history
+    // Search ALL work items for StartOrchestration or ContinueAsNew (not just first)
+    start_item = messages.iter().find(|item| 
+        matches!(item, StartOrchestration { .. } | ContinueAsNew { .. })
+    )
+    
+    IF start_item IS StartOrchestration OR ContinueAsNew:
+        orchestration_name = start_item.orchestration
+        orchestration_version = start_item.version  // May be None - runtime will resolve
         current_execution_id = 1
     ELSE IF history is not empty:
         // Extract from OrchestrationStarted event in history
@@ -312,8 +320,22 @@ IF metadata IS NULL:
         RETURN None or build from history
 
 orchestration_name = metadata.orchestration_name
-orchestration_version = metadata.orchestration_version  
+orchestration_version = metadata.orchestration_version  // May be NULL
 current_execution_id = metadata.current_execution_id
+
+// ⚠️ CRITICAL: Handle NULL version
+// If version is NULL, use "unknown" - don't try to extract from history
+// If instance exists but version is NULL, there shouldn't be an OrchestrationStarted event
+// in history (version should have been set when instance was created via metadata)
+IF orchestration_version IS NULL:
+    orchestration_version = "unknown"
+    // Optional: Add debug assertion that history doesn't contain OrchestrationStarted
+    // This helps catch data inconsistencies during development
+    ASSERT NOT EXISTS (
+        SELECT 1 FROM history 
+        WHERE instance_id = instance_id 
+          AND event_type = 'OrchestrationStarted'
+    )
 
 // Step 7: Load history for current execution
 history_rows = SELECT event_data FROM history
@@ -588,17 +610,24 @@ WHERE instance_id = instance_id
 
 // 4. Create or update instance metadata from runtime-provided metadata
 // Runtime resolves version from registry and provides it via metadata
+// ⚠️ CRITICAL: Instance creation happens HERE, not in enqueue_orchestrator_work()
 IF metadata.orchestration_name IS NOT NULL AND metadata.orchestration_version IS NOT NULL:
-    // Ensure instance exists (creates if new, ignores if exists)
+    // Step 4a: Ensure instance exists (creates if new, ignores if exists)
+    // Use INSERT OR IGNORE to handle race conditions where instance might be created concurrently
     INSERT OR IGNORE INTO instances 
     (instance_id, orchestration_name, orchestration_version, current_execution_id)
     VALUES (instance_id, metadata.orchestration_name, metadata.orchestration_version, execution_id)
     
-    // Update instance with resolved version (will update if instance exists)
+    // Step 4b: Update instance with resolved version (will update if instance exists, no-op if just created)
+    // This ensures version is always set correctly, even if instance was created in step 4a
     UPDATE instances 
     SET orchestration_name = metadata.orchestration_name,
         orchestration_version = metadata.orchestration_version
     WHERE instance_id = instance_id
+ELSE:
+    // If metadata is missing, skip instance creation
+    // This can happen for edge cases where runtime doesn't provide metadata
+    // Instance will be created on next ack when metadata is available
 
 // 5. Idempotently create execution row and update instance pointer
 INSERT INTO executions (instance_id, execution_id, status, started_at)
@@ -652,8 +681,13 @@ FOR item IN orchestrator_items:
                  ELSE:
                      NOW()  // Immediate visibility for other items
     
-    // DO NOT create instance here - runtime will create it when processing this work item
-    // Instance creation happens via ack_orchestration_item metadata (step 4 above)
+    // ⚠️ CRITICAL: DO NOT create instance here - even for StartOrchestration or ContinueAsNew
+    // Instance creation happens ONLY via ack_orchestration_item metadata (step 4 above)
+    // This applies to:
+    //   - StartOrchestration work items (main orchestrations)
+    //   - ContinueAsNew work items (execution restarts)
+    //   - StartOrchestration work items in orchestrator_items (sub-orchestrations)
+    // All instance creation is deferred to runtime via ack_orchestration_item metadata
     
     INSERT INTO orchestrator_queue (instance_id, work_item, visible_at, lock_token, locked_until, created_at)
     VALUES (target_instance, work_json, visible_at, NULL, NULL, NOW())
@@ -923,7 +957,9 @@ If a worker dequeues an item but crashes before acking (loses the lock token), t
 4. **instances** - Instance metadata
    - PRIMARY KEY: instance_id
    - Columns: orchestration_name, orchestration_version (NULLable), current_execution_id
-   - **Note**: orchestration_version may be NULL initially, then set by runtime via metadata
+   - **Note**: `orchestration_version` is NULLable (TEXT, not TEXT NOT NULL)
+   - **Note**: Version starts as NULL, then set by runtime via `ack_orchestration_item` metadata
+   - **Note**: If version is NULL and instance exists, use "unknown" (don't extract from history)
 
 5. **executions** - Execution tracking
    - PRIMARY KEY: (instance_id, execution_id)
@@ -1600,6 +1636,7 @@ After implementing your provider, follow the **[Provider Testing Guide](provider
 - **Stress Tests**: `stress-tests/src/lib.rs`
 - **Schema**: `migrations/20240101000000_initial_schema.sql`
 - **Testing Guide**: `docs/provider-testing-guide.md`
+- **Migration Guide**: `docs/provider-migration-guide-instance-creation.md` (for updating existing providers)
 
 ---
 

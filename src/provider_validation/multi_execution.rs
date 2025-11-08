@@ -15,7 +15,6 @@ fn start_item_with_execution(instance: &str, execution_id: u64) -> WorkItem {
     }
 }
 
-
 /// Test 6.1: Execution Isolation
 /// Goal: Verify each execution has separate history.
 pub async fn test_execution_isolation<F: ProviderFactory>(factory: &F) {
@@ -197,7 +196,7 @@ pub async fn test_execution_id_sequencing<F: ProviderFactory>(factory: &F) {
     let item1 = provider.fetch_orchestration_item().await.unwrap();
     assert_eq!(item1.execution_id, 1);
 
-    // Complete execution 1
+    // Complete execution 1 with proper metadata
     provider
         .ack_orchestration_item(
             &item1.lock_token,
@@ -212,7 +211,11 @@ pub async fn test_execution_id_sequencing<F: ProviderFactory>(factory: &F) {
             }],
             vec![],
             vec![],
-            ExecutionMetadata::default(),
+            ExecutionMetadata {
+                orchestration_name: Some("TestOrch".to_string()),
+                orchestration_version: Some("1.0.0".to_string()),
+                ..Default::default()
+            },
         )
         .await
         .unwrap();
@@ -239,7 +242,11 @@ pub async fn test_execution_id_sequencing<F: ProviderFactory>(factory: &F) {
             }],
             vec![],
             vec![],
-            ExecutionMetadata::default(),
+            ExecutionMetadata {
+                orchestration_name: Some("TestOrch".to_string()),
+                orchestration_version: Some("1.0.0".to_string()),
+                ..Default::default()
+            },
         )
         .await
         .unwrap();

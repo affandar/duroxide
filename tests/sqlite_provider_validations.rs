@@ -10,38 +10,59 @@
 mod tests {
     use duroxide::provider_validations::{
         ProviderFactory,
+        test_abandon_releases_lock_immediately,
+        test_ack_only_affects_locked_messages,
         // Atomicity tests
-        test_atomicity_failure_rollback, test_multi_operation_atomic_ack,
-        test_lock_released_only_on_successful_ack, test_concurrent_ack_prevention,
-        // Error handling tests
-        test_invalid_lock_token_on_ack, test_duplicate_event_id_rejection,
-        test_missing_instance_metadata, test_corrupted_serialization_data,
-        test_lock_expiration_during_ack,
+        test_atomicity_failure_rollback,
+        test_completions_arriving_during_lock_blocked,
+        test_concurrent_ack_prevention,
+        test_concurrent_instance_fetching,
+        test_concurrent_lock_attempts_respect_expiration,
+        test_continue_as_new_creates_new_execution,
+        test_corrupted_serialization_data,
+        test_cross_instance_lock_isolation,
+        test_duplicate_event_id_rejection,
         // Instance locking tests
-        test_exclusive_instance_lock, test_lock_token_uniqueness,
-        test_invalid_lock_token_rejection, test_concurrent_instance_fetching,
-        test_completions_arriving_during_lock_blocked, test_cross_instance_lock_isolation,
-        test_message_tagging_during_lock, test_ack_only_affects_locked_messages,
-        test_multi_threaded_lock_contention, test_multi_threaded_no_duplicate_processing,
-        test_multi_threaded_lock_expiration_recovery,
-        // Lock expiration tests
-        test_lock_expires_after_timeout, test_abandon_releases_lock_immediately,
-        test_lock_renewal_on_ack, test_concurrent_lock_attempts_respect_expiration,
-        // Multi-execution tests
-        test_execution_isolation, test_latest_execution_detection,
-        test_execution_id_sequencing, test_continue_as_new_creates_new_execution,
+        test_exclusive_instance_lock,
         test_execution_history_persistence,
-        // Queue semantics tests
-        test_worker_queue_fifo_ordering, test_worker_peek_lock_semantics,
-        test_worker_ack_atomicity, test_timer_delayed_visibility,
-        test_lost_lock_token_handling,
-        // Management tests
-        test_list_instances, test_list_instances_by_status, test_list_executions,
-        test_get_instance_info, test_get_execution_info, test_get_system_metrics,
+        test_execution_id_sequencing,
+        // Multi-execution tests
+        test_execution_isolation,
+        test_get_execution_info,
+        test_get_instance_info,
         test_get_queue_depths,
+        test_get_system_metrics,
         // Instance creation tests
-        test_instance_creation_via_metadata, test_no_instance_creation_on_enqueue,
-        test_null_version_handling, test_sub_orchestration_instance_creation,
+        test_instance_creation_via_metadata,
+        // Error handling tests
+        test_invalid_lock_token_on_ack,
+        test_invalid_lock_token_rejection,
+        test_latest_execution_detection,
+        test_list_executions,
+        // Management tests
+        test_list_instances,
+        test_list_instances_by_status,
+        test_lock_expiration_during_ack,
+        // Lock expiration tests
+        test_lock_expires_after_timeout,
+        test_lock_released_only_on_successful_ack,
+        test_lock_renewal_on_ack,
+        test_lock_token_uniqueness,
+        test_lost_lock_token_handling,
+        test_message_tagging_during_lock,
+        test_missing_instance_metadata,
+        test_multi_operation_atomic_ack,
+        test_multi_threaded_lock_contention,
+        test_multi_threaded_lock_expiration_recovery,
+        test_multi_threaded_no_duplicate_processing,
+        test_no_instance_creation_on_enqueue,
+        test_null_version_handling,
+        test_sub_orchestration_instance_creation,
+        test_timer_delayed_visibility,
+        test_worker_ack_atomicity,
+        test_worker_peek_lock_semantics,
+        // Queue semantics tests
+        test_worker_queue_fifo_ordering,
     };
     use duroxide::providers::Provider;
     use duroxide::providers::sqlite::{SqliteOptions, SqliteProvider};

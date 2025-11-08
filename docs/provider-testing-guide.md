@@ -479,7 +479,7 @@ async fn test_my_provider_worker_queue_fifo_ordering() {
 }
 ```
 
-**Available test functions:** See `duroxide::provider_validations` module documentation for the complete list of all 41 test functions, or refer to `tests/sqlite_provider_validations.rs` for a complete example using all tests.
+**Available test functions:** See `duroxide::provider_validations` module documentation for the complete list of all 45 test functions, or refer to `tests/sqlite_provider_validations.rs` for a complete example using all tests.
 
 ### Creating a Test Provider Factory
 

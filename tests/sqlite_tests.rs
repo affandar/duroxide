@@ -378,33 +378,38 @@ async fn test_sqlite_file_concurrent_access() {
         result.expect("Task failed");
     }
 
-    // Verify all instances were created
-    let instances = store.list_instances().await;
-    assert_eq!(instances.len(), 10);
-
-    // Verify we can fetch orchestration items for all instances
-    let mut fetched_count = 0;
+    // Fetch and ack all orchestration items to create instances
+    let mut acked_count = 0;
     while let Some(item) = store.fetch_orchestration_item().await {
         store
             .ack_orchestration_item(
                 &item.lock_token,
                 item.execution_id,
-                vec![],
+                vec![Event::OrchestrationStarted {
+                    event_id: duroxide::INITIAL_EVENT_ID,
+                    name: "TestOrch".to_string(),
+                    version: "1.0.0".to_string(),
+                    input: format!("{{\"id\": {}}}", acked_count),
+                    parent_instance: None,
+                    parent_id: None,
+                }],
                 vec![],
                 vec![],
                 ExecutionMetadata {
-                    status: Some("Running".to_string()),
-                    output: None,
-                    orchestration_name: None,
-                    orchestration_version: None,
+                    orchestration_name: Some("TestOrch".to_string()),
+                    orchestration_version: Some("1.0.0".to_string()),
+                    ..Default::default()
                 },
             )
             .await
-            .expect("Failed to ack item");
-        fetched_count += 1;
+            .expect("Failed to ack orchestration item");
+        acked_count += 1;
     }
 
-    assert_eq!(fetched_count, 10);
+    // Verify all instances were created
+    let instances = store.list_instances().await;
+    assert_eq!(instances.len(), 10);
+    assert_eq!(acked_count, 10, "Should have acked all 10 items");
 }
 
 // ============================================================================

@@ -4,7 +4,6 @@ use crate::providers::WorkItem;
 use std::sync::Arc;
 use std::time::Duration;
 
-
 /// Test 1.1: Exclusive Instance Lock Acquisition
 /// Goal: Verify only one dispatcher can process an instance at a time.
 pub async fn test_exclusive_instance_lock<F: ProviderFactory>(factory: &F) {
@@ -206,6 +205,15 @@ pub async fn test_cross_instance_lock_isolation<F: ProviderFactory>(factory: &F)
     let provider = Arc::new(factory.create_provider().await);
 
     // Enqueue work for two different instances
+    // Create instances first
+    crate::provider_validation::create_instance((*provider).as_ref(), "instance-A")
+        .await
+        .unwrap();
+    crate::provider_validation::create_instance((*provider).as_ref(), "instance-B")
+        .await
+        .unwrap();
+
+    // Enqueue additional work for both instances
     provider
         .enqueue_orchestrator_work(start_item("instance-A"), None)
         .await
@@ -231,7 +239,11 @@ pub async fn test_cross_instance_lock_isolation<F: ProviderFactory>(factory: &F)
             vec![],
             vec![],
             vec![],
-            ExecutionMetadata::default(),
+            ExecutionMetadata {
+                orchestration_name: Some("TestOrch".to_string()),
+                orchestration_version: Some("1.0.0".to_string()),
+                ..Default::default()
+            },
         )
         .await
         .unwrap();
@@ -265,23 +277,8 @@ pub async fn test_message_tagging_during_lock<F: ProviderFactory>(factory: &F) {
     tracing::info!("→ Testing instance locking: message tagging during lock");
     let provider = Arc::new(factory.create_provider().await);
 
-    // Create instance first by enqueuing StartOrchestration
-    provider
-        .enqueue_orchestrator_work(start_item("instance-A"), None)
-        .await
-        .unwrap();
-
-    // Fetch and ack to create the instance properly
-    let initial_item = provider.fetch_orchestration_item().await.unwrap();
-    provider
-        .ack_orchestration_item(
-            &initial_item.lock_token,
-            1,
-            vec![],
-            vec![],
-            vec![],
-            ExecutionMetadata::default(),
-        )
+    // Create instance first
+    crate::provider_validation::create_instance((*provider).as_ref(), "instance-A")
         .await
         .unwrap();
 
@@ -353,20 +350,7 @@ pub async fn test_ack_only_affects_locked_messages<F: ProviderFactory>(factory: 
     let provider = Arc::new(factory.create_provider().await);
 
     // Create instance
-    provider
-        .enqueue_orchestrator_work(start_item("instance-A"), None)
-        .await
-        .unwrap();
-    let initial_item = provider.fetch_orchestration_item().await.unwrap();
-    provider
-        .ack_orchestration_item(
-            &initial_item.lock_token,
-            1,
-            vec![],
-            vec![],
-            vec![],
-            ExecutionMetadata::default(),
-        )
+    crate::provider_validation::create_instance((*provider).as_ref(), "instance-A")
         .await
         .unwrap();
 
@@ -479,11 +463,9 @@ pub async fn test_multi_threaded_lock_contention<F: ProviderFactory>(factory: &F
     let successful_fetches: Vec<_> = results
         .iter()
         .filter_map(|(thread_id, result)| {
-            if let Some(item) = result {
-                Some((*thread_id, item.instance.clone(), item.lock_token.clone()))
-            } else {
-                None
-            }
+            result
+                .as_ref()
+                .map(|item| (*thread_id, item.instance.clone(), item.lock_token.clone()))
         })
         .collect();
 
@@ -608,8 +590,7 @@ pub async fn test_multi_threaded_lock_expiration_recovery<F: ProviderFactory>(fa
     let provider3 = provider.clone();
     let handle3 = tokio::spawn(async move {
         tokio::time::sleep(Duration::from_millis(lock_timeout_ms + 100)).await;
-        let result = provider3.fetch_orchestration_item().await;
-        result
+        provider3.fetch_orchestration_item().await
     });
 
     // Wait for all threads

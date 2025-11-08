@@ -119,7 +119,7 @@ pub async fn test_create_execution(
     // The fetched item should have the execution_id we enqueued
     let execution_id = next_execution_id;
 
-    // Ack with OrchestrationStarted event
+    // Ack with OrchestrationStarted event and proper metadata
     provider
         .ack_orchestration_item(
             &item.lock_token,
@@ -134,7 +134,11 @@ pub async fn test_create_execution(
             }],
             vec![], // no worker items
             vec![], // no orchestrator items
-            ExecutionMetadata::default(),
+            ExecutionMetadata {
+                orchestration_name: Some(orchestration.to_string()),
+                orchestration_version: Some(version.to_string()),
+                ..Default::default()
+            },
         )
         .await?;
 

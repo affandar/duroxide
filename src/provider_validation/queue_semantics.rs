@@ -3,7 +3,6 @@ use crate::provider_validations::ProviderFactory;
 use crate::providers::WorkItem;
 use std::time::Duration;
 
-
 /// Test 5.1: Worker Queue FIFO Ordering
 /// Goal: Verify worker items dequeued in order.
 pub async fn test_worker_queue_fifo_ordering<F: ProviderFactory>(factory: &F) {

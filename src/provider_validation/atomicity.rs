@@ -4,7 +4,6 @@ use crate::providers::WorkItem;
 use std::sync::Arc;
 use std::time::Duration;
 
-
 /// Test 2.1: All-or-Nothing Ack
 /// Goal: Verify `ack_orchestration_item` commits everything atomically.
 pub async fn test_atomicity_failure_rollback<F: ProviderFactory>(factory: &F) {

@@ -1,7 +1,6 @@
 use crate::provider_validation::{Event, ExecutionMetadata, start_item};
 use crate::provider_validations::ProviderFactory;
 
-
 /// Test management: list_instances returns all instance IDs
 pub async fn test_list_instances<F: ProviderFactory>(factory: &F) {
     tracing::info!("→ Testing management: list_instances returns all instance IDs");
@@ -12,8 +11,7 @@ pub async fn test_list_instances<F: ProviderFactory>(factory: &F) {
 
     // Create a few instances
     for i in 0..3 {
-        provider
-            .enqueue_orchestrator_work(start_item(&format!("mgmt-inst-{}", i)), None)
+        crate::provider_validation::create_instance(&*provider, &format!("mgmt-inst-{}", i))
             .await
             .unwrap();
     }
@@ -232,7 +230,11 @@ pub async fn test_get_system_metrics<F: ProviderFactory>(factory: &F) {
             }],
             vec![],
             vec![],
-            ExecutionMetadata::default(),
+            ExecutionMetadata {
+                orchestration_name: Some("TestOrch".to_string()),
+                orchestration_version: Some("1.0.0".to_string()),
+                ..Default::default()
+            },
         )
         .await
         .unwrap();

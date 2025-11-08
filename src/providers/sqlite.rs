@@ -52,41 +52,6 @@ impl SqliteProvider {
         };
         tracing::debug!(target: "duroxide::providers::sqlite", ?item, instance=%instance, delay_ms=?delay_ms, "enqueue_orchestrator_work_with_delay");
 
-        // Check if this is a StartOrchestration - if so, create instance
-        if let WorkItem::StartOrchestration {
-            orchestration,
-            version,
-            execution_id,
-            ..
-        } = &item
-        {
-            let version = version.as_deref().unwrap_or("1.0.0");
-            sqlx::query(
-                r#"
-                INSERT OR IGNORE INTO instances (instance_id, orchestration_name, orchestration_version)
-                VALUES (?, ?, ?)
-                "#,
-            )
-            .bind(instance)
-            .bind(orchestration)
-            .bind(version)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| e.to_string())?;
-
-            sqlx::query(
-                r#"
-                INSERT OR IGNORE INTO executions (instance_id, execution_id)
-                VALUES (?, ?)
-                "#,
-            )
-            .bind(instance)
-            .bind(*execution_id as i64)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| e.to_string())?;
-        }
-
         // Calculate visible_at based on delay
         let visible_at = if let Some(delay_ms) = delay_ms {
             Self::now_millis() + delay_ms as i64
@@ -243,7 +208,7 @@ impl SqliteProvider {
             CREATE TABLE IF NOT EXISTS instances (
                 instance_id TEXT PRIMARY KEY,
                 orchestration_name TEXT NOT NULL,
-                orchestration_version TEXT NOT NULL,
+                orchestration_version TEXT,
                 current_execution_id INTEGER NOT NULL DEFAULT 1,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -635,7 +600,7 @@ impl Provider for SqliteProvider {
         {
             // Instance exists - get metadata and history for current execution
             let name: String = info.try_get("orchestration_name").ok()?;
-            let version: String = info.try_get("orchestration_version").ok()?;
+            let version: Option<String> = info.try_get("orchestration_version").ok();
             let exec_id: i64 = info.try_get("current_execution_id").ok()?;
 
             // Normal case: always read history for current execution; runtime decides CAN semantics
@@ -643,6 +608,20 @@ impl Provider for SqliteProvider {
                 .read_history_in_tx(&mut tx, &instance_id, Some(exec_id as u64))
                 .await
                 .ok()?;
+
+            // If version is NULL in database, use "unknown"
+            // If instance exists but version is NULL, there shouldn't be an OrchestrationStarted event
+            // in history (version should have been set when instance was created via metadata)
+            let version = version.unwrap_or_else(|| {
+                debug_assert!(
+                    !hist
+                        .iter()
+                        .any(|e| matches!(e, crate::Event::OrchestrationStarted { .. })),
+                    "Instance exists with NULL version but history contains OrchestrationStarted event"
+                );
+                "unknown".to_string()
+            });
+
             (name, version, exec_id as u64, hist)
         } else {
             // Fallback: try to derive from history (e.g., ActivityCompleted arriving before we see instance row)
@@ -659,17 +638,26 @@ impl Provider for SqliteProvider {
             }) {
                 let (name, version) = first_started;
                 (name, version, 1u64, hist)
-            } else if let Some(WorkItem::StartOrchestration {
-                orchestration, version, ..
-            })
-            | Some(WorkItem::ContinueAsNew {
-                orchestration, version, ..
-            }) = work_items.first()
-            {
-                // Brand new instance - use work item
+            } else if let Some(start_item) = work_items.iter().find(|item| {
+                matches!(
+                    item,
+                    WorkItem::StartOrchestration { .. } | WorkItem::ContinueAsNew { .. }
+                )
+            }) {
+                // Brand new instance - find StartOrchestration or ContinueAsNew in work items
+                // Version may be None - runtime will resolve and set via metadata
+                let (orchestration, version) = match start_item {
+                    WorkItem::StartOrchestration {
+                        orchestration, version, ..
+                    }
+                    | WorkItem::ContinueAsNew {
+                        orchestration, version, ..
+                    } => (orchestration.clone(), version.clone()),
+                    _ => unreachable!(),
+                };
                 (
-                    orchestration.clone(),
-                    version.clone().unwrap_or_else(|| "1.0.0".to_string()),
+                    orchestration,
+                    version.unwrap_or_else(|| "unknown".to_string()),
                     1u64,
                     Vec::new(),
                 )
@@ -736,8 +724,26 @@ impl Provider for SqliteProvider {
             "Acking with explicit execution_id"
         );
 
-        // Update instance metadata from runtime-provided metadata (no event inspection)
+        // Create or update instance metadata from runtime-provided metadata
+        // Runtime resolves version from registry and provides it via metadata
         if let (Some(name), Some(version)) = (&metadata.orchestration_name, &metadata.orchestration_version) {
+            // First, ensure instance exists (INSERT OR IGNORE if new)
+            sqlx::query(
+                r#"
+                INSERT OR IGNORE INTO instances 
+                (instance_id, orchestration_name, orchestration_version, current_execution_id)
+                VALUES (?, ?, ?, ?)
+                "#,
+            )
+            .bind(&instance_id)
+            .bind(name)
+            .bind(version.as_str()) // version is &String, so use as_str()
+            .bind(execution_id as i64)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?;
+
+            // Then update with resolved version (will update if instance exists, no-op if just created)
             sqlx::query(
                 r#"
                 UPDATE instances 
@@ -849,37 +855,6 @@ impl Provider for SqliteProvider {
                 _ => continue,
             };
             tracing::debug!(target = "duroxide::providers::sqlite", instance=%instance, ?item, "enqueue orchestrator item in ack");
-
-            // Check if this is a StartOrchestration - if so, create instance
-            if let WorkItem::StartOrchestration {
-                orchestration, version, ..
-            } = &item
-            {
-                let version = version.as_deref().unwrap_or("1.0.0");
-                sqlx::query(
-                    r#"
-                    INSERT OR IGNORE INTO instances (instance_id, orchestration_name, orchestration_version)
-                    VALUES (?, ?, ?)
-                    "#,
-                )
-                .bind(instance)
-                .bind(orchestration)
-                .bind(version)
-                .execute(&mut *tx)
-                .await
-                .map_err(|e| e.to_string())?;
-
-                sqlx::query(
-                    r#"
-                    INSERT OR IGNORE INTO executions (instance_id, execution_id)
-                    VALUES (?, 1)
-                    "#,
-                )
-                .bind(instance)
-                .execute(&mut *tx)
-                .await
-                .map_err(|e| e.to_string())?;
-            }
 
             // Set visible_at based on item type
             // TimerFired uses fire_at_ms to delay visibility until timer should fire
@@ -1341,7 +1316,11 @@ impl ManagementCapability for SqliteProvider {
             Some(row) => {
                 let instance_id: String = row.try_get("instance_id").map_err(|e| e.to_string())?;
                 let orchestration_name: String = row.try_get("orchestration_name").map_err(|e| e.to_string())?;
-                let orchestration_version: String = row.try_get("orchestration_version").map_err(|e| e.to_string())?;
+                let orchestration_version: Option<String> = row.try_get("orchestration_version").ok();
+                let orchestration_version = orchestration_version.unwrap_or_else(|| {
+                    // Could fetch from history, but for management API, "unknown" is acceptable
+                    "unknown".to_string()
+                });
                 let current_execution_id: i64 = row.try_get("current_execution_id").unwrap_or(1);
                 let created_at: i64 = row.try_get("created_at").unwrap_or(0);
                 let updated_at: i64 = row.try_get("updated_at").unwrap_or(0);
@@ -1543,7 +1522,11 @@ mod tests {
                 }],
                 vec![],
                 vec![],
-                ExecutionMetadata::default(),
+                ExecutionMetadata {
+                    orchestration_name: Some(orchestration.to_string()),
+                    orchestration_version: Some(version.to_string()),
+                    ..Default::default()
+                },
             )
             .await?;
 
@@ -1977,7 +1960,7 @@ mod tests {
         let item = store.fetch_orchestration_item().await.unwrap();
         assert_eq!(item.instance, "test-delayed");
 
-        // Ack it
+        // Ack it with proper metadata to create instance
         store
             .ack_orchestration_item(
                 &item.lock_token,
@@ -1985,7 +1968,11 @@ mod tests {
                 vec![],
                 vec![],
                 vec![],
-                ExecutionMetadata::default(),
+                ExecutionMetadata {
+                    orchestration_name: Some("DelayedTest".to_string()),
+                    orchestration_version: Some("1.0.0".to_string()),
+                    ..Default::default()
+                },
             )
             .await
             .unwrap();
@@ -2011,7 +1998,11 @@ mod tests {
                 vec![],
                 vec![],
                 vec![],
-                ExecutionMetadata::default(),
+                ExecutionMetadata {
+                    orchestration_name: Some("TimerDelayedTest".to_string()),
+                    orchestration_version: Some("1.0.0".to_string()),
+                    ..Default::default()
+                },
             )
             .await
             .unwrap();

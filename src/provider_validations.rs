@@ -134,80 +134,53 @@ pub trait ProviderFactory: Send + Sync {
 /// - `test_get_execution_info` - Verify get_execution_info returns execution metadata
 /// - `test_get_system_metrics` - Verify get_system_metrics returns accurate counts
 /// - `test_get_queue_depths` - Verify get_queue_depths returns current queue sizes
-
 #[cfg(feature = "provider-test")]
 pub use crate::provider_validation::instance_creation::{
-    test_instance_creation_via_metadata,
-    test_no_instance_creation_on_enqueue,
-    test_null_version_handling,
+    test_instance_creation_via_metadata, test_no_instance_creation_on_enqueue, test_null_version_handling,
     test_sub_orchestration_instance_creation,
 };
 
 #[cfg(feature = "provider-test")]
 pub use crate::provider_validation::atomicity::{
-    test_atomicity_failure_rollback,
+    test_atomicity_failure_rollback, test_concurrent_ack_prevention, test_lock_released_only_on_successful_ack,
     test_multi_operation_atomic_ack,
-    test_lock_released_only_on_successful_ack,
-    test_concurrent_ack_prevention,
 };
 
 #[cfg(feature = "provider-test")]
 pub use crate::provider_validation::error_handling::{
-    test_invalid_lock_token_on_ack,
-    test_duplicate_event_id_rejection,
-    test_missing_instance_metadata,
-    test_corrupted_serialization_data,
-    test_lock_expiration_during_ack,
+    test_corrupted_serialization_data, test_duplicate_event_id_rejection, test_invalid_lock_token_on_ack,
+    test_lock_expiration_during_ack, test_missing_instance_metadata,
 };
 
 #[cfg(feature = "provider-test")]
 pub use crate::provider_validation::instance_locking::{
-    test_exclusive_instance_lock,
-    test_lock_token_uniqueness,
-    test_invalid_lock_token_rejection,
-    test_concurrent_instance_fetching,
-    test_completions_arriving_during_lock_blocked,
-    test_cross_instance_lock_isolation,
-    test_message_tagging_during_lock,
-    test_ack_only_affects_locked_messages,
-    test_multi_threaded_lock_contention,
+    test_ack_only_affects_locked_messages, test_completions_arriving_during_lock_blocked,
+    test_concurrent_instance_fetching, test_cross_instance_lock_isolation, test_exclusive_instance_lock,
+    test_invalid_lock_token_rejection, test_lock_token_uniqueness, test_message_tagging_during_lock,
+    test_multi_threaded_lock_contention, test_multi_threaded_lock_expiration_recovery,
     test_multi_threaded_no_duplicate_processing,
-    test_multi_threaded_lock_expiration_recovery,
 };
 
 #[cfg(feature = "provider-test")]
 pub use crate::provider_validation::lock_expiration::{
-    test_lock_expires_after_timeout,
-    test_abandon_releases_lock_immediately,
-    test_lock_renewal_on_ack,
-    test_concurrent_lock_attempts_respect_expiration,
+    test_abandon_releases_lock_immediately, test_concurrent_lock_attempts_respect_expiration,
+    test_lock_expires_after_timeout, test_lock_renewal_on_ack,
 };
 
 #[cfg(feature = "provider-test")]
 pub use crate::provider_validation::multi_execution::{
-    test_execution_isolation,
-    test_latest_execution_detection,
-    test_execution_id_sequencing,
-    test_continue_as_new_creates_new_execution,
-    test_execution_history_persistence,
+    test_continue_as_new_creates_new_execution, test_execution_history_persistence, test_execution_id_sequencing,
+    test_execution_isolation, test_latest_execution_detection,
 };
 
 #[cfg(feature = "provider-test")]
 pub use crate::provider_validation::queue_semantics::{
-    test_worker_queue_fifo_ordering,
-    test_worker_peek_lock_semantics,
-    test_worker_ack_atomicity,
-    test_timer_delayed_visibility,
-    test_lost_lock_token_handling,
+    test_lost_lock_token_handling, test_timer_delayed_visibility, test_worker_ack_atomicity,
+    test_worker_peek_lock_semantics, test_worker_queue_fifo_ordering,
 };
 
 #[cfg(feature = "provider-test")]
 pub use crate::provider_validation::management::{
-    test_list_instances,
-    test_list_instances_by_status,
-    test_list_executions,
-    test_get_instance_info,
-    test_get_execution_info,
-    test_get_system_metrics,
-    test_get_queue_depths,
+    test_get_execution_info, test_get_instance_info, test_get_queue_depths, test_get_system_metrics,
+    test_list_executions, test_list_instances, test_list_instances_by_status,
 };

@@ -3,7 +3,6 @@ use crate::provider_validations::ProviderFactory;
 use std::sync::Arc;
 use std::time::Duration;
 
-
 /// Test 4.1: Lock Expires After Timeout
 /// Goal: Verify locks expire and instance becomes available again.
 pub async fn test_lock_expires_after_timeout<F: ProviderFactory>(factory: &F) {

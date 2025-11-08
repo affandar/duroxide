@@ -31,7 +31,7 @@ use std::any::Any;
 /// // 1. Find available instance (check instance_locks for active locks)
 /// SELECT q.instance_id FROM orchestrator_queue q
 /// LEFT JOIN instance_locks il ON q.instance_id = il.instance_id
-/// WHERE q.visible_at <= now() 
+/// WHERE q.visible_at <= now()
 ///   AND (il.instance_id IS NULL OR il.locked_until <= now())
 /// ORDER BY q.id LIMIT 1
 ///
@@ -538,12 +538,12 @@ pub enum WorkItem {
 ///         
 ///         // Enqueue worker/orchestrator items
 ///         for item in worker_items { pipe.lpush("worker_queue", serialize(item)); }
-///         for item in orch_items { 
+///         for item in orch_items {
 ///             let visible_at = match &item {
 ///                 WorkItem::TimerFired { fire_at_ms, .. } => *fire_at_ms,
 ///                 _ => now()
 ///             };
-///             pipe.zadd("orch_queue", serialize(item), visible_at); 
+///             pipe.zadd("orch_queue", serialize(item), visible_at);
 ///         }
 ///         
 ///         // Release lock
@@ -645,9 +645,11 @@ pub enum WorkItem {
 /// - created_at, updated_at timestamps
 ///
 /// This metadata is updated via:
-/// - `enqueue_orchestrator_work()` with StartOrchestration (creates instance)
-/// - `ack_orchestration_item()` with ExecutionMetadata (updates status/output)
+/// - `ack_orchestration_item()` with ExecutionMetadata (creates instance and updates status/output)
 /// - `ack_orchestration_item()` with metadata.create_next_execution (increments current_execution_id)
+///
+/// **Note:** Instances are NOT created in `enqueue_orchestrator_work()`. Instance creation happens
+/// when the runtime acknowledges the first turn via `ack_orchestration_item()` with metadata.
 ///
 /// # Error Handling Philosophy
 ///
@@ -848,53 +850,53 @@ pub trait Provider: Any + Send + Sync {
     /// This method is called continuously by the orchestration dispatcher.
     /// Must be thread-safe and handle concurrent calls gracefully.
     ///
-/// # Example Implementation Pattern
-///
-/// ```ignore
-/// async fn fetch_orchestration_item(&self) -> Option<OrchestrationItem> {
-///     let tx = begin_transaction()?;
-///     
-///     // Step 1: Find next available instance (check instance_locks)
-///     let instance_id = SELECT q.instance_id FROM orch_queue q
-///         LEFT JOIN instance_locks il ON q.instance_id = il.instance_id
-///         WHERE q.visible_at <= now() 
-///           AND (il.instance_id IS NULL OR il.locked_until <= now())
-///         ORDER BY q.id LIMIT 1;
-///     
-///     if instance_id.is_none() { return None; }
-///     
-///     // Step 2: Atomically acquire instance lock
-///     let lock_token = generate_uuid();
-///     let lock_result = INSERT INTO instance_locks (instance_id, lock_token, locked_until, locked_at)
-///         VALUES (?, ?, ?, ?)
-///         ON CONFLICT(instance_id) DO UPDATE
-///         SET lock_token = excluded.lock_token, locked_until = excluded.locked_until
-///         WHERE locked_until <= excluded.locked_at;
-///     
-///     if lock_result.rows_affected == 0 {
-///         // Lock acquisition failed - another dispatcher has the lock
-///         return None;
-///     }
-///     
-///     // Step 3: Lock all messages for this instance
-///     UPDATE orch_queue SET lock_token = ?, locked_until = now() + 30s
-///         WHERE instance_id = ? AND visible_at <= now();
-///     
-///     // Step 4: Fetch locked messages
-///     let messages = SELECT work_item FROM orch_queue WHERE lock_token = ?;
-///     
-///     // Step 5: Load instance metadata
-///     let (name, version, exec_id) = SELECT ... FROM instances WHERE instance_id = ?;
-///     
-///     // Step 6: Load history for current execution
-///     let history = SELECT event_data FROM history
-///         WHERE instance_id = ? AND execution_id = ?
-///         ORDER BY event_id;
-///     
-///     commit_transaction();
-///     Some(OrchestrationItem { instance, orchestration_name, execution_id, version, history, messages, lock_token })
-/// }
-/// ```
+    /// # Example Implementation Pattern
+    ///
+    /// ```ignore
+    /// async fn fetch_orchestration_item(&self) -> Option<OrchestrationItem> {
+    ///     let tx = begin_transaction()?;
+    ///     
+    ///     // Step 1: Find next available instance (check instance_locks)
+    ///     let instance_id = SELECT q.instance_id FROM orch_queue q
+    ///         LEFT JOIN instance_locks il ON q.instance_id = il.instance_id
+    ///         WHERE q.visible_at <= now()
+    ///           AND (il.instance_id IS NULL OR il.locked_until <= now())
+    ///         ORDER BY q.id LIMIT 1;
+    ///     
+    ///     if instance_id.is_none() { return None; }
+    ///     
+    ///     // Step 2: Atomically acquire instance lock
+    ///     let lock_token = generate_uuid();
+    ///     let lock_result = INSERT INTO instance_locks (instance_id, lock_token, locked_until, locked_at)
+    ///         VALUES (?, ?, ?, ?)
+    ///         ON CONFLICT(instance_id) DO UPDATE
+    ///         SET lock_token = excluded.lock_token, locked_until = excluded.locked_until
+    ///         WHERE locked_until <= excluded.locked_at;
+    ///     
+    ///     if lock_result.rows_affected == 0 {
+    ///         // Lock acquisition failed - another dispatcher has the lock
+    ///         return None;
+    ///     }
+    ///     
+    ///     // Step 3: Lock all messages for this instance
+    ///     UPDATE orch_queue SET lock_token = ?, locked_until = now() + 30s
+    ///         WHERE instance_id = ? AND visible_at <= now();
+    ///     
+    ///     // Step 4: Fetch locked messages
+    ///     let messages = SELECT work_item FROM orch_queue WHERE lock_token = ?;
+    ///     
+    ///     // Step 5: Load instance metadata
+    ///     let (name, version, exec_id) = SELECT ... FROM instances WHERE instance_id = ?;
+    ///     
+    ///     // Step 6: Load history for current execution
+    ///     let history = SELECT event_data FROM history
+    ///         WHERE instance_id = ? AND execution_id = ?
+    ///         ORDER BY event_id;
+    ///     
+    ///     commit_transaction();
+    ///     Some(OrchestrationItem { instance, orchestration_name, execution_id, version, history, messages, lock_token })
+    /// }
+    /// ```
     async fn fetch_orchestration_item(&self) -> Option<OrchestrationItem>;
 
     /// Acknowledge successful orchestration processing atomically.
@@ -976,25 +978,25 @@ pub trait Provider: Any + Send + Sync {
     ///
     /// # Queue Item Enqueuing
     ///
-/// Worker items and orchestrator items must be enqueued within the same transaction:
-///
-/// ```ignore
-/// // Worker queue (no special handling)
-/// for item in worker_items {
-///     INSERT INTO worker_queue (work_item) VALUES (serde_json::to_string(&item))
-/// }
-///
-/// // Orchestrator queue (may have delayed visibility for TimerFired)
-/// for item in orchestrator_items {
-///     let visible_at = match &item {
-///         WorkItem::TimerFired { fire_at_ms, .. } => *fire_at_ms,  // Delayed visibility
-///         _ => now()  // Immediate visibility
-///     };
-///     
-///     INSERT INTO orchestrator_queue (instance_id, work_item, visible_at)
-///     VALUES (extract_instance(&item), serde_json::to_string(&item), visible_at)
-/// }
-/// ```
+    /// Worker items and orchestrator items must be enqueued within the same transaction:
+    ///
+    /// ```ignore
+    /// // Worker queue (no special handling)
+    /// for item in worker_items {
+    ///     INSERT INTO worker_queue (work_item) VALUES (serde_json::to_string(&item))
+    /// }
+    ///
+    /// // Orchestrator queue (may have delayed visibility for TimerFired)
+    /// for item in orchestrator_items {
+    ///     let visible_at = match &item {
+    ///         WorkItem::TimerFired { fire_at_ms, .. } => *fire_at_ms,  // Delayed visibility
+    ///         _ => now()  // Immediate visibility
+    ///     };
+    ///     
+    ///     INSERT INTO orchestrator_queue (instance_id, work_item, visible_at)
+    ///     VALUES (extract_instance(&item), serde_json::to_string(&item), visible_at)
+    /// }
+    /// ```
     ///
     /// # Lock Release
     ///
@@ -1084,23 +1086,23 @@ pub trait Provider: Any + Send + Sync {
     ///     UPDATE instances SET current_execution_id = GREATEST(current_execution_id, ?)
     ///     WHERE instance_id = ?;
     ///     
-///     // Step 7: Enqueue worker/orchestrator items
-///     // Worker items go to worker queue
-///     for item in worker_items {
-///         INSERT INTO worker_queue (work_item) VALUES (serialize(item))
-///     }
-///     
-///     // Orchestrator items go to orchestrator queue (TimerFired uses fire_at_ms for visible_at)
-///     for item in orchestrator_items {
-///         let visible_at = match &item {
-///             WorkItem::TimerFired { fire_at_ms, .. } => *fire_at_ms,
-///             _ => now()
-///         };
-///         INSERT INTO orchestrator_queue (instance_id, work_item, visible_at)
-///         VALUES (extract_instance(&item), serialize(item), visible_at)
-///     }
-///     
-///     // Step 8: Release lock: DELETE FROM orch_queue WHERE lock_token = ?;
+    ///     // Step 7: Enqueue worker/orchestrator items
+    ///     // Worker items go to worker queue
+    ///     for item in worker_items {
+    ///         INSERT INTO worker_queue (work_item) VALUES (serialize(item))
+    ///     }
+    ///     
+    ///     // Orchestrator items go to orchestrator queue (TimerFired uses fire_at_ms for visible_at)
+    ///     for item in orchestrator_items {
+    ///         let visible_at = match &item {
+    ///             WorkItem::TimerFired { fire_at_ms, .. } => *fire_at_ms,
+    ///             _ => now()
+    ///         };
+    ///         INSERT INTO orchestrator_queue (instance_id, work_item, visible_at)
+    ///         VALUES (extract_instance(&item), serialize(item), visible_at)
+    ///     }
+    ///     
+    ///     // Step 8: Release lock: DELETE FROM orch_queue WHERE lock_token = ?;
     ///     
     ///     commit_transaction()?;
     ///     Ok(())
@@ -1137,35 +1139,35 @@ pub trait Provider: Any + Send + Sync {
     ///
     /// # Implementation Pattern
     ///
-/// ```ignore
-/// async fn abandon_orchestration_item(lock_token: &str, delay_ms: Option<u64>) -> Result<(), String> {
-///     let visible_at = if let Some(delay) = delay_ms {
-///         now() + delay
-///     } else {
-///         now()
-///     };
-///     
-///     BEGIN TRANSACTION
-///         // Get instance_id from instance_locks
-///         let instance_id = SELECT instance_id FROM instance_locks WHERE lock_token = ?;
-///         
-///         IF instance_id IS NULL:
-///             // Invalid lock token - return error
-///             ROLLBACK
-///             RETURN Err("Invalid lock token")
-///         
-///         // Clear lock_token from messages
-///         UPDATE orchestrator_queue
-///         SET lock_token = NULL, locked_until = NULL, visible_at = ?
-///         WHERE lock_token = ?;
-///         
-///         // Remove instance lock
-///         DELETE FROM instance_locks WHERE lock_token = ?;
-///     COMMIT
-///     
-///     Ok(())
-/// }
-/// ```
+    /// ```ignore
+    /// async fn abandon_orchestration_item(lock_token: &str, delay_ms: Option<u64>) -> Result<(), String> {
+    ///     let visible_at = if let Some(delay) = delay_ms {
+    ///         now() + delay
+    ///     } else {
+    ///         now()
+    ///     };
+    ///     
+    ///     BEGIN TRANSACTION
+    ///         // Get instance_id from instance_locks
+    ///         let instance_id = SELECT instance_id FROM instance_locks WHERE lock_token = ?;
+    ///         
+    ///         IF instance_id IS NULL:
+    ///             // Invalid lock token - return error
+    ///             ROLLBACK
+    ///             RETURN Err("Invalid lock token")
+    ///         
+    ///         // Clear lock_token from messages
+    ///         UPDATE orchestrator_queue
+    ///         SET lock_token = NULL, locked_until = NULL, visible_at = ?
+    ///         WHERE lock_token = ?;
+    ///         
+    ///         // Remove instance lock
+    ///         DELETE FROM instance_locks WHERE lock_token = ?;
+    ///     COMMIT
+    ///     
+    ///     Ok(())
+    /// }
+    /// ```
     ///
     /// # Use Cases
     ///
@@ -1173,13 +1175,13 @@ pub trait Provider: Any + Send + Sync {
     /// - Orchestration turn failed → delay_ms = None for immediate retry
     /// - Runtime shutdown during processing → messages auto-recover when lock expires
     ///
-/// # Error Handling
-///
-/// **Invalid lock tokens MUST return an error.** Unlike `ack_orchestration_item()`, this method
-/// should not be idempotent for invalid tokens. Invalid tokens indicate a programming error or
-/// state corruption and should be surfaced as errors.
-///
-/// Return `Err("Invalid lock token")` if the lock token is not found in `instance_locks`.
+    /// # Error Handling
+    ///
+    /// **Invalid lock tokens MUST return an error.** Unlike `ack_orchestration_item()`, this method
+    /// should not be idempotent for invalid tokens. Invalid tokens indicate a programming error or
+    /// state corruption and should be surfaced as errors.
+    ///
+    /// Return `Err("Invalid lock token")` if the lock token is not found in `instance_locks`.
     async fn abandon_orchestration_item(&self, _lock_token: &str, _delay_ms: Option<u64>) -> Result<(), String>;
 
     // ===== Basic History Access (REQUIRED) =====
@@ -1492,14 +1494,8 @@ pub trait Provider: Any + Send + Sync {
     ///         now()
     ///     };
     ///     
-    ///     // For StartOrchestration, may need to create instance first
-    ///     if let WorkItem::StartOrchestration { orchestration, version, .. } = &item {
-    ///         INSERT OR IGNORE INTO instances (instance_id, orchestration_name, orchestration_version)
-    ///         VALUES (instance, orchestration, version.unwrap_or("1.0.0"));
-    ///         
-    ///         INSERT OR IGNORE INTO executions (instance_id, execution_id, status)
-    ///         VALUES (instance, 1, 'Running');
-    ///     }
+    ///     // ⚠️ DO NOT create instance here - runtime will create it via ack_orchestration_item metadata
+    ///     // Instance creation happens when runtime acknowledges the first turn with ExecutionMetadata
     ///     
     ///     INSERT INTO orchestrator_queue (instance_id, work_item, visible_at, lock_token, locked_until)
     ///     VALUES (instance, work_json, visible_at, NULL, NULL);
@@ -1511,8 +1507,8 @@ pub trait Provider: Any + Send + Sync {
     /// # Special Cases
     ///
     /// **StartOrchestration:**
-    /// - Must create instance metadata if doesn't exist
-    /// - Must create execution with ID=1
+    /// - ⚠️ DO NOT create instance here - instance creation happens via `ack_orchestration_item()` metadata
+    /// - Just enqueue the work item; runtime will create instance when acknowledging the first turn
     ///
     /// **ExternalRaised:**
     /// - Can arrive before instance is started (race condition)

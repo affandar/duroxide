@@ -2,7 +2,6 @@ use crate::provider_validation::{Event, ExecutionMetadata, start_item};
 use crate::provider_validations::ProviderFactory;
 use std::time::Duration;
 
-
 /// Test 3.1: Invalid Lock Token on Ack
 /// Goal: Provider should reject invalid lock tokens.
 pub async fn test_invalid_lock_token_on_ack<F: ProviderFactory>(factory: &F) {

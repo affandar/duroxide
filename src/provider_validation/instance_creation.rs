@@ -63,7 +63,14 @@ pub async fn test_instance_creation_via_metadata<F: ProviderFactory>(factory: &F
 
     // Clean up
     provider
-        .ack_orchestration_item(&item2.lock_token, 1, vec![], vec![], vec![], ExecutionMetadata::default())
+        .ack_orchestration_item(
+            &item2.lock_token,
+            1,
+            vec![],
+            vec![],
+            vec![],
+            ExecutionMetadata::default(),
+        )
         .await
         .unwrap();
 
@@ -88,7 +95,10 @@ pub async fn test_no_instance_creation_on_enqueue<F: ProviderFactory>(factory: &
 
     // Fetch should work even though instance doesn't exist
     let item = provider.fetch_orchestration_item().await;
-    assert!(item.is_some(), "Should be able to fetch work item even if instance doesn't exist");
+    assert!(
+        item.is_some(),
+        "Should be able to fetch work item even if instance doesn't exist"
+    );
     let item = item.unwrap();
     assert_eq!(item.instance, "instance-B");
 
@@ -136,10 +146,7 @@ pub async fn test_null_version_handling<F: ProviderFactory>(factory: &F) {
         execution_id: 1,
     };
 
-    provider
-        .enqueue_orchestrator_work(start, None)
-        .await
-        .unwrap();
+    provider.enqueue_orchestrator_work(start, None).await.unwrap();
 
     // Fetch work item - should handle None version
     let item = provider.fetch_orchestration_item().await.unwrap();
@@ -181,7 +188,14 @@ pub async fn test_null_version_handling<F: ProviderFactory>(factory: &F) {
 
     // Clean up
     provider
-        .ack_orchestration_item(&item2.lock_token, 1, vec![], vec![], vec![], ExecutionMetadata::default())
+        .ack_orchestration_item(
+            &item2.lock_token,
+            1,
+            vec![],
+            vec![],
+            vec![],
+            ExecutionMetadata::default(),
+        )
         .await
         .unwrap();
 
@@ -283,7 +297,14 @@ pub async fn test_sub_orchestration_instance_creation<F: ProviderFactory>(factor
 
     // Clean up
     provider
-        .ack_orchestration_item(&child_item2.lock_token, 1, vec![], vec![], vec![], ExecutionMetadata::default())
+        .ack_orchestration_item(
+            &child_item2.lock_token,
+            1,
+            vec![],
+            vec![],
+            vec![],
+            ExecutionMetadata::default(),
+        )
         .await
         .unwrap();
 
