@@ -1,6 +1,8 @@
 use crate::Event;
 use std::any::Any;
 
+pub mod error;
+
 /// Orchestration item containing all data needed to process an instance atomically.
 ///
 /// This represents a locked batch of work for a single orchestration instance.
@@ -1627,7 +1629,8 @@ pub mod management;
 /// SQLite-backed provider with full transactional support.
 pub mod sqlite;
 
-// Re-export management types for convenience
+// Re-export error type for convenience
+pub use error::ProviderError;
 pub use management::{ExecutionInfo, InstanceInfo, ManagementProvider, QueueDepths, SystemMetrics};
 
 /// Management capability trait for observability and administrative operations.
