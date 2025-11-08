@@ -2,7 +2,9 @@
 
 use async_trait::async_trait;
 use duroxide::providers::sqlite::SqliteProvider;
-use duroxide::providers::{ExecutionMetadata, ManagementCapability, OrchestrationItem, Provider, WorkItem};
+use duroxide::providers::{
+    ExecutionMetadata, ManagementCapability, OrchestrationItem, Provider, ProviderError, WorkItem,
+};
 use duroxide::runtime;
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{LogFormat, ObservabilityConfig, RuntimeOptions};
@@ -94,6 +96,7 @@ fn metrics_observability_config(label: &str) -> ObservabilityConfig {
 struct FailingProvider {
     inner: Arc<SqliteProvider>,
     fail_next_ack_worker: AtomicBool,
+    fail_next_ack_orchestration_item: AtomicBool,
 }
 
 impl FailingProvider {
@@ -101,11 +104,16 @@ impl FailingProvider {
         Self {
             inner,
             fail_next_ack_worker: AtomicBool::new(false),
+            fail_next_ack_orchestration_item: AtomicBool::new(false),
         }
     }
 
     fn fail_next_ack_worker(&self) {
         self.fail_next_ack_worker.store(true, Ordering::SeqCst);
+    }
+
+    fn fail_next_ack_orchestration_item(&self) {
+        self.fail_next_ack_orchestration_item.store(true, Ordering::SeqCst);
     }
 }
 
@@ -123,20 +131,49 @@ impl Provider for FailingProvider {
         worker_items: Vec<WorkItem>,
         orchestrator_items: Vec<WorkItem>,
         metadata: ExecutionMetadata,
-    ) -> Result<(), String> {
-        self.inner
-            .ack_orchestration_item(
-                lock_token,
-                execution_id,
-                history_delta,
-                worker_items,
-                orchestrator_items,
-                metadata,
-            )
-            .await
+    ) -> Result<(), ProviderError> {
+        if self.fail_next_ack_orchestration_item.swap(false, Ordering::SeqCst) {
+            // Check if this is a failure event commit - if so, allow it to succeed
+            // This allows the runtime to commit the orchestration failure event
+            let is_failure_commit = history_delta
+                .iter()
+                .any(|e| matches!(e, Event::OrchestrationFailed { .. }));
+            if is_failure_commit {
+                // Allow failure event commit to succeed
+                return self
+                    .inner
+                    .ack_orchestration_item(
+                        lock_token,
+                        execution_id,
+                        history_delta,
+                        worker_items,
+                        orchestrator_items,
+                        metadata,
+                    )
+                    .await;
+            }
+
+            // Simulate permanent infrastructure failure for normal commits
+            // This will cause the orchestration to fail with infrastructure error
+            Err(ProviderError::permanent(
+                "ack_orchestration_item",
+                "simulated infrastructure failure",
+            ))
+        } else {
+            self.inner
+                .ack_orchestration_item(
+                    lock_token,
+                    execution_id,
+                    history_delta,
+                    worker_items,
+                    orchestrator_items,
+                    metadata,
+                )
+                .await
+        }
     }
 
-    async fn abandon_orchestration_item(&self, lock_token: &str, delay_ms: Option<u64>) -> Result<(), String> {
+    async fn abandon_orchestration_item(&self, lock_token: &str, delay_ms: Option<u64>) -> Result<(), ProviderError> {
         self.inner.abandon_orchestration_item(lock_token, delay_ms).await
     }
 
@@ -144,7 +181,7 @@ impl Provider for FailingProvider {
         self.inner.read(instance).await
     }
 
-    async fn enqueue_worker_work(&self, item: WorkItem) -> Result<(), String> {
+    async fn enqueue_worker_work(&self, item: WorkItem) -> Result<(), ProviderError> {
         self.inner.enqueue_worker_work(item).await
     }
 
@@ -152,10 +189,13 @@ impl Provider for FailingProvider {
         self.inner.dequeue_worker_peek_lock().await
     }
 
-    async fn ack_worker(&self, token: &str, completion: WorkItem) -> Result<(), String> {
+    async fn ack_worker(&self, token: &str, completion: WorkItem) -> Result<(), ProviderError> {
         if self.fail_next_ack_worker.swap(false, Ordering::SeqCst) {
             self.inner.ack_worker(token, completion.clone()).await?;
-            Err("simulated infrastructure failure".to_string())
+            Err(ProviderError::permanent(
+                "ack_worker",
+                "simulated infrastructure failure",
+            ))
         } else {
             self.inner.ack_worker(token, completion).await
         }
@@ -166,13 +206,13 @@ impl Provider for FailingProvider {
         instance: &str,
         execution_id: u64,
         new_events: Vec<Event>,
-    ) -> Result<(), String> {
+    ) -> Result<(), ProviderError> {
         self.inner
             .append_with_execution(instance, execution_id, new_events)
             .await
     }
 
-    async fn enqueue_orchestrator_work(&self, item: WorkItem, delay_ms: Option<u64>) -> Result<(), String> {
+    async fn enqueue_orchestrator_work(&self, item: WorkItem, delay_ms: Option<u64>) -> Result<(), ProviderError> {
         self.inner.enqueue_orchestrator_work(item, delay_ms).await
     }
 
@@ -436,6 +476,22 @@ async fn metrics_capture_activity_and_orchestration_outcomes() {
         other => panic!("unexpected status for config failure: {other:?}"),
     }
 
+    // Trigger infrastructure error for orchestration (ack_orchestration_item fails permanently)
+    // This tests infrastructure failure handling - orchestration should fail
+    failing_provider.fail_next_ack_orchestration_item();
+    client
+        .start_orchestration("metrics-orch-infra", "SuccessOrch", "")
+        .await
+        .unwrap();
+    match client
+        .wait_for_orchestration("metrics-orch-infra", std::time::Duration::from_secs(5))
+        .await
+        .unwrap()
+    {
+        OrchestrationStatus::Failed { .. } => {}
+        other => panic!("unexpected status for orchestration infra failure: {other:?}"),
+    }
+
     let snapshot = rt
         .metrics_snapshot()
         .expect("metrics should be available when observability is enabled");
@@ -457,7 +513,7 @@ async fn metrics_capture_activity_and_orchestration_outcomes() {
     );
 
     assert_eq!(snapshot.orch_completions, 2, "expected two successful orchestrations");
-    assert_eq!(snapshot.orch_failures, 2, "expected two failed orchestrations");
+    assert_eq!(snapshot.orch_failures, 3, "expected three failed orchestrations");
     assert_eq!(
         snapshot.orch_application_errors, 1,
         "expected one application orchestration failure"
@@ -467,7 +523,7 @@ async fn metrics_capture_activity_and_orchestration_outcomes() {
         "expected one configuration orchestration failure"
     );
     assert_eq!(
-        snapshot.orch_infrastructure_errors, 0,
-        "no orchestrations should have infra failures"
+        snapshot.orch_infrastructure_errors, 1,
+        "expected one infrastructure orchestration failure"
     );
 }

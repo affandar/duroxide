@@ -15,7 +15,7 @@ pub async fn test_invalid_lock_token_on_ack<F: ProviderFactory>(factory: &F) {
 
     assert!(result.is_err());
     let err_msg = result.unwrap_err();
-    assert!(err_msg.contains("Invalid lock token") || err_msg.contains("lock_token"));
+    assert!(err_msg.message.contains("Invalid lock token") || err_msg.message.contains("lock_token"));
     tracing::info!("✓ Test passed: invalid lock token rejected");
 }
 

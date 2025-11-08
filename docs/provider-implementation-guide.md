@@ -66,7 +66,7 @@ for mut event in history_delta {
 ## Complete Implementation Template
 
 ```rust
-use duroxide::providers::{Provider, WorkItem, OrchestrationItem, ExecutionMetadata};
+use duroxide::providers::{Provider, ProviderError, WorkItem, OrchestrationItem, ExecutionMetadata};
 use duroxide::Event;
 use std::sync::Arc;
 
@@ -98,7 +98,7 @@ impl Provider for MyProvider {
         worker_items: Vec<WorkItem>,
         orchestrator_items: Vec<WorkItem>,
         metadata: ExecutionMetadata,
-    ) -> Result<(), String> {
+    ) -> Result<(), ProviderError> {
         // ALL operations must be atomic (single transaction):
         // 1. Idempotently create execution row for the explicit execution_id (INSERT OR IGNORE)
         // 2. Update instances.current_execution_id = MAX(current_execution_id, execution_id)
@@ -111,7 +111,7 @@ impl Provider for MyProvider {
         todo!("See detailed docs below")
     }
     
-    async fn abandon_orchestration_item(&self, lock_token: &str, delay_ms: Option<u64>) -> Result<(), String> {
+    async fn abandon_orchestration_item(&self, lock_token: &str, delay_ms: Option<u64>) -> Result<(), ProviderError> {
         // Clear lock_token from messages
         // Optionally delay visibility for backoff
         
@@ -132,7 +132,7 @@ impl Provider for MyProvider {
         instance: &str,
         execution_id: u64,
         new_events: Vec<Event>,
-    ) -> Result<(), String> {
+    ) -> Result<(), ProviderError> {
         // Append events to history for specified execution
         // DO NOT modify event_ids (runtime assigns these)
         // Reject or ignore duplicates (same event_id)
@@ -142,7 +142,7 @@ impl Provider for MyProvider {
     
     // === REQUIRED: Worker Queue ===
     
-    async fn enqueue_worker_work(&self, item: WorkItem) -> Result<(), String> {
+    async fn enqueue_worker_work(&self, item: WorkItem) -> Result<(), ProviderError> {
         // Add item to worker queue
         // New items should have lock_token = NULL
         
@@ -157,7 +157,7 @@ impl Provider for MyProvider {
         todo!()
     }
     
-    async fn ack_worker(&self, token: &str, completion: WorkItem) -> Result<(), String> {
+    async fn ack_worker(&self, token: &str, completion: WorkItem) -> Result<(), ProviderError> {
         // Atomically:
         // 1. Delete item from worker queue (WHERE lock_token = token)
         // 2. Enqueue completion (ActivityCompleted or ActivityFailed) to orchestrator queue
@@ -168,7 +168,7 @@ impl Provider for MyProvider {
     
     // === REQUIRED: Orchestrator Queue ===
     
-    async fn enqueue_orchestrator_work(&self, item: WorkItem, delay_ms: Option<u64>) -> Result<(), String> {
+    async fn enqueue_orchestrator_work(&self, item: WorkItem, delay_ms: Option<u64>) -> Result<(), ProviderError> {
         // Extract instance from item (see WorkItem docs)
         // Set visible_at = now() + delay_ms.unwrap_or(0)
         // Enqueue work item to orchestrator_queue
@@ -205,6 +205,74 @@ impl Provider for MyProvider {
     }
 }
 ```
+
+---
+
+## Error Handling with ProviderError
+
+**⚠️ CRITICAL: All Provider methods return `Result<..., ProviderError>`**
+
+Providers must return `ProviderError` instead of `String` to enable smart retry logic in the runtime. The runtime uses `ProviderError::is_retryable()` to decide whether to retry operations automatically.
+
+### ProviderError Structure
+
+```rust
+use duroxide::providers::ProviderError;
+
+// Retryable (transient) errors - runtime will retry automatically
+ProviderError::retryable("ack_orchestration_item", "Database is busy")
+
+// Non-retryable (permanent) errors - runtime will fail immediately
+ProviderError::permanent("ack_orchestration_item", "Duplicate event detected")
+```
+
+### Error Classification
+
+**Retryable errors (`is_retryable = true`):**
+- Database busy/locked (e.g., SQLITE_BUSY)
+- Connection timeouts
+- Network failures
+- Temporary resource exhaustion
+
+**Non-retryable errors (`is_retryable = false`):**
+- Data corruption (missing instance, invalid format)
+- Duplicate events (indicates bug)
+- Invalid input (malformed work item)
+- Configuration errors
+- Invalid lock tokens (idempotent - already processed)
+
+### Converting Database Errors
+
+```rust
+use duroxide::providers::ProviderError;
+
+// Example: Converting sqlx::Error to ProviderError
+fn sqlx_to_provider_error(operation: &str, e: sqlx::Error) -> ProviderError {
+    match e {
+        sqlx::Error::Database(db_err) => {
+            if db_err.code() == Some("SQLITE_BUSY") {
+                ProviderError::retryable(operation, format!("Database busy: {}", e))
+            } else if db_err.message().contains("UNIQUE constraint") {
+                ProviderError::permanent(operation, format!("Duplicate detected: {}", e))
+            } else {
+                ProviderError::permanent(operation, format!("Database error: {}", e))
+            }
+        }
+        sqlx::Error::PoolClosed | sqlx::Error::PoolTimedOut => {
+            ProviderError::retryable(operation, format!("Connection pool error: {}", e))
+        }
+        _ => ProviderError::permanent(operation, format!("Unexpected error: {}", e)),
+    }
+}
+```
+
+### Runtime Retry Behavior
+
+The runtime automatically retries retryable errors with exponential backoff:
+- **Retryable errors**: Retried up to 5 times with exponential backoff (10ms, 20ms, 40ms, 80ms, 160ms)
+- **Non-retryable errors**: Fail immediately, orchestration marked as failed with infrastructure error
+
+If a retryable error persists after all retries, it is treated as an infrastructure failure and the orchestration is marked as failed.
 
 ---
 
@@ -572,7 +640,7 @@ VALUES (?, ?, ?, ?)
 ```
 
 **Error Handling:**
-- Return `Err("duplicate event_id")` or similar when duplicate detected
+- Return `Err(ProviderError::permanent("ack_orchestration_item", "duplicate event_id detected"))` when duplicate detected
 - Do NOT silently ignore duplicates (`ON CONFLICT DO NOTHING` is wrong for history)
 - Do NOT update existing events (history is append-only)
 
@@ -588,7 +656,7 @@ instance_id = SELECT instance_id FROM instance_locks
 
 IF instance_id IS NULL:
     ROLLBACK
-    RETURN Err("Invalid or expired lock token")
+    RETURN Err(ProviderError::permanent("ack_orchestration_item", "Invalid or expired lock token"))
 
 // Step 2: Verify lock token matches instance
 // This prevents using a lock token from a different instance
@@ -599,7 +667,7 @@ lock_valid = SELECT COUNT(*) FROM instance_locks
 
 IF lock_valid == 0:
     ROLLBACK
-    RETURN Err("Instance lock expired or invalid")
+    RETURN Err(ProviderError::permanent("ack_orchestration_item", "Instance lock expired or invalid"))
 
 // Step 3: Remove instance lock (processing complete)
 DELETE FROM instance_locks 
@@ -642,7 +710,7 @@ WHERE instance_id = instance_id;
 FOR event IN history_delta:
     // Validate event_id was set by runtime
     IF event.event_id() == 0:
-        RETURN Err("event_id must be set by runtime")
+        RETURN Err(ProviderError::permanent("ack_orchestration_item", "event_id must be set by runtime"))
     
     event_json = serialize(event)
     event_type = extract_discriminant_name(event)  // For indexing only
@@ -766,7 +834,7 @@ instance_id = SELECT instance_id FROM instance_locks
 IF instance_id IS NULL:
     // Invalid lock token - this is an error condition
     ROLLBACK
-    RETURN Err("Invalid lock token")
+    RETURN Err(ProviderError::permanent("abandon_orchestration_item", "Invalid lock token"))
 
 // Step 2: Clear lock_token from messages (unlock them)
 visible_at = IF delay_ms IS NOT NULL:
@@ -1026,16 +1094,18 @@ ON CONFLICT DO NOTHING  // DON'T DO THIS!
 ```
 
 ```rust
-// CORRECT - Error on duplicates
+// CORRECT - Error on duplicates with ProviderError
 INSERT INTO history (...) VALUES (...)
 // PRIMARY KEY constraint will cause error if duplicate exists
-// Provider should return error when constraint violation occurs
+// Provider should return ProviderError when constraint violation occurs
 match db.execute(query).await {
     Err(e) if e.is_constraint_violation() => {
-        Err("duplicate event_id detected".to_string())
+        Err(ProviderError::permanent("ack_orchestration_item", "duplicate event_id detected"))
     }
-    result => result
+    Err(e) => Err(sqlx_to_provider_error("ack_orchestration_item", e)),
+    Ok(_) => Ok(()),
 }
+```
 ```
 
 **Why:** Duplicate events indicate a serious problem (retry bug, runtime issue, or provider corruption). Silent ignoring hides the problem and can lead to data inconsistency. The runtime already performs duplicate detection based on history before calling `ack_orchestration_item()`, so duplicates reaching the provider represent an invalid state that must be surfaced as an error.
@@ -1281,21 +1351,21 @@ The `ManagementCapability` trait provides rich management and observability feat
 #[async_trait::async_trait]
 pub trait ManagementCapability: Send + Sync {
     // Discovery
-    async fn list_instances(&self) -> Result<Vec<String>, String>;
-    async fn list_instances_by_status(&self, status: &str) -> Result<Vec<String>, String>;
-    async fn list_executions(&self, instance: &str) -> Result<Vec<u64>, String>;
+    async fn list_instances(&self) -> Result<Vec<String>, ProviderError>;
+    async fn list_instances_by_status(&self, status: &str) -> Result<Vec<String>, ProviderError>;
+    async fn list_executions(&self, instance: &str) -> Result<Vec<u64>, ProviderError>;
     
     // History access
-    async fn read_execution(&self, instance: &str, execution_id: u64) -> Result<Vec<Event>, String>;
-    async fn latest_execution_id(&self, instance: &str) -> Result<u64, String>;
+    async fn read_execution(&self, instance: &str, execution_id: u64) -> Result<Vec<Event>, ProviderError>;
+    async fn latest_execution_id(&self, instance: &str) -> Result<u64, ProviderError>;
     
     // Metadata
-    async fn get_instance_info(&self, instance: &str) -> Result<InstanceInfo, String>;
-    async fn get_execution_info(&self, instance: &str, execution_id: u64) -> Result<ExecutionInfo, String>;
+    async fn get_instance_info(&self, instance: &str) -> Result<InstanceInfo, ProviderError>;
+    async fn get_execution_info(&self, instance: &str, execution_id: u64) -> Result<ExecutionInfo, ProviderError>;
     
     // System metrics
-    async fn get_system_metrics(&self) -> Result<SystemMetrics, String>;
-    async fn get_queue_depths(&self) -> Result<QueueDepths, String>;
+    async fn get_system_metrics(&self) -> Result<SystemMetrics, ProviderError>;
+    async fn get_queue_depths(&self) -> Result<QueueDepths, ProviderError>;
 }
 ```
 
@@ -1315,17 +1385,17 @@ impl Provider for MyProvider {
 
 #[async_trait::async_trait]
 impl ManagementCapability for MyProvider {
-    async fn list_instances(&self) -> Result<Vec<String>, String> {
+    async fn list_instances(&self) -> Result<Vec<String>, ProviderError> {
         // Return all instance IDs
         let rows = sqlx::query!("SELECT instance_id FROM instances ORDER BY created_at")
             .fetch_all(&self.pool)
             .await
-            .map_err(|e| format!("Failed to list instances: {}", e))?;
+            .map_err(|e| sqlx_to_provider_error("list_instances", e))?;
         
         Ok(rows.into_iter().map(|r| r.instance_id).collect())
     }
     
-    async fn list_instances_by_status(&self, status: &str) -> Result<Vec<String>, String> {
+    async fn list_instances_by_status(&self, status: &str) -> Result<Vec<String>, ProviderError> {
         // Return instances with specific status (Running, Completed, Failed)
         let rows = sqlx::query!(
             "SELECT DISTINCT i.instance_id 
@@ -1338,12 +1408,12 @@ impl ManagementCapability for MyProvider {
         )
         .fetch_all(&self.pool)
         .await
-        .map_err(|e| format!("Failed to list instances by status: {}", e))?;
+        .map_err(|e| sqlx_to_provider_error("list_instances_by_status", e))?;
         
         Ok(rows.into_iter().map(|r| r.instance_id).collect())
     }
     
-    async fn list_executions(&self, instance: &str) -> Result<Vec<u64>, String> {
+    async fn list_executions(&self, instance: &str) -> Result<Vec<u64>, ProviderError> {
         // Return all execution IDs for an instance
         let rows = sqlx::query!(
             "SELECT execution_id FROM executions 
@@ -1353,12 +1423,12 @@ impl ManagementCapability for MyProvider {
         )
         .fetch_all(&self.pool)
         .await
-        .map_err(|e| format!("Failed to list executions: {}", e))?;
+            .map_err(|e| sqlx_to_provider_error("list_executions", e))?;
         
         Ok(rows.into_iter().map(|r| r.execution_id as u64).collect())
     }
     
-    async fn read_execution(&self, instance: &str, execution_id: u64) -> Result<Vec<Event>, String> {
+    async fn read_execution(&self, instance: &str, execution_id: u64) -> Result<Vec<Event>, ProviderError> {
         // Return history for specific execution (not just latest)
         let rows = sqlx::query!(
             "SELECT event_data FROM history 
@@ -1369,15 +1439,15 @@ impl ManagementCapability for MyProvider {
         )
         .fetch_all(&self.pool)
         .await
-        .map_err(|e| format!("Failed to read execution: {}", e))?;
+            .map_err(|e| sqlx_to_provider_error("read_execution", e))?;
         
         rows.into_iter()
             .filter_map(|row| serde_json::from_str(&row.event_data).ok())
             .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| format!("Failed to deserialize events: {}", e))
+            .map_err(|e| ProviderError::permanent("read_execution", &format!("Failed to deserialize events: {}", e)))
     }
     
-    async fn latest_execution_id(&self, instance: &str) -> Result<u64, String> {
+    async fn latest_execution_id(&self, instance: &str) -> Result<u64, ProviderError> {
         // Return highest execution ID
         let row = sqlx::query!(
             "SELECT current_execution_id FROM instances WHERE instance_id = ?",
@@ -1385,13 +1455,13 @@ impl ManagementCapability for MyProvider {
         )
         .fetch_optional(&self.pool)
         .await
-        .map_err(|e| format!("Failed to get latest execution: {}", e))?;
+            .map_err(|e| sqlx_to_provider_error("latest_execution_id", e))?;
         
         row.map(|r| r.current_execution_id as u64)
-            .ok_or_else(|| "Instance not found".to_string())
+            .ok_or_else(|| ProviderError::permanent("latest_execution_id", "Instance not found"))
     }
     
-    async fn get_instance_info(&self, instance: &str) -> Result<InstanceInfo, String> {
+    async fn get_instance_info(&self, instance: &str) -> Result<InstanceInfo, ProviderError> {
         // Return instance metadata
         let row = sqlx::query!(
             "SELECT i.orchestration_name, i.orchestration_version, 
@@ -1405,8 +1475,8 @@ impl ManagementCapability for MyProvider {
         )
         .fetch_optional(&self.pool)
         .await
-        .map_err(|e| format!("Failed to get instance info: {}", e))?
-        .ok_or_else(|| "Instance not found".to_string())?;
+            .map_err(|e| sqlx_to_provider_error("get_instance_info", e))?
+            .ok_or_else(|| ProviderError::permanent("get_instance_info", "Instance not found"))?;
         
         Ok(InstanceInfo {
             instance_id: instance.to_string(),
@@ -1419,7 +1489,7 @@ impl ManagementCapability for MyProvider {
         })
     }
     
-    async fn get_execution_info(&self, instance: &str, execution_id: u64) -> Result<ExecutionInfo, String> {
+    async fn get_execution_info(&self, instance: &str, execution_id: u64) -> Result<ExecutionInfo, ProviderError> {
         // Return execution-specific metadata
         let row = sqlx::query!(
             "SELECT status, output, started_at, completed_at 
@@ -1430,8 +1500,8 @@ impl ManagementCapability for MyProvider {
         )
         .fetch_optional(&self.pool)
         .await
-        .map_err(|e| format!("Failed to get execution info: {}", e))?
-        .ok_or_else(|| "Execution not found".to_string())?;
+            .map_err(|e| sqlx_to_provider_error("get_execution_info", e))?
+            .ok_or_else(|| ProviderError::permanent("get_execution_info", "Execution not found"))?;
         
         Ok(ExecutionInfo {
             instance_id: instance.to_string(),
@@ -1443,42 +1513,42 @@ impl ManagementCapability for MyProvider {
         })
     }
     
-    async fn get_system_metrics(&self) -> Result<SystemMetrics, String> {
+    async fn get_system_metrics(&self) -> Result<SystemMetrics, ProviderError> {
         // Return system-wide statistics
         let total_instances = sqlx::query!("SELECT COUNT(*) as count FROM instances")
             .fetch_one(&self.pool)
             .await
-            .map_err(|e| format!("Failed to get metrics: {}", e))?
+            .map_err(|e| sqlx_to_provider_error("get_system_metrics", e))?
             .count as usize;
         
         let total_executions = sqlx::query!("SELECT COUNT(*) as count FROM executions")
             .fetch_one(&self.pool)
             .await
-            .map_err(|e| format!("Failed to get metrics: {}", e))?
+            .map_err(|e| sqlx_to_provider_error("get_system_metrics", e))?
             .count as usize;
         
         let running = sqlx::query!("SELECT COUNT(*) as count FROM executions WHERE status = 'Running'")
             .fetch_one(&self.pool)
             .await
-            .map_err(|e| format!("Failed to get metrics: {}", e))?
+            .map_err(|e| sqlx_to_provider_error("get_system_metrics", e))?
             .count as usize;
         
         let completed = sqlx::query!("SELECT COUNT(*) as count FROM executions WHERE status = 'Completed'")
             .fetch_one(&self.pool)
             .await
-            .map_err(|e| format!("Failed to get metrics: {}", e))?
+            .map_err(|e| sqlx_to_provider_error("get_system_metrics", e))?
             .count as usize;
         
         let failed = sqlx::query!("SELECT COUNT(*) as count FROM executions WHERE status = 'Failed'")
             .fetch_one(&self.pool)
             .await
-            .map_err(|e| format!("Failed to get metrics: {}", e))?
+            .map_err(|e| sqlx_to_provider_error("get_system_metrics", e))?
             .count as usize;
         
         let total_events = sqlx::query!("SELECT COUNT(*) as count FROM history")
             .fetch_one(&self.pool)
             .await
-            .map_err(|e| format!("Failed to get metrics: {}", e))?
+            .map_err(|e| sqlx_to_provider_error("get_system_metrics", e))?
             .count as usize;
         
         Ok(SystemMetrics {
@@ -1491,18 +1561,18 @@ impl ManagementCapability for MyProvider {
         })
     }
     
-    async fn get_queue_depths(&self) -> Result<QueueDepths, String> {
+    async fn get_queue_depths(&self) -> Result<QueueDepths, ProviderError> {
         // Return current queue depths
         let orch = sqlx::query!("SELECT COUNT(*) as count FROM orchestrator_queue")
             .fetch_one(&self.pool)
             .await
-            .map_err(|e| format!("Failed to get queue depths: {}", e))?
+            .map_err(|e| sqlx_to_provider_error("get_queue_depths", e))?
             .count as usize;
         
         let worker = sqlx::query!("SELECT COUNT(*) as count FROM worker_queue")
             .fetch_one(&self.pool)
             .await
-            .map_err(|e| format!("Failed to get queue depths: {}", e))?
+            .map_err(|e| sqlx_to_provider_error("get_queue_depths", e))?
             .count as usize;
         
         Ok(QueueDepths {

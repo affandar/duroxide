@@ -1,6 +1,8 @@
 ## Durable Task Rust Core – TODOs
 
 
+- Fix up the stress tests, make them more usable by providers
+- API endpoint for runtime, MCP server, orch status etc. 
 - Metrics/logging dashboard 
 - Refactor tests, figure out what are the unit tests vs not
 - some failure stress tests. 

@@ -3,6 +3,7 @@
 //! Separate from the core Provider trait, this interface provides
 //! administrative and debugging capabilities.
 
+use super::ProviderError;
 use crate::Event;
 
 /// Management provider for observability and administrative operations.
@@ -53,7 +54,7 @@ pub trait ManagementProvider: Send + Sync {
     /// # Implementation Example
     ///
     /// ```ignore
-    /// async fn list_instances(&self) -> Result<Vec<String>, String> {
+    /// async fn list_instances(&self) -> Result<Vec<String>, ProviderError> {
     ///     SELECT instance_id FROM instances ORDER BY created_at DESC
     /// }
     /// ```
@@ -61,7 +62,7 @@ pub trait ManagementProvider: Send + Sync {
     /// # Default
     ///
     /// Returns empty Vec if not supported.
-    async fn list_instances(&self) -> Result<Vec<String>, String> {
+    async fn list_instances(&self) -> Result<Vec<String>, ProviderError> {
         Ok(Vec::new())
     }
 
@@ -78,7 +79,7 @@ pub trait ManagementProvider: Send + Sync {
     /// # Implementation Example
     ///
     /// ```ignore
-    /// async fn list_instances_by_status(&self, status: &str) -> Result<Vec<String>, String> {
+    /// async fn list_instances_by_status(&self, status: &str) -> Result<Vec<String>, ProviderError> {
     ///     SELECT i.instance_id FROM instances i
     ///     JOIN executions e ON i.instance_id = e.instance_id AND i.current_execution_id = e.execution_id
     ///     WHERE e.status = ?
@@ -89,7 +90,7 @@ pub trait ManagementProvider: Send + Sync {
     /// # Default
     ///
     /// Returns empty Vec if not supported.
-    async fn list_instances_by_status(&self, _status: &str) -> Result<Vec<String>, String> {
+    async fn list_instances_by_status(&self, _status: &str) -> Result<Vec<String>, ProviderError> {
         Ok(Vec::new())
     }
 
@@ -117,7 +118,7 @@ pub trait ManagementProvider: Send + Sync {
     /// # Implementation Example
     ///
     /// ```ignore
-    /// async fn list_executions(&self, instance: &str) -> Result<Vec<u64>, String> {
+    /// async fn list_executions(&self, instance: &str) -> Result<Vec<u64>, ProviderError> {
     ///     SELECT execution_id FROM executions
     ///     WHERE instance_id = ?
     ///     ORDER BY execution_id ASC
@@ -127,7 +128,7 @@ pub trait ManagementProvider: Send + Sync {
     /// # Default
     ///
     /// Returns [1] if instance exists, empty Vec otherwise.
-    async fn list_executions(&self, _instance: &str) -> Result<Vec<u64>, String> {
+    async fn list_executions(&self, _instance: &str) -> Result<Vec<u64>, ProviderError> {
         // Default: assume single execution
         Ok(vec![1])
     }
@@ -157,7 +158,7 @@ pub trait ManagementProvider: Send + Sync {
     /// # Implementation Example
     ///
     /// ```ignore
-    /// async fn read_execution(&self, instance: &str, execution_id: u64) -> Result<Vec<Event>, String> {
+    /// async fn read_execution(&self, instance: &str, execution_id: u64) -> Result<Vec<Event>, ProviderError> {
     ///     SELECT event_data FROM history
     ///     WHERE instance_id = ? AND execution_id = ?
     ///     ORDER BY event_id ASC
@@ -167,8 +168,11 @@ pub trait ManagementProvider: Send + Sync {
     /// # Default
     ///
     /// Returns error indicating not supported.
-    async fn read_execution(&self, instance: &str, _execution_id: u64) -> Result<Vec<Event>, String> {
-        Err(format!("read_execution not supported for instance: {instance}"))
+    async fn read_execution(&self, instance: &str, _execution_id: u64) -> Result<Vec<Event>, ProviderError> {
+        Err(ProviderError::permanent(
+            "read_execution",
+            format!("not supported for instance: {instance}"),
+        ))
     }
 
     /// Get the latest (current) execution ID for an instance.
@@ -187,7 +191,7 @@ pub trait ManagementProvider: Send + Sync {
     /// # Implementation Example
     ///
     /// ```ignore
-    /// async fn latest_execution_id(&self, instance: &str) -> Result<u64, String> {
+    /// async fn latest_execution_id(&self, instance: &str) -> Result<u64, ProviderError> {
     ///     SELECT COALESCE(MAX(execution_id), 1) FROM executions WHERE instance_id = ?
     /// }
     /// ```
@@ -195,7 +199,7 @@ pub trait ManagementProvider: Send + Sync {
     /// # Default
     ///
     /// Returns 1 (assumes single execution).
-    async fn latest_execution_id(&self, _instance: &str) -> Result<u64, String> {
+    async fn latest_execution_id(&self, _instance: &str) -> Result<u64, ProviderError> {
         Ok(1)
     }
 
@@ -216,7 +220,7 @@ pub trait ManagementProvider: Send + Sync {
     /// # Implementation Example
     ///
     /// ```ignore
-    /// async fn get_instance_info(&self, instance: &str) -> Result<InstanceInfo, String> {
+    /// async fn get_instance_info(&self, instance: &str) -> Result<InstanceInfo, ProviderError> {
     ///     SELECT i.orchestration_name, i.orchestration_version, i.current_execution_id,
     ///            e.status, e.output, i.created_at, e.completed_at
     ///     FROM instances i
@@ -229,8 +233,11 @@ pub trait ManagementProvider: Send + Sync {
     /// # Default
     ///
     /// Returns error indicating not supported.
-    async fn get_instance_info(&self, instance: &str) -> Result<InstanceInfo, String> {
-        Err(format!("get_instance_info not supported for instance: {instance}"))
+    async fn get_instance_info(&self, instance: &str) -> Result<InstanceInfo, ProviderError> {
+        Err(ProviderError::permanent(
+            "get_instance_info",
+            format!("not supported for instance: {instance}"),
+        ))
     }
 
     /// Get detailed metadata for a specific execution.
@@ -248,7 +255,7 @@ pub trait ManagementProvider: Send + Sync {
     /// # Implementation Example
     ///
     /// ```ignore
-    /// async fn get_execution_info(&self, instance: &str, execution_id: u64) -> Result<ExecutionInfo, String> {
+    /// async fn get_execution_info(&self, instance: &str, execution_id: u64) -> Result<ExecutionInfo, ProviderError> {
     ///     SELECT status, output, started_at, completed_at,
     ///            (SELECT COUNT(*) FROM history WHERE instance_id = ? AND execution_id = ?) as event_count
     ///     FROM executions
@@ -259,8 +266,11 @@ pub trait ManagementProvider: Send + Sync {
     /// # Default
     ///
     /// Returns error indicating not supported.
-    async fn get_execution_info(&self, instance: &str, _execution_id: u64) -> Result<ExecutionInfo, String> {
-        Err(format!("get_execution_info not supported for instance: {instance}"))
+    async fn get_execution_info(&self, instance: &str, _execution_id: u64) -> Result<ExecutionInfo, ProviderError> {
+        Err(ProviderError::permanent(
+            "get_execution_info",
+            format!("not supported for instance: {instance}"),
+        ))
     }
 
     // ===== System Metrics =====
@@ -280,7 +290,7 @@ pub trait ManagementProvider: Send + Sync {
     /// # Implementation Example
     ///
     /// ```ignore
-    /// async fn get_system_metrics(&self) -> Result<SystemMetrics, String> {
+    /// async fn get_system_metrics(&self) -> Result<SystemMetrics, ProviderError> {
     ///     SELECT
     ///         COUNT(DISTINCT i.instance_id) as total_instances,
     ///         COUNT(DISTINCT e.execution_id) as total_executions,
@@ -295,7 +305,7 @@ pub trait ManagementProvider: Send + Sync {
     /// # Default
     ///
     /// Returns default/empty metrics.
-    async fn get_system_metrics(&self) -> Result<SystemMetrics, String> {
+    async fn get_system_metrics(&self) -> Result<SystemMetrics, ProviderError> {
         Ok(SystemMetrics::default())
     }
 
@@ -314,7 +324,7 @@ pub trait ManagementProvider: Send + Sync {
     /// # Implementation Example
     ///
     /// ```ignore
-    /// async fn get_queue_depths(&self) -> Result<QueueDepths, String> {
+    /// async fn get_queue_depths(&self) -> Result<QueueDepths, ProviderError> {
     ///     SELECT
     ///         (SELECT COUNT(*) FROM orchestrator_queue WHERE lock_token IS NULL) as orch,
     ///         (SELECT COUNT(*) FROM worker_queue WHERE lock_token IS NULL) as worker,
@@ -325,7 +335,7 @@ pub trait ManagementProvider: Send + Sync {
     /// # Default
     ///
     /// Returns zeros.
-    async fn get_queue_depths(&self) -> Result<QueueDepths, String> {
+    async fn get_queue_depths(&self) -> Result<QueueDepths, ProviderError> {
         Ok(QueueDepths::default())
     }
 }

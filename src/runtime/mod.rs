@@ -1,5 +1,5 @@
 //
-use crate::providers::{ExecutionMetadata, Provider, WorkItem};
+use crate::providers::{ExecutionMetadata, Provider, ProviderError, WorkItem};
 use crate::{Event, OrchestrationContext};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -451,15 +451,16 @@ impl Runtime {
             || (temp_history_mgr.is_continued_as_new && !workitem_reader.is_continue_as_new)
         {
             warn!(instance = %instance, "Instance is terminal (completed/failed or CAN without start), acking batch without processing");
-            self.ack_orchestration_with_changes(
-                lock_token,
-                item.execution_id,
-                vec![],
-                vec![],
-                vec![],
-                ExecutionMetadata::default(),
-            )
-            .await;
+            let _ = self
+                .ack_orchestration_with_changes(
+                    lock_token,
+                    item.execution_id,
+                    vec![],
+                    vec![],
+                    vec![],
+                    ExecutionMetadata::default(),
+                )
+                .await;
             return;
         }
 
@@ -612,15 +613,70 @@ impl Runtime {
         }
 
         // Robust ack with basic retry on any provider error
-        self.ack_orchestration_with_changes(
-            lock_token,
-            execution_id_for_ack,
-            history_delta.to_vec(),
-            worker_items,
-            orchestrator_items,
-            metadata,
-        )
-        .await;
+        match self
+            .ack_orchestration_with_changes(
+                lock_token,
+                execution_id_for_ack,
+                history_delta.to_vec(),
+                worker_items,
+                orchestrator_items,
+                metadata,
+            )
+            .await
+        {
+            Ok(()) => {
+                // Success - orchestration committed
+            }
+            Err(e) => {
+                // Failed to ack - need to fail the orchestration with infrastructure error
+                //
+                // This error handler is reached in two scenarios:
+                // 1. Non-retryable error: Permanent infrastructure issue (data corruption, invalid format, etc.)
+                // 2. Retryable error that failed after all retries: Persistent infrastructure issue
+                //    (database locked, network failure, etc. that persisted despite retries)
+                //
+                // In both cases, the infrastructure problem prevents the orchestration from progressing,
+                // so we treat it as an infrastructure failure and mark the orchestration as failed.
+                warn!(instance = %instance, error = %e, "Failed to ack orchestration item, failing orchestration");
+
+                // Create infrastructure error and commit it
+                let infra_error = e.to_infrastructure_error();
+                self.record_orchestration_infrastructure_error();
+
+                // Create a new history manager to append the failure event
+                let mut failure_history_mgr = HistoryManager::from_history(&item.history);
+                failure_history_mgr.append_failed(infra_error.clone());
+
+                // Try to commit the failure event
+                let failure_delta = failure_history_mgr.delta().to_vec();
+                let failure_metadata = Runtime::compute_execution_metadata(&failure_delta, &[], item.execution_id);
+
+                // Attempt to ack the failure (lock is still valid since we didn't abandon it yet)
+                match self
+                    .ack_orchestration_with_changes(
+                        lock_token,
+                        execution_id_for_ack,
+                        failure_delta.clone(),
+                        vec![],
+                        vec![],
+                        failure_metadata,
+                    )
+                    .await
+                {
+                    Ok(()) => {
+                        // Successfully committed failure event
+                        warn!(instance = %instance, "Successfully committed orchestration failure event");
+                        // Abandon the lock now that failure is committed
+                        drop(self.history_store.abandon_orchestration_item(lock_token, Some(50)));
+                    }
+                    Err(e2) => {
+                        // Failed to commit failure event - abandon lock
+                        warn!(instance = %instance, error = %e2, "Failed to commit failure event, abandoning lock");
+                        drop(self.history_store.abandon_orchestration_item(lock_token, Some(50)));
+                    }
+                }
+            }
+        }
     }
 
     // Helper methods for atomic orchestration processing
@@ -689,6 +745,10 @@ impl Runtime {
     }
 
     /// Execute a function with retry logic and exponential backoff
+    ///
+    /// NOTE: This method is kept for potential future use but is currently unused.
+    /// The runtime now uses ProviderError.is_retryable() for smarter retry decisions.
+    #[allow(dead_code)]
     async fn execute_with_retry<F, R, E>(&self, operation: F, operation_tag: &str, failure_handler: Option<impl Fn()>)
     where
         F: Fn() -> R,
@@ -723,7 +783,8 @@ impl Runtime {
         }
     }
 
-    /// Acknowledge an orchestration item with changes, using retry logic
+    /// Acknowledge an orchestration item with changes, using smart retry logic based on ProviderError
+    /// Returns Ok(()) on success, or the ProviderError if all retries failed
     async fn ack_orchestration_with_changes(
         &self,
         lock_token: &str,
@@ -732,26 +793,51 @@ impl Runtime {
         worker_items: Vec<WorkItem>,
         orchestrator_items: Vec<WorkItem>,
         metadata: ExecutionMetadata,
-    ) {
-        self.execute_with_retry(
-            || async {
-                self.history_store
-                    .ack_orchestration_item(
-                        lock_token,
-                        execution_id,
-                        history_delta.clone(),
-                        worker_items.clone(),
-                        orchestrator_items.clone(),
-                        metadata.clone(),
-                    )
-                    .await
-            },
-            "ack_orchestration_item",
-            Some(|| {
-                drop(self.history_store.abandon_orchestration_item(lock_token, Some(50)));
-            }),
-        )
-        .await;
+    ) -> Result<(), ProviderError> {
+        let mut attempts: u32 = 0;
+        let max_attempts: u32 = 5;
+
+        loop {
+            match self
+                .history_store
+                .ack_orchestration_item(
+                    lock_token,
+                    execution_id,
+                    history_delta.clone(),
+                    worker_items.clone(),
+                    orchestrator_items.clone(),
+                    metadata.clone(),
+                )
+                .await
+            {
+                Ok(()) => {
+                    return Ok(());
+                }
+                Err(e) => {
+                    // Check if error is retryable
+                    if !e.is_retryable() {
+                        // Non-retryable error - don't abandon lock yet, return error
+                        // Caller will try to commit failure event, then abandon lock
+                        warn!(error = %e, "ack_orchestration_item failed with non-retryable error");
+                        return Err(e);
+                    }
+
+                    // Retryable error - retry with backoff
+                    if attempts < max_attempts {
+                        let backoff_ms = 10u64.saturating_mul(1 << attempts);
+                        warn!(attempts, backoff_ms, error = %e, "ack_orchestration_item failed; retrying");
+                        tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
+                        attempts += 1;
+                        continue;
+                    } else {
+                        warn!(attempts, error = %e, "Failed to ack_orchestration_item after max retries");
+                        // Abandon the item to release lock
+                        drop(self.history_store.abandon_orchestration_item(lock_token, Some(50)));
+                        return Err(e);
+                    }
+                }
+            }
+        }
     }
 
     fn start_work_dispatcher(self: Arc<Self>, activities: Arc<registry::ActivityRegistry>) -> JoinHandle<()> {

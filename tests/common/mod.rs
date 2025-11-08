@@ -108,7 +108,8 @@ pub async fn test_create_execution(
             },
             None,
         )
-        .await?;
+        .await
+        .map_err(|e| e.to_string())?;
 
     // Fetch to get lock token
     let item = provider
@@ -140,7 +141,8 @@ pub async fn test_create_execution(
                 ..Default::default()
             },
         )
-        .await?;
+        .await
+        .map_err(|e| e.to_string())?;
 
     Ok(execution_id)
 }
