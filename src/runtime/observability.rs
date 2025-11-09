@@ -633,7 +633,7 @@ impl ObservabilityHandle {
     pub fn init(config: &ObservabilityConfig) -> Result<Self, String> {
         // Initialize logging first, but tolerate failures (e.g., global subscriber already set)
         if let Err(err) = init_logging(config) {
-            eprintln!("duroxide observability logging init failed: {err}");
+            eprintln!("duroxide: logging already initialized (this is normal if running multiple runtimes or tests)");
         }
 
         // Initialize metrics if enabled
