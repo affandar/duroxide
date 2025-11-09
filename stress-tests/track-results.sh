@@ -9,6 +9,29 @@ cd "$SCRIPT_DIR/.."
 
 RESULTS_FILE="stress-test-results.md"
 GIT_LOG_PATTERN="%h %s"
+CLOUD_MODE=false
+DURATION=""
+
+# Parse arguments
+for arg in "$@"; do
+    case "$arg" in
+        --cloud)
+            CLOUD_MODE=true
+            ;;
+        *)
+            if [[ "$arg" =~ ^[0-9]+$ ]]; then
+                DURATION="$arg"
+            else
+                echo "Error: Unrecognized argument '$arg'" >&2
+                exit 1
+            fi
+            ;;
+    esac
+done
+
+if [ "$CLOUD_MODE" = true ]; then
+    RESULTS_FILE="stress-test-results-cloud.md"
+fi
 
 # Get current commit hash and timestamp
 CURRENT_COMMIT=$(git rev-parse --short HEAD)
@@ -34,7 +57,11 @@ echo "Running stress tests..."
 
 # Capture output to a temp file and then display it
 TEMP_OUTPUT=$(mktemp)
-cargo run --release --package duroxide-stress-tests --bin parallel_orchestrations 2>&1 | tee "$TEMP_OUTPUT"
+if [ -n "$DURATION" ]; then
+    cargo run --release --package duroxide-stress-tests --bin parallel_orchestrations "$DURATION" 2>&1 | tee "$TEMP_OUTPUT"
+else
+    cargo run --release --package duroxide-stress-tests --bin parallel_orchestrations 2>&1 | tee "$TEMP_OUTPUT"
+fi
 TEST_OUTPUT=$(cat "$TEMP_OUTPUT")
 rm "$TEMP_OUTPUT"
 
@@ -57,6 +84,17 @@ cat > "$ENTRY_FILE" << EOF
 
 ## Commit: $CURRENT_COMMIT - Timestamp: $TIMESTAMP
 
+EOF
+
+if [ "$CLOUD_MODE" = true ]; then
+cat << 'EOF' >> "$ENTRY_FILE"
+### Environment
+- Cloud test environment
+
+EOF
+fi
+
+cat << EOF >> "$ENTRY_FILE"
 ### Changes Since Last Test
 \`\`\`
 $COMMIT_LOG
@@ -87,12 +125,21 @@ if [ -f "$RESULTS_FILE" ]; then
     mv temp_results.md "$RESULTS_FILE"
 else
     # Create new file with header
-    cat > "$RESULTS_FILE" << 'EOF'
+    if [ "$CLOUD_MODE" = true ]; then
+        cat > "$RESULTS_FILE" << 'EOF'
+# Duroxide Stress Test Results (Cloud)
+
+<!-- Cloud environment runs. -->
+
+EOF
+    else
+        cat > "$RESULTS_FILE" << 'EOF'
 # Duroxide Stress Test Results
 
 This file tracks all stress test runs, including performance metrics and commit changes.
 
 EOF
+    fi
     cat "$ENTRY_FILE" >> "$RESULTS_FILE"
 fi
 
@@ -100,7 +147,11 @@ rm "$ENTRY_FILE"
 
 echo ""
 echo "=========================================="
-echo "Stress Test Results Tracked"
+if [ "$CLOUD_MODE" = true ]; then
+    echo "Stress Test Results Tracked (Cloud)"
+else
+    echo "Stress Test Results Tracked"
+fi
 echo "=========================================="
 echo "Commit: $CURRENT_COMMIT"
 echo "Results saved to: $RESULTS_FILE"

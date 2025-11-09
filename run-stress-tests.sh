@@ -5,26 +5,45 @@
 # which tests multiple providers and concurrency configurations.
 #
 # Usage:
-#   ./run-stress-tests.sh [DURATION] [--track]
+#   ./run-stress-tests.sh [DURATION] [--track|--track-cloud]
 #
 # Examples:
 #   ./run-stress-tests.sh              # Run for 30 seconds (default)
 #   ./run-stress-tests.sh 60           # Run for 60 seconds
 #   ./run-stress-tests.sh 5            # Quick 5 second test
 #   ./run-stress-tests.sh 60 --track   # Run for 60 seconds and track results
+#   ./run-stress-tests.sh --track-cloud   # Track results to the cloud log
 
 set -e
 
-TRACK_RESULTS=false
+TRACK_MODE=""
 DURATION=""
 
 # Parse arguments
 for arg in "$@"; do
-    if [ "$arg" == "--track" ]; then
-        TRACK_RESULTS=true
-    elif [[ "$arg" =~ ^[0-9]+$ ]]; then
-        DURATION="$arg"
-    fi
+    case "$arg" in
+        --track)
+            if [ "$TRACK_MODE" = "cloud" ]; then
+                echo "Error: --track cannot be combined with --track-cloud" >&2
+                exit 1
+            fi
+            TRACK_MODE="local"
+            ;;
+        --track-cloud)
+            if [ "$TRACK_MODE" = "local" ]; then
+                echo "Error: --track-cloud cannot be combined with --track" >&2
+                exit 1
+            fi
+            TRACK_MODE="cloud"
+            ;;
+        *)
+            if [[ "$arg" =~ ^[0-9]+$ ]]; then
+                DURATION="$arg"
+            else
+                echo "Warning: Unrecognized argument '$arg' will be ignored" >&2
+            fi
+            ;;
+    esac
 done
 
 echo "=========================================="
@@ -32,14 +51,26 @@ echo "Duroxide Stress Test Suite"
 echo "=========================================="
 echo ""
 
-if [ "$TRACK_RESULTS" = true ]; then
-    echo "Running tests with result tracking..."
+if [ -n "$TRACK_MODE" ]; then
+    if [ "$TRACK_MODE" = "cloud" ]; then
+        echo "Running tests with cloud result tracking..."
+    else
+        echo "Running tests with result tracking..."
+    fi
     echo ""
     # Run with tracking (pass duration if specified)
     if [ -n "$DURATION" ]; then
-        ./stress-tests/track-results.sh "$DURATION"
+        if [ "$TRACK_MODE" = "cloud" ]; then
+            ./stress-tests/track-results.sh "$DURATION" --cloud
+        else
+            ./stress-tests/track-results.sh "$DURATION"
+        fi
     else
-        ./stress-tests/track-results.sh
+        if [ "$TRACK_MODE" = "cloud" ]; then
+            ./stress-tests/track-results.sh --cloud
+        else
+            ./stress-tests/track-results.sh
+        fi
     fi
 else
     # Run the stress tests in release mode for accurate performance metrics
