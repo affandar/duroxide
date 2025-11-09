@@ -2,9 +2,8 @@
 //!
 //! This scenario tests fan-out/fan-in orchestration patterns with concurrent instance execution.
 
-use crate::{
-    create_default_activities, create_default_orchestrations, print_comparison_table, run_stress_test, StressTestConfig,
-};
+use crate::{create_default_activities, create_default_orchestrations, print_comparison_table, run_stress_test};
+use duroxide::provider_stress_tests::StressTestConfig;
 use duroxide::providers::sqlite::SqliteProvider;
 use std::sync::Arc;
 use tracing::info;

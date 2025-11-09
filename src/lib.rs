@@ -252,6 +252,12 @@ pub mod provider_validations;
 #[cfg(feature = "provider-test")]
 pub mod provider_validation;
 
+#[cfg(feature = "provider-test")]
+pub mod provider_stress_tests;
+
+#[cfg(feature = "provider-test")]
+pub mod provider_stress_test;
+
 // Re-export key runtime types for convenience
 pub use client::Client;
 pub use runtime::{
