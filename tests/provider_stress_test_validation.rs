@@ -3,12 +3,14 @@
 //! This test just ensures the stress test infrastructure doesn't break.
 //! It runs a single orchestration to validate the plumbing works.
 
+#![cfg(feature = "provider-test")]
+
+use duroxide::provider_stress_tests::StressTestConfig;
 use duroxide::provider_stress_tests::parallel_orchestrations::{
     ProviderStressFactory, run_parallel_orchestrations_test_with_config,
 };
-use duroxide::provider_stress_tests::StressTestConfig;
-use duroxide::providers::sqlite::SqliteProvider;
 use duroxide::providers::Provider;
+use duroxide::providers::sqlite::SqliteProvider;
 use std::sync::Arc;
 
 /// Minimal test factory for in-memory SQLite provider
@@ -50,6 +52,9 @@ async fn test_stress_infrastructure_minimal() {
         .expect("Stress test infrastructure is broken");
 
     // Just validate that at least one orchestration completed successfully
-    assert!(result.completed > 0, "No orchestrations completed - infrastructure broken");
+    assert!(
+        result.completed > 0,
+        "No orchestrations completed - infrastructure broken"
+    );
     assert_eq!(result.failed, 0, "Orchestration failed - infrastructure broken");
 }

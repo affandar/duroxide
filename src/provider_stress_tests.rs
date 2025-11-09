@@ -135,13 +135,13 @@
 
 #[cfg(feature = "provider-test")]
 pub use crate::provider_stress_test::core::{
-    create_default_activities, create_default_orchestrations, print_comparison_table, run_stress_test,
-    StressTestConfig, StressTestResult,
+    StressTestConfig, StressTestResult, create_default_activities, create_default_orchestrations,
+    print_comparison_table, run_stress_test,
 };
 
 #[cfg(feature = "provider-test")]
 pub mod parallel_orchestrations {
     pub use crate::provider_stress_test::parallel_orchestrations::{
-        run_parallel_orchestrations_test, run_parallel_orchestrations_test_with_config, ProviderStressFactory,
+        ProviderStressFactory, run_parallel_orchestrations_test, run_parallel_orchestrations_test_with_config,
     };
 }

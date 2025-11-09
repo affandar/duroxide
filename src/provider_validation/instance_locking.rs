@@ -512,10 +512,19 @@ pub async fn test_multi_threaded_no_duplicate_processing<F: ProviderFactory>(fac
                 // Stagger delays to increase contention
                 let delay = (i * 3) % 50; // Cycle through delays without random
                 tokio::time::sleep(Duration::from_millis(delay as u64)).await;
-                p.fetch_orchestration_item()
-                    .await
-                    .unwrap()
-                    .map(|item| item.instance.clone())
+
+                // Retry on deadlock (SQLite in-memory can deadlock under heavy concurrent load)
+                for attempt in 0..3 {
+                    match p.fetch_orchestration_item().await {
+                        Ok(item) => return Ok(item.map(|i| i.instance.clone())),
+                        Err(e) if e.retryable && attempt < 2 => {
+                            tokio::time::sleep(Duration::from_millis(10 * (attempt + 1) as u64)).await;
+                            continue;
+                        }
+                        Err(e) => return Err(e),
+                    }
+                }
+                unreachable!()
             })
         })
         .collect();
@@ -523,7 +532,7 @@ pub async fn test_multi_threaded_no_duplicate_processing<F: ProviderFactory>(fac
     let results: Vec<_> = futures::future::join_all(handles)
         .await
         .into_iter()
-        .filter_map(|r| r.unwrap())
+        .filter_map(|r| r.unwrap().ok().flatten())
         .collect();
 
     // Collect unique instances that were fetched

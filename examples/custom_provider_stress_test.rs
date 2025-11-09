@@ -3,17 +3,19 @@
 //! This example demonstrates how external provider implementations
 //! can leverage the built-in stress test infrastructure.
 //!
+//! **Note:** This example requires the `provider-test` feature.
+//!
 //! Run with:
 //! ```bash
 //! cargo run --example custom_provider_stress_test --features provider-test
 //! ```
 
 use duroxide::provider_stress_tests::parallel_orchestrations::{
-    run_parallel_orchestrations_test, run_parallel_orchestrations_test_with_config, ProviderStressFactory,
+    ProviderStressFactory, run_parallel_orchestrations_test, run_parallel_orchestrations_test_with_config,
 };
-use duroxide::provider_stress_tests::{print_comparison_table, StressTestConfig};
-use duroxide::providers::sqlite::SqliteProvider;
+use duroxide::provider_stress_tests::{StressTestConfig, print_comparison_table};
 use duroxide::providers::Provider;
+use duroxide::providers::sqlite::SqliteProvider;
 use std::sync::Arc;
 
 /// Example factory for in-memory SQLite provider
@@ -123,12 +125,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             worker_concurrency: worker,
         };
 
-        let in_mem_result = run_parallel_orchestrations_test_with_config(&InMemorySqliteFactory, config.clone()).await?;
-        results.push((
-            "InMemory".to_string(),
-            format!("{}/{}", orch, worker),
-            in_mem_result,
-        ));
+        let in_mem_result =
+            run_parallel_orchestrations_test_with_config(&InMemorySqliteFactory, config.clone()).await?;
+        results.push(("InMemory".to_string(), format!("{}/{}", orch, worker), in_mem_result));
 
         let file_result = run_parallel_orchestrations_test_with_config(&FileSqliteFactory, config).await?;
         results.push(("File".to_string(), format!("{}/{}", orch, worker), file_result));

@@ -3,7 +3,7 @@
 //! Tests fan-out/fan-in orchestration patterns with concurrent instance execution.
 
 use super::core::{
-    create_default_activities, create_default_orchestrations, run_stress_test, StressTestConfig, StressTestResult,
+    StressTestConfig, StressTestResult, create_default_activities, create_default_orchestrations, run_stress_test,
 };
 use crate::providers::Provider;
 use std::sync::Arc;
