@@ -41,76 +41,110 @@ The `provider-test` feature enables access to the stress testing infrastructure.
 
 ## Stress Tests
 
+Stress tests validate your provider under load, measuring throughput, latency, and success rate with concurrent orchestrations.
+
 ### Basic Example
 
-Here's a minimal example of running stress tests against a custom provider:
+Implement the `ProviderStressFactory` trait to enable stress testing:
 
 ```rust
+use duroxide::provider_stress_tests::parallel_orchestrations::{
+    ProviderStressFactory, run_parallel_orchestrations_test
+};
 use duroxide::providers::Provider;
-use duroxide_stress_tests::{run_stress_test, StressTestConfig};
 use std::sync::Arc;
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Configure the stress test
-    let config = StressTestConfig {
-        max_concurrent: 20,        // Max concurrent orchestration instances
-        duration_secs: 10,         // Test duration in seconds
-        tasks_per_instance: 5,     // Activities per orchestration
-        activity_delay_ms: 10,      // Simulated work time per activity
-        orch_concurrency: 2,       // Runtime orchestration dispatcher concurrency
-        worker_concurrency: 2,      // Runtime activity worker concurrency
-    };
+struct MyProviderFactory;
+
+#[async_trait::async_trait]
+impl ProviderStressFactory for MyProviderFactory {
+    async fn create_provider(&self) -> Arc<dyn Provider> {
+        // Create a fresh provider instance for stress testing
+        Arc::new(MyCustomProvider::new("connection_string").await.unwrap())
+    }
+}
+
+#[tokio::test]
+async fn stress_test_my_provider() {
+    let factory = MyProviderFactory;
+    let result = run_parallel_orchestrations_test(&factory)
+        .await
+        .expect("Stress test failed");
     
-    // Create your custom provider
-    let provider = Arc::new(MyCustomProvider::new("connection_string").await?);
-    
-    // Run the stress test
-    run_stress_test("MyCustomProvider", provider, config).await?;
-    
-    Ok(())
+    // Validate results
+    assert!(result.success_rate() > 99.0, "Success rate too low: {:.2}%", result.success_rate());
+    assert!(result.orch_throughput > 1.0, "Throughput too low: {:.2} orch/sec", result.orch_throughput);
 }
 ```
 
 The test will:
-1. Launch orchestrations continuously for the specified duration
-2. Track completed and failed instances
-3. Calculate throughput and latency metrics
-4. Print a results table to the console
-5. Return an error if success rate < 100%
+1. Create a fresh provider instance
+2. Launch orchestrations continuously for the configured duration
+3. Track completed and failed instances
+4. Calculate throughput and latency metrics
+5. Return detailed `StressTestResult` with all metrics
 
 ---
 
-## Test Configuration
+## Custom Configuration
 
-The `StressTestConfig` struct controls test behavior:
+Override the default configuration by implementing `stress_test_config()`:
 
 ```rust
-pub struct StressTestConfig {
-    pub max_concurrent: usize,      // Max concurrent instances at once
-    pub duration_secs: u64,          // How long to run the test
-    pub tasks_per_instance: usize,    // Activities per orchestration
-    pub activity_delay_ms: u64,      // Simulated activity work time
-    pub orch_concurrency: usize,      // Orchestration dispatcher threads
-    pub worker_concurrency: usize,    // Activity worker threads
+use duroxide::provider_stress_tests::StressTestConfig;
+
+#[async_trait::async_trait]
+impl ProviderStressFactory for MyProviderFactory {
+    async fn create_provider(&self) -> Arc<dyn Provider> {
+        Arc::new(MyCustomProvider::new().await.unwrap())
+    }
+    
+    // Optional: customize the stress test configuration
+    fn stress_test_config(&self) -> StressTestConfig {
+        StressTestConfig {
+            max_concurrent: 10,       // Max concurrent instances at once
+            duration_secs: 30,        // How long to run the test
+            tasks_per_instance: 3,    // Activities per orchestration
+            activity_delay_ms: 50,    // Simulated activity work time
+            orch_concurrency: 1,      // Orchestration dispatcher threads
+            worker_concurrency: 1,    // Activity worker threads
+        }
+    }
 }
+```
+
+Or pass a custom config directly:
+
+```rust
+use duroxide::provider_stress_tests::parallel_orchestrations::run_parallel_orchestrations_test_with_config;
+
+let config = StressTestConfig {
+    max_concurrent: 20,
+    duration_secs: 10,
+    tasks_per_instance: 5,
+    activity_delay_ms: 10,
+    orch_concurrency: 2,
+    worker_concurrency: 2,
+};
+
+let result = run_parallel_orchestrations_test_with_config(&factory, config).await?;
 ```
 
 ### Recommended Configurations
 
-**Quick Validation (30 seconds):**
+**Quick Validation (for CI):**
 ```rust
 StressTestConfig {
-    max_concurrent: 10,
-    duration_secs: 30,
-    tasks_per_instance: 3,
-    activity_delay_ms: 50,
+    max_concurrent: 5,
+    duration_secs: 2,
+    tasks_per_instance: 2,
+    activity_delay_ms: 5,
     orch_concurrency: 1,
     worker_concurrency: 1,
 }
 ```
 
-**Performance Baseline (10 seconds):**
+**Performance Baseline:**
 ```rust
 StressTestConfig {
     max_concurrent: 20,
@@ -122,7 +156,7 @@ StressTestConfig {
 }
 ```
 
-**Concurrency Stress Test (10 seconds):**
+**Concurrency Stress Test:**
 ```rust
 StressTestConfig {
     max_concurrent: 20,
@@ -136,65 +170,49 @@ StressTestConfig {
 
 ---
 
-## Custom Orchestrations and Activities
+## Advanced: Custom Orchestrations and Activities
 
-You can define custom orchestrations and activities to test provider-specific behavior:
+For custom test scenarios, use the lower-level `run_stress_test` function:
 
 ```rust
-use duroxide::{OrchestrationContext, Event};
-use duroxide::providers::{Provider, ActivityRegistry};
-use duroxide_stress_tests::{run_stress_test, StressTestConfig};
+use duroxide::provider_stress_tests::{run_stress_test, create_default_activities, StressTestConfig};
+use duroxide::{OrchestrationContext, OrchestrationRegistry, ActivityContext};
 use std::sync::Arc;
 
-// Custom activity that simulates work
-async fn custom_activity(input: String) -> Result<String, String> {
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-    Ok(format!("processed: {}", input))
-}
-
-// Custom orchestration that uses the activity
-async fn custom_orchestration(ctx: OrchestrationContext, input: String) -> Result<String, Box<dyn std::error::Error>> {
+// Custom orchestration
+async fn custom_orchestration(ctx: OrchestrationContext, input: String) -> Result<String, String> {
     let tasks = vec!["task1", "task2", "task3"];
     let mut results = Vec::new();
     
     for task in tasks {
-        let result = ctx.call_activity("CustomActivity", task.to_string()).await?;
+        let result = ctx.schedule_activity("ProcessTask", task.to_string())
+            .into_activity()
+            .await?;
         results.push(result);
     }
     
     Ok(format!("completed: {}", results.join(", ")))
 }
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Create custom activity registry
-    let activities = Arc::new(
-        ActivityRegistry::builder()
-            .register("CustomActivity", custom_activity)
-            .build()
-    );
+#[tokio::test]
+async fn custom_stress_test() {
+    let provider = Arc::new(MyCustomProvider::new().await.unwrap());
     
-    // Create custom orchestration registry
+    // Use default activities or create custom ones
+    let activities = create_default_activities(10);
+    
+    // Register custom orchestration
     let orchestrations = OrchestrationRegistry::builder()
-        .register("CustomOrchestration", custom_orchestration)
+        .register("CustomWorkflow", custom_orchestration)
         .build();
     
-    // Create provider and run custom test
-    let provider = Arc::new(MyCustomProvider::new().await?);
+    let config = StressTestConfig::default();
     
-    let config = StressTestConfig {
-        max_concurrent: 10,
-        duration_secs: 10,
-        tasks_per_instance: 3,
-        activity_delay_ms: 100,
-        orch_concurrency: 1,
-        worker_concurrency: 1,
-    };
+    let result = run_stress_test(config, provider, activities, orchestrations)
+        .await
+        .expect("Stress test failed");
     
-    // Note: You'll need to use the internal run_stress_test function with custom registries
-    // Or implement your own test runner using the runtime directly
-    
-    Ok(())
+    assert!(result.success_rate() > 99.0);
 }
 ```
 
@@ -570,39 +588,50 @@ cargo test --features provider-test -- --test-threads=4
 
 ## Comparing Providers
 
-To compare multiple providers side-by-side:
+Compare multiple providers or configurations side-by-side:
 
 ```rust
-use duroxide::providers::sqlite::SqliteProvider;
-use std::sync::Arc;
+use duroxide::provider_stress_tests::{
+    parallel_orchestrations::run_parallel_orchestrations_test_with_config,
+    print_comparison_table, StressTestConfig
+};
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let config = StressTestConfig {
-        max_concurrent: 20,
-        duration_secs: 10,
-        tasks_per_instance: 5,
-        activity_delay_ms: 10,
-        orch_concurrency: 2,
-        worker_concurrency: 2,
-    };
+#[tokio::test]
+async fn compare_providers() {
+    let mut results = Vec::new();
     
-    // Test in-memory SQLite
-    let in_mem_provider = Arc::new(SqliteProvider::new_in_memory().await?);
-    run_stress_test("In-Memory SQLite", in_mem_provider, config).await?;
+    // Test different concurrency settings
+    for (orch, worker) in [(1, 1), (2, 2)] {
+        let config = StressTestConfig {
+            orch_concurrency: orch,
+            worker_concurrency: worker,
+            duration_secs: 5,
+            ..Default::default()
+        };
+        
+        let result = run_parallel_orchestrations_test_with_config(
+            &MyProviderFactory, 
+            config
+        ).await.unwrap();
+        
+        results.push((
+            "MyProvider".to_string(),
+            format!("{}/{}", orch, worker),
+            result,
+        ));
+    }
     
-    // Test file-based SQLite
-    let db_path = "/tmp/test.db";
-    std::fs::File::create(&db_path)?;
-    let file_provider = Arc::new(SqliteProvider::new(&format!("sqlite:{}", db_path), None).await?);
-    run_stress_test("File SQLite", file_provider, config).await?;
-    
-    // Test your custom provider
-    let custom_provider = Arc::new(MyCustomProvider::new().await?);
-    run_stress_test("MyCustomProvider", custom_provider, config).await?;
-    
-    Ok(())
+    // Print comparison table
+    print_comparison_table(&results);
 }
+```
+
+Output:
+```
+Provider             Config     Completed  Failed     Infra    Config   App      Success %  Orch/sec        Activity/sec    Avg Latency    
+------------------------------------------------------------------------------------------------------------------------------------------------------
+MyProvider           1/1        57         0          0        0        0        100.00     11.40           57.00           87.72          ms
+MyProvider           2/2        81         0          0        0        0        100.00     16.20           81.00           61.73          ms
 ```
 
 ---

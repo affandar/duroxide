@@ -1698,10 +1698,46 @@ Core orchestration execution still works normally.
 ## Testing Your Provider
 
 After implementing your provider, follow the **[Provider Testing Guide](provider-testing-guide.md)** to:
-- Run stress tests against your implementation
-- Validate correctness and performance
+- Run **validation tests** (45 correctness tests) to verify behavior
+- Run **stress tests** to measure performance under load
 - Compare metrics with built-in providers
 - Integrate tests into your CI/CD pipeline
+
+### Quick Testing Setup
+
+Enable the `provider-test` feature to access both validation and stress test infrastructure:
+
+```toml
+[dev-dependencies]
+duroxide = { version = "0.1", features = ["provider-test"] }
+```
+
+**Validation Tests (Correctness):**
+```rust
+use duroxide::provider_validations::{ProviderFactory, test_atomicity_failure_rollback};
+
+#[tokio::test]
+async fn test_my_provider_atomicity() {
+    test_atomicity_failure_rollback(&MyProviderFactory).await;
+}
+```
+
+**Stress Tests (Performance):**
+```rust
+use duroxide::provider_stress_tests::parallel_orchestrations::{
+    ProviderStressFactory, run_parallel_orchestrations_test
+};
+
+#[tokio::test]
+async fn stress_test_my_provider() {
+    let result = run_parallel_orchestrations_test(&MyProviderStressFactory)
+        .await
+        .expect("Stress test failed");
+    assert!(result.success_rate() > 99.0);
+}
+```
+
+See the [Provider Testing Guide](provider-testing-guide.md) for comprehensive documentation.
 
 ---
 
@@ -1709,10 +1745,10 @@ After implementing your provider, follow the **[Provider Testing Guide](provider
 
 - **Reference Implementation**: `src/providers/sqlite.rs`
 - **Interface Definition**: `src/providers/mod.rs` (this file, with full docs)
-- **Provider Tests**: `tests/sqlite_provider_test.rs`
-- **Stress Tests**: `stress-tests/src/lib.rs`
+- **Validation Tests**: Enable `provider-test` feature, see `tests/sqlite_provider_validations.rs`
+- **Stress Tests**: Enable `provider-test` feature, see `tests/provider_stress_test_validation.rs`
+- **Testing Guide**: `docs/provider-testing-guide.md` (comprehensive testing documentation)
 - **Schema**: `migrations/20240101000000_initial_schema.sql`
-- **Testing Guide**: `docs/provider-testing-guide.md`
 - **Migration Guide**: `docs/provider-migration-guide-instance-creation.md` (for updating existing providers)
 
 ---
