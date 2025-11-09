@@ -7,7 +7,7 @@ pub async fn test_list_instances<F: ProviderFactory>(factory: &F) {
     let provider = factory.create_provider().await;
     let mgmt = provider
         .as_management_capability()
-        .expect("Provider should implement ProviderManager");
+        .expect("Provider should implement ProviderAdmin");
 
     // Create a few instances
     for i in 0..3 {

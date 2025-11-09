@@ -1,6 +1,6 @@
 use duroxide::Event;
 use duroxide::providers::sqlite::SqliteProvider;
-use duroxide::providers::{ExecutionMetadata, Provider, ProviderManager, WorkItem};
+use duroxide::providers::{ExecutionMetadata, Provider, WorkItem};
 use std::sync::Arc as StdArc;
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
@@ -87,7 +87,7 @@ pub async fn test_create_execution(
     parent_id: Option<u64>,
 ) -> Result<u64, String> {
     // Calculate next execution ID (max + 1, or INITIAL if none exist)
-    // Try to get ProviderManager capability, otherwise assume no executions exist
+    // Try to get ProviderAdmin capability, otherwise assume no executions exist
     let execs = if let Some(mgmt) = provider.as_management_capability() {
         mgmt.list_executions(instance).await.unwrap_or_default()
     } else {

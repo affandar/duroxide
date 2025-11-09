@@ -1,4 +1,3 @@
-use duroxide::providers::{Provider, ProviderManager};
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
 use duroxide::{ActivityContext, Event, OrchestrationContext, OrchestrationRegistry};
@@ -63,19 +62,23 @@ async fn continue_as_new_multiexec() {
     assert!(ok, "timeout waiting for completion");
 
     // Verify multi-execution histories exist: execs 1,2 continued-as-new; exec 3 completed
-    let mgmt = store.as_management_capability().expect("ProviderManager required");
+    let mgmt = store.as_management_capability().expect("ProviderAdmin required");
     let execs = mgmt.list_executions("inst-can-1").await.unwrap_or_default();
     assert_eq!(execs, vec![1, 2, 3]);
 
     // read() must reflect the latest execution's history
     let latest = *execs.last().unwrap();
-    let latest_hist = mgmt.read_history_with_execution_id("inst-can-1", latest)
+    let latest_hist = mgmt
+        .read_history_with_execution_id("inst-can-1", latest)
         .await
         .unwrap_or_default();
     let current_hist = store.read("inst-can-1").await.unwrap_or_default();
     assert_eq!(current_hist, latest_hist);
 
-    let e1 = mgmt.read_history_with_execution_id("inst-can-1", 1).await.unwrap_or_default();
+    let e1 = mgmt
+        .read_history_with_execution_id("inst-can-1", 1)
+        .await
+        .unwrap_or_default();
     assert!(
         e1.iter()
             .any(|e| matches!(e, Event::OrchestrationStarted { input, .. } if input == "0"))
@@ -86,7 +89,10 @@ async fn continue_as_new_multiexec() {
     );
     assert!(!e1.iter().any(|e| matches!(e, Event::OrchestrationCompleted { .. })));
 
-    let e2 = mgmt.read_history_with_execution_id("inst-can-1", 2).await.unwrap_or_default();
+    let e2 = mgmt
+        .read_history_with_execution_id("inst-can-1", 2)
+        .await
+        .unwrap_or_default();
     assert!(
         e2.iter()
             .any(|e| matches!(e, Event::OrchestrationStarted { input, .. } if input == "1"))
@@ -97,7 +103,10 @@ async fn continue_as_new_multiexec() {
     );
     assert!(!e2.iter().any(|e| matches!(e, Event::OrchestrationCompleted { .. })));
 
-    let e3 = mgmt.read_history_with_execution_id("inst-can-1", 3).await.unwrap_or_default();
+    let e3 = mgmt
+        .read_history_with_execution_id("inst-can-1", 3)
+        .await
+        .unwrap_or_default();
     assert!(
         e3.iter()
             .any(|e| matches!(e, Event::OrchestrationStarted { input, .. } if input == "2"))
@@ -182,8 +191,9 @@ async fn continue_as_new_event_routes_to_latest() {
     assert!(ok2, "timeout waiting for completion");
 
     // Exec1 should not contain ExternalEvent; Exec2 should
-    let mgmt2 = store.as_management_capability().expect("ProviderManager required");
-    let e1 = mgmt2.read_history_with_execution_id("inst-can-evt", 1)
+    let mgmt2 = store.as_management_capability().expect("ProviderAdmin required");
+    let e1 = mgmt2
+        .read_history_with_execution_id("inst-can-evt", 1)
         .await
         .unwrap_or_default();
     assert!(
@@ -195,7 +205,8 @@ async fn continue_as_new_event_routes_to_latest() {
             .any(|e| matches!(e, Event::ExternalEvent { name, .. } if name == "Go"))
     );
 
-    let e2 = mgmt2.read_history_with_execution_id("inst-can-evt", 2)
+    let e2 = mgmt2
+        .read_history_with_execution_id("inst-can-evt", 2)
         .await
         .unwrap_or_default();
     assert!(
@@ -208,10 +219,11 @@ async fn continue_as_new_event_routes_to_latest() {
     );
 
     // read() must reflect the latest execution's history
-    let mgmt2 = store.as_management_capability().expect("ProviderManager required");
+    let mgmt2 = store.as_management_capability().expect("ProviderAdmin required");
     let execs = mgmt2.list_executions("inst-can-evt").await.unwrap_or_default();
     let latest = *execs.last().unwrap();
-    let latest_hist = mgmt2.read_history_with_execution_id("inst-can-evt", latest)
+    let latest_hist = mgmt2
+        .read_history_with_execution_id("inst-can-evt", latest)
         .await
         .unwrap_or_default();
     let current_hist = store.read("inst-can-evt").await.unwrap_or_default();
@@ -303,8 +315,9 @@ async fn continue_as_new_event_drop_then_process() {
     assert!(ok, "timeout waiting for completion");
 
     // Exec2 should have ExternalSubscribed and ExternalEvent for Go; payload should be 'late'
-    let mgmt2 = store.as_management_capability().expect("ProviderManager required");
-    let e2 = mgmt2.read_history_with_execution_id("inst-can-evt-drop", 2)
+    let mgmt2 = store.as_management_capability().expect("ProviderAdmin required");
+    let e2 = mgmt2
+        .read_history_with_execution_id("inst-can-evt-drop", 2)
         .await
         .unwrap_or_default();
     assert!(
@@ -317,7 +330,8 @@ async fn continue_as_new_event_drop_then_process() {
     );
 
     // Exec1 must not have ExternalEvent
-    let e1 = mgmt2.read_history_with_execution_id("inst-can-evt-drop", 1)
+    let e1 = mgmt2
+        .read_history_with_execution_id("inst-can-evt-drop", 1)
         .await
         .unwrap_or_default();
     assert!(

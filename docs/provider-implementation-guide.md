@@ -1328,13 +1328,13 @@ Before considering your provider production-ready:
 
 ---
 
-## Implementing ManagementCapability (Optional)
+## Implementing ProviderAdmin (Optional)
 
-The `ManagementCapability` trait provides rich management and observability features for your provider. While optional, implementing it enables powerful introspection and monitoring capabilities.
+The `ProviderAdmin` trait provides rich management and observability features for your provider. While optional, implementing it enables powerful introspection and monitoring capabilities.
 
 ### When to Implement
 
-**Implement ManagementCapability if:**
+**Implement ProviderAdmin if:**
 - Your provider is for production use
 - You need instance/execution discovery
 - You want system metrics and monitoring
@@ -1349,14 +1349,15 @@ The `ManagementCapability` trait provides rich management and observability feat
 
 ```rust
 #[async_trait::async_trait]
-pub trait ManagementCapability: Send + Sync {
+pub trait ProviderAdmin: Send + Sync {
     // Discovery
     async fn list_instances(&self) -> Result<Vec<String>, ProviderError>;
     async fn list_instances_by_status(&self, status: &str) -> Result<Vec<String>, ProviderError>;
     async fn list_executions(&self, instance: &str) -> Result<Vec<u64>, ProviderError>;
     
     // History access
-    async fn read_execution(&self, instance: &str, execution_id: u64) -> Result<Vec<Event>, ProviderError>;
+    async fn read_history_with_execution_id(&self, instance: &str, execution_id: u64) -> Result<Vec<Event>, ProviderError>;
+    async fn read_history(&self, instance: &str) -> Result<Vec<Event>, ProviderError>;
     async fn latest_execution_id(&self, instance: &str) -> Result<u64, ProviderError>;
     
     // Metadata
@@ -1372,19 +1373,19 @@ pub trait ManagementCapability: Send + Sync {
 ### Implementing the Trait
 
 ```rust
-use duroxide::providers::{Provider, ManagementCapability, InstanceInfo, ExecutionInfo, SystemMetrics, QueueDepths};
+use duroxide::providers::{Provider, ProviderAdmin, InstanceInfo, ExecutionInfo, SystemMetrics, QueueDepths};
 
 #[async_trait::async_trait]
 impl Provider for MyProvider {
     // ... core Provider methods ...
     
-    fn as_management_capability(&self) -> Option<&dyn ManagementCapability> {
+    fn as_management_capability(&self) -> Option<&dyn ProviderAdmin> {
         Some(self)  // Enable management features
     }
 }
 
 #[async_trait::async_trait]
-impl ManagementCapability for MyProvider {
+impl ProviderAdmin for MyProvider {
     async fn list_instances(&self) -> Result<Vec<String>, ProviderError> {
         // Return all instance IDs
         let rows = sqlx::query!("SELECT instance_id FROM instances ORDER BY created_at")
@@ -1428,7 +1429,7 @@ impl ManagementCapability for MyProvider {
         Ok(rows.into_iter().map(|r| r.execution_id as u64).collect())
     }
     
-    async fn read_execution(&self, instance: &str, execution_id: u64) -> Result<Vec<Event>, ProviderError> {
+    async fn read_history_with_execution_id(&self, instance: &str, execution_id: u64) -> Result<Vec<Event>, ProviderError> {
         // Return history for specific execution (not just latest)
         let rows = sqlx::query!(
             "SELECT event_data FROM history 
@@ -1439,12 +1440,18 @@ impl ManagementCapability for MyProvider {
         )
         .fetch_all(&self.pool)
         .await
-            .map_err(|e| sqlx_to_provider_error("read_execution", e))?;
+            .map_err(|e| sqlx_to_provider_error("read_history_with_execution_id", e))?;
         
         rows.into_iter()
             .filter_map(|row| serde_json::from_str(&row.event_data).ok())
             .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| ProviderError::permanent("read_execution", &format!("Failed to deserialize events: {}", e)))
+            .map_err(|e| ProviderError::permanent("read_history_with_execution_id", &format!("Failed to deserialize events: {}", e)))
+    }
+    
+    async fn read_history(&self, instance: &str) -> Result<Vec<Event>, ProviderError> {
+        // Convenience method: get history for latest execution
+        let execution_id = self.latest_execution_id(instance).await?;
+        self.read_history_with_execution_id(instance, execution_id).await
     }
     
     async fn latest_execution_id(&self, instance: &str) -> Result<u64, ProviderError> {
@@ -1586,7 +1593,7 @@ impl ManagementCapability for MyProvider {
 
 ### Client Auto-Discovery
 
-When you implement `ManagementCapability`, the Client automatically discovers it:
+When you implement `ProviderAdmin`, the Client automatically discovers it:
 
 ```rust
 use duroxide::Client;
@@ -1679,7 +1686,7 @@ async fn get_system_metrics(&self) -> Result<SystemMetrics, String> {
 
 ### Default Implementations
 
-If you don't implement `ManagementCapability`, clients will get:
+If you don't implement `ProviderAdmin`, clients will get:
 - `list_instances()` → Empty list
 - `get_system_metrics()` → Default/zero metrics
 - `has_management_capability()` → `false`

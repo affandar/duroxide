@@ -2,7 +2,6 @@
 //!
 //! Each test demonstrates a common orchestration pattern using
 //! `OrchestrationContext` and the in-process `Runtime`.
-use duroxide::providers::{Provider, ProviderManager};
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
 use duroxide::{ActivityContext, Client, OrchestrationContext, OrchestrationRegistry};
@@ -821,7 +820,7 @@ async fn sample_continue_as_new_fs() {
         _ => panic!("unexpected orchestration status"),
     }
     // Check executions exist
-    let mgmt = store.as_management_capability().expect("ProviderManager required");
+    let mgmt = store.as_management_capability().expect("ProviderAdmin required");
     let execs = mgmt.list_executions("inst-sample-can").await.unwrap_or_default();
     assert_eq!(execs, vec![1, 2, 3, 4]);
     rt.shutdown(None).await;
@@ -1224,10 +1223,11 @@ async fn sample_versioning_continue_as_new_upgrade_fs() {
     }
 
     // Verify two executions exist, exec1 continued-as-new, exec2 completed with v2 output
-    let mgmt2 = store.as_management_capability().expect("ProviderManager required");
+    let mgmt2 = store.as_management_capability().expect("ProviderAdmin required");
     let execs = mgmt2.list_executions("inst-can-upgrade").await.unwrap_or_default();
     assert_eq!(execs, vec![1, 2]);
-    let e1 = mgmt2.read_history_with_execution_id("inst-can-upgrade", 1)
+    let e1 = mgmt2
+        .read_history_with_execution_id("inst-can-upgrade", 1)
         .await
         .unwrap_or_default();
     assert!(
@@ -1235,7 +1235,8 @@ async fn sample_versioning_continue_as_new_upgrade_fs() {
             .any(|e| matches!(e, duroxide::Event::OrchestrationContinuedAsNew { .. }))
     );
     // Exec2 must start with the v1-marked payload, proving v1 ran first and handed off via CAN
-    let e2 = mgmt2.read_history_with_execution_id("inst-can-upgrade", 2)
+    let e2 = mgmt2
+        .read_history_with_execution_id("inst-can-upgrade", 2)
         .await
         .unwrap_or_default();
     assert!(
@@ -1329,8 +1330,11 @@ async fn sample_cancellation_parent_cascades_to_children_fs() {
     assert!(ok, "timeout waiting for parent cancel failure");
 
     // Find child instance (prefix is parent::sub::<id>) and check it was canceled too
-    let mgmt = store.as_management_capability().expect("ProviderManager required");
-    let children: Vec<String> = mgmt.list_instances().await.unwrap_or_default()
+    let mgmt = store.as_management_capability().expect("ProviderAdmin required");
+    let children: Vec<String> = mgmt
+        .list_instances()
+        .await
+        .unwrap_or_default()
         .into_iter()
         .filter(|i| i.starts_with("inst-sample-cancel::"))
         .collect();

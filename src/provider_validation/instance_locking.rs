@@ -250,7 +250,7 @@ pub async fn test_cross_instance_lock_isolation<F: ProviderFactory>(factory: &F)
 
     // While A is still locked, completion arrives for B
     provider
-        .enqueue_orchestrator_work(
+        .enqueue_for_orchestrator(
             WorkItem::ActivityCompleted {
                 instance: "instance-B".to_string(),
                 execution_id: 1,
@@ -284,7 +284,7 @@ pub async fn test_message_tagging_during_lock<F: ProviderFactory>(factory: &F) {
 
     // Enqueue initial messages
     provider
-        .enqueue_orchestrator_work(
+        .enqueue_for_orchestrator(
             WorkItem::ActivityCompleted {
                 instance: "instance-A".to_string(),
                 execution_id: 1,
@@ -297,7 +297,7 @@ pub async fn test_message_tagging_during_lock<F: ProviderFactory>(factory: &F) {
         .unwrap();
 
     provider
-        .enqueue_orchestrator_work(
+        .enqueue_for_orchestrator(
             WorkItem::ActivityCompleted {
                 instance: "instance-A".to_string(),
                 execution_id: 1,
@@ -317,7 +317,7 @@ pub async fn test_message_tagging_during_lock<F: ProviderFactory>(factory: &F) {
 
     // While locked, new message arrives
     provider
-        .enqueue_orchestrator_work(
+        .enqueue_for_orchestrator(
             WorkItem::ActivityCompleted {
                 instance: "instance-A".to_string(),
                 execution_id: 1,
@@ -356,7 +356,7 @@ pub async fn test_ack_only_affects_locked_messages<F: ProviderFactory>(factory: 
 
     // Enqueue message 1
     provider
-        .enqueue_orchestrator_work(
+        .enqueue_for_orchestrator(
             WorkItem::ActivityCompleted {
                 instance: "instance-A".to_string(),
                 execution_id: 1,
@@ -375,7 +375,7 @@ pub async fn test_ack_only_affects_locked_messages<F: ProviderFactory>(factory: 
 
     // While item1 is locked, enqueue messages 2 and 3
     provider
-        .enqueue_orchestrator_work(
+        .enqueue_for_orchestrator(
             WorkItem::ActivityCompleted {
                 instance: "instance-A".to_string(),
                 execution_id: 1,
@@ -388,7 +388,7 @@ pub async fn test_ack_only_affects_locked_messages<F: ProviderFactory>(factory: 
         .unwrap();
 
     provider
-        .enqueue_orchestrator_work(
+        .enqueue_for_orchestrator(
             WorkItem::ActivityCompleted {
                 instance: "instance-A".to_string(),
                 execution_id: 1,
@@ -514,7 +514,6 @@ pub async fn test_multi_threaded_no_duplicate_processing<F: ProviderFactory>(fac
                 tokio::time::sleep(Duration::from_millis(delay as u64)).await;
                 p.fetch_orchestration_item()
                     .await
-                    .unwrap()
                     .unwrap()
                     .map(|item| item.instance.clone())
             })

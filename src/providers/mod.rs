@@ -695,7 +695,7 @@ pub enum WorkItem {
 ///
 /// # Capability Discovery
 ///
-/// Providers can implement additional capability traits (like `ProviderManager`)
+/// Providers can implement additional capability traits (like `ProviderAdmin`)
 /// to expose richer features. The `Client` automatically discovers these capabilities
 /// through the `as_management_capability()` method.
 ///
@@ -723,7 +723,7 @@ pub enum WorkItem {
 /// ## Optional Management Methods (2 methods)
 ///
 /// These are included for backward compatibility but will be moved to
-/// `ProviderManager` in future versions:
+/// `ProviderAdmin` in future versions:
 ///
 /// - `list_instances()` - List all instance IDs
 /// - `list_executions()` - List execution IDs for an instance
@@ -736,12 +736,12 @@ pub enum WorkItem {
 /// impl Provider for MyProvider {
 ///     // ... implement required methods
 ///     
-///     fn as_management_capability(&self) -> Option<&dyn ProviderManager> {
-///         Some(self as &dyn ProviderManager)
+///     fn as_management_capability(&self) -> Option<&dyn ProviderAdmin> {
+///         Some(self as &dyn ProviderAdmin)
 ///     }
 /// }
 ///
-/// impl ProviderManager for MyProvider {
+/// impl ProviderAdmin for MyProvider {
 ///     // ... implement management methods
 /// }
 /// ```
@@ -1479,8 +1479,8 @@ pub trait Provider: Any + Send + Sync {
     /// # Purpose
     ///
     /// This method enables automatic capability discovery by the `Client`.
-    /// When a provider implements `ProviderManager`, it should return
-    /// `Some(self as &dyn ProviderManager)` to expose management features.
+    /// When a provider implements `ProviderAdmin`, it should return
+    /// `Some(self as &dyn ProviderAdmin)` to expose management features.
     ///
     /// # Default Implementation
     ///
@@ -1488,8 +1488,8 @@ pub trait Provider: Any + Send + Sync {
     ///
     /// ```ignore
     /// impl Provider for MyProvider {
-    ///     fn as_management_capability(&self) -> Option<&dyn ProviderManager> {
-    ///         Some(self as &dyn ProviderManager)
+    ///     fn as_management_capability(&self) -> Option<&dyn ProviderAdmin> {
+    ///         Some(self as &dyn ProviderAdmin)
     ///     }
     /// }
     /// ```
@@ -1504,7 +1504,7 @@ pub trait Provider: Any + Send + Sync {
     ///     let instances = client.list_all_instances().await?;
     /// }
     /// ```
-    fn as_management_capability(&self) -> Option<&dyn ProviderManager> {
+    fn as_management_capability(&self) -> Option<&dyn ProviderAdmin> {
         None
     }
 }
@@ -1518,7 +1518,7 @@ pub mod sqlite;
 // Re-export management types for convenience
 pub use management::{ExecutionInfo, InstanceInfo, ManagementProvider, QueueDepths, SystemMetrics};
 
-/// Management capability trait for observability and administrative operations.
+/// Administrative capability trait for observability and management operations.
 ///
 /// This trait provides rich management and observability features that extend
 /// the core `Provider` functionality. Providers can implement this trait to
@@ -1539,12 +1539,12 @@ pub use management::{ExecutionInfo, InstanceInfo, ManagementProvider, QueueDepth
 /// impl Provider for MyProvider {
 ///     // ... implement required Provider methods
 ///     
-///     fn as_management_capability(&self) -> Option<&dyn ProviderManager> {
-///         Some(self as &dyn ProviderManager)
+///     fn as_management_capability(&self) -> Option<&dyn ProviderAdmin> {
+///         Some(self as &dyn ProviderAdmin)
 ///     }
 /// }
 ///
-/// impl ProviderManager for MyProvider {
+/// impl ProviderAdmin for MyProvider {
 ///     async fn list_instances(&self) -> Result<Vec<String>, String> {
 ///         // Query your storage for all instance IDs
 ///         Ok(vec!["instance-1".to_string(), "instance-2".to_string()])
@@ -1607,7 +1607,7 @@ pub use management::{ExecutionInfo, InstanceInfo, ManagementProvider, QueueDepth
 /// }
 /// ```
 #[async_trait::async_trait]
-pub trait ProviderManager: Any + Send + Sync {
+pub trait ProviderAdmin: Any + Send + Sync {
     // ===== Instance Discovery =====
 
     /// List all known instance IDs.

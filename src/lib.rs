@@ -259,7 +259,7 @@ pub use runtime::{
 };
 
 // Re-export management types for convenience
-pub use providers::{ExecutionInfo, InstanceInfo, ProviderManager, QueueDepths, SystemMetrics};
+pub use providers::{ExecutionInfo, InstanceInfo, ProviderAdmin, QueueDepths, SystemMetrics};
 
 // System call operation constants
 pub(crate) const SYSCALL_OP_GUID: &str = "guid";

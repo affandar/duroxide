@@ -152,7 +152,7 @@ async fn fetch_orchestration_item(&self) -> Option<OrchestrationItem> {
 
 ## Queue Depth Metrics
 
-Providers supporting `ManagementCapability` should implement queue depth queries:
+Providers supporting `ProviderAdmin` should implement queue depth queries:
 
 ```rust
 async fn get_queue_depths(&self) -> Result<QueueDepths, String> {

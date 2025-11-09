@@ -2,9 +2,7 @@
 
 use async_trait::async_trait;
 use duroxide::providers::sqlite::SqliteProvider;
-use duroxide::providers::{
-    ExecutionMetadata, OrchestrationItem, Provider, ProviderError, ProviderManager, WorkItem,
-};
+use duroxide::providers::{ExecutionMetadata, OrchestrationItem, Provider, ProviderAdmin, ProviderError, WorkItem};
 use duroxide::runtime;
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{LogFormat, ObservabilityConfig, RuntimeOptions};
@@ -205,7 +203,9 @@ impl Provider for FailingProvider {
         execution_id: u64,
         new_events: Vec<Event>,
     ) -> Result<(), ProviderError> {
-        self.inner.append_with_execution(instance, execution_id, new_events).await
+        self.inner
+            .append_with_execution(instance, execution_id, new_events)
+            .await
     }
 
     async fn enqueue_for_worker(&self, item: WorkItem) -> Result<(), ProviderError> {
@@ -232,7 +232,7 @@ impl Provider for FailingProvider {
         self.inner.enqueue_for_orchestrator(item, delay_ms).await
     }
 
-    fn as_management_capability(&self) -> Option<&dyn ProviderManager> {
+    fn as_management_capability(&self) -> Option<&dyn ProviderAdmin> {
         self.inner.as_management_capability()
     }
 }

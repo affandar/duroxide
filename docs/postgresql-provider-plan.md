@@ -252,7 +252,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tracing::debug;
 
 use super::{
-    ExecutionInfo, InstanceInfo, ManagementCapability, OrchestrationItem, 
+    ExecutionInfo, InstanceInfo, ProviderAdmin, OrchestrationItem, 
     Provider, QueueDepths, SystemMetrics, WorkItem, ExecutionMetadata
 };
 use crate::Event;
@@ -1137,9 +1137,9 @@ impl Provider for PostgresProvider {
     }
 }
 
-// Implement ManagementCapability for advanced queries
+// Implement ProviderAdmin for advanced queries
 #[async_trait::async_trait]
-impl ManagementCapability for PostgresProvider {
+impl ProviderAdmin for PostgresProvider {
     async fn get_instance_info(&self, instance: &str) -> Option<InstanceInfo> {
         let row = sqlx::query(
             r#"

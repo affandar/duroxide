@@ -4,8 +4,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tracing::debug;
 
 use super::{
-    ExecutionInfo, InstanceInfo, OrchestrationItem, Provider, ProviderError, ProviderManager,
-    QueueDepths, SystemMetrics, WorkItem,
+    ExecutionInfo, InstanceInfo, OrchestrationItem, Provider, ProviderAdmin, ProviderError, QueueDepths, SystemMetrics,
+    WorkItem,
 };
 use crate::Event;
 
@@ -1254,13 +1254,13 @@ impl Provider for SqliteProvider {
         Ok(())
     }
 
-    fn as_management_capability(&self) -> Option<&dyn ProviderManager> {
-        Some(self as &dyn ProviderManager)
+    fn as_management_capability(&self) -> Option<&dyn ProviderAdmin> {
+        Some(self as &dyn ProviderAdmin)
     }
 }
 
 #[async_trait::async_trait]
-impl ProviderManager for SqliteProvider {
+impl ProviderAdmin for SqliteProvider {
     async fn list_instances(&self) -> Result<Vec<String>, ProviderError> {
         let rows = sqlx::query("SELECT instance_id FROM instances ORDER BY created_at DESC")
             .fetch_all(&self.pool)
@@ -1577,7 +1577,7 @@ mod tests {
         parent_instance: Option<&str>,
         parent_id: Option<u64>,
     ) -> Result<u64, ProviderError> {
-        let execs = ProviderManager::list_executions(provider, instance).await?;
+        let execs = ProviderAdmin::list_executions(provider, instance).await?;
         let next_execution_id = if execs.is_empty() {
             crate::INITIAL_EXECUTION_ID
         } else {
@@ -1877,9 +1877,9 @@ mod tests {
         let instance = "test-multi-exec";
 
         // No execution initially
-        assert_eq!(ProviderManager::latest_execution_id(&store, instance).await, Ok(1)); // ProviderManager default
+        assert_eq!(ProviderAdmin::latest_execution_id(&store, instance).await, Ok(1)); // ProviderAdmin default
         assert!(
-            ProviderManager::list_executions(&store, instance)
+            ProviderAdmin::list_executions(&store, instance)
                 .await
                 .unwrap()
                 .is_empty()
@@ -1892,11 +1892,8 @@ mod tests {
         assert_eq!(exec1, 1);
 
         // Verify execution exists
-        assert_eq!(ProviderManager::latest_execution_id(&store, instance).await, Ok(1));
-        assert_eq!(
-            ProviderManager::list_executions(&store, instance).await.unwrap(),
-            vec![1]
-        );
+        assert_eq!(ProviderAdmin::latest_execution_id(&store, instance).await, Ok(1));
+        assert_eq!(ProviderAdmin::list_executions(&store, instance).await.unwrap(), vec![1]);
 
         // Read history from first execution
         let hist1 = store.read_with_execution(instance, 1).await.unwrap_or_default();
@@ -1923,9 +1920,9 @@ mod tests {
         assert_eq!(exec2, 2);
 
         // Verify latest execution
-        assert_eq!(ProviderManager::latest_execution_id(&store, instance).await, Ok(2));
+        assert_eq!(ProviderAdmin::latest_execution_id(&store, instance).await, Ok(2));
         assert_eq!(
-            ProviderManager::list_executions(&store, instance).await.unwrap(),
+            ProviderAdmin::list_executions(&store, instance).await.unwrap(),
             vec![1, 2]
         );
 
@@ -1979,7 +1976,7 @@ mod tests {
         let store = create_test_store().await;
 
         // Initially empty
-        assert!(ProviderManager::list_instances(&store).await.unwrap().is_empty());
+        assert!(ProviderAdmin::list_instances(&store).await.unwrap().is_empty());
 
         // Create a few instances using test helper
         for i in 1..=3 {
@@ -1989,7 +1986,7 @@ mod tests {
         }
 
         // List instances
-        let instances = ProviderManager::list_instances(&store).await.unwrap();
+        let instances = ProviderAdmin::list_instances(&store).await.unwrap();
         assert_eq!(instances.len(), 3);
         assert!(instances.contains(&"instance-1".to_string()));
         assert!(instances.contains(&"instance-2".to_string()));

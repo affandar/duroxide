@@ -1,5 +1,5 @@
 use duroxide::providers::sqlite::SqliteProvider;
-use duroxide::providers::{ExecutionMetadata, Provider, ProviderManager, WorkItem};
+use duroxide::providers::{ExecutionMetadata, Provider, ProviderAdmin, WorkItem};
 use duroxide::{ActivityContext, Event};
 use std::sync::Arc;
 use tempfile::TempDir;
@@ -57,7 +57,11 @@ async fn test_sqlite_provider_basic() {
         .expect("Failed to enqueue work");
 
     // 2. Fetch orchestration item
-    let item = store.fetch_orchestration_item().await.expect("Should have work").expect("Should have item");
+    let item = store
+        .fetch_orchestration_item()
+        .await
+        .expect("Should have work")
+        .expect("Should have item");
 
     assert_eq!(item.instance, instance);
     assert_eq!(item.orchestration_name, "TestOrchestration");
@@ -152,7 +156,7 @@ async fn test_execution_status_completed() {
         .unwrap();
 
     // Verify execution status
-    let mgmt = store.as_management_capability().expect("ProviderManager required");
+    let mgmt = store.as_management_capability().expect("ProviderAdmin required");
     let executions = mgmt.list_executions(instance).await.unwrap_or_default();
     assert_eq!(executions.len(), 1);
     assert_eq!(executions[0], execution_id);
@@ -408,7 +412,7 @@ async fn test_sqlite_file_concurrent_access() {
     }
 
     // Verify all instances were created
-    let mgmt = store.as_management_capability().expect("ProviderManager required");
+    let mgmt = store.as_management_capability().expect("ProviderAdmin required");
     let instances = mgmt.list_instances().await.unwrap_or_default();
     assert_eq!(instances.len(), 10);
     assert_eq!(acked_count, 10, "Should have acked all 10 items");
@@ -534,7 +538,11 @@ async fn test_sqlite_provider_transactional() {
         .await
         .expect("Failed to enqueue");
 
-    let item = store.fetch_orchestration_item().await.expect("Should have work").expect("Should have item");
+    let item = store
+        .fetch_orchestration_item()
+        .await
+        .expect("Should have work")
+        .expect("Should have item");
 
     // Simulate orchestration that schedules multiple activities atomically
     let history_delta = vec![
@@ -655,7 +663,11 @@ async fn test_sqlite_provider_timer_queue() {
         .await
         .expect("Failed to enqueue");
 
-    let item = store.fetch_orchestration_item().await.expect("Should have work").expect("Should have item");
+    let item = store
+        .fetch_orchestration_item()
+        .await
+        .expect("Should have work")
+        .expect("Should have item");
 
     store
         .ack_orchestration_item(
@@ -733,7 +745,7 @@ async fn test_execution_status_running() {
         .unwrap();
 
     // Verify execution exists and is running
-    let mgmt = store.as_management_capability().expect("ProviderManager required");
+    let mgmt = store.as_management_capability().expect("ProviderAdmin required");
     let executions = mgmt.list_executions(instance).await.unwrap_or_default();
     assert_eq!(executions.len(), 1);
     assert_eq!(executions[0], 1);
@@ -790,7 +802,7 @@ async fn test_execution_output_captured_on_continue_as_new() {
         .unwrap();
 
     // Verify execution exists
-    let mgmt = store.as_management_capability().expect("ProviderManager required");
+    let mgmt = store.as_management_capability().expect("ProviderAdmin required");
     let executions = mgmt.list_executions(instance).await.unwrap_or_default();
     assert_eq!(executions.len(), 1);
     assert_eq!(executions[0], 1);

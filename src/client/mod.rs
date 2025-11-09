@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use crate::_typed_codec::{Codec, Json};
-use crate::providers::{ExecutionInfo, InstanceInfo, Provider, ProviderManager, QueueDepths, SystemMetrics, WorkItem};
+use crate::providers::{ExecutionInfo, InstanceInfo, Provider, ProviderAdmin, QueueDepths, SystemMetrics, WorkItem};
 use crate::{Event, OrchestrationStatus};
 use serde::Serialize;
 
@@ -18,7 +18,7 @@ use serde::Serialize;
 /// # Automatic Capability Discovery
 ///
 /// The Client automatically discovers provider capabilities through the `Provider::as_management_capability()` method.
-/// When a provider implements `ProviderManager`, rich management features become available:
+/// When a provider implements `ProviderAdmin`, rich management features become available:
 ///
 /// ```ignore
 /// let client = Client::new(provider);
@@ -527,7 +527,7 @@ impl Client {
     ///
     /// # Returns
     ///
-    /// `true` if the provider implements `ProviderManager`, `false` otherwise.
+    /// `true` if the provider implements `ProviderAdmin`, `false` otherwise.
     ///
     /// # Usage
     ///
@@ -552,10 +552,10 @@ impl Client {
     /// # Internal Use
     ///
     /// This method is used internally by management methods to access capabilities.
-    fn discover_management(&self) -> Result<&dyn ProviderManager, String> {
+    fn discover_management(&self) -> Result<&dyn ProviderAdmin, String> {
         self.store
             .as_management_capability()
-            .ok_or_else(|| "Management features not available - provider doesn't implement ProviderManager".to_string())
+            .ok_or_else(|| "Management features not available - provider doesn't implement ProviderAdmin".to_string())
     }
 
     // ===== Rich Management Methods =====
@@ -568,7 +568,7 @@ impl Client {
     ///
     /// # Errors
     ///
-    /// Returns `Err("Management features not available")` if the provider doesn't implement `ProviderManager`.
+    /// Returns `Err("Management features not available")` if the provider doesn't implement `ProviderAdmin`.
     ///
     /// # Usage
     ///
@@ -600,7 +600,7 @@ impl Client {
     ///
     /// # Errors
     ///
-    /// Returns `Err("Management features not available")` if the provider doesn't implement `ProviderManager`.
+    /// Returns `Err("Management features not available")` if the provider doesn't implement `ProviderAdmin`.
     ///
     /// # Usage
     ///
@@ -631,7 +631,7 @@ impl Client {
     ///
     /// # Errors
     ///
-    /// Returns `Err("Management features not available")` if the provider doesn't implement `ProviderManager`.
+    /// Returns `Err("Management features not available")` if the provider doesn't implement `ProviderAdmin`.
     ///
     /// # Usage
     ///
@@ -662,7 +662,7 @@ impl Client {
     ///
     /// # Errors
     ///
-    /// Returns `Err("Management features not available")` if the provider doesn't implement `ProviderManager`.
+    /// Returns `Err("Management features not available")` if the provider doesn't implement `ProviderAdmin`.
     ///
     /// # Usage
     ///
@@ -760,7 +760,7 @@ impl Client {
     ///
     /// # Errors
     ///
-    /// Returns `Err("Management features not available")` if the provider doesn't implement `ProviderManager`.
+    /// Returns `Err("Management features not available")` if the provider doesn't implement `ProviderAdmin`.
     ///
     /// # Usage
     ///
@@ -787,7 +787,7 @@ impl Client {
     ///
     /// # Errors
     ///
-    /// Returns `Err("Management features not available")` if the provider doesn't implement `ProviderManager`.
+    /// Returns `Err("Management features not available")` if the provider doesn't implement `ProviderAdmin`.
     ///
     /// # Usage
     ///

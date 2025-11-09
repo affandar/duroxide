@@ -82,8 +82,11 @@ async fn cancel_parent_down_propagates_to_child() {
     }
 
     // Find child instance (prefix inst-cancel-1::)
-    let mgmt = store.as_management_capability().expect("ProviderManager required");
-    let children: Vec<String> = mgmt.list_instances().await.unwrap_or_default()
+    let mgmt = store.as_management_capability().expect("ProviderAdmin required");
+    let children: Vec<String> = mgmt
+        .list_instances()
+        .await
+        .unwrap_or_default()
         .into_iter()
         .filter(|i| i.starts_with("inst-cancel-1::"))
         .collect();

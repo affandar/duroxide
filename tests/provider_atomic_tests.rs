@@ -22,16 +22,17 @@ async fn test_ignore_work_after_terminal_event() {
         .await
         .unwrap();
     // Use event_id=1 (first event)
-    store.append_with_execution(
-        instance,
-        1,
-        vec![Event::OrchestrationCompleted {
-            event_id: 2,
-            output: "done".to_string(),
-        }],
-    )
-    .await
-    .unwrap();
+    store
+        .append_with_execution(
+            instance,
+            1,
+            vec![Event::OrchestrationCompleted {
+                event_id: 2,
+                output: "done".to_string(),
+            }],
+        )
+        .await
+        .unwrap();
 
     // Enqueue arbitrary work item that should be ignored by runtime
     store
@@ -132,18 +133,19 @@ async fn test_fetch_orchestration_item_existing_instance() {
     )
     .await
     .unwrap();
-    store.append_with_execution(
-        "test-instance",
-        1,
-        vec![Event::ActivityScheduled {
-            event_id: 2,
-            name: "TestActivity".to_string(),
-            input: "activity-input".to_string(),
-            execution_id: 1,
-        }],
-    )
-    .await
-    .unwrap();
+    store
+        .append_with_execution(
+            "test-instance",
+            1,
+            vec![Event::ActivityScheduled {
+                event_id: 2,
+                name: "TestActivity".to_string(),
+                input: "activity-input".to_string(),
+                execution_id: 1,
+            }],
+        )
+        .await
+        .unwrap();
 
     // Enqueue completion
     store
