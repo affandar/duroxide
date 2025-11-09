@@ -170,7 +170,7 @@ impl Runtime {
                             name,
                             input,
                         } => {
-                            let execution_id = self.get_execution_id_for_instance(instance).await;
+                            let execution_id = self.get_execution_id_for_instance(instance, Some(execution_id)).await;
                             worker_items.push(WorkItem::ActivityExecute {
                                 instance: instance.to_string(),
                                 execution_id,
@@ -183,7 +183,7 @@ impl Runtime {
                             scheduling_event_id,
                             delay_ms,
                         } => {
-                            let execution_id = self.get_execution_id_for_instance(instance).await;
+                            let execution_id = self.get_execution_id_for_instance(instance, Some(execution_id)).await;
                             let fire_at_ms = Self::calculate_timer_fire_time(&turn.final_history(), *delay_ms);
 
                             // Record TimerCreated in history for deterministic replay
@@ -259,7 +259,7 @@ impl Runtime {
                     tracing::debug!(target = "duroxide::runtime::execution", instance=%instance, parent_instance=%parent_instance, parent_id=%parent_id, "Enqueue SubOrchCompleted to parent");
                     orchestrator_items.push(WorkItem::SubOrchCompleted {
                         parent_instance: parent_instance.clone(),
-                        parent_execution_id: self.get_execution_id_for_instance(&parent_instance).await,
+                        parent_execution_id: self.get_execution_id_for_instance(&parent_instance, None).await,
                         parent_id,
                         result: output.clone(),
                     });
@@ -284,7 +284,7 @@ impl Runtime {
                     tracing::debug!(target = "duroxide::runtime::execution", instance=%instance, parent_instance=%parent_instance, parent_id=%parent_id, "Enqueue SubOrchFailed to parent");
                     orchestrator_items.push(WorkItem::SubOrchFailed {
                         parent_instance: parent_instance.clone(),
-                        parent_execution_id: self.get_execution_id_for_instance(&parent_instance).await,
+                        parent_execution_id: self.get_execution_id_for_instance(&parent_instance, None).await,
                         parent_id,
                         details: details.clone(),
                     });
@@ -327,7 +327,7 @@ impl Runtime {
                 if let Some((parent_instance, parent_id)) = parent_link {
                     orchestrator_items.push(WorkItem::SubOrchFailed {
                         parent_instance: parent_instance.clone(),
-                        parent_execution_id: self.get_execution_id_for_instance(&parent_instance).await,
+                        parent_execution_id: self.get_execution_id_for_instance(&parent_instance, None).await,
                         parent_id,
                         details: details.clone(),
                     });

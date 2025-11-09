@@ -7,7 +7,7 @@ pub async fn test_list_instances<F: ProviderFactory>(factory: &F) {
     let provider = factory.create_provider().await;
     let mgmt = provider
         .as_management_capability()
-        .expect("Provider should implement ManagementCapability");
+        .expect("Provider should implement ProviderManager");
 
     // Create a few instances
     for i in 0..3 {
@@ -37,10 +37,10 @@ pub async fn test_list_instances_by_status<F: ProviderFactory>(factory: &F) {
 
     // Create instance and complete it
     provider
-        .enqueue_orchestrator_work(start_item("mgmt-completed"), None)
+        .enqueue_for_orchestrator(start_item("mgmt-completed"), None)
         .await
         .unwrap();
-    let item = provider.fetch_orchestration_item().await.unwrap();
+    let item = provider.fetch_orchestration_item().await.unwrap().unwrap();
 
     // Ack with Completed status
     provider
@@ -84,10 +84,10 @@ pub async fn test_list_executions<F: ProviderFactory>(factory: &F) {
 
     // Create instance with first execution
     provider
-        .enqueue_orchestrator_work(start_item("mgmt-multi-exec"), None)
+        .enqueue_for_orchestrator(start_item("mgmt-multi-exec"), None)
         .await
         .unwrap();
-    let item = provider.fetch_orchestration_item().await.unwrap();
+    let item = provider.fetch_orchestration_item().await.unwrap().unwrap();
     provider
         .ack_orchestration_item(
             &item.lock_token,
@@ -121,10 +121,10 @@ pub async fn test_get_instance_info<F: ProviderFactory>(factory: &F) {
 
     // Create and complete instance
     provider
-        .enqueue_orchestrator_work(start_item("mgmt-info"), None)
+        .enqueue_for_orchestrator(start_item("mgmt-info"), None)
         .await
         .unwrap();
-    let item = provider.fetch_orchestration_item().await.unwrap();
+    let item = provider.fetch_orchestration_item().await.unwrap().unwrap();
     provider
         .ack_orchestration_item(
             &item.lock_token,
@@ -165,10 +165,10 @@ pub async fn test_get_execution_info<F: ProviderFactory>(factory: &F) {
 
     // Create instance
     provider
-        .enqueue_orchestrator_work(start_item("mgmt-exec-info"), None)
+        .enqueue_for_orchestrator(start_item("mgmt-exec-info"), None)
         .await
         .unwrap();
-    let item = provider.fetch_orchestration_item().await.unwrap();
+    let item = provider.fetch_orchestration_item().await.unwrap().unwrap();
     provider
         .ack_orchestration_item(
             &item.lock_token,
@@ -212,10 +212,10 @@ pub async fn test_get_system_metrics<F: ProviderFactory>(factory: &F) {
 
     // Create new instance
     provider
-        .enqueue_orchestrator_work(start_item("mgmt-metrics"), None)
+        .enqueue_for_orchestrator(start_item("mgmt-metrics"), None)
         .await
         .unwrap();
-    let item = provider.fetch_orchestration_item().await.unwrap();
+    let item = provider.fetch_orchestration_item().await.unwrap().unwrap();
     provider
         .ack_orchestration_item(
             &item.lock_token,
@@ -261,7 +261,7 @@ pub async fn test_get_queue_depths<F: ProviderFactory>(factory: &F) {
 
     // Enqueue work
     provider
-        .enqueue_orchestrator_work(start_item("mgmt-queue"), None)
+        .enqueue_for_orchestrator(start_item("mgmt-queue"), None)
         .await
         .unwrap();
 

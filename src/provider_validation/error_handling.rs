@@ -27,10 +27,10 @@ pub async fn test_duplicate_event_id_rejection<F: ProviderFactory>(factory: &F) 
 
     // Create instance with initial event
     provider
-        .enqueue_orchestrator_work(start_item("instance-A"), None)
+        .enqueue_for_orchestrator(start_item("instance-A"), None)
         .await
         .unwrap();
-    let item = provider.fetch_orchestration_item().await.unwrap();
+    let item = provider.fetch_orchestration_item().await.unwrap().unwrap();
     let lock_token = item.lock_token.clone();
 
     // Ack with event_id=1
@@ -55,10 +55,10 @@ pub async fn test_duplicate_event_id_rejection<F: ProviderFactory>(factory: &F) 
 
     // Try to append duplicate event_id=1
     provider
-        .enqueue_orchestrator_work(start_item("instance-A"), None)
+        .enqueue_for_orchestrator(start_item("instance-A"), None)
         .await
         .unwrap();
-    let item2 = provider.fetch_orchestration_item().await.unwrap();
+    let item2 = provider.fetch_orchestration_item().await.unwrap().unwrap();
     let lock_token2 = item2.lock_token.clone();
 
     let result = provider
@@ -81,7 +81,7 @@ pub async fn test_duplicate_event_id_rejection<F: ProviderFactory>(factory: &F) 
     assert!(result.is_err());
 
     // Verify history unchanged
-    let history = provider.read("instance-A").await;
+    let history = provider.read("instance-A").await.unwrap_or_default();
     assert_eq!(history.len(), 1);
     assert!(matches!(history[0], Event::OrchestrationStarted { .. }));
     tracing::info!("✓ Test passed: duplicate event_id rejected");
@@ -94,7 +94,7 @@ pub async fn test_missing_instance_metadata<F: ProviderFactory>(factory: &F) {
     let provider = factory.create_provider().await;
 
     // Attempt to read history for non-existent instance
-    let history = provider.read("non-existent-instance").await;
+    let history = provider.read("non-existent-instance").await.unwrap_or_default();
     assert_eq!(history.len(), 0);
     tracing::info!("✓ Test passed: missing instance handled gracefully");
 }
@@ -108,7 +108,7 @@ pub async fn test_corrupted_serialization_data<F: ProviderFactory>(factory: &F) 
     // This test is primarily about graceful degradation
     // SQLite provider will handle corrupted data by returning None on deserialization failure
     // Test that provider doesn't panic
-    let item = provider.fetch_orchestration_item().await;
+    let item = provider.fetch_orchestration_item().await.unwrap();
     assert!(item.is_none() || item.is_some(), "Should not panic");
     tracing::info!("✓ Test passed: corrupted data handled gracefully");
 }
@@ -121,10 +121,10 @@ pub async fn test_lock_expiration_during_ack<F: ProviderFactory>(factory: &F) {
 
     // Create and fetch item
     provider
-        .enqueue_orchestrator_work(start_item("instance-A"), None)
+        .enqueue_for_orchestrator(start_item("instance-A"), None)
         .await
         .unwrap();
-    let item = provider.fetch_orchestration_item().await.unwrap();
+    let item = provider.fetch_orchestration_item().await.unwrap().unwrap();
     let lock_token = item.lock_token.clone();
 
     // Wait for lock to expire

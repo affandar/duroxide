@@ -72,7 +72,7 @@ async fn code_swap_triggers_nondeterminism() {
     // Poke the instance so it activates and runs a turn (nondeterminism check occurs before completions)
     // Use a timer that fires immediately to trigger a turn reliably
     let _ = store
-        .enqueue_orchestrator_work(
+        .enqueue_for_orchestrator(
             WorkItem::TimerFired {
                 instance: "inst-swap".to_string(),
                 execution_id: 1,
@@ -155,7 +155,7 @@ async fn completion_kind_mismatch_triggers_nondeterminism() {
 
     // Inject a completion with the WRONG kind - send ActivityCompleted for a timer ID
     let _ = store
-        .enqueue_orchestrator_work(
+        .enqueue_for_orchestrator(
             WorkItem::ActivityCompleted {
                 instance: "inst-mismatch".to_string(),
                 execution_id: 1,
@@ -223,7 +223,7 @@ async fn unexpected_completion_id_triggers_nondeterminism() {
 
     // Inject a completion for an ID that was never scheduled (999)
     let _ = store
-        .enqueue_orchestrator_work(
+        .enqueue_for_orchestrator(
             WorkItem::ActivityCompleted {
                 instance: "inst-unexpected".to_string(),
                 execution_id: 1,
@@ -283,7 +283,7 @@ async fn unexpected_timer_completion_triggers_nondeterminism() {
 
     // Inject an unexpected timer completion (timer ID 123 was never scheduled)
     let _ = store
-        .enqueue_orchestrator_work(
+        .enqueue_for_orchestrator(
             WorkItem::TimerFired {
                 instance: "inst-timer".to_string(),
                 execution_id: 1,
@@ -389,7 +389,7 @@ async fn continue_as_new_with_unconsumed_completion_triggers_nondeterminism() {
         id: 1,
         result: serde_json::to_string(&Ok::<String, String>("activity_completed".to_string())).unwrap(),
     };
-    store.enqueue_orchestrator_work(completion, None).await.unwrap();
+    store.enqueue_for_orchestrator(completion, None).await.unwrap();
 
     // Give it a moment to ensure the completion is in the queue
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -474,7 +474,7 @@ async fn execution_id_filtering_without_continue_as_new_triggers_nondeterminism(
     // Manually inject a completion from a different execution ID
     // This simulates what would happen if there was a bug in execution ID handling
     store
-        .enqueue_orchestrator_work(
+        .enqueue_for_orchestrator(
             WorkItem::ActivityCompleted {
                 instance: "inst-exec-id-no-can".to_string(),
                 id: 1,

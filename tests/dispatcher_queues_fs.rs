@@ -17,7 +17,7 @@ where
 {
     let deadline = std::time::Instant::now() + Duration::from_millis(timeout_ms);
     while std::time::Instant::now() < deadline {
-        let h = store.read(instance).await;
+        let h = store.read(instance).await.unwrap_or_default();
         if pred(&h) {
             return true;
         }

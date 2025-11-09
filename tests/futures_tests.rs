@@ -66,8 +66,8 @@ async fn select2_two_externals_history_order_wins() {
         name: "A".to_string(),
         data: "va".to_string(),
     };
-    let _ = store.enqueue_orchestrator_work(wi_b, None).await;
-    let _ = store.enqueue_orchestrator_work(wi_a, None).await;
+    let _ = store.enqueue_for_orchestrator(wi_b, None).await;
+    let _ = store.enqueue_for_orchestrator(wi_a, None).await;
 
     let acts2 = ActivityRegistry::builder().build();
     let reg2 = OrchestrationRegistry::builder()
@@ -85,9 +85,9 @@ async fn select2_two_externals_history_order_wins() {
         .await,
         "timeout waiting for completion"
     );
-    let hist = store.read("inst-ab2").await;
-    let output = match hist.last().unwrap() {
-        Event::OrchestrationCompleted { output, .. } => output.clone(),
+    let hist = store.read("inst-ab2").await.unwrap_or_default();
+    let output = match hist.last() {
+        Some(Event::OrchestrationCompleted { output, .. }) => output.clone(),
         _ => String::new(),
     };
 
@@ -178,8 +178,8 @@ async fn select_two_externals_history_order_wins() {
         name: "A".to_string(),
         data: "va".to_string(),
     };
-    let _ = store.enqueue_orchestrator_work(wi_b, None).await;
-    let _ = store.enqueue_orchestrator_work(wi_a, None).await;
+    let _ = store.enqueue_for_orchestrator(wi_b, None).await;
+    let _ = store.enqueue_for_orchestrator(wi_a, None).await;
 
     let acts2 = ActivityRegistry::builder().build();
     let reg2 = OrchestrationRegistry::builder()
@@ -197,9 +197,9 @@ async fn select_two_externals_history_order_wins() {
         .await,
         "timeout waiting for completion"
     );
-    let hist = store.read("inst-ab").await;
-    let output = match hist.last().unwrap() {
-        Event::OrchestrationCompleted { output, .. } => output.clone(),
+    let hist = store.read("inst-ab").await.unwrap_or_default();
+    let output = match hist.last() {
+        Some(Event::OrchestrationCompleted { output, .. }) => output.clone(),
         _ => String::new(),
     };
 
@@ -297,8 +297,8 @@ async fn select_three_mixed_history_winner() {
         name: "A".to_string(),
         data: "va".to_string(),
     };
-    let _ = store.enqueue_orchestrator_work(wi_b, None).await;
-    let _ = store.enqueue_orchestrator_work(wi_a, None).await;
+    let _ = store.enqueue_for_orchestrator(wi_b, None).await;
+    let _ = store.enqueue_for_orchestrator(wi_a, None).await;
 
     let acts2 = ActivityRegistry::builder().build();
     let reg2 = OrchestrationRegistry::builder()
@@ -315,9 +315,9 @@ async fn select_three_mixed_history_winner() {
         )
         .await
     );
-    let hist = store.read("inst-atb").await;
-    let output = match hist.last().unwrap() {
-        Event::OrchestrationCompleted { output, .. } => output.clone(),
+    let hist = store.read("inst-atb").await.unwrap_or_default();
+    let output = match hist.last() {
+        Some(Event::OrchestrationCompleted { output, .. }) => output.clone(),
         _ => String::new(),
     };
 
@@ -412,8 +412,8 @@ async fn join_returns_history_order() {
         name: "A".to_string(),
         data: "va".to_string(),
     };
-    let _ = store.enqueue_orchestrator_work(wi_b, None).await;
-    let _ = store.enqueue_orchestrator_work(wi_a, None).await;
+    let _ = store.enqueue_for_orchestrator(wi_b, None).await;
+    let _ = store.enqueue_for_orchestrator(wi_a, None).await;
 
     let acts2 = ActivityRegistry::builder().build();
     let reg2 = OrchestrationRegistry::builder()
@@ -430,9 +430,9 @@ async fn join_returns_history_order() {
         )
         .await
     );
-    let hist = store.read("inst-join").await;
-    let output = match hist.last().unwrap() {
-        Event::OrchestrationCompleted { output, .. } => output.clone(),
+    let hist = store.read("inst-join").await.unwrap_or_default();
+    let output = match hist.last() {
+        Some(Event::OrchestrationCompleted { output, .. }) => output.clone(),
         _ => String::new(),
     };
     // Ensure output is vb,va to reflect history order B before A

@@ -55,7 +55,7 @@ async fn cancel_parent_down_propagates_to_child() {
     // Wait for parent terminal failure due to cancel
     let deadline = std::time::Instant::now() + std::time::Duration::from_millis(5000);
     loop {
-        let hist = store.read("inst-cancel-1").await;
+        let hist = store.read("inst-cancel-1").await.unwrap_or_default();
         if hist.iter().any(|e| {
             matches!(
                 e,
@@ -82,9 +82,8 @@ async fn cancel_parent_down_propagates_to_child() {
     }
 
     // Find child instance (prefix inst-cancel-1::)
-    let children: Vec<String> = store
-        .list_instances()
-        .await
+    let mgmt = store.as_management_capability().expect("ProviderManager required");
+    let children: Vec<String> = mgmt.list_instances().await.unwrap_or_default()
         .into_iter()
         .filter(|i| i.starts_with("inst-cancel-1::"))
         .collect();
@@ -94,7 +93,7 @@ async fn cancel_parent_down_propagates_to_child() {
     for child in children {
         let deadline = std::time::Instant::now() + std::time::Duration::from_millis(5000);
         loop {
-            let hist = store.read(&child).await;
+            let hist = store.read(&child).await.unwrap_or_default();
             let has_cancel = hist
                 .iter()
                 .any(|e| matches!(e, Event::OrchestrationCancelRequested { .. }));
@@ -160,7 +159,7 @@ async fn cancel_after_completion_is_noop() {
     let _ = client.cancel_instance("inst-cancel-noop", "late").await;
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
-    let hist = store.read("inst-cancel-noop").await;
+    let hist = store.read("inst-cancel-noop").await.unwrap_or_default();
     assert!(
         hist.iter()
             .any(|e| matches!(e, Event::OrchestrationCompleted { output, .. } if output == "ok"))
@@ -233,7 +232,7 @@ async fn cancel_child_directly_signals_parent() {
     );
 
     // Parent should have SubOrchestrationFailed for the child id 2
-    let ph = store.read("inst-chdirect").await;
+    let ph = store.read("inst-chdirect").await.unwrap_or_default();
     assert!(ph.iter().any(|e| matches!(
         e,
         Event::SubOrchestrationFailed { source_event_id, details, .. }
@@ -331,7 +330,7 @@ async fn cancel_continue_as_new_second_exec() {
     assert!(ok, "timeout waiting for cancel failure");
 
     // Ensure cancel requested recorded
-    let hist = store.read("inst-can-can").await;
+    let hist = store.read("inst-can-can").await.unwrap_or_default();
     assert!(
         hist.iter()
             .any(|e| matches!(e, Event::OrchestrationCancelRequested { .. }))
@@ -384,7 +383,7 @@ async fn orchestration_completes_before_activity_finishes() {
 
     // Give activity time to finish; no additional terminal events should be added
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-    let hist = store.read("inst-orch-done-first").await;
+    let hist = store.read("inst-orch-done-first").await.unwrap_or_default();
     assert!(
         hist.iter()
             .any(|e| matches!(e, Event::OrchestrationCompleted { output, .. } if output == "done"))
@@ -435,7 +434,7 @@ async fn orchestration_fails_before_activity_finishes() {
 
     // Give activity time to finish; no change to terminal failure
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-    let hist = store.read("inst-orch-fail-first").await;
+    let hist = store.read("inst-orch-fail-first").await.unwrap_or_default();
     assert!(hist.iter().any(|e| matches!(
         e,
         Event::OrchestrationFailed { details, .. } if matches!(

@@ -884,7 +884,7 @@ impl Provider for PostgresProvider {
     }
 
     // Worker queue operations
-    async fn enqueue_worker_work(&self, item: WorkItem) -> Result<(), String> {
+    async fn enqueue_for_worker(&self, item: WorkItem) -> Result<(), String> {
         let work_json = serde_json::to_value(&item).map_err(|e| e.to_string())?;
         
         sqlx::query("INSERT INTO worker_queue (work_item) VALUES ($1)")

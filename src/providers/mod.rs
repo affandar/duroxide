@@ -297,7 +297,7 @@ pub enum WorkItem {
 /// │                             │    visibility for timers)   │
 /// │                             └──► Worker Queue              │
 /// │                                                             │
-/// │  [Worker Dispatcher]  ←────────── dequeue_worker_peek_lock │
+/// │  [Worker Dispatcher]  ←────────── fetch_work_item │
 /// │       Execute Activity                                      │
 /// │           ↓                                                 │
 /// │  Completion ────────────────────► Orchestrator Queue        │
@@ -348,7 +348,7 @@ pub enum WorkItem {
 ///
 /// The runtime runs 3 background dispatchers polling your queues:
 /// 1. **Orchestration Dispatcher**: Polls fetch_orchestration_item() continuously
-/// 2. **Work Dispatcher**: Polls dequeue_worker_peek_lock() continuously
+/// 2. **Work Dispatcher**: Polls fetch_work_item() continuously
 /// 3. **Timer Dispatcher**: Polls dequeue_timer_peek_lock() continuously
 ///
 /// **Your implementation must be thread-safe** and support concurrent access from multiple dispatchers.
@@ -401,7 +401,7 @@ pub enum WorkItem {
 /// - created_at, updated_at timestamps
 ///
 /// This metadata is updated via:
-/// - `enqueue_orchestrator_work()` with StartOrchestration
+/// - `enqueue_for_orchestrator()` with StartOrchestration
 /// - `ack_orchestration_item()` with history changes
 /// - `ExecutionMetadata` for status/output updates
 ///
@@ -410,8 +410,8 @@ pub enum WorkItem {
 /// **REQUIRED** (must implement):
 /// - fetch_orchestration_item, ack_orchestration_item, abandon_orchestration_item
 /// - read, append_with_execution
-/// - enqueue_worker_work, dequeue_worker_peek_lock, ack_worker
-/// - enqueue_orchestrator_work
+/// - enqueue_for_worker, fetch_work_item, ack_work_item
+/// - enqueue_for_orchestrator
 ///
 /// **OPTIONAL** (has defaults):
 /// - latest_execution_id, read_with_execution
@@ -593,7 +593,7 @@ pub enum WorkItem {
 ///
 /// The runtime runs 3 background dispatchers polling your queues:
 /// 1. **Orchestration Dispatcher**: Polls fetch_orchestration_item() continuously
-/// 2. **Work Dispatcher**: Polls dequeue_worker_peek_lock() continuously
+/// 2. **Work Dispatcher**: Polls fetch_work_item() continuously
 /// 3. **Timer Dispatcher**: Polls dequeue_timer_peek_lock() continuously
 ///
 /// **Your implementation must be thread-safe** and support concurrent access from multiple dispatchers.
@@ -651,7 +651,7 @@ pub enum WorkItem {
 /// - `ack_orchestration_item()` with ExecutionMetadata (creates instance and updates status/output)
 /// - `ack_orchestration_item()` with metadata.create_next_execution (increments current_execution_id)
 ///
-/// **Note:** Instances are NOT created in `enqueue_orchestrator_work()`. Instance creation happens
+/// **Note:** Instances are NOT created in `enqueue_for_orchestrator()`. Instance creation happens
 /// when the runtime acknowledges the first turn via `ack_orchestration_item()` with metadata.
 ///
 /// # Error Handling Philosophy
@@ -666,8 +666,8 @@ pub enum WorkItem {
 /// **REQUIRED** (must implement):
 /// - fetch_orchestration_item, ack_orchestration_item, abandon_orchestration_item
 /// - read, append_with_execution
-/// - enqueue_worker_work, dequeue_worker_peek_lock, ack_worker
-/// - enqueue_orchestrator_work
+/// - enqueue_for_worker, fetch_work_item, ack_work_item
+/// - enqueue_for_orchestrator
 ///
 /// **OPTIONAL** (has defaults):
 /// - latest_execution_id, read_with_execution
@@ -695,7 +695,7 @@ pub enum WorkItem {
 ///
 /// # Capability Discovery
 ///
-/// Providers can implement additional capability traits (like `ManagementCapability`)
+/// Providers can implement additional capability traits (like `ProviderManager`)
 /// to expose richer features. The `Client` automatically discovers these capabilities
 /// through the `as_management_capability()` method.
 ///
@@ -714,16 +714,16 @@ pub enum WorkItem {
 ///    - `read()` - Get event history for status checks
 ///
 /// 3. **Worker Queue (2 methods)**
-///    - `dequeue_worker_peek_lock()` - Get activity work items
-///    - `ack_worker()` - Acknowledge activity completion
+///    - `fetch_work_item()` - Get activity work items
+///    - `ack_work_item()` - Acknowledge activity completion
 ///
 /// 4. **Orchestrator Queue (1 method)**
-///    - `enqueue_orchestrator_work()` - Enqueue control messages (including TimerFired with delayed visibility)
+///    - `enqueue_for_orchestrator()` - Enqueue control messages (including TimerFired with delayed visibility)
 ///
 /// ## Optional Management Methods (2 methods)
 ///
 /// These are included for backward compatibility but will be moved to
-/// `ManagementCapability` in future versions:
+/// `ProviderManager` in future versions:
 ///
 /// - `list_instances()` - List all instance IDs
 /// - `list_executions()` - List execution IDs for an instance
@@ -736,12 +736,12 @@ pub enum WorkItem {
 /// impl Provider for MyProvider {
 ///     // ... implement required methods
 ///     
-///     fn as_management_capability(&self) -> Option<&dyn ManagementCapability> {
-///         Some(self as &dyn ManagementCapability)
+///     fn as_management_capability(&self) -> Option<&dyn ProviderManager> {
+///         Some(self as &dyn ProviderManager)
 ///     }
 /// }
 ///
-/// impl ManagementCapability for MyProvider {
+/// impl ProviderManager for MyProvider {
 ///     // ... implement management methods
 /// }
 /// ```
@@ -900,7 +900,7 @@ pub trait Provider: Any + Send + Sync {
     ///     Some(OrchestrationItem { instance, orchestration_name, execution_id, version, history, messages, lock_token })
     /// }
     /// ```
-    async fn fetch_orchestration_item(&self) -> Option<OrchestrationItem>;
+    async fn fetch_orchestration_item(&self) -> Result<Option<OrchestrationItem>, ProviderError>;
 
     /// Acknowledge successful orchestration processing atomically.
     ///
@@ -1187,9 +1187,7 @@ pub trait Provider: Any + Send + Sync {
     /// Return `Err("Invalid lock token")` if the lock token is not found in `instance_locks`.
     async fn abandon_orchestration_item(&self, _lock_token: &str, _delay_ms: Option<u64>) -> Result<(), ProviderError>;
 
-    // ===== Basic History Access (REQUIRED) =====
-
-    /// Read the full history for an instance.
+    /// Read the full history for the latest execution of an instance.
     ///
     /// # What This Does
     ///
@@ -1204,36 +1202,110 @@ pub trait Provider: Any + Send + Sync {
     ///
     /// # Return Value
     ///
-    /// - Empty Vec if instance doesn't exist
-    /// - Empty Vec if instance exists but has no events (shouldn't happen normally)
-    /// - Vec of events ordered by event_id ascending (event_id 1, 2, 3, ...)
-    ///
-    /// # Implementation Pattern
-    ///
-    /// ```ignore
-    /// async fn read(&self, instance: &str) -> Vec<Event> {
-    ///     // Get latest execution ID
-    ///     let exec_id = SELECT COALESCE(MAX(execution_id), 1)
-    ///         FROM executions WHERE instance_id = ?;
-    ///     
-    ///     // Load events for that execution
-    ///     let rows = SELECT event_data FROM history
-    ///         WHERE instance_id = ? AND execution_id = ?
-    ///         ORDER BY event_id;
-    ///     
-    ///     rows.into_iter()
-    ///         .filter_map(|row| serde_json::from_str(&row.event_data).ok())
-    ///         .collect()
-    /// }
-    /// ```
+    /// - `Ok(Vec<Event>)` - Events ordered by event_id ascending (event_id 1, 2, 3, ...)
+    /// - `Err(ProviderError)` - Storage error
     ///
     /// # Usage
     ///
-    /// Called by:
+    /// **NOT called in runtime hot path.** Used by:
     /// - Client.get_orchestration_status() - to determine current state
-    /// - Tests and debugging tools
-    /// - NOT called in hot path (fetch_orchestration_item loads history internally)
-    async fn read(&self, instance: &str) -> Vec<Event>;
+    /// - Runtime.get_orchestration_descriptor() - to get orchestration metadata
+    /// - Testing and validation suites
+    ///
+    /// The runtime hot path uses `fetch_orchestration_item()` which loads history internally.
+    async fn read(&self, instance: &str) -> Result<Vec<Event>, ProviderError>;
+
+    // ===== History Reading and Testing Methods (NOT used by runtime hot path) =====
+    // These methods are NOT called by the main runtime during orchestration execution.
+    // They are used by testing, validation suites, client APIs, and debugging tools.
+
+    /// Read the full event history for a specific execution within an instance.
+    ///
+    /// **NOT called in runtime hot path.** Used by testing, validation suites, and debugging tools.
+    ///
+    /// # Parameters
+    ///
+    /// * `instance` - The ID of the orchestration instance.
+    /// * `execution_id` - The specific execution ID to read history for.
+    ///
+    /// # Returns
+    ///
+    /// Vector of events in chronological order (oldest first).
+    ///
+    /// # Implementation Example
+    ///
+    /// ```ignore
+    /// async fn read_with_execution(&self, instance: &str, execution_id: u64) -> Result<Vec<Event>, ProviderError> {
+    ///     SELECT event_data FROM history
+    ///     WHERE instance_id = ? AND execution_id = ?
+    ///     ORDER BY event_id
+    /// }
+    /// ```
+    ///
+    /// # Default
+    ///
+    /// Returns empty vector.
+    async fn read_with_execution(&self, _instance: &str, _execution_id: u64) -> Result<Vec<Event>, ProviderError>;
+
+    /// Append events to a specific execution.
+    ///
+    /// **NOT called in runtime hot path.** Used by testing and validation suites for fault injection
+    /// and test setup. The runtime uses `ack_orchestration_item()` to append history atomically.
+    ///
+    /// # What This Does
+    ///
+    /// Add new events to the history log for a specific execution.
+    ///
+    /// # CRITICAL: Event ID Assignment
+    ///
+    /// **The runtime assigns event_ids BEFORE calling this method.**
+    /// - DO NOT modify event.event_id()
+    /// - DO NOT renumber events
+    /// - Store events exactly as provided
+    ///
+    /// # Duplicate Detection
+    ///
+    /// Events with duplicate (instance_id, execution_id, event_id) should:
+    /// - Either: Reject with error (let runtime handle)
+    /// - Or: IGNORE (idempotent append)
+    /// - NEVER: Overwrite existing event (corrupts history)
+    ///
+    /// # Parameters
+    ///
+    /// * `instance` - The ID of the orchestration instance.
+    /// * `execution_id` - The specific execution ID to append events to.
+    /// * `new_events` - Vector of events to append (event_ids already assigned).
+    ///
+    /// # Returns
+    ///
+    /// `Ok(())` on success, `Err(ProviderError)` on failure.
+    ///
+    /// # Implementation Example
+    ///
+    /// ```ignore
+    /// async fn append_with_execution(
+    ///     &self,
+    ///     instance: &str,
+    ///     execution_id: u64,
+    ///     new_events: Vec<Event>,
+    /// ) -> Result<(), ProviderError> {
+    ///     for event in &new_events {
+    ///         INSERT INTO history (instance_id, execution_id, event_id, event_data)
+    ///         VALUES (?, ?, event.event_id(), serialize(event))
+    ///     }
+    ///     Ok(())
+    /// }
+    /// ```
+    ///
+    /// # Default
+    ///
+    /// Returns error indicating not implemented.
+    async fn append_with_execution(
+        &self,
+        _instance: &str,
+        _execution_id: u64,
+        _new_events: Vec<Event>,
+    ) -> Result<(), ProviderError>;
 
     // ===== Worker Queue Operations (REQUIRED) =====
     // Worker queue processes activity executions.
@@ -1247,7 +1319,7 @@ pub trait Provider: Any + Send + Sync {
     /// # Implementation
     ///
     /// ```ignore
-    /// async fn enqueue_worker_work(&self, item: WorkItem) -> Result<(), String> {
+    /// async fn enqueue_for_worker(&self, item: WorkItem) -> Result<(), String> {
     ///     INSERT INTO worker_queue (work_item)
     ///     VALUES (serde_json::to_string(&item)?)
     /// }
@@ -1260,7 +1332,7 @@ pub trait Provider: Any + Send + Sync {
     /// # Ordering
     ///
     /// FIFO order preferred but not strictly required.
-    async fn enqueue_worker_work(&self, _item: WorkItem) -> Result<(), ProviderError>;
+    async fn enqueue_for_worker(&self, _item: WorkItem) -> Result<(), ProviderError>;
 
     /// Dequeue a single work item with peek-lock semantics.
     ///
@@ -1273,7 +1345,7 @@ pub trait Provider: Any + Send + Sync {
     /// # Implementation Pattern
     ///
     /// ```ignore
-    /// async fn dequeue_worker_peek_lock(&self) -> Option<(WorkItem, String)> {
+    /// async fn fetch_work_item(&self) -> Option<(WorkItem, String)> {
     ///     let tx = begin_transaction()?;
     ///     
     ///     // Find next available item
@@ -1303,7 +1375,7 @@ pub trait Provider: Any + Send + Sync {
     /// # Concurrency
     ///
     /// Called continuously by work dispatcher. Must prevent double-dequeue.
-    async fn dequeue_worker_peek_lock(&self) -> Option<(WorkItem, String)>;
+    async fn fetch_work_item(&self) -> Option<(WorkItem, String)>;
 
     /// Acknowledge successful processing of a work item.
     ///
@@ -1319,13 +1391,13 @@ pub trait Provider: Any + Send + Sync {
     ///
     /// # Parameters
     ///
-    /// * `token` - Lock token from dequeue_worker_peek_lock
+    /// * `token` - Lock token from fetch_work_item
     /// * `completion` - WorkItem::ActivityCompleted or WorkItem::ActivityFailed
     ///
     /// # Implementation
     ///
     /// ```ignore
-    /// async fn ack_worker(&self, token: &str, completion: WorkItem) -> Result<(), String> {
+    /// async fn ack_work_item(&self, token: &str, completion: WorkItem) -> Result<(), String> {
     ///     BEGIN TRANSACTION
     ///         DELETE FROM worker_queue WHERE lock_token = ?token
     ///         INSERT INTO orchestrator_queue (instance_id, work_item, visible_at)
@@ -1333,134 +1405,7 @@ pub trait Provider: Any + Send + Sync {
     ///     COMMIT
     /// }
     /// ```
-    async fn ack_worker(&self, token: &str, completion: WorkItem) -> Result<(), ProviderError>;
-
-    // ===== Multi-Execution Support (REQUIRED for ContinueAsNew) =====
-    // These methods enable orchestrations to continue with new input while maintaining history.
-
-    /// Get the latest execution ID for an instance.
-    ///
-    /// # What This Does
-    ///
-    /// Returns the current (highest) execution_id for an instance.
-    ///
-    /// # Implementation
-    ///
-    /// ```ignore
-    /// async fn latest_execution_id(&self, instance: &str) -> Option<u64> {
-    ///     SELECT MAX(execution_id) FROM executions WHERE instance_id = ?
-    ///     // Returns None if no executions, Some(max_id) otherwise
-    /// }
-    /// ```
-    ///
-    /// # Default Implementation
-    ///
-    /// The default implementation uses `read()` and returns Some(1) if history exists.
-    /// Override for better performance if you track execution IDs separately.
-    ///
-    /// # Return Value
-    ///
-    /// - `None` if instance doesn't exist or no execution ID can be determined
-    /// - `Some(n)` for instances with executions (derived from history)
-    async fn latest_execution_id(&self, instance: &str) -> Option<u64> {
-        let h = self.read(instance).await;
-        if h.is_empty() {
-            None
-        } else {
-            // Count OrchestrationStarted events to determine latest execution_id
-            let count = h
-                .iter()
-                .filter(|e| matches!(e, crate::Event::OrchestrationStarted { .. }))
-                .count() as u64;
-            if count > 0 { Some(count) } else { None }
-        }
-    }
-
-    /// Read history for a specific execution.
-    ///
-    /// # What This Does
-    ///
-    /// Returns events for a specific execution_id, not just the latest.
-    ///
-    /// # Use Cases
-    ///
-    /// - Debugging: inspect execution 1 after ContinueAsNew created execution 2
-    /// - Testing: verify execution history isolation
-    /// - NOT used in normal runtime operation
-    ///
-    /// # Implementation
-    ///
-    /// ```ignore
-    /// async fn read_with_execution(&self, instance: &str, execution_id: u64) -> Vec<Event> {
-    ///     SELECT event_data FROM history
-    ///     WHERE instance_id = ? AND execution_id = ?
-    ///     ORDER BY event_id
-    /// }
-    /// ```
-    ///
-    /// # Default Implementation
-    ///
-    /// Falls back to `read()` (ignores execution_id parameter).
-    /// Override if you need execution-specific history access.
-    async fn read_with_execution(&self, instance: &str, _execution_id: u64) -> Vec<Event> {
-        self.read(instance).await
-    }
-
-    /// Append events to a specific execution.
-    ///
-    /// # What This Does
-    ///
-    /// Add new events to the history log for a specific execution.
-    ///
-    /// # CRITICAL: Event ID Assignment
-    ///
-    /// **The runtime assigns event_ids BEFORE calling this method.**
-    /// - DO NOT modify event.event_id()
-    /// - DO NOT renumber events
-    /// - Store events exactly as provided
-    ///
-    /// # Duplicate Detection
-    ///
-    /// Events with duplicate (instance_id, execution_id, event_id) should:
-    /// - Either: Reject with error (let runtime handle)
-    /// - Or: IGNORE (idempotent append)
-    /// - NEVER: Overwrite existing event (corrupts history)
-    ///
-    /// # Implementation Pattern
-    ///
-    /// ```ignore
-    /// async fn append_with_execution(instance: &str, execution_id: u64, new_events: Vec<Event>) -> Result<(), String> {
-    ///     for event in &new_events {
-    ///         // Validate event_id was set
-    ///         if event.event_id() == 0 {
-    ///             return Err("event_id must be set by runtime");
-    ///         }
-    ///         
-    ///         let event_json = serde_json::to_string(&event)?;
-    ///         let event_type = discriminant_name(&event); // For indexing
-    ///         
-    ///         INSERT INTO history (instance_id, execution_id, event_id, event_data, event_type)
-    ///         VALUES (?, ?, event.event_id(), event_json, event_type)
-    ///         // Use PRIMARY KEY (instance_id, execution_id, event_id) to prevent duplicates
-    ///     }
-    ///     Ok(())
-    /// }
-    /// ```
-    ///
-    /// # Ordering
-    ///
-    /// Events must be retrievable in event_id order (use ORDER BY event_id in reads).
-    ///
-    /// # Concurrency
-    ///
-    /// Usually called within a transaction (from ack_orchestration_item).
-    /// If called standalone, must be thread-safe.
-    async fn append_with_execution(
-        &self,
-        instance: &str,
-        _execution_id: u64,
-        new_events: Vec<Event>,
-    ) -> Result<(), ProviderError>;
+    async fn ack_work_item(&self, token: &str, completion: WorkItem) -> Result<(), ProviderError>;
 
     // ===== Optional Management APIs =====
     // These have default implementations and are primarily used for testing/debugging.
@@ -1487,7 +1432,7 @@ pub trait Provider: Any + Send + Sync {
     /// # Implementation Pattern
     ///
     /// ```ignore
-    /// async fn enqueue_orchestrator_work(&self, item: WorkItem, delay_ms: Option<u64>) -> Result<(), String> {
+    /// async fn enqueue_for_orchestrator(&self, item: WorkItem, delay_ms: Option<u64>) -> Result<(), String> {
     ///     let instance = extract_instance(&item);  // See WorkItem docs for extraction
     ///     let work_json = serde_json::to_string(&item)?;
     ///     
@@ -1520,69 +1465,9 @@ pub trait Provider: Any + Send + Sync {
     /// # Error Handling
     ///
     /// Return Err if storage fails. Return Ok if item was enqueued successfully.
-    async fn enqueue_orchestrator_work(&self, _item: WorkItem, _delay_ms: Option<u64>) -> Result<(), ProviderError>;
+    async fn enqueue_for_orchestrator(&self, _item: WorkItem, _delay_ms: Option<u64>) -> Result<(), ProviderError>;
 
-    /// List all known instance IDs.
-    ///
-    /// # Purpose
-    ///
-    /// Used for:
-    /// - Testing: Find all instances created during a test
-    /// - Debugging: Inspect what instances exist
-    /// - Admin tools: Build dashboards
-    ///
-    /// # Implementation
-    ///
-    /// ```ignore
-    /// async fn list_instances(&self) -> Vec<String> {
-    ///     SELECT instance_id FROM instances ORDER BY created_at
-    /// }
-    /// ```
-    ///
-    /// # Default Implementation
-    ///
-    /// Returns empty Vec. Override if you want to support instance listing.
-    ///
-    /// # Not Required
-    ///
-    /// This is purely for observability - runtime doesn't call this.
-    async fn list_instances(&self) -> Vec<String> {
-        Vec::new()
-    }
-
-    /// List all execution IDs for an instance.
-    ///
-    /// # Purpose
-    ///
-    /// Used for:
-    /// - Testing: Verify ContinueAsNew created multiple executions
-    /// - Debugging: See execution history for an instance
-    /// - NOT used by runtime in normal operation
-    ///
-    /// # Implementation
-    ///
-    /// ```ignore
-    /// async fn list_executions(&self, instance: &str) -> Vec<u64> {
-    ///     SELECT execution_id FROM executions
-    ///     WHERE instance_id = ?
-    ///     ORDER BY execution_id
-    /// }
-    /// ```
-    ///
-    /// # Default Implementation
-    ///
-    /// Returns `[1]` if instance exists (from read()), empty Vec otherwise.
-    /// Override for proper multi-execution support.
-    ///
-    /// # Return Value
-    ///
-    /// Vec of execution IDs in ascending order: `[1]`, `[1, 2]`, `[1, 2, 3]`, etc.
-    async fn list_executions(&self, instance: &str) -> Vec<u64> {
-        let h = self.read(instance).await;
-        if h.is_empty() { Vec::new() } else { vec![1] }
-    }
-
-    // - Add timeout parameter to dequeue_worker_peek_lock and dequeue_timer_peek_lock
+    // - Add timeout parameter to fetch_work_item and dequeue_timer_peek_lock
     // - Add refresh_worker_lock(token, extend_ms) and refresh_timer_lock(token, extend_ms)
     // - Provider should auto-abandon messages if lock expires without ack
     // This would enable graceful handling of worker crashes and long-running activities
@@ -1594,8 +1479,8 @@ pub trait Provider: Any + Send + Sync {
     /// # Purpose
     ///
     /// This method enables automatic capability discovery by the `Client`.
-    /// When a provider implements `ManagementCapability`, it should return
-    /// `Some(self as &dyn ManagementCapability)` to expose management features.
+    /// When a provider implements `ProviderManager`, it should return
+    /// `Some(self as &dyn ProviderManager)` to expose management features.
     ///
     /// # Default Implementation
     ///
@@ -1603,8 +1488,8 @@ pub trait Provider: Any + Send + Sync {
     ///
     /// ```ignore
     /// impl Provider for MyProvider {
-    ///     fn as_management_capability(&self) -> Option<&dyn ManagementCapability> {
-    ///         Some(self as &dyn ManagementCapability)
+    ///     fn as_management_capability(&self) -> Option<&dyn ProviderManager> {
+    ///         Some(self as &dyn ProviderManager)
     ///     }
     /// }
     /// ```
@@ -1619,7 +1504,7 @@ pub trait Provider: Any + Send + Sync {
     ///     let instances = client.list_all_instances().await?;
     /// }
     /// ```
-    fn as_management_capability(&self) -> Option<&dyn ManagementCapability> {
+    fn as_management_capability(&self) -> Option<&dyn ProviderManager> {
         None
     }
 }
@@ -1654,12 +1539,12 @@ pub use management::{ExecutionInfo, InstanceInfo, ManagementProvider, QueueDepth
 /// impl Provider for MyProvider {
 ///     // ... implement required Provider methods
 ///     
-///     fn as_management_capability(&self) -> Option<&dyn ManagementCapability> {
-///         Some(self as &dyn ManagementCapability)
+///     fn as_management_capability(&self) -> Option<&dyn ProviderManager> {
+///         Some(self as &dyn ProviderManager)
 ///     }
 /// }
 ///
-/// impl ManagementCapability for MyProvider {
+/// impl ProviderManager for MyProvider {
 ///     async fn list_instances(&self) -> Result<Vec<String>, String> {
 ///         // Query your storage for all instance IDs
 ///         Ok(vec!["instance-1".to_string(), "instance-2".to_string()])
@@ -1722,7 +1607,7 @@ pub use management::{ExecutionInfo, InstanceInfo, ManagementProvider, QueueDepth
 /// }
 /// ```
 #[async_trait::async_trait]
-pub trait ManagementCapability: Any + Send + Sync {
+pub trait ProviderManager: Any + Send + Sync {
     // ===== Instance Discovery =====
 
     /// List all known instance IDs.
@@ -1748,9 +1633,7 @@ pub trait ManagementCapability: Any + Send + Sync {
     /// # Default
     ///
     /// Returns empty Vec if not supported.
-    async fn list_instances(&self) -> Result<Vec<String>, ProviderError> {
-        Ok(Vec::new())
-    }
+    async fn list_instances(&self) -> Result<Vec<String>, ProviderError>;
 
     /// List instances matching a status filter.
     ///
@@ -1776,9 +1659,7 @@ pub trait ManagementCapability: Any + Send + Sync {
     /// # Default
     ///
     /// Returns empty Vec if not supported.
-    async fn list_instances_by_status(&self, _status: &str) -> Result<Vec<String>, ProviderError> {
-        Ok(Vec::new())
-    }
+    async fn list_instances_by_status(&self, status: &str) -> Result<Vec<String>, ProviderError>;
 
     // ===== Execution Inspection =====
 
@@ -1809,14 +1690,7 @@ pub trait ManagementCapability: Any + Send + Sync {
     /// # Default
     ///
     /// Returns `[1]` if instance exists, empty Vec otherwise.
-    async fn list_executions(&self, instance: &str) -> Result<Vec<u64>, ProviderError> {
-        // Default assumes single execution if instance exists
-        if let Ok(info) = self.get_instance_info(instance).await {
-            Ok(vec![info.current_execution_id])
-        } else {
-            Ok(Vec::new())
-        }
-    }
+    async fn list_executions(&self, instance: &str) -> Result<Vec<u64>, ProviderError>;
 
     /// Read the full event history for a specific execution within an instance.
     ///
@@ -1842,9 +1716,37 @@ pub trait ManagementCapability: Any + Send + Sync {
     /// # Default
     ///
     /// Returns empty vector.
-    async fn read_execution(&self, _instance: &str, _execution_id: u64) -> Result<Vec<Event>, ProviderError> {
-        Ok(Vec::new())
-    }
+    async fn read_history_with_execution_id(
+        &self,
+        instance: &str,
+        execution_id: u64,
+    ) -> Result<Vec<Event>, ProviderError>;
+
+    /// Read the full event history for the latest execution of an instance.
+    ///
+    /// # Parameters
+    ///
+    /// * `instance` - The ID of the orchestration instance.
+    ///
+    /// # Returns
+    ///
+    /// Vector of events in chronological order (oldest first) for the latest execution.
+    ///
+    /// # Implementation
+    ///
+    /// This method gets the latest execution ID and delegates to `read_history_with_execution_id`.
+    ///
+    /// ```ignore
+    /// async fn read_history(&self, instance: &str) -> Result<Vec<Event>, ProviderError> {
+    ///     let execution_id = self.latest_execution_id(instance).await?;
+    ///     self.read_history_with_execution_id(instance, execution_id).await
+    /// }
+    /// ```
+    ///
+    /// # Default
+    ///
+    /// Returns empty vector.
+    async fn read_history(&self, instance: &str) -> Result<Vec<Event>, ProviderError>;
 
     /// Get the latest (current) execution ID for an instance.
     ///
@@ -1863,9 +1765,7 @@ pub trait ManagementCapability: Any + Send + Sync {
     /// # Default
     ///
     /// Returns 1 (assumes single execution).
-    async fn latest_execution_id(&self, _instance: &str) -> Result<u64, ProviderError> {
-        Ok(1)
-    }
+    async fn latest_execution_id(&self, instance: &str) -> Result<u64, ProviderError>;
 
     // ===== Instance Metadata =====
 
@@ -1893,12 +1793,7 @@ pub trait ManagementCapability: Any + Send + Sync {
     /// # Default
     ///
     /// Returns an error indicating not implemented.
-    async fn get_instance_info(&self, instance: &str) -> Result<InstanceInfo, ProviderError> {
-        Err(ProviderError::permanent(
-            "get_instance_info",
-            format!("not implemented for instance {instance}"),
-        ))
-    }
+    async fn get_instance_info(&self, instance: &str) -> Result<InstanceInfo, ProviderError>;
 
     /// Get detailed information about a specific execution.
     ///
@@ -1926,9 +1821,7 @@ pub trait ManagementCapability: Any + Send + Sync {
     /// # Default
     ///
     /// Returns an error indicating not implemented.
-    async fn get_execution_info(&self, _instance: &str, _execution_id: u64) -> Result<ExecutionInfo, ProviderError> {
-        Err(ProviderError::permanent("get_execution_info", "not implemented"))
-    }
+    async fn get_execution_info(&self, instance: &str, execution_id: u64) -> Result<ExecutionInfo, ProviderError>;
 
     // ===== System Metrics =====
 
@@ -1955,9 +1848,7 @@ pub trait ManagementCapability: Any + Send + Sync {
     /// # Default
     ///
     /// Returns default `SystemMetrics`.
-    async fn get_system_metrics(&self) -> Result<SystemMetrics, ProviderError> {
-        Ok(SystemMetrics::default())
-    }
+    async fn get_system_metrics(&self) -> Result<SystemMetrics, ProviderError>;
 
     /// Get the current depths of the internal work queues.
     ///
@@ -1981,7 +1872,5 @@ pub trait ManagementCapability: Any + Send + Sync {
     /// # Default
     ///
     /// Returns default `QueueDepths` (timer_queue will be 0).
-    async fn get_queue_depths(&self) -> Result<QueueDepths, ProviderError> {
-        Ok(QueueDepths::default())
-    }
+    async fn get_queue_depths(&self) -> Result<QueueDepths, ProviderError>;
 }

@@ -1,6 +1,6 @@
 use duroxide::Event;
 use duroxide::providers::sqlite::SqliteProvider;
-use duroxide::providers::{ExecutionMetadata, Provider, WorkItem};
+use duroxide::providers::{ExecutionMetadata, Provider, ProviderManager, WorkItem};
 use std::sync::Arc as StdArc;
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
@@ -8,7 +8,7 @@ use tempfile::TempDir;
 #[allow(dead_code)]
 pub async fn wait_for_history<F>(store: StdArc<dyn Provider>, instance: &str, predicate: F, timeout_ms: u64) -> bool
 where
-    F: Fn(&Vec<Event>) -> bool,
+    F: Fn(&[Event]) -> bool,
 {
     wait_for_history_event(
         store,
@@ -43,11 +43,11 @@ pub async fn wait_for_history_event<T, F>(
 ) -> Option<T>
 where
     T: Clone,
-    F: Fn(&Vec<Event>) -> Option<T>,
+    F: Fn(&[Event]) -> Option<T>,
 {
     let deadline = Instant::now() + Duration::from_millis(timeout_ms);
     loop {
-        let hist = store.read(instance).await;
+        let hist = store.read(instance).await.unwrap_or_default();
         if let Some(e) = selector(&hist) {
             return Some(e);
         }
@@ -87,7 +87,12 @@ pub async fn test_create_execution(
     parent_id: Option<u64>,
 ) -> Result<u64, String> {
     // Calculate next execution ID (max + 1, or INITIAL if none exist)
-    let execs = provider.list_executions(instance).await;
+    // Try to get ProviderManager capability, otherwise assume no executions exist
+    let execs = if let Some(mgmt) = provider.as_management_capability() {
+        mgmt.list_executions(instance).await.unwrap_or_default()
+    } else {
+        Vec::new()
+    };
     let next_execution_id = if execs.is_empty() {
         duroxide::INITIAL_EXECUTION_ID
     } else {
@@ -96,7 +101,7 @@ pub async fn test_create_execution(
 
     // Enqueue StartOrchestration work item with calculated execution_id
     provider
-        .enqueue_orchestrator_work(
+        .enqueue_for_orchestrator(
             WorkItem::StartOrchestration {
                 instance: instance.to_string(),
                 orchestration: orchestration.to_string(),
@@ -115,6 +120,7 @@ pub async fn test_create_execution(
     let item = provider
         .fetch_orchestration_item()
         .await
+        .map_err(|e| e.to_string())?
         .ok_or_else(|| "Failed to fetch orchestration item".to_string())?;
 
     // The fetched item should have the execution_id we enqueued

@@ -150,7 +150,7 @@ mod otel_impl {
         // Provider metrics
         pub provider_fetch_duration: Histogram<u64>,
         pub provider_ack_orch_duration: Histogram<u64>,
-        pub provider_ack_worker_duration: Histogram<u64>,
+        pub provider_ack_work_item_duration: Histogram<u64>,
         pub provider_dequeue_worker_duration: Histogram<u64>,
         pub provider_enqueue_orch_duration: Histogram<u64>,
         pub provider_ack_retries: Counter<u64>,
@@ -283,8 +283,8 @@ mod otel_impl {
                 .with_description("Provider orchestration ack duration")
                 .build();
 
-            let provider_ack_worker_duration = meter
-                .u64_histogram("duroxide.provider.ack_worker_duration_ms")
+            let provider_ack_work_item_duration = meter
+                .u64_histogram("duroxide.provider.ack_work_item_duration_ms")
                 .with_description("Provider worker ack duration")
                 .build();
 
@@ -368,7 +368,7 @@ mod otel_impl {
                 orch_turns,
                 provider_fetch_duration,
                 provider_ack_orch_duration,
-                provider_ack_worker_duration,
+                provider_ack_work_item_duration,
                 provider_dequeue_worker_duration,
                 provider_enqueue_orch_duration,
                 provider_ack_retries,

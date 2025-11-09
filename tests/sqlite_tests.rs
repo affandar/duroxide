@@ -1,5 +1,5 @@
 use duroxide::providers::sqlite::SqliteProvider;
-use duroxide::providers::{ExecutionMetadata, ManagementCapability, Provider, WorkItem};
+use duroxide::providers::{ExecutionMetadata, Provider, ProviderManager, WorkItem};
 use duroxide::{ActivityContext, Event};
 use std::sync::Arc;
 use tempfile::TempDir;
@@ -52,12 +52,12 @@ async fn test_sqlite_provider_basic() {
     };
 
     store
-        .enqueue_orchestrator_work(start_work.clone(), None)
+        .enqueue_for_orchestrator(start_work.clone(), None)
         .await
         .expect("Failed to enqueue work");
 
     // 2. Fetch orchestration item
-    let item = store.fetch_orchestration_item().await.expect("Should have work");
+    let item = store.fetch_orchestration_item().await.expect("Should have work").expect("Should have item");
 
     assert_eq!(item.instance, instance);
     assert_eq!(item.orchestration_name, "TestOrchestration");
@@ -97,7 +97,7 @@ async fn test_sqlite_provider_basic() {
         .expect("Failed to ack orchestration item");
 
     // 4. Verify history was persisted
-    let history = store.read(instance).await;
+    let history = store.read(instance).await.unwrap_or_default();
     assert_eq!(history.len(), 2);
     assert!(matches!(history[0], Event::OrchestrationStarted { .. }));
     assert!(matches!(history[1], Event::ActivityScheduled { .. }));
@@ -112,7 +112,7 @@ async fn test_execution_status_completed() {
 
     // Create instance and execution
     store
-        .enqueue_orchestrator_work(
+        .enqueue_for_orchestrator(
             WorkItem::StartOrchestration {
                 instance: instance.to_string(),
                 orchestration: "TestOrch".to_string(),
@@ -128,7 +128,7 @@ async fn test_execution_status_completed() {
         .unwrap();
 
     // Fetch and ack with completion
-    let item = store.fetch_orchestration_item().await.unwrap();
+    let item = store.fetch_orchestration_item().await.unwrap().unwrap();
     let metadata = ExecutionMetadata {
         status: Some("Completed".to_string()),
         output: Some("Success".to_string()),
@@ -152,7 +152,8 @@ async fn test_execution_status_completed() {
         .unwrap();
 
     // Verify execution status
-    let executions = Provider::list_executions(&store, instance).await;
+    let mgmt = store.as_management_capability().expect("ProviderManager required");
+    let executions = mgmt.list_executions(instance).await.unwrap_or_default();
     assert_eq!(executions.len(), 1);
     assert_eq!(executions[0], execution_id);
 
@@ -171,7 +172,7 @@ async fn test_execution_status_failed() {
 
     // Create instance and execution
     store
-        .enqueue_orchestrator_work(
+        .enqueue_for_orchestrator(
             WorkItem::StartOrchestration {
                 instance: instance.to_string(),
                 orchestration: "TestOrch".to_string(),
@@ -187,7 +188,7 @@ async fn test_execution_status_failed() {
         .unwrap();
 
     // Fetch and ack with failure
-    let item = store.fetch_orchestration_item().await.unwrap();
+    let item = store.fetch_orchestration_item().await.unwrap().unwrap();
     let metadata = ExecutionMetadata {
         status: Some("Failed".to_string()),
         output: Some("Error occurred".to_string()),
@@ -243,7 +244,7 @@ async fn test_sqlite_basic_persistence() {
 
         // Enqueue worker items
         store
-            .enqueue_worker_work(WorkItem::ActivityExecute {
+            .enqueue_for_worker(WorkItem::ActivityExecute {
                 instance: "test-instance".to_string(),
                 execution_id: 1,
                 id: 1,
@@ -254,7 +255,7 @@ async fn test_sqlite_basic_persistence() {
             .expect("Failed to enqueue worker work");
 
         store
-            .enqueue_worker_work(WorkItem::ActivityExecute {
+            .enqueue_for_worker(WorkItem::ActivityExecute {
                 instance: "test-instance".to_string(),
                 execution_id: 1,
                 id: 2,
@@ -276,7 +277,7 @@ async fn test_sqlite_basic_persistence() {
         let store: Arc<dyn Provider> = Arc::new(store);
 
         // Dequeue and verify items
-        let (item1, token1) = store.dequeue_worker_peek_lock().await.expect("Should have first item");
+        let (item1, token1) = store.fetch_work_item().await.expect("Should have first item");
         match item1 {
             WorkItem::ActivityExecute { name, input, .. } => {
                 assert_eq!(name, "TestActivity");
@@ -285,7 +286,7 @@ async fn test_sqlite_basic_persistence() {
             _ => panic!("Expected ActivityExecute"),
         }
 
-        let (item2, token2) = store.dequeue_worker_peek_lock().await.expect("Should have second item");
+        let (item2, token2) = store.fetch_work_item().await.expect("Should have second item");
         match item2 {
             WorkItem::ActivityExecute { name, input, .. } => {
                 assert_eq!(name, "TestActivity2");
@@ -296,7 +297,7 @@ async fn test_sqlite_basic_persistence() {
 
         // Acknowledge items with dummy completions
         store
-            .ack_worker(
+            .ack_work_item(
                 &token1,
                 WorkItem::ActivityCompleted {
                     instance: "test-instance".to_string(),
@@ -308,7 +309,7 @@ async fn test_sqlite_basic_persistence() {
             .await
             .expect("Failed to ack worker 1");
         store
-            .ack_worker(
+            .ack_work_item(
                 &token2,
                 WorkItem::ActivityCompleted {
                     instance: "test-instance".to_string(),
@@ -321,7 +322,7 @@ async fn test_sqlite_basic_persistence() {
             .expect("Failed to ack worker 2");
 
         // Verify no more items
-        assert!(store.dequeue_worker_peek_lock().await.is_none());
+        assert!(store.fetch_work_item().await.is_none());
 
         println!("Phase 2: Successfully verified persistence");
     }
@@ -367,7 +368,7 @@ async fn test_sqlite_file_concurrent_access() {
             };
 
             store_clone
-                .enqueue_orchestrator_work(work_item, None)
+                .enqueue_for_orchestrator(work_item, None)
                 .await
                 .expect("Failed to enqueue work");
         });
@@ -380,7 +381,7 @@ async fn test_sqlite_file_concurrent_access() {
 
     // Fetch and ack all orchestration items to create instances
     let mut acked_count = 0;
-    while let Some(item) = store.fetch_orchestration_item().await {
+    while let Some(item) = store.fetch_orchestration_item().await.unwrap() {
         store
             .ack_orchestration_item(
                 &item.lock_token,
@@ -407,7 +408,8 @@ async fn test_sqlite_file_concurrent_access() {
     }
 
     // Verify all instances were created
-    let instances = store.list_instances().await;
+    let mgmt = store.as_management_capability().expect("ProviderManager required");
+    let instances = mgmt.list_instances().await.unwrap_or_default();
     assert_eq!(instances.len(), 10);
     assert_eq!(acked_count, 10, "Should have acked all 10 items");
 }
@@ -528,11 +530,11 @@ async fn test_sqlite_provider_transactional() {
     };
 
     store
-        .enqueue_orchestrator_work(start_work, None)
+        .enqueue_for_orchestrator(start_work, None)
         .await
         .expect("Failed to enqueue");
 
-    let item = store.fetch_orchestration_item().await.expect("Should have work");
+    let item = store.fetch_orchestration_item().await.expect("Should have work").expect("Should have item");
 
     // Simulate orchestration that schedules multiple activities atomically
     let history_delta = vec![
@@ -602,12 +604,12 @@ async fn test_sqlite_provider_transactional() {
         .expect("Failed to ack");
 
     // Verify all history saved
-    let history = store.read(instance).await;
+    let history = store.read(instance).await.unwrap_or_default();
     assert_eq!(history.len(), 4); // Start + 3 schedules
 
     // Verify all worker items enqueued
     let mut worker_count = 0;
-    while let Some((work_item, token)) = store.dequeue_worker_peek_lock().await {
+    while let Some((work_item, token)) = store.fetch_work_item().await {
         worker_count += 1;
         // Extract id from work item for completion
         let id = match work_item {
@@ -615,7 +617,7 @@ async fn test_sqlite_provider_transactional() {
             _ => panic!("Expected ActivityExecute"),
         };
         store
-            .ack_worker(
+            .ack_work_item(
                 &token,
                 WorkItem::ActivityCompleted {
                     instance: "test-instance".to_string(),
@@ -638,7 +640,7 @@ async fn test_sqlite_provider_timer_queue() {
 
     // Start orchestration
     store
-        .enqueue_orchestrator_work(
+        .enqueue_for_orchestrator(
             WorkItem::StartOrchestration {
                 instance: instance.to_string(),
                 orchestration: "TimerTest".to_string(),
@@ -653,7 +655,7 @@ async fn test_sqlite_provider_timer_queue() {
         .await
         .expect("Failed to enqueue");
 
-    let item = store.fetch_orchestration_item().await.expect("Should have work");
+    let item = store.fetch_orchestration_item().await.expect("Should have work").expect("Should have item");
 
     store
         .ack_orchestration_item(
@@ -695,10 +697,10 @@ async fn test_execution_status_running() {
         execution_id: duroxide::INITIAL_EXECUTION_ID,
     };
 
-    store.enqueue_orchestrator_work(start_work, None).await.unwrap();
+    store.enqueue_for_orchestrator(start_work, None).await.unwrap();
 
     // Fetch and process
-    let item = store.fetch_orchestration_item().await.unwrap();
+    let item = store.fetch_orchestration_item().await.unwrap().unwrap();
 
     // Simulate orchestration running (not completed)
     let history_delta = vec![
@@ -731,7 +733,8 @@ async fn test_execution_status_running() {
         .unwrap();
 
     // Verify execution exists and is running
-    let executions = Provider::list_executions(&store, instance).await;
+    let mgmt = store.as_management_capability().expect("ProviderManager required");
+    let executions = mgmt.list_executions(instance).await.unwrap_or_default();
     assert_eq!(executions.len(), 1);
     assert_eq!(executions[0], 1);
 }
@@ -753,10 +756,10 @@ async fn test_execution_output_captured_on_continue_as_new() {
         execution_id: duroxide::INITIAL_EXECUTION_ID,
     };
 
-    store.enqueue_orchestrator_work(start_work, None).await.unwrap();
+    store.enqueue_for_orchestrator(start_work, None).await.unwrap();
 
     // Fetch and process
-    let item = store.fetch_orchestration_item().await.unwrap();
+    let item = store.fetch_orchestration_item().await.unwrap().unwrap();
 
     // Simulate orchestration continuing as new
     let history_delta = vec![
@@ -787,7 +790,8 @@ async fn test_execution_output_captured_on_continue_as_new() {
         .unwrap();
 
     // Verify execution exists
-    let executions = Provider::list_executions(&store, instance).await;
+    let mgmt = store.as_management_capability().expect("ProviderManager required");
+    let executions = mgmt.list_executions(instance).await.unwrap_or_default();
     assert_eq!(executions.len(), 1);
     assert_eq!(executions[0], 1);
 }

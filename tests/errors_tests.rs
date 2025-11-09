@@ -309,13 +309,13 @@ async fn event_after_completion_is_ignored_fs() {
     }
     // Allow runtime to append OrchestrationCompleted terminal event
     tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-    let before = store.read(instance).await.len();
+    let before = store.read(instance).await.unwrap_or_default().len();
 
     // Raise another event after completion
     let _ = client.raise_event(instance, "Once", "late").await;
     // Give router a moment
     tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-    let hist_after = store.read(instance).await;
+    let hist_after = store.read(instance).await.unwrap_or_default();
     assert_eq!(
         hist_after.len(),
         before,

@@ -57,7 +57,7 @@ async fn unknown_orchestration_fails_gracefully() {
     ));
 
     // Store history should also include both events
-    let persisted = store.read("inst-unknown-1").await;
+    let persisted = store.read("inst-unknown-1").await.unwrap_or_default();
     assert_eq!(persisted.len(), 2);
     assert!(matches!(&persisted[0], Event::OrchestrationStarted { .. }));
     assert!(matches!(

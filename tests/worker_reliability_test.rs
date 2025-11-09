@@ -77,7 +77,7 @@ async fn activity_reliability_after_crash_before_completion_enqueue() {
     );
 
     // Verify activity hasn't completed yet (we'll simulate crash before completion)
-    let hist_before = store1.read(instance).await;
+    let hist_before = store1.read(instance).await.unwrap_or_default();
     assert!(
         !hist_before.iter().any(|e| matches!(e, Event::ActivityCompleted { .. })),
         "Activity should not have completed yet"
@@ -130,7 +130,7 @@ async fn activity_reliability_after_crash_before_completion_enqueue() {
     }
 
     // Verify the activity actually completed
-    let hist_after = store2.read(instance).await;
+    let hist_after = store2.read(instance).await.unwrap_or_default();
 
     // Debug: print all events (can be removed in production)
     println!("History after restart:");
@@ -267,7 +267,7 @@ async fn multiple_activities_reliability_after_crash() {
     );
 
     // Crash before any activity completes
-    let hist_before = store1.read(instance).await;
+    let hist_before = store1.read(instance).await.unwrap_or_default();
     assert_eq!(
         hist_before
             .iter()
@@ -307,7 +307,7 @@ async fn multiple_activities_reliability_after_crash() {
     }
 
     // Verify all 3 TestActivity activities completed
-    let hist_after = store2.read(instance).await;
+    let hist_after = store2.read(instance).await.unwrap_or_default();
     let test_activity_completed_count = hist_after
         .iter()
         .filter(|e| {

@@ -204,7 +204,7 @@ async fn test_trace_deterministic_in_history() {
     ));
 
     // Check history contains trace system calls
-    let history = history_store.read("instance-2").await;
+    let history = history_store.read("instance-2").await.unwrap_or_default();
     let trace_events: Vec<_> = history
         .iter()
         .filter(|e| matches!(e, duroxide::Event::SystemCall { op, .. } if op.starts_with("trace:")))
@@ -365,7 +365,7 @@ async fn test_trace_fire_and_forget() {
     ));
 
     // Check history contains trace system calls
-    let history = history_store.read("instance-trace-fire-and-forget").await;
+    let history = history_store.read("instance-trace-fire-and-forget").await.unwrap_or_default();
     let trace_events: Vec<_> = history
         .iter()
         .filter(|e| matches!(e, duroxide::Event::SystemCall { op, .. } if op.starts_with("trace:")))

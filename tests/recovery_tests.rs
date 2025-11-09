@@ -52,7 +52,7 @@ where
     // This guarantees that steps 1 and 2 have executed and were persisted.
     assert!(wait_for_subscription(store1.clone(), &instance, "Resume", 1000).await);
 
-    let pre_crash_hist = store1.read(&instance).await;
+    let pre_crash_hist = store1.read(&instance).await.unwrap_or_default();
     assert_eq!(count_scheduled(&pre_crash_hist, "1"), 1);
     assert_eq!(count_scheduled(&pre_crash_hist, "2"), 1);
     assert_eq!(count_scheduled(&pre_crash_hist, "3"), 0);
@@ -96,7 +96,7 @@ where
         _ => panic!("unexpected orchestration status"),
     }
 
-    let final_hist2 = store2.read(&instance).await;
+    let final_hist2 = store2.read(&instance).await.unwrap_or_default();
     assert_eq!(count_scheduled(&final_hist2, "3"), 1);
     assert_eq!(count_scheduled(&final_hist2, "4"), 1);
 
@@ -134,7 +134,7 @@ async fn recovery_across_restart_sqlite_provider() {
     recovery_across_restart_core(make_store1, make_store2, instance.clone()).await;
 
     let store = store2_arc; // already an Arc
-    let hist = store.read(&instance).await;
+    let hist = store.read(&instance).await.unwrap_or_default();
     let count = |inp: &str| {
         hist.iter()
             .filter(|e| matches!(e, Event::ActivityScheduled { name, input, .. } if name == "Step" && input == inp))
@@ -161,8 +161,8 @@ async fn recovery_across_restart_sqlite_memory() {
 
     let store_before = StdArc::new(SqliteProvider::new_in_memory().await.unwrap()) as StdArc<dyn Provider>;
     let store_after = StdArc::new(SqliteProvider::new_in_memory().await.unwrap()) as StdArc<dyn Provider>;
-    let hist_before = store_before.read(&instance).await;
-    let hist_after = store_after.read(&instance).await;
+    let hist_before = store_before.read(&instance).await.unwrap_or_default();
+    let hist_after = store_after.read(&instance).await.unwrap_or_default();
 
     let count = |hist: &Vec<Event>, inp: &str| {
         hist.iter()

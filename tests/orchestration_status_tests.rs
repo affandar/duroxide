@@ -239,7 +239,7 @@ async fn test_status_after_continue_as_new() {
     );
 
     // Verify provider returns latest execution's history
-    let history = store.read("test-continue").await;
+    let history = store.read("test-continue").await.unwrap_or_default();
     assert!(
         history
             .iter()

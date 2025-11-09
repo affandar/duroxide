@@ -49,13 +49,14 @@ pub(crate) fn start_item(instance: &str) -> WorkItem {
 #[cfg(feature = "provider-test")]
 pub(crate) async fn create_instance(provider: &dyn crate::providers::Provider, instance: &str) -> Result<(), String> {
     provider
-        .enqueue_orchestrator_work(start_item(instance), None)
+        .enqueue_for_orchestrator(start_item(instance), None)
         .await
         .map_err(|e| e.to_string())?;
 
     let item = provider
         .fetch_orchestration_item()
         .await
+        .map_err(|e| e.to_string())?
         .ok_or_else(|| "Failed to fetch orchestration item".to_string())?;
 
     provider

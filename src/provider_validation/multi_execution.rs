@@ -23,10 +23,10 @@ pub async fn test_execution_isolation<F: ProviderFactory>(factory: &F) {
 
     // Create execution 1 with 3 events
     provider
-        .enqueue_orchestrator_work(start_item_with_execution("instance-A", 1), None)
+        .enqueue_for_orchestrator(start_item_with_execution("instance-A", 1), None)
         .await
         .unwrap();
-    let item1 = provider.fetch_orchestration_item().await.unwrap();
+    let item1 = provider.fetch_orchestration_item().await.unwrap().unwrap();
     provider
         .ack_orchestration_item(
             &item1.lock_token,
@@ -60,10 +60,10 @@ pub async fn test_execution_isolation<F: ProviderFactory>(factory: &F) {
 
     // Create execution 2 with 2 events
     provider
-        .enqueue_orchestrator_work(start_item_with_execution("instance-A", 2), None)
+        .enqueue_for_orchestrator(start_item_with_execution("instance-A", 2), None)
         .await
         .unwrap();
-    let item2 = provider.fetch_orchestration_item().await.unwrap();
+    let item2 = provider.fetch_orchestration_item().await.unwrap().unwrap();
     provider
         .ack_orchestration_item(
             &item2.lock_token,
@@ -90,20 +90,20 @@ pub async fn test_execution_isolation<F: ProviderFactory>(factory: &F) {
         .unwrap();
 
     // Read execution 1 → should return 3 events
-    let history1 = provider.read_with_execution("instance-A", 1).await;
+    let history1 = provider.read_with_execution("instance-A", 1).await.unwrap_or_default();
     assert_eq!(history1.len(), 3);
     assert!(matches!(history1[0], Event::OrchestrationStarted { .. }));
     assert!(matches!(history1[1], Event::ActivityScheduled { .. }));
     assert!(matches!(history1[2], Event::OrchestrationCompleted { .. }));
 
     // Read execution 2 → should return 2 events
-    let history2 = provider.read_with_execution("instance-A", 2).await;
+    let history2 = provider.read_with_execution("instance-A", 2).await.unwrap_or_default();
     assert_eq!(history2.len(), 2);
     assert!(matches!(history2[0], Event::OrchestrationStarted { .. }));
     assert!(matches!(history2[1], Event::OrchestrationCompleted { .. }));
 
     // Read latest (default) → should return execution 2's events
-    let latest = provider.read("instance-A").await;
+    let latest = provider.read("instance-A").await.unwrap_or_default();
     assert_eq!(latest.len(), 2);
     assert!(matches!(latest[0], Event::OrchestrationStarted { .. }));
     assert!(matches!(latest[1], Event::OrchestrationCompleted { .. }));
@@ -118,10 +118,10 @@ pub async fn test_latest_execution_detection<F: ProviderFactory>(factory: &F) {
 
     // Create execution 1 with event "A"
     provider
-        .enqueue_orchestrator_work(start_item_with_execution("instance-A", 1), None)
+        .enqueue_for_orchestrator(start_item_with_execution("instance-A", 1), None)
         .await
         .unwrap();
-    let item1 = provider.fetch_orchestration_item().await.unwrap();
+    let item1 = provider.fetch_orchestration_item().await.unwrap().unwrap();
     provider
         .ack_orchestration_item(
             &item1.lock_token,
@@ -141,10 +141,10 @@ pub async fn test_latest_execution_detection<F: ProviderFactory>(factory: &F) {
 
     // Create execution 2 with event "B"
     provider
-        .enqueue_orchestrator_work(start_item_with_execution("instance-A", 2), None)
+        .enqueue_for_orchestrator(start_item_with_execution("instance-A", 2), None)
         .await
         .unwrap();
-    let item2 = provider.fetch_orchestration_item().await.unwrap();
+    let item2 = provider.fetch_orchestration_item().await.unwrap().unwrap();
     provider
         .ack_orchestration_item(
             &item2.lock_token,
@@ -163,7 +163,7 @@ pub async fn test_latest_execution_detection<F: ProviderFactory>(factory: &F) {
         .unwrap();
 
     // Call read() → should return execution 2 (latest)
-    let latest = provider.read("instance-A").await;
+    let latest = provider.read("instance-A").await.unwrap_or_default();
     assert_eq!(latest.len(), 1);
     if let Event::ActivityScheduled { name, .. } = &latest[0] {
         assert_eq!(name, "B");
@@ -172,7 +172,7 @@ pub async fn test_latest_execution_detection<F: ProviderFactory>(factory: &F) {
     }
 
     // Call read_with_execution(instance, 1) → should return execution 1
-    let exec1 = provider.read_with_execution("instance-A", 1).await;
+    let exec1 = provider.read_with_execution("instance-A", 1).await.unwrap_or_default();
     assert_eq!(exec1.len(), 1);
     if let Event::ActivityScheduled { name, .. } = &exec1[0] {
         assert_eq!(name, "A");
@@ -190,10 +190,10 @@ pub async fn test_execution_id_sequencing<F: ProviderFactory>(factory: &F) {
 
     // First execution should be execution_id = 1
     provider
-        .enqueue_orchestrator_work(start_item_with_execution("instance-A", 1), None)
+        .enqueue_for_orchestrator(start_item_with_execution("instance-A", 1), None)
         .await
         .unwrap();
-    let item1 = provider.fetch_orchestration_item().await.unwrap();
+    let item1 = provider.fetch_orchestration_item().await.unwrap().unwrap();
     assert_eq!(item1.execution_id, 1);
 
     // Complete execution 1 with proper metadata
@@ -222,10 +222,10 @@ pub async fn test_execution_id_sequencing<F: ProviderFactory>(factory: &F) {
 
     // Enqueue second execution with explicit execution_id = 2
     provider
-        .enqueue_orchestrator_work(start_item_with_execution("instance-A", 2), None)
+        .enqueue_for_orchestrator(start_item_with_execution("instance-A", 2), None)
         .await
         .unwrap();
-    let item2 = provider.fetch_orchestration_item().await.unwrap();
+    let item2 = provider.fetch_orchestration_item().await.unwrap().unwrap();
     // The fetched item will have execution_id = 1 (from instance's current_execution_id)
     // We need to ack with execution_id = 2 to create the new execution
     provider
@@ -253,10 +253,10 @@ pub async fn test_execution_id_sequencing<F: ProviderFactory>(factory: &F) {
 
     // Now fetch should return execution_id = 2
     provider
-        .enqueue_orchestrator_work(start_item_with_execution("instance-A", 3), None)
+        .enqueue_for_orchestrator(start_item_with_execution("instance-A", 3), None)
         .await
         .unwrap();
-    let item3 = provider.fetch_orchestration_item().await.unwrap();
+    let item3 = provider.fetch_orchestration_item().await.unwrap().unwrap();
     assert_eq!(item3.execution_id, 2, "Current execution should be 2");
     tracing::info!("✓ Test passed: execution ID sequencing verified");
 }
@@ -269,10 +269,10 @@ pub async fn test_continue_as_new_creates_new_execution<F: ProviderFactory>(fact
 
     // Create execution 1
     provider
-        .enqueue_orchestrator_work(start_item_with_execution("instance-A", 1), None)
+        .enqueue_for_orchestrator(start_item_with_execution("instance-A", 1), None)
         .await
         .unwrap();
-    let item1 = provider.fetch_orchestration_item().await.unwrap();
+    let item1 = provider.fetch_orchestration_item().await.unwrap().unwrap();
     provider
         .ack_orchestration_item(
             &item1.lock_token,
@@ -294,7 +294,7 @@ pub async fn test_continue_as_new_creates_new_execution<F: ProviderFactory>(fact
 
     // Simulate continue-as-new by enqueuing a ContinueAsNew work item
     provider
-        .enqueue_orchestrator_work(
+        .enqueue_for_orchestrator(
             WorkItem::ContinueAsNew {
                 instance: "instance-A".to_string(),
                 orchestration: "TestOrch".to_string(),
@@ -306,7 +306,7 @@ pub async fn test_continue_as_new_creates_new_execution<F: ProviderFactory>(fact
         .await
         .unwrap();
 
-    let item2 = provider.fetch_orchestration_item().await.unwrap();
+    let item2 = provider.fetch_orchestration_item().await.unwrap().unwrap();
     // The fetched item will have execution_id = 1 (from instance's current_execution_id)
     // We need to ack with execution_id = 2 to create the new execution
     provider
@@ -329,7 +329,7 @@ pub async fn test_continue_as_new_creates_new_execution<F: ProviderFactory>(fact
         .unwrap();
 
     // Now the instance should have current_execution_id = 2
-    let item3 = provider.fetch_orchestration_item().await;
+    let item3 = provider.fetch_orchestration_item().await.unwrap();
     if let Some(item) = item3 {
         assert_eq!(item.execution_id, 2, "Continue-as-new should create execution 2");
     }
@@ -345,10 +345,10 @@ pub async fn test_execution_history_persistence<F: ProviderFactory>(factory: &F)
     // Create 3 executions with different history
     for exec_id in 1..=3 {
         provider
-            .enqueue_orchestrator_work(start_item_with_execution("instance-A", exec_id), None)
+            .enqueue_for_orchestrator(start_item_with_execution("instance-A", exec_id), None)
             .await
             .unwrap();
-        let item = provider.fetch_orchestration_item().await.unwrap();
+        let item = provider.fetch_orchestration_item().await.unwrap().unwrap();
         provider
             .ack_orchestration_item(
                 &item.lock_token,
@@ -369,7 +369,10 @@ pub async fn test_execution_history_persistence<F: ProviderFactory>(factory: &F)
 
     // Verify each execution's history is independent
     for exec_id in 1..=3 {
-        let history = provider.read_with_execution("instance-A", exec_id).await;
+        let history = provider
+            .read_with_execution("instance-A", exec_id)
+            .await
+            .unwrap_or_default();
         assert_eq!(history.len(), 1);
         if let Event::ActivityScheduled { name, .. } = &history[0] {
             assert_eq!(name, &format!("Activity-{}", exec_id));
@@ -379,7 +382,7 @@ pub async fn test_execution_history_persistence<F: ProviderFactory>(factory: &F)
     }
 
     // Latest should be execution 3
-    let latest = provider.read("instance-A").await;
+    let latest = provider.read("instance-A").await.unwrap_or_default();
     assert_eq!(latest.len(), 1);
     if let Event::ActivityScheduled { name, .. } = &latest[0] {
         assert_eq!(name, "Activity-3");

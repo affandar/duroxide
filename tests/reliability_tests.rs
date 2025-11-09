@@ -29,8 +29,8 @@ async fn external_duplicate_workitems_dedup() {
         name: "Evt".to_string(),
         data: "ok".to_string(),
     };
-    let _ = store.enqueue_orchestrator_work(wi.clone(), None).await;
-    let _ = store.enqueue_orchestrator_work(wi.clone(), None).await;
+    let _ = store.enqueue_for_orchestrator(wi.clone(), None).await;
+    let _ = store.enqueue_for_orchestrator(wi.clone(), None).await;
 
     // wait for completion
     let ok = common::wait_for_history(
@@ -46,7 +46,7 @@ async fn external_duplicate_workitems_dedup() {
     assert!(ok, "timeout waiting for completion");
 
     // exactly one ExternalEvent in history
-    let hist = store.read(inst).await;
+    let hist = store.read(inst).await.unwrap_or_default();
     let external_events: Vec<&Event> = hist
         .iter()
         .filter(|e| matches!(e, Event::ExternalEvent { name, .. } if name == "Evt"))
@@ -89,7 +89,7 @@ async fn timer_duplicate_workitems_dedup() {
         .await
     );
     let (id, fire_at_ms) = {
-        let hist = store.read(inst).await;
+        let hist = store.read(inst).await.unwrap_or_default();
         let mut t_id = 0u64;
         let mut t_fire = 0u64;
         for e in hist.iter() {
@@ -114,8 +114,8 @@ async fn timer_duplicate_workitems_dedup() {
         id,
         fire_at_ms,
     };
-    let _ = store.enqueue_orchestrator_work(wi.clone(), None).await;
-    let _ = store.enqueue_orchestrator_work(wi.clone(), None).await;
+    let _ = store.enqueue_for_orchestrator(wi.clone(), None).await;
+    let _ = store.enqueue_for_orchestrator(wi.clone(), None).await;
 
     // wait for completion
     let ok = common::wait_for_history(
@@ -131,7 +131,7 @@ async fn timer_duplicate_workitems_dedup() {
     assert!(ok, "timeout waiting for completion");
 
     // exactly one TimerFired in history
-    let hist = store.read(inst).await;
+    let hist = store.read(inst).await.unwrap_or_default();
     let fired: Vec<&Event> = hist.iter().filter(|e| matches!(e, Event::TimerFired { .. })).collect();
     assert_eq!(fired.len(), 1, "expected 1 TimerFired, got {}", fired.len());
 
@@ -178,7 +178,7 @@ async fn activity_duplicate_completion_workitems_dedup() {
         .await
     );
     let id = {
-        let hist = store.read(inst).await;
+        let hist = store.read(inst).await.unwrap_or_default();
         let mut t_id = 0u64;
         for e in hist.iter() {
             if let Event::ActivityScheduled { event_id, name, .. } = e
@@ -198,8 +198,8 @@ async fn activity_duplicate_completion_workitems_dedup() {
         id,
         result: "x".to_string(),
     };
-    let _ = store.enqueue_orchestrator_work(wi.clone(), None).await;
-    let _ = store.enqueue_orchestrator_work(wi.clone(), None).await;
+    let _ = store.enqueue_for_orchestrator(wi.clone(), None).await;
+    let _ = store.enqueue_for_orchestrator(wi.clone(), None).await;
 
     // wait for completion and assert single ActivityCompleted recorded
     let ok = common::wait_for_history(
@@ -214,7 +214,7 @@ async fn activity_duplicate_completion_workitems_dedup() {
     .await;
     assert!(ok, "timeout waiting for completion");
 
-    let hist = store.read(inst).await;
+    let hist = store.read(inst).await.unwrap_or_default();
     let acts: Vec<&Event> = hist
         .iter()
         .filter(|e| matches!(e, Event::ActivityCompleted { source_event_id, .. } if *source_event_id == id))
@@ -260,9 +260,9 @@ async fn crash_after_dequeue_before_append_completion() {
         name: "Evt".to_string(),
         data: "ok".to_string(),
     };
-    let _ = store.enqueue_orchestrator_work(wi.clone(), None).await;
+    let _ = store.enqueue_for_orchestrator(wi.clone(), None).await;
     // Simulate crash-before-append by enqueuing duplicate before runtime gets to append
-    let _ = store.enqueue_orchestrator_work(wi.clone(), None).await;
+    let _ = store.enqueue_for_orchestrator(wi.clone(), None).await;
 
     // Wait for completion, ensure a single ExternalEvent recorded
     let ok = common::wait_for_history(
@@ -276,7 +276,7 @@ async fn crash_after_dequeue_before_append_completion() {
     )
     .await;
     assert!(ok, "timeout waiting for completion");
-    let hist = store.read(inst).await;
+    let hist = store.read(inst).await.unwrap_or_default();
     let evs: Vec<&Event> = hist
         .iter()
         .filter(|e| matches!(e, Event::ExternalEvent { .. }))
@@ -314,7 +314,7 @@ async fn crash_after_append_before_ack_timer() {
     );
     // Get timer id
     let (id, fire_at_ms) = {
-        let hist = store.read(inst).await;
+        let hist = store.read(inst).await.unwrap_or_default();
         let mut t_id = 0u64;
         let mut t_fire = 0u64;
         for e in hist.iter() {
@@ -339,8 +339,8 @@ async fn crash_after_append_before_ack_timer() {
         id,
         fire_at_ms,
     };
-    let _ = store.enqueue_orchestrator_work(wi.clone(), None).await;
-    let _ = store.enqueue_orchestrator_work(wi.clone(), None).await;
+    let _ = store.enqueue_for_orchestrator(wi.clone(), None).await;
+    let _ = store.enqueue_for_orchestrator(wi.clone(), None).await;
 
     let ok = common::wait_for_history(
         store.clone(),
@@ -353,7 +353,7 @@ async fn crash_after_append_before_ack_timer() {
     )
     .await;
     assert!(ok, "timeout waiting for completion");
-    let hist = store.read(inst).await;
+    let hist = store.read(inst).await.unwrap_or_default();
     let fired: Vec<&Event> = hist.iter().filter(|e| matches!(e, Event::TimerFired { .. })).collect();
     assert_eq!(fired.len(), 1);
 

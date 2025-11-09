@@ -4,8 +4,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tracing::debug;
 
 use super::{
-    ExecutionInfo, InstanceInfo, ManagementCapability, OrchestrationItem, Provider, ProviderError, QueueDepths,
-    SystemMetrics, WorkItem,
+    ExecutionInfo, InstanceInfo, OrchestrationItem, Provider, ProviderError, ProviderManager,
+    QueueDepths, SystemMetrics, WorkItem,
 };
 use crate::Event;
 
@@ -63,9 +63,8 @@ impl SqliteProvider {
         item: WorkItem,
         delay_ms: Option<u64>,
     ) -> Result<(), ProviderError> {
-        let work_item = serde_json::to_string(&item).map_err(|e| {
-            ProviderError::permanent("enqueue_orchestrator_work", format!("Serialization error: {}", e))
-        })?;
+        let work_item = serde_json::to_string(&item)
+            .map_err(|e| ProviderError::permanent("enqueue_for_orchestrator", format!("Serialization error: {}", e)))?;
         let instance = match &item {
             WorkItem::StartOrchestration { instance, .. }
             | WorkItem::ActivityCompleted { instance, .. }
@@ -79,7 +78,7 @@ impl SqliteProvider {
             }
             _ => {
                 return Err(ProviderError::permanent(
-                    "enqueue_orchestrator_work",
+                    "enqueue_for_orchestrator",
                     "Invalid work item type",
                 ));
             }
@@ -99,7 +98,7 @@ impl SqliteProvider {
             .bind(visible_at)
             .execute(&self.pool)
             .await
-            .map_err(|e| Self::sqlx_to_provider_error("enqueue_orchestrator_work", e))?;
+            .map_err(|e| Self::sqlx_to_provider_error("enqueue_for_orchestrator", e))?;
 
         Ok(())
     }
@@ -487,8 +486,12 @@ impl SqliteProvider {
 
 #[async_trait::async_trait]
 impl Provider for SqliteProvider {
-    async fn fetch_orchestration_item(&self) -> Option<OrchestrationItem> {
-        let mut tx = self.pool.begin().await.ok()?;
+    async fn fetch_orchestration_item(&self) -> Result<Option<OrchestrationItem>, ProviderError> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| Self::sqlx_to_provider_error("fetch_orchestration_item", e))?;
         let now_ms = Self::now_millis();
 
         // Find an instance that has visible messages AND is not locked (or lock expired)
@@ -507,24 +510,29 @@ impl Provider for SqliteProvider {
         .bind(now_ms)
         .fetch_optional(&mut *tx)
         .await
-        .ok()?;
+        .map_err(|e| Self::sqlx_to_provider_error("fetch_orchestration_item", e))?;
 
         if row.is_none() {
             // Check if there are any messages at all
             let msg_count: Option<i64> = sqlx::query_scalar("SELECT COUNT(*) FROM orchestrator_queue")
                 .fetch_one(&mut *tx)
                 .await
-                .ok();
+                .map_err(|e| Self::sqlx_to_provider_error("fetch_orchestration_item", e))?;
             tracing::debug!(
                 target = "duroxide::providers::sqlite",
                 total_messages=?msg_count,
                 "No available instances"
             );
             tx.rollback().await.ok();
-            return None;
+            return Ok(None);
         }
 
-        let instance_id: String = row?.try_get("instance_id").ok()?;
+        let instance_id: String = row
+            .ok_or_else(|| ProviderError::permanent("fetch_orchestration_item", "No instance found"))?
+            .try_get("instance_id")
+            .map_err(|e| {
+                ProviderError::permanent("fetch_orchestration_item", format!("Failed to get instance_id: {}", e))
+            })?;
         tracing::debug!(target="duroxide::providers::sqlite", instance_id=%instance_id, "Selected available instance");
 
         let lock_token = Self::generate_lock_token();
@@ -555,13 +563,13 @@ impl Provider for SqliteProvider {
                     // Failed to acquire lock (lock still held by another worker)
                     tracing::debug!(target="duroxide::providers::sqlite", instance=%instance_id, "Failed to acquire instance lock (already locked)");
                     tx.rollback().await.ok();
-                    return None;
+                    return Ok(None);
                 }
             }
             Err(e) => {
                 tracing::debug!(target="duroxide::providers::sqlite", instance=%instance_id, error=%e.to_string(), "Error acquiring instance lock");
                 tx.rollback().await.ok();
-                return None;
+                return Err(Self::sqlx_to_provider_error("fetch_orchestration_item", e));
             }
         }
 
@@ -579,7 +587,7 @@ impl Provider for SqliteProvider {
         .bind(now_ms)
         .execute(&mut *tx)
         .await
-        .ok()?;
+        .map_err(|e| Self::sqlx_to_provider_error("fetch_orchestration_item", e))?;
 
         let messages = sqlx::query(
             r#"
@@ -592,7 +600,7 @@ impl Provider for SqliteProvider {
         .bind(&lock_token)
         .fetch_all(&mut *tx)
         .await
-        .ok()?;
+        .map_err(|e| Self::sqlx_to_provider_error("fetch_orchestration_item", e))?;
         tracing::debug!(target="duroxide::providers::sqlite", message_count=%messages.len(), instance=%instance_id, "Fetched and marked messages for locked instance");
 
         if messages.is_empty() {
@@ -603,7 +611,7 @@ impl Provider for SqliteProvider {
                 .await
                 .ok();
             tx.rollback().await.ok();
-            return None;
+            return Ok(None);
         }
 
         // Deserialize work items
@@ -627,21 +635,33 @@ impl Provider for SqliteProvider {
         .bind(&instance_id)
         .fetch_optional(&mut *tx)
         .await
-        .ok()?;
+        .map_err(|e| Self::sqlx_to_provider_error("fetch_orchestration_item", e))?;
 
         let (orchestration_name, orchestration_version, current_execution_id, history) = if let Some(info) =
             instance_info
         {
             // Instance exists - get metadata and history for current execution
-            let name: String = info.try_get("orchestration_name").ok()?;
+            let name: String = info.try_get("orchestration_name").map_err(|e| {
+                ProviderError::permanent(
+                    "fetch_orchestration_item",
+                    format!("Failed to get orchestration_name: {}", e),
+                )
+            })?;
             let version: Option<String> = info.try_get("orchestration_version").ok();
-            let exec_id: i64 = info.try_get("current_execution_id").ok()?;
+            let exec_id: i64 = info.try_get("current_execution_id").map_err(|e| {
+                ProviderError::permanent(
+                    "fetch_orchestration_item",
+                    format!("Failed to get current_execution_id: {}", e),
+                )
+            })?;
 
             // Normal case: always read history for current execution; runtime decides CAN semantics
             let hist = self
                 .read_history_in_tx(&mut tx, &instance_id, Some(exec_id as u64))
                 .await
-                .ok()?;
+                .map_err(|e| {
+                    ProviderError::permanent("fetch_orchestration_item", format!("Failed to read history: {}", e))
+                })?;
 
             // If version is NULL in database, use "unknown"
             // If instance exists but version is NULL, there shouldn't be an OrchestrationStarted event
@@ -698,11 +718,13 @@ impl Provider for SqliteProvider {
             } else {
                 tracing::debug!(target="duroxide::providers::sqlite", instance=%instance_id, "No instance info or history; cannot build orchestration item");
                 tx.rollback().await.ok();
-                return None;
+                return Ok(None);
             }
         };
 
-        tx.commit().await.ok()?;
+        tx.commit()
+            .await
+            .map_err(|e| Self::sqlx_to_provider_error("fetch_orchestration_item", e))?;
 
         debug!(
             instance = %instance_id,
@@ -711,7 +733,7 @@ impl Provider for SqliteProvider {
             "Fetched orchestration item"
         );
 
-        Some(OrchestrationItem {
+        Ok(Some(OrchestrationItem {
             instance: instance_id,
             orchestration_name,
             execution_id: current_execution_id,
@@ -719,7 +741,7 @@ impl Provider for SqliteProvider {
             messages: work_items,
             history,
             lock_token,
-        })
+        }))
     }
 
     async fn ack_orchestration_item(
@@ -874,7 +896,7 @@ impl Provider for SqliteProvider {
         );
         for item in worker_items {
             let work_item = serde_json::to_string(&item).map_err(|e| {
-                ProviderError::permanent("enqueue_orchestrator_work", format!("Serialization error: {}", e))
+                ProviderError::permanent("enqueue_for_orchestrator", format!("Serialization error: {}", e))
             })?;
             sqlx::query("INSERT INTO worker_queue (work_item) VALUES (?)")
                 .bind(work_item)
@@ -886,7 +908,7 @@ impl Provider for SqliteProvider {
         // Enqueue orchestrator items within the transaction
         for item in orchestrator_items {
             let work_item = serde_json::to_string(&item).map_err(|e| {
-                ProviderError::permanent("enqueue_orchestrator_work", format!("Serialization error: {}", e))
+                ProviderError::permanent("enqueue_for_orchestrator", format!("Serialization error: {}", e))
             })?;
             let instance = match &item {
                 WorkItem::StartOrchestration { instance, .. }
@@ -967,18 +989,19 @@ impl Provider for SqliteProvider {
         Ok(())
     }
 
-    async fn read(&self, instance: &str) -> Vec<Event> {
-        let mut conn = match self.pool.acquire().await {
-            Ok(conn) => conn,
-            Err(_) => return Vec::new(),
-        };
+    async fn read(&self, instance: &str) -> Result<Vec<Event>, ProviderError> {
+        let mut conn = self
+            .pool
+            .acquire()
+            .await
+            .map_err(|e| Self::sqlx_to_provider_error("read", e))?;
 
         let execution_id: i64 =
-            sqlx::query_scalar("SELECT COALESCE(MAX(execution_id), 1) FROM executions WHERE instance_id = ?")
+            sqlx::query_scalar::<_, i64>("SELECT COALESCE(MAX(execution_id), 1) FROM executions WHERE instance_id = ?")
                 .bind(instance)
                 .fetch_one(&mut *conn)
                 .await
-                .unwrap_or(1);
+                .map_err(|e| Self::sqlx_to_provider_error("read", e))?;
 
         let rows = sqlx::query(
             r#"
@@ -992,36 +1015,99 @@ impl Provider for SqliteProvider {
         .bind(execution_id)
         .fetch_all(&mut *conn)
         .await
-        .unwrap_or_default();
+        .map_err(|e| Self::sqlx_to_provider_error("read", e))?;
 
-        rows.into_iter()
-            .filter_map(|row| {
-                row.try_get::<String, _>("event_data")
-                    .ok()
-                    .and_then(|s| serde_json::from_str(&s).ok())
-            })
-            .collect()
+        let mut events = Vec::new();
+        for row in rows {
+            let event_data: String = row
+                .try_get("event_data")
+                .map_err(|e| ProviderError::permanent("read", format!("Failed to get event_data: {}", e)))?;
+            let event: Event = serde_json::from_str(&event_data)
+                .map_err(|e| ProviderError::permanent("read", format!("Failed to deserialize event: {}", e)))?;
+            events.push(event);
+        }
+
+        Ok(events)
     }
 
-    async fn enqueue_orchestrator_work(&self, item: WorkItem, delay_ms: Option<u64>) -> Result<(), ProviderError> {
+    async fn read_with_execution(&self, instance: &str, execution_id: u64) -> Result<Vec<Event>, ProviderError> {
+        let mut conn = self
+            .pool
+            .acquire()
+            .await
+            .map_err(|e| Self::sqlx_to_provider_error("read_with_execution", e))?;
+
+        let rows = sqlx::query(
+            r#"
+            SELECT event_data 
+            FROM history 
+            WHERE instance_id = ? AND execution_id = ?
+            ORDER BY event_id
+            "#,
+        )
+        .bind(instance)
+        .bind(execution_id as i64)
+        .fetch_all(&mut *conn)
+        .await
+        .map_err(|e| Self::sqlx_to_provider_error("read_with_execution", e))?;
+
+        let mut events = Vec::new();
+        for row in rows {
+            let event_data: String = row.try_get("event_data").map_err(|e| {
+                ProviderError::permanent("read_with_execution", format!("Failed to get event_data: {}", e))
+            })?;
+            let event: Event = serde_json::from_str(&event_data).map_err(|e| {
+                ProviderError::permanent("read_with_execution", format!("Failed to deserialize event: {}", e))
+            })?;
+            events.push(event);
+        }
+
+        Ok(events)
+    }
+
+    async fn append_with_execution(
+        &self,
+        instance: &str,
+        execution_id: u64,
+        new_events: Vec<Event>,
+    ) -> Result<(), ProviderError> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| Self::sqlx_to_provider_error("append_with_execution", e))?;
+
+        self.append_history_in_tx(&mut tx, instance, execution_id, new_events)
+            .await
+            .map_err(|e| {
+                ProviderError::permanent("append_with_execution", format!("Failed to append history: {}", e))
+            })?;
+
+        tx.commit()
+            .await
+            .map_err(|e| Self::sqlx_to_provider_error("append_with_execution", e))?;
+        Ok(())
+    }
+
+    async fn enqueue_for_orchestrator(&self, item: WorkItem, delay_ms: Option<u64>) -> Result<(), ProviderError> {
         self.enqueue_orchestrator_work_with_delay(item, delay_ms).await
     }
 
-    async fn enqueue_worker_work(&self, item: WorkItem) -> Result<(), ProviderError> {
-        tracing::debug!(target: "duroxide::providers::sqlite", ?item, "enqueue_worker_work");
+    async fn enqueue_for_worker(&self, item: WorkItem) -> Result<(), ProviderError> {
+        tracing::debug!(target: "duroxide::providers::sqlite", ?item, "enqueue_for_worker");
         let work_item = serde_json::to_string(&item)
-            .map_err(|e| ProviderError::permanent("enqueue_worker_work", format!("Serialization error: {}", e)))?;
+            .map_err(|e| ProviderError::permanent("enqueue_for_worker", format!("Serialization error: {}", e)))?;
 
         sqlx::query("INSERT INTO worker_queue (work_item) VALUES (?)")
             .bind(work_item)
             .execute(&self.pool)
             .await
-            .map_err(|e| Self::sqlx_to_provider_error("enqueue_worker_work", e))?;
+            .map_err(|e| Self::sqlx_to_provider_error("enqueue_for_worker", e))?;
 
         Ok(())
     }
 
-    async fn dequeue_worker_peek_lock(&self) -> Option<(WorkItem, String)> {
+    async fn fetch_work_item(&self) -> Option<(WorkItem, String)> {
         let mut tx = self.pool.begin().await.ok()?;
 
         let lock_token = Self::generate_lock_token();
@@ -1081,12 +1167,12 @@ impl Provider for SqliteProvider {
         Some((work_item, lock_token))
     }
 
-    async fn ack_worker(&self, token: &str, completion: WorkItem) -> Result<(), ProviderError> {
+    async fn ack_work_item(&self, token: &str, completion: WorkItem) -> Result<(), ProviderError> {
         let mut tx = self
             .pool
             .begin()
             .await
-            .map_err(|e| Self::sqlx_to_provider_error("ack_worker", e))?;
+            .map_err(|e| Self::sqlx_to_provider_error("ack_work_item", e))?;
 
         // Extract instance from completion
         let instance = match &completion {
@@ -1094,7 +1180,7 @@ impl Provider for SqliteProvider {
             WorkItem::ActivityFailed { instance, .. } => instance,
             _ => {
                 return Err(ProviderError::permanent(
-                    "ack_worker",
+                    "ack_work_item",
                     "Invalid completion type for worker ack",
                 ));
             }
@@ -1105,11 +1191,11 @@ impl Provider for SqliteProvider {
             .bind(token)
             .execute(&mut *tx)
             .await
-            .map_err(|e| Self::sqlx_to_provider_error("ack_worker", e))?;
+            .map_err(|e| Self::sqlx_to_provider_error("ack_work_item", e))?;
 
         // Enqueue completion to orchestrator queue
         let work_item = serde_json::to_string(&completion)
-            .map_err(|e| ProviderError::permanent("ack_worker", format!("Serialization error: {}", e)))?;
+            .map_err(|e| ProviderError::permanent("ack_work_item", format!("Serialization error: {}", e)))?;
         let now_ms = Self::now_millis();
 
         sqlx::query("INSERT INTO orchestrator_queue (instance_id, work_item, visible_at) VALUES (?, ?, ?)")
@@ -1118,11 +1204,11 @@ impl Provider for SqliteProvider {
             .bind(now_ms)
             .execute(&mut *tx)
             .await
-            .map_err(|e| Self::sqlx_to_provider_error("ack_worker", e))?;
+            .map_err(|e| Self::sqlx_to_provider_error("ack_work_item", e))?;
 
         tx.commit()
             .await
-            .map_err(|e| Self::sqlx_to_provider_error("ack_worker", e))?;
+            .map_err(|e| Self::sqlx_to_provider_error("ack_work_item", e))?;
 
         debug!(instance = %instance, "Atomically acked worker and enqueued completion");
         Ok(())
@@ -1168,108 +1254,13 @@ impl Provider for SqliteProvider {
         Ok(())
     }
 
-    async fn latest_execution_id(&self, instance: &str) -> Option<u64> {
-        let mut conn = self.pool.acquire().await.ok()?;
-
-        let execution_id: Option<i64> =
-            sqlx::query_scalar("SELECT MAX(execution_id) FROM executions WHERE instance_id = ?")
-                .bind(instance)
-                .fetch_optional(&mut *conn)
-                .await
-                .ok()
-                .flatten();
-
-        execution_id.filter(|&id| id > 0).map(|id| id as u64)
-    }
-
-    async fn read_with_execution(&self, instance: &str, execution_id: u64) -> Vec<Event> {
-        let mut conn = match self.pool.acquire().await {
-            Ok(conn) => conn,
-            Err(_) => return Vec::new(),
-        };
-
-        let rows = sqlx::query(
-            r#"
-            SELECT event_data 
-            FROM history 
-            WHERE instance_id = ? AND execution_id = ?
-            ORDER BY event_id
-            "#,
-        )
-        .bind(instance)
-        .bind(execution_id as i64)
-        .fetch_all(&mut *conn)
-        .await
-        .unwrap_or_default();
-
-        rows.into_iter()
-            .filter_map(|row| {
-                row.try_get::<String, _>("event_data")
-                    .ok()
-                    .and_then(|s| serde_json::from_str(&s).ok())
-            })
-            .collect()
-    }
-
-    async fn append_with_execution(
-        &self,
-        instance: &str,
-        execution_id: u64,
-        new_events: Vec<Event>,
-    ) -> Result<(), ProviderError> {
-        let mut tx = self
-            .pool
-            .begin()
-            .await
-            .map_err(|e| Self::sqlx_to_provider_error("append_with_execution", e))?;
-
-        self.append_history_in_tx(&mut tx, instance, execution_id, new_events)
-            .await
-            .map_err(|e| {
-                ProviderError::permanent("append_with_execution", format!("Failed to append history: {}", e))
-            })?;
-
-        tx.commit()
-            .await
-            .map_err(|e| Self::sqlx_to_provider_error("append_with_execution", e))?;
-        Ok(())
-    }
-
-    async fn list_instances(&self) -> Vec<String> {
-        let mut conn = match self.pool.acquire().await {
-            Ok(conn) => conn,
-            Err(_) => return Vec::new(),
-        };
-
-        sqlx::query_scalar::<_, String>("SELECT DISTINCT instance_id FROM executions ORDER BY instance_id")
-            .fetch_all(&mut *conn)
-            .await
-            .unwrap_or_default()
-    }
-
-    async fn list_executions(&self, instance: &str) -> Vec<u64> {
-        let mut conn = match self.pool.acquire().await {
-            Ok(conn) => conn,
-            Err(_) => return Vec::new(),
-        };
-
-        let exec_ids: Vec<i64> =
-            sqlx::query_scalar("SELECT execution_id FROM executions WHERE instance_id = ? ORDER BY execution_id")
-                .bind(instance)
-                .fetch_all(&mut *conn)
-                .await
-                .unwrap_or_default();
-
-        exec_ids.into_iter().map(|id| id as u64).collect()
-    }
-
-    fn as_management_capability(&self) -> Option<&dyn ManagementCapability> {
-        Some(self as &dyn ManagementCapability)
+    fn as_management_capability(&self) -> Option<&dyn ProviderManager> {
+        Some(self as &dyn ProviderManager)
     }
 }
 
 #[async_trait::async_trait]
-impl ManagementCapability for SqliteProvider {
+impl ProviderManager for SqliteProvider {
     async fn list_instances(&self) -> Result<Vec<String>, ProviderError> {
         let rows = sqlx::query("SELECT instance_id FROM instances ORDER BY created_at DESC")
             .fetch_all(&self.pool)
@@ -1322,7 +1313,11 @@ impl ManagementCapability for SqliteProvider {
         Ok(executions)
     }
 
-    async fn read_execution(&self, instance: &str, execution_id: u64) -> Result<Vec<Event>, ProviderError> {
+    async fn read_history_with_execution_id(
+        &self,
+        instance: &str,
+        execution_id: u64,
+    ) -> Result<Vec<Event>, ProviderError> {
         let rows = sqlx::query(
             r#"
             SELECT event_data 
@@ -1335,20 +1330,28 @@ impl ManagementCapability for SqliteProvider {
         .bind(execution_id as i64)
         .fetch_all(&self.pool)
         .await
-        .map_err(|e| Self::sqlx_to_provider_error("read_execution", e))?;
+        .map_err(|e| Self::sqlx_to_provider_error("read_history_with_execution_id", e))?;
 
         let mut events = Vec::new();
         for row in rows {
             let event_data: String = row
                 .try_get("event_data")
-                .map_err(|e| Self::sqlx_to_provider_error("read_execution", e))?;
+                .map_err(|e| Self::sqlx_to_provider_error("read_history_with_execution_id", e))?;
             let event: Event = serde_json::from_str(&event_data).map_err(|e| {
-                ProviderError::permanent("read_execution", format!("Failed to deserialize event: {}", e))
+                ProviderError::permanent(
+                    "read_history_with_execution_id",
+                    format!("Failed to deserialize event: {}", e),
+                )
             })?;
             events.push(event);
         }
 
         Ok(events)
+    }
+
+    async fn read_history(&self, instance: &str) -> Result<Vec<Event>, ProviderError> {
+        let execution_id = self.latest_execution_id(instance).await?;
+        self.read_history_with_execution_id(instance, execution_id).await
     }
 
     async fn latest_execution_id(&self, instance: &str) -> Result<u64, ProviderError> {
@@ -1566,7 +1569,7 @@ mod tests {
 
     // Test helper - duplicated here to avoid module issues
     async fn test_create_execution(
-        provider: &dyn Provider,
+        provider: &SqliteProvider,
         instance: &str,
         orchestration: &str,
         version: &str,
@@ -1574,7 +1577,7 @@ mod tests {
         parent_instance: Option<&str>,
         parent_id: Option<u64>,
     ) -> Result<u64, ProviderError> {
-        let execs = provider.list_executions(instance).await;
+        let execs = ProviderManager::list_executions(provider, instance).await?;
         let next_execution_id = if execs.is_empty() {
             crate::INITIAL_EXECUTION_ID
         } else {
@@ -1582,7 +1585,7 @@ mod tests {
         };
 
         provider
-            .enqueue_orchestrator_work(
+            .enqueue_for_orchestrator(
                 WorkItem::StartOrchestration {
                     instance: instance.to_string(),
                     orchestration: orchestration.to_string(),
@@ -1598,7 +1601,7 @@ mod tests {
 
         let item = provider
             .fetch_orchestration_item()
-            .await
+            .await?
             .ok_or_else(|| "Failed to fetch orchestration item".to_string())?;
 
         provider
@@ -1647,10 +1650,10 @@ mod tests {
             execution_id: crate::INITIAL_EXECUTION_ID,
         };
 
-        store.enqueue_orchestrator_work(item.clone(), None).await.unwrap();
+        store.enqueue_for_orchestrator(item.clone(), None).await.unwrap();
 
         // Fetch it
-        let orch_item = store.fetch_orchestration_item().await.unwrap();
+        let orch_item = store.fetch_orchestration_item().await.unwrap().unwrap();
         assert_eq!(orch_item.instance, "test-1");
         assert_eq!(orch_item.messages.len(), 1);
         assert_eq!(orch_item.history.len(), 0); // No history yet
@@ -1678,10 +1681,10 @@ mod tests {
             .unwrap();
 
         // Verify no more work
-        assert!(store.fetch_orchestration_item().await.is_none());
+        assert!(store.fetch_orchestration_item().await.unwrap().is_none());
 
         // Verify history was saved
-        let history = store.read("test-1").await;
+        let history = store.read("test-1").await.unwrap_or_default();
         assert_eq!(history.len(), 1);
     }
 
@@ -1700,9 +1703,9 @@ mod tests {
             execution_id: crate::INITIAL_EXECUTION_ID,
         };
 
-        store.enqueue_orchestrator_work(start, None).await.unwrap();
+        store.enqueue_for_orchestrator(start, None).await.unwrap();
 
-        let orch_item = store.fetch_orchestration_item().await.unwrap();
+        let orch_item = store.fetch_orchestration_item().await.unwrap().unwrap();
 
         // Ack with multiple outputs - all should be atomic
         let history_delta = vec![
@@ -1758,22 +1761,22 @@ mod tests {
             .unwrap();
 
         // Verify all operations succeeded atomically
-        let history = store.read("test-atomic").await;
+        let history = store.read("test-atomic").await.unwrap_or_default();
         assert_eq!(history.len(), 3); // Start + 2 schedules
 
         // Verify worker items enqueued
-        let (work1, token1) = store.dequeue_worker_peek_lock().await.unwrap();
-        let (work2, token2) = store.dequeue_worker_peek_lock().await.unwrap();
+        let (work1, token1) = store.fetch_work_item().await.unwrap();
+        let (work2, token2) = store.fetch_work_item().await.unwrap();
 
         assert!(matches!(work1, WorkItem::ActivityExecute { id: 1, .. }));
         assert!(matches!(work2, WorkItem::ActivityExecute { id: 2, .. }));
 
         // No more work
-        assert!(store.dequeue_worker_peek_lock().await.is_none());
+        assert!(store.fetch_work_item().await.is_none());
 
         // Ack the work with dummy completions
         store
-            .ack_worker(
+            .ack_work_item(
                 &token1,
                 WorkItem::ActivityCompleted {
                     instance: "test-atomic".to_string(),
@@ -1785,7 +1788,7 @@ mod tests {
             .await
             .unwrap();
         store
-            .ack_worker(
+            .ack_work_item(
                 &token2,
                 WorkItem::ActivityCompleted {
                     instance: "test-atomic".to_string(),
@@ -1815,20 +1818,20 @@ mod tests {
             execution_id: crate::INITIAL_EXECUTION_ID,
         };
 
-        store.enqueue_orchestrator_work(item, None).await.unwrap();
+        store.enqueue_for_orchestrator(item, None).await.unwrap();
 
         // Fetch but don't ack
-        let orch_item = store.fetch_orchestration_item().await.unwrap();
+        let orch_item = store.fetch_orchestration_item().await.unwrap().unwrap();
         let lock_token = orch_item.lock_token.clone();
 
         // Should not be available immediately
-        assert!(store.fetch_orchestration_item().await.is_none());
+        assert!(store.fetch_orchestration_item().await.unwrap().is_none());
 
         // Wait for lock to expire
         tokio::time::sleep(Duration::from_millis(2100)).await;
 
         // Should be available again
-        let redelivered = store.fetch_orchestration_item().await;
+        let redelivered = store.fetch_orchestration_item().await.unwrap();
         if redelivered.is_none() {
             // Debug: check the state of the queue
             eprintln!("No redelivery after lock expiry. Checking queue state...");
@@ -1874,8 +1877,13 @@ mod tests {
         let instance = "test-multi-exec";
 
         // No execution initially
-        assert_eq!(ManagementCapability::latest_execution_id(&store, instance).await, Ok(1)); // ManagementCapability default
-        assert!(Provider::list_executions(&store, instance).await.is_empty());
+        assert_eq!(ProviderManager::latest_execution_id(&store, instance).await, Ok(1)); // ProviderManager default
+        assert!(
+            ProviderManager::list_executions(&store, instance)
+                .await
+                .unwrap()
+                .is_empty()
+        );
 
         // Create first execution using test helper
         let exec1 = test_create_execution(&store, instance, "MultiExecTest", "1.0.0", "input1", None, None)
@@ -1884,11 +1892,14 @@ mod tests {
         assert_eq!(exec1, 1);
 
         // Verify execution exists
-        assert_eq!(ManagementCapability::latest_execution_id(&store, instance).await, Ok(1));
-        assert_eq!(Provider::list_executions(&store, instance).await, vec![1]);
+        assert_eq!(ProviderManager::latest_execution_id(&store, instance).await, Ok(1));
+        assert_eq!(
+            ProviderManager::list_executions(&store, instance).await.unwrap(),
+            vec![1]
+        );
 
         // Read history from first execution
-        let hist1 = store.read_with_execution(instance, 1).await;
+        let hist1 = store.read_with_execution(instance, 1).await.unwrap_or_default();
         assert_eq!(hist1.len(), 1);
         assert!(matches!(hist1[0], Event::OrchestrationStarted { .. }));
 
@@ -1912,18 +1923,21 @@ mod tests {
         assert_eq!(exec2, 2);
 
         // Verify latest execution
-        assert_eq!(ManagementCapability::latest_execution_id(&store, instance).await, Ok(2));
-        assert_eq!(Provider::list_executions(&store, instance).await, vec![1, 2]);
+        assert_eq!(ProviderManager::latest_execution_id(&store, instance).await, Ok(2));
+        assert_eq!(
+            ProviderManager::list_executions(&store, instance).await.unwrap(),
+            vec![1, 2]
+        );
 
         // Verify each execution has separate history
-        let hist1_final = store.read_with_execution(instance, 1).await;
+        let hist1_final = store.read_with_execution(instance, 1).await.unwrap_or_default();
         assert_eq!(hist1_final.len(), 2);
 
-        let hist2 = store.read_with_execution(instance, 2).await;
+        let hist2 = store.read_with_execution(instance, 2).await.unwrap_or_default();
         assert_eq!(hist2.len(), 1);
 
         // Default read should return latest execution
-        let hist_latest = store.read(instance).await;
+        let hist_latest = store.read(instance).await.unwrap_or_default();
         assert_eq!(hist_latest.len(), 1);
         assert!(matches!(&hist_latest[0], Event::OrchestrationStarted { input, .. } if input == "input2"));
     }
@@ -1942,20 +1956,20 @@ mod tests {
             parent_id: None,
             execution_id: crate::INITIAL_EXECUTION_ID,
         };
-        store.enqueue_orchestrator_work(item, None).await.unwrap();
+        store.enqueue_for_orchestrator(item, None).await.unwrap();
 
         // Fetch and lock it
-        let orch_item = store.fetch_orchestration_item().await.unwrap();
+        let orch_item = store.fetch_orchestration_item().await.unwrap().unwrap();
         let lock_token = orch_item.lock_token.clone();
 
         // Verify it's locked (can't fetch again)
-        assert!(store.fetch_orchestration_item().await.is_none());
+        assert!(store.fetch_orchestration_item().await.unwrap().is_none());
 
         // Abandon it
         store.abandon_orchestration_item(&lock_token, None).await.unwrap();
 
         // Should be able to fetch again
-        let orch_item2 = store.fetch_orchestration_item().await.unwrap();
+        let orch_item2 = store.fetch_orchestration_item().await.unwrap().unwrap();
         assert_eq!(orch_item2.instance, "test-abandon");
         assert_ne!(orch_item2.lock_token, lock_token); // Different lock token
     }
@@ -1965,7 +1979,7 @@ mod tests {
         let store = create_test_store().await;
 
         // Initially empty
-        assert!(Provider::list_instances(&store).await.is_empty());
+        assert!(ProviderManager::list_instances(&store).await.unwrap().is_empty());
 
         // Create a few instances using test helper
         for i in 1..=3 {
@@ -1975,7 +1989,7 @@ mod tests {
         }
 
         // List instances
-        let instances = Provider::list_instances(&store).await;
+        let instances = ProviderManager::list_instances(&store).await.unwrap();
         assert_eq!(instances.len(), 3);
         assert!(instances.contains(&"instance-1".to_string()));
         assert!(instances.contains(&"instance-2".to_string()));
@@ -1995,18 +2009,18 @@ mod tests {
             input: "test-input".to_string(),
         };
 
-        store.enqueue_worker_work(work_item.clone()).await.unwrap();
+        store.enqueue_for_worker(work_item.clone()).await.unwrap();
 
         // Dequeue it
-        let (dequeued, token) = store.dequeue_worker_peek_lock().await.unwrap();
+        let (dequeued, token) = store.fetch_work_item().await.unwrap();
         assert!(matches!(dequeued, WorkItem::ActivityExecute { name, .. } if name == "TestActivity"));
 
         // Can't dequeue again while locked
-        assert!(store.dequeue_worker_peek_lock().await.is_none());
+        assert!(store.fetch_work_item().await.is_none());
 
         // Ack it with completion
         store
-            .ack_worker(
+            .ack_work_item(
                 &token,
                 WorkItem::ActivityCompleted {
                     instance: "test-worker".to_string(),
@@ -2019,7 +2033,7 @@ mod tests {
             .unwrap();
 
         // Queue should be empty
-        assert!(store.dequeue_worker_peek_lock().await.is_none());
+        assert!(store.fetch_work_item().await.is_none());
     }
 
     #[tokio::test]
@@ -2044,13 +2058,13 @@ mod tests {
             .unwrap();
 
         // Should not be visible immediately
-        assert!(store.fetch_orchestration_item().await.is_none());
+        assert!(store.fetch_orchestration_item().await.unwrap().is_none());
 
         // Wait for delay to pass
         tokio::time::sleep(std::time::Duration::from_millis(2100)).await;
 
         // Should be visible now
-        let item = store.fetch_orchestration_item().await.unwrap();
+        let item = store.fetch_orchestration_item().await.unwrap().unwrap();
         assert_eq!(item.instance, "test-delayed");
 
         // Ack it with proper metadata to create instance
@@ -2070,7 +2084,7 @@ mod tests {
             .await
             .unwrap();
 
-        // Test 2: Timer with delayed visibility via enqueue_orchestrator_work_delayed
+        // Test 2: Timer with delayed visibility via enqueue_for_orchestrator_delayed
         // First create an instance so the TimerFired has a valid context
         let start_item = WorkItem::StartOrchestration {
             instance: "test-timer-delayed".to_string(),
@@ -2082,8 +2096,8 @@ mod tests {
             execution_id: crate::INITIAL_EXECUTION_ID,
         };
 
-        store.enqueue_orchestrator_work(start_item, None).await.unwrap();
-        let orch_item = store.fetch_orchestration_item().await.unwrap();
+        store.enqueue_for_orchestrator(start_item, None).await.unwrap();
+        let orch_item = store.fetch_orchestration_item().await.unwrap().unwrap();
         store
             .ack_orchestration_item(
                 &orch_item.lock_token,
@@ -2113,18 +2127,18 @@ mod tests {
 
         // Enqueue with 2 second delay
         store
-            .enqueue_orchestrator_work(timer_fired.clone(), Some(2000))
+            .enqueue_for_orchestrator(timer_fired.clone(), Some(2000))
             .await
             .unwrap();
 
         // TimerFired should not be visible immediately
-        assert!(store.fetch_orchestration_item().await.is_none());
+        assert!(store.fetch_orchestration_item().await.unwrap().is_none());
 
         // Wait for timer to be visible
         tokio::time::sleep(std::time::Duration::from_millis(2100)).await;
 
         // TimerFired should be visible now
-        let timer_item = store.fetch_orchestration_item().await.unwrap();
+        let timer_item = store.fetch_orchestration_item().await.unwrap().unwrap();
         assert_eq!(timer_item.instance, "test-timer-delayed");
         assert_eq!(timer_item.messages.len(), 1);
         assert!(matches!(timer_item.messages[0], WorkItem::TimerFired { .. }));
@@ -2145,23 +2159,23 @@ mod tests {
             execution_id: crate::INITIAL_EXECUTION_ID,
         };
 
-        store.enqueue_orchestrator_work(item, None).await.unwrap();
+        store.enqueue_for_orchestrator(item, None).await.unwrap();
 
         // Fetch and lock it
-        let orch_item = store.fetch_orchestration_item().await.unwrap();
+        let orch_item = store.fetch_orchestration_item().await.unwrap().unwrap();
         let lock_token = orch_item.lock_token.clone();
 
         // Abandon with 2 second delay
         store.abandon_orchestration_item(&lock_token, Some(2000)).await.unwrap();
 
         // Should not be visible immediately
-        assert!(store.fetch_orchestration_item().await.is_none());
+        assert!(store.fetch_orchestration_item().await.unwrap().is_none());
 
         // Wait for delay
         tokio::time::sleep(std::time::Duration::from_millis(2100)).await;
 
         // Should be visible again
-        let item2 = store.fetch_orchestration_item().await.unwrap();
+        let item2 = store.fetch_orchestration_item().await.unwrap().unwrap();
         assert_eq!(item2.instance, "test-abandon-delay");
     }
 
@@ -2180,8 +2194,8 @@ mod tests {
             parent_id: None,
             execution_id: 1,
         };
-        store.enqueue_orchestrator_work(start_item, None).await.unwrap();
-        let orch_item = store.fetch_orchestration_item().await.unwrap();
+        store.enqueue_for_orchestrator(start_item, None).await.unwrap();
+        let orch_item = store.fetch_orchestration_item().await.unwrap().unwrap();
         store
             .ack_orchestration_item(
                 &orch_item.lock_token,
@@ -2216,13 +2230,10 @@ mod tests {
         };
 
         // Enqueue with delayed visibility via orchestrator queue
-        store
-            .enqueue_orchestrator_work(future_timer, Some(60000))
-            .await
-            .unwrap();
+        store.enqueue_for_orchestrator(future_timer, Some(60000)).await.unwrap();
 
         // Should not dequeue immediately (future visible_at)
-        assert!(store.fetch_orchestration_item().await.is_none());
+        assert!(store.fetch_orchestration_item().await.unwrap().is_none());
 
         // Enqueue a timer that should fire immediately (no delay)
         let past_timer = WorkItem::TimerFired {
@@ -2232,10 +2243,10 @@ mod tests {
             fire_at_ms: 0,
         };
 
-        store.enqueue_orchestrator_work(past_timer, None).await.unwrap();
+        store.enqueue_for_orchestrator(past_timer, None).await.unwrap();
 
         // Should dequeue the past timer
-        let item = store.fetch_orchestration_item().await.unwrap();
+        let item = store.fetch_orchestration_item().await.unwrap().unwrap();
         assert_eq!(item.instance, "test-timer");
 
         // Verify it's the TimerFired work item

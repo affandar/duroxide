@@ -1,5 +1,6 @@
 use duroxide::providers::Provider;
 use duroxide::providers::sqlite::SqliteProvider;
+use duroxide::providers::ProviderManager;
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
 use duroxide::{Action, ActivityContext, Event, OrchestrationContext, OrchestrationRegistry, run_turn};
@@ -307,7 +308,9 @@ async fn providers_fs_multi_execution_persistence_and_latest_read() {
     )
     .await
     .unwrap();
-    let e1_before = fs.read_with_execution("pfs", 1).await;
+    let e1_before = fs.read_with_execution("pfs", 1)
+        .await
+        .unwrap_or_default();
 
     // Create execution #2 using test helper
     let _eid2 = test_create_execution(&fs, "pfs", "O", "0.0.0", "1", None, None)
@@ -325,16 +328,20 @@ async fn providers_fs_multi_execution_persistence_and_latest_read() {
     .unwrap();
 
     // Execution list must contain both
-    let execs = fs.list_executions("pfs").await;
+    let execs = ProviderManager::list_executions(&fs, "pfs").await.unwrap_or_default();
     assert_eq!(execs, vec![1, 2]);
 
     // Older execution history remains unchanged
-    let e1_after = fs.read_with_execution("pfs", 1).await;
+    let e1_after = fs.read_with_execution("pfs", 1)
+        .await
+        .unwrap_or_default();
     assert_eq!(e1_before, e1_after);
 
     // Latest read() equals latest execution history
-    let latest_hist = fs.read_with_execution("pfs", 2).await;
-    let current_hist = fs.read("pfs").await;
+    let latest_hist = fs.read_with_execution("pfs", 2)
+        .await
+        .unwrap_or_default();
+    let current_hist = fs.read("pfs").await.unwrap_or_default();
     assert_eq!(current_hist, latest_hist);
 }
 
@@ -356,7 +363,9 @@ async fn providers_inmem_multi_execution_persistence_and_latest_read() {
     )
     .await
     .unwrap();
-    let e1_before = mem.read_with_execution("pmem", 1).await;
+    let e1_before = mem.read_with_execution("pmem", 1)
+        .await
+        .unwrap_or_default();
 
     let _eid2 = test_create_execution(&mem, "pmem", "O", "0.0.0", "1", None, None)
         .await
@@ -372,13 +381,17 @@ async fn providers_inmem_multi_execution_persistence_and_latest_read() {
     .await
     .unwrap();
 
-    let execs = mem.list_executions("pmem").await;
+    let execs = ProviderManager::list_executions(&mem, "pmem").await.unwrap_or_default();
     assert_eq!(execs, vec![1, 2]);
 
-    let e1_after = mem.read_with_execution("pmem", 1).await;
+    let e1_after = mem.read_with_execution("pmem", 1)
+        .await
+        .unwrap_or_default();
     assert_eq!(e1_before, e1_after);
 
-    let latest_hist = mem.read_with_execution("pmem", 2).await;
-    let current_hist = mem.read("pmem").await;
+    let latest_hist = mem.read_with_execution("pmem", 2)
+        .await
+        .unwrap_or_default();
+    let current_hist = mem.read("pmem").await.unwrap_or_default();
     assert_eq!(current_hist, latest_hist);
 }

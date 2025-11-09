@@ -3,7 +3,7 @@
 use async_trait::async_trait;
 use duroxide::providers::sqlite::SqliteProvider;
 use duroxide::providers::{
-    ExecutionMetadata, ManagementCapability, OrchestrationItem, Provider, ProviderError, WorkItem,
+    ExecutionMetadata, OrchestrationItem, Provider, ProviderError, ProviderManager, WorkItem,
 };
 use duroxide::runtime;
 use duroxide::runtime::registry::ActivityRegistry;
@@ -95,32 +95,46 @@ fn metrics_observability_config(label: &str) -> ObservabilityConfig {
 
 struct FailingProvider {
     inner: Arc<SqliteProvider>,
-    fail_next_ack_worker: AtomicBool,
+    fail_next_ack_work_item: AtomicBool,
     fail_next_ack_orchestration_item: AtomicBool,
+    fail_next_fetch_orchestration_item: AtomicBool,
 }
 
 impl FailingProvider {
     fn new(inner: Arc<SqliteProvider>) -> Self {
         Self {
             inner,
-            fail_next_ack_worker: AtomicBool::new(false),
+            fail_next_ack_work_item: AtomicBool::new(false),
             fail_next_ack_orchestration_item: AtomicBool::new(false),
+            fail_next_fetch_orchestration_item: AtomicBool::new(false),
         }
     }
 
-    fn fail_next_ack_worker(&self) {
-        self.fail_next_ack_worker.store(true, Ordering::SeqCst);
+    fn fail_next_ack_work_item(&self) {
+        self.fail_next_ack_work_item.store(true, Ordering::SeqCst);
     }
 
     fn fail_next_ack_orchestration_item(&self) {
         self.fail_next_ack_orchestration_item.store(true, Ordering::SeqCst);
     }
+
+    fn fail_next_fetch_orchestration_item(&self) {
+        self.fail_next_fetch_orchestration_item.store(true, Ordering::SeqCst);
+    }
 }
 
 #[async_trait]
 impl Provider for FailingProvider {
-    async fn fetch_orchestration_item(&self) -> Option<OrchestrationItem> {
-        self.inner.fetch_orchestration_item().await
+    async fn fetch_orchestration_item(&self) -> Result<Option<OrchestrationItem>, ProviderError> {
+        if self.fail_next_fetch_orchestration_item.swap(false, Ordering::SeqCst) {
+            // Simulate transient infrastructure failure (e.g., database connection issue)
+            Err(ProviderError::retryable(
+                "fetch_orchestration_item",
+                "simulated transient infrastructure failure",
+            ))
+        } else {
+            self.inner.fetch_orchestration_item().await
+        }
     }
 
     async fn ack_orchestration_item(
@@ -177,28 +191,12 @@ impl Provider for FailingProvider {
         self.inner.abandon_orchestration_item(lock_token, delay_ms).await
     }
 
-    async fn read(&self, instance: &str) -> Vec<Event> {
+    async fn read(&self, instance: &str) -> Result<Vec<Event>, ProviderError> {
         self.inner.read(instance).await
     }
 
-    async fn enqueue_worker_work(&self, item: WorkItem) -> Result<(), ProviderError> {
-        self.inner.enqueue_worker_work(item).await
-    }
-
-    async fn dequeue_worker_peek_lock(&self) -> Option<(WorkItem, String)> {
-        self.inner.dequeue_worker_peek_lock().await
-    }
-
-    async fn ack_worker(&self, token: &str, completion: WorkItem) -> Result<(), ProviderError> {
-        if self.fail_next_ack_worker.swap(false, Ordering::SeqCst) {
-            self.inner.ack_worker(token, completion.clone()).await?;
-            Err(ProviderError::permanent(
-                "ack_worker",
-                "simulated infrastructure failure",
-            ))
-        } else {
-            self.inner.ack_worker(token, completion).await
-        }
+    async fn read_with_execution(&self, instance: &str, execution_id: u64) -> Result<Vec<Event>, ProviderError> {
+        self.inner.read_with_execution(instance, execution_id).await
     }
 
     async fn append_with_execution(
@@ -207,16 +205,34 @@ impl Provider for FailingProvider {
         execution_id: u64,
         new_events: Vec<Event>,
     ) -> Result<(), ProviderError> {
-        self.inner
-            .append_with_execution(instance, execution_id, new_events)
-            .await
+        self.inner.append_with_execution(instance, execution_id, new_events).await
     }
 
-    async fn enqueue_orchestrator_work(&self, item: WorkItem, delay_ms: Option<u64>) -> Result<(), ProviderError> {
-        self.inner.enqueue_orchestrator_work(item, delay_ms).await
+    async fn enqueue_for_worker(&self, item: WorkItem) -> Result<(), ProviderError> {
+        self.inner.enqueue_for_worker(item).await
     }
 
-    fn as_management_capability(&self) -> Option<&dyn ManagementCapability> {
+    async fn fetch_work_item(&self) -> Option<(WorkItem, String)> {
+        self.inner.fetch_work_item().await
+    }
+
+    async fn ack_work_item(&self, token: &str, completion: WorkItem) -> Result<(), ProviderError> {
+        if self.fail_next_ack_work_item.swap(false, Ordering::SeqCst) {
+            self.inner.ack_work_item(token, completion.clone()).await?;
+            Err(ProviderError::permanent(
+                "ack_work_item",
+                "simulated infrastructure failure",
+            ))
+        } else {
+            self.inner.ack_work_item(token, completion).await
+        }
+    }
+
+    async fn enqueue_for_orchestrator(&self, item: WorkItem, delay_ms: Option<u64>) -> Result<(), ProviderError> {
+        self.inner.enqueue_for_orchestrator(item, delay_ms).await
+    }
+
+    fn as_management_capability(&self) -> Option<&dyn ProviderManager> {
         self.inner.as_management_capability()
     }
 }
@@ -420,7 +436,7 @@ async fn metrics_capture_activity_and_orchestration_outcomes() {
     let client = Client::new(provider_trait.clone());
 
     // Trigger infrastructure error (first ack fails but work has already been committed)
-    failing_provider.fail_next_ack_worker();
+    failing_provider.fail_next_ack_work_item();
     client
         .start_orchestration("metrics-success-infra", "SuccessOrch", "")
         .await
@@ -526,4 +542,45 @@ async fn metrics_capture_activity_and_orchestration_outcomes() {
         snapshot.orch_infrastructure_errors, 1,
         "expected one infrastructure orchestration failure"
     );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn test_fetch_orchestration_item_fault_injection() {
+    let sqlite = Arc::new(SqliteProvider::new_in_memory().await.unwrap());
+    let failing_provider = Arc::new(FailingProvider::new(sqlite));
+    let provider_trait: Arc<dyn Provider> = failing_provider.clone();
+
+    // Enqueue a work item
+    provider_trait
+        .enqueue_for_orchestrator(
+            WorkItem::StartOrchestration {
+                instance: "test-instance".to_string(),
+                orchestration: "TestOrch".to_string(),
+                input: "test-input".to_string(),
+                version: Some("1.0.0".to_string()),
+                parent_instance: None,
+                parent_id: None,
+                execution_id: duroxide::INITIAL_EXECUTION_ID,
+            },
+            None,
+        )
+        .await
+        .unwrap();
+
+    // Enable fault injection
+    failing_provider.fail_next_fetch_orchestration_item();
+
+    // Attempt to fetch - should return error
+    let result = provider_trait.fetch_orchestration_item().await;
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert!(err.is_retryable());
+    assert!(err.message.contains("simulated transient infrastructure failure"));
+
+    // Disable fault injection - should succeed now
+    let result = provider_trait.fetch_orchestration_item().await;
+    assert!(result.is_ok());
+    let item = result.unwrap();
+    assert!(item.is_some());
+    assert_eq!(item.unwrap().instance, "test-instance");
 }

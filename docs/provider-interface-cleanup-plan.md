@@ -2,7 +2,7 @@
 
 ### Phase 1 – Surface Rename Pass
 - Rename `enqueue_orchestrator_work` → `enqueue_for_orchestrator`.
-- Rename `enqueue_worker_work` → `enqueue_for_worker`.
+- Rename `enqueue_for_worker` → `enqueue_for_worker`.
 - Rename `dequeue_worker_peek_lock` → `fetch_work_item`.
 - Rename `ack_worker` → `ack_work_item`.
 - Update all implementations, tests, helper methods, and docs to use the new names.

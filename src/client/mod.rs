@@ -1,9 +1,7 @@
 use std::sync::Arc;
 
 use crate::_typed_codec::{Codec, Json};
-use crate::providers::{
-    ExecutionInfo, InstanceInfo, ManagementCapability, Provider, QueueDepths, SystemMetrics, WorkItem,
-};
+use crate::providers::{ExecutionInfo, InstanceInfo, Provider, ProviderManager, QueueDepths, SystemMetrics, WorkItem};
 use crate::{Event, OrchestrationStatus};
 use serde::Serialize;
 
@@ -20,7 +18,7 @@ use serde::Serialize;
 /// # Automatic Capability Discovery
 ///
 /// The Client automatically discovers provider capabilities through the `Provider::as_management_capability()` method.
-/// When a provider implements `ManagementCapability`, rich management features become available:
+/// When a provider implements `ProviderManager`, rich management features become available:
 ///
 /// ```ignore
 /// let client = Client::new(provider);
@@ -152,7 +150,7 @@ impl Client {
             execution_id: crate::INITIAL_EXECUTION_ID,
         };
         self.store
-            .enqueue_orchestrator_work(item, None)
+            .enqueue_for_orchestrator(item, None)
             .await
             .map_err(|e| e.to_string())
     }
@@ -175,7 +173,7 @@ impl Client {
             execution_id: crate::INITIAL_EXECUTION_ID,
         };
         self.store
-            .enqueue_orchestrator_work(item, None)
+            .enqueue_for_orchestrator(item, None)
             .await
             .map_err(|e| e.to_string())
     }
@@ -267,7 +265,7 @@ impl Client {
             data: data.into(),
         };
         self.store
-            .enqueue_orchestrator_work(item, None)
+            .enqueue_for_orchestrator(item, None)
             .await
             .map_err(|e| e.to_string())
     }
@@ -334,7 +332,7 @@ impl Client {
             reason: reason.into(),
         };
         self.store
-            .enqueue_orchestrator_work(item, None)
+            .enqueue_for_orchestrator(item, None)
             .await
             .map_err(|e| e.to_string())
     }
@@ -383,7 +381,7 @@ impl Client {
     /// # }
     /// ```
     pub async fn get_orchestration_status(&self, instance: &str) -> OrchestrationStatus {
-        let hist = self.store.read(instance).await;
+        let hist = self.store.read(instance).await.unwrap_or_default();
         // Find terminal events first
         for e in hist.iter().rev() {
             match e {
@@ -529,7 +527,7 @@ impl Client {
     ///
     /// # Returns
     ///
-    /// `true` if the provider implements `ManagementCapability`, `false` otherwise.
+    /// `true` if the provider implements `ProviderManager`, `false` otherwise.
     ///
     /// # Usage
     ///
@@ -554,10 +552,10 @@ impl Client {
     /// # Internal Use
     ///
     /// This method is used internally by management methods to access capabilities.
-    fn discover_management(&self) -> Result<&dyn ManagementCapability, String> {
-        self.store.as_management_capability().ok_or_else(|| {
-            "Management features not available - provider doesn't implement ManagementCapability".to_string()
-        })
+    fn discover_management(&self) -> Result<&dyn ProviderManager, String> {
+        self.store
+            .as_management_capability()
+            .ok_or_else(|| "Management features not available - provider doesn't implement ProviderManager".to_string())
     }
 
     // ===== Rich Management Methods =====
@@ -570,7 +568,7 @@ impl Client {
     ///
     /// # Errors
     ///
-    /// Returns `Err("Management features not available")` if the provider doesn't implement `ManagementCapability`.
+    /// Returns `Err("Management features not available")` if the provider doesn't implement `ProviderManager`.
     ///
     /// # Usage
     ///
@@ -602,7 +600,7 @@ impl Client {
     ///
     /// # Errors
     ///
-    /// Returns `Err("Management features not available")` if the provider doesn't implement `ManagementCapability`.
+    /// Returns `Err("Management features not available")` if the provider doesn't implement `ProviderManager`.
     ///
     /// # Usage
     ///
@@ -633,7 +631,7 @@ impl Client {
     ///
     /// # Errors
     ///
-    /// Returns `Err("Management features not available")` if the provider doesn't implement `ManagementCapability`.
+    /// Returns `Err("Management features not available")` if the provider doesn't implement `ProviderManager`.
     ///
     /// # Usage
     ///
@@ -664,7 +662,7 @@ impl Client {
     ///
     /// # Errors
     ///
-    /// Returns `Err("Management features not available")` if the provider doesn't implement `ManagementCapability`.
+    /// Returns `Err("Management features not available")` if the provider doesn't implement `ProviderManager`.
     ///
     /// # Usage
     ///
@@ -749,7 +747,7 @@ impl Client {
     /// ```
     pub async fn read_execution_history(&self, instance: &str, execution_id: u64) -> Result<Vec<crate::Event>, String> {
         let mgmt = self.discover_management()?;
-        mgmt.read_execution(instance, execution_id)
+        mgmt.read_history_with_execution_id(instance, execution_id)
             .await
             .map_err(|e| e.to_string())
     }
@@ -762,7 +760,7 @@ impl Client {
     ///
     /// # Errors
     ///
-    /// Returns `Err("Management features not available")` if the provider doesn't implement `ManagementCapability`.
+    /// Returns `Err("Management features not available")` if the provider doesn't implement `ProviderManager`.
     ///
     /// # Usage
     ///
@@ -789,7 +787,7 @@ impl Client {
     ///
     /// # Errors
     ///
-    /// Returns `Err("Management features not available")` if the provider doesn't implement `ManagementCapability`.
+    /// Returns `Err("Management features not available")` if the provider doesn't implement `ProviderManager`.
     ///
     /// # Usage
     ///

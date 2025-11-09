@@ -273,7 +273,7 @@ impl Runtime {
         &self,
         instance: &str,
     ) -> Option<crate::runtime::OrchestrationDescriptor> {
-        let hist = self.history_store.read(instance).await;
+        let hist = self.history_store.read(instance).await.unwrap_or_default();
         for e in hist.iter().rev() {
             if let Event::OrchestrationStarted {
                 name,
@@ -295,17 +295,27 @@ impl Runtime {
     }
 
     /// Get the current execution ID for an instance, or fetch from store if not tracked
-    async fn get_execution_id_for_instance(&self, instance: &str) -> u64 {
+    ///
+    /// If `current_execution_id` is provided and the instance matches, use it directly.
+    /// Otherwise, check in-memory tracking, then fall back to INITIAL_EXECUTION_ID.
+    async fn get_execution_id_for_instance(&self, instance: &str, current_execution_id: Option<u64>) -> u64 {
+        // If this is the current instance being processed, use the provided execution_id
+        if let Some(exec_id) = current_execution_id {
+            // Update in-memory tracking for future calls
+            self.current_execution_ids
+                .lock()
+                .await
+                .insert(instance.to_string(), exec_id);
+            return exec_id;
+        }
+
         // First check in-memory tracking
         if let Some(&exec_id) = self.current_execution_ids.lock().await.get(instance) {
             return exec_id;
         }
 
-        // Fall back to querying the store
-        self.history_store
-            .latest_execution_id(instance)
-            .await
-            .unwrap_or(crate::INITIAL_EXECUTION_ID)
+        // Fall back to INITIAL_EXECUTION_ID (no longer querying Provider::latest_execution_id)
+        crate::INITIAL_EXECUTION_ID
     }
 
     /// Generate a unique worker ID suffix using last 5 chars of a GUID
@@ -415,7 +425,7 @@ impl Runtime {
                             break;
                         }
 
-                        if let Some(item) = rt.history_store.fetch_orchestration_item().await {
+                        if let Ok(Some(item)) = rt.history_store.fetch_orchestration_item().await {
                             // Process orchestration item atomically
                             // Provider ensures no other worker has this instance locked
                             rt.process_orchestration_item(item, &worker_id).await;
@@ -864,7 +874,7 @@ impl Runtime {
                             break;
                         }
 
-                        if let Some((item, token)) = rt.history_store.dequeue_worker_peek_lock().await {
+                        if let Some((item, token)) = rt.history_store.fetch_work_item().await {
                             match item {
                                 WorkItem::ActivityExecute {
                                     instance,
@@ -925,7 +935,7 @@ impl Runtime {
                                                 );
                                                 (
                                                     rt.history_store
-                                                        .ack_worker(
+                                                        .ack_work_item(
                                                             &token,
                                                             WorkItem::ActivityCompleted {
                                                                 instance: instance.clone(),
@@ -954,7 +964,7 @@ impl Runtime {
                                                 );
                                                 (
                                                     rt.history_store
-                                                        .ack_worker(
+                                                        .ack_work_item(
                                                             &token,
                                                             WorkItem::ActivityFailed {
                                                                 instance: instance.clone(),
@@ -988,7 +998,7 @@ impl Runtime {
                                         );
                                         (
                                             rt.history_store
-                                                .ack_worker(
+                                                .ack_work_item(
                                                     &token,
                                                     WorkItem::ActivityFailed {
                                                         instance: instance.clone(),

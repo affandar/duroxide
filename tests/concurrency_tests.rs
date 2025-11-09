@@ -105,7 +105,7 @@ async fn concurrent_orchestrations_different_activities_with(store: StdArc<dyn P
         .await;
 
     if out1_result.is_err() {
-        let hist1 = store.read("inst-multi-1").await;
+        let hist1 = store.read("inst-multi-1").await.unwrap_or_default();
         println!("inst-multi-1 history ({} events):", hist1.len());
         for (i, e) in hist1.iter().enumerate() {
             println!("  {i}: {e:?}");
@@ -123,7 +123,7 @@ async fn concurrent_orchestrations_different_activities_with(store: StdArc<dyn P
         .await;
 
     if out2_result.is_err() {
-        let hist2 = store.read("inst-multi-2").await;
+        let hist2 = store.read("inst-multi-2").await.unwrap_or_default();
         println!("inst-multi-2 history ({} events):", hist2.len());
         for (i, e) in hist2.iter().enumerate() {
             println!("  {i}: {e:?}");
@@ -399,7 +399,7 @@ async fn single_orchestration_with_join_test() {
         .await;
 
     if result.is_err() {
-        let hist = store.read("inst-single").await;
+        let hist = store.read("inst-single").await.unwrap_or_default();
         println!("❌ Timeout! History ({} events):", hist.len());
         for (i, e) in hist.iter().enumerate() {
             println!("  {i}: {e:?}");

@@ -142,7 +142,7 @@ impl Provider for MyProvider {
     
     // === REQUIRED: Worker Queue ===
     
-    async fn enqueue_worker_work(&self, item: WorkItem) -> Result<(), ProviderError> {
+    async fn enqueue_for_worker(&self, item: WorkItem) -> Result<(), ProviderError> {
         // Add item to worker queue
         // New items should have lock_token = NULL
         
@@ -909,7 +909,7 @@ If deserialization fails for queue items or history events, the provider MUST ha
 
 ### 5. Worker Queue Operations
 
-**enqueue_worker_work():**
+**enqueue_for_worker():**
 ```
 work_json = serialize(item)
 INSERT INTO worker_queue (work_item, lock_token, locked_until)
