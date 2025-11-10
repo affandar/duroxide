@@ -5,6 +5,37 @@ use std::task::{Context, Poll};
 
 use crate::{Action, Event, OrchestrationContext};
 
+/// Helper function to check if a completion event can be consumed according to FIFO ordering.
+///
+/// Returns `true` if all completion events in history that occurred before the given
+/// `completion_event_id` have already been consumed. This enforces the invariant that
+/// completions must be consumed in the order they appear in history.
+///
+/// # Arguments
+/// * `history` - The full event history
+/// * `consumed_completions` - Set of already consumed completion event IDs
+/// * `completion_event_id` - The event ID we want to consume
+fn can_consume_completion(
+    history: &[Event],
+    consumed_completions: &std::collections::HashSet<u64>,
+    completion_event_id: u64,
+) -> bool {
+    history.iter().all(|e| {
+        match e {
+            Event::ActivityCompleted { event_id, .. }
+            | Event::ActivityFailed { event_id, .. }
+            | Event::TimerFired { event_id, .. }
+            | Event::SubOrchestrationCompleted { event_id, .. }
+            | Event::SubOrchestrationFailed { event_id, .. }
+            | Event::ExternalEvent { event_id, .. } => {
+                // If this completion is before ours, it must be consumed
+                *event_id >= completion_event_id || consumed_completions.contains(event_id)
+            }
+            _ => true, // Non-completions don't affect ordering
+        }
+    })
+}
+
 #[derive(Debug, Clone)]
 pub enum DurableOutput {
     Activity(Result<String, String>),
@@ -174,22 +205,7 @@ impl Future for DurableFuture {
 
                 if let Some((completion_event_id, result)) = our_completion {
                     // Check: Are all completion events BEFORE ours consumed?
-                    let can_consume = inner.history.iter().all(|e| {
-                        match e {
-                            Event::ActivityCompleted { event_id, .. }
-                            | Event::ActivityFailed { event_id, .. }
-                            | Event::TimerFired { event_id, .. }
-                            | Event::SubOrchestrationCompleted { event_id, .. }
-                            | Event::SubOrchestrationFailed { event_id, .. }
-                            | Event::ExternalEvent { event_id, .. } => {
-                                // If this completion is before ours, it must be consumed
-                                *event_id >= completion_event_id || inner.consumed_completions.contains(event_id)
-                            }
-                            _ => true, // Non-completions don't matter
-                        }
-                    });
-
-                    if can_consume {
+                    if can_consume_completion(&inner.history, &inner.consumed_completions, completion_event_id) {
                         inner.consumed_completions.insert(completion_event_id);
                         return Poll::Ready(DurableOutput::Activity(result));
                     }
@@ -294,19 +310,7 @@ impl Future for DurableFuture {
 
                 if let Some(completion_event_id) = our_completion {
                     // Check: Are all completion events BEFORE ours consumed?
-                    let can_consume = inner.history.iter().all(|e| match e {
-                        Event::ActivityCompleted { event_id, .. }
-                        | Event::ActivityFailed { event_id, .. }
-                        | Event::TimerFired { event_id, .. }
-                        | Event::SubOrchestrationCompleted { event_id, .. }
-                        | Event::SubOrchestrationFailed { event_id, .. }
-                        | Event::ExternalEvent { event_id, .. } => {
-                            *event_id >= completion_event_id || inner.consumed_completions.contains(event_id)
-                        }
-                        _ => true,
-                    });
-
-                    if can_consume {
+                    if can_consume_completion(&inner.history, &inner.consumed_completions, completion_event_id) {
                         inner.consumed_completions.insert(completion_event_id);
                         return Poll::Ready(DurableOutput::Timer);
                     }
@@ -421,19 +425,7 @@ impl Future for DurableFuture {
                     })
                 {
                     // Check: Are all completions BEFORE ours consumed?
-                    let can_consume = inner.history.iter().all(|e| match e {
-                        Event::ActivityCompleted { event_id: eid, .. }
-                        | Event::ActivityFailed { event_id: eid, .. }
-                        | Event::TimerFired { event_id: eid, .. }
-                        | Event::SubOrchestrationCompleted { event_id: eid, .. }
-                        | Event::SubOrchestrationFailed { event_id: eid, .. }
-                        | Event::ExternalEvent { event_id: eid, .. } => {
-                            *eid >= event_id || inner.consumed_completions.contains(eid)
-                        }
-                        _ => true,
-                    });
-
-                    if can_consume {
+                    if can_consume_completion(&inner.history, &inner.consumed_completions, event_id) {
                         inner.consumed_completions.insert(event_id);
                         inner.consumed_external_events.insert(name.clone());
                         *result.borrow_mut() = Some(data.clone());
@@ -565,19 +557,7 @@ impl Future for DurableFuture {
 
                 if let Some((completion_event_id, result)) = our_completion {
                     // Check: Are all completions BEFORE ours consumed?
-                    let can_consume = inner.history.iter().all(|e| match e {
-                        Event::ActivityCompleted { event_id, .. }
-                        | Event::ActivityFailed { event_id, .. }
-                        | Event::TimerFired { event_id, .. }
-                        | Event::SubOrchestrationCompleted { event_id, .. }
-                        | Event::SubOrchestrationFailed { event_id, .. }
-                        | Event::ExternalEvent { event_id, .. } => {
-                            *event_id >= completion_event_id || inner.consumed_completions.contains(event_id)
-                        }
-                        _ => true,
-                    });
-
-                    if can_consume {
+                    if can_consume_completion(&inner.history, &inner.consumed_completions, completion_event_id) {
                         inner.consumed_completions.insert(completion_event_id);
                         return Poll::Ready(DurableOutput::SubOrchestration(result));
                     }
