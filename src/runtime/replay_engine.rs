@@ -394,7 +394,7 @@ impl ReplayEngine {
         // Build working history: baseline + completion events from this run
         let working_history_len_before = self.baseline_history.len() + self.history_delta.len();
         let mut working_history = self.baseline_history.clone();
-        working_history.extend(self.history_delta.clone());
+        working_history.extend_from_slice(&self.history_delta);
 
         // Run orchestration with unified cursor model (metadata passed from caller)
         let execution_id = self.get_current_execution_id();
@@ -456,16 +456,13 @@ impl ReplayEngine {
         self.pending_actions = decisions;
 
         // Check for cancellation first - if cancelled, return immediately
-        let full_history = {
-            let mut h = self.baseline_history.clone();
-            h.extend(self.history_delta.clone());
-            h
-        };
-
-        if let Some(Event::OrchestrationCancelRequested { reason, .. }) = full_history
+        // Optimization: Search both slices separately to avoid cloning
+        let cancel_event = self.baseline_history
             .iter()
-            .find(|e| matches!(e, Event::OrchestrationCancelRequested { .. }))
-        {
+            .chain(self.history_delta.iter())
+            .find(|e| matches!(e, Event::OrchestrationCancelRequested { .. }));
+
+        if let Some(Event::OrchestrationCancelRequested { reason, .. }) = cancel_event {
             return TurnResult::Cancelled(reason.clone());
         }
 
@@ -514,7 +511,7 @@ impl ReplayEngine {
     /// Get the final history after this run
     pub fn final_history(&self) -> Vec<Event> {
         let mut final_hist = self.baseline_history.clone();
-        final_hist.extend(self.history_delta.clone());
+        final_hist.extend_from_slice(&self.history_delta);
         final_hist
     }
 }

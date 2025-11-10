@@ -43,6 +43,7 @@ features = ["bundled"]
 [dev-dependencies]
 # Used in tests/examples
 tempfile = "3"
+proptest = "1.4"
 
 [workspace]
 members = [
