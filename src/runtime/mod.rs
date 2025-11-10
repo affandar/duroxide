@@ -347,7 +347,8 @@ impl Runtime {
         orchestration_registry: OrchestrationRegistry,
     ) -> Arc<Self> {
         let history_store: Arc<dyn Provider> =
-            Arc::new(crate::providers::sqlite::SqliteProvider::new_in_memory().await.unwrap());
+            Arc::new(crate::providers::sqlite::SqliteProvider::new_in_memory().await
+                .expect("in-memory SQLite provider creation should never fail"));
         Self::start_with_store(history_store, activity_registry, orchestration_registry).await
     }
 
