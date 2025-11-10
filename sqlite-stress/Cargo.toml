@@ -1,21 +1,21 @@
 [package]
-name = "duroxide-stress-tests"
+name = "duroxide-sqlite-stress"
 version = "0.1.0"
 edition = "2021"
 
 [lib]
-name = "duroxide_stress_tests"
+name = "duroxide_sqlite_stress"
 path = "src/lib.rs"
 
 [dependencies]
 duroxide = { path = "..", features = ["provider-test"] }
 tokio = { version = "1", features = ["full"] }
+async-trait = "0.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [[bin]]
-name = "parallel_orchestrations"
-path = "src/bin/parallel_orchestrations.rs"
-
+name = "sqlite-stress"
+path = "src/bin/sqlite-stress.rs"

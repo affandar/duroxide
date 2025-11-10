@@ -61,23 +61,23 @@ if [ -n "$TRACK_MODE" ]; then
     # Run with tracking (pass duration if specified)
     if [ -n "$DURATION" ]; then
         if [ "$TRACK_MODE" = "cloud" ]; then
-            ./stress-tests/track-results.sh "$DURATION" --cloud
+            ./sqlite-stress/track-results.sh "$DURATION" --cloud
         else
-            ./stress-tests/track-results.sh "$DURATION"
+            ./sqlite-stress/track-results.sh "$DURATION"
         fi
     else
         if [ "$TRACK_MODE" = "cloud" ]; then
-            ./stress-tests/track-results.sh --cloud
+            ./sqlite-stress/track-results.sh --cloud
         else
-            ./stress-tests/track-results.sh
+            ./sqlite-stress/track-results.sh
         fi
     fi
 else
     # Run the stress tests in release mode for accurate performance metrics
     if [ -n "$DURATION" ]; then
-        cargo run --release --package duroxide-stress-tests --bin parallel_orchestrations "$DURATION"
+        cargo run --release --package duroxide-sqlite-stress --bin sqlite-stress "$DURATION"
     else
-        cargo run --release --package duroxide-stress-tests --bin parallel_orchestrations
+        cargo run --release --package duroxide-sqlite-stress --bin sqlite-stress
     fi
 fi
 

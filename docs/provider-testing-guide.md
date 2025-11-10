@@ -1,7 +1,7 @@
 # Provider Testing Guide
 
 **For:** Developers testing custom Duroxide providers  
-**Reference:** See `stress-tests/src/lib.rs` for test implementation details
+**Reference:** See `sqlite-stress/src/lib.rs` for SQLite stress test implementation
 
 ---
 
@@ -720,8 +720,8 @@ jobs:
       
       - name: Run stress tests
         run: |
-          cd stress-tests
-          cargo run --release --bin parallel_orchestrations
+          cd sqlite-stress
+          cargo run --release --bin sqlite-stress
 ```
 
 ---
@@ -795,7 +795,7 @@ To track results over time (like Duroxide's own tracking):
 
 ```bash
 # Run with tracking enabled
-./stress-tests/track-results.sh
+./sqlite-stress/track-results.sh
 ```
 
 This generates `stress-test-results.md` with:

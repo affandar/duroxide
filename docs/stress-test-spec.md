@@ -100,11 +100,17 @@ Each test validates:
 
 ### Standard Provider Tests
 
-Run all built-in provider tests:
+Run all built-in SQLite provider tests:
 
 ```bash
-cd stress-tests
-cargo run --release --bin parallel_orchestrations
+cd sqlite-stress
+cargo run --release --bin sqlite-stress
+```
+
+Or from the workspace root:
+
+```bash
+./run-stress-tests.sh [DURATION_SECS]
 ```
 
 ### Custom Provider Tests

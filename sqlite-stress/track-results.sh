@@ -58,9 +58,9 @@ echo "Running stress tests..."
 # Capture output to a temp file and then display it
 TEMP_OUTPUT=$(mktemp)
 if [ -n "$DURATION" ]; then
-    cargo run --release --package duroxide-stress-tests --bin parallel_orchestrations "$DURATION" 2>&1 | tee "$TEMP_OUTPUT"
+    cargo run --release --package duroxide-sqlite-stress --bin sqlite-stress "$DURATION" 2>&1 | tee "$TEMP_OUTPUT"
 else
-    cargo run --release --package duroxide-stress-tests --bin parallel_orchestrations 2>&1 | tee "$TEMP_OUTPUT"
+    cargo run --release --package duroxide-sqlite-stress --bin sqlite-stress 2>&1 | tee "$TEMP_OUTPUT"
 fi
 TEST_OUTPUT=$(cat "$TEMP_OUTPUT")
 rm "$TEMP_OUTPUT"
@@ -71,9 +71,9 @@ rm "$TEMP_OUTPUT"
 RESULTS=$(echo "$TEST_OUTPUT" \
   | awk '/=== Comparison Table ===/{found=1; next} found {print}' \
   | sed 's/\x1b\[[0-9;]*m//g' \
-  | sed -E 's/^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+Z[[:space:]]+INFO[[:space:]]+[^:]*:[[:space:]]*//' \
-  | sed -E 's/^[[:space:]]*[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+Z[[:space:]]+INFO[[:space:]]+[^:]*:[[:space:]]*//' \
-  | sed -E 's/^[[:space:]]*INFO[[:space:]]+[^:]*:[[:space:]]*//' \
+  | sed -E 's/^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+Z[[:space:]]+INFO[[:space:]]+[a-zA-Z_:]+:[[:space:]]*//' \
+  | sed -E 's/^[[:space:]]*INFO[[:space:]]+[a-zA-Z_:]+:[[:space:]]*//' \
+  | sed -E 's/^[a-zA-Z_:]+:[[:space:]]*//' \
   | sed '/^$/d')
 
 # Create the results entry

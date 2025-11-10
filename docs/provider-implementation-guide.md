@@ -1728,9 +1728,19 @@ use duroxide::provider_stress_tests::parallel_orchestrations::{
     ProviderStressFactory, run_parallel_orchestrations_test
 };
 
+struct MyProviderStressFactory;
+
+#[async_trait::async_trait]
+impl ProviderStressFactory for MyProviderStressFactory {
+    async fn create_provider(&self) -> Arc<dyn Provider> {
+        Arc::new(MyProvider::new().await.unwrap())
+    }
+}
+
 #[tokio::test]
 async fn stress_test_my_provider() {
-    let result = run_parallel_orchestrations_test(&MyProviderStressFactory)
+    let factory = MyProviderStressFactory;
+    let result = run_parallel_orchestrations_test(&factory)
         .await
         .expect("Stress test failed");
     assert!(result.success_rate() > 99.0);

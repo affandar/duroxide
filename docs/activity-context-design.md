@@ -369,7 +369,7 @@ This is the breaking change - every activity registration needs updating:
 - ... and ~20 more test files
 
 **Stress Tests**:
-- `stress-tests/src/lib.rs`
+- `sqlite-stress/src/lib.rs`
 
 **README**:
 - `README.md` - Update hello world example
@@ -648,12 +648,12 @@ This validates:
 
 ### Phase 6: Stress Test Validation
 
-**Test File**: `stress-tests/src/lib.rs`
+**Test File**: `sqlite-stress/src/lib.rs`
 
 #### Test 11: Stress Test with ActivityContext
 After updating stress test activities:
 ```bash
-cd stress-tests && cargo run --release --bin parallel_orchestrations
+cd sqlite-stress && cargo run --release --bin sqlite-stress
 ```
 
 **Validation**:
@@ -737,7 +737,7 @@ for ex in examples/*.rs; do
 done
 
 # Stress tests
-cd stress-tests && cargo test
+cd sqlite-stress && cargo test
 ```
 
 **Success Criteria**:
@@ -750,7 +750,7 @@ cd stress-tests && cargo test
 
 1. **Unit tests first** (ActivityContext, ActivityHandler, ActivityRegistry)
 2. **Integration tests** (Worker dispatcher with context creation)
-3. **Update all activities** in examples, tests, stress-tests
+3. **Update all activities** in examples, tests, sqlite-stress
 4. **E2E test suite** (validate end-to-end behavior)
 5. **Stress tests** (validate performance)
 6. **Examples** (validate user-facing behavior)
