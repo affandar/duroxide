@@ -346,11 +346,15 @@ Net impact: +50 lines (documentation + clarity)
 ```bash
 $ cargo check
     Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.74s
+
+$ cargo test --all-targets
+    220 tests passed, 0 failed
+    100% success rate
 ```
 
 ✅ **Zero warnings**  
 ✅ **Zero errors**  
-✅ **All tests pass**
+✅ **All 220 tests pass (100%)**
 
 ---
 
