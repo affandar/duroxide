@@ -7,7 +7,7 @@ Eliminate all compiler warnings, clippy lints, and formatting issues across the 
 - Main library (`src/`)
 - All tests (`tests/`)
 - All examples (`examples/`)
-- Workspace members (`stress-tests/`)
+- Workspace members (`sqlite-stress/`)
 - Documentation tests
 
 ## Tools to Run

@@ -243,7 +243,7 @@ ObservabilityConfig {
 **Config**:
 - Updated `Cargo.toml` - Added OpenTelemetry dependencies
 - Updated `README.md` - Observability section
-- Updated `stress-tests/src/lib.rs` - Compatible with new RuntimeOptions
+- Updated `sqlite-stress/src/lib.rs` - Compatible with new RuntimeOptions
 
 ## Future Work (Optional)
 

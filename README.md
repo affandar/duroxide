@@ -69,7 +69,7 @@ use duroxide::providers::sqlite::SqliteProvider;
 # async fn main() {
 let store = std::sync::Arc::new(SqliteProvider::new("sqlite:./data.db", None).await.unwrap());
 let activities = ActivityRegistry::builder()
-    .register("Hello", |_ctx: ActivityContext, name: String| async move { Ok(format!("Hello, {name}!")) })
+    .register("Hello", |ctx: ActivityContext, name: String| async move { Ok(format!("Hello, {name}!")) })
     .build();
 let orch = |ctx: OrchestrationContext, name: String| async move {
     ctx.trace_info("hello started");
@@ -161,7 +161,7 @@ Stress testing
 - Run stress tests: `./run-stress-tests.sh`
 - Run with result tracking: `./run-stress-tests.sh --track` (saves to `stress-test-results.md`)
 - Tracked results include commit history, performance metrics, and rolling averages
-- See `stress-tests/README.md` for details
+- See `sqlite-stress/README.md` for details
 
 Observability
 - Enable structured logging: `RuntimeOptions { observability: ObservabilityConfig { log_format: LogFormat::Compact, ... }, ... }`

@@ -1,7 +1,7 @@
 # Update Documentation After Code Changes
 
 ## Objective
-Ensure all documentation is accurate, complete, and helpful for both humans and LLMs after a session of code changes.
+Ensure all documentation is accurate, complete, and helpful for both humans and LLMs after a session of code changes. Pay special attention to what changes are in the current workspace vs where were we at the time of last update of these docs.
 
 ## Documentation Hierarchy
 
@@ -63,7 +63,7 @@ Review if major changes were made:
 - **`docs/provider-observability.md`** - Provider instrumentation
 - **`docs/library-observability.md`** - Library developer guide
 - **`docs/activity-context-design.md`** - ActivityContext design document
-- **`stress-tests/README.md`** - Stress testing guide
+- **`sqlite-stress/README.md`** - Stress testing guide
 
 ## Execution Checklist
 

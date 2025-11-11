@@ -152,12 +152,20 @@ Scenarios where human input is needed
 4. @duroxide-merge-main.md      - Commit and merge
 ```
 
+### Performance Optimization Cycle
+```
+1. @duroxide-profile.md         - Profile and identify bottlenecks
+2. @duroxide-refactor.md        - Implement optimizations
+3. @duroxide-profile.md         - Re-profile to verify improvements
+4. @duroxide-add-test.md        - Add performance regression tests
+5. @duroxide-merge-main.md      - Commit and merge
+```
+
 ## Suggested Additional Prompts
 
 Consider creating these prompts for specialized tasks:
 
 - **duroxide-add-provider.md** - Implementing new storage backends (PostgreSQL, DynamoDB, Redis)
-- **duroxide-performance-profile.md** - Profiling and optimizing performance
 - **duroxide-add-example.md** - Creating comprehensive runnable examples
 - **duroxide-review-pr.md** - Guidelines for reviewing pull requests
 - **duroxide-release.md** - Steps for cutting a new release
