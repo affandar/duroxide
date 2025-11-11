@@ -5,6 +5,16 @@ use crate::providers::{ExecutionInfo, InstanceInfo, Provider, ProviderAdmin, Que
 use crate::{Event, OrchestrationStatus};
 use serde::Serialize;
 
+// Constants for polling behavior in wait_for_orchestration
+/// Initial delay between status polls (5ms)
+const INITIAL_POLL_DELAY_MS: u64 = 5;
+
+/// Maximum delay between status polls (100ms)
+const MAX_POLL_DELAY_MS: u64 = 100;
+
+/// Multiplier for exponential backoff
+const POLL_DELAY_MULTIPLIER: u64 = 2;
+
 /// Client for orchestration control-plane operations with automatic capability discovery.
 ///
 /// The Client provides APIs for managing orchestration instances:
@@ -491,14 +501,14 @@ impl Client {
             _ => {}
         }
         // poll with backoff
-        let mut delay_ms: u64 = 5;
+        let mut delay_ms: u64 = INITIAL_POLL_DELAY_MS;
         while std::time::Instant::now() < deadline {
             match self.get_orchestration_status(instance).await {
                 OrchestrationStatus::Completed { output } => return Ok(OrchestrationStatus::Completed { output }),
                 OrchestrationStatus::Failed { details } => return Ok(OrchestrationStatus::Failed { details }),
                 _ => {
                     tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
-                    delay_ms = (delay_ms.saturating_mul(2)).min(100);
+                    delay_ms = (delay_ms.saturating_mul(POLL_DELAY_MULTIPLIER)).min(MAX_POLL_DELAY_MS);
                 }
             }
         }

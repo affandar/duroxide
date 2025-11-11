@@ -362,13 +362,19 @@ impl SqliteProvider {
 
     /// Generate a unique lock token
     fn generate_lock_token() -> String {
-        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be after UNIX epoch")
+            .as_nanos();
         format!("lock_{}_{}", now, std::process::id())
     }
 
     /// Get current timestamp in milliseconds
     fn now_millis() -> i64 {
-        SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as i64
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be after UNIX epoch")
+            .as_millis() as i64
     }
 
     /// Get future timestamp in milliseconds
@@ -458,7 +464,8 @@ impl SqliteProvider {
                 Event::SystemCall { .. } => crate::EVENT_TYPE_SYSTEM_CALL,
             };
 
-            let event_data = serde_json::to_string(&event).unwrap();
+            let event_data = serde_json::to_string(&event)
+                .expect("Event serialization should never fail - this is a programming error");
             let event_id = event.event_id() as i64;
 
             sqlx::query(
@@ -1581,7 +1588,8 @@ mod tests {
         let next_execution_id = if execs.is_empty() {
             crate::INITIAL_EXECUTION_ID
         } else {
-            execs.iter().max().copied().unwrap() + 1
+            execs.iter().max().copied()
+                .expect("execs is not empty, so max() must return Some") + 1
         };
 
         provider
@@ -1650,10 +1658,13 @@ mod tests {
             execution_id: crate::INITIAL_EXECUTION_ID,
         };
 
-        store.enqueue_for_orchestrator(item.clone(), None).await.unwrap();
+        store.enqueue_for_orchestrator(item.clone(), None).await
+            .expect("enqueue should succeed");
 
         // Fetch it
-        let orch_item = store.fetch_orchestration_item().await.unwrap().unwrap();
+        let orch_item = store.fetch_orchestration_item().await
+            .expect("fetch should succeed")
+            .expect("item should be present");
         assert_eq!(orch_item.instance, "test-1");
         assert_eq!(orch_item.messages.len(), 1);
         assert_eq!(orch_item.history.len(), 0); // No history yet

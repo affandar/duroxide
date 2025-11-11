@@ -132,7 +132,7 @@ impl OrchestrationRegistryBuilder {
     {
         use super::FnOrchestration;
         let name = name.into();
-        let v = Version::parse("1.0.0").unwrap();
+        let v = Version::parse("1.0.0").expect("hardcoded version string is valid semver");
         let entry = self.map.entry(name.clone()).or_default();
         if entry.contains_key(&v) {
             self.errors
@@ -161,7 +161,7 @@ impl OrchestrationRegistryBuilder {
             }
         };
         let name = name.into();
-        let v = Version::parse("1.0.0").unwrap();
+        let v = Version::parse("1.0.0").expect("hardcoded version string is valid semver");
         self.map
             .entry(name)
             .or_default()

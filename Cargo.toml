@@ -43,9 +43,23 @@ features = ["bundled"]
 [dev-dependencies]
 # Used in tests/examples
 tempfile = "3"
+proptest = "1.4"
 
 [workspace]
 members = [
     ".",
     "sqlite-stress",
 ]
+
+# Clippy lints for better code quality
+[lints.clippy]
+# Correctness (warn for now, can upgrade to deny after fixing)
+unwrap_used = "warn"
+expect_used = "warn"
+
+# Performance
+clone_on_ref_ptr = "warn"
+large_enum_variant = "warn"
+
+# Style and maintainability
+missing_errors_doc = "warn"

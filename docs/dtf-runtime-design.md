@@ -354,7 +354,7 @@ async fn apply_decisions(
                 dispatch_call_activity(self, instance, history, id, name, input).await;
             }
             Decision::CreateTimer { id, delay_ms } => {
-                // Enqueue to Timer queue if not already fired
+                // Enqueue TimerFired to the orchestrator queue with delayed visibility if not already present
                 dispatch_create_timer(self, instance, history, id, delay_ms).await;
             }
             // ... other decision types

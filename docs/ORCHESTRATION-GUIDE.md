@@ -23,7 +23,7 @@
 ### Minimum Viable Orchestration
 
 ```rust
-use duroxide::{OrchestrationContext, OrchestrationRegistry, Client};
+use duroxide::{ActivityContext, OrchestrationContext, OrchestrationRegistry, Client};
 use duroxide::runtime::{self, registry::ActivityRegistry};
 use duroxide::providers::sqlite::SqliteProvider;
 use std::sync::Arc;

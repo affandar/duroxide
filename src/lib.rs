@@ -267,6 +267,13 @@ pub use runtime::{
 // Re-export management types for convenience
 pub use providers::{ExecutionInfo, InstanceInfo, ProviderAdmin, QueueDepths, SystemMetrics};
 
+// Type aliases for improved readability and maintainability
+/// Shared reference to a Provider implementation
+pub type ProviderRef = Arc<dyn providers::Provider>;
+
+/// Shared reference to an OrchestrationHandler
+pub type OrchestrationHandlerRef = Arc<dyn runtime::OrchestrationHandler>;
+
 // System call operation constants
 pub(crate) const SYSCALL_OP_GUID: &str = "guid";
 pub(crate) const SYSCALL_OP_UTCNOW_MS: &str = "utcnow_ms";
