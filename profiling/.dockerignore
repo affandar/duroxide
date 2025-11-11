@@ -1,0 +1,10 @@
+# Don't copy these into Docker image
+target/
+profiling/results/
+.git/
+.gitignore
+*.svg
+*.perf
+*.data
+.DS_Store
+

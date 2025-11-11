@@ -25,3 +25,12 @@ apps/*/dtf-data/
 # Coverage outputs
 coverage.lcov
 /target/llvm-cov/**
+
+# Profiling outputs
+profiling/results/*.svg
+profiling/results/*.perf
+profiling/results/*.data
+profiling/results/*.folded
+flamegraph.svg
+perf.data
+perf.data.old

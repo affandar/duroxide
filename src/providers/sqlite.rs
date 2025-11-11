@@ -124,8 +124,13 @@ impl SqliteProvider {
                         } else {
                             // Enable WAL mode for better concurrent access
                             sqlx::query("PRAGMA journal_mode = WAL").execute(&mut *conn).await?;
-                            // Set synchronous mode to NORMAL for durability/perf balance
-                            sqlx::query("PRAGMA synchronous = NORMAL").execute(&mut *conn).await?;
+                            // Set synchronous mode to WAL for better performance with WAL mode
+                            // WAL mode: only sync the WAL file, not the main database
+                            sqlx::query("PRAGMA synchronous = WAL").execute(&mut *conn).await?;
+                            // Increase WAL checkpoint interval for better write batching
+                            sqlx::query("PRAGMA wal_autocheckpoint = 10000").execute(&mut *conn).await?;
+                            // Increase cache size for better performance (64MB)
+                            sqlx::query("PRAGMA cache_size = -64000").execute(&mut *conn).await?;
                         }
 
                         // Set busy timeout to 60 seconds to retry on locks

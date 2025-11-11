@@ -1,0 +1,23 @@
+version: '3.8'
+
+services:
+  profiler:
+    build:
+      context: ..
+      dockerfile: profiling/Dockerfile
+    privileged: true  # Required for perf
+    volumes:
+      - ../:/workspace
+      - ./results:/workspace/profiling/results
+    environment:
+      - CARGO_PROFILE_RELEASE_DEBUG=true
+    command: >
+      bash -c "
+        cd sqlite-stress &&
+        cargo flamegraph 
+          --output /workspace/profiling/results/docker_flamegraph.svg
+          --bin sqlite-stress 
+          -- --duration 30 &&
+        echo 'Flamegraph saved to profiling/results/docker_flamegraph.svg'
+      "
+

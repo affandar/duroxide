@@ -44,9 +44,17 @@ This directory contains structured prompts for LLMs working on the duroxide code
    - API documentation standards
    - Example validation
 
+### Performance
+
+7. **[duroxide-profile.md](duroxide-profile.md)**
+   - Profiling runtime performance
+   - Flamegraph analysis
+   - Identifying bottlenecks
+   - Optimization strategies
+
 ### Git Operations
 
-7. **[duroxide-merge-main.md](duroxide-merge-main.md)**
+8. **[duroxide-merge-main.md](duroxide-merge-main.md)**
    - Committing changes
    - Merging branches
    - Writing good commit messages
