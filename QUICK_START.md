@@ -134,7 +134,7 @@ async fn approval_workflow(ctx: OrchestrationContext) -> String {
 use duroxide::providers::sqlite::SqliteProvider;
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
-use duroxide::{Client, OrchestrationContext, OrchestrationRegistry, OrchestrationStatus};
+use duroxide::{ActivityContext, Client, OrchestrationContext, OrchestrationRegistry, OrchestrationStatus};
 use std::sync::Arc;
 
 #[tokio::main]

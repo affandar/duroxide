@@ -1,14 +1,14 @@
 # Ack Semantics and Reliability
 
 ## Purpose
-This document explains how the runtime maintains reliability guarantees using peek-lock acks and abandons across the Orchestrator, Worker, and Timer queues. It specifies when an item is acknowledged, when it is abandoned for redelivery, and how these choices ensure at-least-once processing with durable history as the source of truth.
+This document explains how the runtime maintains reliability guarantees using peek-lock acks and abandons across the orchestrator and worker queues. Timers now ride the orchestrator queue via delayed visibility, so there is no dedicated timer queue/dispatcher. The goal is to specify when an item is acknowledged, when it is abandoned for redelivery, and how these choices ensure at-least-once processing with durable history as the source of truth.
 
 ## Terminology
 - **History**: Append-only event log per instance. All correctness is evaluated against this log.
-- **Peek-lock dequeue**: `dequeue_peek_lock(QueueKind)` returns `(WorkItem, token)`. The item is invisible until acknowledged (ack) or abandoned.
+- **Peek-lock dequeue**: A fetch returns `(WorkItem, token)`. The item is invisible until acknowledged (ack) or abandoned.
 - **Ack**: Permanently removes a peek-locked item.
 - **Abandon**: Makes the item visible again (immediately or after a visibility timeout) so it can be reprocessed.
-- **Queues**: `QueueKind::{Orchestrator, Worker, Timer}`.
+- **Queues**: `orchestrator_queue` (drives orchestration turns, including `TimerFired`) and `worker_queue` (executes activities). Providers may still expose a `timer_queue` depth for backwards compatibility, but it remains zero.
 
 ## Core Rule
 - Any operation that changes history is only acked after the corresponding events are durably appended to history.

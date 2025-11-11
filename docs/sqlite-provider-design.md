@@ -52,7 +52,7 @@ CREATE TABLE history (
     FOREIGN KEY (instance_id, execution_id) REFERENCES executions(instance_id, execution_id)
 );
 
--- Orchestrator queue with visibility support
+-- Orchestrator queue with visibility support (also handles timers via visible_at)
 CREATE TABLE orchestrator_queue (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     instance_id TEXT NOT NULL,
@@ -74,22 +74,11 @@ CREATE TABLE worker_queue (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     INDEX idx_available (lock_token, id)
 );
-
--- Timer queue (if we implement native delayed visibility)
-CREATE TABLE timer_queue (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    work_item TEXT NOT NULL, -- JSON serialized WorkItem
-    fire_at TIMESTAMP NOT NULL,
-    lock_token TEXT,
-    locked_until TIMESTAMP,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    INDEX idx_fire_time (fire_at, lock_token)
-);
 ```
 
 ### Key Design Decisions
 
-1. **Separate queues** for orchestrator, worker, and timer to avoid contention
+1. **Separate queues** for orchestrator and worker (timers reuse the orchestrator queue via delayed visibility) to avoid contention
 2. **Lock tokens with expiry** for crash recovery
 3. **Visibility timestamps** for delayed message processing
 4. **Normalized schema** for efficient queries and updates
@@ -271,124 +260,7 @@ BEGIN TRANSACTION;
 DELETE FROM orchestrator_queue WHERE lock_token = ?;
 INSERT INTO history ...;
 INSERT INTO worker_queue ...;
-INSERT INTO timer_queue ...;
+-- TimerFired items reuse orchestrator_queue via delayed visibility
 INSERT INTO orchestrator_queue ...;
 COMMIT;
 ```
-
-### 2. **Built-in Concurrency Control**
-- Row-level locking prevents race conditions
-- Atomic compare-and-swap operations
-- No manual file locking needed
-
-### 3. **Efficient Queries**
-```sql
--- Get next available work with single query
-SELECT * FROM orchestrator_queue 
-WHERE visible_at <= datetime('now') 
-  AND lock_token IS NULL
-ORDER BY visible_at 
-LIMIT 1;
-```
-
-### 4. **Automatic Crash Recovery**
-```sql
--- Auto-abandon expired locks
-UPDATE orchestrator_queue 
-SET lock_token = NULL 
-WHERE locked_until < datetime('now');
-```
-
-### 5. **Native Delayed Visibility**
-```sql
--- Schedule future work
-INSERT INTO timer_queue (work_item, fire_at) 
-VALUES (?, datetime('now', '+5 minutes'));
-```
-
-## Performance Characteristics
-
-### Expected Performance
-- **Enqueue**: ~1-2ms per operation
-- **Dequeue**: ~2-5ms including lock acquisition
-- **History append**: ~1-3ms for small batches
-- **Transaction overhead**: ~0.5-1ms
-
-### Optimization Options
-1. **Write-Ahead Logging** (WAL mode) for better concurrency
-2. **Connection pooling** to reduce overhead
-3. **Prepared statements** for repeated queries
-4. **Batch operations** where possible
-
-## Migration Path
-
-### 1. **Side-by-Side Testing**
-```rust
-// Feature flag for provider selection
-let provider: Arc<dyn Provider> = match config.provider {
-    ProviderKind::Filesystem => Arc::new(FsProvider::new(path)),
-    ProviderKind::Sqlite => Arc::new(SqliteProvider::new(url, None).await?),
-    ProviderKind::InMemory => Arc::new(InMemoryProvider::default()),
-};
-```
-
-### 2. **Data Migration Tool**
-```rust
-pub async fn migrate_fs_to_sqlite(fs_path: &Path, sqlite_url: &str) -> Result<()> {
-    let fs_store = FsProvider::new(fs_path, false);
-    let sqlite_store = SqliteProvider::new(sqlite_url, None).await?;
-    
-    for instance in fs_store.list_instances().await {
-        let history = fs_store.read(&instance).await;
-        sqlite_store.import_instance(&instance, history).await?;
-    }
-    
-    Ok(())
-}
-```
-
-## Implementation Timeline
-
-### Week 1: Foundation
-- Set up SQLite dependencies (sqlx)
-- Create schema and migrations
-- Implement basic CRUD operations
-
-### Week 2: Core Methods
-- Implement `fetch_orchestration_item`
-- Implement `ack_orchestration_item`
-- Add queue operations
-
-### Week 3: Advanced Features
-- Multi-execution support
-- Timer queue with delays
-- Lock timeout handling
-
-### Week 4: Production Ready
-- Performance optimization
-- Monitoring and metrics
-- Migration tooling
-
-## Risks and Mitigations
-
-### 1. **SQLite Limitations**
-- **Risk**: Write concurrency limits
-- **Mitigation**: Use WAL mode, consider sharding by instance
-
-### 2. **Lock Timeout Tuning**
-- **Risk**: Too short = unnecessary retries, too long = slow recovery
-- **Mitigation**: Make configurable, add metrics
-
-### 3. **History Growth**
-- **Risk**: Unbounded history size
-- **Mitigation**: Implement history capping, archival strategy
-
-## Conclusion
-
-SQLite provides an ideal solution for Duroxide's transactional needs:
-- **Solves all concurrency issues** in the filesystem provider
-- **Minimal operational overhead** compared to full databases
-- **Production-ready** for single-node deployments
-- **Easy migration path** from existing providers
-
-The implementation is straightforward with modern Rust SQLite libraries, and the benefits far outweigh the development effort.

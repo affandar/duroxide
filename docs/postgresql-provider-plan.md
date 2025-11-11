@@ -5,6 +5,8 @@
 **Estimated Timeline:** 2-3 weeks  
 **Complexity:** Medium (80% code reuse from SQLite)
 
+> **Update (2025-11-11):** The runtime no longer uses a dedicated `timer_queue`. Wherever this plan references `timer_queue`, substitute an `orchestrator_queue` entry with delayed `visible_at` semantics that delivers `WorkItem::TimerFired` directly. The rest of the design (locking, peek-lock semantics) remains applicable.
+
 ---
 
 ## Executive Summary

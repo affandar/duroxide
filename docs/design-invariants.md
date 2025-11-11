@@ -16,12 +16,11 @@ This document captures the design rules that govern the runtime, with rationale.
 - Rationale: stable replay across code evolution; predictable behavior on code upgrades.
 
 ## 3) Multi-queue provider with peek-lock
-- Distinct queues via `QueueKind`: `Orchestrator`, `Worker`, `Timer`.
+- Primary queues: `orchestrator_queue` (drives orchestration turns and delayed `TimerFired` messages) and `worker_queue` (executes activities). The legacy `timer_queue` surface is retained only for backwards compatibility with tooling; providers report `0` depth there.
 - Dispatchers:
-  - OrchestrationDispatcher consumes Orchestrator queue and drives replay/append/ack.
-  - WorkDispatcher executes activities and enqueues completions back to Orchestrator.
-  - TimerDispatcher schedules and later enqueues `TimerFired` back to Orchestrator.
-- Rationale: separation of concerns, scalability, and durability boundaries.
+  - OrchestrationDispatcher consumes orchestrator messages and drives replay/append/ack.
+  - WorkDispatcher executes activities and enqueues completions back to orchestrator.
+- Rationale: separation of concerns, scalability, and durability boundaries without a dedicated timer dispatcher.
 
 ## 4) Ack/abandon reliability rules
 - Only ack items that change history after durable append succeeds.
