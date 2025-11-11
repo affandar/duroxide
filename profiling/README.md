@@ -26,5 +26,5 @@ open profiling/results/*.svg
 
 ## For LLMs
 
-See `ai_prompts/duroxide-profile.md` for detailed profiling instructions and analysis guidance.
+See `prompts/duroxide-profile.md` for detailed profiling instructions and analysis guidance.
 

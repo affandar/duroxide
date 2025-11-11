@@ -52,9 +52,15 @@ This directory contains structured prompts for LLMs working on the duroxide code
    - Identifying bottlenecks
    - Optimization strategies
 
+8. **[duroxide-stress-test.md](duroxide-stress-test.md)**
+   - Running comprehensive stress tests
+   - Updating results files (local vs cloud)
+   - Interpreting performance metrics
+   - Tracking performance over time
+
 ### Git Operations
 
-8. **[duroxide-merge-main.md](duroxide-merge-main.md)**
+9. **[duroxide-merge-main.md](duroxide-merge-main.md)**
    - Committing changes
    - Merging branches
    - Writing good commit messages
