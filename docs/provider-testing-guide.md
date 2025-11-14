@@ -503,7 +503,7 @@ async fn test_my_provider_worker_queue_fifo_ordering() {
 
 ### Creating a Test Provider Factory
 
-Your factory should create fresh, isolated provider instances for each test. **Importantly, you must implement `lock_timeout_ms()` to return the lock timeout configured in your provider** - this ensures validation tests wait for the correct duration when testing lock expiration behavior.
+Your factory should create fresh, isolated provider instances for each test. **Importantly, you must implement `lock_timeout_ms()` to return the lock timeout used in validation tests** - this ensures validation tests wait for the correct duration when testing lock expiration behavior. Note that in production, lock timeouts are configured via `RuntimeOptions` (`orchestrator_lock_timeout_secs` and `worker_lock_timeout_secs`), not provider options.
 
 ```rust
 use duroxide::providers::Provider;
@@ -543,7 +543,7 @@ impl ProviderFactory for MyProviderFactory {
 }
 ```
 
-**Important:** The `lock_timeout_ms()` value must match the lock timeout configured in your provider's options. If they don't match, validation tests that check lock expiration will fail because they'll wait for the wrong duration.
+**Important:** The `lock_timeout_ms()` value should match the timeout you pass to `fetch_orchestration_item()` and `fetch_work_item()` in your tests. In production, lock timeouts are configured via `RuntimeOptions` (`orchestrator_lock_timeout_secs` for orchestrations, `worker_lock_timeout_secs` for activities) and passed to these methods by the runtime dispatchers.
 
 ### Integration with CI/CD
 

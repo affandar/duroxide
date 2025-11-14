@@ -42,7 +42,11 @@ impl Runtime {
                             break;
                         }
 
-                        if let Some((item, token)) = rt.history_store.fetch_work_item().await {
+                        if let Some((item, token)) = rt
+                            .history_store
+                            .fetch_work_item(rt.options.worker_lock_timeout_secs)
+                            .await
+                        {
                             match item {
                                 WorkItem::ActivityExecute {
                                     instance,

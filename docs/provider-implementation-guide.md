@@ -332,7 +332,7 @@ instance_id = row.instance_id
 // Step 2: Generate lock token and calculate expiration
 lock_token = generate_uuid()
 now_ms = current_timestamp_millis()
-locked_until = now_ms + lock_timeout_ms  // e.g., now + 30000 (30 seconds)
+locked_until = now_ms + (lock_timeout_secs * 1000)  // e.g., now + 30000 (30 seconds from runtime)
 
 // Step 3: Atomically acquire instance lock
 // This is CRITICAL - must be atomic to prevent race conditions
@@ -434,7 +434,7 @@ RETURN Some(OrchestrationItem {
 - Empty history → Valid (new instance)
 
 **Lock Expiration:**
-- Locks must expire after `lock_timeout_ms` (recommended: 30 seconds)
+- Locks must expire after `lock_timeout_secs` (passed from RuntimeOptions: 5s for orchestrator, 30s for worker)
 - Expired locks allow automatic recovery from crashed dispatchers
 - Check `locked_until <= current_timestamp()` when acquiring locks
 - Always validate lock token on ack to ensure lock hasn't expired
@@ -1156,7 +1156,9 @@ impl ProviderFactory for MyProviderFactory {
     }
 
     fn lock_timeout_ms(&self) -> u64 {
-        TEST_LOCK_TIMEOUT_MS  // Must match your provider's lock timeout
+        // Return the lock timeout used in validation tests
+        // Note: Actual lock timeout is now configured via RuntimeOptions
+        TEST_LOCK_TIMEOUT_MS
     }
 }
 ```

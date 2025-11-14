@@ -40,7 +40,7 @@ pub async fn test_list_instances_by_status<F: ProviderFactory>(factory: &F) {
         .enqueue_for_orchestrator(start_item("mgmt-completed"), None)
         .await
         .unwrap();
-    let item = provider.fetch_orchestration_item().await.unwrap().unwrap();
+    let item = provider.fetch_orchestration_item(30).await.unwrap().unwrap();
 
     // Ack with Completed status
     provider
@@ -87,7 +87,7 @@ pub async fn test_list_executions<F: ProviderFactory>(factory: &F) {
         .enqueue_for_orchestrator(start_item("mgmt-multi-exec"), None)
         .await
         .unwrap();
-    let item = provider.fetch_orchestration_item().await.unwrap().unwrap();
+    let item = provider.fetch_orchestration_item(30).await.unwrap().unwrap();
     provider
         .ack_orchestration_item(
             &item.lock_token,
@@ -124,7 +124,7 @@ pub async fn test_get_instance_info<F: ProviderFactory>(factory: &F) {
         .enqueue_for_orchestrator(start_item("mgmt-info"), None)
         .await
         .unwrap();
-    let item = provider.fetch_orchestration_item().await.unwrap().unwrap();
+    let item = provider.fetch_orchestration_item(30).await.unwrap().unwrap();
     provider
         .ack_orchestration_item(
             &item.lock_token,
@@ -168,7 +168,7 @@ pub async fn test_get_execution_info<F: ProviderFactory>(factory: &F) {
         .enqueue_for_orchestrator(start_item("mgmt-exec-info"), None)
         .await
         .unwrap();
-    let item = provider.fetch_orchestration_item().await.unwrap().unwrap();
+    let item = provider.fetch_orchestration_item(30).await.unwrap().unwrap();
     provider
         .ack_orchestration_item(
             &item.lock_token,
@@ -215,7 +215,7 @@ pub async fn test_get_system_metrics<F: ProviderFactory>(factory: &F) {
         .enqueue_for_orchestrator(start_item("mgmt-metrics"), None)
         .await
         .unwrap();
-    let item = provider.fetch_orchestration_item().await.unwrap().unwrap();
+    let item = provider.fetch_orchestration_item(30).await.unwrap().unwrap();
     provider
         .ack_orchestration_item(
             &item.lock_token,

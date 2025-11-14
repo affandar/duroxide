@@ -54,7 +54,7 @@ pub(crate) async fn create_instance(provider: &dyn crate::providers::Provider, i
         .map_err(|e| e.to_string())?;
 
     let item = provider
-        .fetch_orchestration_item()
+        .fetch_orchestration_item(30)
         .await
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "Failed to fetch orchestration item".to_string())?;

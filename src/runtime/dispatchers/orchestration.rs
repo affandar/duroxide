@@ -5,14 +5,14 @@
 //! - Fetches and processes orchestration items from the queue
 //! - Handles orchestration execution and atomic commits
 
-use crate::providers::{ExecutionMetadata, ProviderError, WorkItem};
 use crate::Event;
+use crate::providers::{ExecutionMetadata, ProviderError, WorkItem};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use tokio::task::JoinHandle;
 use tracing::warn;
 
-use super::super::{Runtime, HistoryManager, WorkItemReader};
+use super::super::{HistoryManager, Runtime, WorkItemReader};
 
 impl Runtime {
     /// Start the orchestration dispatcher with N concurrent workers
@@ -39,7 +39,11 @@ impl Runtime {
                             break;
                         }
 
-                        if let Ok(Some(item)) = rt.history_store.fetch_orchestration_item().await {
+                        if let Ok(Some(item)) = rt
+                            .history_store
+                            .fetch_orchestration_item(rt.options.orchestrator_lock_timeout_secs)
+                            .await
+                        {
                             // Process orchestration item atomically
                             // Provider ensures no other worker has this instance locked
                             rt.process_orchestration_item(item, &worker_id).await;

@@ -25,7 +25,7 @@ pub async fn test_worker_queue_fifo_ordering<F: ProviderFactory>(factory: &F) {
 
     // Dequeue all 5 and verify order
     for i in 0..5 {
-        let (item, _token) = provider.fetch_work_item().await.unwrap();
+        let (item, _token) = provider.fetch_work_item(30).await.unwrap();
         match item {
             WorkItem::ActivityExecute { id, name, .. } => {
                 assert_eq!(id, i);
@@ -36,7 +36,7 @@ pub async fn test_worker_queue_fifo_ordering<F: ProviderFactory>(factory: &F) {
     }
 
     // Queue should be empty
-    assert!(provider.fetch_work_item().await.is_none());
+    assert!(provider.fetch_work_item(30).await.is_none());
     tracing::info!("✓ Test passed: worker queue FIFO ordering verified");
 }
 
@@ -59,11 +59,11 @@ pub async fn test_worker_peek_lock_semantics<F: ProviderFactory>(factory: &F) {
         .unwrap();
 
     // Dequeue (gets item + token)
-    let (item, token) = provider.fetch_work_item().await.unwrap();
+    let (item, token) = provider.fetch_work_item(30).await.unwrap();
     assert!(matches!(item, WorkItem::ActivityExecute { .. }));
 
     // Attempt second dequeue → should return None
-    assert!(provider.fetch_work_item().await.is_none());
+    assert!(provider.fetch_work_item(30).await.is_none());
 
     // Ack with token
     provider
@@ -80,7 +80,7 @@ pub async fn test_worker_peek_lock_semantics<F: ProviderFactory>(factory: &F) {
         .unwrap();
 
     // Queue should now be empty
-    assert!(provider.fetch_work_item().await.is_none());
+    assert!(provider.fetch_work_item(30).await.is_none());
     tracing::info!("✓ Test passed: worker peek-lock semantics verified");
 }
 
@@ -95,7 +95,7 @@ pub async fn test_worker_ack_atomicity<F: ProviderFactory>(factory: &F) {
         .enqueue_for_orchestrator(start_item("instance-A"), None)
         .await
         .unwrap();
-    let item = provider.fetch_orchestration_item().await.unwrap().unwrap();
+    let item = provider.fetch_orchestration_item(30).await.unwrap().unwrap();
     provider
         .ack_orchestration_item(
             &item.lock_token,
@@ -128,7 +128,7 @@ pub async fn test_worker_ack_atomicity<F: ProviderFactory>(factory: &F) {
         .unwrap();
 
     // Dequeue and get token
-    let (_item, token) = provider.fetch_work_item().await.unwrap();
+    let (_item, token) = provider.fetch_work_item(30).await.unwrap();
 
     // Ack with completion
     provider
@@ -146,10 +146,10 @@ pub async fn test_worker_ack_atomicity<F: ProviderFactory>(factory: &F) {
 
     // Verify:
     // 1. Worker queue is empty
-    assert!(provider.fetch_work_item().await.is_none());
+    assert!(provider.fetch_work_item(30).await.is_none());
 
     // 2. Orchestrator queue has completion item
-    let orchestration_item = provider.fetch_orchestration_item().await.unwrap().unwrap();
+    let orchestration_item = provider.fetch_orchestration_item(30).await.unwrap().unwrap();
     assert_eq!(orchestration_item.instance, "instance-A");
     assert_eq!(orchestration_item.messages.len(), 1);
     assert!(matches!(
@@ -170,7 +170,7 @@ pub async fn test_timer_delayed_visibility<F: ProviderFactory>(factory: &F) {
         .enqueue_for_orchestrator(start_item("instance-A"), None)
         .await
         .unwrap();
-    let item = provider.fetch_orchestration_item().await.unwrap().unwrap();
+    let item = provider.fetch_orchestration_item(30).await.unwrap().unwrap();
     provider
         .ack_orchestration_item(
             &item.lock_token,
@@ -207,13 +207,13 @@ pub async fn test_timer_delayed_visibility<F: ProviderFactory>(factory: &F) {
         .unwrap();
 
     // Fetch orchestration item immediately → should return None (timer not visible yet)
-    assert!(provider.fetch_orchestration_item().await.unwrap().is_none());
+    assert!(provider.fetch_orchestration_item(30).await.unwrap().is_none());
 
     // Wait for timer to become visible
     tokio::time::sleep(Duration::from_millis(5100)).await;
 
     // Fetch again → should return TimerFired when visible_at <= now
-    let item2 = provider.fetch_orchestration_item().await.unwrap().unwrap();
+    let item2 = provider.fetch_orchestration_item(30).await.unwrap().unwrap();
     assert_eq!(item2.instance, "instance-A");
     assert_eq!(item2.messages.len(), 1);
     assert!(matches!(&item2.messages[0], WorkItem::TimerFired { .. }));
@@ -239,19 +239,19 @@ pub async fn test_lost_lock_token_handling<F: ProviderFactory>(factory: &F) {
         .unwrap();
 
     // Dequeue (gets token)
-    let (_item, _token) = provider.fetch_work_item().await.unwrap();
+    let (_item, _token) = provider.fetch_work_item(30).await.unwrap();
 
     // Lose token (simulate crash)
     // Drop the token without acking
 
     // Attempt second dequeue → should return None (locked)
-    assert!(provider.fetch_work_item().await.is_none());
+    assert!(provider.fetch_work_item(30).await.is_none());
 
     // Wait for lock expiration
     tokio::time::sleep(Duration::from_millis(factory.lock_timeout_ms() + 100)).await;
 
     // Dequeue again → should succeed → item redelivered
-    let (item2, _token2) = provider.fetch_work_item().await.unwrap();
+    let (item2, _token2) = provider.fetch_work_item(30).await.unwrap();
     assert!(matches!(item2, WorkItem::ActivityExecute { .. }));
     tracing::info!("✓ Test passed: lost lock token handling verified");
 }

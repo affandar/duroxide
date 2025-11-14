@@ -15,7 +15,7 @@ pub async fn test_atomicity_failure_rollback<F: ProviderFactory>(factory: &F) {
         .enqueue_for_orchestrator(start_item("instance-A"), None)
         .await
         .unwrap();
-    let item = provider.fetch_orchestration_item().await.unwrap().unwrap();
+    let item = provider.fetch_orchestration_item(30).await.unwrap().unwrap();
     let lock_token = item.lock_token.clone();
 
     // Ack with valid data to establish baseline
@@ -47,7 +47,7 @@ pub async fn test_atomicity_failure_rollback<F: ProviderFactory>(factory: &F) {
         .enqueue_for_orchestrator(start_item("instance-A"), None)
         .await
         .unwrap();
-    let item2 = provider.fetch_orchestration_item().await.unwrap().unwrap();
+    let item2 = provider.fetch_orchestration_item(30).await.unwrap().unwrap();
     let lock_token2 = item2.lock_token.clone();
 
     // Try to ack with duplicate event_id (should fail due to primary key constraint)
@@ -80,7 +80,7 @@ pub async fn test_atomicity_failure_rollback<F: ProviderFactory>(factory: &F) {
     );
 
     // Lock should still be held, preventing another fetch
-    assert!(provider.fetch_orchestration_item().await.unwrap().is_none());
+    assert!(provider.fetch_orchestration_item(30).await.unwrap().is_none());
     tracing::info!("✓ Test passed: atomicity rollback verified");
 }
 
@@ -95,7 +95,7 @@ pub async fn test_multi_operation_atomic_ack<F: ProviderFactory>(factory: &F) {
         .enqueue_for_orchestrator(start_item("instance-A"), None)
         .await
         .unwrap();
-    let item = provider.fetch_orchestration_item().await.unwrap().unwrap();
+    let item = provider.fetch_orchestration_item(30).await.unwrap().unwrap();
     let lock_token = item.lock_token.clone();
 
     // Prepare complex ack with multiple operations
@@ -191,12 +191,12 @@ pub async fn test_multi_operation_atomic_ack<F: ProviderFactory>(factory: &F) {
 
     // 2. Worker queue should have 3 items
     for _ in 0..3 {
-        assert!(provider.fetch_work_item().await.is_some());
+        assert!(provider.fetch_work_item(30).await.is_some());
     }
-    assert!(provider.fetch_work_item().await.is_none());
+    assert!(provider.fetch_work_item(30).await.is_none());
 
     // 3. Orchestrator queue should have 2 items
-    let item1 = provider.fetch_orchestration_item().await.unwrap().unwrap();
+    let item1 = provider.fetch_orchestration_item(30).await.unwrap().unwrap();
     assert_eq!(item1.messages.len(), 2, "Should have TimerFired and ExternalRaised");
     assert!(matches!(&item1.messages[0], WorkItem::TimerFired { .. }));
     assert!(matches!(&item1.messages[1], WorkItem::ExternalRaised { .. }));
@@ -214,11 +214,11 @@ pub async fn test_lock_released_only_on_successful_ack<F: ProviderFactory>(facto
         .enqueue_for_orchestrator(start_item("instance-A"), None)
         .await
         .unwrap();
-    let item = provider.fetch_orchestration_item().await.unwrap().unwrap();
+    let item = provider.fetch_orchestration_item(30).await.unwrap().unwrap();
     let _lock_token = item.lock_token.clone();
 
     // Verify lock is held (can't fetch again)
-    assert!(provider.fetch_orchestration_item().await.unwrap().is_none());
+    assert!(provider.fetch_orchestration_item(30).await.unwrap().is_none());
 
     // Attempt ack with invalid lock token (should fail)
     let _result = provider
@@ -243,13 +243,13 @@ pub async fn test_lock_released_only_on_successful_ack<F: ProviderFactory>(facto
     assert!(_result.is_err());
 
     // Lock should still be held
-    assert!(provider.fetch_orchestration_item().await.unwrap().is_none());
+    assert!(provider.fetch_orchestration_item(30).await.unwrap().is_none());
 
     // Wait for lock expiration
     tokio::time::sleep(Duration::from_millis(factory.lock_timeout_ms() + 100)).await;
 
     // Now should be able to fetch again
-    let item2 = provider.fetch_orchestration_item().await.unwrap().unwrap();
+    let item2 = provider.fetch_orchestration_item(30).await.unwrap().unwrap();
     assert_eq!(item2.instance, "instance-A");
     tracing::info!("✓ Test passed: lock release on successful ack verified");
 }
@@ -265,7 +265,7 @@ pub async fn test_concurrent_ack_prevention<F: ProviderFactory>(factory: &F) {
         .enqueue_for_orchestrator(start_item("instance-A"), None)
         .await
         .unwrap();
-    let item = provider.fetch_orchestration_item().await.unwrap().unwrap();
+    let item = provider.fetch_orchestration_item(30).await.unwrap().unwrap();
     let lock_token = item.lock_token.clone();
 
     // Spawn two concurrent tasks trying to ack with same lock token

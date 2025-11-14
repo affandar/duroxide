@@ -457,7 +457,8 @@ impl ReplayEngine {
 
         // Check for cancellation first - if cancelled, return immediately
         // Optimization: Search both slices separately to avoid cloning
-        let cancel_event = self.baseline_history
+        let cancel_event = self
+            .baseline_history
             .iter()
             .chain(self.history_delta.iter())
             .find(|e| matches!(e, Event::OrchestrationCancelRequested { .. }));

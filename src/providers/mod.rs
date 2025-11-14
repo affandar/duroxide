@@ -900,7 +900,10 @@ pub trait Provider: Any + Send + Sync {
     ///     Some(OrchestrationItem { instance, orchestration_name, execution_id, version, history, messages, lock_token })
     /// }
     /// ```
-    async fn fetch_orchestration_item(&self) -> Result<Option<OrchestrationItem>, ProviderError>;
+    async fn fetch_orchestration_item(
+        &self,
+        lock_timeout_secs: u64,
+    ) -> Result<Option<OrchestrationItem>, ProviderError>;
 
     /// Acknowledge successful orchestration processing atomically.
     ///
@@ -1375,7 +1378,7 @@ pub trait Provider: Any + Send + Sync {
     /// # Concurrency
     ///
     /// Called continuously by work dispatcher. Must prevent double-dequeue.
-    async fn fetch_work_item(&self) -> Option<(WorkItem, String)>;
+    async fn fetch_work_item(&self, lock_timeout_secs: u64) -> Option<(WorkItem, String)>;
 
     /// Acknowledge successful processing of a work item.
     ///

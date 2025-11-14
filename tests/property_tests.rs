@@ -1,7 +1,7 @@
 //! Property-based tests using proptest to verify invariants
 
-use duroxide::*;
 use duroxide::runtime::registry::{ActivityRegistry, OrchestrationRegistry};
+use duroxide::*;
 use proptest::prelude::*;
 use std::sync::Arc;
 
@@ -129,7 +129,7 @@ proptest! {
         let result = tokio::runtime::Runtime::new().unwrap().block_on(async {
             // Simple successful orchestration
             let activities = ActivityRegistry::builder().build();
-            
+
             let orchestrations = OrchestrationRegistry::builder()
                 .register(
                     orch_name.clone(),

@@ -17,6 +17,8 @@ use tracing::warn;
 /// let options = RuntimeOptions {
 ///     orchestration_concurrency: 4,
 ///     worker_concurrency: 8,
+///     orchestrator_lock_timeout_secs: 10,  // 10 seconds for orchestration turns
+///     worker_lock_timeout_secs: 120,       // 2 minutes for long-running activities
 ///     observability: ObservabilityConfig {
 ///         log_format: LogFormat::Compact,
 ///         log_level: "info".to_string(),
@@ -45,6 +47,22 @@ pub struct RuntimeOptions {
     /// Default: 2
     pub worker_concurrency: usize,
 
+    /// Lock timeout in seconds for orchestrator queue items.
+    /// When an orchestration message is dequeued, it's locked for this duration.
+    /// Orchestration turns are typically fast (milliseconds), so a shorter timeout is appropriate.
+    /// If processing doesn't complete within this time, the lock expires and the message is retried.
+    /// Default: 5 seconds
+    pub orchestrator_lock_timeout_secs: u64,
+
+    /// Lock timeout in seconds for worker queue items (activities).
+    /// When an activity is dequeued, it's locked for this duration.
+    /// Activities can be long-running (minutes), so a longer timeout is appropriate.
+    /// If processing doesn't complete within this time, the lock expires and the activity is retried.
+    /// Higher values = more tolerance for long-running activities.
+    /// Lower values = faster retry on failures, but may timeout legitimate work.
+    /// Default: 30 seconds
+    pub worker_lock_timeout_secs: u64,
+
     /// Observability configuration for metrics and logging.
     /// Requires the `observability` feature flag for full functionality.
     /// Default: Disabled with basic logging
@@ -57,15 +75,17 @@ impl Default for RuntimeOptions {
             dispatcher_idle_sleep_ms: 100,
             orchestration_concurrency: 2,
             worker_concurrency: 2,
+            orchestrator_lock_timeout_secs: 5,
+            worker_lock_timeout_secs: 30,
             observability: ObservabilityConfig::default(),
         }
     }
 }
 
+mod dispatchers;
 pub mod observability;
 pub mod registry;
 mod state_helpers;
-mod dispatchers;
 
 use async_trait::async_trait;
 pub use state_helpers::{HistoryManager, WorkItemReader};
@@ -347,9 +367,11 @@ impl Runtime {
         activity_registry: Arc<registry::ActivityRegistry>,
         orchestration_registry: OrchestrationRegistry,
     ) -> Arc<Self> {
-        let history_store: Arc<dyn Provider> =
-            Arc::new(crate::providers::sqlite::SqliteProvider::new_in_memory().await
-                .expect("in-memory SQLite provider creation should never fail"));
+        let history_store: Arc<dyn Provider> = Arc::new(
+            crate::providers::sqlite::SqliteProvider::new_in_memory()
+                .await
+                .expect("in-memory SQLite provider creation should never fail"),
+        );
         Self::start_with_store(history_store, activity_registry, orchestration_registry).await
     }
 
@@ -403,7 +425,6 @@ impl Runtime {
 
         runtime
     }
-
 
     /// Shutdown the runtime.
     ///

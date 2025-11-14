@@ -76,10 +76,8 @@ mod tests {
     #[async_trait::async_trait]
     impl ProviderFactory for SqliteTestFactory {
         async fn create_provider(&self) -> Arc<dyn Provider> {
-            let options = SqliteOptions {
-                lock_timeout: Duration::from_millis(TEST_LOCK_TIMEOUT_MS),
-            };
-            Arc::new(SqliteProvider::new_in_memory_with_options(Some(options)).await.unwrap())
+            // Lock timeout is now configured via RuntimeOptions, not SqliteOptions
+            Arc::new(SqliteProvider::new_in_memory().await.unwrap())
         }
 
         fn lock_timeout_ms(&self) -> u64 {
