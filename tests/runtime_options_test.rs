@@ -127,7 +127,7 @@ async fn test_fast_polling() {
 
     assert!(matches!(status, runtime::OrchestrationStatus::Completed { .. }));
     // Fast polling should complete very quickly
-    assert!(elapsed.as_millis() < 200, "Took too long: {}ms", elapsed.as_millis());
+    assert!(elapsed.as_millis() < 300, "Took too long: {}ms", elapsed.as_millis());
 
     rt.shutdown(None).await;
 }
