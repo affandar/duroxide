@@ -1223,6 +1223,49 @@ impl Provider for SqliteProvider {
         Ok(())
     }
 
+    async fn renew_work_item_lock(&self, token: &str, extend_secs: u64) -> Result<(), ProviderError> {
+        let locked_until = Self::timestamp_after(Duration::from_secs(extend_secs));
+        let now_ms = Self::now_millis();
+
+        tracing::trace!(
+            target: "duroxide::providers::sqlite",
+            lock_token = %token,
+            extend_secs = %extend_secs,
+            locked_until = %locked_until,
+            "Renewing work item lock"
+        );
+
+        let result = sqlx::query(
+            r#"
+            UPDATE worker_queue
+            SET locked_until = ?1
+            WHERE lock_token = ?2
+              AND locked_until > ?3
+            "#,
+        )
+        .bind(locked_until)
+        .bind(token)
+        .bind(now_ms)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| Self::sqlx_to_provider_error("renew_work_item_lock", e))?;
+
+        if result.rows_affected() == 0 {
+            return Err(ProviderError::permanent(
+                "renew_work_item_lock",
+                "Lock token invalid, expired, or already acked",
+            ));
+        }
+
+        tracing::trace!(
+            target: "duroxide::providers::sqlite",
+            lock_token = %token,
+            "Work item lock renewed successfully"
+        );
+
+        Ok(())
+    }
+
     async fn abandon_orchestration_item(&self, lock_token: &str, delay_ms: Option<u64>) -> Result<(), ProviderError> {
         // Get instance_id from lock before removing it
         let instance_id: Option<String> =

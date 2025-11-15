@@ -53,6 +53,7 @@
 //!
 //! - **Orchestrations**: Long-running workflows written as async functions (coordination logic)
 //! - **Activities**: Single-purpose work units (can do anything - DB, API, polling, etc.)
+//!   - Supports long-running activities via automatic lock renewal (minutes to hours)
 //! - **Timers**: Use `ctx.schedule_timer(ms)` for orchestration-level delays and timeouts
 //! - **Deterministic Replay**: Orchestrations are replayed from history to ensure consistency
 //! - **Durable Futures**: Composable futures for activities, timers, and external events
@@ -139,6 +140,7 @@
 //!
 //! - Worker/Timer queues
 //!   - Peek-lock semantics (dequeue with lock token; ack by deleting)
+//!   - Automatic lock renewal for long-running activities (no configuration needed)
 //!   - Orchestrator, Worker, Timer queues are independent but committed atomically with history
 //!
 //! See `docs/provider-implementation-guide.md` and `src/providers/sqlite.rs` for a complete,

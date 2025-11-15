@@ -231,6 +231,10 @@ impl Provider for FailingProvider {
         }
     }
 
+    async fn renew_work_item_lock(&self, token: &str, extend_secs: u64) -> Result<(), ProviderError> {
+        self.inner.renew_work_item_lock(token, extend_secs).await
+    }
+
     async fn enqueue_for_orchestrator(&self, item: WorkItem, delay_ms: Option<u64>) -> Result<(), ProviderError> {
         self.inner.enqueue_for_orchestrator(item, delay_ms).await
     }

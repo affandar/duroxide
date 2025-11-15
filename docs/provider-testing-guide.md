@@ -399,7 +399,7 @@ async fn test_my_provider_worker_queue_fifo_ordering() {
 
 ### What the Tests Validate
 
-The validation test suite includes **45 individual test functions** organized into 8 categories:
+The validation test suite includes **50 individual test functions** organized into 8 categories:
 
 1. **Atomicity Tests (4 tests)**
    - `test_atomicity_failure_rollback` - All-or-nothing commit semantics, rollback on failure
@@ -427,11 +427,16 @@ The validation test suite includes **45 individual test functions** organized in
    - `test_multi_threaded_no_duplicate_processing` - No duplicate processing (multi-threaded)
    - `test_multi_threaded_lock_expiration_recovery` - Lock expiration recovery (multi-threaded)
 
-4. **Lock Expiration Tests (4 tests)**
+4. **Lock Expiration Tests (9 tests)**
    - `test_lock_expires_after_timeout` - Automatic lock release after timeout
    - `test_abandon_releases_lock_immediately` - Abandon releases lock immediately
    - `test_lock_renewal_on_ack` - Successful ack releases lock immediately
    - `test_concurrent_lock_attempts_respect_expiration` - Concurrent attempts respect expiration
+   - `test_worker_lock_renewal_success` - Worker lock can be renewed with valid token
+   - `test_worker_lock_renewal_invalid_token` - Renewal fails with invalid token
+   - `test_worker_lock_renewal_after_expiration` - Renewal fails after lock expires
+   - `test_worker_lock_renewal_extends_timeout` - Renewal properly extends lock timeout
+   - `test_worker_lock_renewal_after_ack` - Renewal fails after item has been acked
 
 5. **Multi-Execution Tests (5 tests)**
    - `test_execution_isolation` - Each execution has separate history
@@ -499,7 +504,7 @@ async fn test_my_provider_worker_queue_fifo_ordering() {
 }
 ```
 
-**Available test functions:** See `duroxide::provider_validations` module documentation for the complete list of all 45 test functions, or refer to `tests/sqlite_provider_validations.rs` for a complete example using all tests.
+**Available test functions:** See `duroxide::provider_validations` module documentation for the complete list of all 50 test functions, or refer to `tests/sqlite_provider_validations.rs` for a complete example using all tests.
 
 ### Creating a Test Provider Factory
 
@@ -810,7 +815,7 @@ This generates `stress-test-results.md` with:
 
 - **Test Implementation**: `src/provider_validation/` (individual test modules)
 - **Test API**: `src/provider_validations.rs` (test function exports)
-- **Example Usage**: `tests/sqlite_provider_validations.rs` (complete example with all 41 tests)
+- **Example Usage**: `tests/sqlite_provider_validations.rs` (complete example with all 50 tests)
 - **Test Specification**: See individual test function documentation
 - **Provider Guide**: `docs/provider-implementation-guide.md`
 - **Built-in Providers**: `src/providers/sqlite.rs`

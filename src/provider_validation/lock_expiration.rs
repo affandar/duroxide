@@ -157,3 +157,171 @@ pub async fn test_concurrent_lock_attempts_respect_expiration<F: ProviderFactory
     assert_eq!(item2.instance, "instance-A");
     tracing::info!("✓ Test passed: concurrent lock attempts respect expiration verified");
 }
+
+/// Test 4.5: Worker Lock Renewal Success
+/// Goal: Verify worker lock can be renewed with valid token
+pub async fn test_worker_lock_renewal_success<F: ProviderFactory>(factory: &F) {
+    tracing::info!("→ Testing worker lock renewal: renewal succeeds with valid token");
+    let provider = factory.create_provider().await;
+
+    use crate::providers::WorkItem;
+
+    // Enqueue and fetch work item
+    provider
+        .enqueue_for_worker(WorkItem::ActivityExecute {
+            instance: "test-instance".to_string(),
+            execution_id: 1,
+            id: 1,
+            name: "TestActivity".to_string(),
+            input: "test".to_string(),
+        })
+        .await
+        .unwrap();
+
+    let (item, token) = provider.fetch_work_item(30).await.unwrap();
+    tracing::info!("Fetched work item with lock token: {}", token);
+
+    // Verify item is locked (can't fetch again)
+    assert!(provider.fetch_work_item(30).await.is_none());
+
+    // Wait a bit to simulate activity in progress
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // Renew lock
+    provider.renew_work_item_lock(&token, 30).await.unwrap();
+    tracing::info!("Successfully renewed lock");
+
+    // Item should still be locked
+    assert!(provider.fetch_work_item(30).await.is_none());
+
+    tracing::info!("✓ Test passed: worker lock renewal success verified");
+}
+
+/// Test 4.6: Worker Lock Renewal Invalid Token
+/// Goal: Verify renewal fails with invalid token
+pub async fn test_worker_lock_renewal_invalid_token<F: ProviderFactory>(factory: &F) {
+    tracing::info!("→ Testing worker lock renewal: renewal fails with invalid token");
+    let provider = factory.create_provider().await;
+
+    // Try to renew with invalid token
+    let result = provider.renew_work_item_lock("invalid-token-123", 30).await;
+    assert!(result.is_err(), "Should fail with invalid token");
+    tracing::info!("✓ Test passed: invalid token rejection verified");
+}
+
+/// Test 4.7: Worker Lock Renewal After Expiration
+/// Goal: Verify renewal fails after lock expires
+pub async fn test_worker_lock_renewal_after_expiration<F: ProviderFactory>(factory: &F) {
+    tracing::info!("→ Testing worker lock renewal: renewal fails after expiration");
+    let provider = factory.create_provider().await;
+
+    use crate::providers::WorkItem;
+
+    // Enqueue and fetch work item with short timeout
+    provider
+        .enqueue_for_worker(WorkItem::ActivityExecute {
+            instance: "test-instance".to_string(),
+            execution_id: 1,
+            id: 1,
+            name: "TestActivity".to_string(),
+            input: "test".to_string(),
+        })
+        .await
+        .unwrap();
+
+    let (item, token) = provider.fetch_work_item(1).await.unwrap(); // 1 second timeout
+    tracing::info!("Fetched work item with 1s timeout");
+
+    // Wait for lock to expire
+    tokio::time::sleep(Duration::from_millis(factory.lock_timeout_ms() + 100)).await;
+
+    // Try to renew expired lock
+    let result = provider.renew_work_item_lock(&token, 30).await;
+    assert!(result.is_err(), "Should fail to renew expired lock");
+    tracing::info!("✓ Test passed: expired lock renewal rejection verified");
+}
+
+/// Test 4.8: Worker Lock Renewal Extends Timeout
+/// Goal: Verify renewal properly extends lock timeout
+pub async fn test_worker_lock_renewal_extends_timeout<F: ProviderFactory>(factory: &F) {
+    tracing::info!("→ Testing worker lock renewal: renewal extends timeout");
+    let provider = Arc::new(factory.create_provider().await);
+
+    use crate::providers::WorkItem;
+
+    // Enqueue and fetch work item with short timeout
+    provider
+        .enqueue_for_worker(WorkItem::ActivityExecute {
+            instance: "test-instance".to_string(),
+            execution_id: 1,
+            id: 1,
+            name: "TestActivity".to_string(),
+            input: "test".to_string(),
+        })
+        .await
+        .unwrap();
+
+    let (item, token) = provider.fetch_work_item(1).await.unwrap(); // 1 second timeout
+    tracing::info!("Fetched work item with 1s timeout");
+
+    // Wait 800ms (before expiration)
+    tokio::time::sleep(Duration::from_millis(800)).await;
+
+    // Renew lock for another 1 second
+    provider.renew_work_item_lock(&token, 1).await.unwrap();
+    tracing::info!("Renewed lock at 800ms mark");
+
+    // Wait another 800ms (total 1.6s from original fetch)
+    // Without renewal, lock would have expired at 1s
+    tokio::time::sleep(Duration::from_millis(800)).await;
+
+    // Item should still be locked (because we renewed at 800ms for another 1s = expires at 1.8s)
+    let result = provider.fetch_work_item(1).await;
+    assert!(result.is_none(), "Item should still be locked after renewal");
+
+    tracing::info!("✓ Test passed: lock timeout extension verified");
+}
+
+/// Test 4.9: Worker Lock Renewal After Ack Fails
+/// Goal: Verify renewal fails after item has been acked
+pub async fn test_worker_lock_renewal_after_ack<F: ProviderFactory>(factory: &F) {
+    tracing::info!("→ Testing worker lock renewal: renewal fails after ack");
+    let provider = factory.create_provider().await;
+
+    use crate::providers::WorkItem;
+
+    // Enqueue and fetch work item
+    provider
+        .enqueue_for_worker(WorkItem::ActivityExecute {
+            instance: "test-instance".to_string(),
+            execution_id: 1,
+            id: 1,
+            name: "TestActivity".to_string(),
+            input: "test".to_string(),
+        })
+        .await
+        .unwrap();
+
+    let (item, token) = provider.fetch_work_item(30).await.unwrap();
+    tracing::info!("Fetched work item");
+
+    // Ack the work item
+    provider
+        .ack_work_item(
+            &token,
+            WorkItem::ActivityCompleted {
+                instance: "test-instance".to_string(),
+                execution_id: 1,
+                id: 1,
+                result: "done".to_string(),
+            },
+        )
+        .await
+        .unwrap();
+    tracing::info!("Acked work item");
+
+    // Try to renew after ack
+    let result = provider.renew_work_item_lock(&token, 30).await;
+    assert!(result.is_err(), "Should fail to renew after ack");
+    tracing::info!("✓ Test passed: renewal after ack rejection verified");
+}

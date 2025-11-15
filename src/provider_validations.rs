@@ -111,6 +111,11 @@ pub trait ProviderFactory: Send + Sync {
 /// - `test_abandon_releases_lock_immediately` - Verify abandon releases lock immediately
 /// - `test_lock_renewal_on_ack` - Verify successful ack releases lock immediately
 /// - `test_concurrent_lock_attempts_respect_expiration` - Verify concurrent attempts respect expiration
+/// - `test_worker_lock_renewal_success` - Verify worker lock can be renewed with valid token
+/// - `test_worker_lock_renewal_invalid_token` - Verify renewal fails with invalid token
+/// - `test_worker_lock_renewal_after_expiration` - Verify renewal fails after lock expires
+/// - `test_worker_lock_renewal_extends_timeout` - Verify renewal properly extends lock timeout
+/// - `test_worker_lock_renewal_after_ack` - Verify renewal fails after item has been acked
 ///
 /// **Multi-Execution Tests:**
 /// - `test_execution_isolation` - Verify each execution has separate history
@@ -164,7 +169,9 @@ pub use crate::provider_validation::instance_locking::{
 #[cfg(feature = "provider-test")]
 pub use crate::provider_validation::lock_expiration::{
     test_abandon_releases_lock_immediately, test_concurrent_lock_attempts_respect_expiration,
-    test_lock_expires_after_timeout, test_lock_renewal_on_ack,
+    test_lock_expires_after_timeout, test_lock_renewal_on_ack, test_worker_lock_renewal_after_ack,
+    test_worker_lock_renewal_after_expiration, test_worker_lock_renewal_extends_timeout,
+    test_worker_lock_renewal_invalid_token, test_worker_lock_renewal_success,
 };
 
 #[cfg(feature = "provider-test")]

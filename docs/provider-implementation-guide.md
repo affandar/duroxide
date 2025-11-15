@@ -166,6 +166,19 @@ impl Provider for MyProvider {
         todo!()
     }
     
+    async fn renew_work_item_lock(&self, token: &str, extend_secs: u64) -> Result<(), ProviderError> {
+        // Extend lock timeout for in-flight activity
+        // Called automatically by worker dispatcher for long-running activities
+        // 
+        // UPDATE worker_queue
+        // SET locked_until = now() + extend_secs
+        // WHERE lock_token = token AND locked_until > now()
+        //
+        // Return error if token invalid/expired
+        
+        todo!()
+    }
+    
     // === REQUIRED: Orchestrator Queue ===
     
     async fn enqueue_orchestrator_work(&self, item: WorkItem, delay_ms: Option<u64>) -> Result<(), ProviderError> {
@@ -433,11 +446,15 @@ RETURN Some(OrchestrationItem {
 - Missing instance metadata → Derive from messages or history
 - Empty history → Valid (new instance)
 
-**Lock Expiration:**
+**Lock Expiration and Renewal:**
 - Locks must expire after `lock_timeout_secs` (passed from RuntimeOptions: 5s for orchestrator, 30s for worker)
 - Expired locks allow automatic recovery from crashed dispatchers
+- **Worker lock renewal:** Runtime automatically extends locks for long-running activities
+  - For timeouts ≥15s: renewal at `(timeout - buffer_secs)`
+  - For timeouts <15s: renewal at `0.5 * timeout`
+  - Implemented via `renew_work_item_lock()` method
 - Check `locked_until <= current_timestamp()` when acquiring locks
-- Always validate lock token on ack to ensure lock hasn't expired
+- Always validate lock token on ack/renew to ensure lock hasn't expired
 
 **⚠️ CRITICAL: Successful Ack Releases Lock Immediately**
 
@@ -1002,6 +1019,42 @@ If a worker dequeues an item but crashes before acking (loses the lock token), t
 - Prevents permanent loss of work items
 - Enables at-least-once processing semantics
 
+### Method 4: renew_work_item_lock (Lock Renewal)
+
+**Purpose:** Extend lock timeout for in-progress activities to support long-running work.
+
+**Implementation:**
+```
+async fn renew_work_item_lock(token: &str, extend_secs: u64) -> Result<(), ProviderError> {
+    locked_until = current_timestamp_ms() + (extend_secs * 1000)
+    now_ms = current_timestamp_ms()
+    
+    result = UPDATE worker_queue
+             SET locked_until = locked_until
+             WHERE lock_token = token
+               AND locked_until > now_ms  // Only renew if still valid
+    
+    IF result.rows_affected == 0:
+        // Token invalid, expired, or already acked
+        RETURN Err(ProviderError::permanent("Lock token invalid or expired"))
+    
+    RETURN Ok(())
+}
+```
+
+**Called By:**
+- Worker dispatcher automatically for all in-flight activities
+- Renewal interval based on timeout:
+  - timeout ≥15s: renew at `(timeout - buffer_secs)` 
+  - timeout <15s: renew at `0.5 * timeout`
+- Example: 30s timeout, 5s buffer → renew every 25s
+
+**Why this matters:**
+- Enables activities that run longer than initial lock timeout
+- Prevents lock expiration for legitimate long-running work
+- Stops automatically when activity completes or worker crashes
+- Graceful recovery: if worker dies, renewal stops and lock expires naturally
+
 ---
 
 ## Schema Recommendations
@@ -1217,11 +1270,16 @@ The validation suite provides **45 individual test functions** organized into 8 
 - `test_multi_threaded_no_duplicate_processing` - Verify no duplicate processing (multi-threaded)
 - `test_multi_threaded_lock_expiration_recovery` - Verify lock expiration recovery (multi-threaded)
 
-**Lock Expiration Tests (4 tests):**
+**Lock Expiration Tests (9 tests):**
 - `test_lock_expires_after_timeout` - Verify locks expire after timeout
 - `test_abandon_releases_lock_immediately` - Verify abandon releases lock immediately
 - `test_lock_renewal_on_ack` - Verify successful ack releases lock immediately
 - `test_concurrent_lock_attempts_respect_expiration` - Verify concurrent attempts respect expiration
+- `test_worker_lock_renewal_success` - Verify worker lock can be renewed with valid token
+- `test_worker_lock_renewal_invalid_token` - Verify renewal fails with invalid token
+- `test_worker_lock_renewal_after_expiration` - Verify renewal fails after lock expires
+- `test_worker_lock_renewal_extends_timeout` - Verify renewal properly extends lock timeout
+- `test_worker_lock_renewal_after_ack` - Verify renewal fails after item has been acked
 
 **Multi-Execution Tests (5 tests):**
 - `test_execution_isolation` - Verify each execution has separate history

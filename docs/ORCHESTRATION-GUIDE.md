@@ -111,6 +111,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 **Example:**
 ```rust
 // ✅ GOOD: Activity polls for VM readiness (single-purpose: provision VM)
+// Note: Long-running activities (minutes to hours) are fully supported via automatic lock renewal
 activities.register("ProvisionVM", |ctx: ActivityContext, config| async move {
     let vm = create_vm(config).await?;
     while !vm_ready(&vm).await {

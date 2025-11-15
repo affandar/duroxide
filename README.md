@@ -26,9 +26,9 @@ What it is
 - Deterministic orchestration core with correlated event IDs and replay safety
 - Message-driven runtime built on Tokio, with two dispatchers:
   - OrchestrationDispatcher (orchestrator queue) - processes workflow turns and durable timers
-  - WorkDispatcher (worker queue) - executes activities
+  - WorkDispatcher (worker queue) - executes activities with automatic lock renewal
 - Storage-agnostic via `Provider` trait (SQLite provider with in-memory and file-based modes)
-- Configurable polling frequency and runtime options
+- Configurable polling frequency, lock timeouts, and automatic lock renewal for long-running activities
 
 How it works (brief)
 - The orchestrator runs turn-by-turn. Each turn it is polled once, may schedule actions, then the runtime waits for completions.
@@ -42,7 +42,8 @@ Key types
 - `OrchestrationContext`: schedules work (`schedule_activity`, `schedule_timer`, `schedule_wait`, `schedule_sub_orchestration`, `schedule_orchestration`) and exposes deterministic `select2/select/join`, `trace_*`, `continue_as_new`.
 - `DurableFuture`: returned by `schedule_*`; use `into_activity()`, `into_timer()`, `into_event()`, `into_sub_orchestration()` (and `_typed` variants) to await.
 - `Event`/`Action`: immutable history entries and host-side actions, including `ContinueAsNew`.
-- `Provider`: persistence + queues abstraction (`SqliteProvider` with in-memory and file-based modes).
+- `Provider`: persistence + queues abstraction with atomic operations and lock renewal (`SqliteProvider` with in-memory and file-based modes).
+- `RuntimeOptions`: configure concurrency, lock timeouts, and lock renewal buffer for long-running activities.
 - `OrchestrationRegistry` / `ActivityRegistry`: register orchestrations/activities in-memory.
 
 Project layout
@@ -162,6 +163,13 @@ Stress testing
 - Run with result tracking: `./run-stress-tests.sh --track` (saves to `stress-test-results.md`)
 - Tracked results include commit history, performance metrics, and rolling averages
 - See `sqlite-stress/README.md` for details
+
+Runtime Configuration
+- Configure lock timeouts, concurrency, and polling via `RuntimeOptions`
+- Worker lock renewal automatically enabled for long-running activities (no configuration needed)
+- Example: `RuntimeOptions { worker_lock_timeout_secs: 300, worker_lock_renewal_buffer_secs: 30, ... }`
+- Lock renewal happens at `(timeout - buffer)` for timeouts ≥15s, or `0.5 * timeout` for shorter timeouts
+- See API docs for `RuntimeOptions` for complete configuration options
 
 Observability
 - Enable structured logging: `RuntimeOptions { observability: ObservabilityConfig { log_format: LogFormat::Compact, ... }, ... }`

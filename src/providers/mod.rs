@@ -1410,6 +1410,64 @@ pub trait Provider: Any + Send + Sync {
     /// ```
     async fn ack_work_item(&self, token: &str, completion: WorkItem) -> Result<(), ProviderError>;
 
+    /// Renew the lock on a worker queue item.
+    ///
+    /// # What This Does
+    ///
+    /// Extends the lock timeout for an in-progress activity execution, preventing
+    /// the lock from expiring while the activity is still being processed.
+    ///
+    /// # Purpose
+    ///
+    /// Enables long-running activities to complete without lock timeout:
+    /// - Worker fetches activity with initial lock timeout (e.g., 30s)
+    /// - Background renewal task periodically extends the lock
+    /// - If worker crashes, renewal stops and lock expires naturally
+    /// - Another worker can then pick up the abandoned activity
+    ///
+    /// # Parameters
+    ///
+    /// * `token` - Lock token from fetch_work_item
+    /// * `extend_secs` - Duration in seconds to extend lock from now (typically worker_lock_timeout_secs)
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(())` - Lock renewed successfully, timeout extended to now() + extend_secs
+    /// * `Err(ProviderError)` - Lock renewal failed:
+    ///   - Permanent error: Token invalid, expired, or already acked
+    ///   - Retryable error: Database connection issues
+    ///
+    /// # Implementation Pattern
+    ///
+    /// ```ignore
+    /// async fn renew_work_item_lock(&self, token: &str, extend_secs: u64) -> Result<(), ProviderError> {
+    ///     let locked_until = now() + (extend_secs * 1000);  // milliseconds
+    ///     
+    ///     let result = UPDATE worker_queue
+    ///                  SET locked_until = ?locked_until
+    ///                  WHERE lock_token = ?token
+    ///                    AND locked_until > now()  // Only renew if still valid
+    ///     
+    ///     if result.rows_affected == 0:
+    ///         return Err(ProviderError::permanent("Lock token invalid or expired"))
+    ///     
+    ///     Ok(())
+    /// }
+    /// ```
+    ///
+    /// # Concurrency
+    ///
+    /// - Safe to call while activity is executing
+    /// - Idempotent: Multiple renewals with same token are safe
+    /// - Renewal fails gracefully after ack_work_item (token deleted)
+    ///
+    /// # Usage in Runtime
+    ///
+    /// Called by worker dispatcher's background renewal task:
+    /// - Renewal interval calculated based on lock timeout
+    /// - Stops automatically when activity completes or worker crashes
+    async fn renew_work_item_lock(&self, token: &str, extend_secs: u64) -> Result<(), ProviderError>;
+
     // ===== Optional Management APIs =====
     // These have default implementations and are primarily used for testing/debugging.
 

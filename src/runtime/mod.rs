@@ -17,8 +17,9 @@ use tracing::warn;
 /// let options = RuntimeOptions {
 ///     orchestration_concurrency: 4,
 ///     worker_concurrency: 8,
-///     orchestrator_lock_timeout_secs: 10,  // 10 seconds for orchestration turns
-///     worker_lock_timeout_secs: 120,       // 2 minutes for long-running activities
+///     orchestrator_lock_timeout_secs: 10,         // 10 seconds for orchestration turns
+///     worker_lock_timeout_secs: 300,              // 5 minutes for long-running activities
+///     worker_lock_renewal_buffer_secs: 30,        // Renew 30s before expiration (at 270s)
 ///     observability: ObservabilityConfig {
 ///         log_format: LogFormat::Compact,
 ///         log_level: "info".to_string(),
@@ -63,6 +64,25 @@ pub struct RuntimeOptions {
     /// Default: 30 seconds
     pub worker_lock_timeout_secs: u64,
 
+    /// Buffer time in seconds before lock expiration to trigger renewal.
+    ///
+    /// Lock renewal strategy:
+    /// - If worker_lock_timeout_secs >= 15: Renew at (timeout - buffer_secs)
+    /// - If worker_lock_timeout_secs < 15: Renew at 0.5 * timeout (buffer_secs ignored)
+    ///
+    /// Example with default values (timeout=30s, buffer=5s):
+    /// - Initial lock: expires at T+30s
+    /// - First renewal: at T+25s (30-5), extends to T+55s
+    /// - Second renewal: at T+50s (55-5), extends to T+80s
+    ///
+    /// Example with short timeout (timeout=10s, buffer ignored):
+    /// - Initial lock: expires at T+10s
+    /// - First renewal: at T+5s (10*0.5), extends to T+15s
+    /// - Second renewal: at T+10s (15*0.5), extends to T+20s
+    ///
+    /// Default: 5 seconds
+    pub worker_lock_renewal_buffer_secs: u64,
+
     /// Observability configuration for metrics and logging.
     /// Requires the `observability` feature flag for full functionality.
     /// Default: Disabled with basic logging
@@ -77,6 +97,7 @@ impl Default for RuntimeOptions {
             worker_concurrency: 2,
             orchestrator_lock_timeout_secs: 5,
             worker_lock_timeout_secs: 30,
+            worker_lock_renewal_buffer_secs: 5,
             observability: ObservabilityConfig::default(),
         }
     }

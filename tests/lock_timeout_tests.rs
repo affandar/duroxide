@@ -18,6 +18,10 @@ async fn default_lock_timeouts() {
         options.worker_lock_timeout_secs, 30,
         "Default worker lock timeout should be 30 seconds"
     );
+    assert_eq!(
+        options.worker_lock_renewal_buffer_secs, 5,
+        "Default worker lock renewal buffer should be 5 seconds"
+    );
 }
 
 /// Test that custom lock timeouts can be configured via RuntimeOptions
@@ -38,81 +42,6 @@ async fn custom_lock_timeout_configuration() {
     };
     assert_eq!(short_options.orchestrator_lock_timeout_secs, 1);
     assert_eq!(short_options.worker_lock_timeout_secs, 5);
-}
-
-/// Test that long-running activity gets retried after lock timeout expires
-/// This test verifies end-to-end behavior: activity takes longer than lock timeout,
-/// lock expires, activity is retried, and eventually completes.
-#[tokio::test]
-async fn long_running_activity_retries_after_timeout() {
-    let (store, _temp_dir) = common::create_sqlite_store_disk().await;
-
-    // Track how many times activity is called
-    let call_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let call_count_clone = call_count.clone();
-
-    let orch = |ctx: OrchestrationContext, _input: String| async move {
-        let result = ctx.schedule_activity("LongActivity", "data").into_activity().await?;
-        Ok(result)
-    };
-
-    let acts = ActivityRegistry::builder()
-        .register("LongActivity", move |_ctx: duroxide::ActivityContext, input: String| {
-            let count = call_count_clone.clone();
-            async move {
-                let attempt = count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-
-                if attempt == 0 {
-                    // First attempt: simulate stuck activity (sleep longer than lock timeout)
-                    tokio::time::sleep(Duration::from_millis(3000)).await;
-                    // This will timeout and be retried
-                    Ok(format!("attempt-{}: {}", attempt, input))
-                } else {
-                    // Second attempt: complete quickly
-                    Ok(format!("attempt-{}: {}", attempt, input))
-                }
-            }
-        })
-        .build();
-
-    let reg = OrchestrationRegistry::builder().register("TestOrch", orch).build();
-
-    // Use 2 second worker lock timeout (shorter than first activity attempt)
-    let options = RuntimeOptions {
-        worker_lock_timeout_secs: 2,
-        ..Default::default()
-    };
-
-    let rt = runtime::Runtime::start_with_options(store.clone(), Arc::new(acts), reg, options).await;
-    let client = Client::new(store.clone());
-
-    let inst = "inst-long-activity";
-    client.start_orchestration(inst, "TestOrch", "").await.unwrap();
-
-    // Wait for orchestration to complete (should retry after timeout)
-    let status = client
-        .wait_for_orchestration(inst, Duration::from_secs(10))
-        .await
-        .unwrap();
-
-    match status {
-        runtime::OrchestrationStatus::Completed { output } => {
-            // Should have been called at least twice (initial + retry after timeout)
-            let attempts = call_count.load(std::sync::atomic::Ordering::SeqCst);
-            assert!(
-                attempts >= 2,
-                "Activity should have been retried after lock timeout, got {} attempts",
-                attempts
-            );
-            assert!(output.contains("attempt-"), "Output should show attempt number");
-        }
-        runtime::OrchestrationStatus::Failed { details } => {
-            panic!("Orchestration failed: {}", details.display_message());
-        }
-        _ => panic!("Unexpected orchestration status"),
-    }
-
-    rt.shutdown(None).await;
 }
 
 /// Test that orchestration with custom timeout completes successfully
@@ -210,6 +139,303 @@ async fn very_short_lock_timeout_works() {
     match status {
         runtime::OrchestrationStatus::Completed { output } => {
             assert_eq!(output, "processed: data");
+        }
+        runtime::OrchestrationStatus::Failed { details } => {
+            panic!("Orchestration failed: {}", details.display_message());
+        }
+        _ => panic!("Unexpected orchestration status"),
+    }
+
+    rt.shutdown(None).await;
+}
+
+/// Test: Long-running activity completes successfully with lock renewal
+/// This test verifies that activities running longer than the lock timeout
+/// complete successfully due to automatic lock renewal.
+#[tokio::test]
+async fn long_running_activity_with_lock_renewal() {
+    let (store, _temp_dir) = common::create_sqlite_store_disk().await;
+
+    let orch = |ctx: OrchestrationContext, _input: String| async move {
+        let result = ctx.schedule_activity("LongActivity", "data").into_activity().await?;
+        Ok(result)
+    };
+
+    // Activity that takes 6 seconds
+    let acts = ActivityRegistry::builder()
+        .register(
+            "LongActivity",
+            |_ctx: duroxide::ActivityContext, input: String| async move {
+                tokio::time::sleep(Duration::from_secs(6)).await;
+                Ok(format!("completed: {}", input))
+            },
+        )
+        .build();
+
+    let reg = OrchestrationRegistry::builder().register("TestOrch", orch).build();
+
+    // Use 3 second worker lock timeout with 1 second buffer
+    // Lock should be renewed at 2s, 4s (ensuring activity completes)
+    let options = RuntimeOptions {
+        worker_lock_timeout_secs: 3,
+        worker_lock_renewal_buffer_secs: 1,
+        ..Default::default()
+    };
+
+    let rt = runtime::Runtime::start_with_options(store.clone(), Arc::new(acts), reg, options).await;
+    let client = Client::new(store.clone());
+
+    let inst = "inst-long-activity-renewal";
+    client.start_orchestration(inst, "TestOrch", "").await.unwrap();
+
+    // Wait for orchestration to complete (should succeed despite activity > initial lock timeout)
+    let status = client
+        .wait_for_orchestration(inst, Duration::from_secs(10))
+        .await
+        .unwrap();
+
+    match status {
+        runtime::OrchestrationStatus::Completed { output } => {
+            assert_eq!(output, "completed: data");
+        }
+        runtime::OrchestrationStatus::Failed { details } => {
+            panic!("Orchestration failed: {}", details.display_message());
+        }
+        _ => panic!("Unexpected orchestration status"),
+    }
+
+    rt.shutdown(None).await;
+}
+
+/// Test: Activity completes before first renewal interval
+/// Verifies that short activities complete without any renewals
+#[tokio::test]
+async fn short_activity_no_renewal_needed() {
+    let (store, _temp_dir) = common::create_sqlite_store_disk().await;
+
+    let orch = |ctx: OrchestrationContext, _input: String| async move {
+        let result = ctx.schedule_activity("QuickActivity", "data").into_activity().await?;
+        Ok(result)
+    };
+
+    // Activity that completes quickly (500ms)
+    let acts = ActivityRegistry::builder()
+        .register(
+            "QuickActivity",
+            |_ctx: duroxide::ActivityContext, input: String| async move {
+                tokio::time::sleep(Duration::from_millis(500)).await;
+                Ok(format!("quick: {}", input))
+            },
+        )
+        .build();
+
+    let reg = OrchestrationRegistry::builder().register("TestOrch", orch).build();
+
+    // 3 second timeout, renewal at 2s - activity finishes well before
+    let options = RuntimeOptions {
+        worker_lock_timeout_secs: 3,
+        worker_lock_renewal_buffer_secs: 1,
+        ..Default::default()
+    };
+
+    let rt = runtime::Runtime::start_with_options(store.clone(), Arc::new(acts), reg, options).await;
+    let client = Client::new(store.clone());
+
+    let inst = "inst-quick-activity";
+    client.start_orchestration(inst, "TestOrch", "").await.unwrap();
+
+    let status = client
+        .wait_for_orchestration(inst, Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    match status {
+        runtime::OrchestrationStatus::Completed { output } => {
+            assert_eq!(output, "quick: data");
+        }
+        runtime::OrchestrationStatus::Failed { details } => {
+            panic!("Orchestration failed: {}", details.display_message());
+        }
+        _ => panic!("Unexpected orchestration status"),
+    }
+
+    rt.shutdown(None).await;
+}
+
+/// Test: Renewal interval calculation with short timeout (< 15s)
+/// Verifies that short timeouts use 0.5x multiplier
+#[tokio::test]
+async fn lock_renewal_short_timeout() {
+    let (store, _temp_dir) = common::create_sqlite_store_disk().await;
+
+    let orch = |ctx: OrchestrationContext, _input: String| async move {
+        let result = ctx.schedule_activity("MediumActivity", "data").into_activity().await?;
+        Ok(result)
+    };
+
+    // Activity that takes 3 seconds
+    let acts = ActivityRegistry::builder()
+        .register(
+            "MediumActivity",
+            |_ctx: duroxide::ActivityContext, input: String| async move {
+                tokio::time::sleep(Duration::from_secs(3)).await;
+                Ok(format!("medium: {}", input))
+            },
+        )
+        .build();
+
+    let reg = OrchestrationRegistry::builder().register("TestOrch", orch).build();
+
+    // 2 second timeout (< 15), renewal should happen at 1s (0.5 * 2)
+    // First renewal at T+1s extends to T+3s
+    // Second renewal at T+2s extends to T+4s
+    // Activity finishes at T+3s, well within renewed lock
+    let options = RuntimeOptions {
+        worker_lock_timeout_secs: 2,
+        worker_lock_renewal_buffer_secs: 1, // Ignored for short timeouts
+        ..Default::default()
+    };
+
+    let rt = runtime::Runtime::start_with_options(store.clone(), Arc::new(acts), reg, options).await;
+    let client = Client::new(store.clone());
+
+    let inst = "inst-short-timeout-renewal";
+    client.start_orchestration(inst, "TestOrch", "").await.unwrap();
+
+    let status = client
+        .wait_for_orchestration(inst, Duration::from_secs(6))
+        .await
+        .unwrap();
+
+    match status {
+        runtime::OrchestrationStatus::Completed { output } => {
+            assert_eq!(output, "medium: data");
+        }
+        runtime::OrchestrationStatus::Failed { details } => {
+            panic!("Orchestration failed: {}", details.display_message());
+        }
+        _ => panic!("Unexpected orchestration status"),
+    }
+
+    rt.shutdown(None).await;
+}
+
+/// Test: Custom renewal buffer configuration
+/// Verifies that custom buffer settings work correctly
+#[tokio::test]
+async fn custom_renewal_buffer() {
+    let (store, _temp_dir) = common::create_sqlite_store_disk().await;
+
+    let orch = |ctx: OrchestrationContext, _input: String| async move {
+        let result = ctx.schedule_activity("LongActivity", "data").into_activity().await?;
+        Ok(result)
+    };
+
+    // Activity that takes 6 seconds
+    let acts = ActivityRegistry::builder()
+        .register(
+            "LongActivity",
+            |_ctx: duroxide::ActivityContext, input: String| async move {
+                tokio::time::sleep(Duration::from_secs(6)).await;
+                Ok(format!("done: {}", input))
+            },
+        )
+        .build();
+
+    let reg = OrchestrationRegistry::builder().register("TestOrch", orch).build();
+
+    // 5 second timeout with 2 second buffer
+    // Renewal at T+3s (5-2), extends to T+8s
+    // Activity finishes at T+6s, within renewed lock
+    let options = RuntimeOptions {
+        worker_lock_timeout_secs: 5,
+        worker_lock_renewal_buffer_secs: 2, // Custom buffer
+        ..Default::default()
+    };
+
+    let rt = runtime::Runtime::start_with_options(store.clone(), Arc::new(acts), reg, options).await;
+    let client = Client::new(store.clone());
+
+    let inst = "inst-custom-buffer";
+    client.start_orchestration(inst, "TestOrch", "").await.unwrap();
+
+    let status = client
+        .wait_for_orchestration(inst, Duration::from_secs(10))
+        .await
+        .unwrap();
+
+    match status {
+        runtime::OrchestrationStatus::Completed { output } => {
+            assert_eq!(output, "done: data");
+        }
+        runtime::OrchestrationStatus::Failed { details } => {
+            panic!("Orchestration failed: {}", details.display_message());
+        }
+        _ => panic!("Unexpected orchestration status"),
+    }
+
+    rt.shutdown(None).await;
+}
+
+/// Test: Multiple concurrent long-running activities
+/// Verifies that multiple activities can have their locks renewed independently
+#[tokio::test]
+async fn concurrent_activities_with_renewal() {
+    let (store, _temp_dir) = common::create_sqlite_store_disk().await;
+
+    let orch = |ctx: OrchestrationContext, _input: String| async move {
+        // Schedule multiple activities in parallel
+        let a1 = ctx.schedule_activity("LongActivity", "task1");
+        let a2 = ctx.schedule_activity("LongActivity", "task2");
+        let a3 = ctx.schedule_activity("LongActivity", "task3");
+
+        let r1 = a1.into_activity().await?;
+        let r2 = a2.into_activity().await?;
+        let r3 = a3.into_activity().await?;
+
+        Ok(format!("{}, {}, {}", r1, r2, r3))
+    };
+
+    // Each activity takes 6 seconds
+    let acts = ActivityRegistry::builder()
+        .register(
+            "LongActivity",
+            |_ctx: duroxide::ActivityContext, input: String| async move {
+                tokio::time::sleep(Duration::from_secs(6)).await;
+                Ok(format!("completed-{}", input))
+            },
+        )
+        .build();
+
+    let reg = OrchestrationRegistry::builder().register("TestOrch", orch).build();
+
+    // 3 second timeout with 1 second buffer
+    // Each activity should have its lock renewed independently
+    let options = RuntimeOptions {
+        worker_lock_timeout_secs: 3,
+        worker_lock_renewal_buffer_secs: 1,
+        worker_concurrency: 3, // Allow 3 parallel activities
+        ..Default::default()
+    };
+
+    let rt = runtime::Runtime::start_with_options(store.clone(), Arc::new(acts), reg, options).await;
+    let client = Client::new(store.clone());
+
+    let inst = "inst-concurrent-renewal";
+    client.start_orchestration(inst, "TestOrch", "").await.unwrap();
+
+    // Activities run sequentially in this orchestration, so total time is 6s + 6s + 6s = 18s
+    let status = client
+        .wait_for_orchestration(inst, Duration::from_secs(25))
+        .await
+        .unwrap();
+
+    match status {
+        runtime::OrchestrationStatus::Completed { output } => {
+            // All three tasks should complete
+            assert!(output.contains("completed-task1"));
+            assert!(output.contains("completed-task2"));
+            assert!(output.contains("completed-task3"));
         }
         runtime::OrchestrationStatus::Failed { details } => {
             panic!("Orchestration failed: {}", details.display_message());

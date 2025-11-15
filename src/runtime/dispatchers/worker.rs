@@ -55,6 +55,15 @@ impl Runtime {
                                     name,
                                     input,
                                 } => {
+                                    // Spawn lock renewal task for this activity
+                                    let renewal_handle = spawn_lock_renewal_task(
+                                        rt.history_store.clone(),
+                                        token.clone(),
+                                        rt.options.worker_lock_timeout_secs,
+                                        rt.options.worker_lock_renewal_buffer_secs,
+                                        shutdown.clone(),
+                                    );
+
                                     let descriptor = rt.get_orchestration_descriptor(&instance).await;
                                     let (orch_name, orch_version) = if let Some(desc) = descriptor {
                                         (desc.name, desc.version)
@@ -188,6 +197,9 @@ impl Runtime {
                                         )
                                     };
 
+                                    // Stop lock renewal task now that activity is complete
+                                    renewal_handle.abort();
+
                                     match ack_result {
                                         Ok(()) => match outcome {
                                             ActivityOutcome::Success => rt.record_activity_success(),
@@ -229,4 +241,109 @@ impl Runtime {
             // debug!("Work dispatcher exited");
         })
     }
+}
+
+/// Calculate the renewal interval based on lock timeout and buffer settings.
+///
+/// # Logic
+/// - If timeout >= 15s: renew at (timeout - buffer_secs)
+/// - If timeout < 15s: renew at 0.5 * timeout (buffer ignored)
+///
+/// # Returns
+/// Renewal interval in seconds
+fn calculate_renewal_interval(lock_timeout_secs: u64, buffer_secs: u64) -> u64 {
+    if lock_timeout_secs >= 15 {
+        lock_timeout_secs.saturating_sub(buffer_secs).max(1)
+    } else {
+        ((lock_timeout_secs as f64) * 0.5).ceil() as u64
+    }
+}
+
+/// Spawn a background task to renew the lock for an in-flight activity.
+///
+/// # Parameters
+/// - `store`: Provider to call renew_work_item_lock on
+/// - `token`: Lock token to renew
+/// - `lock_timeout_secs`: Original lock timeout value
+/// - `buffer_secs`: Buffer time before expiration (only used if timeout >= 15s)
+/// - `shutdown`: Shared shutdown flag
+///
+/// # Behavior
+/// - Calculates renewal interval based on timeout and buffer
+/// - Renews lock periodically until activity completes or error occurs
+/// - Stops automatically on shutdown
+/// - Logs renewal attempts and failures
+///
+/// # Returns
+/// JoinHandle that can be aborted when activity completes
+fn spawn_lock_renewal_task(
+    store: Arc<dyn crate::providers::Provider>,
+    token: String,
+    lock_timeout_secs: u64,
+    buffer_secs: u64,
+    shutdown: Arc<std::sync::atomic::AtomicBool>,
+) -> JoinHandle<()> {
+    let renewal_interval_secs = calculate_renewal_interval(lock_timeout_secs, buffer_secs);
+
+    tracing::debug!(
+        target: "duroxide::runtime::worker",
+        lock_token = %token,
+        lock_timeout_secs = %lock_timeout_secs,
+        buffer_secs = %buffer_secs,
+        renewal_interval_secs = %renewal_interval_secs,
+        "Spawning lock renewal task"
+    );
+
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(renewal_interval_secs));
+        interval.tick().await; // Skip first immediate tick
+
+        loop {
+            tokio::select! {
+                _ = interval.tick() => {
+                    if shutdown.load(Ordering::Relaxed) {
+                        tracing::debug!(
+                            target: "duroxide::runtime::worker",
+                            lock_token = %token,
+                            "Lock renewal task stopping due to shutdown"
+                        );
+                        break;
+                    }
+
+                    tracing::trace!(
+                        target: "duroxide::runtime::worker",
+                        lock_token = %token,
+                        extend_secs = %lock_timeout_secs,
+                        "Renewing work item lock"
+                    );
+
+                    match store.renew_work_item_lock(&token, lock_timeout_secs).await {
+                        Ok(()) => {
+                            tracing::trace!(
+                                target: "duroxide::runtime::worker",
+                                lock_token = %token,
+                                "Lock renewed successfully"
+                            );
+                        }
+                        Err(e) => {
+                            tracing::debug!(
+                                target: "duroxide::runtime::worker",
+                                lock_token = %token,
+                                error = %e,
+                                "Failed to renew lock (may have been acked/abandoned)"
+                            );
+                            // Stop renewal - lock is gone or expired
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        tracing::debug!(
+            target: "duroxide::runtime::worker",
+            lock_token = %token,
+            "Lock renewal task stopped"
+        );
+    })
 }
