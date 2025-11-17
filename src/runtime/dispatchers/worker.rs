@@ -27,12 +27,12 @@ impl Runtime {
         tokio::spawn(async move {
             let mut worker_handles = Vec::new();
 
-            for _worker_idx in 0..concurrency {
+            for worker_idx in 0..concurrency {
                 let rt = self.clone();
                 let activities = activities.clone();
                 let shutdown = shutdown.clone();
-                // Generate unique worker ID with GUID suffix
-                let worker_id = format!("work-{}", Self::generate_worker_suffix());
+                // Generate unique worker ID: work-{index}-{runtime_id}
+                let worker_id = format!("work-{}-{}", worker_idx, rt.runtime_id);
                 let handle = tokio::spawn(async move {
                     // debug!("Worker dispatcher {} started", worker_id);
                     loop {
