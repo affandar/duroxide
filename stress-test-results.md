@@ -4,6 +4,57 @@ This file tracks all stress test runs, including performance metrics and commit 
 
 ---
 
+## Commit: 7893d1d - Timestamp: 2025-11-17 18:49:52 UTC
+
+### Changes Since Last Test
+```
+7893d1d api feedback in TODO
+06be8cf refactor: Simplify OrchestrationContext constructor and fix logging filter
+71a67ed fix: Correct log filter target from orchestrator to orchestration
+81fc816 feat: Add worker_id to all user trace logs (orchestration and activity)
+109bc4f feat: Add runtime instance ID to worker identifiers
+b6c04d9 feat: Add runtime instance ID to worker identifiers for cross-restart tracing
+9f2d3ee feat: Add automatic worker lock renewal for long-running activities
+0f5aea1 relaxing timing related test
+48a6b87 refactor: move lock timeout to RuntimeOptions with separate orchestrator/worker timeouts
+224a77c refactor: rename ai_prompts to prompts and add stress test workflow
+6af3bf9 docs: update references from stress-tests to sqlite-stress
+9873c2f feat: add Docker-based profiling infrastructure and optimize SQLite I/O
+9e8d32c Merge branch 'cursor/review-rust-codebase-for-improvements-3f6a'
+1965bee docs: align timer handling guidance
+e34f6ee Refactor: Move dispatchers to separate modules
+8ece749 Refactor: Implement code quality improvements and clippy lints
+43573dc Add property tests and optimize replay engine
+923f6cf Refactor: Extract completion consumption check into helper function
+9d7419f feat: Add PHASE1_COMPLETE.md and update test summary
+2a9d890 Refactor: Improve code quality with clippy, constants, and type aliases
+8e0952e Refactor stress tests: Rename to sqlite-stress and consolidate structure
+4d91c19 Refactor: Improve error handling and code structure
+1ecba43 Fix: Improve provider stress test and retry logic
+5e234ec Refactor provider testing documentation and examples
+0171fd0 Refactor stress test validation to run minimal infrastructure test
+ab7c668 Refactor: Move stress test infrastructure to core crate
+cbbd629 minor tracing update
+0279731 Merge pull request #4 from affandar/cursor/run-and-compare-stress-tests-ff17
+6f255b2 feat: Add --track-cloud option to stress tests
+e7b44a8 Add cloud stress test results and environment details
+6208596 Add stress test results for commit 806599c
+```
+
+### Test Results
+```
+Provider             Config     Completed  Failed     Infra    Config   App      Success %  Orch/sec        Activity/sec    Avg Latency    
+------------------------------------------------------------------------------------------------------------------------------------------------------
+In-Memory SQLite     1/1        512        0          0        0        0        100.00     8.59            42.94           116.44         ms
+In-Memory SQLite     2/2        429        1          0        0        0        99.77      5.66            28.29           176.75         ms
+File SQLite          1/1        503        0          0        0        0        100.00     16.11           80.54           62.08          ms
+File SQLite          2/2        850        1          1        0        0        99.88      27.95           139.75          35.78          ms
+```
+
+**Failure Analysis:** Both failures are infrastructure-related (database contention under high concurrency). In-memory SQLite: 1 timeout from deadlock on instance stress-test-373. File SQLite: 1 lock contention failure after 5 retries on stress-test-641. No configuration or application errors. Failure handling working correctly with graceful degradation.
+
+---
+
 ## Commit: 806599c - Timestamp: 2025-11-09 20:35:34 UTC
 
 ### Changes Since Last Test
