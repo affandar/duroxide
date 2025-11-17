@@ -1,6 +1,8 @@
 ## Durable Task Rust Core – TODOs
 
 
+- Mgmt API feedback
+  - list instances should get back version, status, and other basic info.
 - Fix up the stress tests, make them more usable by providers
 - API endpoint for runtime, MCP server, orch status etc. 
 - Metrics/logging dashboard 
