@@ -192,6 +192,8 @@ pub struct Runtime {
     options: RuntimeOptions,
     /// Observability handle for metrics and logging
     observability_handle: Option<observability::ObservabilityHandle>,
+    /// Unique runtime instance ID (4-char hex, generated on start)
+    runtime_id: String,
 }
 
 /// Introspection: descriptor of an orchestration derived from history.
@@ -360,28 +362,6 @@ impl Runtime {
         crate::INITIAL_EXECUTION_ID
     }
 
-    /// Generate a unique worker ID suffix using last 5 chars of a GUID
-    fn generate_worker_suffix() -> String {
-        use std::time::{SystemTime, UNIX_EPOCH};
-
-        let timestamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
-
-        // Thread-local counter for uniqueness
-        thread_local! {
-            static COUNTER: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
-        }
-        let counter = COUNTER.with(|c| {
-            let val = c.get();
-            c.set(val.wrapping_add(1));
-            val
-        });
-
-        // Generate a short unique suffix (last 5 hex chars)
-        format!("{:05x}", ((timestamp ^ (counter as u128)) & 0xFFFFF))
-    }
 
     /// Start a new runtime using the in-memory SQLite provider.
     pub async fn start(
@@ -423,6 +403,16 @@ impl Runtime {
 
         let joins: Vec<JoinHandle<()>> = Vec::new();
 
+        // Generate unique runtime instance ID (4-char hex)
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let runtime_id = format!(
+            "{:04x}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| (d.as_nanos() & 0xFFFF) as u16)
+                .unwrap_or(0)
+        );
+
         // start request queue + worker
         let runtime = Arc::new(Self {
             joins: Mutex::new(joins),
@@ -434,6 +424,7 @@ impl Runtime {
 
             options,
             observability_handle,
+            runtime_id,
         });
 
         // background orchestrator dispatcher (extracted from inline poller)

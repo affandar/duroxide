@@ -25,11 +25,11 @@ impl Runtime {
         tokio::spawn(async move {
             let mut worker_handles = Vec::new();
 
-            for _worker_idx in 0..concurrency {
+            for worker_idx in 0..concurrency {
                 let rt = self.clone();
                 let shutdown = shutdown.clone();
-                // Generate unique worker ID with GUID suffix
-                let worker_id = format!("orch-{}", Self::generate_worker_suffix());
+                // Generate unique worker ID: orch-{index}-{runtime_id}
+                let worker_id = format!("orch-{}-{}", worker_idx, rt.runtime_id);
                 let handle = tokio::spawn(async move {
                     // debug!("Orchestration worker {} started", worker_id);
                     loop {
