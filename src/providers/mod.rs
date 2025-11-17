@@ -1568,6 +1568,164 @@ pub trait Provider: Any + Send + Sync {
     fn as_management_capability(&self) -> Option<&dyn ProviderAdmin> {
         None
     }
+
+    // ===== Batch Fetch Operations (OPTIONAL - For Performance) =====
+
+    /// Fetch multiple orchestration items atomically.
+    ///
+    /// # Purpose
+    ///
+    /// This is a performance optimization that allows the runtime to fetch multiple
+    /// orchestration items in a single provider call, reducing database round-trips
+    /// and lock contention.
+    ///
+    /// # What This Does
+    ///
+    /// 1. Find up to `max_items` available instances (respecting instance locks)
+    /// 2. For each instance:
+    ///    - Atomically acquire instance lock
+    ///    - Lock all messages for that instance
+    ///    - Load history and metadata
+    ///    - Build OrchestrationItem with unique lock_token
+    /// 3. Return all locked items in a Vec
+    ///
+    /// # Parameters
+    ///
+    /// * `max_items` - Maximum number of items to fetch (will return fewer if not available)
+    /// * `lock_timeout_secs` - Lock timeout in seconds for each item
+    ///
+    /// # Return Value
+    ///
+    /// * `Ok(Vec<OrchestrationItem>)` - Successfully fetched items (may be empty)
+    /// * `Err(ProviderError)` - Fatal error during fetch
+    ///
+    /// # Lock Token Independence
+    ///
+    /// Each returned OrchestrationItem MUST have a unique lock_token that can be
+    /// independently acked or abandoned. The items are independent work units.
+    ///
+    /// # Implementation Notes
+    ///
+    /// **SQLite Example:**
+    /// ```text
+    /// BEGIN TRANSACTION;
+    ///
+    /// // Step 1: Find N available instances
+    /// SELECT DISTINCT q.instance_id FROM orchestrator_queue q
+    /// LEFT JOIN instance_locks il ON q.instance_id = il.instance_id
+    /// WHERE q.visible_at <= now()
+    ///   AND (il.instance_id IS NULL OR il.locked_until <= now())
+    /// ORDER BY q.id
+    /// LIMIT ?max_items;
+    ///
+    /// // Step 2-5: For each instance (loop):
+    /// //   - Generate unique lock_token
+    /// //   - Acquire instance lock (same as fetch_orchestration_item)
+    /// //   - Lock messages for instance
+    /// //   - Load history
+    /// //   - Add to result Vec
+    ///
+    /// COMMIT;
+    /// ```
+    ///
+    /// # Default Implementation
+    ///
+    /// Calls `fetch_orchestration_item()` repeatedly up to `max_items` times.
+    /// Providers should override this with a more efficient implementation.
+    ///
+    /// # Concurrency
+    ///
+    /// This method must be thread-safe and handle concurrent batch fetches gracefully.
+    /// Multiple batch fetchers should not lock the same instances.
+    async fn fetch_orchestration_items_batch(
+        &self,
+        max_items: usize,
+        lock_timeout_secs: u64,
+    ) -> Result<Vec<OrchestrationItem>, ProviderError> {
+        let mut items = Vec::new();
+        for _ in 0..max_items {
+            match self.fetch_orchestration_item(lock_timeout_secs).await? {
+                Some(item) => items.push(item),
+                None => break,
+            }
+        }
+        Ok(items)
+    }
+
+    /// Fetch multiple work items atomically.
+    ///
+    /// # Purpose
+    ///
+    /// This is a performance optimization that allows the runtime to fetch multiple
+    /// work items in a single provider call, reducing database round-trips and
+    /// improving throughput for activity execution.
+    ///
+    /// # What This Does
+    ///
+    /// 1. Find up to `max_items` available work items (unlocked or expired locks)
+    /// 2. For each item:
+    ///    - Generate unique lock_token
+    ///    - Lock the item atomically
+    /// 3. Return all locked items as Vec<(WorkItem, String)>
+    ///
+    /// # Parameters
+    ///
+    /// * `max_items` - Maximum number of items to fetch (will return fewer if not available)
+    /// * `lock_timeout_secs` - Lock timeout in seconds for each item
+    ///
+    /// # Return Value
+    ///
+    /// Vec of (WorkItem, lock_token) tuples. May be empty if no work available.
+    ///
+    /// # Lock Token Independence
+    ///
+    /// Each tuple MUST have a unique lock_token that can be independently acked.
+    /// The items are independent work units that can be processed concurrently.
+    ///
+    /// # Implementation Notes
+    ///
+    /// **SQLite Example:**
+    /// ```text
+    /// BEGIN TRANSACTION;
+    ///
+    /// // Find N available work items
+    /// SELECT id, work_item FROM worker_queue
+    /// WHERE lock_token IS NULL OR locked_until <= now()
+    /// ORDER BY id
+    /// LIMIT ?max_items;
+    ///
+    /// // For each row:
+    /// //   - Generate unique lock_token
+    /// //   - UPDATE worker_queue SET lock_token = ?, locked_until = now() + timeout WHERE id = ?
+    /// //   - Deserialize work_item
+    /// //   - Add (WorkItem, lock_token) to result Vec
+    ///
+    /// COMMIT;
+    /// ```
+    ///
+    /// # Default Implementation
+    ///
+    /// Calls `fetch_work_item()` repeatedly up to `max_items` times.
+    /// Providers should override this with a more efficient implementation.
+    ///
+    /// # Concurrency
+    ///
+    /// This method must be thread-safe. Multiple batch fetchers should not
+    /// lock the same work items.
+    async fn fetch_work_items_batch(
+        &self,
+        max_items: usize,
+        lock_timeout_secs: u64,
+    ) -> Vec<(WorkItem, String)> {
+        let mut items = Vec::new();
+        for _ in 0..max_items {
+            match self.fetch_work_item(lock_timeout_secs).await {
+                Some(item) => items.push(item),
+                None => break,
+            }
+        }
+        items
+    }
 }
 
 /// Management and observability provider interface.

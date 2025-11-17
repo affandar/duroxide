@@ -1306,6 +1306,361 @@ impl Provider for SqliteProvider {
         Ok(())
     }
 
+    async fn fetch_orchestration_items_batch(
+        &self,
+        max_items: usize,
+        lock_timeout_secs: u64,
+    ) -> Result<Vec<OrchestrationItem>, ProviderError> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| Self::sqlx_to_provider_error("fetch_orchestration_items_batch", e))?;
+        let now_ms = Self::now_millis();
+
+        // Find up to max_items available instances (respecting instance locks)
+        let rows = sqlx::query(
+            r#"
+            SELECT DISTINCT q.instance_id
+            FROM orchestrator_queue q
+            LEFT JOIN instance_locks il ON q.instance_id = il.instance_id
+            WHERE q.visible_at <= ?1
+              AND (il.instance_id IS NULL OR il.locked_until <= ?1)
+            ORDER BY q.id
+            LIMIT ?2
+            "#,
+        )
+        .bind(now_ms)
+        .bind(max_items as i64)
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(|e| Self::sqlx_to_provider_error("fetch_orchestration_items_batch", e))?;
+
+        if rows.is_empty() {
+            tx.rollback().await.ok();
+            return Ok(Vec::new());
+        }
+
+        let instance_ids: Vec<String> = rows
+            .iter()
+            .filter_map(|r| r.try_get::<String, _>("instance_id").ok())
+            .collect();
+
+        tracing::debug!(
+            target = "duroxide::providers::sqlite",
+            found_instances = instance_ids.len(),
+            "Batch fetch found available instances"
+        );
+
+        let mut items = Vec::new();
+        let locked_until = Self::timestamp_after(Duration::from_secs(lock_timeout_secs));
+
+        // Process each instance
+        for instance_id in instance_ids {
+            let lock_token = Self::generate_lock_token();
+
+            // Try to acquire instance lock
+            let lock_result = sqlx::query(
+                r#"
+                INSERT INTO instance_locks (instance_id, lock_token, locked_until, locked_at)
+                VALUES (?1, ?2, ?3, ?4)
+                ON CONFLICT(instance_id) DO UPDATE
+                SET lock_token = ?2, locked_until = ?3, locked_at = ?4
+                WHERE locked_until <= ?4
+                "#,
+            )
+            .bind(&instance_id)
+            .bind(&lock_token)
+            .bind(locked_until)
+            .bind(now_ms)
+            .execute(&mut *tx)
+            .await;
+
+            match lock_result {
+                Ok(result) if result.rows_affected() == 0 => {
+                    // Failed to acquire lock - skip this instance
+                    tracing::debug!(
+                        target = "duroxide::providers::sqlite",
+                        instance = %instance_id,
+                        "Skipped instance (lock contention)"
+                    );
+                    continue;
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        target = "duroxide::providers::sqlite",
+                        instance = %instance_id,
+                        error = %e,
+                        "Error acquiring lock"
+                    );
+                    continue;
+                }
+                _ => {}
+            }
+
+            // Lock all visible messages for this instance
+            sqlx::query(
+                r#"
+                UPDATE orchestrator_queue
+                SET lock_token = ?1
+                WHERE instance_id = ?2 AND visible_at <= ?3
+                "#,
+            )
+            .bind(&lock_token)
+            .bind(&instance_id)
+            .bind(now_ms)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| Self::sqlx_to_provider_error("fetch_orchestration_items_batch", e))?;
+
+            // Fetch locked messages
+            let messages = sqlx::query(
+                r#"
+                SELECT id, work_item
+                FROM orchestrator_queue
+                WHERE lock_token = ?1
+                ORDER BY id
+                "#,
+            )
+            .bind(&lock_token)
+            .fetch_all(&mut *tx)
+            .await
+            .map_err(|e| Self::sqlx_to_provider_error("fetch_orchestration_items_batch", e))?;
+
+            if messages.is_empty() {
+                // No messages found - release lock and skip
+                sqlx::query("DELETE FROM instance_locks WHERE instance_id = ?")
+                    .bind(&instance_id)
+                    .execute(&mut *tx)
+                    .await
+                    .ok();
+                continue;
+            }
+
+            // Deserialize work items
+            let work_items: Vec<WorkItem> = messages
+                .iter()
+                .filter_map(|r| {
+                    r.try_get::<String, _>("work_item")
+                        .ok()
+                        .and_then(|s| serde_json::from_str(&s).ok())
+                })
+                .collect();
+
+            // Get instance metadata
+            let instance_info = sqlx::query(
+                r#"
+                SELECT i.orchestration_name, i.orchestration_version, i.current_execution_id
+                FROM instances i
+                WHERE i.instance_id = ?1
+                "#,
+            )
+            .bind(&instance_id)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(|e| Self::sqlx_to_provider_error("fetch_orchestration_items_batch", e))?;
+
+            let (orchestration_name, orchestration_version, current_execution_id, history) =
+                if let Some(info) = instance_info {
+                    // Existing instance
+                    let name: String = info
+                        .try_get("orchestration_name")
+                        .map_err(|e| {
+                            ProviderError::permanent(
+                                "fetch_orchestration_items_batch",
+                                format!("Failed to get orchestration_name: {}", e),
+                            )
+                        })?;
+                    let version: Option<String> = info.try_get("orchestration_version").ok();
+                    let exec_id: i64 = info.try_get("current_execution_id").map_err(|e| {
+                        ProviderError::permanent(
+                            "fetch_orchestration_items_batch",
+                            format!("Failed to get current_execution_id: {}", e),
+                        )
+                    })?;
+
+                    let hist = self
+                        .read_history_in_tx(&mut tx, &instance_id, Some(exec_id as u64))
+                        .await
+                        .map_err(|e| {
+                            ProviderError::permanent(
+                                "fetch_orchestration_items_batch",
+                                format!("Failed to read history: {}", e),
+                            )
+                        })?;
+
+                    let version = version.unwrap_or_else(|| "unknown".to_string());
+                    (name, version, exec_id as u64, hist)
+                } else if let Some(start_item) = work_items.iter().find(|item| {
+                    matches!(
+                        item,
+                        WorkItem::StartOrchestration { .. } | WorkItem::ContinueAsNew { .. }
+                    )
+                }) {
+                    // New instance - extract from StartOrchestration/ContinueAsNew
+                    let (orchestration, version) = match start_item {
+                        WorkItem::StartOrchestration {
+                            orchestration,
+                            version,
+                            ..
+                        }
+                        | WorkItem::ContinueAsNew {
+                            orchestration,
+                            version,
+                            ..
+                        } => (orchestration.clone(), version.clone()),
+                        _ => unreachable!(),
+                    };
+                    (
+                        orchestration,
+                        version.unwrap_or_else(|| "unknown".to_string()),
+                        1u64,
+                        Vec::new(),
+                    )
+                } else {
+                    // No valid start item - skip
+                    continue;
+                };
+
+            items.push(OrchestrationItem {
+                instance: instance_id,
+                orchestration_name,
+                execution_id: current_execution_id,
+                version: orchestration_version,
+                messages: work_items,
+                history,
+                lock_token,
+            });
+        }
+
+        tx.commit()
+            .await
+            .map_err(|e| Self::sqlx_to_provider_error("fetch_orchestration_items_batch", e))?;
+
+        tracing::debug!(
+            target = "duroxide::providers::sqlite",
+            fetched_items = items.len(),
+            requested = max_items,
+            "Batch fetch completed"
+        );
+
+        Ok(items)
+    }
+
+    async fn fetch_work_items_batch(
+        &self,
+        max_items: usize,
+        lock_timeout_secs: u64,
+    ) -> Vec<(WorkItem, String)> {
+        let mut tx = match self.pool.begin().await {
+            Ok(tx) => tx,
+            Err(e) => {
+                tracing::warn!(
+                    target = "duroxide::providers::sqlite",
+                    error = %e,
+                    "Failed to begin transaction for batch work fetch"
+                );
+                return Vec::new();
+            }
+        };
+
+        let now_ms = Self::now_millis();
+        let locked_until = Self::timestamp_after(Duration::from_secs(lock_timeout_secs));
+
+        // Find up to max_items available work items
+        let rows = match sqlx::query(
+            r#"
+            SELECT id, work_item
+            FROM worker_queue
+            WHERE lock_token IS NULL OR locked_until <= ?1
+            ORDER BY id
+            LIMIT ?2
+            "#,
+        )
+        .bind(now_ms)
+        .bind(max_items as i64)
+        .fetch_all(&mut *tx)
+        .await
+        {
+            Ok(rows) => rows,
+            Err(e) => {
+                tracing::warn!(
+                    target = "duroxide::providers::sqlite",
+                    error = %e,
+                    "Failed to fetch work items"
+                );
+                return Vec::new();
+            }
+        };
+
+        if rows.is_empty() {
+            return Vec::new();
+        }
+
+        let mut items = Vec::new();
+
+        // Lock each item with unique token
+        for row in rows {
+            let id: i64 = match row.try_get("id") {
+                Ok(id) => id,
+                Err(_) => continue,
+            };
+
+            let work_item_str: String = match row.try_get("work_item") {
+                Ok(s) => s,
+                Err(_) => continue,
+            };
+
+            let lock_token = Self::generate_lock_token();
+
+            // Update with lock
+            let update_result = sqlx::query(
+                r#"
+                UPDATE worker_queue
+                SET lock_token = ?1, locked_until = ?2
+                WHERE id = ?3 AND (lock_token IS NULL OR locked_until <= ?4)
+                "#,
+            )
+            .bind(&lock_token)
+            .bind(locked_until)
+            .bind(id)
+            .bind(now_ms)
+            .execute(&mut *tx)
+            .await;
+
+            match update_result {
+                Ok(result) if result.rows_affected() > 0 => {
+                    // Successfully locked
+                    if let Ok(work_item) = serde_json::from_str::<WorkItem>(&work_item_str) {
+                        items.push((work_item, lock_token));
+                    }
+                }
+                _ => {
+                    // Lock contention or error - skip this item
+                    continue;
+                }
+            }
+        }
+
+        if let Err(e) = tx.commit().await {
+            tracing::warn!(
+                target = "duroxide::providers::sqlite",
+                error = %e,
+                "Failed to commit batch work fetch"
+            );
+            return Vec::new();
+        }
+
+        tracing::debug!(
+            target = "duroxide::providers::sqlite",
+            fetched_items = items.len(),
+            requested = max_items,
+            "Batch work fetch completed"
+        );
+
+        items
+    }
+
     fn as_management_capability(&self) -> Option<&dyn ProviderAdmin> {
         Some(self as &dyn ProviderAdmin)
     }
