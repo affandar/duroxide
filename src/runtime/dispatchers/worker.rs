@@ -35,6 +35,7 @@ impl Runtime {
                 let worker_id = format!("work-{}-{}", worker_idx, rt.runtime_id);
                 let handle = tokio::spawn(async move {
                     // debug!("Worker dispatcher {} started", worker_id);
+                    
                     loop {
                         // Check shutdown flag before fetching
                         if shutdown.load(Ordering::Relaxed) {
@@ -42,11 +43,12 @@ impl Runtime {
                             break;
                         }
 
-                        if let Some((item, token)) = rt
-                            .history_store
-                            .fetch_work_item(rt.options.worker_lock_timeout_secs)
-                            .await
-                        {
+                        // Consume from buffer (blocks until item available or channel closed)
+                        let mut rx_guard = rt.work_buffer_rx.lock().await;
+                        let work_opt = rx_guard.recv().await;
+                        drop(rx_guard); // Release lock immediately
+
+                        if let Some((item, token)) = work_opt {
                             match item {
                                 WorkItem::ActivityExecute {
                                     instance,
@@ -226,8 +228,8 @@ impl Runtime {
                                 }
                             }
                         } else {
-                            tokio::time::sleep(std::time::Duration::from_millis(rt.options.dispatcher_idle_sleep_ms))
-                                .await;
+                            // Channel closed, exit
+                            break;
                         }
                     }
                 });

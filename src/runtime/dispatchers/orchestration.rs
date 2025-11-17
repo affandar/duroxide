@@ -32,6 +32,7 @@ impl Runtime {
                 let worker_id = format!("orch-{}-{}", worker_idx, rt.runtime_id);
                 let handle = tokio::spawn(async move {
                     // debug!("Orchestration worker {} started", worker_id);
+                    
                     loop {
                         // Check shutdown flag before fetching
                         if shutdown.load(Ordering::Relaxed) {
@@ -39,17 +40,18 @@ impl Runtime {
                             break;
                         }
 
-                        if let Ok(Some(item)) = rt
-                            .history_store
-                            .fetch_orchestration_item(rt.options.orchestrator_lock_timeout_secs)
-                            .await
-                        {
+                        // Consume from buffer (blocks until item available or channel closed)
+                        let mut rx_guard = rt.orchestration_buffer_rx.lock().await;
+                        let item_opt = rx_guard.recv().await;
+                        drop(rx_guard); // Release lock immediately
+
+                        if let Some(item) = item_opt {
                             // Process orchestration item atomically
                             // Provider ensures no other worker has this instance locked
                             rt.process_orchestration_item(item, &worker_id).await;
                         } else {
-                            tokio::time::sleep(std::time::Duration::from_millis(rt.options.dispatcher_idle_sleep_ms))
-                                .await;
+                            // Channel closed, exit
+                            break;
                         }
                     }
                 });

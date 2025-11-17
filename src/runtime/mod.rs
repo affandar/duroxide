@@ -83,6 +83,32 @@ pub struct RuntimeOptions {
     /// Default: 5 seconds
     pub worker_lock_renewal_buffer_secs: u64,
 
+    // ===== Batch Fetching Configuration =====
+    
+    /// Maximum number of orchestration items to fetch in a single batch.
+    /// Larger batches = fewer DB queries but more memory usage.
+    /// Should be >= orchestration_concurrency for best efficiency.
+    /// Default: orchestration_concurrency * 2
+    pub orchestration_batch_size: usize,
+
+    /// Buffer capacity for orchestration items.
+    /// This is the maximum number of pre-fetched orchestration items held in memory.
+    /// Should be >= orchestration_batch_size to avoid blocking the fetcher.
+    /// Default: orchestration_concurrency * 4
+    pub orchestration_buffer_capacity: usize,
+
+    /// Maximum number of work items to fetch in a single batch.
+    /// Larger batches = fewer DB queries but more memory usage.
+    /// Should be >= worker_concurrency for best efficiency.
+    /// Default: worker_concurrency * 2
+    pub work_batch_size: usize,
+
+    /// Buffer capacity for work items.
+    /// This is the maximum number of pre-fetched work items held in memory.
+    /// Should be >= work_batch_size to avoid blocking the fetcher.
+    /// Default: worker_concurrency * 4
+    pub work_buffer_capacity: usize,
+
     /// Observability configuration for metrics and logging.
     /// Requires the `observability` feature flag for full functionality.
     /// Default: Disabled with basic logging
@@ -91,13 +117,21 @@ pub struct RuntimeOptions {
 
 impl Default for RuntimeOptions {
     fn default() -> Self {
+        let orchestration_concurrency = 2;
+        let worker_concurrency = 2;
+        
         Self {
             dispatcher_idle_sleep_ms: 100,
-            orchestration_concurrency: 2,
-            worker_concurrency: 2,
+            orchestration_concurrency,
+            worker_concurrency,
             orchestrator_lock_timeout_secs: 5,
             worker_lock_timeout_secs: 30,
             worker_lock_renewal_buffer_secs: 5,
+            // Batch fetching configuration (defaults based on concurrency)
+            orchestration_batch_size: orchestration_concurrency * 2,
+            orchestration_buffer_capacity: orchestration_concurrency * 4,
+            work_batch_size: worker_concurrency * 2,
+            work_buffer_capacity: worker_concurrency * 4,
             observability: ObservabilityConfig::default(),
         }
     }
@@ -194,6 +228,14 @@ pub struct Runtime {
     observability_handle: Option<observability::ObservabilityHandle>,
     /// Unique runtime instance ID (4-char hex, generated on start)
     runtime_id: String,
+    /// Orchestration item buffer (sender side for batch fetcher)
+    orchestration_buffer_tx: tokio::sync::mpsc::Sender<crate::providers::OrchestrationItem>,
+    /// Orchestration item buffer (receiver side for dispatchers)
+    orchestration_buffer_rx: Arc<Mutex<tokio::sync::mpsc::Receiver<crate::providers::OrchestrationItem>>>,
+    /// Work item buffer (sender side for batch fetcher)
+    work_buffer_tx: tokio::sync::mpsc::Sender<(WorkItem, String)>,
+    /// Work item buffer (receiver side for dispatchers)
+    work_buffer_rx: Arc<Mutex<tokio::sync::mpsc::Receiver<(WorkItem, String)>>>,
 }
 
 /// Introspection: descriptor of an orchestration derived from history.
@@ -413,6 +455,17 @@ impl Runtime {
                 .unwrap_or(0)
         );
 
+        // Initialize batch fetching buffers
+        let (orchestration_buffer_tx, orchestration_buffer_rx) = {
+            let (tx, rx) = tokio::sync::mpsc::channel(options.orchestration_buffer_capacity);
+            (tx, Arc::new(Mutex::new(rx)))
+        };
+
+        let (work_buffer_tx, work_buffer_rx) = {
+            let (tx, rx) = tokio::sync::mpsc::channel(options.work_buffer_capacity);
+            (tx, Arc::new(Mutex::new(rx)))
+        };
+
         // start request queue + worker
         let runtime = Arc::new(Self {
             joins: Mutex::new(joins),
@@ -425,7 +478,18 @@ impl Runtime {
             options,
             observability_handle,
             runtime_id,
+            orchestration_buffer_tx,
+            orchestration_buffer_rx,
+            work_buffer_tx,
+            work_buffer_rx,
         });
+
+        // Start batch fetcher services
+        let orch_fetcher_handle = runtime.clone().start_orchestration_batch_fetcher();
+        runtime.joins.lock().await.push(orch_fetcher_handle);
+
+        let work_fetcher_handle = runtime.clone().start_work_batch_fetcher();
+        runtime.joins.lock().await.push(work_fetcher_handle);
 
         // background orchestrator dispatcher (extracted from inline poller)
         let handle = runtime.clone().start_orchestration_dispatcher();
@@ -436,6 +500,199 @@ impl Runtime {
         runtime.joins.lock().await.push(work_handle);
 
         runtime
+    }
+
+    /// Start the orchestration batch fetcher service.
+    ///
+    /// This service continuously fetches batches of orchestration items
+    /// from the provider at regular intervals and sends them to the buffer.
+    ///
+    /// # How It Works
+    ///
+    /// 1. Check shutdown flag
+    /// 2. Fetch a batch from provider
+    /// 3. Send fetched items to buffer
+    /// 4. Sleep for polling interval
+    /// 5. Repeat until shutdown
+    fn start_orchestration_batch_fetcher(self: Arc<Self>) -> JoinHandle<()> {
+        let shutdown = self.shutdown_flag.clone();
+        let history_store = self.history_store.clone();
+        let batch_size = self.options.orchestration_batch_size;
+        let lock_timeout = self.options.orchestrator_lock_timeout_secs;
+        let idle_sleep = self.options.dispatcher_idle_sleep_ms;
+        
+        let buffer_tx = self.orchestration_buffer_tx.clone();
+
+        tokio::spawn(async move {
+            tracing::debug!("Orchestration batch fetcher started");
+
+            loop {
+                // Check shutdown flag
+                if shutdown.load(Ordering::Relaxed) {
+                    tracing::debug!("Orchestration batch fetcher exiting");
+                    break;
+                }
+
+                // Fetch a batch from provider
+                match history_store.fetch_orchestration_items_batch(batch_size, lock_timeout).await {
+                    Ok(items) if !items.is_empty() => {
+                        let fetched = items.len();
+                        tracing::debug!(
+                            target: "duroxide::runtime::batch_fetcher",
+                            fetched_items = fetched,
+                            "Fetched orchestration batch"
+                        );
+
+                        // Send all items to buffer, collecting unsent items if channel closes
+                        let mut sent_count = 0;
+                        let mut unsent_items = Vec::new();
+                        let mut items_iter = items.into_iter();
+                        
+                        for item in items_iter.by_ref() {
+                            match buffer_tx.send(item).await {
+                                Ok(()) => {
+                                    sent_count += 1;
+                                }
+                                Err(err) => {
+                                    // Channel closed - collect the failed item
+                                    unsent_items.push(err.0); // Extract item from SendError
+                                    // Collect all remaining items that we didn't try to send
+                                    unsent_items.extend(items_iter);
+                                    break;
+                                }
+                            }
+                        }
+                        
+                        // If channel closed, abandon all unsent items
+                        if !unsent_items.is_empty() {
+                            let mut abandoned_count = 0;
+                            for item in unsent_items {
+                                if let Err(e) = history_store.abandon_orchestration_item(&item.lock_token, None).await {
+                                    tracing::error!(
+                                        target: "duroxide::runtime::batch_fetcher",
+                                        error = %e,
+                                        instance = %item.instance,
+                                        "Failed to abandon orchestration item"
+                                    );
+                                } else {
+                                    abandoned_count += 1;
+                                }
+                            }
+                            
+                            tracing::warn!(
+                                target: "duroxide::runtime::batch_fetcher",
+                                sent = sent_count,
+                                abandoned = abandoned_count,
+                                total_fetched = fetched,
+                                "Orchestration buffer channel closed, abandoned unsent items"
+                            );
+                            
+                            return;
+                        }
+                    }
+                    Ok(_) => {
+                        // No items available, continue polling
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            target: "duroxide::runtime::batch_fetcher",
+                            error = %e,
+                            "Error fetching orchestration batch, will retry"
+                        );
+                    }
+                }
+
+                // Sleep before next poll
+                tokio::time::sleep(std::time::Duration::from_millis(idle_sleep)).await;
+            }
+
+            tracing::debug!("Orchestration batch fetcher stopped");
+        })
+    }
+
+    /// Start the work batch fetcher service.
+    ///
+    /// This service continuously fetches batches of work items
+    /// from the provider at regular intervals and sends them to the buffer.
+    ///
+    /// # How It Works
+    ///
+    /// 1. Check shutdown flag
+    /// 2. Fetch a batch from provider
+    /// 3. Send fetched items to buffer
+    /// 4. Sleep for polling interval
+    /// 5. Repeat until shutdown
+    fn start_work_batch_fetcher(self: Arc<Self>) -> JoinHandle<()> {
+        let shutdown = self.shutdown_flag.clone();
+        let history_store = self.history_store.clone();
+        let batch_size = self.options.work_batch_size;
+        let lock_timeout = self.options.worker_lock_timeout_secs;
+        let idle_sleep = self.options.dispatcher_idle_sleep_ms;
+        
+        let buffer_tx = self.work_buffer_tx.clone();
+
+        tokio::spawn(async move {
+            tracing::debug!("Work batch fetcher started");
+
+            loop {
+                // Check shutdown flag
+                if shutdown.load(Ordering::Relaxed) {
+                    tracing::debug!("Work batch fetcher exiting");
+                    break;
+                }
+
+                // Fetch a batch from provider
+                let items = history_store.fetch_work_items_batch(batch_size, lock_timeout).await;
+                
+                if !items.is_empty() {
+                    let fetched = items.len();
+                    tracing::debug!(
+                        target: "duroxide::runtime::batch_fetcher",
+                        fetched_items = fetched,
+                        "Fetched work batch"
+                    );
+
+                    // Send all items to buffer, collecting unsent items if channel closes
+                    let mut sent_count = 0;
+                    let mut unsent_items = Vec::new();
+                    let mut items_iter = items.into_iter();
+                    
+                    for item in items_iter.by_ref() {
+                        match buffer_tx.send(item).await {
+                            Ok(()) => {
+                                sent_count += 1;
+                            }
+                            Err(err) => {
+                                // Channel closed - collect the failed item
+                                unsent_items.push(err.0); // Extract item from SendError
+                                // Collect all remaining items that we didn't try to send
+                                unsent_items.extend(items_iter);
+                                break;
+                            }
+                        }
+                    }
+                    
+                    // If channel closed, log warning (work items expire naturally via lock timeout)
+                    if !unsent_items.is_empty() {
+                        tracing::warn!(
+                            target: "duroxide::runtime::batch_fetcher",
+                            sent = sent_count,
+                            unsent = unsent_items.len(),
+                            total_fetched = fetched,
+                            lock_timeout_secs = lock_timeout,
+                            "Work buffer channel closed, {} unsent work items will expire after lock timeout",
+                            unsent_items.len()
+                        );
+                        return;
+                    }
+                }
+
+                // Sleep before next poll
+                tokio::time::sleep(std::time::Duration::from_millis(idle_sleep)).await;
+            }
+
+            tracing::debug!("Work batch fetcher stopped");
+        })
     }
 
     /// Shutdown the runtime.

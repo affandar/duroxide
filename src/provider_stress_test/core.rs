@@ -95,6 +95,8 @@ pub async fn run_stress_test(
         dispatcher_idle_sleep_ms: 100,
         orchestration_concurrency: config.orch_concurrency,
         worker_concurrency: config.worker_concurrency,
+        orchestration_batch_size: 1,  // Testing with batch_size=1
+        work_batch_size: 1,            // Testing with batch_size=1
         ..Default::default()
     };
     let rt = runtime::Runtime::start_with_options(provider.clone(), activities, orchestrations, options).await;

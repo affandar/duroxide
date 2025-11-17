@@ -1,9 +1,12 @@
 ## Durable Task Rust Core – TODOs
 
 
+- Add abandon to worker queue, and wire it up with the batch prefetch
 - Mgmt API feedback
   - list instances should get back version, status, and other basic info.
-- Fix up the stress tests, make them more usable by providers
+  - list instances API needs to be scalable, thousands of instances
+  - truncate/archive old instances
+- Agentic orchestration engine
 - API endpoint for runtime, MCP server, orch status etc. 
 - Metrics/logging dashboard 
 - Refactor tests, figure out what are the unit tests vs not
@@ -31,9 +34,6 @@
 - Introduce a provider error type with Retryable/NonRetryable classification; update runtime to use it for retries across all provider ops (not just ack_orchestration_item)
 - Proper lock / visibility timeouts
 - review duplicate orch instance ids
-- perf pass over replay engine
-- parallelize dispatcher loops
-- lock TTL for timer and worker queues and update lease
 - Reduce ornamental user code in orchestrations and acivities
 - Continue the provider simplification
 - Rename to provider
@@ -57,6 +57,10 @@
 
 ## DONE
 
+- perf pass over replay engine
+- lock TTL for timer and worker queues and update lease
+- parallelize dispatcher loops
+- Fix up the stress tests, make them more usable by providers
 - Disable infra logs by default
 - conventions and changes for exporting and importing orchestration and activity registries across crates
 - make the provider tests usable by outside implementors
