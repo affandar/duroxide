@@ -100,7 +100,7 @@ impl Default for ObservabilityConfig {
 }
 
 fn default_filter_expression(level: &str) -> String {
-    format!("warn,duroxide::orchestrator={level},duroxide::activity={level}")
+    format!("warn,duroxide::orchestration={level},duroxide::activity={level}")
 }
 
 /// Snapshot of key observability metrics counters for tests and diagnostics.
