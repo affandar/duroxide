@@ -185,6 +185,7 @@ mod tests {
             "test-input".to_string(),
             Some("test-orch".to_string()),
             Some("1.0.0".to_string()),
+            "test-worker-id",
         );
 
         match result {
@@ -221,6 +222,7 @@ mod tests {
             "test-input".to_string(),
             Some("test-orch".to_string()),
             Some("1.0.0".to_string()),
+            "test-worker-id",
         );
 
         match result {
@@ -280,6 +282,7 @@ mod tests {
             "test-input".to_string(),
             Some("test-orch".to_string()),
             Some("1.0.0".to_string()),
+            "test-worker-id",
         );
 
         // With the mock handler, the orchestration completes successfully

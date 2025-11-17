@@ -62,6 +62,7 @@ impl Runtime {
         history_mgr: &mut crate::runtime::state_helpers::HistoryManager,
         workitem_reader: &crate::runtime::state_helpers::WorkItemReader,
         execution_id: u64,
+        worker_id: &str,
     ) -> (Vec<Event>, Vec<WorkItem>, Vec<WorkItem>, Result<String, String>) {
         let orchestration_name = &workitem_reader.orchestration_name;
         debug!(instance, orchestration_name, "🚀 Starting atomic single execution");
@@ -152,7 +153,7 @@ impl Runtime {
         let orch_version = history_mgr.version();
 
         // Execute the orchestration logic
-        let turn_result = turn.execute_orchestration(handler.clone(), input.clone(), orch_name, orch_version);
+        let turn_result = turn.execute_orchestration(handler.clone(), input.clone(), orch_name, orch_version, worker_id);
 
         // Collect history delta from turn
         history_mgr.extend(turn.history_delta().to_vec());

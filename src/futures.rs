@@ -621,6 +621,7 @@ impl Future for DurableFuture {
                                 let execution_id = inner.execution_id;
                                 let orch_name = inner.orchestration_name.as_deref().unwrap_or("unknown");
                                 let orch_version = inner.orchestration_version.as_deref().unwrap_or("unknown");
+                                let worker_id = inner.worker_id.as_deref().unwrap_or("unknown");
 
                                 // Log to tracing only on first execution (not during replay)
                                 // Include instance context for correlation
@@ -631,6 +632,7 @@ impl Future for DurableFuture {
                                         execution_id = %execution_id,
                                         orchestration_name = %orch_name,
                                         orchestration_version = %orch_version,
+                                        worker_id = %worker_id,
                                         "{}", message
                                     ),
                                     "WARN" => tracing::warn!(
@@ -639,6 +641,7 @@ impl Future for DurableFuture {
                                         execution_id = %execution_id,
                                         orchestration_name = %orch_name,
                                         orchestration_version = %orch_version,
+                                        worker_id = %worker_id,
                                         "{}", message
                                     ),
                                     "DEBUG" => tracing::debug!(
@@ -647,6 +650,7 @@ impl Future for DurableFuture {
                                         execution_id = %execution_id,
                                         orchestration_name = %orch_name,
                                         orchestration_version = %orch_version,
+                                        worker_id = %worker_id,
                                         "{}", message
                                     ),
                                     _ => tracing::info!(
@@ -655,6 +659,7 @@ impl Future for DurableFuture {
                                         execution_id = %execution_id,
                                         orchestration_name = %orch_name,
                                         orchestration_version = %orch_version,
+                                        worker_id = %worker_id,
                                         "{}", message
                                     ),
                                 }

@@ -381,6 +381,7 @@ impl ReplayEngine {
         input: String,
         orchestration_name: Option<String>,
         orchestration_version: Option<String>,
+        worker_id: &str,
     ) -> TurnResult {
         debug!(
             instance = %self.instance,
@@ -399,6 +400,7 @@ impl ReplayEngine {
         // Run orchestration with unified cursor model (metadata passed from caller)
         let execution_id = self.get_current_execution_id();
         let instance_id = self.instance.clone();
+        let worker_id_owned = worker_id.to_string();
         let run_result = catch_unwind(AssertUnwindSafe(|| {
             crate::run_turn_with_status(
                 working_history,
@@ -406,6 +408,7 @@ impl ReplayEngine {
                 instance_id,
                 orchestration_name,
                 orchestration_version,
+                worker_id_owned,
                 move |ctx| {
                     let h = handler.clone();
                     let inp = input.clone();

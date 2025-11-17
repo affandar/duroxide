@@ -664,6 +664,7 @@ struct CtxInner {
     instance_id: String,
     orchestration_name: Option<String>,
     orchestration_version: Option<String>,
+    worker_id: Option<String>,
     logging_enabled_this_poll: bool,
     // When set, indicates a nondeterminism condition detected by futures during polling
     nondeterminism_error: Option<String>,
@@ -676,6 +677,7 @@ impl CtxInner {
         instance_id: String,
         orchestration_name: Option<String>,
         orchestration_version: Option<String>,
+        worker_id: Option<String>,
     ) -> Self {
         // Compute next event_id based on maximum event_id in history
         // (skip event_id=0 which are placeholders)
@@ -698,6 +700,7 @@ impl CtxInner {
             instance_id,
             orchestration_name,
             orchestration_version,
+            worker_id,
             logging_enabled_this_poll: false,
             nondeterminism_error: None,
         }
@@ -768,6 +771,7 @@ pub struct ActivityContext {
     orchestration_version: String,
     activity_name: String,
     activity_id: u64,
+    worker_id: String,
 }
 
 impl ActivityContext {
@@ -779,6 +783,7 @@ impl ActivityContext {
         orchestration_version: String,
         activity_name: String,
         activity_id: u64,
+        worker_id: String,
     ) -> Self {
         Self {
             instance_id,
@@ -787,6 +792,7 @@ impl ActivityContext {
             orchestration_version,
             activity_name,
             activity_id,
+            worker_id,
         }
     }
 
@@ -815,6 +821,11 @@ impl ActivityContext {
         &self.activity_name
     }
 
+    /// Returns the worker dispatcher ID processing this activity.
+    pub fn worker_id(&self) -> &str {
+        &self.worker_id
+    }
+
     /// Emit an INFO level trace entry associated with this activity.
     pub fn trace_info(&self, message: impl Into<String>) {
         tracing::info!(
@@ -825,6 +836,7 @@ impl ActivityContext {
             orchestration_version = %self.orchestration_version,
             activity_name = %self.activity_name,
             activity_id = %self.activity_id,
+            worker_id = %self.worker_id,
             "{}",
             message.into()
         );
@@ -840,6 +852,7 @@ impl ActivityContext {
             orchestration_version = %self.orchestration_version,
             activity_name = %self.activity_name,
             activity_id = %self.activity_id,
+            worker_id = %self.worker_id,
             "{}",
             message.into()
         );
@@ -855,6 +868,7 @@ impl ActivityContext {
             orchestration_version = %self.orchestration_version,
             activity_name = %self.activity_name,
             activity_id = %self.activity_id,
+            worker_id = %self.worker_id,
             "{}",
             message.into()
         );
@@ -870,6 +884,7 @@ impl ActivityContext {
             orchestration_version = %self.orchestration_version,
             activity_name = %self.activity_name,
             activity_id = %self.activity_id,
+            worker_id = %self.worker_id,
             "{}",
             message.into()
         );
@@ -897,6 +912,28 @@ impl OrchestrationContext {
                 instance_id,
                 orchestration_name,
                 orchestration_version,
+                None, // worker_id not available for public constructor
+            ))),
+        }
+    }
+
+    /// Construct a new context with worker_id (internal use only).
+    pub(crate) fn new_with_worker_id(
+        history: Vec<Event>,
+        execution_id: u64,
+        instance_id: String,
+        orchestration_name: Option<String>,
+        orchestration_version: Option<String>,
+        worker_id: String,
+    ) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(CtxInner::new(
+                history,
+                execution_id,
+                instance_id,
+                orchestration_name,
+                orchestration_version,
+                Some(worker_id),
             ))),
         }
     }
@@ -1574,17 +1611,19 @@ pub fn run_turn_with_status<O, F>(
     instance_id: String,
     orchestration_name: Option<String>,
     orchestration_version: Option<String>,
+    worker_id: String,
     orchestrator: impl Fn(OrchestrationContext) -> F,
 ) -> (Vec<Event>, Vec<Action>, Option<O>, Option<String>)
 where
     F: Future<Output = O>,
 {
-    let ctx = OrchestrationContext::new(
+    let ctx = OrchestrationContext::new_with_worker_id(
         history,
         execution_id,
         instance_id,
         orchestration_name,
         orchestration_version,
+        worker_id,
     );
     ctx.inner.lock().unwrap().logging_enabled_this_poll = false;
     let mut fut = orchestrator(ctx.clone());

@@ -77,6 +77,7 @@ impl Runtime {
                                         orch_version,
                                         name.clone(),
                                         id,
+                                        worker_id.clone(),
                                     );
 
                                     // Log activity start with all correlation fields

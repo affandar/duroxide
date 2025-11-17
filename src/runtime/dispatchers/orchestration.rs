@@ -129,7 +129,7 @@ impl Runtime {
         // Process the execution (unified path)
         let (worker_items, orchestrator_items, execution_id_for_ack) = if workitem_reader.has_orchestration_name() {
             let (wi, oi) = self
-                .handle_orchestration_atomic(instance, &mut history_mgr, &workitem_reader, execution_id_to_use)
+                .handle_orchestration_atomic(instance, &mut history_mgr, &workitem_reader, execution_id_to_use, worker_id)
                 .await;
             (wi, oi, execution_id_to_use)
         } else {
@@ -312,6 +312,7 @@ impl Runtime {
         history_mgr: &mut HistoryManager,
         workitem_reader: &WorkItemReader,
         execution_id: u64,
+        worker_id: &str,
     ) -> (Vec<WorkItem>, Vec<WorkItem>) {
         let mut worker_items = Vec::new();
         let mut orchestrator_items = Vec::new();
@@ -360,7 +361,7 @@ impl Runtime {
         // Run the atomic execution to get all changes
         let (_exec_history_delta, exec_worker_items, exec_orchestrator_items, _result) = self
             .clone()
-            .run_single_execution_atomic(instance, history_mgr, workitem_reader, execution_id)
+            .run_single_execution_atomic(instance, history_mgr, workitem_reader, execution_id, worker_id)
             .await;
 
         // Combine all changes (history already in history_mgr via mutation)
