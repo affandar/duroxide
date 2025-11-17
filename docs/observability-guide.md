@@ -32,11 +32,11 @@ let rt = Runtime::start_with_options(store, activities, orchestrations, options)
 
 **Output Format**:
 ```
-2025-11-01T17:22:04.494Z INFO duroxide::runtime Orchestration started instance_id=order-123 execution_id=1 orchestration_name=ProcessOrder worker_id=orch-cd541
-2025-11-01T17:22:04.596Z INFO duroxide::runtime Activity started instance_id=order-123 execution_id=1 activity_name=ValidatePayment activity_id=3 worker_id=work-cd541
-2025-11-01T17:22:04.698Z INFO duroxide::runtime Activity completed instance_id=order-123 execution_id=1 activity_name=ValidatePayment worker_id=work-cd541 outcome="success" duration_ms=102
-2025-11-01T17:22:04.806Z INFO duroxide::orchestration Payment validated successfully instance_id=order-123 execution_id=1 orchestration_name=ProcessOrder
-2025-11-01T17:22:05.010Z INFO duroxide::runtime Orchestration completed instance_id=order-123 execution_id=1 worker_id=orch-cd541 history_events=9
+2025-11-01T17:22:04.494Z INFO duroxide::runtime Orchestration started instance_id=order-123 execution_id=1 orchestration_name=ProcessOrder worker_id=orch-0-cd54
+2025-11-01T17:22:04.596Z INFO duroxide::runtime Activity started instance_id=order-123 execution_id=1 activity_name=ValidatePayment activity_id=3 worker_id=work-1-cd54
+2025-11-01T17:22:04.698Z INFO duroxide::runtime Activity completed instance_id=order-123 execution_id=1 activity_name=ValidatePayment worker_id=work-1-cd54 outcome="success" duration_ms=102
+2025-11-01T17:22:04.806Z INFO duroxide::orchestration Payment validated successfully instance_id=order-123 execution_id=1 orchestration_name=ProcessOrder worker_id=orch-0-cd54
+2025-11-01T17:22:05.010Z INFO duroxide::runtime Orchestration completed instance_id=order-123 execution_id=1 worker_id=orch-0-cd54 history_events=9
 ```
 
 Format: `timestamp level module message field1=value1 field2=value2 ...`
@@ -57,7 +57,7 @@ ObservabilityConfig {
 }
 ```
 
-Output: `timestamp level module [instance_id] [worker:worker_id] message`
+Output: `timestamp level module [instance_id] [worker_id] message`
 
 ### Pretty Format
 
@@ -73,7 +73,7 @@ ObservabilityConfig {
 
 Output includes all fields as `key=value` pairs:
 ```
-2024-10-30T10:15:23.456Z INFO duroxide::runtime instance_id=order-123 execution_id=1 orchestration_name=ProcessOrder version=1.0.0 worker_id=0: Orchestration started
+2024-10-30T10:15:23.456Z INFO duroxide::runtime instance_id=order-123 execution_id=1 orchestration_name=ProcessOrder version=1.0.0 worker_id=orch-0-a3f9: Orchestration started
 ```
 
 ### JSON Format
@@ -100,7 +100,7 @@ Every log entry includes these fields for correlation:
 - **orchestration_version** - Semantic version
 - **activity_name** - Activity name (in activity context)
 - **activity_id** - Event ID of the activity
-- **worker_id** - Dispatcher worker ID
+- **worker_id** - Dispatcher worker ID (format: `work-{index}-{runtime_id}` or `orch-{index}-{runtime_id}`)
 - **timestamp** - ISO8601 timestamp
 
 ### Example: Tracing an Orchestration

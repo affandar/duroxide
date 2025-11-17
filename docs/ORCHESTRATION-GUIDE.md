@@ -11,10 +11,11 @@
 2. [Core Concepts](#core-concepts)
 3. [Determinism Rules](#determinism-rules)
 4. [API Reference](#api-reference)
-5. [Common Patterns](#common-patterns)
-6. [Anti-Patterns (What to Avoid)](#anti-patterns)
-7. [Complete Examples](#complete-examples)
-8. [Testing Your Orchestrations](#testing)
+5. [Client API Reference](#client-api-reference)
+6. [Common Patterns](#common-patterns)
+7. [Anti-Patterns (What to Avoid)](#anti-patterns)
+8. [Complete Examples](#complete-examples)
+9. [Testing Your Orchestrations](#testing)
 
 ---
 
@@ -441,6 +442,392 @@ async fn utcnow_ms(&self) -> Result<u64, String>
 let correlation_id = ctx.new_guid().await?;
 let created_at = ctx.utcnow_ms().await?;
 ```
+
+---
+
+## Client API Reference
+
+The `Client` provides control-plane operations for managing orchestration instances. It communicates with the runtime through the shared `Provider` (no direct coupling).
+
+### Creating a Client
+
+```rust
+use duroxide::Client;
+use duroxide::providers::sqlite::SqliteProvider;
+use std::sync::Arc;
+
+let store = Arc::new(SqliteProvider::new("sqlite:./data.db", None).await?);
+let client = Client::new(store);
+```
+
+**Key Points:**
+- Client shares the same Provider instance as the Runtime
+- Client is `Clone` and thread-safe
+- Can be used from any process, even without a running Runtime
+
+### Core Operations
+
+#### Start an Orchestration
+
+```rust
+// Basic string input
+client.start_orchestration("order-123", "ProcessOrder", r#"{"customer_id": "c1"}"#).await?;
+
+// With explicit version
+client.start_orchestration_versioned("order-456", "ProcessOrder", "2.0.0", "{}").await?;
+
+// With typed input
+#[derive(Serialize)]
+struct OrderInput {
+    customer_id: String,
+    amount: f64,
+}
+
+let input = OrderInput {
+    customer_id: "c1".to_string(),
+    amount: 99.99,
+};
+client.start_orchestration_typed("order-789", "ProcessOrder", &input).await?;
+```
+
+**Behavior:**
+- Enqueues a `StartOrchestration` work item
+- Runtime picks it up and begins execution
+- Returns immediately (non-blocking)
+- Use `wait_for_orchestration()` to wait for completion
+
+#### Raise External Event
+
+```rust
+// String payload
+client.raise_event("order-123", "PaymentReceived", r#"{"amount": 99.99}"#).await?;
+
+// Typed payload
+#[derive(Serialize)]
+struct PaymentEvent {
+    transaction_id: String,
+    amount: f64,
+}
+
+let event = PaymentEvent {
+    transaction_id: "tx-456".to_string(),
+    amount: 99.99,
+};
+client.raise_event_typed("order-123", "PaymentReceived", &event).await?;
+```
+
+**Use Cases:**
+- Human approvals
+- Webhook callbacks
+- External system notifications
+- Timer-based triggers from external schedulers
+
+#### Cancel an Orchestration
+
+```rust
+client.cancel_instance("order-123", "Customer requested cancellation").await?;
+```
+
+**Behavior:**
+- Enqueues a `CancelInstance` work item
+- Runtime processes it on next turn
+- Orchestration receives cancellation and can handle gracefully
+
+#### Check Status
+
+```rust
+use duroxide::OrchestrationStatus;
+
+let status = client.get_orchestration_status("order-123").await;
+
+match status {
+    OrchestrationStatus::Running => println!("Still processing..."),
+    OrchestrationStatus::Completed { output } => println!("Done: {}", output),
+    OrchestrationStatus::Failed { details } => {
+        eprintln!("Failed: {}", details.display_message());
+        eprintln!("Category: {}", details.category());
+    }
+    OrchestrationStatus::NotFound => println!("Instance doesn't exist"),
+}
+```
+
+**Returns:**
+- `Running` - Orchestration in progress
+- `Completed { output }` - Successful completion with result
+- `Failed { details }` - Failed with error details
+- `NotFound` - Instance doesn't exist or no history
+
+#### Wait for Completion
+
+```rust
+use std::time::Duration;
+
+// Wait up to 30 seconds
+let status = client.wait_for_orchestration("order-123", Duration::from_secs(30)).await?;
+
+match status {
+    OrchestrationStatus::Completed { output } => {
+        println!("Success: {}", output);
+    }
+    OrchestrationStatus::Failed { details } => {
+        eprintln!("Failed: {}", details.display_message());
+    }
+    _ => unreachable!("wait_for_orchestration only returns terminal states"),
+}
+
+// Typed output
+#[derive(Deserialize)]
+struct OrderResult {
+    order_id: String,
+    status: String,
+}
+
+let result: OrderResult = client
+    .wait_for_orchestration_typed("order-123", Duration::from_secs(30))
+    .await?;
+```
+
+**Behavior:**
+- Polls status with exponential backoff (5ms → 100ms)
+- Returns when terminal state reached or timeout
+- Only returns `Completed` or `Failed`, never `Running` or `NotFound`
+
+### Management Operations (Optional)
+
+These methods require a provider that implements `ProviderAdmin`. Check availability first:
+
+```rust
+if client.has_management_capability() {
+    // Management operations available
+} else {
+    // Provider doesn't support management
+}
+```
+
+#### List Instances
+
+```rust
+// List all instances
+let instances = client.list_all_instances().await?;
+for instance in instances {
+    println!("Instance: {}", instance);
+}
+
+// Filter by status
+let completed = client.list_instances_by_status("Completed").await?;
+let running = client.list_instances_by_status("Running").await?;
+let failed = client.list_instances_by_status("Failed").await?;
+```
+
+#### Get Instance Metadata
+
+```rust
+let info = client.get_instance_info("order-123").await?;
+
+println!("Instance: {}", info.instance_id);
+println!("Orchestration: {} v{}", info.orchestration_name, info.orchestration_version);
+println!("Status: {}", info.status);
+println!("Current Execution: {}", info.current_execution_id);
+if let Some(output) = info.output {
+    println!("Output: {}", output);
+}
+```
+
+#### Inspect Executions
+
+```rust
+// List all execution IDs for an instance
+let executions = client.list_executions("order-123").await?;
+println!("Executions: {:?}", executions);  // [1, 2, 3] if ContinueAsNew used
+
+// Get execution metadata
+let exec_info = client.get_execution_info("order-123", 1).await?;
+println!("Status: {}", exec_info.status);
+println!("Events: {}", exec_info.event_count);
+
+// Read execution history
+let history = client.read_execution_history("order-123", 1).await?;
+for event in history {
+    println!("Event: {:?}", event);
+}
+```
+
+#### System Metrics
+
+```rust
+let metrics = client.get_system_metrics().await?;
+println!("Total instances: {}", metrics.total_instances);
+println!("Running: {}", metrics.running_instances);
+println!("Completed: {}", metrics.completed_instances);
+println!("Failed: {}", metrics.failed_instances);
+
+let queues = client.get_queue_depths().await?;
+println!("Orchestrator queue: {}", queues.orchestrator_queue);
+println!("Worker queue: {}", queues.worker_queue);
+```
+
+### Client Usage Patterns
+
+#### Fire-and-Forget
+
+```rust
+// Start orchestration and don't wait
+client.start_orchestration("background-job-1", "ProcessData", "input").await?;
+// Continue with other work immediately
+```
+
+#### Synchronous Wait
+
+```rust
+// Start and wait for completion
+client.start_orchestration("sync-job-1", "ProcessData", "input").await?;
+let status = client.wait_for_orchestration("sync-job-1", Duration::from_secs(30)).await?;
+```
+
+#### Polling for Progress
+
+```rust
+client.start_orchestration("long-job-1", "ProcessData", "input").await?;
+
+loop {
+    let status = client.get_orchestration_status("long-job-1").await;
+    match status {
+        OrchestrationStatus::Running => {
+            println!("Still running...");
+            tokio::time::sleep(Duration::from_secs(5)).await;
+        }
+        OrchestrationStatus::Completed { output } => {
+            println!("Completed: {}", output);
+            break;
+        }
+        OrchestrationStatus::Failed { details } => {
+            eprintln!("Failed: {}", details.display_message());
+            break;
+        }
+        _ => break,
+    }
+}
+```
+
+#### Human-in-the-Loop
+
+```rust
+// In your orchestration:
+async fn approval_workflow(ctx: OrchestrationContext, order_id: String) -> Result<String, String> {
+    let result = ctx.schedule_activity("SubmitForApproval", order_id).into_activity().await?;
+    
+    // Wait for approval event
+    let approval = ctx.schedule_wait("ManagerApproval").into_event().await;
+    
+    Ok(approval)
+}
+
+// External system receives approval and raises event:
+async fn handle_approval(client: &Client, order_id: &str, approved: bool) {
+    let event_data = serde_json::json!({
+        "approved": approved,
+        "approver": "manager@company.com",
+        "timestamp": chrono::Utc::now().to_rfc3339(),
+    });
+    
+    client.raise_event(
+        &format!("order-{}", order_id),
+        "ManagerApproval",
+        event_data.to_string()
+    ).await.unwrap();
+}
+```
+
+#### Dashboard / Monitoring
+
+```rust
+async fn show_dashboard(client: &Client) {
+    if !client.has_management_capability() {
+        println!("Management features not available");
+        return;
+    }
+    
+    // System overview
+    let metrics = client.get_system_metrics().await.unwrap();
+    println!("=== System Status ===");
+    println!("Total: {} | Running: {} | Completed: {} | Failed: {}",
+        metrics.total_instances,
+        metrics.running_instances,
+        metrics.completed_instances,
+        metrics.failed_instances
+    );
+    
+    // Queue health
+    let queues = client.get_queue_depths().await.unwrap();
+    println!("\n=== Queue Depths ===");
+    println!("Orchestrator: {} | Worker: {}", 
+        queues.orchestrator_queue, 
+        queues.worker_queue
+    );
+    
+    // Recent failures
+    let failed = client.list_instances_by_status("Failed").await.unwrap();
+    println!("\n=== Recent Failures ===");
+    for instance in failed.iter().take(10) {
+        let info = client.get_instance_info(instance).await.unwrap();
+        println!("{}: {} ({})", instance, info.orchestration_name, info.status);
+    }
+}
+```
+
+### Error Handling
+
+```rust
+use duroxide::OrchestrationStatus;
+
+match client.start_orchestration("test", "MyOrch", "input").await {
+    Ok(()) => println!("Started successfully"),
+    Err(e) => eprintln!("Failed to start: {}", e),
+}
+
+// Wait with timeout handling
+match client.wait_for_orchestration("test", Duration::from_secs(10)).await {
+    Ok(OrchestrationStatus::Completed { output }) => println!("Done: {}", output),
+    Ok(OrchestrationStatus::Failed { details }) => {
+        eprintln!("Orchestration failed: {}", details.display_message());
+        
+        // Check error category for handling
+        match details.category() {
+            "application" => {
+                // Business logic error - may want to retry with different input
+            }
+            "configuration" => {
+                // Unregistered orchestration/activity - needs deployment fix
+            }
+            "infrastructure" => {
+                // Provider/database error - may be transient
+            }
+            _ => {}
+        }
+    }
+    Err(e) => eprintln!("Timeout or error: {:?}", e),
+    _ => {}
+}
+```
+
+### Client API Summary
+
+| Method | Purpose | Returns |
+|--------|---------|---------|
+| `start_orchestration()` | Start new instance | `Result<(), String>` |
+| `raise_event()` | Send external event | `Result<(), String>` |
+| `cancel_instance()` | Request cancellation | `Result<(), String>` |
+| `get_orchestration_status()` | Check status | `OrchestrationStatus` |
+| `wait_for_orchestration()` | Wait for completion | `Result<OrchestrationStatus, WaitError>` |
+| `has_management_capability()` | Check feature availability | `bool` |
+| `list_all_instances()` | List instances | `Result<Vec<String>, String>` |
+| `list_instances_by_status()` | Filter by status | `Result<Vec<String>, String>` |
+| `get_instance_info()` | Instance metadata | `Result<InstanceInfo, String>` |
+| `get_execution_info()` | Execution metadata | `Result<ExecutionInfo, String>` |
+| `list_executions()` | List execution IDs | `Result<Vec<u64>, String>` |
+| `read_execution_history()` | Read history | `Result<Vec<Event>, String>` |
+| `get_system_metrics()` | System stats | `Result<SystemMetrics, String>` |
+| `get_queue_depths()` | Queue depths | `Result<QueueDepths, String>` |
 
 ---
 

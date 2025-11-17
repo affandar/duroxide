@@ -331,7 +331,7 @@ pub trait ReplayEngine {
 ```
 
 **Replay Process:**
-1. **Context Creation**: `OrchestrationContext::new(history)`
+1. **Context Creation**: `OrchestrationContext::new(history, execution_id, instance_id, name, version, worker_id)`
 2. **Single Poll**: Execute orchestration function once via `poll_once()`
 3. **Decision Extraction**: Collect `Action`s recorded during poll
 4. **History Update**: Append new events based on decisions
@@ -479,7 +479,14 @@ pub fn run_turn_with_claims<O, F>(
 where
     F: Future<Output = O>,
 {
-    let ctx = OrchestrationContext::new(history, /* execution_id */ 1);
+    let ctx = OrchestrationContext::new(
+        history,
+        /* execution_id */ 1,
+        "test-instance".to_string(),
+        Some("TestOrch".to_string()),
+        Some("1.0.0".to_string()),
+        None, // No worker_id in standalone execution
+    );
     
     let mut fut = orchestrator(ctx.clone());
     match poll_once(&mut fut) {

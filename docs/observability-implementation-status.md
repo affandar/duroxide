@@ -30,11 +30,11 @@ Last updated: 2025-11-01
 
 **Compact Format** (default):
 ```
-2025-11-01T17:22:04.494Z INFO duroxide::runtime Orchestration started instance_id=greeting-1 execution_id=1 orchestration_name=GreetingWorkflow worker_id=orch-cd541
-2025-11-01T17:22:04.596Z INFO duroxide::runtime Activity started instance_id=greeting-1 execution_id=1 activity_name=Greet activity_id=3 worker_id=work-cd541
-2025-11-01T17:22:04.698Z INFO duroxide::runtime Activity completed instance_id=greeting-1 execution_id=1 activity_name=Greet worker_id=work-cd541 outcome="success" duration_ms=102
-2025-11-01T17:22:04.806Z INFO duroxide::orchestration Got greeting: Hello, World! instance_id=greeting-1 execution_id=1 orchestration_name=GreetingWorkflow
-2025-11-01T17:22:05.010Z INFO duroxide::runtime Orchestration completed instance_id=greeting-1 execution_id=1 worker_id=orch-cd541 history_events=9
+2025-11-01T17:22:04.494Z INFO duroxide::runtime Orchestration started instance_id=greeting-1 execution_id=1 orchestration_name=GreetingWorkflow worker_id=orch-0-cd54
+2025-11-01T17:22:04.596Z INFO duroxide::runtime Activity started instance_id=greeting-1 execution_id=1 activity_name=Greet activity_id=3 worker_id=work-1-cd54
+2025-11-01T17:22:04.698Z INFO duroxide::runtime Activity completed instance_id=greeting-1 execution_id=1 activity_name=Greet worker_id=work-1-cd54 outcome="success" duration_ms=102
+2025-11-01T17:22:04.806Z INFO duroxide::orchestration Got greeting: Hello, World! instance_id=greeting-1 execution_id=1 orchestration_name=GreetingWorkflow worker_id=orch-0-cd54
+2025-11-01T17:22:05.010Z INFO duroxide::runtime Orchestration completed instance_id=greeting-1 execution_id=1 worker_id=orch-0-cd54 history_events=9
 ```
 
 **Flat Structure**:
@@ -49,7 +49,7 @@ Last updated: 2025-11-01
 
 **Pretty Format** (with all fields):
 ```
-2025-11-01T03:52:17.466Z INFO duroxide::runtime instance_id=greeting-1 execution_id=1 orchestration_name=GreetingWorkflow orchestration_version=1.0.0 worker_id=orch-a1b2c: Orchestration started
+2025-11-01T03:52:17.466Z INFO duroxide::runtime instance_id=greeting-1 execution_id=1 orchestration_name=GreetingWorkflow orchestration_version=1.0.0 worker_id=orch-0-a1b2: Orchestration started
 ```
 
 ### Documentation

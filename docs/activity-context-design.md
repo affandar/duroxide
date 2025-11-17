@@ -285,6 +285,7 @@ WorkItem::ActivityExecute {
         orch_metadata.as_ref().map(|d| d.version.clone()).unwrap_or_else(|| "unknown".to_string()),
         name.clone(),
         id,
+        worker_id.clone(),
     );
     
     // Log activity start
@@ -393,6 +394,7 @@ fn test_activity_context_creation() {
         "1.0.0".to_string(),
         "TestActivity".to_string(),
         5,
+        "test-worker".to_string(),
     );
     
     assert_eq!(ctx.instance_id(), "test-instance");
@@ -416,6 +418,7 @@ async fn test_activity_context_trace_methods() {
         "1.0.0".to_string(),
         "TestActivity".to_string(),
         5,
+        "test-worker".to_string(),
     );
     
     ctx.trace_info("Test info message");
@@ -439,6 +442,7 @@ fn test_activity_context_clone() {
         "1.0.0".to_string(),
         "Activity".to_string(),
         5,
+        "test-worker".to_string(),
     );
     
     let ctx2 = ctx1.clone();
@@ -470,6 +474,7 @@ async fn test_activity_handler_with_context() {
         "1.0.0".to_string(),
         "TestActivity".to_string(),
         5,
+        "test-worker".to_string(),
     );
     
     let result = activity.invoke(ctx, "hello".to_string()).await.unwrap();
@@ -502,6 +507,7 @@ async fn test_register_activity_with_context() {
         "1.0.0".to_string(),
         "TestActivity".to_string(),
         1,
+        "test-worker".to_string(),
     );
     
     let result = handler.invoke(ctx, "test".to_string()).await.unwrap();
@@ -531,6 +537,7 @@ async fn test_register_typed_activity_with_context() {
         "1.0.0".to_string(),
         "Add".to_string(),
         1,
+        "test-worker".to_string(),
     );
     
     let input_json = r#"{"a": 5, "b": 3}"#;

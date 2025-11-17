@@ -898,12 +898,19 @@ pub struct OrchestrationContext {
 
 impl OrchestrationContext {
     /// Construct a new context from an existing history vector.
+    /// 
+    /// # Parameters
+    /// 
+    /// * `worker_id` - Optional dispatcher worker ID for logging correlation.
+    ///   - `Some(id)`: Used by runtime dispatchers to include worker_id in traces
+    ///   - `None`: Used by standalone/test execution without runtime context
     pub fn new(
         history: Vec<Event>,
         execution_id: u64,
         instance_id: String,
         orchestration_name: Option<String>,
         orchestration_version: Option<String>,
+        worker_id: Option<String>,
     ) -> Self {
         Self {
             inner: Arc::new(Mutex::new(CtxInner::new(
@@ -912,28 +919,7 @@ impl OrchestrationContext {
                 instance_id,
                 orchestration_name,
                 orchestration_version,
-                None, // worker_id not available for public constructor
-            ))),
-        }
-    }
-
-    /// Construct a new context with worker_id (internal use only).
-    pub(crate) fn new_with_worker_id(
-        history: Vec<Event>,
-        execution_id: u64,
-        instance_id: String,
-        orchestration_name: Option<String>,
-        orchestration_version: Option<String>,
-        worker_id: String,
-    ) -> Self {
-        Self {
-            inner: Arc::new(Mutex::new(CtxInner::new(
-                history,
-                execution_id,
-                instance_id,
-                orchestration_name,
-                orchestration_version,
-                Some(worker_id),
+                worker_id,
             ))),
         }
     }
@@ -1584,6 +1570,7 @@ where
         instance_id,
         orchestration_name,
         orchestration_version,
+        None, // No worker_id in standalone execution
     );
     ctx.inner.lock().unwrap().logging_enabled_this_poll = false;
     let mut fut = orchestrator(ctx.clone());
@@ -1617,13 +1604,13 @@ pub fn run_turn_with_status<O, F>(
 where
     F: Future<Output = O>,
 {
-    let ctx = OrchestrationContext::new_with_worker_id(
+    let ctx = OrchestrationContext::new(
         history,
         execution_id,
         instance_id,
         orchestration_name,
         orchestration_version,
-        worker_id,
+        Some(worker_id),
     );
     ctx.inner.lock().unwrap().logging_enabled_this_poll = false;
     let mut fut = orchestrator(ctx.clone());
