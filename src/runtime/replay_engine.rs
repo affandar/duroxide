@@ -206,7 +206,26 @@ impl ReplayEngine {
                         result,
                     })
                 }
-                WorkItem::ActivityFailed { id, details, .. } => {
+                WorkItem::ActivityFailed { id, details, instance, execution_id } => {
+                    // Log full ActivityFailed details for debugging
+                    let workitem_json = serde_json::to_string(&WorkItem::ActivityFailed {
+                        instance: instance.clone(),
+                        execution_id,
+                        id,
+                        details: details.clone(),
+                    }).unwrap_or_else(|_| "failed to serialize".to_string());
+                    
+                    tracing::warn!(
+                        target: "duroxide::runtime::replay_engine",
+                        instance = %instance,
+                        execution_id = %execution_id,
+                        activity_id = %id,
+                        error_category = %details.category(),
+                        error_display = %details.display_message(),
+                        workitem_json = %workitem_json,
+                        "Processing ActivityFailed completion message"
+                    );
+                    
                     // Always create event in history for audit trail
                     let event = Event::ActivityFailed {
                         event_id: 0,
@@ -216,8 +235,28 @@ impl ReplayEngine {
 
                     // Check if system error (abort turn)
                     match &details {
-                        crate::ErrorDetails::Configuration { .. } | crate::ErrorDetails::Infrastructure { .. } => {
-                            warn!(instance = %self.instance, id, ?details, "System error aborts turn");
+                        crate::ErrorDetails::Configuration { kind, resource, message } => {
+                            warn!(
+                                instance = %self.instance, 
+                                id, 
+                                error_kind = ?kind,
+                                resource = %resource,
+                                message = ?message,
+                                "Configuration error aborts turn"
+                            );
+                            if self.abort_error.is_none() {
+                                self.abort_error = Some(details);
+                            }
+                        }
+                        crate::ErrorDetails::Infrastructure { operation, message, retryable } => {
+                            warn!(
+                                instance = %self.instance,
+                                id,
+                                operation = %operation,
+                                message = %message,
+                                retryable = %retryable,
+                                "Infrastructure error aborts turn"
+                            );
                             if self.abort_error.is_none() {
                                 self.abort_error = Some(details);
                             }
