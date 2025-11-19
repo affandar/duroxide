@@ -7,10 +7,11 @@
 
 use crate::Event;
 use crate::providers::{ExecutionMetadata, ProviderError, WorkItem};
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use tokio::task::JoinHandle;
-use tracing::warn;
+use tracing::{debug, error, warn};
 
 use super::super::{HistoryManager, Runtime, WorkItemReader};
 
@@ -319,16 +320,71 @@ impl Runtime {
 
         // Create started event if this is a new instance
         if history_mgr.is_empty() {
+            let orchestration_name = &workitem_reader.orchestration_name;
+            
+            // Get version policy for this orchestration
+            let version_policy = self.orchestration_registry
+                .policy
+                .lock()
+                .await
+                .get(orchestration_name)
+                .cloned();
+
+            // Log registered orchestrations with their versions
+            let registered_names = self.orchestration_registry.list_orchestration_names();
+            let mut registered_with_versions: HashMap<String, Vec<String>> = HashMap::new();
+            for name in &registered_names {
+                let versions = self.orchestration_registry.list_orchestration_versions(name);
+                registered_with_versions.insert(
+                    name.clone(),
+                    versions.iter().map(|v| v.to_string()).collect()
+                );
+            }
+
+            debug!(
+                target: "duroxide::runtime::dispatchers::orchestration:resolve_version",
+                orchestration_name = %orchestration_name,
+                workitem_version = ?workitem_reader.version,
+                version_policy = ?version_policy,
+                registered_count = registered_names.len(),
+                registered_orchestrations = ?registered_names,
+                registered_with_versions = ?registered_with_versions,
+                "🔍 DIAGNOSTIC: Resolving new orchestration version - full context dump"
+            );
+
             // Resolve version: use provided version or get from registry policy
             let resolved_version = if let Some(v) = &workitem_reader.version {
+                debug!(
+                    target: "duroxide::runtime::dispatchers::orchestration:resolve_version",
+                    orchestration_name = %orchestration_name,
+                    version = %v,
+                    "Using provided version from work item"
+                );
                 v.to_string()
             } else if let Some(v) = self
                 .orchestration_registry
-                .resolve_version(&workitem_reader.orchestration_name)
+                .resolve_version(orchestration_name)
                 .await
             {
+                debug!(
+                    target: "duroxide::runtime::dispatchers::orchestration:resolve_version",
+                    orchestration_name = %orchestration_name,
+                    resolved_version = %v,
+                    "Resolved version from registry"
+                );
                 v.to_string()
             } else {
+                error!(
+                    target: "duroxide::runtime::dispatchers::orchestration:resolve_version",
+                    orchestration_name = %orchestration_name,
+                    workitem_version = ?workitem_reader.version,
+                    version_policy = ?version_policy,
+                    registered_count = registered_names.len(),
+                    registered_orchestrations = ?registered_names,
+                    registered_with_versions = ?registered_with_versions,
+                    "❌ Failed to resolve version for new orchestration"
+                );
+
                 // Not found in registry - fail with unregistered error
                 history_mgr.append(Event::OrchestrationStarted {
                     event_id: crate::INITIAL_EVENT_ID,
