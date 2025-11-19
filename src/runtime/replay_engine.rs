@@ -206,7 +206,7 @@ impl ReplayEngine {
                         result,
                     })
                 }
-                WorkItem::ActivityFailed { id, details, .. } => {
+                WorkItem::ActivityFailed { id, details, instance, execution_id } => {
                     // Always create event in history for audit trail
                     let event = Event::ActivityFailed {
                         event_id: 0,
@@ -221,10 +221,16 @@ impl ReplayEngine {
                                 instance = %self.instance,
                                 activity_id = id,
                                 error = %details.display_message(),
+                                msg = ?WorkItem::ActivityFailed {
+                                    instance: instance.clone(),
+                                    execution_id,
+                                    id,
+                                    details: details.clone()
+                                },
                                 "System error aborts turn"
                             );
                             if self.abort_error.is_none() {
-                                self.abort_error = Some(details);
+                                self.abort_error = Some(details.clone());
                             }
                         }
                         crate::ErrorDetails::Application { .. } => {
