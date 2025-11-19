@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use tracing::debug;
+use tracing::{debug, error, warn};
 
 use super::replay_engine::{ReplayEngine, TurnResult};
 use crate::{
@@ -23,21 +23,107 @@ impl Runtime {
         // Get version from history (includes delta for new instances)
         let version_from_history = history_mgr.version();
 
+        debug!(
+            target: "duroxide::runtime::execution",
+            orchestration_name = %orchestration_name,
+            version_from_history = ?version_from_history,
+            "🔍 Resolving orchestration handler"
+        );
+
+        // Log registered orchestrations for diagnostics
+        let registered_names = self.orchestration_registry.list_orchestration_names();
+        debug!(
+            target: "duroxide::runtime::execution",
+            orchestration_name = %orchestration_name,
+            registered_count = registered_names.len(),
+            registered_orchestrations = ?registered_names,
+            "Registered orchestrations in registry"
+        );
+
         let handler_opt = if let Some(ref version_str) = version_from_history {
             // Use exact version from history
-            if let Ok(v) = semver::Version::parse(version_str) {
-                self.orchestration_registry
-                    .resolve_handler_exact(orchestration_name, &v)
-            } else {
-                None
+            debug!(
+                target: "duroxide::runtime::execution",
+                orchestration_name = %orchestration_name,
+                version_str = %version_str,
+                "Attempting to parse version string from history"
+            );
+
+            match semver::Version::parse(version_str) {
+                Ok(v) => {
+                    debug!(
+                        target: "duroxide::runtime::execution",
+                        orchestration_name = %orchestration_name,
+                        parsed_version = %v,
+                        "Version parsed successfully, resolving handler with exact version"
+                    );
+
+                    // Log available versions for this orchestration
+                    let available_versions = self.orchestration_registry.list_orchestration_versions(orchestration_name);
+                    debug!(
+                        target: "duroxide::runtime::execution",
+                        orchestration_name = %orchestration_name,
+                        requested_version = %v,
+                        available_versions = ?available_versions,
+                        "Available versions for orchestration"
+                    );
+
+                    let handler = self.orchestration_registry
+                        .resolve_handler_exact(orchestration_name, &v);
+
+                    if handler.is_none() {
+                        error!(
+                            target: "duroxide::runtime::execution",
+                            orchestration_name = %orchestration_name,
+                            requested_version = %v,
+                            available_versions = ?available_versions,
+                            version_str = %version_str,
+                            "Handler not found for exact version - version mismatch"
+                        );
+                    } else {
+                        debug!(
+                            target: "duroxide::runtime::execution",
+                            orchestration_name = %orchestration_name,
+                            version = %v,
+                            "Handler resolved successfully"
+                        );
+                    }
+
+                    handler
+                }
+                Err(parse_err) => {
+                    error!(
+                        target: "duroxide::runtime::execution",
+                        orchestration_name = %orchestration_name,
+                        version_str = %version_str,
+                        parse_error = %parse_err,
+                        "Failed to parse version string from history"
+                    );
+                    None
+                }
             }
         } else {
             // No version in history - shouldn't happen at this point
+            warn!(
+                target: "duroxide::runtime::execution",
+                orchestration_name = %orchestration_name,
+                "No version found in history - this should not happen at this point"
+            );
             None
         };
 
         handler_opt.ok_or_else(|| {
-            if let Some(v) = version_from_history {
+            let registered_names = self.orchestration_registry.list_orchestration_names();
+            let error = if let Some(v) = version_from_history {
+                let available_versions = self.orchestration_registry.list_orchestration_versions(orchestration_name);
+                error!(
+                    target: "duroxide::runtime::execution",
+                    orchestration_name = %orchestration_name,
+                    requested_version = %v,
+                    available_versions = ?available_versions,
+                    registered_orchestrations = ?registered_names,
+                    "Handler resolution failed: MissingVersion"
+                );
                 crate::ErrorDetails::Configuration {
                     kind: crate::ConfigErrorKind::MissingVersion {
                         requested_version: v.clone(),
@@ -46,12 +132,19 @@ impl Runtime {
                     message: None,
                 }
             } else {
+                error!(
+                    target: "duroxide::runtime::execution",
+                    orchestration_name = %orchestration_name,
+                    registered_orchestrations = ?registered_names,
+                    "Handler resolution failed: UnregisteredOrchestration"
+                );
                 crate::ErrorDetails::Configuration {
                     kind: crate::ConfigErrorKind::UnregisteredOrchestration,
                     resource: orchestration_name.to_string(),
                     message: None,
                 }
-            }
+            };
+            error
         })
     }
 

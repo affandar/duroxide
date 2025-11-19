@@ -5,7 +5,8 @@
 - Revive batching from dispatcher-batching branch, currently the perf dropped drastically. Might've been a sqlite-only issue. 
 - Mgmt API feedback
   - list instances should get back version, status, and other basic info.
-  - truncate API
+  - truncate API for instances
+  - truncate API for executions, to be called in eternal orchestrations. Or maybe default it. 
 - Fix up the stress tests, make them more usable by providers
 - API endpoint for runtime, MCP server, orch status etc. 
 - Metrics/logging dashboard 
