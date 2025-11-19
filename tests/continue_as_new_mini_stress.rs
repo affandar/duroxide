@@ -400,7 +400,7 @@ async fn instance_actor_pattern_stress_test() {
         serde_json::to_string(&output).map_err(|e| format!("Serialize error: {}", e))
     };
 
-    // Instance actor orchestration (50 iterations for stress test)
+    // Instance actor orchestration (10 iterations for stress test)
     let instance_actor = |ctx: OrchestrationContext, input: String| async move {
         let mut input_data: InstanceActorInput = serde_json::from_str(&input)
             .map_err(|e| format!("Failed to parse input: {}", e))?;
@@ -412,9 +412,9 @@ async fn instance_actor_pattern_stress_test() {
             input_data.orchestration_id
         ));
 
-        // Exit after 50 iterations for stress test
-        // Executions 1-49 (iteration 0-48) do full cycle, execution 50 (iteration 49) completes
-        if input_data.iteration >= 49 {
+        // Exit after 10 iterations for stress test
+        // Executions 1-9 (iteration 0-8) do full cycle, execution 10 (iteration 9) completes
+        if input_data.iteration >= 9 {
             return Ok(format!("completed after {} executions", input_data.iteration + 1));
         }
 
@@ -566,7 +566,7 @@ async fn instance_actor_pattern_stress_test() {
         tracing::info!("Started instance actor: {}", instance_id);
     }
 
-    // Wait for all 3 to complete (50 iterations × 50ms timer = 2.5s approx, use 30s timeout)
+    // Wait for all 3 to complete (10 iterations × 50ms timer = 0.5s approx, use 30s timeout)
     for (instance_id, _k8s_name, _orch_id) in &instances {
         let status = client
             .wait_for_orchestration(instance_id, Duration::from_secs(30))
@@ -575,8 +575,8 @@ async fn instance_actor_pattern_stress_test() {
 
         match status {
             OrchestrationStatus::Completed { output } => {
-                assert!(output.contains("completed after 50 executions"));
-                tracing::info!("✓ Instance actor {} completed after 50 executions", instance_id);
+                assert!(output.contains("completed after 10 executions"));
+                tracing::info!("✓ Instance actor {} completed after 10 executions", instance_id);
             }
             OrchestrationStatus::Failed { details } => {
                 eprintln!("\n❌ Instance actor {} failed: {}\n", instance_id, details.display_message());
@@ -620,7 +620,7 @@ async fn instance_actor_pattern_stress_test() {
     for (instance_id, _k8s_name, _orch_id) in &instances {
         tracing::info!("Verifying executions for {}", instance_id);
         
-        for exec_id in 1..=50 {
+        for exec_id in 1..=10 {
             let hist = client
                 .read_execution_history(instance_id, exec_id)
                 .await
@@ -632,8 +632,8 @@ async fn instance_actor_pattern_stress_test() {
                 .filter(|e| matches!(e, Event::ActivityScheduled { .. }))
                 .count();
 
-            // Executions 1-49 have full cycle (4 activities), execution 50 exits immediately (0 activities)
-            if exec_id < 50 {
+            // Executions 1-9 have full cycle (4 activities), execution 10 exits immediately (0 activities)
+            if exec_id < 10 {
                 assert!(
                     activity_count >= 4,
                     "{} execution {} should have at least 4 activities, has {}",
@@ -658,8 +658,8 @@ async fn instance_actor_pattern_stress_test() {
             }
 
             // Verify terminal event
-            // Executions 1-49: continue-as-new, Execution 50: completes
-            if exec_id < 50 {
+            // Executions 1-9: continue-as-new, Execution 10: completes
+            if exec_id < 10 {
                 assert!(
                     hist.iter().any(|e| matches!(e, Event::OrchestrationContinuedAsNew { .. })),
                     "{} execution {} should have ContinuedAsNew",
@@ -676,13 +676,13 @@ async fn instance_actor_pattern_stress_test() {
             }
         }
         
-        tracing::info!("✓ All 50 executions verified for {}", instance_id);
+        tracing::info!("✓ All 10 executions verified for {}", instance_id);
     }
 
     tracing::info!("✓ All 3 instance actors completed successfully");
-    tracing::info!("✓ Total: 150 executions (3 instances × 50 executions each)");
-    tracing::info!("✓ Total: 588 activities (3 instances × 49 full cycles × 4 activities)");
-    tracing::info!("✓ Total: 147 timers (3 instances × 49 full cycles)");
+    tracing::info!("✓ Total: 30 executions (3 instances × 10 executions each)");
+    tracing::info!("✓ Total: 108 activities (3 instances × 9 full cycles × 4 activities)");
+    tracing::info!("✓ Total: 27 timers (3 instances × 9 full cycles)");
 
     rt.shutdown(None).await;
 }

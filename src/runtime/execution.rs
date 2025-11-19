@@ -1,6 +1,5 @@
-use std::collections::HashMap;
 use std::sync::Arc;
-use tracing::{debug, error};
+use tracing::debug;
 
 use super::replay_engine::{ReplayEngine, TurnResult};
 use crate::{
@@ -24,147 +23,21 @@ impl Runtime {
         // Get version from history (includes delta for new instances)
         let version_from_history = history_mgr.version();
 
-        // Get full history for diagnostics
-        let full_history = history_mgr.full_history();
-        
-        // Get cached version from HistoryManager
-        let cached_version = history_mgr.orchestration_version.as_deref();
-        
-        // Get version policy for this orchestration
-        let version_policy = self.orchestration_registry
-            .policy
-            .lock()
-            .await
-            .get(orchestration_name)
-            .cloned();
-
-        // Log registered orchestrations with their versions
-        let registered_names = self.orchestration_registry.list_orchestration_names();
-        let mut registered_with_versions: HashMap<String, Vec<String>> = HashMap::new();
-        for name in &registered_names {
-            let versions = self.orchestration_registry.list_orchestration_versions(name);
-            registered_with_versions.insert(
-                name.clone(),
-                versions.iter().map(|v| v.to_string()).collect()
-            );
-        }
-
-        debug!(
-            target: "duroxide::runtime::execution:resolve_orchestration_handler",
-            orchestration_name = %orchestration_name,
-            version_from_history = ?version_from_history,
-            cached_version = ?cached_version,
-            version_policy = ?version_policy,
-            history_length = full_history.len(),
-            history_events = ?full_history,
-            registered_count = registered_names.len(),
-            registered_orchestrations = ?registered_names,
-            registered_with_versions = ?registered_with_versions,
-            "🔍 DIAGNOSTIC: Resolving orchestration handler - full context dump"
-        );
-
         let handler_opt = if let Some(ref version_str) = version_from_history {
             // Use exact version from history
-            debug!(
-                target: "duroxide::runtime::execution",
-                orchestration_name = %orchestration_name,
-                version_str = %version_str,
-                "Attempting to parse version string from history"
-            );
-
-            match semver::Version::parse(version_str) {
-                Ok(v) => {
-                    debug!(
-                        target: "duroxide::runtime::execution",
-                        orchestration_name = %orchestration_name,
-                        parsed_version = %v,
-                        "Version parsed successfully, resolving handler with exact version"
-                    );
-
-                    // Log available versions for this orchestration
-                    let available_versions = self.orchestration_registry.list_orchestration_versions(orchestration_name);
-                    debug!(
-                        target: "duroxide::runtime::execution",
-                        orchestration_name = %orchestration_name,
-                        requested_version = %v,
-                        available_versions = ?available_versions,
-                        "Available versions for orchestration"
-                    );
-
-                    let handler = self.orchestration_registry
-                        .resolve_handler_exact(orchestration_name, &v);
-
-                    if handler.is_none() {
-                        error!(
-                            target: "duroxide::runtime::execution",
-                            orchestration_name = %orchestration_name,
-                            requested_version = %v,
-                            available_versions = ?available_versions,
-                            version_str = %version_str,
-                            "Handler not found for exact version - version mismatch"
-                        );
-                    } else {
-                        debug!(
-                            target: "duroxide::runtime::execution",
-                            orchestration_name = %orchestration_name,
-                            version = %v,
-                            "Handler resolved successfully"
-                        );
-                    }
-
-                    handler
-                }
-                Err(parse_err) => {
-                    error!(
-                        target: "duroxide::runtime::execution",
-                        orchestration_name = %orchestration_name,
-                        version_str = %version_str,
-                        parse_error = %parse_err,
-                        "Failed to parse version string from history"
-                    );
-                    None
-                }
+            if let Ok(v) = semver::Version::parse(version_str) {
+                self.orchestration_registry
+                    .resolve_handler_exact(orchestration_name, &v)
+            } else {
+                None
             }
         } else {
             // No version in history - shouldn't happen at this point
-            // Check if cached_version is "0.0.0" which causes version() to return None
-            let is_zero_version = cached_version == Some("0.0.0");
-            
-            error!(
-                target: "duroxide::runtime::execution",
-                orchestration_name = %orchestration_name,
-                cached_version = ?cached_version,
-                is_zero_version = is_zero_version,
-                version_policy = ?version_policy,
-                "DIAGNOSTIC: No version found in history - taking else branch (version_from_history is None)"
-            );
             None
         };
 
         handler_opt.ok_or_else(|| {
-            let registered_names = self.orchestration_registry.list_orchestration_names();
-            let mut registered_with_versions: HashMap<String, Vec<String>> = HashMap::new();
-            for name in &registered_names {
-                let versions = self.orchestration_registry.list_orchestration_versions(name);
-                registered_with_versions.insert(
-                    name.clone(),
-                    versions.iter().map(|v| v.to_string()).collect()
-                );
-            }
-            
-            let error = if let Some(v) = version_from_history {
-                let available_versions = self.orchestration_registry.list_orchestration_versions(orchestration_name);
-                error!(
-                    target: "duroxide::runtime::execution",
-                    orchestration_name = %orchestration_name,
-                    requested_version = %v,
-                    cached_version = ?cached_version,
-                    available_versions = ?available_versions,
-                    registered_orchestrations = ?registered_names,
-                    registered_with_versions = ?registered_with_versions,
-                    version_policy = ?version_policy,
-                    "DIAGNOSTIC: Handler resolution failed: MissingVersion"
-                );
+            if let Some(v) = version_from_history {
                 crate::ErrorDetails::Configuration {
                     kind: crate::ConfigErrorKind::MissingVersion {
                         requested_version: v.clone(),
@@ -173,26 +46,12 @@ impl Runtime {
                     message: None,
                 }
             } else {
-                let available_versions = self.orchestration_registry.list_orchestration_versions(orchestration_name);
-                let is_zero_version = cached_version == Some("0.0.0");
-                error!(
-                    target: "duroxide::runtime::execution",
-                    orchestration_name = %orchestration_name,
-                    cached_version = ?cached_version,
-                    is_zero_version = is_zero_version,
-                    available_versions = ?available_versions,
-                    registered_orchestrations = ?registered_names,
-                    registered_with_versions = ?registered_with_versions,
-                    version_policy = ?version_policy,
-                    "DIAGNOSTIC: Handler resolution failed: UnregisteredOrchestration (version_from_history is None)"
-                );
                 crate::ErrorDetails::Configuration {
                     kind: crate::ConfigErrorKind::UnregisteredOrchestration,
                     resource: orchestration_name.to_string(),
                     message: None,
                 }
-            };
-            error
+            }
         })
     }
 

@@ -63,7 +63,7 @@ impl OrchestrationRegistry {
             .cloned()
             .unwrap_or(VersionPolicy::Latest);
         
-        let result = match pol {
+        match pol {
             VersionPolicy::Latest => {
                 let m = self.inner.get(name)?;
                 let (v, h) = m.iter().next_back()?;
@@ -73,20 +73,7 @@ impl OrchestrationRegistry {
                 let h = self.inner.get(name)?.get(&v)?.clone();
                 Some((v, h))
             }
-        };
-        
-        if result.is_none() {
-            let registered: Vec<String> = self.inner.keys().cloned().collect();
-            tracing::error!(
-                target: "duroxide::runtime::registry",
-                requested_name = %name,
-                registered_count = registered.len(),
-                registered_orchestrations = ?registered,
-                "Orchestration not found in registry"
-            );
         }
-        
-        result
     }
 
     pub async fn resolve_version(&self, name: &str) -> Option<Version> {
@@ -98,7 +85,7 @@ impl OrchestrationRegistry {
             .cloned()
             .unwrap_or(VersionPolicy::Latest);
         
-        let result = match pol {
+        match pol {
             VersionPolicy::Latest => {
                 let m = self.inner.get(name)?;
                 let (v, _h) = m.iter().next_back()?;
@@ -108,43 +95,11 @@ impl OrchestrationRegistry {
                 self.inner.get(name)?.get(&v)?;
                 Some(v)
             }
-        };
-        
-        if result.is_none() {
-            let registered: Vec<String> = self.inner.keys().cloned().collect();
-            tracing::error!(
-                target: "duroxide::runtime::registry",
-                requested_name = %name,
-                registered_count = registered.len(),
-                registered_orchestrations = ?registered,
-                "Orchestration version not found in registry"
-            );
         }
-        
-        result
     }
 
     pub fn resolve_handler_exact(&self, name: &str, v: &Version) -> Option<Arc<dyn OrchestrationHandler>> {
-        let result = self.inner.get(name)?.get(v).cloned();
-        
-        if result.is_none() {
-            let registered: Vec<String> = self.inner.keys().cloned().collect();
-            let available_versions = self.inner.get(name)
-                .map(|versions| versions.keys().map(|v| v.to_string()).collect::<Vec<_>>())
-                .unwrap_or_default();
-            
-            tracing::error!(
-                target: "duroxide::runtime::registry",
-                requested_name = %name,
-                requested_version = %v,
-                available_versions = ?available_versions,
-                registered_count = registered.len(),
-                registered_orchestrations = ?registered,
-                "Orchestration version not found in registry"
-            );
-        }
-        
-        result
+        self.inner.get(name)?.get(v).cloned()
     }
 
     pub async fn set_version_policy(&self, name: &str, policy: VersionPolicy) {
@@ -412,20 +367,7 @@ impl ActivityRegistry {
     ///
     /// Returns `None` if the activity is not registered.
     pub fn get(&self, name: &str) -> Option<Arc<dyn ActivityHandler>> {
-        let result = self.inner.get(name).cloned();
-        
-        if result.is_none() {
-            let registered: Vec<String> = self.inner.keys().cloned().collect();
-            tracing::error!(
-                target: "duroxide::runtime::registry",
-                requested_name = %name,
-                registered_count = registered.len(),
-                registered_activities = ?registered,
-                "Activity not found in registry"
-            );
-        }
-        
-        result
+        self.inner.get(name).cloned()
     }
 
     /// List all registered activity names.
