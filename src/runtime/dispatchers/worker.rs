@@ -99,20 +99,7 @@ impl Runtime {
                                         ConfigError,
                                     }
 
-                                    // Check if handler is registered
-                                    let handler_opt = activities.get(&name);
-                                    tracing::debug!(
-                                        target: "duroxide::runtime::worker",
-                                        instance_id = %instance,
-                                        execution_id = %execution_id,
-                                        activity_name = %name,
-                                        activity_id = %id,
-                                        worker_id = %worker_id,
-                                        handler_found = handler_opt.is_some(),
-                                        "Activity handler lookup"
-                                    );
-
-                                    let (ack_result, outcome) = if let Some(handler) = handler_opt {
+                                    let (ack_result, outcome) = if let Some(handler) = activities.get(&name) {
                                         match handler.invoke(activity_ctx, input).await {
                                             Ok(result) => {
                                                 let duration_ms = start_time.elapsed().as_millis() as u64;

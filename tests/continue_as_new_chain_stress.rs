@@ -1,0 +1,694 @@
+use duroxide::runtime::registry::ActivityRegistry;
+use duroxide::runtime;
+use duroxide::{Event, OrchestrationContext, OrchestrationRegistry, OrchestrationStatus};
+use std::sync::Arc;
+use std::time::Duration;
+
+mod common;
+
+/// Test a long continue-as-new chain with default versioning
+#[tokio::test]
+#[ignore]
+async fn continue_as_new_chain_50_iterations() {
+    let (store, _td) = common::create_sqlite_store_disk().await;
+
+    // Register a simple counter orchestration that continues as new
+    let counter_orch = |ctx: OrchestrationContext, input: String| async move {
+        let count: u64 = input.parse().unwrap_or(0);
+        
+        // Log current iteration
+        tracing::info!("Counter iteration: {}", count);
+        
+        if count < 49 {
+            // Continue to next iteration (0-48 continue, 49 completes)
+            ctx.continue_as_new((count + 1).to_string());
+            Ok("continuing".to_string())
+        } else {
+            // Reached 49, complete (giving us 50 total executions: exec_id 1-50)
+            Ok(format!("completed at {}", count))
+        }
+    };
+
+    let orchestrations = OrchestrationRegistry::builder()
+        .register("Counter", counter_orch)  // Default versioning (1.0.0)
+        .build();
+
+    let activities = ActivityRegistry::builder().build();
+
+    let rt = runtime::Runtime::start_with_store(
+        store.clone(),
+        Arc::new(activities),
+        orchestrations,
+    )
+    .await;
+
+    let client = duroxide::Client::new(store.clone());
+
+    // Start the chain at count=0
+    client
+        .start_orchestration("counter-chain", "Counter", "0")
+        .await
+        .unwrap();
+
+    // Wait for completion (give it plenty of time)
+    let status = client
+        .wait_for_orchestration("counter-chain", Duration::from_secs(60))
+        .await
+        .unwrap();
+
+    match status {
+        OrchestrationStatus::Completed { output } => {
+            assert_eq!(output, "completed at 49");
+            tracing::info!("✓ Continue-as-new chain completed successfully");
+        }
+        OrchestrationStatus::Failed { details } => {
+            panic!("Chain failed: {}", details.display_message());
+        }
+        _ => panic!("Unexpected status: {:?}", status),
+    }
+
+    // Verify we have 50 executions (exec 1 starts with count=0, continues until exec 50 with count=49)
+    // Each execution should have its own history
+    for exec_id in 1..=50 {
+        let hist = client
+            .read_execution_history("counter-chain", exec_id)
+            .await
+            .unwrap();
+        
+        // Each execution should have OrchestrationStarted
+        assert!(
+            hist.iter().any(|e| matches!(e, Event::OrchestrationStarted { .. })),
+            "Execution {} missing OrchestrationStarted",
+            exec_id
+        );
+
+        // Verify version consistency - all should use default version
+        if let Some(Event::OrchestrationStarted { version, .. }) = 
+            hist.iter().find(|e| matches!(e, Event::OrchestrationStarted { .. }))
+        {
+            // Version should be resolved to 1.0.0 (default)
+            assert!(
+                version.starts_with("1."),
+                "Execution {} has unexpected version: {}",
+                exec_id,
+                version
+            );
+        }
+
+        // Verify terminal event
+        let last = hist.last().unwrap();
+        if exec_id <= 49 {
+            assert!(
+                matches!(last, Event::OrchestrationContinuedAsNew { .. }),
+                "Execution {} should end with ContinuedAsNew, got {:?}",
+                exec_id,
+                last
+            );
+        } else {
+            assert!(
+                matches!(last, Event::OrchestrationCompleted { .. }),
+                "Execution 50 should end with Completed, got {:?}",
+                last
+            );
+        }
+    }
+
+    tracing::info!("✓ All 50 executions verified");
+
+    rt.shutdown(None).await;
+}
+
+/// Test continue-as-new chain with activity execution at each step
+#[tokio::test]
+#[ignore]
+
+async fn continue_as_new_chain_with_activities() {
+    let (store, _td) = common::create_sqlite_store_disk().await;
+
+    // Simple echo activity
+    let echo = |_ctx: duroxide::ActivityContext, input: String| async move { Ok(input) };
+
+    // Orchestration that executes activity then continues
+    let counter_with_activity = |ctx: OrchestrationContext, input: String| async move {
+        let count: u64 = input.parse().unwrap_or(0);
+        
+        // Execute an activity at each step
+        let activity_input = format!("step-{}", count);
+        let result = ctx
+            .schedule_activity("Echo", activity_input)
+            .into_activity()
+            .await
+            .map_err(|e| format!("Activity failed: {}", e))?;
+        
+        assert_eq!(result, format!("step-{}", count));
+        
+        if count < 19 {  // 20 executions: 0-18 continue, 19 completes
+            ctx.continue_as_new((count + 1).to_string());
+            Ok("continuing".to_string())
+        } else {
+            Ok(format!("completed at {}", count))
+        }
+    };
+
+    let orchestrations = OrchestrationRegistry::builder()
+        .register("CounterWithActivity", counter_with_activity)
+        .build();
+
+    let activities = ActivityRegistry::builder()
+        .register("Echo", echo)
+        .build();
+
+    let rt = runtime::Runtime::start_with_store(
+        store.clone(),
+        Arc::new(activities),
+        orchestrations,
+    )
+    .await;
+
+    let client = duroxide::Client::new(store.clone());
+
+    client
+        .start_orchestration("counter-activity-chain", "CounterWithActivity", "0")
+        .await
+        .unwrap();
+
+    let status = client
+        .wait_for_orchestration("counter-activity-chain", Duration::from_secs(60))
+        .await
+        .unwrap();
+
+    match status {
+        OrchestrationStatus::Completed { output } => {
+            assert_eq!(output, "completed at 19");
+            tracing::info!("✓ Continue-as-new chain with activities completed");
+        }
+        OrchestrationStatus::Failed { details } => {
+            panic!("Chain failed: {}", details.display_message());
+        }
+        _ => panic!("Unexpected status: {:?}", status),
+    }
+
+    // Verify each execution has activity events
+    for exec_id in 1..=20 {
+        let hist = client
+            .read_execution_history("counter-activity-chain", exec_id)
+            .await
+            .unwrap();
+        
+        // Should have ActivityScheduled and ActivityCompleted
+        assert!(
+            hist.iter().any(|e| matches!(e, Event::ActivityScheduled { .. })),
+            "Execution {} missing ActivityScheduled",
+            exec_id
+        );
+        assert!(
+            hist.iter().any(|e| matches!(e, Event::ActivityCompleted { .. })),
+            "Execution {} missing ActivityCompleted",
+            exec_id
+        );
+    }
+
+    tracing::info!("✓ All 20 executions with activities verified");
+
+    rt.shutdown(None).await;
+}
+
+/// Test concurrent continue-as-new chains (stress test)
+#[tokio::test]
+#[ignore]
+
+async fn concurrent_continue_as_new_chains() {
+    let (store, _td) = common::create_sqlite_store_disk().await;
+
+    let counter_orch = |ctx: OrchestrationContext, input: String| async move {
+        let count: u64 = input.parse().unwrap_or(0);
+        
+        if count < 9 {  // 10 executions: 0-8 continue, 9 completes
+            ctx.continue_as_new((count + 1).to_string());
+            Ok("continuing".to_string())
+        } else {
+            Ok(format!("completed at {}", count))
+        }
+    };
+
+    let orchestrations = OrchestrationRegistry::builder()
+        .register("ConcurrentCounter", counter_orch)
+        .build();
+
+    let activities = ActivityRegistry::builder().build();
+
+    let rt = runtime::Runtime::start_with_store(
+        store.clone(),
+        Arc::new(activities),
+        orchestrations,
+    )
+    .await;
+
+    let client = duroxide::Client::new(store.clone());
+
+    // Start 5 concurrent chains
+    let instances: Vec<String> = (0..5)
+        .map(|i| format!("concurrent-chain-{}", i))
+        .collect();
+
+    for instance in &instances {
+        client
+            .start_orchestration(instance, "ConcurrentCounter", "0")
+            .await
+            .unwrap();
+    }
+
+    // Wait for all to complete
+    for instance in &instances {
+        let status = client
+            .wait_for_orchestration(instance, Duration::from_secs(30))
+            .await
+            .unwrap();
+
+        match status {
+            OrchestrationStatus::Completed { output } => {
+                assert_eq!(output, "completed at 9");
+            }
+            OrchestrationStatus::Failed { details } => {
+                panic!("Chain {} failed: {}", instance, details.display_message());
+            }
+            _ => panic!("Unexpected status for {}: {:?}", instance, status),
+        }
+    }
+
+    tracing::info!("✓ All 5 concurrent chains completed successfully");
+
+    // Verify each chain has 10 executions
+    for instance in &instances {
+        for exec_id in 1..=10 {
+            let hist = client
+                .read_execution_history(instance, exec_id)
+                .await
+                .unwrap();
+            
+            assert!(
+                !hist.is_empty(),
+                "Chain {} execution {} has empty history",
+                instance,
+                exec_id
+            );
+        }
+    }
+
+    tracing::info!("✓ All executions verified for all chains");
+
+    rt.shutdown(None).await;
+}
+
+/// Test modeling a real-world instance actor pattern with multiple activities per iteration
+#[tokio::test]
+#[ignore]
+
+async fn instance_actor_pattern_stress_test() {
+    let (store, _td) = common::create_sqlite_store_disk().await;
+
+    // Mock activity types (simplified versions of the real ones)
+    #[derive(serde::Serialize, serde::Deserialize, Clone)]
+    struct GetInstanceConnectionInput {
+        k8s_name: String,
+    }
+
+    #[derive(serde::Serialize, serde::Deserialize, Clone)]
+    struct GetInstanceConnectionOutput {
+        found: bool,
+        connection_string: Option<String>,
+        state: Option<String>,
+    }
+
+    #[derive(serde::Serialize, serde::Deserialize, Clone)]
+    struct TestConnectionInput {
+        connection_string: String,
+    }
+
+    #[derive(serde::Serialize, serde::Deserialize, Clone)]
+    struct TestConnectionOutput {
+        version: String,
+    }
+
+    #[derive(serde::Serialize, serde::Deserialize, Clone)]
+    struct RecordHealthCheckInput {
+        k8s_name: String,
+        status: String,
+        postgres_version: Option<String>,
+        response_time_ms: Option<i32>,
+        error_message: Option<String>,
+    }
+
+    #[derive(serde::Serialize, serde::Deserialize, Clone)]
+    struct RecordHealthCheckOutput {
+        recorded: bool,
+    }
+
+    #[derive(serde::Serialize, serde::Deserialize, Clone)]
+    struct UpdateInstanceHealthInput {
+        k8s_name: String,
+        health_status: String,
+    }
+
+    #[derive(serde::Serialize, serde::Deserialize, Clone)]
+    struct UpdateInstanceHealthOutput {
+        updated: bool,
+    }
+
+    #[derive(serde::Serialize, serde::Deserialize, Clone)]
+    struct InstanceActorInput {
+        k8s_name: String,
+        orchestration_id: String,
+        iteration: u64,  // Track iteration for testing
+    }
+
+    // Mock activities
+    let get_instance_connection = |_ctx: duroxide::ActivityContext, input: String| async move {
+        let parsed: GetInstanceConnectionInput = serde_json::from_str(&input)
+            .map_err(|e| format!("Parse error: {}", e))?;
+        
+        let output = GetInstanceConnectionOutput {
+            found: true,
+            connection_string: Some(format!("postgresql://localhost/db_{}", parsed.k8s_name)),
+            state: Some("running".to_string()),
+        };
+        
+        serde_json::to_string(&output).map_err(|e| format!("Serialize error: {}", e))
+    };
+
+    let test_connection = |_ctx: duroxide::ActivityContext, input: String| async move {
+        let parsed: TestConnectionInput = serde_json::from_str(&input)
+            .map_err(|e| format!("Parse error: {}", e))?;
+        
+        // Simulate connection test
+        assert!(parsed.connection_string.starts_with("postgresql://"));
+        
+        let output = TestConnectionOutput {
+            version: "PostgreSQL 16.1".to_string(),
+        };
+        
+        serde_json::to_string(&output).map_err(|e| format!("Serialize error: {}", e))
+    };
+
+    let record_health_check = |_ctx: duroxide::ActivityContext, input: String| async move {
+        let _parsed: RecordHealthCheckInput = serde_json::from_str(&input)
+            .map_err(|e| format!("Parse error: {}", e))?;
+        
+        let output = RecordHealthCheckOutput { recorded: true };
+        serde_json::to_string(&output).map_err(|e| format!("Serialize error: {}", e))
+    };
+
+    let update_instance_health = |_ctx: duroxide::ActivityContext, input: String| async move {
+        let _parsed: UpdateInstanceHealthInput = serde_json::from_str(&input)
+            .map_err(|e| format!("Parse error: {}", e))?;
+        
+        let output = UpdateInstanceHealthOutput { updated: true };
+        serde_json::to_string(&output).map_err(|e| format!("Serialize error: {}", e))
+    };
+
+    // Instance actor orchestration (50 iterations for stress test)
+    let instance_actor = |ctx: OrchestrationContext, input: String| async move {
+        let mut input_data: InstanceActorInput = serde_json::from_str(&input)
+            .map_err(|e| format!("Failed to parse input: {}", e))?;
+
+        ctx.trace_info(format!(
+            "Instance actor iteration {} for: {} (orchestration: {})",
+            input_data.iteration,
+            input_data.k8s_name,
+            input_data.orchestration_id
+        ));
+
+        // Exit after 50 iterations for stress test
+        // Executions 1-49 (iteration 0-48) do full cycle, execution 50 (iteration 49) completes
+        if input_data.iteration >= 49 {
+            return Ok(format!("completed after {} executions", input_data.iteration + 1));
+        }
+
+        // Step 1: Get instance connection string from CMS
+        let conn_info = ctx
+            .schedule_activity_typed::<GetInstanceConnectionInput, GetInstanceConnectionOutput>(
+                "cms-get-instance-connection",
+                &GetInstanceConnectionInput {
+                    k8s_name: input_data.k8s_name.clone(),
+                },
+            )
+            .into_activity_typed::<GetInstanceConnectionOutput>()
+            .await
+            .map_err(|e| format!("Failed to get instance connection: {}", e))?;
+
+        // Step 2: Check if instance still exists
+        if !conn_info.found {
+            ctx.trace_info("Instance no longer exists in CMS, stopping instance actor");
+            return Ok("instance not found".to_string());
+        }
+
+        let connection_string = match conn_info.connection_string {
+            Some(conn) => conn,
+            None => {
+                ctx.trace_warn("No connection string available yet, skipping health check");
+                
+                // Wait and retry
+                ctx.schedule_timer(30000).into_timer().await; // 30 seconds
+                
+                input_data.iteration += 1;
+                let input_json = serde_json::to_string(&input_data)
+                    .map_err(|e| format!("Failed to serialize input: {}", e))?;
+                ctx.continue_as_new(input_json);
+                
+                return Ok("retrying".to_string());
+            }
+        };
+
+        // Step 3: Test connection
+        let health_result = ctx
+            .schedule_activity_typed::<TestConnectionInput, TestConnectionOutput>(
+                "test-connection",
+                &TestConnectionInput {
+                    connection_string: connection_string.clone(),
+                },
+            )
+            .into_activity_typed::<TestConnectionOutput>()
+            .await;
+
+        // Step 4: Determine health status
+        let (status, postgres_version, error_message) = match health_result {
+            Ok(output) => {
+                ctx.trace_info("Health check passed");
+                ("healthy", Some(output.version), None)
+            }
+            Err(e) => {
+                ctx.trace_warn(format!("Health check failed: {}", e));
+                ("unhealthy", None, Some(e.to_string()))
+            }
+        };
+
+        // Step 5: Record health check
+        let _record = ctx
+            .schedule_activity_typed::<RecordHealthCheckInput, RecordHealthCheckOutput>(
+                "cms-record-health-check",
+                &RecordHealthCheckInput {
+                    k8s_name: input_data.k8s_name.clone(),
+                    status: status.to_string(),
+                    postgres_version,
+                    response_time_ms: Some(50),
+                    error_message,
+                },
+            )
+            .into_activity_typed::<RecordHealthCheckOutput>()
+            .await
+            .map_err(|e| format!("Failed to record health check: {}", e))?;
+
+        // Step 6: Update instance health status
+        let _update = ctx
+            .schedule_activity_typed::<UpdateInstanceHealthInput, UpdateInstanceHealthOutput>(
+                "cms-update-instance-health",
+                &UpdateInstanceHealthInput {
+                    k8s_name: input_data.k8s_name.clone(),
+                    health_status: status.to_string(),
+                },
+            )
+            .into_activity_typed::<UpdateInstanceHealthOutput>()
+            .await
+            .map_err(|e| format!("Failed to update instance health: {}", e))?;
+
+        ctx.trace_info(format!("Health check complete, status: {}", status));
+
+        // Step 7: Wait before next check
+        ctx.schedule_timer(30000).into_timer().await; // 30 seconds
+
+        ctx.trace_info("Restarting instance actor with continue-as-new");
+
+        // Step 8: Continue as new
+        input_data.iteration += 1;
+        let input_json = serde_json::to_string(&input_data)
+            .map_err(|e| format!("Failed to serialize input: {}", e))?;
+        
+        ctx.continue_as_new(input_json);
+
+        Ok("continuing".to_string())
+    };
+
+    let orchestrations = OrchestrationRegistry::builder()
+        .register("InstanceActor", instance_actor)
+        .build();
+
+    let activities = ActivityRegistry::builder()
+        .register_typed("cms-get-instance-connection", get_instance_connection)
+        .register_typed("test-connection", test_connection)
+        .register_typed("cms-record-health-check", record_health_check)
+        .register_typed("cms-update-instance-health", update_instance_health)
+        .build();
+
+    let rt = runtime::Runtime::start_with_store(
+        store.clone(),
+        Arc::new(activities),
+        orchestrations,
+    )
+    .await;
+
+    let client = duroxide::Client::new(store.clone());
+
+    // Start 3 parallel instance actors
+    let instances = vec![
+        ("instance-actor-test-1", "test-instance-1", "orch-123-1"),
+        ("instance-actor-test-2", "test-instance-2", "orch-123-2"),
+        ("instance-actor-test-3", "test-instance-3", "orch-123-3"),
+    ];
+
+    for (instance_id, k8s_name, orch_id) in &instances {
+        let input = InstanceActorInput {
+            k8s_name: k8s_name.to_string(),
+            orchestration_id: orch_id.to_string(),
+            iteration: 0,
+        };
+
+        let input_json = serde_json::to_string(&input).unwrap();
+
+        client
+            .start_orchestration(instance_id, "InstanceActor", &input_json)
+            .await
+            .unwrap();
+        
+        tracing::info!("Started instance actor: {}", instance_id);
+    }
+
+    // Wait for all 3 to complete (50 executions × 30s timer = 1500s theoretical max, use 30 min timeout)
+    for (instance_id, _k8s_name, _orch_id) in &instances {
+        let status = client
+            .wait_for_orchestration(instance_id, Duration::from_secs(1800))
+            .await
+            .unwrap();
+
+        match status {
+            OrchestrationStatus::Completed { output } => {
+                assert!(output.contains("completed after 50 executions"));
+                tracing::info!("✓ Instance actor {} completed after 50 executions", instance_id);
+            }
+            OrchestrationStatus::Failed { details } => {
+                eprintln!("\n❌ Instance actor {} failed: {}\n", instance_id, details.display_message());
+                eprintln!("=== DUMPING ALL EXECUTION HISTORIES FOR {} ===\n", instance_id);
+                
+                // Find how many executions exist
+                let mut exec_id = 1;
+                loop {
+                    match client.read_execution_history(instance_id, exec_id).await {
+                        Ok(hist) if !hist.is_empty() => {
+                            eprintln!("--- Execution {} ---", exec_id);
+                            eprintln!("Events: {}", hist.len());
+                            for (idx, event) in hist.iter().enumerate() {
+                                let event_json = serde_json::to_string_pretty(event)
+                                    .unwrap_or_else(|_| format!("{:?}", event));
+                                eprintln!("  Event {}: {}", idx + 1, event_json);
+                            }
+                            eprintln!();
+                            exec_id += 1;
+                        }
+                        _ => break,
+                    }
+                    
+                    // Safety limit
+                    if exec_id > 100 {
+                        eprintln!("(stopping dump at execution 100)");
+                        break;
+                    }
+                }
+                
+                eprintln!("=== END OF HISTORY DUMP ===\n");
+                panic!("Instance actor {} failed: {}", instance_id, details.display_message());
+            }
+            _ => panic!("Unexpected status for {}: {:?}", instance_id, status),
+        }
+    }
+
+    tracing::info!("✓ All 3 instance actors completed successfully");
+
+    // Verify each execution has the expected activities for all 3 instances
+    for (instance_id, _k8s_name, _orch_id) in &instances {
+        tracing::info!("Verifying executions for {}", instance_id);
+        
+        for exec_id in 1..=50 {
+            let hist = client
+                .read_execution_history(instance_id, exec_id)
+                .await
+                .unwrap();
+
+            // Count activities scheduled in this execution
+            let activity_count = hist
+                .iter()
+                .filter(|e| matches!(e, Event::ActivityScheduled { .. }))
+                .count();
+
+            // Executions 1-49 have full cycle (4 activities), execution 50 exits immediately (0 activities)
+            if exec_id < 50 {
+                assert!(
+                    activity_count >= 4,
+                    "{} execution {} should have at least 4 activities, has {}",
+                    instance_id,
+                    exec_id,
+                    activity_count
+                );
+            }
+
+            // Verify OrchestrationStarted has proper version
+            if let Some(Event::OrchestrationStarted { name, version, .. }) =
+                hist.iter().find(|e| matches!(e, Event::OrchestrationStarted { .. }))
+            {
+                assert_eq!(name, "InstanceActor");
+                assert!(
+                    version.starts_with("1."),
+                    "{} execution {} has unexpected version: {}",
+                    instance_id,
+                    exec_id,
+                    version
+                );
+            }
+
+            // Verify terminal event
+            // Executions 1-49: continue-as-new, Execution 50: completes
+            if exec_id < 50 {
+                assert!(
+                    hist.iter().any(|e| matches!(e, Event::OrchestrationContinuedAsNew { .. })),
+                    "{} execution {} should have ContinuedAsNew",
+                    instance_id,
+                    exec_id
+                );
+            } else {
+                assert!(
+                    hist.iter().any(|e| matches!(e, Event::OrchestrationCompleted { .. })),
+                    "{} execution {} should have Completed",
+                    instance_id,
+                    exec_id
+                );
+            }
+        }
+        
+        tracing::info!("✓ All 50 executions verified for {}", instance_id);
+    }
+
+    tracing::info!("✓ All 3 instance actors completed successfully");
+    tracing::info!("✓ Total: 150 executions (3 instances × 50 executions each)");
+    tracing::info!("✓ Total: 588 activities (3 instances × 49 full cycles × 4 activities)");
+    tracing::info!("✓ Total: 147 timers (3 instances × 49 full cycles)");
+
+    rt.shutdown(None).await;
+}

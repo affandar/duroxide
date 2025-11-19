@@ -1,6 +1,7 @@
 ## Durable Task Rust Core – TODOs
 
 
+- Do a pass on registries for interface consistency
 - Revive batching from dispatcher-batching branch, currently the perf dropped drastically. Might've been a sqlite-only issue. 
 - Mgmt API feedback
   - list instances should get back version, status, and other basic info.
