@@ -6,39 +6,21 @@ This directory contains structured prompts for LLMs working on the duroxide code
 
 ### Core Development Tasks
 
-1. **[duroxide-add-feature.md](duroxide-add-feature.md)**
-   - Adding new features to the framework
-   - API design considerations
-   - Testing strategy
-   - Documentation requirements
-
-2. **[duroxide-fix-bug.md](duroxide-fix-bug.md)**
-   - Diagnosing and reproducing bugs
-   - Root cause analysis
-   - Writing regression tests
-   - Fixing without breaking existing behavior
-
-3. **[duroxide-add-test.md](duroxide-add-test.md)**
-   - Test organization and patterns
-   - Coverage goals by test type
-   - Writing deterministic tests
-   - Avoiding flaky tests
-
-4. **[duroxide-refactor.md](duroxide-refactor.md)**
-   - Improving code quality
-   - Safe refactoring patterns
-   - Maintaining determinism
-   - Performance optimizations
+1. **[duroxide-create-scenario-test.md](duroxide-create-scenario-test.md)**
+   - Converting orchestrations to regression tests
+   - Supporting Duroxide, Temporal, and Durable Tasks patterns
+   - Creating scenario tests in `tests/scenarios/`
+   - Modeling real-world orchestration patterns
 
 ### Quality and Maintenance
 
-5. **[duroxide-clean-warnings.md](duroxide-clean-warnings.md)**
+2. **[duroxide-clean-warnings.md](duroxide-clean-warnings.md)**
    - Eliminating compiler warnings
    - Running clippy
    - Proper handling of unused code
    - Code formatting
 
-6. **[duroxide-update-docs.md](duroxide-update-docs.md)**
+3. **[duroxide-update-docs.md](duroxide-update-docs.md)**
    - Comprehensive documentation review
    - Keeping guides accurate
    - API documentation standards
@@ -46,13 +28,13 @@ This directory contains structured prompts for LLMs working on the duroxide code
 
 ### Performance
 
-7. **[duroxide-profile.md](duroxide-profile.md)**
+4. **[duroxide-profile.md](duroxide-profile.md)**
    - Profiling runtime performance
    - Flamegraph analysis
    - Identifying bottlenecks
    - Optimization strategies
 
-8. **[duroxide-stress-test.md](duroxide-stress-test.md)**
+5. **[duroxide-stress-test.md](duroxide-stress-test.md)**
    - Running comprehensive stress tests
    - Updating results files (local vs cloud)
    - Interpreting performance metrics
@@ -60,7 +42,7 @@ This directory contains structured prompts for LLMs working on the duroxide code
 
 ### Git Operations
 
-9. **[duroxide-merge-main.md](duroxide-merge-main.md)**
+6. **[duroxide-merge-main.md](duroxide-merge-main.md)**
    - Committing changes
    - Merging branches
    - Writing good commit messages
@@ -72,9 +54,9 @@ This directory contains structured prompts for LLMs working on the duroxide code
 Reference the appropriate prompt when tackling a task:
 
 ```
-@duroxide-add-feature.md
+@duroxide-create-scenario-test.md
 
-I need to add support for orchestration priorities in the queue.
+Convert this Temporal workflow to a Duroxide scenario test: [workflow code]
 ```
 
 ### For Humans
@@ -133,38 +115,28 @@ Scenarios where human input is needed
 
 ## Integration with Development Workflow
 
-### Feature Development Cycle
+### Scenario Test Creation Cycle
 ```
-1. @duroxide-add-feature.md     - Design and implement
-2. @duroxide-add-test.md        - Add test coverage
-3. @duroxide-update-docs.md     - Update documentation
-4. @duroxide-clean-warnings.md  - Polish and clean
-5. @duroxide-merge-main.md      - Commit and merge
-```
-
-### Bug Fix Cycle
-```
-1. @duroxide-fix-bug.md         - Reproduce and fix
-2. @duroxide-add-test.md        - Add regression test
-3. @duroxide-update-docs.md     - Update if behavior changed
-4. @duroxide-merge-main.md      - Commit and merge
-```
-
-### Refactoring Cycle
-```
-1. @duroxide-add-test.md        - Ensure coverage first
-2. @duroxide-refactor.md        - Make improvements
-3. @duroxide-clean-warnings.md  - Clean up
-4. @duroxide-merge-main.md      - Commit and merge
+1. @duroxide-create-scenario-test.md  - Convert orchestration to test
+2. @duroxide-clean-warnings.md         - Clean up warnings
+3. @duroxide-update-docs.md           - Update documentation if needed
+4. @duroxide-merge-main.md            - Commit and merge
 ```
 
 ### Performance Optimization Cycle
 ```
 1. @duroxide-profile.md         - Profile and identify bottlenecks
-2. @duroxide-refactor.md        - Implement optimizations
+2. @duroxide-stress-test.md     - Run stress tests to validate
 3. @duroxide-profile.md         - Re-profile to verify improvements
-4. @duroxide-add-test.md        - Add performance regression tests
+4. @duroxide-clean-warnings.md  - Clean up warnings
 5. @duroxide-merge-main.md      - Commit and merge
+```
+
+### Documentation Update Cycle
+```
+1. @duroxide-update-docs.md     - Review and update documentation
+2. @duroxide-clean-warnings.md  - Clean up any code issues found
+3. @duroxide-merge-main.md      - Commit and merge
 ```
 
 ## Suggested Additional Prompts

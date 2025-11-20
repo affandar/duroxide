@@ -1,13 +1,14 @@
-## Durable Task Rust Core – TODOs
+## Duroxide – TODOs
 
 
-- Do a pass on registries for interface consistency
+- Port samples from DurableTasks and Temporal to tests/scenarios/
+- Limits everywhere, orch/activity names, input/output event sizes, history sizes etc. 
+- LLM-orchestration/provider
 - Revive batching from dispatcher-batching branch, currently the perf dropped drastically. Might've been a sqlite-only issue. 
 - Mgmt API feedback
   - list instances should get back version, status, and other basic info.
   - truncate API for instances
   - truncate API for executions, to be called in eternal orchestrations. Or maybe default it. 
-- Fix up the stress tests, make them more usable by providers
 - API endpoint for runtime, MCP server, orch status etc. 
 - Metrics/logging dashboard 
 - Refactor tests, figure out what are the unit tests vs not
@@ -61,6 +62,8 @@
 
 ## DONE
 
+- Fix up the stress tests, make them more usable by providers
+- Do a pass on registries for interface consistency
 - Disable infra logs by default
 - conventions and changes for exporting and importing orchestration and activity registries across crates
 - make the provider tests usable by outside implementors
