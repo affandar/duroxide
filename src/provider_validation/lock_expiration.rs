@@ -178,7 +178,7 @@ pub async fn test_worker_lock_renewal_success<F: ProviderFactory>(factory: &F) {
         .await
         .unwrap();
 
-    let (item, token) = provider.fetch_work_item(30).await.unwrap();
+    let (_item, token) = provider.fetch_work_item(30).await.unwrap();
     tracing::info!("Fetched work item with lock token: {}", token);
 
     // Verify item is locked (can't fetch again)
@@ -229,7 +229,7 @@ pub async fn test_worker_lock_renewal_after_expiration<F: ProviderFactory>(facto
         .await
         .unwrap();
 
-    let (item, token) = provider.fetch_work_item(1).await.unwrap(); // 1 second timeout
+    let (_item, token) = provider.fetch_work_item(1).await.unwrap(); // 1 second timeout
     tracing::info!("Fetched work item with 1s timeout");
 
     // Wait for lock to expire
@@ -261,7 +261,7 @@ pub async fn test_worker_lock_renewal_extends_timeout<F: ProviderFactory>(factor
         .await
         .unwrap();
 
-    let (item, token) = provider.fetch_work_item(1).await.unwrap(); // 1 second timeout
+    let (_item, token) = provider.fetch_work_item(1).await.unwrap(); // 1 second timeout
     tracing::info!("Fetched work item with 1s timeout");
 
     // Wait 800ms (before expiration)
@@ -302,7 +302,7 @@ pub async fn test_worker_lock_renewal_after_ack<F: ProviderFactory>(factory: &F)
         .await
         .unwrap();
 
-    let (item, token) = provider.fetch_work_item(30).await.unwrap();
+    let (_item, token) = provider.fetch_work_item(30).await.unwrap();
     tracing::info!("Fetched work item");
 
     // Ack the work item

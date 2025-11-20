@@ -193,10 +193,7 @@ fn test_activity_registry_builder_detects_duplicates() {
         .build_result();
 
     assert!(result.is_err());
-    assert!(result
-        .err()
-        .unwrap()
-        .contains("duplicate activity registration"));
+    assert!(result.err().unwrap().contains("duplicate activity registration"));
 }
 
 #[test]
@@ -204,12 +201,12 @@ fn test_activity_registry_merge_duplicate_errors() {
     let registry1 = ActivityRegistry::builder().register("activity1", activity1).build();
     let registry2 = ActivityRegistry::builder().register("activity1", activity2).build();
 
-    let result = ActivityRegistry::builder().merge(registry1).merge(registry2).build_result();
+    let result = ActivityRegistry::builder()
+        .merge(registry1)
+        .merge(registry2)
+        .build_result();
     assert!(result.is_err());
-    assert!(result
-        .err()
-        .unwrap()
-        .contains("duplicate activity in merge"));
+    assert!(result.err().unwrap().contains("duplicate activity in merge"));
 }
 
 #[tokio::test]
@@ -469,7 +466,10 @@ fn test_registry_default() {
     assert!(reg.list_names().is_empty());
     assert!(reg.resolve_handler("nonexistent").is_none());
     assert!(reg.resolve_version("nonexistent").is_none());
-    assert!(reg.resolve_handler_exact("nonexistent", &semver::Version::parse("1.0.0").unwrap()).is_none());
+    assert!(
+        reg.resolve_handler_exact("nonexistent", &semver::Version::parse("1.0.0").unwrap())
+            .is_none()
+    );
     assert_eq!(reg.list_versions("nonexistent").len(), 0);
 }
 
@@ -480,14 +480,17 @@ fn test_registry_clone_shares_policy() {
         .register_versioned("orch1", "2.0.0", orch2)
         .build();
     let reg2 = reg1.clone();
-    
+
     // Change policy on clone - since policy is Arc<Mutex>, both share the same policy map
-    reg2.set_version_policy("orch1", duroxide::runtime::VersionPolicy::Exact(semver::Version::parse("1.0.0").unwrap()));
-    
+    reg2.set_version_policy(
+        "orch1",
+        duroxide::runtime::VersionPolicy::Exact(semver::Version::parse("1.0.0").unwrap()),
+    );
+
     // Both should see the policy change since they share the Arc
     let (v1, _) = reg1.resolve_handler("orch1").expect("resolve exact");
     assert_eq!(v1, semver::Version::parse("1.0.0").unwrap());
-    
+
     let (v2, _) = reg2.resolve_handler("orch1").expect("resolve exact");
     assert_eq!(v2, semver::Version::parse("1.0.0").unwrap());
 }
@@ -495,10 +498,13 @@ fn test_registry_clone_shares_policy() {
 #[test]
 fn test_empty_registry_resolution() {
     let reg: OrchestrationRegistry = OrchestrationRegistry::builder().build();
-    
+
     assert!(reg.resolve_handler("nonexistent").is_none());
     assert!(reg.resolve_version("nonexistent").is_none());
-    assert!(reg.resolve_handler_exact("nonexistent", &semver::Version::parse("1.0.0").unwrap()).is_none());
+    assert!(
+        reg.resolve_handler_exact("nonexistent", &semver::Version::parse("1.0.0").unwrap())
+            .is_none()
+    );
     assert_eq!(reg.list_versions("nonexistent").len(), 0);
     assert!(!reg.has("nonexistent"));
 }
@@ -508,9 +514,12 @@ fn test_resolve_handler_exact_policy_missing_version() {
     let reg = OrchestrationRegistry::builder()
         .register("orch1", orch1) // 1.0.0
         .build();
-    
-    reg.set_version_policy("orch1", duroxide::runtime::VersionPolicy::Exact(semver::Version::parse("2.0.0").unwrap()));
-    
+
+    reg.set_version_policy(
+        "orch1",
+        duroxide::runtime::VersionPolicy::Exact(semver::Version::parse("2.0.0").unwrap()),
+    );
+
     // Should return None since 2.0.0 doesn't exist
     assert!(reg.resolve_handler("orch1").is_none());
     assert!(reg.resolve_version("orch1").is_none());
@@ -522,7 +531,7 @@ fn test_resolve_version_latest() {
         .register("orch1", orch1)
         .register_versioned("orch1", "2.0.0", orch2)
         .build();
-    
+
     let v = reg.resolve_version("orch1").expect("resolve version");
     assert_eq!(v, semver::Version::parse("2.0.0").unwrap());
 }
@@ -533,22 +542,23 @@ fn test_resolve_version_exact() {
         .register("orch1", orch1)
         .register_versioned("orch1", "2.0.0", orch2)
         .build();
-    
-    reg.set_version_policy("orch1", duroxide::runtime::VersionPolicy::Exact(semver::Version::parse("1.0.0").unwrap()));
+
+    reg.set_version_policy(
+        "orch1",
+        duroxide::runtime::VersionPolicy::Exact(semver::Version::parse("1.0.0").unwrap()),
+    );
     let v = reg.resolve_version("orch1").expect("resolve version");
     assert_eq!(v, semver::Version::parse("1.0.0").unwrap());
 }
 
 #[test]
 fn test_activity_always_1_0_0_and_latest() {
-    let reg = ActivityRegistry::builder()
-        .register("activity1", activity1)
-        .build();
-    
+    let reg = ActivityRegistry::builder().register("activity1", activity1).build();
+
     let versions = reg.list_versions("activity1");
     assert_eq!(versions.len(), 1);
     assert_eq!(versions[0], semver::Version::parse("1.0.0").unwrap());
-    
+
     // Policy should be Latest (can verify via resolve)
     let (v, _h) = reg.resolve_handler("activity1").expect("resolve handler");
     assert_eq!(v, semver::Version::parse("1.0.0").unwrap());
@@ -557,17 +567,17 @@ fn test_activity_always_1_0_0_and_latest() {
 #[test]
 fn test_activity_register_typed() {
     use serde::{Deserialize, Serialize};
-    
+
     #[derive(Serialize, Deserialize)]
     struct Input {
         value: i32,
     }
-    
+
     #[derive(Serialize, Deserialize)]
     struct Output {
         result: i32,
     }
-    
+
     let reg = ActivityRegistry::builder()
         .register_typed("typed-activity", |_ctx: ActivityContext, input: Input| async move {
             Ok(Output {
@@ -575,7 +585,7 @@ fn test_activity_register_typed() {
             })
         })
         .build();
-    
+
     assert!(reg.has("typed-activity"));
     let (v, _h) = reg.resolve_handler("typed-activity").expect("resolve handler");
     assert_eq!(v, semver::Version::parse("1.0.0").unwrap());
@@ -583,10 +593,8 @@ fn test_activity_register_typed() {
 
 #[test]
 fn test_register_all() {
-    let handler = |_ctx: OrchestrationContext, input: String| async move {
-        Ok(format!("processed: {}", input))
-    };
-    
+    let handler = |_ctx: OrchestrationContext, input: String| async move { Ok(format!("processed: {}", input)) };
+
     let reg = OrchestrationRegistry::builder()
         .register_all(vec![
             ("orch1", handler.clone()),
@@ -594,7 +602,7 @@ fn test_register_all() {
             ("orch3", handler.clone()),
         ])
         .build();
-    
+
     assert_eq!(reg.count(), 3);
     assert!(reg.has("orch1"));
     assert!(reg.has("orch2"));
@@ -608,7 +616,7 @@ fn test_list_versions_ordering() {
         .register_versioned("orch1", "2.0.0", orch2)
         .register_versioned("orch1", "3.0.0", orch3)
         .build();
-    
+
     let versions = reg.list_versions("orch1");
     // BTreeMap maintains sorted order
     assert_eq!(versions.len(), 3);
@@ -625,13 +633,16 @@ fn test_multiple_policies() {
         .register("orch2", orch3)
         .register_versioned("orch2", "2.0.0", orch1)
         .build();
-    
-    reg.set_version_policy("orch1", duroxide::runtime::VersionPolicy::Exact(semver::Version::parse("1.0.0").unwrap()));
+
+    reg.set_version_policy(
+        "orch1",
+        duroxide::runtime::VersionPolicy::Exact(semver::Version::parse("1.0.0").unwrap()),
+    );
     reg.set_version_policy("orch2", duroxide::runtime::VersionPolicy::Latest);
-    
+
     let (v1, _) = reg.resolve_handler("orch1").expect("resolve orch1");
     assert_eq!(v1, semver::Version::parse("1.0.0").unwrap());
-    
+
     let (v2, _) = reg.resolve_handler("orch2").expect("resolve orch2");
     assert_eq!(v2, semver::Version::parse("2.0.0").unwrap());
 }

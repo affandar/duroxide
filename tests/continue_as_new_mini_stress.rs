@@ -1,5 +1,5 @@
-use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime;
+use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::{Event, OrchestrationContext, OrchestrationRegistry, OrchestrationStatus};
 use std::sync::Arc;
 use std::time::Duration;
@@ -15,10 +15,10 @@ async fn continue_as_new_chain_5_iterations() {
     // Register a simple counter orchestration that continues as new
     let counter_orch = |ctx: OrchestrationContext, input: String| async move {
         let count: u64 = input.parse().unwrap_or(0);
-        
+
         // Log current iteration
         tracing::info!("Counter iteration: {}", count);
-        
+
         if count < 4 {
             // Continue to next iteration (0-3 continue, 4 completes)
             ctx.continue_as_new((count + 1).to_string());
@@ -30,17 +30,12 @@ async fn continue_as_new_chain_5_iterations() {
     };
 
     let orchestrations = OrchestrationRegistry::builder()
-        .register("Counter", counter_orch)  // Default versioning (1.0.0)
+        .register("Counter", counter_orch) // Default versioning (1.0.0)
         .build();
 
     let activities = ActivityRegistry::builder().build();
 
-    let rt = runtime::Runtime::start_with_store(
-        store.clone(),
-        Arc::new(activities),
-        orchestrations,
-    )
-    .await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activities), orchestrations).await;
 
     let client = duroxide::Client::new(store.clone());
 
@@ -70,11 +65,8 @@ async fn continue_as_new_chain_5_iterations() {
     // Verify we have 5 executions (exec 1 starts with count=0, continues until exec 5 with count=4)
     // Each execution should have its own history
     for exec_id in 1..=5 {
-        let hist = client
-            .read_execution_history("counter-chain", exec_id)
-            .await
-            .unwrap();
-        
+        let hist = client.read_execution_history("counter-chain", exec_id).await.unwrap();
+
         // Each execution should have OrchestrationStarted
         assert!(
             hist.iter().any(|e| matches!(e, Event::OrchestrationStarted { .. })),
@@ -83,7 +75,7 @@ async fn continue_as_new_chain_5_iterations() {
         );
 
         // Verify version consistency - all should use default version
-        if let Some(Event::OrchestrationStarted { version, .. }) = 
+        if let Some(Event::OrchestrationStarted { version, .. }) =
             hist.iter().find(|e| matches!(e, Event::OrchestrationStarted { .. }))
         {
             // Version should be resolved to 1.0.0 (default)
@@ -129,7 +121,7 @@ async fn continue_as_new_chain_with_activities() {
     // Orchestration that executes activity then continues
     let counter_with_activity = |ctx: OrchestrationContext, input: String| async move {
         let count: u64 = input.parse().unwrap_or(0);
-        
+
         // Execute an activity at each step
         let activity_input = format!("step-{}", count);
         let result = ctx
@@ -137,10 +129,11 @@ async fn continue_as_new_chain_with_activities() {
             .into_activity()
             .await
             .map_err(|e| format!("Activity failed: {}", e))?;
-        
+
         assert_eq!(result, format!("step-{}", count));
-        
-        if count < 4 {  // 5 executions: 0-3 continue, 4 completes
+
+        if count < 4 {
+            // 5 executions: 0-3 continue, 4 completes
             ctx.continue_as_new((count + 1).to_string());
             Ok("continuing".to_string())
         } else {
@@ -152,16 +145,9 @@ async fn continue_as_new_chain_with_activities() {
         .register("CounterWithActivity", counter_with_activity)
         .build();
 
-    let activities = ActivityRegistry::builder()
-        .register("Echo", echo)
-        .build();
+    let activities = ActivityRegistry::builder().register("Echo", echo).build();
 
-    let rt = runtime::Runtime::start_with_store(
-        store.clone(),
-        Arc::new(activities),
-        orchestrations,
-    )
-    .await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activities), orchestrations).await;
 
     let client = duroxide::Client::new(store.clone());
 
@@ -192,7 +178,7 @@ async fn continue_as_new_chain_with_activities() {
             .read_execution_history("counter-activity-chain", exec_id)
             .await
             .unwrap();
-        
+
         // Should have ActivityScheduled and ActivityCompleted
         assert!(
             hist.iter().any(|e| matches!(e, Event::ActivityScheduled { .. })),
@@ -218,8 +204,9 @@ async fn concurrent_continue_as_new_chains() {
 
     let counter_orch = |ctx: OrchestrationContext, input: String| async move {
         let count: u64 = input.parse().unwrap_or(0);
-        
-        if count < 4 {  // 5 executions: 0-3 continue, 4 completes
+
+        if count < 4 {
+            // 5 executions: 0-3 continue, 4 completes
             ctx.continue_as_new((count + 1).to_string());
             Ok("continuing".to_string())
         } else {
@@ -233,19 +220,12 @@ async fn concurrent_continue_as_new_chains() {
 
     let activities = ActivityRegistry::builder().build();
 
-    let rt = runtime::Runtime::start_with_store(
-        store.clone(),
-        Arc::new(activities),
-        orchestrations,
-    )
-    .await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activities), orchestrations).await;
 
     let client = duroxide::Client::new(store.clone());
 
     // Start 5 concurrent chains
-    let instances: Vec<String> = (0..5)
-        .map(|i| format!("concurrent-chain-{}", i))
-        .collect();
+    let instances: Vec<String> = (0..5).map(|i| format!("concurrent-chain-{}", i)).collect();
 
     for instance in &instances {
         client
@@ -277,11 +257,8 @@ async fn concurrent_continue_as_new_chains() {
     // Verify each chain has 5 executions
     for instance in &instances {
         for exec_id in 1..=5 {
-            let hist = client
-                .read_execution_history(instance, exec_id)
-                .await
-                .unwrap();
-            
+            let hist = client.read_execution_history(instance, exec_id).await.unwrap();
+
             assert!(
                 !hist.is_empty(),
                 "Chain {} execution {} has empty history",
@@ -353,63 +330,60 @@ async fn instance_actor_pattern_stress_test() {
     struct InstanceActorInput {
         k8s_name: String,
         orchestration_id: String,
-        iteration: u64,  // Track iteration for testing
+        iteration: u64, // Track iteration for testing
     }
 
     // Mock activities
     let get_instance_connection = |_ctx: duroxide::ActivityContext, input: String| async move {
-        let parsed: GetInstanceConnectionInput = serde_json::from_str(&input)
-            .map_err(|e| format!("Parse error: {}", e))?;
-        
+        let parsed: GetInstanceConnectionInput =
+            serde_json::from_str(&input).map_err(|e| format!("Parse error: {}", e))?;
+
         let output = GetInstanceConnectionOutput {
             found: true,
             connection_string: Some(format!("postgresql://localhost/db_{}", parsed.k8s_name)),
             state: Some("running".to_string()),
         };
-        
+
         serde_json::to_string(&output).map_err(|e| format!("Serialize error: {}", e))
     };
 
     let test_connection = |_ctx: duroxide::ActivityContext, input: String| async move {
-        let parsed: TestConnectionInput = serde_json::from_str(&input)
-            .map_err(|e| format!("Parse error: {}", e))?;
-        
+        let parsed: TestConnectionInput = serde_json::from_str(&input).map_err(|e| format!("Parse error: {}", e))?;
+
         // Simulate connection test
         assert!(parsed.connection_string.starts_with("postgresql://"));
-        
+
         let output = TestConnectionOutput {
             version: "PostgreSQL 16.1".to_string(),
         };
-        
+
         serde_json::to_string(&output).map_err(|e| format!("Serialize error: {}", e))
     };
 
     let record_health_check = |_ctx: duroxide::ActivityContext, input: String| async move {
-        let _parsed: RecordHealthCheckInput = serde_json::from_str(&input)
-            .map_err(|e| format!("Parse error: {}", e))?;
-        
+        let _parsed: RecordHealthCheckInput =
+            serde_json::from_str(&input).map_err(|e| format!("Parse error: {}", e))?;
+
         let output = RecordHealthCheckOutput { recorded: true };
         serde_json::to_string(&output).map_err(|e| format!("Serialize error: {}", e))
     };
 
     let update_instance_health = |_ctx: duroxide::ActivityContext, input: String| async move {
-        let _parsed: UpdateInstanceHealthInput = serde_json::from_str(&input)
-            .map_err(|e| format!("Parse error: {}", e))?;
-        
+        let _parsed: UpdateInstanceHealthInput =
+            serde_json::from_str(&input).map_err(|e| format!("Parse error: {}", e))?;
+
         let output = UpdateInstanceHealthOutput { updated: true };
         serde_json::to_string(&output).map_err(|e| format!("Serialize error: {}", e))
     };
 
     // Instance actor orchestration (5 iterations for stress test)
     let instance_actor = |ctx: OrchestrationContext, input: String| async move {
-        let mut input_data: InstanceActorInput = serde_json::from_str(&input)
-            .map_err(|e| format!("Failed to parse input: {}", e))?;
+        let mut input_data: InstanceActorInput =
+            serde_json::from_str(&input).map_err(|e| format!("Failed to parse input: {}", e))?;
 
         ctx.trace_info(format!(
             "Instance actor iteration {} for: {} (orchestration: {})",
-            input_data.iteration,
-            input_data.k8s_name,
-            input_data.orchestration_id
+            input_data.iteration, input_data.k8s_name, input_data.orchestration_id
         ));
 
         // Exit after 5 iterations for stress test
@@ -440,15 +414,15 @@ async fn instance_actor_pattern_stress_test() {
             Some(conn) => conn,
             None => {
                 ctx.trace_warn("No connection string available yet, skipping health check");
-                
+
                 // Wait and retry
                 ctx.schedule_timer(50).into_timer().await; // 50ms (was 30s)
-                
+
                 input_data.iteration += 1;
-                let input_json = serde_json::to_string(&input_data)
-                    .map_err(|e| format!("Failed to serialize input: {}", e))?;
+                let input_json =
+                    serde_json::to_string(&input_data).map_err(|e| format!("Failed to serialize input: {}", e))?;
                 ctx.continue_as_new(input_json);
-                
+
                 return Ok("retrying".to_string());
             }
         };
@@ -514,9 +488,8 @@ async fn instance_actor_pattern_stress_test() {
 
         // Step 8: Continue as new
         input_data.iteration += 1;
-        let input_json = serde_json::to_string(&input_data)
-            .map_err(|e| format!("Failed to serialize input: {}", e))?;
-        
+        let input_json = serde_json::to_string(&input_data).map_err(|e| format!("Failed to serialize input: {}", e))?;
+
         ctx.continue_as_new(input_json);
 
         Ok("continuing".to_string())
@@ -533,12 +506,7 @@ async fn instance_actor_pattern_stress_test() {
         .register_typed("cms-update-instance-health", update_instance_health)
         .build();
 
-    let rt = runtime::Runtime::start_with_store(
-        store.clone(),
-        Arc::new(activities),
-        orchestrations,
-    )
-    .await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activities), orchestrations).await;
 
     let client = duroxide::Client::new(store.clone());
 
@@ -562,7 +530,7 @@ async fn instance_actor_pattern_stress_test() {
             .start_orchestration(instance_id, "InstanceActor", &input_json)
             .await
             .unwrap();
-        
+
         tracing::info!("Started instance actor: {}", instance_id);
     }
 
@@ -579,9 +547,13 @@ async fn instance_actor_pattern_stress_test() {
                 tracing::info!("✓ Instance actor {} completed after 5 executions", instance_id);
             }
             OrchestrationStatus::Failed { details } => {
-                eprintln!("\n❌ Instance actor {} failed: {}\n", instance_id, details.display_message());
+                eprintln!(
+                    "\n❌ Instance actor {} failed: {}\n",
+                    instance_id,
+                    details.display_message()
+                );
                 eprintln!("=== DUMPING ALL EXECUTION HISTORIES FOR {} ===\n", instance_id);
-                
+
                 // Find how many executions exist
                 let mut exec_id = 1;
                 loop {
@@ -590,8 +562,8 @@ async fn instance_actor_pattern_stress_test() {
                             eprintln!("--- Execution {} ---", exec_id);
                             eprintln!("Events: {}", hist.len());
                             for (idx, event) in hist.iter().enumerate() {
-                                let event_json = serde_json::to_string_pretty(event)
-                                    .unwrap_or_else(|_| format!("{:?}", event));
+                                let event_json =
+                                    serde_json::to_string_pretty(event).unwrap_or_else(|_| format!("{:?}", event));
                                 eprintln!("  Event {}: {}", idx + 1, event_json);
                             }
                             eprintln!();
@@ -599,14 +571,14 @@ async fn instance_actor_pattern_stress_test() {
                         }
                         _ => break,
                     }
-                    
+
                     // Safety limit
                     if exec_id > 100 {
                         eprintln!("(stopping dump at execution 100)");
                         break;
                     }
                 }
-                
+
                 eprintln!("=== END OF HISTORY DUMP ===\n");
                 panic!("Instance actor {} failed: {}", instance_id, details.display_message());
             }
@@ -619,12 +591,9 @@ async fn instance_actor_pattern_stress_test() {
     // Verify each execution has the expected activities for all 3 instances
     for (instance_id, _k8s_name, _orch_id) in &instances {
         tracing::info!("Verifying executions for {}", instance_id);
-        
+
         for exec_id in 1..=5 {
-            let hist = client
-                .read_execution_history(instance_id, exec_id)
-                .await
-                .unwrap();
+            let hist = client.read_execution_history(instance_id, exec_id).await.unwrap();
 
             // Count activities scheduled in this execution
             let activity_count = hist
@@ -661,7 +630,8 @@ async fn instance_actor_pattern_stress_test() {
             // Executions 1-4: continue-as-new, Execution 5: completes
             if exec_id < 5 {
                 assert!(
-                    hist.iter().any(|e| matches!(e, Event::OrchestrationContinuedAsNew { .. })),
+                    hist.iter()
+                        .any(|e| matches!(e, Event::OrchestrationContinuedAsNew { .. })),
                     "{} execution {} should have ContinuedAsNew",
                     instance_id,
                     exec_id
@@ -675,7 +645,7 @@ async fn instance_actor_pattern_stress_test() {
                 );
             }
         }
-        
+
         tracing::info!("✓ All 5 executions verified for {}", instance_id);
     }
 

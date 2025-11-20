@@ -5,7 +5,7 @@
 //! version 1.0.0 with Latest policy (hardcoded), while orchestrations support
 //! explicit versioning and policies.
 
-use super::{ActivityHandler, FnActivity, OrchestrationHandler, FnOrchestration};
+use super::{ActivityHandler, FnActivity, FnOrchestration, OrchestrationHandler};
 use crate::_typed_codec::Codec;
 use crate::OrchestrationContext;
 use semver::Version;
@@ -105,17 +105,11 @@ impl<H: ?Sized> Registry<H> {
                     None
                 }
             }
-            VersionPolicy::Exact(v) => {
-                if let Some(versions) = self.inner.get(name) {
-                    if let Some(h) = versions.get(v) {
-                        Some((v.clone(), h.clone()))
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                }
-            }
+            VersionPolicy::Exact(v) => self
+                .inner
+                .get(name)
+                .and_then(|versions| versions.get(v))
+                .map(|h| (v.clone(), Arc::clone(h))),
         };
 
         if result.is_none() {
@@ -148,10 +142,7 @@ impl<H: ?Sized> Registry<H> {
 
     /// Set version policy (SYNC)
     pub fn set_version_policy(&self, name: &str, policy: VersionPolicy) {
-        self.policy
-            .lock()
-            .unwrap()
-            .insert(name.to_string(), policy);
+        self.policy.lock().unwrap().insert(name.to_string(), policy);
     }
 
     /// List all registered names
@@ -181,12 +172,7 @@ impl<H: ?Sized> Registry<H> {
     fn debug_dump(&self) -> HashMap<String, Vec<String>> {
         self.inner
             .iter()
-            .map(|(name, versions)| {
-                (
-                    name.clone(),
-                    versions.keys().map(|v| v.to_string()).collect(),
-                )
-            })
+            .map(|(name, versions)| (name.clone(), versions.keys().map(|v| v.to_string()).collect()))
             .collect()
     }
 
@@ -216,7 +202,6 @@ impl<H: ?Sized> Registry<H> {
     }
 }
 
-
 // ============================================================================
 // Generic Builder Implementation
 // ============================================================================
@@ -243,7 +228,8 @@ impl<H: ?Sized> RegistryBuilder<H> {
             let entry = self.map.entry(name.clone()).or_default();
             for (version, handler) in versions.iter() {
                 if entry.contains_key(version) {
-                    self.errors.push(format!("duplicate {} in merge: {}@{}", error_prefix, name, version));
+                    self.errors
+                        .push(format!("duplicate {} in merge: {}@{}", error_prefix, name, version));
                 } else {
                     entry.insert(version.clone(), handler.clone());
                 }
@@ -257,22 +243,23 @@ impl<H: ?Sized> RegistryBuilder<H> {
     where
         F: Clone,
     {
-        items.into_iter().fold(self, |builder, (name, f)| register_fn(builder, name, f))
+        items
+            .into_iter()
+            .fold(self, |builder, (name, f)| register_fn(builder, name, f))
     }
 
     /// Check for duplicate registration and return error if found
     fn check_duplicate(&mut self, name: &str, version: &Version, error_prefix: &str) -> bool {
         let entry = self.map.entry(name.to_string()).or_default();
         if entry.contains_key(version) {
-            self.errors.push(format!("duplicate {} registration: {}@{}", error_prefix, name, version));
+            self.errors
+                .push(format!("duplicate {} registration: {}@{}", error_prefix, name, version));
             true
         } else {
             false
         }
     }
-
 }
-
 
 // ============================================================================
 // Orchestration Builder - Specialized Methods
@@ -320,12 +307,7 @@ impl OrchestrationRegistryBuilder {
         self
     }
 
-    pub fn register_versioned<F, Fut>(
-        mut self,
-        name: impl Into<String>,
-        version: impl AsRef<str>,
-        f: F,
-    ) -> Self
+    pub fn register_versioned<F, Fut>(mut self, name: impl Into<String>, version: impl AsRef<str>, f: F) -> Self
     where
         F: Fn(OrchestrationContext, String) -> Fut + Send + Sync + 'static,
         Fut: std::future::Future<Output = Result<String, String>> + Send + 'static,
@@ -378,11 +360,14 @@ impl OrchestrationRegistryBuilder {
                 crate::_typed_codec::Json::encode(&out)
             }
         };
-        self.map.entry(name).or_default().insert(v, Arc::new(FnOrchestration(wrapper)));
+        self.map
+            .entry(name)
+            .or_default()
+            .insert(v, Arc::new(FnOrchestration(wrapper)));
         self
     }
 
-    pub fn merge(mut self, other: OrchestrationRegistry) -> Self {
+    pub fn merge(self, other: OrchestrationRegistry) -> Self {
         self.merge_registry(other, "orchestration")
     }
 
@@ -457,7 +442,7 @@ impl ActivityRegistryBuilder {
         self
     }
 
-    pub fn merge(mut self, other: ActivityRegistry) -> Self {
+    pub fn merge(self, other: ActivityRegistry) -> Self {
         self.merge_registry(other, "activity")
     }
 

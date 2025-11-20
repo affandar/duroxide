@@ -99,104 +99,105 @@ impl Runtime {
                                         ConfigError,
                                     }
 
-                                    let (ack_result, outcome) = if let Some((_version, handler)) = activities.resolve_handler(&name) {
-                                        match handler.invoke(activity_ctx, input).await {
-                                            Ok(result) => {
-                                                let duration_ms = start_time.elapsed().as_millis() as u64;
-                                                tracing::debug!(
-                                                    target: "duroxide::runtime",
-                                                    instance_id = %instance,
-                                                    execution_id = %execution_id,
-                                                    activity_name = %name,
-                                                    activity_id = %id,
-                                                    worker_id = %worker_id,
-                                                    outcome = "success",
-                                                    duration_ms = %duration_ms,
-                                                    result_size = %result.len(),
-                                                    "Activity completed"
-                                                );
-                                                (
-                                                    rt.history_store
-                                                        .ack_work_item(
-                                                            &token,
-                                                            WorkItem::ActivityCompleted {
-                                                                instance: instance.clone(),
-                                                                execution_id,
-                                                                id,
-                                                                result,
-                                                            },
-                                                        )
-                                                        .await,
-                                                    ActivityOutcome::Success,
-                                                )
-                                            }
-                                            Err(error) => {
-                                                let duration_ms = start_time.elapsed().as_millis() as u64;
-                                                tracing::warn!(
-                                                    target: "duroxide::runtime",
-                                                    instance_id = %instance,
-                                                    execution_id = %execution_id,
-                                                    activity_name = %name,
-                                                    activity_id = %id,
-                                                    worker_id = %worker_id,
-                                                    outcome = "app_error",
-                                                    duration_ms = %duration_ms,
-                                                    error = %error,
-                                                    "Activity failed (application error)"
-                                                );
-                                                (
-                                                    rt.history_store
-                                                        .ack_work_item(
-                                                            &token,
-                                                            WorkItem::ActivityFailed {
-                                                                instance: instance.clone(),
-                                                                execution_id,
-                                                                id,
-                                                                details: crate::ErrorDetails::Application {
-                                                                    kind: crate::AppErrorKind::ActivityFailed,
-                                                                    message: error,
-                                                                    retryable: false,
+                                    let (ack_result, outcome) =
+                                        if let Some((_version, handler)) = activities.resolve_handler(&name) {
+                                            match handler.invoke(activity_ctx, input).await {
+                                                Ok(result) => {
+                                                    let duration_ms = start_time.elapsed().as_millis() as u64;
+                                                    tracing::debug!(
+                                                        target: "duroxide::runtime",
+                                                        instance_id = %instance,
+                                                        execution_id = %execution_id,
+                                                        activity_name = %name,
+                                                        activity_id = %id,
+                                                        worker_id = %worker_id,
+                                                        outcome = "success",
+                                                        duration_ms = %duration_ms,
+                                                        result_size = %result.len(),
+                                                        "Activity completed"
+                                                    );
+                                                    (
+                                                        rt.history_store
+                                                            .ack_work_item(
+                                                                &token,
+                                                                WorkItem::ActivityCompleted {
+                                                                    instance: instance.clone(),
+                                                                    execution_id,
+                                                                    id,
+                                                                    result,
                                                                 },
-                                                            },
-                                                        )
-                                                        .await,
-                                                    ActivityOutcome::AppError,
-                                                )
+                                                            )
+                                                            .await,
+                                                        ActivityOutcome::Success,
+                                                    )
+                                                }
+                                                Err(error) => {
+                                                    let duration_ms = start_time.elapsed().as_millis() as u64;
+                                                    tracing::warn!(
+                                                        target: "duroxide::runtime",
+                                                        instance_id = %instance,
+                                                        execution_id = %execution_id,
+                                                        activity_name = %name,
+                                                        activity_id = %id,
+                                                        worker_id = %worker_id,
+                                                        outcome = "app_error",
+                                                        duration_ms = %duration_ms,
+                                                        error = %error,
+                                                        "Activity failed (application error)"
+                                                    );
+                                                    (
+                                                        rt.history_store
+                                                            .ack_work_item(
+                                                                &token,
+                                                                WorkItem::ActivityFailed {
+                                                                    instance: instance.clone(),
+                                                                    execution_id,
+                                                                    id,
+                                                                    details: crate::ErrorDetails::Application {
+                                                                        kind: crate::AppErrorKind::ActivityFailed,
+                                                                        message: error,
+                                                                        retryable: false,
+                                                                    },
+                                                                },
+                                                            )
+                                                            .await,
+                                                        ActivityOutcome::AppError,
+                                                    )
+                                                }
                                             }
-                                        }
-                                    } else {
-                                        let duration_ms = start_time.elapsed().as_millis() as u64;
-                                        tracing::error!(
-                                            target: "duroxide::runtime",
-                                            instance_id = %instance,
-                                            execution_id = %execution_id,
-                                            activity_name = %name,
-                                            activity_id = %id,
-                                            worker_id = %worker_id,
-                                            outcome = "system_error",
-                                            error_type = "unregistered",
-                                            duration_ms = %duration_ms,
-                                            "Activity failed (unregistered)"
-                                        );
-                                        (
-                                            rt.history_store
-                                                .ack_work_item(
-                                                    &token,
-                                                    WorkItem::ActivityFailed {
-                                                        instance: instance.clone(),
-                                                        execution_id,
-                                                        id,
-                                                        details: crate::ErrorDetails::Configuration {
-                                                            kind: crate::ConfigErrorKind::UnregisteredActivity,
-                                                            resource: name.clone(),
-                                                            message: None,
+                                        } else {
+                                            let duration_ms = start_time.elapsed().as_millis() as u64;
+                                            tracing::error!(
+                                                target: "duroxide::runtime",
+                                                instance_id = %instance,
+                                                execution_id = %execution_id,
+                                                activity_name = %name,
+                                                activity_id = %id,
+                                                worker_id = %worker_id,
+                                                outcome = "system_error",
+                                                error_type = "unregistered",
+                                                duration_ms = %duration_ms,
+                                                "Activity failed (unregistered)"
+                                            );
+                                            (
+                                                rt.history_store
+                                                    .ack_work_item(
+                                                        &token,
+                                                        WorkItem::ActivityFailed {
+                                                            instance: instance.clone(),
+                                                            execution_id,
+                                                            id,
+                                                            details: crate::ErrorDetails::Configuration {
+                                                                kind: crate::ConfigErrorKind::UnregisteredActivity,
+                                                                resource: name.clone(),
+                                                                message: None,
+                                                            },
                                                         },
-                                                    },
-                                                )
-                                                .await,
-                                            ActivityOutcome::ConfigError,
-                                        )
-                                    };
+                                                    )
+                                                    .await,
+                                                ActivityOutcome::ConfigError,
+                                            )
+                                        };
 
                                     // Stop lock renewal task now that activity is complete
                                     renewal_handle.abort();

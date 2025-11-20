@@ -129,7 +129,13 @@ impl Runtime {
         // Process the execution (unified path)
         let (worker_items, orchestrator_items, execution_id_for_ack) = if workitem_reader.has_orchestration_name() {
             let (wi, oi) = self
-                .handle_orchestration_atomic(instance, &mut history_mgr, &workitem_reader, execution_id_to_use, worker_id)
+                .handle_orchestration_atomic(
+                    instance,
+                    &mut history_mgr,
+                    &workitem_reader,
+                    execution_id_to_use,
+                    worker_id,
+                )
                 .await;
             (wi, oi, execution_id_to_use)
         } else {

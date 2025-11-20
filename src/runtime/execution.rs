@@ -89,7 +89,8 @@ impl Runtime {
         let orch_version = history_mgr.version();
 
         // Execute the orchestration logic
-        let turn_result = turn.execute_orchestration(handler.clone(), input.clone(), orch_name, orch_version, worker_id);
+        let turn_result =
+            turn.execute_orchestration(handler.clone(), input.clone(), orch_name, orch_version, worker_id);
 
         // Collect history delta from turn
         history_mgr.extend(turn.history_delta().to_vec());

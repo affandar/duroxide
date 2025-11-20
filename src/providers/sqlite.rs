@@ -10,16 +10,10 @@ use super::{
 use crate::Event;
 
 /// Configuration options for SQLiteProvider
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct SqliteOptions {
     // Currently empty - lock timeout moved to RuntimeOptions
     // Kept for future provider-specific options
-}
-
-impl Default for SqliteOptions {
-    fn default() -> Self {
-        Self {}
-    }
 }
 
 /// SQLite-backed provider with full transactional support

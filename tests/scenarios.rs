@@ -12,4 +12,3 @@
 
 #[path = "scenarios/continue_as_new_mini_stress.rs"]
 mod continue_as_new_mini_stress;
-

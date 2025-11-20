@@ -898,9 +898,9 @@ pub struct OrchestrationContext {
 
 impl OrchestrationContext {
     /// Construct a new context from an existing history vector.
-    /// 
+    ///
     /// # Parameters
-    /// 
+    ///
     /// * `worker_id` - Optional dispatcher worker ID for logging correlation.
     ///   - `Some(id)`: Used by runtime dispatchers to include worker_id in traces
     ///   - `None`: Used by standalone/test execution without runtime context

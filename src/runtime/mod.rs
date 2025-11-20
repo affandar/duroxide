@@ -385,7 +385,6 @@ impl Runtime {
         crate::INITIAL_EXECUTION_ID
     }
 
-
     /// Start a new runtime using the in-memory SQLite provider.
     pub async fn start(
         activity_registry: Arc<registry::ActivityRegistry>,
