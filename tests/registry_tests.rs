@@ -2,7 +2,7 @@
 
 use duroxide::providers::sqlite::SqliteProvider;
 use duroxide::runtime;
-use duroxide::runtime::registry::{ActivityRegistry, ActivityRegistryBuilder};
+use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::{ActivityContext, Client, OrchestrationContext, OrchestrationRegistry, OrchestrationStatus};
 use std::sync::{Arc, Mutex};
 
@@ -141,7 +141,7 @@ fn test_activity_registry_from_registry() {
         .build();
 
     // Extend it with from_registry
-    let extended = ActivityRegistryBuilder::from_registry(&base)
+    let extended = ActivityRegistry::builder_from(&base)
         .register("activity3", activity3)
         .build();
 
@@ -183,6 +183,33 @@ fn test_activity_registry_merge_with_chained_register() {
     assert!(combined.get("activity1").is_some());
     assert!(combined.get("activity2").is_some());
     assert!(combined.get("activity3").is_some());
+}
+
+#[test]
+fn test_activity_registry_builder_detects_duplicates() {
+    let result = ActivityRegistry::builder()
+        .register("activity1", activity1)
+        .register("activity1", activity2)
+        .build_result();
+
+    assert!(result.is_err());
+    assert!(result
+        .err()
+        .unwrap()
+        .contains("duplicate activity registration"));
+}
+
+#[test]
+fn test_activity_registry_merge_duplicate_errors() {
+    let registry1 = ActivityRegistry::builder().register("activity1", activity1).build();
+    let registry2 = ActivityRegistry::builder().register("activity1", activity2).build();
+
+    let result = ActivityRegistry::builder().merge(registry1).merge(registry2).build_result();
+    assert!(result.is_err());
+    assert!(result
+        .err()
+        .unwrap()
+        .contains("duplicate activity in merge"));
 }
 
 #[tokio::test]
@@ -330,6 +357,19 @@ fn test_orchestration_registry_list_names() {
     assert_eq!(names.len(), 2);
     assert!(names.contains(&"orch1".to_string()));
     assert!(names.contains(&"orch2".to_string()));
+}
+
+#[test]
+fn test_orchestration_registry_has_and_count() {
+    let registry = OrchestrationRegistry::builder()
+        .register("orch1", orch1)
+        .register("orch2", orch2)
+        .build();
+
+    assert!(registry.has("orch1"));
+    assert!(registry.has("orch2"));
+    assert!(!registry.has("orch3"));
+    assert_eq!(registry.count(), 2);
 }
 
 #[test]

@@ -112,6 +112,14 @@ impl OrchestrationRegistry {
     pub fn list_orchestration_names(&self) -> Vec<String> {
         self.inner.keys().cloned().collect()
     }
+
+    pub fn has(&self, name: &str) -> bool {
+        self.inner.contains_key(name)
+    }
+
+    pub fn count(&self) -> usize {
+        self.inner.len()
+    }
     pub fn list_orchestration_versions(&self, name: &str) -> Vec<Version> {
         self.inner
             .get(name)
@@ -354,13 +362,28 @@ pub struct ActivityRegistry {
 
 pub struct ActivityRegistryBuilder {
     map: HashMap<String, Arc<dyn ActivityHandler>>,
+    errors: Vec<String>,
 }
 
 impl ActivityRegistry {
     pub fn builder() -> ActivityRegistryBuilder {
         // System calls (guid, utcnow_ms, trace) are no longer dispatched as activities.
         // They are handled synchronously during orchestration turns via SystemCall events.
-        ActivityRegistryBuilder { map: HashMap::new() }
+        ActivityRegistryBuilder {
+            map: HashMap::new(),
+            errors: Vec::new(),
+        }
+    }
+
+    pub fn builder_from(reg: &ActivityRegistry) -> ActivityRegistryBuilder {
+        let mut map: HashMap<String, Arc<dyn ActivityHandler>> = HashMap::new();
+        for (k, v) in reg.inner.iter() {
+            map.insert(k.clone(), v.clone());
+        }
+        ActivityRegistryBuilder {
+            map,
+            errors: Vec::new(),
+        }
     }
 
     /// Get the handler for a specific activity.
@@ -427,18 +450,20 @@ impl ActivityRegistry {
 
 impl ActivityRegistryBuilder {
     pub fn from_registry(reg: &ActivityRegistry) -> Self {
-        let mut map: HashMap<String, Arc<dyn ActivityHandler>> = HashMap::new();
-        for (k, v) in reg.inner.iter() {
-            map.insert(k.clone(), v.clone());
-        }
-        ActivityRegistryBuilder { map }
+        ActivityRegistry::builder_from(reg)
     }
     pub fn register<F, Fut>(mut self, name: impl Into<String>, f: F) -> Self
     where
         F: Fn(crate::ActivityContext, String) -> Fut + Send + Sync + 'static,
         Fut: std::future::Future<Output = Result<String, String>> + Send + 'static,
     {
-        self.map.insert(name.into(), Arc::new(FnActivity(f)));
+        let name = name.into();
+        if self.map.contains_key(&name) {
+            self.errors
+                .push(format!("duplicate activity registration: {name}"));
+            return self;
+        }
+        self.map.insert(name, Arc::new(FnActivity(f)));
         self
     }
     pub fn register_typed<In, Out, F, Fut>(mut self, name: impl Into<String>, f: F) -> Self
@@ -457,7 +482,13 @@ impl ActivityRegistryBuilder {
                 crate::_typed_codec::Json::encode(&out)
             }
         };
-        self.map.insert(name.into(), Arc::new(FnActivity(wrapper)));
+        let name = name.into();
+        if self.map.contains_key(&name) {
+            self.errors
+                .push(format!("duplicate activity registration: {name}"));
+            return self;
+        }
+        self.map.insert(name, Arc::new(FnActivity(wrapper)));
         self
     }
 
@@ -478,10 +509,11 @@ impl ActivityRegistryBuilder {
     pub fn merge(mut self, other: ActivityRegistry) -> Self {
         for (name, handler) in other.inner.iter() {
             if self.map.contains_key(name) {
-                // Skip duplicates silently (last registration wins)
-                // Alternative: could collect errors like OrchestrationRegistryBuilder
+                self.errors
+                    .push(format!("duplicate activity in merge: {name}"));
+            } else {
+                self.map.insert(name.clone(), handler.clone());
             }
-            self.map.insert(name.clone(), handler.clone());
         }
         self
     }
@@ -528,6 +560,16 @@ impl ActivityRegistryBuilder {
     pub fn build(self) -> ActivityRegistry {
         ActivityRegistry {
             inner: Arc::new(self.map),
+        }
+    }
+
+    pub fn build_result(self) -> Result<ActivityRegistry, String> {
+        if self.errors.is_empty() {
+            Ok(ActivityRegistry {
+                inner: Arc::new(self.map),
+            })
+        } else {
+            Err(self.errors.join("; "))
         }
     }
 }
