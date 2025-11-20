@@ -317,50 +317,63 @@ impl Runtime {
         let mut worker_items = Vec::new();
         let mut orchestrator_items = Vec::new();
 
+        // Resolve handler once - use provided version or resolve from registry policy
+        let resolved_handler = if let Some(v_str) = &workitem_reader.version {
+            // Use exact version if provided
+            if let Ok(v) = semver::Version::parse(v_str) {
+                self.orchestration_registry
+                    .resolve_handler_exact(&workitem_reader.orchestration_name, &v)
+                    .map(|h| (v, h))
+            } else {
+                None
+            }
+        } else {
+            // Resolve using policy (returns both version and handler)
+            self.orchestration_registry
+                .resolve_handler(&workitem_reader.orchestration_name)
+        };
+
+        let (resolved_version, handler) = match resolved_handler {
+            Some((v, h)) => (v, h),
+            None => {
+                // Not found in registry - fail with unregistered error
+                if history_mgr.is_empty() {
+                    history_mgr.append(Event::OrchestrationStarted {
+                        event_id: crate::INITIAL_EVENT_ID,
+                        name: workitem_reader.orchestration_name.clone(),
+                        version: "0.0.0".to_string(), // Placeholder version for unregistered
+                        input: workitem_reader.input.clone(),
+                        parent_instance: workitem_reader.parent_instance.clone(),
+                        parent_id: workitem_reader.parent_id,
+                    });
+
+                    history_mgr.append_failed(crate::ErrorDetails::Configuration {
+                        kind: crate::ConfigErrorKind::UnregisteredOrchestration,
+                        resource: workitem_reader.orchestration_name.clone(),
+                        message: None,
+                    });
+                    self.record_orchestration_configuration_error();
+                }
+                return (worker_items, orchestrator_items);
+            }
+        };
+
         // Create started event if this is a new instance
         if history_mgr.is_empty() {
-            // Resolve version: use provided version or get from registry policy
-            let resolved_version = if let Some(v) = &workitem_reader.version {
-                v.to_string()
-            } else if let Some(v) = self
-                .orchestration_registry
-                .resolve_version(&workitem_reader.orchestration_name)
-            {
-                v.to_string()
-            } else {
-                // Not found in registry - fail with unregistered error
-                history_mgr.append(Event::OrchestrationStarted {
-                    event_id: crate::INITIAL_EVENT_ID,
-                    name: workitem_reader.orchestration_name.clone(),
-                    version: "0.0.0".to_string(), // Placeholder version for unregistered
-                    input: workitem_reader.input.clone(),
-                    parent_instance: workitem_reader.parent_instance.clone(),
-                    parent_id: workitem_reader.parent_id,
-                });
-
-                history_mgr.append_failed(crate::ErrorDetails::Configuration {
-                    kind: crate::ConfigErrorKind::UnregisteredOrchestration,
-                    resource: workitem_reader.orchestration_name.clone(),
-                    message: None,
-                });
-                self.record_orchestration_configuration_error();
-                return (worker_items, orchestrator_items);
-            };
-
             history_mgr.append(Event::OrchestrationStarted {
                 event_id: 1, // First event always has event_id=1
                 name: workitem_reader.orchestration_name.clone(),
-                version: resolved_version,
+                version: resolved_version.to_string(),
                 input: workitem_reader.input.clone(),
                 parent_instance: workitem_reader.parent_instance.clone(),
                 parent_id: workitem_reader.parent_id,
             });
         }
 
-        // Run the atomic execution to get all changes
+        // Run the atomic execution to get all changes, passing the resolved handler
         let (_exec_history_delta, exec_worker_items, exec_orchestrator_items, _result) = self
             .clone()
-            .run_single_execution_atomic(instance, history_mgr, workitem_reader, execution_id, worker_id)
+            .run_single_execution_atomic(instance, history_mgr, workitem_reader, execution_id, worker_id, handler)
             .await;
 
         // Combine all changes (history already in history_mgr via mutation)

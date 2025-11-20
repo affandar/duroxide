@@ -126,45 +126,9 @@ impl<H: ?Sized> Registry<H> {
     }
 
     /// Resolve version using policy (SYNC)
+    /// Note: This is primarily for testing. Production code should use `resolve_handler` which returns both version and handler.
     pub fn resolve_version(&self, name: &str) -> Option<Version> {
-        let pol = self
-            .policy
-            .lock()
-            .unwrap()
-            .get(name)
-            .cloned()
-            .unwrap_or(VersionPolicy::Latest);
-
-        let result = match &pol {
-            VersionPolicy::Latest => {
-                if let Some(m) = self.inner.get(name) {
-                    if let Some((v, _h)) = m.iter().next_back() {
-                        Some(v.clone())
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                }
-            }
-            VersionPolicy::Exact(v) => {
-                if let Some(versions) = self.inner.get(name) {
-                    if versions.get(v).is_some() {
-                        Some(v.clone())
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                }
-            }
-        };
-
-        if result.is_none() {
-            self.log_registry_miss(name, None, Some(&pol));
-        }
-
-        result
+        self.resolve_handler(name).map(|(v, _h)| v)
     }
 
     /// Resolve handler for exact version (SYNC)

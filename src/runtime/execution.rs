@@ -13,49 +13,7 @@ impl Runtime {
     ///
     /// This method processes completion messages and executes one orchestration turn,
     /// collecting all resulting work items and history changes atomically.
-    /// It handles version pinning, handler resolution, and deterministic completion processing.
-    /// Resolve the orchestration handler using version from history
-    async fn resolve_orchestration_handler(
-        &self,
-        orchestration_name: &str,
-        history_mgr: &crate::runtime::state_helpers::HistoryManager,
-    ) -> Result<Arc<dyn OrchestrationHandler>, crate::ErrorDetails> {
-        // Get version from history (includes delta for new instances)
-        let version_from_history = history_mgr.version();
-
-        let handler_opt = if let Some(ref version_str) = version_from_history {
-            // Use exact version from history
-            if let Ok(v) = semver::Version::parse(version_str) {
-                self.orchestration_registry
-                    .resolve_handler_exact(orchestration_name, &v)
-            } else {
-                None
-            }
-        } else {
-            // No version in history - shouldn't happen at this point
-            None
-        };
-
-        handler_opt.ok_or_else(|| {
-            if let Some(v) = version_from_history {
-                crate::ErrorDetails::Configuration {
-                    kind: crate::ConfigErrorKind::MissingVersion {
-                        requested_version: v.clone(),
-                    },
-                    resource: orchestration_name.to_string(),
-                    message: None,
-                }
-            } else {
-                crate::ErrorDetails::Configuration {
-                    kind: crate::ConfigErrorKind::UnregisteredOrchestration,
-                    resource: orchestration_name.to_string(),
-                    message: None,
-                }
-            }
-        })
-    }
-
-    /// Execute a single orchestration turn atomically
+    /// The handler must already be resolved and provided as a parameter.
     pub async fn run_single_execution_atomic(
         self: Arc<Self>,
         instance: &str,
@@ -63,6 +21,7 @@ impl Runtime {
         workitem_reader: &crate::runtime::state_helpers::WorkItemReader,
         execution_id: u64,
         worker_id: &str,
+        handler: Arc<dyn OrchestrationHandler>,
     ) -> (Vec<Event>, Vec<WorkItem>, Vec<WorkItem>, Result<String, String>) {
         let orchestration_name = &workitem_reader.orchestration_name;
         debug!(instance, orchestration_name, "🚀 Starting atomic single execution");
@@ -97,29 +56,6 @@ impl Runtime {
 
         // History must have OrchestrationStarted at this point (either from existing history or newly created in delta)
         debug_assert!(!history_mgr.is_empty(), "history_mgr should never be empty here");
-
-        // Resolve orchestration handler using version from history
-        let handler = match self
-            .resolve_orchestration_handler(orchestration_name, history_mgr)
-            .await
-        {
-            Ok(h) => h,
-            Err(error) => {
-                // Handle unregistered orchestration
-                history_mgr.append_failed(error.clone());
-                match error {
-                    crate::ErrorDetails::Application { .. } => self.record_orchestration_application_error(),
-                    crate::ErrorDetails::Infrastructure { .. } => self.record_orchestration_infrastructure_error(),
-                    crate::ErrorDetails::Configuration { .. } => self.record_orchestration_configuration_error(),
-                }
-                return (
-                    history_mgr.delta().to_vec(),
-                    worker_items,
-                    orchestrator_items,
-                    Err(error.display_message()),
-                );
-            }
-        };
 
         // Extract input and parent linkage from history manager
         // (works for both existing history and newly appended OrchestrationStarted in delta)
