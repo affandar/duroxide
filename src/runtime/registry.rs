@@ -1,18 +1,19 @@
-use super::OrchestrationHandler;
+//! Generic versioned registry for orchestrations and activities
+//!
+//! This module provides a unified `Registry<H>` type that can store both orchestration
+//! and activity handlers with version support. Activities are always registered at
+//! version 1.0.0 with Latest policy (hardcoded), while orchestrations support
+//! explicit versioning and policies.
+
+use super::{ActivityHandler, FnActivity, OrchestrationHandler, FnOrchestration};
 use crate::_typed_codec::Codec;
 use crate::OrchestrationContext;
-use async_trait::async_trait;
 use semver::Version;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
-type HandlerMap = HashMap<String, std::collections::BTreeMap<Version, Arc<dyn OrchestrationHandler>>>;
-
-#[derive(Clone, Default)]
-pub struct OrchestrationRegistry {
-    pub(crate) inner: Arc<HandlerMap>,
-    pub(crate) policy: Arc<tokio::sync::Mutex<HashMap<String, VersionPolicy>>>,
-}
+/// Default version for activities and default orchestration registrations
+const DEFAULT_VERSION: Version = Version::new(1, 0, 0);
 
 #[derive(Clone, Debug)]
 pub enum VersionPolicy {
@@ -20,119 +21,298 @@ pub enum VersionPolicy {
     Exact(Version),
 }
 
-impl OrchestrationRegistry {
-    pub fn builder() -> OrchestrationRegistryBuilder {
-        OrchestrationRegistryBuilder {
+/// Generic versioned registry
+///
+/// Both orchestrations and activities use this unified structure.
+/// Activities are always stored at version 1.0.0 with Latest policy.
+pub struct Registry<H: ?Sized> {
+    pub(crate) inner: Arc<HashMap<String, std::collections::BTreeMap<Version, Arc<H>>>>,
+    pub(crate) policy: Arc<Mutex<HashMap<String, VersionPolicy>>>,
+}
+
+// Manual Clone impl since H: ?Sized doesn't auto-derive Clone
+impl<H: ?Sized> Clone for Registry<H> {
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+            policy: self.policy.clone(),
+        }
+    }
+}
+
+impl<H: ?Sized> Default for Registry<H> {
+    fn default() -> Self {
+        Self {
+            inner: Arc::new(HashMap::new()),
+            policy: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+}
+
+/// Generic registry builder
+pub struct RegistryBuilder<H: ?Sized> {
+    map: HashMap<String, std::collections::BTreeMap<Version, Arc<H>>>,
+    policy: HashMap<String, VersionPolicy>,
+    errors: Vec<String>,
+}
+
+// Type aliases for backward compatibility and clarity
+pub type OrchestrationRegistry = Registry<dyn OrchestrationHandler>;
+pub type ActivityRegistry = Registry<dyn ActivityHandler>;
+pub type OrchestrationRegistryBuilder = RegistryBuilder<dyn OrchestrationHandler>;
+pub type ActivityRegistryBuilder = RegistryBuilder<dyn ActivityHandler>;
+
+// ============================================================================
+// Generic Registry Implementation
+// ============================================================================
+
+impl<H: ?Sized> Registry<H> {
+    pub fn builder() -> RegistryBuilder<H> {
+        RegistryBuilder {
             map: HashMap::new(),
             policy: HashMap::new(),
             errors: Vec::new(),
         }
     }
 
-    /// Create a builder from an existing registry, copying all registered orchestrations.
-    ///
-    /// This is useful for extending a pre-built registry with additional orchestrations.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// let base_registry = some_library::create_orchestration_registry();
-    /// let extended = OrchestrationRegistry::builder_from(&base_registry)
-    ///     .register("my-custom-orch", my_orchestration)
-    ///     .build();
-    /// ```
-    pub fn builder_from(reg: &OrchestrationRegistry) -> OrchestrationRegistryBuilder {
-        let mut map: HashMap<String, std::collections::BTreeMap<Version, Arc<dyn OrchestrationHandler>>> =
-            HashMap::new();
-        for (name, versions) in reg.inner.iter() {
-            map.insert(name.clone(), versions.clone());
-        }
-        OrchestrationRegistryBuilder {
-            map,
-            policy: HashMap::new(),
+    pub fn builder_from(reg: &Registry<H>) -> RegistryBuilder<H> {
+        RegistryBuilder {
+            map: reg.inner.as_ref().clone(),
+            policy: reg.policy.lock().unwrap().clone(),
             errors: Vec::new(),
         }
     }
 
-    pub async fn resolve_handler(&self, name: &str) -> Option<(Version, Arc<dyn OrchestrationHandler>)> {
+    /// Resolve handler using version policy (SYNC)
+    pub fn resolve_handler(&self, name: &str) -> Option<(Version, Arc<H>)> {
         let pol = self
             .policy
             .lock()
-            .await
+            .unwrap()
             .get(name)
             .cloned()
             .unwrap_or(VersionPolicy::Latest);
-        
-        match pol {
+
+        let result = match &pol {
             VersionPolicy::Latest => {
-                let m = self.inner.get(name)?;
-                let (v, h) = m.iter().next_back()?;
-                Some((v.clone(), h.clone()))
+                if let Some(m) = self.inner.get(name) {
+                    if let Some((v, h)) = m.iter().next_back() {
+                        Some((v.clone(), h.clone()))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
             }
             VersionPolicy::Exact(v) => {
-                let h = self.inner.get(name)?.get(&v)?.clone();
-                Some((v, h))
+                if let Some(versions) = self.inner.get(name) {
+                    if let Some(h) = versions.get(v) {
+                        Some((v.clone(), h.clone()))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
             }
+        };
+
+        if result.is_none() {
+            self.log_registry_miss(name, None, Some(&pol));
         }
+
+        result
     }
 
-    pub async fn resolve_version(&self, name: &str) -> Option<Version> {
+    /// Resolve version using policy (SYNC)
+    pub fn resolve_version(&self, name: &str) -> Option<Version> {
         let pol = self
             .policy
             .lock()
-            .await
+            .unwrap()
             .get(name)
             .cloned()
             .unwrap_or(VersionPolicy::Latest);
-        
-        match pol {
+
+        let result = match &pol {
             VersionPolicy::Latest => {
-                let m = self.inner.get(name)?;
-                let (v, _h) = m.iter().next_back()?;
-                Some(v.clone())
+                if let Some(m) = self.inner.get(name) {
+                    if let Some((v, _h)) = m.iter().next_back() {
+                        Some(v.clone())
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
             }
             VersionPolicy::Exact(v) => {
-                self.inner.get(name)?.get(&v)?;
-                Some(v)
+                if let Some(versions) = self.inner.get(name) {
+                    if versions.get(v).is_some() {
+                        Some(v.clone())
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
             }
+        };
+
+        if result.is_none() {
+            self.log_registry_miss(name, None, Some(&pol));
         }
+
+        result
     }
 
-    pub fn resolve_handler_exact(&self, name: &str, v: &Version) -> Option<Arc<dyn OrchestrationHandler>> {
-        self.inner.get(name)?.get(v).cloned()
+    /// Resolve handler for exact version (SYNC)
+    pub fn resolve_handler_exact(&self, name: &str, v: &Version) -> Option<Arc<H>> {
+        let result = if let Some(versions) = self.inner.get(name) {
+            versions.get(v).cloned()
+        } else {
+            None
+        };
+
+        if result.is_none() {
+            self.log_registry_miss(name, Some(v), None);
+        }
+
+        result
     }
 
-    pub async fn set_version_policy(&self, name: &str, policy: VersionPolicy) {
-        self.policy.lock().await.insert(name.to_string(), policy);
-    }
-    pub async fn unpin(&self, name: &str) {
-        self.set_version_policy(name, VersionPolicy::Latest).await;
+    /// Set version policy (SYNC)
+    pub fn set_version_policy(&self, name: &str, policy: VersionPolicy) {
+        self.policy
+            .lock()
+            .unwrap()
+            .insert(name.to_string(), policy);
     }
 
-    pub fn list_orchestration_names(&self) -> Vec<String> {
+    /// List all registered names
+    pub fn list_names(&self) -> Vec<String> {
         self.inner.keys().cloned().collect()
     }
 
-    pub fn has(&self, name: &str) -> bool {
-        self.inner.contains_key(name)
-    }
-
-    pub fn count(&self) -> usize {
-        self.inner.len()
-    }
-    pub fn list_orchestration_versions(&self, name: &str) -> Vec<Version> {
+    /// List versions for a specific name
+    pub fn list_versions(&self, name: &str) -> Vec<Version> {
         self.inner
             .get(name)
             .map(|m| m.keys().cloned().collect())
             .unwrap_or_default()
     }
+
+    /// Check if a name is registered
+    pub fn has(&self, name: &str) -> bool {
+        self.inner.contains_key(name)
+    }
+
+    /// Count of registered handlers
+    pub fn count(&self) -> usize {
+        self.inner.len()
+    }
+
+    // Debug helpers
+    fn debug_dump(&self) -> HashMap<String, Vec<String>> {
+        self.inner
+            .iter()
+            .map(|(name, versions)| {
+                (
+                    name.clone(),
+                    versions.keys().map(|v| v.to_string()).collect(),
+                )
+            })
+            .collect()
+    }
+
+    fn log_registry_miss(
+        &self,
+        name: &str,
+        requested_version: Option<&Version>,
+        requested_policy: Option<&VersionPolicy>,
+    ) {
+        let all_names = self.list_names();
+        let contents = self.debug_dump();
+        let policy_map = self.policy.lock().unwrap().clone();
+        let available_versions = self.list_versions(name);
+
+        tracing::debug!(
+            target: "duroxide::runtime::registry",
+            requested_name = %name,
+            requested_version = ?requested_version,
+            requested_policy = ?requested_policy,
+            available_versions_for_name = ?available_versions,
+            registered_count = all_names.len(),
+            registered_names = ?all_names,
+            full_registry_contents = ?contents,
+            current_policies = ?policy_map,
+            "Registry lookup miss - dumping full registry state"
+        );
+    }
 }
 
-pub struct OrchestrationRegistryBuilder {
-    map: HashMap<String, std::collections::BTreeMap<Version, Arc<dyn OrchestrationHandler>>>,
-    policy: HashMap<String, VersionPolicy>,
-    errors: Vec<String>,
+
+// ============================================================================
+// Generic Builder Implementation
+// ============================================================================
+
+impl<H: ?Sized> RegistryBuilder<H> {
+    pub fn build(self) -> Registry<H> {
+        Registry {
+            inner: Arc::new(self.map),
+            policy: Arc::new(Mutex::new(self.policy)),
+        }
+    }
+
+    pub fn build_result(self) -> Result<Registry<H>, String> {
+        if self.errors.is_empty() {
+            Ok(self.build())
+        } else {
+            Err(self.errors.join("; "))
+        }
+    }
+
+    /// Merge another registry into this builder (generic implementation)
+    pub fn merge_registry(mut self, other: Registry<H>, error_prefix: &str) -> Self {
+        for (name, versions) in other.inner.iter() {
+            let entry = self.map.entry(name.clone()).or_default();
+            for (version, handler) in versions.iter() {
+                if entry.contains_key(version) {
+                    self.errors.push(format!("duplicate {} in merge: {}@{}", error_prefix, name, version));
+                } else {
+                    entry.insert(version.clone(), handler.clone());
+                }
+            }
+        }
+        self
+    }
+
+    /// Register multiple handlers at once (generic implementation)
+    pub fn register_all_handlers<F>(self, items: Vec<(&str, F)>, register_fn: impl Fn(Self, &str, F) -> Self) -> Self
+    where
+        F: Clone,
+    {
+        items.into_iter().fold(self, |builder, (name, f)| register_fn(builder, name, f))
+    }
+
+    /// Check for duplicate registration and return error if found
+    fn check_duplicate(&mut self, name: &str, version: &Version, error_prefix: &str) -> bool {
+        let entry = self.map.entry(name.to_string()).or_default();
+        if entry.contains_key(version) {
+            self.errors.push(format!("duplicate {} registration: {}@{}", error_prefix, name, version));
+            true
+        } else {
+            false
+        }
+    }
+
 }
+
+
+// ============================================================================
+// Orchestration Builder - Specialized Methods
+// ============================================================================
 
 impl OrchestrationRegistryBuilder {
     pub fn register<F, Fut>(mut self, name: impl Into<String>, f: F) -> Self
@@ -140,16 +320,14 @@ impl OrchestrationRegistryBuilder {
         F: Fn(OrchestrationContext, String) -> Fut + Send + Sync + 'static,
         Fut: std::future::Future<Output = Result<String, String>> + Send + 'static,
     {
-        use super::FnOrchestration;
         let name = name.into();
-        let v = Version::parse("1.0.0").expect("hardcoded version string is valid semver");
-        let entry = self.map.entry(name.clone()).or_default();
-        if entry.contains_key(&v) {
-            self.errors
-                .push(format!("duplicate orchestration registration: {name}@{v}"));
+        if self.check_duplicate(&name, &DEFAULT_VERSION, "orchestration") {
             return self;
         }
-        entry.insert(v, Arc::new(FnOrchestration(f)));
+        self.map
+            .entry(name)
+            .or_default()
+            .insert(DEFAULT_VERSION, Arc::new(FnOrchestration(f)));
         self
     }
 
@@ -171,28 +349,29 @@ impl OrchestrationRegistryBuilder {
             }
         };
         let name = name.into();
-        let v = Version::parse("1.0.0").expect("hardcoded version string is valid semver");
         self.map
             .entry(name)
             .or_default()
-            .insert(v, Arc::new(FnOrchestration(wrapper)));
+            .insert(DEFAULT_VERSION, Arc::new(FnOrchestration(wrapper)));
         self
     }
 
-    pub fn register_versioned<F, Fut>(mut self, name: impl Into<String>, version: impl AsRef<str>, f: F) -> Self
+    pub fn register_versioned<F, Fut>(
+        mut self,
+        name: impl Into<String>,
+        version: impl AsRef<str>,
+        f: F,
+    ) -> Self
     where
         F: Fn(OrchestrationContext, String) -> Fut + Send + Sync + 'static,
         Fut: std::future::Future<Output = Result<String, String>> + Send + 'static,
     {
-        use super::FnOrchestration;
         let name = name.into();
         let v = Version::parse(version.as_ref()).expect("semver");
-        let entry = self.map.entry(name.clone()).or_default();
-        if entry.contains_key(&v) {
-            self.errors
-                .push(format!("duplicate orchestration registration: {name}@{v}"));
+        if self.check_duplicate(&name, &v, "orchestration") {
             return self;
         }
+        let entry = self.map.entry(name.clone()).or_default();
         if let Some((latest, _)) = entry.iter().next_back()
             && &v <= latest
         {
@@ -215,6 +394,17 @@ impl OrchestrationRegistryBuilder {
         Fut: std::future::Future<Output = Result<Out, String>> + Send + 'static,
     {
         use super::FnOrchestration;
+        let name = name.into();
+        let v = Version::parse(version.as_ref()).expect("semver");
+        if self.check_duplicate(&name, &v, "orchestration") {
+            return self;
+        }
+        let entry = self.map.entry(name.clone()).or_default();
+        if let Some((latest, _)) = entry.iter().next_back()
+            && &v <= latest
+        {
+            panic!("non-monotonic orchestration version for {name}: {v} is not later than existing latest {latest}");
+        }
         let f_clone = f.clone();
         let wrapper = move |ctx: OrchestrationContext, input_s: String| {
             let f_inner = f_clone.clone();
@@ -224,248 +414,56 @@ impl OrchestrationRegistryBuilder {
                 crate::_typed_codec::Json::encode(&out)
             }
         };
-        let name = name.into();
-        let v = Version::parse(version.as_ref()).expect("semver");
-        let entry = self.map.entry(name.clone()).or_default();
-        if entry.contains_key(&v) {
-            self.errors
-                .push(format!("duplicate orchestration registration: {name}@{v}"));
-            return self;
-        }
-        if let Some((latest, _)) = entry.iter().next_back()
-            && &v <= latest
-        {
-            panic!("non-monotonic orchestration version for {name}: {v} is not later than existing latest {latest}");
-        }
-        entry.insert(v, Arc::new(FnOrchestration(wrapper)));
+        self.map.entry(name).or_default().insert(v, Arc::new(FnOrchestration(wrapper)));
         self
     }
 
-    /// Merge another registry into this builder.
-    ///
-    /// This copies all orchestrations from the other registry into this builder.
-    /// Useful for composing registries from multiple library crates.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// let combined = OrchestrationRegistry::builder()
-    ///     .merge(library1::create_orchestration_registry())
-    ///     .merge(library2::create_orchestration_registry())
-    ///     .register("my-custom", my_orch)
-    ///     .build();
-    /// ```
     pub fn merge(mut self, other: OrchestrationRegistry) -> Self {
-        for (name, versions) in other.inner.iter() {
-            let entry = self.map.entry(name.clone()).or_default();
-            for (version, handler) in versions.iter() {
-                if entry.contains_key(version) {
-                    self.errors
-                        .push(format!("duplicate orchestration in merge: {}@{}", name, version));
-                } else {
-                    entry.insert(version.clone(), handler.clone());
-                }
-            }
-        }
-        self
+        self.merge_registry(other, "orchestration")
     }
 
-    /// Register multiple orchestrations at once.
-    ///
-    /// Note: Due to Rust's type system, all functions in the Vec must have identical types.
-    /// This is mainly useful with closures or when wrapping functions to match signatures.
-    /// For most cases, chaining `.register()` calls is more practical.
-    ///
-    /// # Example
-    ///
-    /// ```rust,no_run
-    /// # use duroxide::{OrchestrationRegistry, OrchestrationContext};
-    /// // Works when all functions have the same type
-    /// let handler = |_ctx: OrchestrationContext, input: String| async move {
-    ///     Ok(format!("processed: {}", input))
-    /// };
-    ///
-    /// OrchestrationRegistry::builder()
-    ///     .register_all(vec![
-    ///         ("orch1", handler.clone()),
-    ///         ("orch2", handler.clone()),
-    ///         ("orch3", handler.clone()),
-    ///     ])
-    ///     .build();
-    ///
-    /// // For different function implementations, use chained .register():
-    /// // .register("orch1", orch1_fn)
-    /// // .register("orch2", orch2_fn)
-    /// ```
-    pub fn register_all<F, Fut>(mut self, items: Vec<(&str, F)>) -> Self
+    pub fn register_all<F, Fut>(self, items: Vec<(&str, F)>) -> Self
     where
         F: Fn(OrchestrationContext, String) -> Fut + Send + Sync + 'static + Clone,
         Fut: std::future::Future<Output = Result<String, String>> + Send + 'static,
     {
-        for (name, f) in items {
-            self = self.register(name, f.clone());
-        }
-        self
+        self.register_all_handlers(items, |builder, name, f| builder.register(name, f))
     }
 
     pub fn set_policy(mut self, name: impl Into<String>, policy: VersionPolicy) -> Self {
         self.policy.insert(name.into(), policy);
         self
     }
-
-    pub fn build(self) -> OrchestrationRegistry {
-        OrchestrationRegistry {
-            inner: Arc::new(self.map),
-            policy: Arc::new(tokio::sync::Mutex::new(self.policy)),
-        }
-    }
-
-    pub fn build_result(self) -> Result<OrchestrationRegistry, String> {
-        if self.errors.is_empty() {
-            Ok(OrchestrationRegistry {
-                inner: Arc::new(self.map),
-                policy: Arc::new(tokio::sync::Mutex::new(self.policy)),
-            })
-        } else {
-            Err(self.errors.join("; "))
-        }
-    }
 }
 
-// ---------------- Activity registry (moved here)
-
-#[async_trait]
-pub trait ActivityHandler: Send + Sync {
-    async fn invoke(&self, ctx: crate::ActivityContext, input: String) -> Result<String, String>;
-}
-
-pub struct FnActivity<F, Fut>(pub F)
-where
-    F: Fn(crate::ActivityContext, String) -> Fut + Send + Sync + 'static,
-    Fut: std::future::Future<Output = Result<String, String>> + Send + 'static;
-
-#[async_trait]
-impl<F, Fut> ActivityHandler for FnActivity<F, Fut>
-where
-    F: Fn(crate::ActivityContext, String) -> Fut + Send + Sync + 'static,
-    Fut: std::future::Future<Output = Result<String, String>> + Send + 'static,
-{
-    async fn invoke(&self, ctx: crate::ActivityContext, input: String) -> Result<String, String> {
-        (self.0)(ctx, input).await
-    }
-}
-
-#[derive(Clone, Default)]
-pub struct ActivityRegistry {
-    pub(crate) inner: Arc<HashMap<String, Arc<dyn ActivityHandler>>>,
-}
-
-pub struct ActivityRegistryBuilder {
-    map: HashMap<String, Arc<dyn ActivityHandler>>,
-    errors: Vec<String>,
-}
-
-impl ActivityRegistry {
-    pub fn builder() -> ActivityRegistryBuilder {
-        // System calls (guid, utcnow_ms, trace) are no longer dispatched as activities.
-        // They are handled synchronously during orchestration turns via SystemCall events.
-        ActivityRegistryBuilder {
-            map: HashMap::new(),
-            errors: Vec::new(),
-        }
-    }
-
-    pub fn builder_from(reg: &ActivityRegistry) -> ActivityRegistryBuilder {
-        let mut map: HashMap<String, Arc<dyn ActivityHandler>> = HashMap::new();
-        for (k, v) in reg.inner.iter() {
-            map.insert(k.clone(), v.clone());
-        }
-        ActivityRegistryBuilder {
-            map,
-            errors: Vec::new(),
-        }
-    }
-
-    /// Get the handler for a specific activity.
-    ///
-    /// Returns `None` if the activity is not registered.
-    pub fn get(&self, name: &str) -> Option<Arc<dyn ActivityHandler>> {
-        self.inner.get(name).cloned()
-    }
-
-    /// List all registered activity names.
-    ///
-    /// # Example
-    ///
-    /// ```rust,no_run
-    /// # use duroxide::runtime::registry::ActivityRegistry;
-    /// # use duroxide::ActivityContext;
-    /// let registry = ActivityRegistry::builder()
-    ///     .register("activity1", |_ctx: ActivityContext, _| async { Ok("result".to_string()) })
-    ///     .build();
-    ///
-    /// let names = registry.list_activity_names();
-    /// assert!(names.contains(&"activity1".to_string()));
-    /// ```
-    pub fn list_activity_names(&self) -> Vec<String> {
-        self.inner.keys().cloned().collect()
-    }
-
-    /// Check if an activity is registered.
-    ///
-    /// # Example
-    ///
-    /// ```rust,no_run
-    /// # use duroxide::runtime::registry::ActivityRegistry;
-    /// # use duroxide::ActivityContext;
-    /// let registry = ActivityRegistry::builder()
-    ///     .register("my-activity", |_ctx: ActivityContext, _| async { Ok("result".to_string()) })
-    ///     .build();
-    ///
-    /// assert!(registry.has("my-activity"));
-    /// assert!(!registry.has("unknown-activity"));
-    /// ```
-    pub fn has(&self, name: &str) -> bool {
-        self.inner.contains_key(name)
-    }
-
-    /// Get the count of registered activities.
-    ///
-    /// # Example
-    ///
-    /// ```rust,no_run
-    /// # use duroxide::runtime::registry::ActivityRegistry;
-    /// # use duroxide::ActivityContext;
-    /// let registry = ActivityRegistry::builder()
-    ///     .register("activity1", |_ctx: ActivityContext, _| async { Ok("result".to_string()) })
-    ///     .register("activity2", |_ctx: ActivityContext, _| async { Ok("result".to_string()) })
-    ///     .build();
-    ///
-    /// assert_eq!(registry.count(), 2);
-    /// ```
-    pub fn count(&self) -> usize {
-        self.inner.len()
-    }
-}
+// ============================================================================
+// Activity Builder - Specialized Methods
+// ============================================================================
 
 impl ActivityRegistryBuilder {
+    /// Deprecated: use `ActivityRegistry::builder_from` instead
     pub fn from_registry(reg: &ActivityRegistry) -> Self {
         ActivityRegistry::builder_from(reg)
     }
+
     pub fn register<F, Fut>(mut self, name: impl Into<String>, f: F) -> Self
     where
         F: Fn(crate::ActivityContext, String) -> Fut + Send + Sync + 'static,
         Fut: std::future::Future<Output = Result<String, String>> + Send + 'static,
     {
         let name = name.into();
-        if self.map.contains_key(&name) {
-            self.errors
-                .push(format!("duplicate activity registration: {name}"));
+        if self.check_duplicate(&name, &DEFAULT_VERSION, "activity") {
             return self;
         }
-        self.map.insert(name, Arc::new(FnActivity(f)));
+        self.map
+            .entry(name.clone())
+            .or_default()
+            .insert(DEFAULT_VERSION, Arc::new(FnActivity(f)));
+        // Set policy to Latest (hardcoded for activities)
+        self.policy.insert(name, VersionPolicy::Latest);
         self
     }
+
     pub fn register_typed<In, Out, F, Fut>(mut self, name: impl Into<String>, f: F) -> Self
     where
         In: serde::de::DeserializeOwned + Send + 'static,
@@ -483,93 +481,27 @@ impl ActivityRegistryBuilder {
             }
         };
         let name = name.into();
-        if self.map.contains_key(&name) {
-            self.errors
-                .push(format!("duplicate activity registration: {name}"));
+        if self.check_duplicate(&name, &DEFAULT_VERSION, "activity") {
             return self;
         }
-        self.map.insert(name, Arc::new(FnActivity(wrapper)));
+        self.map
+            .entry(name.clone())
+            .or_default()
+            .insert(DEFAULT_VERSION, Arc::new(FnActivity(wrapper)));
+        // Set policy to Latest (hardcoded for activities)
+        self.policy.insert(name, VersionPolicy::Latest);
         self
     }
 
-    /// Merge another activity registry into this builder.
-    ///
-    /// This copies all activities from the other registry into this builder.
-    /// Useful for composing activity registries from multiple library crates.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// let combined = ActivityRegistry::builder()
-    ///     .merge(library1::create_activity_registry())
-    ///     .merge(library2::create_activity_registry())
-    ///     .register("my-custom", my_activity)
-    ///     .build();
-    /// ```
     pub fn merge(mut self, other: ActivityRegistry) -> Self {
-        for (name, handler) in other.inner.iter() {
-            if self.map.contains_key(name) {
-                self.errors
-                    .push(format!("duplicate activity in merge: {name}"));
-            } else {
-                self.map.insert(name.clone(), handler.clone());
-            }
-        }
-        self
+        self.merge_registry(other, "activity")
     }
 
-    /// Register multiple activities at once.
-    ///
-    /// Note: Due to Rust's type system, all functions in the Vec must have identical types.
-    /// This is mainly useful with closures or when wrapping functions to match signatures.
-    /// For most cases, chaining `.register()` calls is more practical.
-    ///
-    /// # Example
-    ///
-    /// ```rust,no_run
-    /// # use duroxide::runtime::registry::ActivityRegistry;
-    /// # use duroxide::ActivityContext;
-    /// // Works when all functions have the same type
-    /// let handler = |_ctx: ActivityContext, input: String| async move {
-    ///     Ok(format!("processed: {}", input))
-    /// };
-    ///
-    /// ActivityRegistry::builder()
-    ///     .register_all(vec![
-    ///         ("activity1", handler.clone()),
-    ///         ("activity2", handler.clone()),
-    ///         ("activity3", handler.clone()),
-    ///     ])
-    ///     .build();
-    ///
-    /// // For different function implementations, use chained .register():
-    /// // .register("activity1", activity1_fn)
-    /// // .register("activity2", activity2_fn)
-    /// ```
-    pub fn register_all<F, Fut>(mut self, items: Vec<(&str, F)>) -> Self
+    pub fn register_all<F, Fut>(self, items: Vec<(&str, F)>) -> Self
     where
         F: Fn(crate::ActivityContext, String) -> Fut + Send + Sync + 'static + Clone,
         Fut: std::future::Future<Output = Result<String, String>> + Send + 'static,
     {
-        for (name, f) in items {
-            self = self.register(name, f.clone());
-        }
-        self
-    }
-
-    pub fn build(self) -> ActivityRegistry {
-        ActivityRegistry {
-            inner: Arc::new(self.map),
-        }
-    }
-
-    pub fn build_result(self) -> Result<ActivityRegistry, String> {
-        if self.errors.is_empty() {
-            Ok(ActivityRegistry {
-                inner: Arc::new(self.map),
-            })
-        } else {
-            Err(self.errors.join("; "))
-        }
+        self.register_all_handlers(items, |builder, name, f| builder.register(name, f))
     }
 }

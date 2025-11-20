@@ -160,6 +160,29 @@ where
     }
 }
 
+/// Trait implemented by activity handlers that can be invoked by the runtime.
+#[async_trait]
+pub trait ActivityHandler: Send + Sync {
+    async fn invoke(&self, ctx: crate::ActivityContext, input: String) -> Result<String, String>;
+}
+
+/// Function wrapper that implements `ActivityHandler`.
+pub struct FnActivity<F, Fut>(pub F)
+where
+    F: Fn(crate::ActivityContext, String) -> Fut + Send + Sync + 'static,
+    Fut: std::future::Future<Output = Result<String, String>> + Send + 'static;
+
+#[async_trait]
+impl<F, Fut> ActivityHandler for FnActivity<F, Fut>
+where
+    F: Fn(crate::ActivityContext, String) -> Fut + Send + Sync + 'static,
+    Fut: std::future::Future<Output = Result<String, String>> + Send + 'static,
+{
+    async fn invoke(&self, ctx: crate::ActivityContext, input: String) -> Result<String, String> {
+        (self.0)(ctx, input).await
+    }
+}
+
 /// Immutable registry mapping orchestration names to versioned handlers.
 pub use crate::runtime::registry::{OrchestrationRegistry, OrchestrationRegistryBuilder, VersionPolicy};
 

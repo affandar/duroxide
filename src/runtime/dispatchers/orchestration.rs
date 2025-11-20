@@ -325,7 +325,6 @@ impl Runtime {
             } else if let Some(v) = self
                 .orchestration_registry
                 .resolve_version(&workitem_reader.orchestration_name)
-                .await
             {
                 v.to_string()
             } else {

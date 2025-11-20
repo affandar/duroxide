@@ -1,0 +1,29 @@
+# Scenario Tests
+
+This directory contains regression tests that model specific scenarios found in actual production usage of duroxide.
+
+These tests validate complex orchestration patterns, long-running workflows, and edge cases discovered during real-world deployments. They serve as both regression tests and documentation of how duroxide handles complex orchestration patterns in practice.
+
+## Test Scenarios
+
+### Continue-As-New Chains
+Tests for long-running orchestration chains that use `continue_as_new` to restart themselves:
+- Simple counter chains
+- Chains with activity execution
+- Concurrent chains running in parallel
+
+### Instance Actor Pattern
+Tests modeling the "instance actor" pattern where an orchestration manages the lifecycle of a single resource instance:
+- Health check cycles
+- Multiple activities per iteration
+- Continue-as-new with state preservation
+- Concurrent instance actors
+
+## Purpose
+
+These tests ensure that patterns discovered and validated in production environments continue to work correctly as the codebase evolves. They are particularly important for validating:
+- Version resolution across continue-as-new boundaries
+- State preservation during orchestration restarts
+- Concurrent execution correctness
+- Complex activity workflows
+

@@ -256,8 +256,7 @@ async fn policy_exact_pins_start() {
     reg.set_version_policy(
         "OrderFlow",
         duroxide::runtime::VersionPolicy::Exact(Version::parse("1.0.0").unwrap()),
-    )
-    .await;
+    );
 
     let activities = ActivityRegistry::builder().build();
     let store = StdArc::new(SqliteProvider::new_in_memory().await.unwrap());
@@ -328,8 +327,7 @@ async fn sub_orchestration_uses_latest_by_default_and_pinned_when_set() {
     reg.set_version_policy(
         "ChildFlow",
         duroxide::runtime::VersionPolicy::Exact(Version::parse("1.0.0").unwrap()),
-    )
-    .await;
+    );
     client
         .start_orchestration("inst-child-pinned", "ParentFlow", "Q")
         .await
@@ -498,9 +496,9 @@ fn register_default_is_1_0_0_and_list_versions() {
     let reg = OrchestrationRegistry::builder()
         .register("OrderFlow", handler_echo())
         .build();
-    let names = reg.list_orchestration_names();
+    let names = reg.list_names();
     assert!(names.contains(&"OrderFlow".to_string()));
-    let vs = reg.list_orchestration_versions("OrderFlow");
+    let vs = reg.list_versions("OrderFlow");
     assert_eq!(vs, vec![Version::parse("1.0.0").unwrap()]);
 }
 
@@ -511,7 +509,7 @@ fn register_multiple_versions_latest_is_highest() {
         .register_versioned("OrderFlow", "1.1.0", handler_echo())
         .register_versioned("OrderFlow", "2.0.0", handler_echo())
         .build();
-    let mut vs = reg.list_orchestration_versions("OrderFlow");
+    let mut vs = reg.list_versions("OrderFlow");
     vs.sort();
     assert_eq!(
         vs,
@@ -523,26 +521,25 @@ fn register_multiple_versions_latest_is_highest() {
     );
 }
 
-#[tokio::test]
-async fn policy_exact_pins_resolve_handler() {
+#[test]
+fn policy_exact_pins_resolve_handler() {
     let reg = OrchestrationRegistry::builder()
         .register("OrderFlow", handler_echo()) // 1.0.0
         .register_versioned("OrderFlow", "1.1.0", handler_echo())
         .build();
     // Default Latest -> 1.1.0
-    let (v_latest, _h) = reg.resolve_handler("OrderFlow").await.expect("resolve latest");
+    let (v_latest, _h) = reg.resolve_handler("OrderFlow").expect("resolve latest");
     assert_eq!(v_latest, Version::parse("1.1.0").unwrap());
     // Pin to 1.0.0
     reg.set_version_policy(
         "OrderFlow",
         duroxide::runtime::VersionPolicy::Exact(Version::parse("1.0.0").unwrap()),
-    )
-    .await;
-    let (v_pinned, _h) = reg.resolve_handler("OrderFlow").await.expect("resolve pinned");
+    );
+    let (v_pinned, _h) = reg.resolve_handler("OrderFlow").expect("resolve pinned");
     assert_eq!(v_pinned, Version::parse("1.0.0").unwrap());
     // Unpin back to Latest
-    reg.unpin("OrderFlow").await;
-    let (v_unpinned, _h) = reg.resolve_handler("OrderFlow").await.expect("resolve unpinned");
+    reg.set_version_policy("OrderFlow", duroxide::runtime::VersionPolicy::Latest);
+    let (v_unpinned, _h) = reg.resolve_handler("OrderFlow").expect("resolve unpinned");
     assert_eq!(v_unpinned, Version::parse("1.1.0").unwrap());
 }
 

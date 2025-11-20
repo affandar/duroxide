@@ -50,7 +50,7 @@ fn test_orchestration_registry_merge() {
         .build();
 
     // Verify all three orchestrations are present
-    let names = combined.list_orchestration_names();
+    let names = combined.list_names();
     assert_eq!(names.len(), 3);
     assert!(names.contains(&"orch1".to_string()));
     assert!(names.contains(&"orch2".to_string()));
@@ -71,14 +71,14 @@ fn test_orchestration_registry_builder_from() {
         .build();
 
     // Verify all three orchestrations are present
-    let names = extended.list_orchestration_names();
+    let names = extended.list_names();
     assert_eq!(names.len(), 3);
     assert!(names.contains(&"orch1".to_string()));
     assert!(names.contains(&"orch2".to_string()));
     assert!(names.contains(&"orch3".to_string()));
 
     // Verify base registry is unchanged
-    let base_names = base.list_orchestration_names();
+    let base_names = base.list_names();
     assert_eq!(base_names.len(), 2);
 }
 
@@ -91,7 +91,7 @@ fn test_orchestration_registry_chained_register() {
         .register("orch3", orch3)
         .build();
 
-    let names = registry.list_orchestration_names();
+    let names = registry.list_names();
     assert_eq!(names.len(), 3);
     assert!(names.contains(&"orch1".to_string()));
     assert!(names.contains(&"orch2".to_string()));
@@ -108,7 +108,7 @@ fn test_orchestration_registry_merge_with_chained_register() {
         .register("orch3", orch3)
         .build();
 
-    let names = combined.list_orchestration_names();
+    let names = combined.list_names();
     assert_eq!(names.len(), 3);
 }
 
@@ -127,9 +127,9 @@ fn test_activity_registry_merge() {
     let combined = ActivityRegistry::builder().merge(registry1).merge(registry2).build();
 
     // Verify all three activities are present
-    assert!(combined.get("activity1").is_some());
-    assert!(combined.get("activity2").is_some());
-    assert!(combined.get("activity3").is_some());
+    assert!(combined.has("activity1"));
+    assert!(combined.has("activity2"));
+    assert!(combined.has("activity3"));
 }
 
 #[test]
@@ -146,14 +146,14 @@ fn test_activity_registry_from_registry() {
         .build();
 
     // Verify all three activities are present
-    assert!(extended.get("activity1").is_some());
-    assert!(extended.get("activity2").is_some());
-    assert!(extended.get("activity3").is_some());
+    assert!(extended.has("activity1"));
+    assert!(extended.has("activity2"));
+    assert!(extended.has("activity3"));
 
     // Verify base registry is unchanged
-    assert!(base.get("activity1").is_some());
-    assert!(base.get("activity2").is_some());
-    assert!(base.get("activity3").is_none());
+    assert!(base.has("activity1"));
+    assert!(base.has("activity2"));
+    assert!(!base.has("activity3"));
 }
 
 #[test]
@@ -165,9 +165,9 @@ fn test_activity_registry_chained_register() {
         .register("activity3", activity3)
         .build();
 
-    assert!(registry.get("activity1").is_some());
-    assert!(registry.get("activity2").is_some());
-    assert!(registry.get("activity3").is_some());
+    assert!(registry.has("activity1"));
+    assert!(registry.has("activity2"));
+    assert!(registry.has("activity3"));
 }
 
 #[test]
@@ -180,9 +180,9 @@ fn test_activity_registry_merge_with_chained_register() {
         .register("activity3", activity3)
         .build();
 
-    assert!(combined.get("activity1").is_some());
-    assert!(combined.get("activity2").is_some());
-    assert!(combined.get("activity3").is_some());
+    assert!(combined.has("activity1"));
+    assert!(combined.has("activity2"));
+    assert!(combined.has("activity3"));
 }
 
 #[test]
@@ -237,11 +237,11 @@ async fn test_register_versioned_typed() {
         .build();
 
     // Verify it's registered
-    let names = registry.list_orchestration_names();
+    let names = registry.list_names();
     assert!(names.contains(&"typed-orch".to_string()));
 
     // Verify version
-    let versions = registry.list_orchestration_versions("typed-orch");
+    let versions = registry.list_versions("typed-orch");
     assert_eq!(versions.len(), 1);
     assert_eq!(versions[0].to_string(), "2.0.0");
 }
@@ -337,7 +337,7 @@ async fn test_cross_crate_composition_pattern() {
         .build();
 
     // Verify all orchestrations are present
-    let names = combined.list_orchestration_names();
+    let names = combined.list_names();
     assert_eq!(names.len(), 3);
     assert!(names.contains(&"duroxide-azure-arm::orchestration::provision-postgres".to_string()));
     assert!(names.contains(&"duroxide-azure-arm::orchestration::deploy-webapp".to_string()));
@@ -353,7 +353,7 @@ fn test_orchestration_registry_list_names() {
         .register("orch2", orch2)
         .build();
 
-    let names = registry.list_orchestration_names();
+    let names = registry.list_names();
     assert_eq!(names.len(), 2);
     assert!(names.contains(&"orch1".to_string()));
     assert!(names.contains(&"orch2".to_string()));
@@ -380,14 +380,14 @@ fn test_orchestration_registry_list_versions() {
         .register_versioned("orch1", "3.0.0", orch3)
         .build();
 
-    let versions = registry.list_orchestration_versions("orch1");
+    let versions = registry.list_versions("orch1");
     assert_eq!(versions.len(), 3);
     assert!(versions.contains(&semver::Version::parse("1.0.0").unwrap()));
     assert!(versions.contains(&semver::Version::parse("2.0.0").unwrap()));
     assert!(versions.contains(&semver::Version::parse("3.0.0").unwrap()));
 
     // Non-existent orchestration returns empty vec
-    let versions = registry.list_orchestration_versions("non-existent");
+    let versions = registry.list_versions("non-existent");
     assert_eq!(versions.len(), 0);
 }
 
@@ -399,7 +399,7 @@ fn test_activity_registry_list_names() {
         .register("activity3", activity3)
         .build();
 
-    let names = registry.list_activity_names();
+    let names = registry.list_names();
     assert_eq!(names.len(), 3);
     assert!(names.contains(&"activity1".to_string()));
     assert!(names.contains(&"activity2".to_string()));
@@ -447,7 +447,7 @@ fn test_activity_registry_introspection_after_merge() {
     let combined = ActivityRegistry::builder().merge(registry1).merge(registry2).build();
 
     // Test list_activity_names
-    let names = combined.list_activity_names();
+    let names = combined.list_names();
     assert_eq!(names.len(), 3);
     assert!(names.contains(&"lib1::activity1".to_string()));
     assert!(names.contains(&"lib1::activity2".to_string()));
@@ -460,4 +460,178 @@ fn test_activity_registry_introspection_after_merge() {
 
     // Test count
     assert_eq!(combined.count(), 3);
+}
+
+#[test]
+fn test_registry_default() {
+    let reg: OrchestrationRegistry = Default::default();
+    assert_eq!(reg.count(), 0);
+    assert!(reg.list_names().is_empty());
+    assert!(reg.resolve_handler("nonexistent").is_none());
+    assert!(reg.resolve_version("nonexistent").is_none());
+    assert!(reg.resolve_handler_exact("nonexistent", &semver::Version::parse("1.0.0").unwrap()).is_none());
+    assert_eq!(reg.list_versions("nonexistent").len(), 0);
+}
+
+#[test]
+fn test_registry_clone_shares_policy() {
+    let reg1 = OrchestrationRegistry::builder()
+        .register("orch1", orch1)
+        .register_versioned("orch1", "2.0.0", orch2)
+        .build();
+    let reg2 = reg1.clone();
+    
+    // Change policy on clone - since policy is Arc<Mutex>, both share the same policy map
+    reg2.set_version_policy("orch1", duroxide::runtime::VersionPolicy::Exact(semver::Version::parse("1.0.0").unwrap()));
+    
+    // Both should see the policy change since they share the Arc
+    let (v1, _) = reg1.resolve_handler("orch1").expect("resolve exact");
+    assert_eq!(v1, semver::Version::parse("1.0.0").unwrap());
+    
+    let (v2, _) = reg2.resolve_handler("orch1").expect("resolve exact");
+    assert_eq!(v2, semver::Version::parse("1.0.0").unwrap());
+}
+
+#[test]
+fn test_empty_registry_resolution() {
+    let reg: OrchestrationRegistry = OrchestrationRegistry::builder().build();
+    
+    assert!(reg.resolve_handler("nonexistent").is_none());
+    assert!(reg.resolve_version("nonexistent").is_none());
+    assert!(reg.resolve_handler_exact("nonexistent", &semver::Version::parse("1.0.0").unwrap()).is_none());
+    assert_eq!(reg.list_versions("nonexistent").len(), 0);
+    assert!(!reg.has("nonexistent"));
+}
+
+#[test]
+fn test_resolve_handler_exact_policy_missing_version() {
+    let reg = OrchestrationRegistry::builder()
+        .register("orch1", orch1) // 1.0.0
+        .build();
+    
+    reg.set_version_policy("orch1", duroxide::runtime::VersionPolicy::Exact(semver::Version::parse("2.0.0").unwrap()));
+    
+    // Should return None since 2.0.0 doesn't exist
+    assert!(reg.resolve_handler("orch1").is_none());
+    assert!(reg.resolve_version("orch1").is_none());
+}
+
+#[test]
+fn test_resolve_version_latest() {
+    let reg = OrchestrationRegistry::builder()
+        .register("orch1", orch1)
+        .register_versioned("orch1", "2.0.0", orch2)
+        .build();
+    
+    let v = reg.resolve_version("orch1").expect("resolve version");
+    assert_eq!(v, semver::Version::parse("2.0.0").unwrap());
+}
+
+#[test]
+fn test_resolve_version_exact() {
+    let reg = OrchestrationRegistry::builder()
+        .register("orch1", orch1)
+        .register_versioned("orch1", "2.0.0", orch2)
+        .build();
+    
+    reg.set_version_policy("orch1", duroxide::runtime::VersionPolicy::Exact(semver::Version::parse("1.0.0").unwrap()));
+    let v = reg.resolve_version("orch1").expect("resolve version");
+    assert_eq!(v, semver::Version::parse("1.0.0").unwrap());
+}
+
+#[test]
+fn test_activity_always_1_0_0_and_latest() {
+    let reg = ActivityRegistry::builder()
+        .register("activity1", activity1)
+        .build();
+    
+    let versions = reg.list_versions("activity1");
+    assert_eq!(versions.len(), 1);
+    assert_eq!(versions[0], semver::Version::parse("1.0.0").unwrap());
+    
+    // Policy should be Latest (can verify via resolve)
+    let (v, _h) = reg.resolve_handler("activity1").expect("resolve handler");
+    assert_eq!(v, semver::Version::parse("1.0.0").unwrap());
+}
+
+#[test]
+fn test_activity_register_typed() {
+    use serde::{Deserialize, Serialize};
+    
+    #[derive(Serialize, Deserialize)]
+    struct Input {
+        value: i32,
+    }
+    
+    #[derive(Serialize, Deserialize)]
+    struct Output {
+        result: i32,
+    }
+    
+    let reg = ActivityRegistry::builder()
+        .register_typed("typed-activity", |_ctx: ActivityContext, input: Input| async move {
+            Ok(Output {
+                result: input.value * 2,
+            })
+        })
+        .build();
+    
+    assert!(reg.has("typed-activity"));
+    let (v, _h) = reg.resolve_handler("typed-activity").expect("resolve handler");
+    assert_eq!(v, semver::Version::parse("1.0.0").unwrap());
+}
+
+#[test]
+fn test_register_all() {
+    let handler = |_ctx: OrchestrationContext, input: String| async move {
+        Ok(format!("processed: {}", input))
+    };
+    
+    let reg = OrchestrationRegistry::builder()
+        .register_all(vec![
+            ("orch1", handler.clone()),
+            ("orch2", handler.clone()),
+            ("orch3", handler.clone()),
+        ])
+        .build();
+    
+    assert_eq!(reg.count(), 3);
+    assert!(reg.has("orch1"));
+    assert!(reg.has("orch2"));
+    assert!(reg.has("orch3"));
+}
+
+#[test]
+fn test_list_versions_ordering() {
+    let reg = OrchestrationRegistry::builder()
+        .register("orch1", orch1) // 1.0.0
+        .register_versioned("orch1", "2.0.0", orch2)
+        .register_versioned("orch1", "3.0.0", orch3)
+        .build();
+    
+    let versions = reg.list_versions("orch1");
+    // BTreeMap maintains sorted order
+    assert_eq!(versions.len(), 3);
+    assert_eq!(versions[0], semver::Version::parse("1.0.0").unwrap());
+    assert_eq!(versions[1], semver::Version::parse("2.0.0").unwrap());
+    assert_eq!(versions[2], semver::Version::parse("3.0.0").unwrap());
+}
+
+#[test]
+fn test_multiple_policies() {
+    let reg = OrchestrationRegistry::builder()
+        .register("orch1", orch1)
+        .register_versioned("orch1", "2.0.0", orch2)
+        .register("orch2", orch3)
+        .register_versioned("orch2", "2.0.0", orch1)
+        .build();
+    
+    reg.set_version_policy("orch1", duroxide::runtime::VersionPolicy::Exact(semver::Version::parse("1.0.0").unwrap()));
+    reg.set_version_policy("orch2", duroxide::runtime::VersionPolicy::Latest);
+    
+    let (v1, _) = reg.resolve_handler("orch1").expect("resolve orch1");
+    assert_eq!(v1, semver::Version::parse("1.0.0").unwrap());
+    
+    let (v2, _) = reg.resolve_handler("orch2").expect("resolve orch2");
+    assert_eq!(v2, semver::Version::parse("2.0.0").unwrap());
 }

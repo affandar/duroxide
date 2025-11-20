@@ -1090,8 +1090,7 @@ async fn sample_versioning_start_latest_vs_exact_fs() {
     reg.set_version_policy(
         "Versioned",
         duroxide::runtime::VersionPolicy::Exact(semver::Version::parse("1.0.0").unwrap()),
-    )
-    .await;
+    );
     client
         .start_orchestration("inst-vers-exact", "Versioned", "")
         .await

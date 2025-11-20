@@ -99,7 +99,7 @@ impl Runtime {
                                         ConfigError,
                                     }
 
-                                    let (ack_result, outcome) = if let Some(handler) = activities.get(&name) {
+                                    let (ack_result, outcome) = if let Some((_version, handler)) = activities.resolve_handler(&name) {
                                         match handler.invoke(activity_ctx, input).await {
                                             Ok(result) => {
                                                 let duration_ms = start_time.elapsed().as_millis() as u64;
