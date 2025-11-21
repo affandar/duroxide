@@ -215,7 +215,7 @@ impl Provider for FailingProvider {
         self.inner.enqueue_for_worker(item).await
     }
 
-    async fn fetch_work_item(&self, lock_timeout_secs: u64) -> Option<(WorkItem, String)> {
+    async fn fetch_work_item(&self, lock_timeout_secs: u64) -> Result<Option<(WorkItem, String)>, ProviderError> {
         self.inner.fetch_work_item(lock_timeout_secs).await
     }
 

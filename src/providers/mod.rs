@@ -1244,10 +1244,6 @@ pub trait Provider: Any + Send + Sync {
     ///     ORDER BY event_id
     /// }
     /// ```
-    ///
-    /// # Default
-    ///
-    /// Returns empty vector.
     async fn read_with_execution(&self, _instance: &str, _execution_id: u64) -> Result<Vec<Event>, ProviderError>;
 
     /// Append events to a specific execution.
@@ -1299,10 +1295,6 @@ pub trait Provider: Any + Send + Sync {
     ///     Ok(())
     /// }
     /// ```
-    ///
-    /// # Default
-    ///
-    /// Returns error indicating not implemented.
     async fn append_with_execution(
         &self,
         _instance: &str,
@@ -1348,15 +1340,16 @@ pub trait Provider: Any + Send + Sync {
     /// # Implementation Pattern
     ///
     /// ```ignore
-    /// async fn fetch_work_item(&self) -> Option<(WorkItem, String)> {
-    ///     let tx = begin_transaction()?;
+    /// async fn fetch_work_item(&self, lock_timeout_secs: u64) -> Result<Option<(WorkItem, String)>, ProviderError> {
+    ///     let mut tx = begin_transaction()
+    ///         .map_err(|e| ProviderError::retryable("fetch_work_item", e))?;
     ///     
     ///     // Find next available item
     ///     let row = SELECT id, work_item FROM worker_queue
     ///         WHERE lock_token IS NULL OR locked_until <= now()
     ///         ORDER BY id LIMIT 1;
     ///     
-    ///     if row.is_none() { return None; }
+    ///     if row.is_none() { return Ok(None); }
     ///     
     ///     // Lock it
     ///     let lock_token = generate_uuid();
@@ -1364,21 +1357,24 @@ pub trait Provider: Any + Send + Sync {
     ///     SET lock_token = ?, locked_until = now() + 30s
     ///     WHERE id = ?;
     ///     
-    ///     let item = serde_json::from_str(&row.work_item)?;
-    ///     commit_transaction();
-    ///     Some((item, lock_token))
+    ///     let item = serde_json::from_str(&row.work_item)
+    ///         .map_err(|e| ProviderError::permanent("fetch_work_item", e))?;
+    ///     commit_transaction()
+    ///         .map_err(|e| ProviderError::retryable("fetch_work_item", e))?;
+    ///     Ok(Some((item, lock_token)))
     /// }
     /// ```
     ///
     /// # Return Value
     ///
-    /// - `Some((WorkItem, String))` - Item is locked and ready to process
-    /// - `None` - No work available
+    /// - `Ok(Some((WorkItem, String)))` - Item is locked and ready to process
+    /// - `Ok(None)` - No work available
+    /// - `Err(ProviderError)` - Database error (allows runtime to distinguish empty queue from failures)
     ///
     /// # Concurrency
     ///
     /// Called continuously by work dispatcher. Must prevent double-dequeue.
-    async fn fetch_work_item(&self, lock_timeout_secs: u64) -> Option<(WorkItem, String)>;
+    async fn fetch_work_item(&self, lock_timeout_secs: u64) -> Result<Option<(WorkItem, String)>, ProviderError>;
 
     /// Acknowledge successful processing of a work item.
     ///
@@ -1648,11 +1644,6 @@ pub use management::{ExecutionInfo, InstanceInfo, ManagementProvider, QueueDepth
 ///    - `get_system_metrics()` - Get system-wide metrics
 ///    - `get_queue_depths()` - Get current queue depths
 ///
-/// # Default Implementations
-///
-/// All methods have default implementations that return empty results or errors,
-/// making this trait optional for providers that don't need management features.
-///
 /// # Usage
 ///
 /// ```ignore
@@ -1690,10 +1681,6 @@ pub trait ProviderAdmin: Any + Send + Sync {
     ///     SELECT instance_id FROM instances ORDER BY created_at DESC
     /// }
     /// ```
-    ///
-    /// # Default
-    ///
-    /// Returns empty Vec if not supported.
     async fn list_instances(&self) -> Result<Vec<String>, ProviderError>;
 
     /// List instances matching a status filter.
@@ -1716,10 +1703,6 @@ pub trait ProviderAdmin: Any + Send + Sync {
     ///     ORDER BY i.created_at DESC
     /// }
     /// ```
-    ///
-    /// # Default
-    ///
-    /// Returns empty Vec if not supported.
     async fn list_instances_by_status(&self, status: &str) -> Result<Vec<String>, ProviderError>;
 
     // ===== Execution Inspection =====
@@ -1747,10 +1730,6 @@ pub trait ProviderAdmin: Any + Send + Sync {
     ///     ORDER BY execution_id
     /// }
     /// ```
-    ///
-    /// # Default
-    ///
-    /// Returns `[1]` if instance exists, empty Vec otherwise.
     async fn list_executions(&self, instance: &str) -> Result<Vec<u64>, ProviderError>;
 
     /// Read the full event history for a specific execution within an instance.
@@ -1773,10 +1752,6 @@ pub trait ProviderAdmin: Any + Send + Sync {
     ///     ORDER BY event_id
     /// }
     /// ```
-    ///
-    /// # Default
-    ///
-    /// Returns empty vector.
     async fn read_history_with_execution_id(
         &self,
         instance: &str,
@@ -1803,10 +1778,6 @@ pub trait ProviderAdmin: Any + Send + Sync {
     ///     self.read_history_with_execution_id(instance, execution_id).await
     /// }
     /// ```
-    ///
-    /// # Default
-    ///
-    /// Returns empty vector.
     async fn read_history(&self, instance: &str) -> Result<Vec<Event>, ProviderError>;
 
     /// Get the latest (current) execution ID for an instance.
@@ -1822,10 +1793,6 @@ pub trait ProviderAdmin: Any + Send + Sync {
     ///     SELECT COALESCE(MAX(execution_id), 1) FROM executions WHERE instance_id = ?
     /// }
     /// ```
-    ///
-    /// # Default
-    ///
-    /// Returns 1 (assumes single execution).
     async fn latest_execution_id(&self, instance: &str) -> Result<u64, ProviderError>;
 
     // ===== Instance Metadata =====
@@ -1850,10 +1817,6 @@ pub trait ProviderAdmin: Any + Send + Sync {
     ///     WHERE i.instance_id = ?
     /// }
     /// ```
-    ///
-    /// # Default
-    ///
-    /// Returns an error indicating not implemented.
     async fn get_instance_info(&self, instance: &str) -> Result<InstanceInfo, ProviderError>;
 
     /// Get detailed information about a specific execution.
@@ -1878,10 +1841,6 @@ pub trait ProviderAdmin: Any + Send + Sync {
     ///     GROUP BY e.execution_id
     /// }
     /// ```
-    ///
-    /// # Default
-    ///
-    /// Returns an error indicating not implemented.
     async fn get_execution_info(&self, instance: &str, execution_id: u64) -> Result<ExecutionInfo, ProviderError>;
 
     // ===== System Metrics =====
@@ -1905,10 +1864,6 @@ pub trait ProviderAdmin: Any + Send + Sync {
     ///     JOIN executions e ON i.instance_id = e.instance_id AND i.current_execution_id = e.execution_id
     /// }
     /// ```
-    ///
-    /// # Default
-    ///
-    /// Returns default `SystemMetrics`.
     async fn get_system_metrics(&self) -> Result<SystemMetrics, ProviderError>;
 
     /// Get the current depths of the internal work queues.
@@ -1929,9 +1884,5 @@ pub trait ProviderAdmin: Any + Send + Sync {
     ///         (SELECT COUNT(*) FROM worker_queue WHERE lock_token IS NULL) as worker_queue
     /// }
     /// ```
-    ///
-    /// # Default
-    ///
-    /// Returns default `QueueDepths` (timer_queue will be 0).
     async fn get_queue_depths(&self) -> Result<QueueDepths, ProviderError>;
 }

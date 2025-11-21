@@ -191,9 +191,9 @@ pub async fn test_multi_operation_atomic_ack<F: ProviderFactory>(factory: &F) {
 
     // 2. Worker queue should have 3 items
     for _ in 0..3 {
-        assert!(provider.fetch_work_item(30).await.is_some());
+        assert!(provider.fetch_work_item(30).await.unwrap().is_some());
     }
-    assert!(provider.fetch_work_item(30).await.is_none());
+    assert!(provider.fetch_work_item(30).await.unwrap().is_none());
 
     // 3. Orchestrator queue should have 2 items
     let item1 = provider.fetch_orchestration_item(30).await.unwrap().unwrap();

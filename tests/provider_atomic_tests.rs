@@ -264,7 +264,7 @@ async fn test_ack_orchestration_item_atomic() {
     assert!(matches!(&history[1], Event::ActivityScheduled { .. }));
 
     // Verify worker item was enqueued
-    let (worker_item, _) = store.fetch_work_item(30).await.unwrap();
+    let (worker_item, _) = store.fetch_work_item(30).await.unwrap().unwrap();
     assert!(matches!(worker_item, WorkItem::ActivityExecute { .. }));
 
     // Verify orchestrator queue is empty (item was acked)

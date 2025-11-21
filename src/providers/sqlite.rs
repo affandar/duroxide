@@ -1110,8 +1110,12 @@ impl Provider for SqliteProvider {
         Ok(())
     }
 
-    async fn fetch_work_item(&self, lock_timeout_secs: u64) -> Option<(WorkItem, String)> {
-        let mut tx = self.pool.begin().await.ok()?;
+    async fn fetch_work_item(&self, lock_timeout_secs: u64) -> Result<Option<(WorkItem, String)>, ProviderError> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| Self::sqlx_to_provider_error("fetch_work_item", e))?;
 
         let lock_token = Self::generate_lock_token();
         let locked_until = Self::timestamp_after(Duration::from_secs(lock_timeout_secs));
@@ -1134,19 +1138,23 @@ impl Provider for SqliteProvider {
         .bind(now_ms)
         .fetch_optional(&mut *tx)
         .await
-        .ok()?;
+        .map_err(|e| Self::sqlx_to_provider_error("fetch_work_item", e))?;
 
         if next_item.is_none() {
             tracing::debug!("Worker dequeue: no available items found");
-            return None;
+            return Ok(None);
         }
 
-        let next_item = next_item?;
+        let next_item = next_item.unwrap();
 
         tracing::debug!("Worker dequeue found item");
 
-        let id: i64 = next_item.try_get("id").ok()?;
-        let work_item_str: String = next_item.try_get("work_item").ok()?;
+        let id: i64 = next_item.try_get("id").map_err(|e| {
+            ProviderError::permanent("fetch_work_item", format!("Failed to get id: {}", e))
+        })?;
+        let work_item_str: String = next_item.try_get("work_item").map_err(|e| {
+            ProviderError::permanent("fetch_work_item", format!("Failed to get work_item: {}", e))
+        })?;
 
         // Update with lock
         sqlx::query(
@@ -1161,13 +1169,17 @@ impl Provider for SqliteProvider {
         .bind(id)
         .execute(&mut *tx)
         .await
-        .ok()?;
+        .map_err(|e| Self::sqlx_to_provider_error("fetch_work_item", e))?;
 
-        let work_item: WorkItem = serde_json::from_str(&work_item_str).ok()?;
+        let work_item: WorkItem = serde_json::from_str(&work_item_str).map_err(|e| {
+            ProviderError::permanent("fetch_work_item", format!("Deserialization error: {}", e))
+        })?;
 
-        tx.commit().await.ok()?;
+        tx.commit()
+            .await
+            .map_err(|e| Self::sqlx_to_provider_error("fetch_work_item", e))?;
 
-        Some((work_item, lock_token))
+        Ok(Some((work_item, lock_token)))
     }
 
     async fn ack_work_item(&self, token: &str, completion: WorkItem) -> Result<(), ProviderError> {
@@ -1823,14 +1835,14 @@ mod tests {
         assert_eq!(history.len(), 3); // Start + 2 schedules
 
         // Verify worker items enqueued
-        let (work1, token1) = store.fetch_work_item(30).await.unwrap();
-        let (work2, token2) = store.fetch_work_item(30).await.unwrap();
+        let (work1, token1) = store.fetch_work_item(30).await.unwrap().unwrap();
+        let (work2, token2) = store.fetch_work_item(30).await.unwrap().unwrap();
 
         assert!(matches!(work1, WorkItem::ActivityExecute { id: 1, .. }));
         assert!(matches!(work2, WorkItem::ActivityExecute { id: 2, .. }));
 
         // No more work
-        assert!(store.fetch_work_item(30).await.is_none());
+        assert!(store.fetch_work_item(30).await.unwrap().is_none());
 
         // Ack the work with dummy completions
         store
@@ -2077,11 +2089,11 @@ mod tests {
         store.enqueue_for_worker(work_item.clone()).await.unwrap();
 
         // Dequeue it
-        let (dequeued, token) = store.fetch_work_item(30).await.unwrap();
+        let (dequeued, token) = store.fetch_work_item(30).await.unwrap().unwrap();
         assert!(matches!(dequeued, WorkItem::ActivityExecute { name, .. } if name == "TestActivity"));
 
         // Can't dequeue again while locked
-        assert!(store.fetch_work_item(30).await.is_none());
+        assert!(store.fetch_work_item(30).await.unwrap().is_none());
 
         // Ack it with completion
         store
@@ -2098,7 +2110,7 @@ mod tests {
             .unwrap();
 
         // Queue should be empty
-        assert!(store.fetch_work_item(30).await.is_none());
+        assert!(store.fetch_work_item(30).await.unwrap().is_none());
     }
 
     #[tokio::test]

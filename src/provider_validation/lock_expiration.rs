@@ -178,11 +178,11 @@ pub async fn test_worker_lock_renewal_success<F: ProviderFactory>(factory: &F) {
         .await
         .unwrap();
 
-    let (_item, token) = provider.fetch_work_item(30).await.unwrap();
+    let (_item, token) = provider.fetch_work_item(30).await.unwrap().unwrap();
     tracing::info!("Fetched work item with lock token: {}", token);
 
     // Verify item is locked (can't fetch again)
-    assert!(provider.fetch_work_item(30).await.is_none());
+    assert!(provider.fetch_work_item(30).await.unwrap().is_none());
 
     // Wait a bit to simulate activity in progress
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -192,7 +192,7 @@ pub async fn test_worker_lock_renewal_success<F: ProviderFactory>(factory: &F) {
     tracing::info!("Successfully renewed lock");
 
     // Item should still be locked
-    assert!(provider.fetch_work_item(30).await.is_none());
+    assert!(provider.fetch_work_item(30).await.unwrap().is_none());
 
     tracing::info!("✓ Test passed: worker lock renewal success verified");
 }
@@ -302,7 +302,7 @@ pub async fn test_worker_lock_renewal_after_ack<F: ProviderFactory>(factory: &F)
         .await
         .unwrap();
 
-    let (_item, token) = provider.fetch_work_item(30).await.unwrap();
+    let (_item, token) = provider.fetch_work_item(30).await.unwrap().unwrap();
     tracing::info!("Fetched work item");
 
     // Ack the work item

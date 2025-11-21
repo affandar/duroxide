@@ -281,7 +281,7 @@ async fn test_sqlite_basic_persistence() {
         let store: Arc<dyn Provider> = Arc::new(store);
 
         // Dequeue and verify items
-        let (item1, token1) = store.fetch_work_item(30).await.expect("Should have first item");
+        let (item1, token1) = store.fetch_work_item(30).await.expect("Fetch should succeed").expect("Should have first item");
         match item1 {
             WorkItem::ActivityExecute { name, input, .. } => {
                 assert_eq!(name, "TestActivity");
@@ -290,7 +290,7 @@ async fn test_sqlite_basic_persistence() {
             _ => panic!("Expected ActivityExecute"),
         }
 
-        let (item2, token2) = store.fetch_work_item(30).await.expect("Should have second item");
+        let (item2, token2) = store.fetch_work_item(30).await.expect("Fetch should succeed").expect("Should have second item");
         match item2 {
             WorkItem::ActivityExecute { name, input, .. } => {
                 assert_eq!(name, "TestActivity2");
@@ -326,7 +326,7 @@ async fn test_sqlite_basic_persistence() {
             .expect("Failed to ack worker 2");
 
         // Verify no more items
-        assert!(store.fetch_work_item(30).await.is_none());
+        assert!(store.fetch_work_item(30).await.unwrap().is_none());
 
         println!("Phase 2: Successfully verified persistence");
     }
@@ -617,7 +617,7 @@ async fn test_sqlite_provider_transactional() {
 
     // Verify all worker items enqueued
     let mut worker_count = 0;
-    while let Some((work_item, token)) = store.fetch_work_item(30).await {
+    while let Some((work_item, token)) = store.fetch_work_item(30).await.unwrap() {
         worker_count += 1;
         // Extract id from work item for completion
         let id = match work_item {

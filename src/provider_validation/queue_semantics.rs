@@ -25,7 +25,7 @@ pub async fn test_worker_queue_fifo_ordering<F: ProviderFactory>(factory: &F) {
 
     // Dequeue all 5 and verify order
     for i in 0..5 {
-        let (item, _token) = provider.fetch_work_item(30).await.unwrap();
+        let (item, _token) = provider.fetch_work_item(30).await.unwrap().unwrap();
         match item {
             WorkItem::ActivityExecute { id, name, .. } => {
                 assert_eq!(id, i);
@@ -36,7 +36,7 @@ pub async fn test_worker_queue_fifo_ordering<F: ProviderFactory>(factory: &F) {
     }
 
     // Queue should be empty
-    assert!(provider.fetch_work_item(30).await.is_none());
+    assert!(provider.fetch_work_item(30).await.unwrap().is_none());
     tracing::info!("✓ Test passed: worker queue FIFO ordering verified");
 }
 
@@ -59,11 +59,11 @@ pub async fn test_worker_peek_lock_semantics<F: ProviderFactory>(factory: &F) {
         .unwrap();
 
     // Dequeue (gets item + token)
-    let (item, token) = provider.fetch_work_item(30).await.unwrap();
+    let (item, token) = provider.fetch_work_item(30).await.unwrap().unwrap();
     assert!(matches!(item, WorkItem::ActivityExecute { .. }));
 
     // Attempt second dequeue → should return None
-    assert!(provider.fetch_work_item(30).await.is_none());
+    assert!(provider.fetch_work_item(30).await.unwrap().is_none());
 
     // Ack with token
     provider
@@ -80,7 +80,7 @@ pub async fn test_worker_peek_lock_semantics<F: ProviderFactory>(factory: &F) {
         .unwrap();
 
     // Queue should now be empty
-    assert!(provider.fetch_work_item(30).await.is_none());
+    assert!(provider.fetch_work_item(30).await.unwrap().is_none());
     tracing::info!("✓ Test passed: worker peek-lock semantics verified");
 }
 
@@ -128,7 +128,7 @@ pub async fn test_worker_ack_atomicity<F: ProviderFactory>(factory: &F) {
         .unwrap();
 
     // Dequeue and get token
-    let (_item, token) = provider.fetch_work_item(30).await.unwrap();
+    let (_item, token) = provider.fetch_work_item(30).await.unwrap().unwrap();
 
     // Ack with completion
     provider
@@ -146,7 +146,7 @@ pub async fn test_worker_ack_atomicity<F: ProviderFactory>(factory: &F) {
 
     // Verify:
     // 1. Worker queue is empty
-    assert!(provider.fetch_work_item(30).await.is_none());
+    assert!(provider.fetch_work_item(30).await.unwrap().is_none());
 
     // 2. Orchestrator queue has completion item
     let orchestration_item = provider.fetch_orchestration_item(30).await.unwrap().unwrap();

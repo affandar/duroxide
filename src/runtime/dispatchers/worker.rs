@@ -42,12 +42,13 @@ impl Runtime {
                             break;
                         }
 
-                        if let Some((item, token)) = rt
+                        let fetch_result = rt
                             .history_store
                             .fetch_work_item(rt.options.worker_lock_timeout_secs)
-                            .await
-                        {
-                            match item {
+                            .await;
+
+                        match fetch_result {
+                            Ok(Some((item, token))) => match item {
                                 WorkItem::ActivityExecute {
                                     instance,
                                     execution_id,
@@ -225,10 +226,17 @@ impl Runtime {
                                     error!(?other, "unexpected WorkItem in Worker dispatcher; state corruption");
                                     panic!("unexpected WorkItem in Worker dispatcher");
                                 }
+                            },
+                            Err(e) => {
+                                warn!(error = %e, "Worker fetch failed");
+                                // Backoff on error
+                                tokio::time::sleep(std::time::Duration::from_millis(rt.options.dispatcher_idle_sleep_ms))
+                                    .await;
                             }
-                        } else {
-                            tokio::time::sleep(std::time::Duration::from_millis(rt.options.dispatcher_idle_sleep_ms))
-                                .await;
+                            Ok(None) => {
+                                tokio::time::sleep(std::time::Duration::from_millis(rt.options.dispatcher_idle_sleep_ms))
+                                    .await;
+                            }
                         }
                     }
                 });
