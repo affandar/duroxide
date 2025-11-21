@@ -61,14 +61,14 @@ duroxide = "0.1"
 Hello world (activities + runtime)
 ```rust
 use std::sync::Arc;
-use duroxide::{ActivityContext, Client, OrchestrationContext, OrchestrationRegistry, OrchestrationStatus};
+use duroxide::{ActivityContext, Client, ClientError, OrchestrationContext, OrchestrationRegistry, OrchestrationStatus};
 use duroxide::runtime::{self};
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::providers::sqlite::SqliteProvider;
 
 # #[tokio::main]
-# async fn main() {
-let store = std::sync::Arc::new(SqliteProvider::new("sqlite:./data.db", None).await.unwrap());
+# async fn main() -> Result<(), Box<dyn std::error::Error>> {
+let store = std::sync::Arc::new(SqliteProvider::new("sqlite:./data.db", None).await?);
 let activities = ActivityRegistry::builder()
     .register("Hello", |ctx: ActivityContext, name: String| async move { Ok(format!("Hello, {name}!")) })
     .build();
@@ -80,13 +80,14 @@ let orch = |ctx: OrchestrationContext, name: String| async move {
 let orchestrations = OrchestrationRegistry::builder().register("HelloWorld", orch).build();
 let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activities), orchestrations).await;
 let client = Client::new(store);
-client.start_orchestration("inst-hello-1", "HelloWorld", "Rust").await.unwrap();
-match client.wait_for_orchestration("inst-hello-1", std::time::Duration::from_secs(5)).await.unwrap() {
+client.start_orchestration("inst-hello-1", "HelloWorld", "Rust").await?; // Returns Result<(), ClientError>
+match client.wait_for_orchestration("inst-hello-1", std::time::Duration::from_secs(5)).await? {
     OrchestrationStatus::Completed { output } => assert_eq!(output, "Hello, Rust!"),
     OrchestrationStatus::Failed { details } => panic!("Failed: {}", details.display_message()),
     _ => panic!("Unexpected status"),
 }
 rt.shutdown(None).await;  // Graceful shutdown with 1s timeout
+# Ok(())
 # }
 ```
 
@@ -143,8 +144,8 @@ ContinueAsNew and multi-execution
 - The initial `start_orchestration` handle resolves with an empty success when `ContinueAsNew` occurs; the latest execution can be observed via status APIs.
 
 Status and control-plane
-- `Client::get_orchestration_status(instance)` -> Running | Completed { output } | Failed { details: ErrorDetails } | NotFound
-- `Client::wait_for_orchestration(instance, timeout)` -> Wait for completion with timeout
+- `Client::get_orchestration_status(instance)` -> `Result<OrchestrationStatus, ClientError>` where `OrchestrationStatus` is Running | Completed { output } | Failed { details: ErrorDetails } | NotFound
+- `Client::wait_for_orchestration(instance, timeout)` -> Wait for completion with timeout, returns `Result<OrchestrationStatus, WaitError>`
 - SQLite provider exposes execution-aware methods (`list_executions`, `read_with_execution`, etc.) for diagnostics.
 
 Error classification

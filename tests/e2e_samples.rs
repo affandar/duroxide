@@ -1210,7 +1210,7 @@ async fn sample_versioning_continue_as_new_upgrade_fs() {
     // Poll for the new execution (v2) to complete
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     loop {
-        match client.get_orchestration_status("inst-can-upgrade").await {
+        match client.get_orchestration_status("inst-can-upgrade").await.unwrap() {
             OrchestrationStatus::Completed { output } => {
                 assert_eq!(output, "upgraded:v1:state");
                 break;

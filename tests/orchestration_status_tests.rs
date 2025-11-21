@@ -13,7 +13,7 @@ async fn test_status_not_found() {
     let (store, _temp_dir) = common::create_sqlite_store_disk().await;
 
     let client = Client::new(store.clone());
-    let status = client.get_orchestration_status("nonexistent-instance").await;
+    let status = client.get_orchestration_status("nonexistent-instance").await.unwrap();
 
     assert!(
         matches!(status, OrchestrationStatus::NotFound),
@@ -53,7 +53,7 @@ async fn test_status_running() {
     // Give it a moment to start but not complete
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
-    let status = client.get_orchestration_status("test-running").await;
+    let status = client.get_orchestration_status("test-running").await.unwrap();
     assert!(
         matches!(status, OrchestrationStatus::Running),
         "Expected Running, got: {status:?}"
@@ -103,7 +103,7 @@ async fn test_status_completed() {
     }
 
     // Check status again (should still be Completed)
-    let status = client.get_orchestration_status("test-completed").await;
+    let status = client.get_orchestration_status("test-completed").await.unwrap();
     match status {
         OrchestrationStatus::Completed { output } => {
             assert_eq!(output, "result: test-input");
@@ -162,7 +162,7 @@ async fn test_status_failed() {
     }
 
     // Check status again (should still be Failed)
-    let status = client.get_orchestration_status("test-failed").await;
+    let status = client.get_orchestration_status("test-failed").await.unwrap();
     match status {
         OrchestrationStatus::Failed { details } => {
             assert!(matches!(
@@ -218,7 +218,7 @@ async fn test_status_after_continue_as_new() {
     let mut final_status = None;
 
     while std::time::Instant::now() < deadline {
-        match client.get_orchestration_status("test-continue").await {
+        match client.get_orchestration_status("test-continue").await.unwrap() {
             OrchestrationStatus::Completed { output } if output == "done: 2" => {
                 final_status = Some(output);
                 break;
@@ -342,7 +342,7 @@ async fn test_status_lifecycle_transitions() {
     let client = Client::new(store.clone());
 
     // Initially: NotFound
-    let status = client.get_orchestration_status("test-lifecycle").await;
+    let status = client.get_orchestration_status("test-lifecycle").await.unwrap();
     assert!(matches!(status, OrchestrationStatus::NotFound));
 
     // Start orchestration
@@ -353,7 +353,7 @@ async fn test_status_lifecycle_transitions() {
 
     // Brief moment: should be Running
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    let status = client.get_orchestration_status("test-lifecycle").await;
+    let status = client.get_orchestration_status("test-lifecycle").await.unwrap();
     assert!(
         matches!(status, OrchestrationStatus::Running),
         "Should be Running after start, got: {status:?}"
@@ -372,7 +372,7 @@ async fn test_status_lifecycle_transitions() {
     }
 
     // Still Completed on subsequent checks
-    let status = client.get_orchestration_status("test-lifecycle").await;
+    let status = client.get_orchestration_status("test-lifecycle").await.unwrap();
     assert!(matches!(status, OrchestrationStatus::Completed { .. }));
 
     rt.shutdown(None).await;
@@ -420,8 +420,8 @@ async fn test_status_independence() {
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
     // Check statuses are independent
-    let status1 = client.get_orchestration_status("inst-success").await;
-    let status2 = client.get_orchestration_status("inst-fail").await;
+    let status1 = client.get_orchestration_status("inst-success").await.unwrap();
+    let status2 = client.get_orchestration_status("inst-fail").await.unwrap();
 
     assert!(
         matches!(status1, OrchestrationStatus::Completed { .. }),

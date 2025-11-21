@@ -1,9 +1,60 @@
 use std::sync::Arc;
 
 use crate::_typed_codec::{Codec, Json};
-use crate::providers::{ExecutionInfo, InstanceInfo, Provider, ProviderAdmin, QueueDepths, SystemMetrics, WorkItem};
+use crate::providers::{
+    ExecutionInfo, InstanceInfo, Provider, ProviderAdmin, ProviderError, QueueDepths, SystemMetrics, WorkItem,
+};
 use crate::{Event, OrchestrationStatus};
 use serde::Serialize;
+
+/// Client-specific error type that wraps provider errors and adds client-specific errors.
+///
+/// This enum allows callers to distinguish between:
+/// - Provider errors (storage failures, can be retryable or permanent)
+/// - Client-specific errors (validation, capability not available, etc.)
+#[derive(Debug, Clone)]
+pub enum ClientError {
+    /// Provider operation failed (wraps ProviderError)
+    Provider(ProviderError),
+
+    /// Management capability not available
+    ManagementNotAvailable,
+
+    /// Invalid input (client validation)
+    InvalidInput { message: String },
+}
+
+impl ClientError {
+    /// Check if this error is retryable (only applies to Provider errors)
+    pub fn is_retryable(&self) -> bool {
+        match self {
+            ClientError::Provider(e) => e.is_retryable(),
+            ClientError::ManagementNotAvailable => false,
+            ClientError::InvalidInput { .. } => false,
+        }
+    }
+}
+
+impl std::fmt::Display for ClientError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ClientError::Provider(e) => write!(f, "{}", e),
+            ClientError::ManagementNotAvailable => write!(
+                f,
+                "Management features not available - provider doesn't implement ProviderAdmin"
+            ),
+            ClientError::InvalidInput { message } => write!(f, "Invalid input: {}", message),
+        }
+    }
+}
+
+impl std::error::Error for ClientError {}
+
+impl From<ProviderError> for ClientError {
+    fn from(e: ProviderError) -> Self {
+        ClientError::Provider(e)
+    }
+}
 
 // Constants for polling behavior in wait_for_orchestration
 /// Initial delay between status polls (5ms)
@@ -61,6 +112,7 @@ const POLL_DELAY_MULTIPLIER: u64 = 2;
 /// use duroxide::providers::sqlite::SqliteProvider;
 /// use std::sync::Arc;
 ///
+/// use duroxide::ClientError;
 /// let store = Arc::new(SqliteProvider::new("sqlite:./data.db").await?);
 /// let client = Client::new(store);
 ///
@@ -68,7 +120,7 @@ const POLL_DELAY_MULTIPLIER: u64 = 2;
 /// client.start_orchestration("order-123", "ProcessOrder", r#"{"customer_id": "c1"}"#).await?;
 ///
 /// // Check status
-/// let status = client.get_orchestration_status("order-123").await;
+/// let status = client.get_orchestration_status("order-123").await?;
 /// println!("Status: {:?}", status);
 ///
 /// // Wait for completion
@@ -132,9 +184,9 @@ impl Client {
     /// # Example
     ///
     /// ```rust,no_run
-    /// # use duroxide::Client;
+    /// # use duroxide::{Client, ClientError};
     /// # use std::sync::Arc;
-    /// # async fn example(client: Client) -> Result<(), String> {
+    /// # async fn example(client: Client) -> Result<(), ClientError> {
     /// // Start with JSON string input
     /// client.start_orchestration(
     ///     "order-123",
@@ -149,7 +201,7 @@ impl Client {
         instance: &str,
         orchestration: &str,
         input: impl Into<String>,
-    ) -> Result<(), String> {
+    ) -> Result<(), ClientError> {
         let item = WorkItem::StartOrchestration {
             instance: instance.to_string(),
             orchestration: orchestration.to_string(),
@@ -162,7 +214,7 @@ impl Client {
         self.store
             .enqueue_for_orchestrator(item, None)
             .await
-            .map_err(|e| e.to_string())
+            .map_err(ClientError::from)
     }
 
     /// Start an orchestration instance pinned to a specific version.
@@ -172,7 +224,7 @@ impl Client {
         orchestration: &str,
         version: impl Into<String>,
         input: impl Into<String>,
-    ) -> Result<(), String> {
+    ) -> Result<(), ClientError> {
         let item = WorkItem::StartOrchestration {
             instance: instance.to_string(),
             orchestration: orchestration.to_string(),
@@ -185,7 +237,7 @@ impl Client {
         self.store
             .enqueue_for_orchestrator(item, None)
             .await
-            .map_err(|e| e.to_string())
+            .map_err(ClientError::from)
     }
 
     // Note: No delayed scheduling API. Clients should use normal start APIs.
@@ -196,8 +248,10 @@ impl Client {
         instance: &str,
         orchestration: &str,
         input: In,
-    ) -> Result<(), String> {
-        let payload = Json::encode(&input).map_err(|e| format!("encode: {e}"))?;
+    ) -> Result<(), ClientError> {
+        let payload = Json::encode(&input).map_err(|e| ClientError::InvalidInput {
+            message: format!("encode: {e}"),
+        })?;
         self.start_orchestration(instance, orchestration, payload).await
     }
 
@@ -208,8 +262,10 @@ impl Client {
         orchestration: &str,
         version: impl Into<String>,
         input: In,
-    ) -> Result<(), String> {
-        let payload = Json::encode(&input).map_err(|e| format!("encode: {e}"))?;
+    ) -> Result<(), ClientError> {
+        let payload = Json::encode(&input).map_err(|e| ClientError::InvalidInput {
+            message: format!("encode: {e}"),
+        })?;
         self.start_orchestration_versioned(instance, orchestration, version, payload)
             .await
     }
@@ -237,8 +293,8 @@ impl Client {
     /// # Example
     ///
     /// ```rust,no_run
-    /// # use duroxide::Client;
-    /// # async fn example(client: Client) -> Result<(), String> {
+    /// # use duroxide::{Client, ClientError};
+    /// # async fn example(client: Client) -> Result<(), ClientError> {
     /// // Orchestration waiting for approval
     /// // ctx.schedule_wait("ApprovalEvent").into_event().await
     ///
@@ -268,7 +324,7 @@ impl Client {
         instance: &str,
         event_name: impl Into<String>,
         data: impl Into<String>,
-    ) -> Result<(), String> {
+    ) -> Result<(), ClientError> {
         let item = WorkItem::ExternalRaised {
             instance: instance.to_string(),
             name: event_name.into(),
@@ -277,7 +333,7 @@ impl Client {
         self.store
             .enqueue_for_orchestrator(item, None)
             .await
-            .map_err(|e| e.to_string())
+            .map_err(ClientError::from)
     }
 
     /// Request cancellation of an orchestration instance.
@@ -336,7 +392,7 @@ impl Client {
     ///
     /// - Instance already completed: Cancellation is no-op
     /// - Instance doesn't exist: Cancellation is no-op
-    pub async fn cancel_instance(&self, instance: &str, reason: impl Into<String>) -> Result<(), String> {
+    pub async fn cancel_instance(&self, instance: &str, reason: impl Into<String>) -> Result<(), ClientError> {
         let item = WorkItem::CancelInstance {
             instance: instance.to_string(),
             reason: reason.into(),
@@ -344,7 +400,7 @@ impl Client {
         self.store
             .enqueue_for_orchestrator(item, None)
             .await
-            .map_err(|e| e.to_string())
+            .map_err(ClientError::from)
     }
 
     /// Get the current status of an orchestration by inspecting its history.
@@ -377,9 +433,9 @@ impl Client {
     /// # Example
     ///
     /// ```rust,no_run
-    /// # use duroxide::{Client, OrchestrationStatus};
-    /// # async fn example(client: Client) -> Result<(), String> {
-    /// let status = client.get_orchestration_status("order-123").await;
+    /// # use duroxide::{Client, ClientError, OrchestrationStatus};
+    /// # async fn example(client: Client) -> Result<(), ClientError> {
+    /// let status = client.get_orchestration_status("order-123").await?;
     ///
     /// match status {
     ///     OrchestrationStatus::NotFound => println!("Instance not found"),
@@ -390,27 +446,27 @@ impl Client {
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn get_orchestration_status(&self, instance: &str) -> OrchestrationStatus {
-        let hist = self.store.read(instance).await.unwrap_or_default();
+    pub async fn get_orchestration_status(&self, instance: &str) -> Result<OrchestrationStatus, ClientError> {
+        let hist = self.store.read(instance).await.map_err(ClientError::from)?;
         // Find terminal events first
         for e in hist.iter().rev() {
             match e {
                 Event::OrchestrationCompleted { output, .. } => {
-                    return OrchestrationStatus::Completed { output: output.clone() };
+                    return Ok(OrchestrationStatus::Completed { output: output.clone() });
                 }
                 Event::OrchestrationFailed { details, .. } => {
-                    return OrchestrationStatus::Failed {
+                    return Ok(OrchestrationStatus::Failed {
                         details: details.clone(),
-                    };
+                    });
                 }
                 _ => {}
             }
         }
         // If we ever saw a start, it's running
         if hist.iter().any(|e| matches!(e, Event::OrchestrationStarted { .. })) {
-            OrchestrationStatus::Running
+            Ok(OrchestrationStatus::Running)
         } else {
-            OrchestrationStatus::NotFound
+            Ok(OrchestrationStatus::NotFound)
         }
     }
 
@@ -496,16 +552,18 @@ impl Client {
         let deadline = std::time::Instant::now() + timeout;
         // quick path
         match self.get_orchestration_status(instance).await {
-            OrchestrationStatus::Completed { output } => return Ok(OrchestrationStatus::Completed { output }),
-            OrchestrationStatus::Failed { details } => return Ok(OrchestrationStatus::Failed { details }),
+            Ok(OrchestrationStatus::Completed { output }) => return Ok(OrchestrationStatus::Completed { output }),
+            Ok(OrchestrationStatus::Failed { details }) => return Ok(OrchestrationStatus::Failed { details }),
+            Err(e) => return Err(crate::runtime::WaitError::Other(e.to_string())),
             _ => {}
         }
         // poll with backoff
         let mut delay_ms: u64 = INITIAL_POLL_DELAY_MS;
         while std::time::Instant::now() < deadline {
             match self.get_orchestration_status(instance).await {
-                OrchestrationStatus::Completed { output } => return Ok(OrchestrationStatus::Completed { output }),
-                OrchestrationStatus::Failed { details } => return Ok(OrchestrationStatus::Failed { details }),
+                Ok(OrchestrationStatus::Completed { output }) => return Ok(OrchestrationStatus::Completed { output }),
+                Ok(OrchestrationStatus::Failed { details }) => return Ok(OrchestrationStatus::Failed { details }),
+                Err(e) => return Err(crate::runtime::WaitError::Other(e.to_string())),
                 _ => {
                     tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
                     delay_ms = (delay_ms.saturating_mul(POLL_DELAY_MULTIPLIER)).min(MAX_POLL_DELAY_MS);
@@ -562,10 +620,10 @@ impl Client {
     /// # Internal Use
     ///
     /// This method is used internally by management methods to access capabilities.
-    fn discover_management(&self) -> Result<&dyn ProviderAdmin, String> {
+    fn discover_management(&self) -> Result<&dyn ProviderAdmin, ClientError> {
         self.store
             .as_management_capability()
-            .ok_or_else(|| "Management features not available - provider doesn't implement ProviderAdmin".to_string())
+            .ok_or(ClientError::ManagementNotAvailable)
     }
 
     // ===== Rich Management Methods =====
@@ -591,11 +649,11 @@ impl Client {
     ///     }
     /// }
     /// ```
-    pub async fn list_all_instances(&self) -> Result<Vec<String>, String> {
+    pub async fn list_all_instances(&self) -> Result<Vec<String>, ClientError> {
         self.discover_management()?
             .list_instances()
             .await
-            .map_err(|e| e.to_string())
+            .map_err(ClientError::from)
     }
 
     /// List instances matching a status filter.
@@ -622,11 +680,11 @@ impl Client {
     ///     println!("Running: {}, Completed: {}", running.len(), completed.len());
     /// }
     /// ```
-    pub async fn list_instances_by_status(&self, status: &str) -> Result<Vec<String>, String> {
+    pub async fn list_instances_by_status(&self, status: &str) -> Result<Vec<String>, ClientError> {
         self.discover_management()?
             .list_instances_by_status(status)
             .await
-            .map_err(|e| e.to_string())
+            .map_err(ClientError::from)
     }
 
     /// Get comprehensive information about an instance.
@@ -652,11 +710,11 @@ impl Client {
     ///     println!("Instance {}: {} ({})", info.instance_id, info.orchestration_name, info.status);
     /// }
     /// ```
-    pub async fn get_instance_info(&self, instance: &str) -> Result<InstanceInfo, String> {
+    pub async fn get_instance_info(&self, instance: &str) -> Result<InstanceInfo, ClientError> {
         self.discover_management()?
             .get_instance_info(instance)
             .await
-            .map_err(|e| e.to_string())
+            .map_err(ClientError::from)
     }
 
     /// Get detailed information about a specific execution.
@@ -683,11 +741,11 @@ impl Client {
     ///     println!("Execution {}: {} events, status: {}", info.execution_id, info.event_count, info.status);
     /// }
     /// ```
-    pub async fn get_execution_info(&self, instance: &str, execution_id: u64) -> Result<ExecutionInfo, String> {
+    pub async fn get_execution_info(&self, instance: &str, execution_id: u64) -> Result<ExecutionInfo, ClientError> {
         self.discover_management()?
             .get_execution_info(instance, execution_id)
             .await
-            .map_err(|e| e.to_string())
+            .map_err(ClientError::from)
     }
 
     /// List all execution IDs for an instance.
@@ -718,9 +776,9 @@ impl Client {
     ///     println!("Instance has {} executions", executions.len()); // [1, 2, 3]
     /// }
     /// ```
-    pub async fn list_executions(&self, instance: &str) -> Result<Vec<u64>, String> {
+    pub async fn list_executions(&self, instance: &str) -> Result<Vec<u64>, ClientError> {
         let mgmt = self.discover_management()?;
-        mgmt.list_executions(instance).await.map_err(|e| e.to_string())
+        mgmt.list_executions(instance).await.map_err(ClientError::from)
     }
 
     /// Read the full event history for a specific execution within an instance.
@@ -755,11 +813,15 @@ impl Client {
     ///     }
     /// }
     /// ```
-    pub async fn read_execution_history(&self, instance: &str, execution_id: u64) -> Result<Vec<crate::Event>, String> {
+    pub async fn read_execution_history(
+        &self,
+        instance: &str,
+        execution_id: u64,
+    ) -> Result<Vec<crate::Event>, ClientError> {
         let mgmt = self.discover_management()?;
         mgmt.read_history_with_execution_id(instance, execution_id)
             .await
-            .map_err(|e| e.to_string())
+            .map_err(ClientError::from)
     }
 
     /// Get system-wide metrics for the orchestration engine.
@@ -782,11 +844,11 @@ impl Client {
     ///         metrics.running_instances, metrics.completed_instances, metrics.failed_instances);
     /// }
     /// ```
-    pub async fn get_system_metrics(&self) -> Result<SystemMetrics, String> {
+    pub async fn get_system_metrics(&self) -> Result<SystemMetrics, ClientError> {
         self.discover_management()?
             .get_system_metrics()
             .await
-            .map_err(|e| e.to_string())
+            .map_err(ClientError::from)
     }
 
     /// Get the current depths of the internal work queues.
@@ -809,10 +871,10 @@ impl Client {
     ///         queues.orchestrator_queue, queues.worker_queue, queues.timer_queue);
     /// }
     /// ```
-    pub async fn get_queue_depths(&self) -> Result<QueueDepths, String> {
+    pub async fn get_queue_depths(&self) -> Result<QueueDepths, ClientError> {
         self.discover_management()?
             .get_queue_depths()
             .await
-            .map_err(|e| e.to_string())
+            .map_err(ClientError::from)
     }
 }

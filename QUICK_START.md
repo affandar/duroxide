@@ -70,7 +70,7 @@ let orchestrations = OrchestrationRegistry::builder()
 
 let rt = Runtime::start_with_store(store.clone(), Arc::new(activities), orchestrations).await;
 let client = Client::new(store);
-client.start_orchestration("inst-1", "HelloWorld", "World").await?;
+client.start_orchestration("inst-1", "HelloWorld", "World").await?; // Returns Result<(), ClientError>
 ```
 
 ## Common Patterns
@@ -175,9 +175,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ).await;
     
     let client = Client::new(store);
-    client.start_orchestration("order-1", "OrderProcessor", "ORDER-123").await?;
+    client.start_orchestration("order-1", "OrderProcessor", "ORDER-123").await?; // Returns Result<(), ClientError>
     
-    match client.wait_for_orchestration("order-1", std::time::Duration::from_secs(5)).await? {
+    match client.wait_for_orchestration("order-1", std::time::Duration::from_secs(5)).await? { // Returns Result<OrchestrationStatus, WaitError>
         OrchestrationStatus::Completed { output } => {
             println!("✅ Success: {}", output);
         }

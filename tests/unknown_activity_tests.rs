@@ -109,11 +109,11 @@ async fn unknown_activity_is_isolated_from_other_orchestrations_fs() {
     ));
 
     // Status API should reflect isolation as well
-    match client.get_orchestration_status("inst-healthy-1").await {
+    match client.get_orchestration_status("inst-healthy-1").await.unwrap() {
         OrchestrationStatus::Completed { output } => assert_eq!(output, "healthy:yo"),
         other => panic!("unexpected status for healthy: {other:?}"),
     }
-    match client.get_orchestration_status("inst-missing-1").await {
+    match client.get_orchestration_status("inst-missing-1").await.unwrap() {
         OrchestrationStatus::Failed { details } => {
             assert!(matches!(
                 details,
@@ -196,11 +196,11 @@ async fn unknown_activity_is_isolated_from_other_orchestrations_inmem() {
         } if resource == "Missing"
     ));
 
-    match client.get_orchestration_status("inst-healthy-im").await {
+    match client.get_orchestration_status("inst-healthy-im").await.unwrap() {
         OrchestrationStatus::Completed { output } => assert_eq!(output, "healthy:yo"),
         other => panic!("unexpected status for healthy: {other:?}"),
     }
-    match client.get_orchestration_status("inst-missing-im").await {
+    match client.get_orchestration_status("inst-missing-im").await.unwrap() {
         OrchestrationStatus::Failed { details } => {
             assert!(matches!(
                 details,

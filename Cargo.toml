@@ -14,6 +14,7 @@ categories = ["asynchronous", "concurrency", "workflow", "durable"]
 [features]
 default = []
 provider-test = []  # Enable all provider testing infrastructure (stress tests + correctness tests)
+test = ["provider-test"]  # Auto-enable provider-test for tests (internal use only)
 observability = ["opentelemetry", "opentelemetry_sdk", "opentelemetry-otlp", "tracing-opentelemetry"]
 
 [dependencies]

@@ -215,7 +215,7 @@ async fn test_instance_info() {
     // Test non-existent instance
     let result = client.get_instance_info("nonexistent").await;
     assert!(result.is_err());
-    assert!(result.unwrap_err().contains("not found"));
+    assert!(result.unwrap_err().to_string().contains("not found"));
 }
 
 /// Test: Execution information and history
@@ -527,11 +527,11 @@ async fn test_error_handling() {
     // Test all management methods with non-existent instance
     let result = client.get_instance_info("nonexistent").await;
     assert!(result.is_err());
-    assert!(result.unwrap_err().contains("not found"));
+    assert!(result.unwrap_err().to_string().contains("not found"));
 
     let result = client.get_execution_info("nonexistent", 1).await;
     assert!(result.is_err());
-    assert!(result.unwrap_err().contains("not found"));
+    assert!(result.unwrap_err().to_string().contains("not found"));
 
     let result = client.read_execution_history("nonexistent", 1).await;
     assert!(result.is_ok());

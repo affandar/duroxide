@@ -225,7 +225,7 @@ async fn orchestration_status_apis() {
     let client = duroxide::Client::new(store.clone());
 
     // NotFound for unknown instance
-    let s = client.get_orchestration_status("no-such").await;
+    let s = client.get_orchestration_status("no-such").await.unwrap();
     assert!(matches!(s, OrchestrationStatus::NotFound));
 
     // Start a running orchestration; should be Running after dispatcher processes it
@@ -238,7 +238,7 @@ async fn orchestration_status_apis() {
     let mut s1 = OrchestrationStatus::NotFound;
     for _ in 0..10 {
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        s1 = client.get_orchestration_status(inst_running).await;
+        s1 = client.get_orchestration_status(inst_running).await.unwrap();
         if matches!(s1, OrchestrationStatus::Running) {
             break;
         }
@@ -260,7 +260,7 @@ async fn orchestration_status_apis() {
         }
         _ => panic!("unexpected orchestration status"),
     }
-    let s2 = client.get_orchestration_status(inst_running).await;
+    let s2 = client.get_orchestration_status(inst_running).await.unwrap();
     assert!(matches!(s2, OrchestrationStatus::Completed { .. }));
     if let OrchestrationStatus::Completed { output } = s2 {
         assert_eq!(output, "ok");
@@ -279,7 +279,7 @@ async fn orchestration_status_apis() {
         duroxide::OrchestrationStatus::Completed { output } => panic!("expected failure, got: {output}"),
         _ => panic!("unexpected orchestration status"),
     }
-    let s3 = client.get_orchestration_status(inst_fail).await;
+    let s3 = client.get_orchestration_status(inst_fail).await.unwrap();
     assert!(matches!(s3, OrchestrationStatus::Failed { .. }));
     if let OrchestrationStatus::Failed { details } = s3 {
         assert_eq!(details.display_message(), "boom");

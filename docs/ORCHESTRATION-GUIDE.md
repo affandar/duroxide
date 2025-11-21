@@ -538,7 +538,7 @@ client.cancel_instance("order-123", "Customer requested cancellation").await?;
 ```rust
 use duroxide::OrchestrationStatus;
 
-let status = client.get_orchestration_status("order-123").await;
+let status = client.get_orchestration_status("order-123").await?; // Returns Result<OrchestrationStatus, ClientError>
 
 match status {
     OrchestrationStatus::Running => println!("Still processing..."),
@@ -690,7 +690,7 @@ let status = client.wait_for_orchestration("sync-job-1", Duration::from_secs(30)
 client.start_orchestration("long-job-1", "ProcessData", "input").await?;
 
 loop {
-    let status = client.get_orchestration_status("long-job-1").await;
+    let status = client.get_orchestration_status("long-job-1").await?; // Returns Result<OrchestrationStatus, ClientError>
     match status {
         OrchestrationStatus::Running => {
             println!("Still running...");
@@ -814,20 +814,20 @@ match client.wait_for_orchestration("test", Duration::from_secs(10)).await {
 
 | Method | Purpose | Returns |
 |--------|---------|---------|
-| `start_orchestration()` | Start new instance | `Result<(), String>` |
-| `raise_event()` | Send external event | `Result<(), String>` |
-| `cancel_instance()` | Request cancellation | `Result<(), String>` |
-| `get_orchestration_status()` | Check status | `OrchestrationStatus` |
+| `start_orchestration()` | Start new instance | `Result<(), ClientError>` |
+| `raise_event()` | Send external event | `Result<(), ClientError>` |
+| `cancel_instance()` | Request cancellation | `Result<(), ClientError>` |
+| `get_orchestration_status()` | Check status | `Result<OrchestrationStatus, ClientError>` |
 | `wait_for_orchestration()` | Wait for completion | `Result<OrchestrationStatus, WaitError>` |
 | `has_management_capability()` | Check feature availability | `bool` |
-| `list_all_instances()` | List instances | `Result<Vec<String>, String>` |
-| `list_instances_by_status()` | Filter by status | `Result<Vec<String>, String>` |
-| `get_instance_info()` | Instance metadata | `Result<InstanceInfo, String>` |
-| `get_execution_info()` | Execution metadata | `Result<ExecutionInfo, String>` |
-| `list_executions()` | List execution IDs | `Result<Vec<u64>, String>` |
-| `read_execution_history()` | Read history | `Result<Vec<Event>, String>` |
-| `get_system_metrics()` | System stats | `Result<SystemMetrics, String>` |
-| `get_queue_depths()` | Queue depths | `Result<QueueDepths, String>` |
+| `list_all_instances()` | List instances | `Result<Vec<String>, ClientError>` |
+| `list_instances_by_status()` | Filter by status | `Result<Vec<String>, ClientError>` |
+| `get_instance_info()` | Instance metadata | `Result<InstanceInfo, ClientError>` |
+| `get_execution_info()` | Execution metadata | `Result<ExecutionInfo, ClientError>` |
+| `list_executions()` | List execution IDs | `Result<Vec<u64>, ClientError>` |
+| `read_execution_history()` | Read history | `Result<Vec<Event>, ClientError>` |
+| `get_system_metrics()` | System stats | `Result<SystemMetrics, ClientError>` |
+| `get_queue_depths()` | Queue depths | `Result<QueueDepths, ClientError>` |
 
 ---
 
@@ -1032,7 +1032,7 @@ These also abort before your code runs, may be retryable by the runtime.
 
 **Checking Error Category** (for metrics/logging):
 ```rust
-match client.get_orchestration_status("inst-1").await {
+match client.get_orchestration_status("inst-1").await? { // Returns Result<OrchestrationStatus, ClientError>
     OrchestrationStatus::Failed { details } => {
         match details.category() {
             "infrastructure" => alert_ops_team(),      // System issue

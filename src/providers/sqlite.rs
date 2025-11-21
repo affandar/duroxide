@@ -578,7 +578,10 @@ impl Provider for SqliteProvider {
 
         // Fetch ALL messages for this instance and mark them with our lock_token for later deletion
         // We mark them so we can distinguish between messages we fetched vs new messages that arrive later
-        sqlx::query(
+        // This includes messages that were previously fetched but the lock expired (they still have old lock_token)
+        // We update ALL visible messages for this instance, regardless of their current lock_token
+        // This allows recovery of messages that were fetched but the lock expired without ack
+        let update_result = sqlx::query(
             r#"
             UPDATE orchestrator_queue
             SET lock_token = ?1
@@ -604,10 +607,13 @@ impl Provider for SqliteProvider {
         .fetch_all(&mut *tx)
         .await
         .map_err(|e| Self::sqlx_to_provider_error("fetch_orchestration_item", e))?;
-        tracing::debug!(target="duroxide::providers::sqlite", message_count=%messages.len(), instance=%instance_id, "Fetched and marked messages for locked instance");
+        tracing::debug!(target="duroxide::providers::sqlite", message_count=%messages.len(), rows_updated=%update_result.rows_affected(), instance=%instance_id, "Fetched and marked messages for locked instance");
 
         if messages.is_empty() {
-            // No messages for instance (shouldn't happen), release lock and rollback
+            // No messages for instance - this can happen if:
+            // 1. Messages were already acked/deleted by another worker
+            // 2. Race condition where messages were consumed between SELECT and UPDATE
+            // Release lock and rollback
             sqlx::query("DELETE FROM instance_locks WHERE instance_id = ?")
                 .bind(&instance_id)
                 .execute(&mut *tx)
@@ -1149,12 +1155,12 @@ impl Provider for SqliteProvider {
 
         tracing::debug!("Worker dequeue found item");
 
-        let id: i64 = next_item.try_get("id").map_err(|e| {
-            ProviderError::permanent("fetch_work_item", format!("Failed to get id: {}", e))
-        })?;
-        let work_item_str: String = next_item.try_get("work_item").map_err(|e| {
-            ProviderError::permanent("fetch_work_item", format!("Failed to get work_item: {}", e))
-        })?;
+        let id: i64 = next_item
+            .try_get("id")
+            .map_err(|e| ProviderError::permanent("fetch_work_item", format!("Failed to get id: {}", e)))?;
+        let work_item_str: String = next_item
+            .try_get("work_item")
+            .map_err(|e| ProviderError::permanent("fetch_work_item", format!("Failed to get work_item: {}", e)))?;
 
         // Update with lock
         sqlx::query(
@@ -1171,9 +1177,8 @@ impl Provider for SqliteProvider {
         .await
         .map_err(|e| Self::sqlx_to_provider_error("fetch_work_item", e))?;
 
-        let work_item: WorkItem = serde_json::from_str(&work_item_str).map_err(|e| {
-            ProviderError::permanent("fetch_work_item", format!("Deserialization error: {}", e))
-        })?;
+        let work_item: WorkItem = serde_json::from_str(&work_item_str)
+            .map_err(|e| ProviderError::permanent("fetch_work_item", format!("Deserialization error: {}", e)))?;
 
         tx.commit()
             .await

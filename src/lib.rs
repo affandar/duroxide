@@ -261,7 +261,7 @@ pub mod provider_stress_tests;
 pub mod provider_stress_test;
 
 // Re-export key runtime types for convenience
-pub use client::Client;
+pub use client::{Client, ClientError};
 pub use runtime::{
     OrchestrationHandler, OrchestrationRegistry, OrchestrationRegistryBuilder, OrchestrationStatus, RuntimeOptions,
 };

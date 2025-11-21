@@ -230,12 +230,16 @@ impl Runtime {
                             Err(e) => {
                                 warn!(error = %e, "Worker fetch failed");
                                 // Backoff on error
-                                tokio::time::sleep(std::time::Duration::from_millis(rt.options.dispatcher_idle_sleep_ms))
-                                    .await;
+                                tokio::time::sleep(std::time::Duration::from_millis(
+                                    rt.options.dispatcher_idle_sleep_ms,
+                                ))
+                                .await;
                             }
                             Ok(None) => {
-                                tokio::time::sleep(std::time::Duration::from_millis(rt.options.dispatcher_idle_sleep_ms))
-                                    .await;
+                                tokio::time::sleep(std::time::Duration::from_millis(
+                                    rt.options.dispatcher_idle_sleep_ms,
+                                ))
+                                .await;
                             }
                         }
                     }

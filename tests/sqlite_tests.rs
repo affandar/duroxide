@@ -281,7 +281,11 @@ async fn test_sqlite_basic_persistence() {
         let store: Arc<dyn Provider> = Arc::new(store);
 
         // Dequeue and verify items
-        let (item1, token1) = store.fetch_work_item(30).await.expect("Fetch should succeed").expect("Should have first item");
+        let (item1, token1) = store
+            .fetch_work_item(30)
+            .await
+            .expect("Fetch should succeed")
+            .expect("Should have first item");
         match item1 {
             WorkItem::ActivityExecute { name, input, .. } => {
                 assert_eq!(name, "TestActivity");
@@ -290,7 +294,11 @@ async fn test_sqlite_basic_persistence() {
             _ => panic!("Expected ActivityExecute"),
         }
 
-        let (item2, token2) = store.fetch_work_item(30).await.expect("Fetch should succeed").expect("Should have second item");
+        let (item2, token2) = store
+            .fetch_work_item(30)
+            .await
+            .expect("Fetch should succeed")
+            .expect("Should have second item");
         match item2 {
             WorkItem::ActivityExecute { name, input, .. } => {
                 assert_eq!(name, "TestActivity2");
