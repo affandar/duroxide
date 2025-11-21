@@ -149,10 +149,11 @@ impl Provider for MyProvider {
         todo!()
     }
     
-    async fn dequeue_worker_peek_lock(&self) -> Option<(WorkItem, String)> {
+    async fn fetch_work_item(&self, lock_timeout_secs: u64) -> Result<Option<(WorkItem, String)>, ProviderError> {
         // Find next unlocked item
         // Lock it with unique token
-        // Return item + token (item stays in queue)
+        // Return Ok(Some((item, token))) if found, Ok(None) if empty, Err(ProviderError) on storage failure
+        // Item stays in queue until acked
         
         todo!()
     }
@@ -226,6 +227,15 @@ impl Provider for MyProvider {
 **⚠️ CRITICAL: All Provider methods return `Result<..., ProviderError>`**
 
 Providers must return `ProviderError` instead of `String` to enable smart retry logic in the runtime. The runtime uses `ProviderError::is_retryable()` to decide whether to retry operations automatically.
+
+**Special case: `fetch_work_item()` returns `Result<Option<(WorkItem, String)>, ProviderError>`**
+
+The `fetch_work_item()` method has a special return type that distinguishes between:
+- Empty queue: `Ok(None)` - No items available (normal, not an error)
+- Success: `Ok(Some((item, token)))` - Successfully fetched and locked an item
+- Storage failure: `Err(ProviderError)` - Database error, connection failure, etc.
+
+This allows the runtime to properly handle backoff (empty queue) vs retry (storage errors).
 
 ### ProviderError Structure
 
@@ -933,7 +943,7 @@ INSERT INTO worker_queue (work_item, lock_token, locked_until)
 VALUES (work_json, NULL, NULL)
 ```
 
-**dequeue_worker_peek_lock():**
+**fetch_work_item(lock_timeout_secs: u64):**
 ```
 BEGIN TRANSACTION
 
@@ -944,10 +954,10 @@ row = SELECT id, work_item FROM worker_queue
 
 IF row IS NULL:
     ROLLBACK
-    RETURN None
+    RETURN Ok(None)  // Empty queue - not an error
 
 lock_token = generate_uuid()
-locked_until = current_timestamp() + lock_timeout_ms
+locked_until = current_timestamp() + lock_timeout_secs
 
 UPDATE worker_queue
 SET lock_token = lock_token, locked_until = locked_until
@@ -955,8 +965,25 @@ WHERE id = row.id
 
 COMMIT
 item = deserialize_workitem(row.work_item)
-RETURN Some((item, lock_token))
+RETURN Ok(Some((item, lock_token)))
 ```
+
+**⚠️ CRITICAL: Error Handling for fetch_work_item**
+
+`fetch_work_item()` MUST return `Result<Option<(WorkItem, String)>, ProviderError>`:
+- `Ok(None)` - Queue is empty (normal case, not an error)
+- `Ok(Some((item, token)))` - Successfully fetched and locked an item
+- `Err(ProviderError)` - Storage operation failed (database error, connection lost, etc.)
+
+**Why this matters:**
+- Allows runtime to distinguish between empty queue (back off) and storage failures (retry)
+- Enables proper error propagation and retry logic
+- Prevents silent failures that could cause worker dispatcher to hang
+
+**Error classification:**
+- Database busy/locked → `ProviderError::retryable("fetch_work_item", ...)`
+- Connection timeout → `ProviderError::retryable("fetch_work_item", ...)`
+- Data corruption (invalid JSON) → `ProviderError::permanent("fetch_work_item", ...)`
 
 **⚠️ CRITICAL: Worker Queue FIFO Ordering**
 
@@ -969,7 +996,7 @@ Worker items MUST be dequeued in FIFO (first-in-first-out) order based on insert
 
 **⚠️ CRITICAL: Worker Peek-Lock Semantics**
 
-When `dequeue_worker_peek_lock()` returns an item, it MUST:
+When `fetch_work_item()` returns `Ok(Some((item, token)))`, it MUST:
 - Lock the item (set lock_token and locked_until)
 - Keep the item in the queue (don't delete it)
 - Return item + lock_token
