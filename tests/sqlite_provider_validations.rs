@@ -3,8 +3,8 @@
 //! This test file validates the SQLite provider using the reusable
 //! provider validation test suite from `duroxide::provider_validations`.
 //!
-//! **Note:** These tests require the `provider-test` feature to be enabled.
-//! Run with: `cargo test --test sqlite_provider_validations --features provider-test`
+//! These tests automatically enable the `provider-test` feature when running
+//! tests within the duroxide repository.
 
 #[cfg(feature = "provider-test")]
 mod tests {
@@ -65,9 +65,8 @@ mod tests {
         test_worker_queue_fifo_ordering,
     };
     use duroxide::providers::Provider;
-    use duroxide::providers::sqlite::{SqliteOptions, SqliteProvider};
+use duroxide::providers::sqlite::SqliteProvider;
     use std::sync::Arc;
-    use std::time::Duration;
 
     const TEST_LOCK_TIMEOUT_MS: u64 = 1000;
 

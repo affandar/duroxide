@@ -225,6 +225,7 @@ pub async fn test_timer_delayed_visibility<F: ProviderFactory>(factory: &F) {
 pub async fn test_lost_lock_token_handling<F: ProviderFactory>(factory: &F) {
     tracing::info!("→ Testing queue semantics: lost lock token handling");
     let provider = factory.create_provider().await;
+    let lock_timeout_secs = (factory.lock_timeout_ms() + 999) / 1000;
 
     // Enqueue worker item
     provider
@@ -239,19 +240,33 @@ pub async fn test_lost_lock_token_handling<F: ProviderFactory>(factory: &F) {
         .unwrap();
 
     // Dequeue (gets token)
-    let (_item, _token) = provider.fetch_work_item(30).await.unwrap();
+    let (_item, _token) = provider
+        .fetch_work_item(lock_timeout_secs)
+        .await
+        .unwrap()
+        .unwrap();
 
     // Lose token (simulate crash)
     // Drop the token without acking
 
     // Attempt second dequeue → should return None (locked)
-    assert!(provider.fetch_work_item(30).await.is_none());
+    assert!(
+        provider
+            .fetch_work_item(lock_timeout_secs)
+            .await
+            .unwrap()
+            .is_none()
+    );
 
     // Wait for lock expiration
     tokio::time::sleep(Duration::from_millis(factory.lock_timeout_ms() + 100)).await;
 
     // Dequeue again → should succeed → item redelivered
-    let (item2, _token2) = provider.fetch_work_item(30).await.unwrap();
+    let (item2, _token2) = provider
+        .fetch_work_item(lock_timeout_secs)
+        .await
+        .unwrap()
+        .unwrap();
     assert!(matches!(item2, WorkItem::ActivityExecute { .. }));
     tracing::info!("✓ Test passed: lost lock token handling verified");
 }

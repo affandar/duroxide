@@ -3,28 +3,48 @@ use crate::provider_validations::ProviderFactory;
 use std::sync::Arc;
 use std::time::Duration;
 
+fn provider_lock_timeout_secs<F: ProviderFactory>(factory: &F) -> u64 {
+    let ms = factory.lock_timeout_ms();
+    (ms + 999) / 1000
+}
+
 /// Test 4.1: Lock Expires After Timeout
 /// Goal: Verify locks expire and instance becomes available again.
 pub async fn test_lock_expires_after_timeout<F: ProviderFactory>(factory: &F) {
     tracing::info!("→ Testing lock expiration: lock expires after timeout");
     let provider = factory.create_provider().await;
+    let lock_timeout_secs = provider_lock_timeout_secs(factory);
 
     // Setup: create and fetch item
     provider
         .enqueue_for_orchestrator(start_item("instance-A"), None)
         .await
         .unwrap();
-    let item = provider.fetch_orchestration_item(30).await.unwrap().unwrap();
+    let item = provider
+        .fetch_orchestration_item(lock_timeout_secs)
+        .await
+        .unwrap()
+        .unwrap();
     let lock_token = item.lock_token.clone();
 
     // Verify lock is held
-    assert!(provider.fetch_orchestration_item(30).await.unwrap().is_none());
+    assert!(
+        provider
+            .fetch_orchestration_item(lock_timeout_secs)
+            .await
+            .unwrap()
+            .is_none()
+    );
 
     // Wait for lock to expire
     tokio::time::sleep(Duration::from_millis(factory.lock_timeout_ms() + 100)).await;
 
     // Instance should be available again
-    let item2 = provider.fetch_orchestration_item(30).await.unwrap().unwrap();
+    let item2 = provider
+        .fetch_orchestration_item(lock_timeout_secs)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(item2.instance, "instance-A");
     assert_ne!(item2.lock_token, lock_token, "Should have new lock token");
 
@@ -119,23 +139,32 @@ pub async fn test_lock_renewal_on_ack<F: ProviderFactory>(factory: &F) {
 pub async fn test_concurrent_lock_attempts_respect_expiration<F: ProviderFactory>(factory: &F) {
     tracing::info!("→ Testing lock expiration: concurrent lock attempts respect expiration");
     let provider = Arc::new(factory.create_provider().await);
+    let lock_timeout_secs = provider_lock_timeout_secs(factory);
 
     // Setup: create and fetch item
     provider
         .enqueue_for_orchestrator(start_item("instance-A"), None)
         .await
         .unwrap();
-    let item = provider.fetch_orchestration_item(30).await.unwrap().unwrap();
+    let item = provider
+        .fetch_orchestration_item(lock_timeout_secs)
+        .await
+        .unwrap()
+        .unwrap();
     let _lock_token = item.lock_token.clone();
 
     // Spawn multiple concurrent fetchers
     let handles: Vec<_> = (0..5)
         .map(|i| {
             let provider = provider.clone();
+            let lock_timeout_secs = lock_timeout_secs;
             tokio::spawn(async move {
                 // Stagger the attempts slightly
                 tokio::time::sleep(Duration::from_millis(i * 50)).await;
-                provider.fetch_orchestration_item(30).await.unwrap()
+                provider
+                    .fetch_orchestration_item(lock_timeout_secs)
+                    .await
+                    .unwrap()
             })
         })
         .collect();
@@ -153,7 +182,11 @@ pub async fn test_concurrent_lock_attempts_respect_expiration<F: ProviderFactory
     tokio::time::sleep(Duration::from_millis(factory.lock_timeout_ms() - 200 + 100)).await;
 
     // Now one should succeed
-    let item2 = provider.fetch_orchestration_item(30).await.unwrap().unwrap();
+    let item2 = provider
+        .fetch_orchestration_item(lock_timeout_secs)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(item2.instance, "instance-A");
     tracing::info!("✓ Test passed: concurrent lock attempts respect expiration verified");
 }
@@ -229,7 +262,7 @@ pub async fn test_worker_lock_renewal_after_expiration<F: ProviderFactory>(facto
         .await
         .unwrap();
 
-    let (_item, token) = provider.fetch_work_item(1).await.unwrap(); // 1 second timeout
+    let (_item, token) = provider.fetch_work_item(1).await.unwrap().unwrap(); // 1 second timeout
     tracing::info!("Fetched work item with 1s timeout");
 
     // Wait for lock to expire
@@ -261,7 +294,7 @@ pub async fn test_worker_lock_renewal_extends_timeout<F: ProviderFactory>(factor
         .await
         .unwrap();
 
-    let (_item, token) = provider.fetch_work_item(1).await.unwrap(); // 1 second timeout
+    let (_item, token) = provider.fetch_work_item(1).await.unwrap().unwrap(); // 1 second timeout
     tracing::info!("Fetched work item with 1s timeout");
 
     // Wait 800ms (before expiration)
@@ -276,7 +309,7 @@ pub async fn test_worker_lock_renewal_extends_timeout<F: ProviderFactory>(factor
     tokio::time::sleep(Duration::from_millis(800)).await;
 
     // Item should still be locked (because we renewed at 800ms for another 1s = expires at 1.8s)
-    let result = provider.fetch_work_item(1).await;
+    let result = provider.fetch_work_item(1).await.unwrap();
     assert!(result.is_none(), "Item should still be locked after renewal");
 
     tracing::info!("✓ Test passed: lock timeout extension verified");

@@ -118,13 +118,18 @@ pub async fn test_corrupted_serialization_data<F: ProviderFactory>(factory: &F) 
 pub async fn test_lock_expiration_during_ack<F: ProviderFactory>(factory: &F) {
     tracing::info!("→ Testing error handling: lock expiration during ack");
     let provider = factory.create_provider().await;
+    let lock_timeout_secs = (factory.lock_timeout_ms() + 999) / 1000;
 
     // Create and fetch item
     provider
         .enqueue_for_orchestrator(start_item("instance-A"), None)
         .await
         .unwrap();
-    let item = provider.fetch_orchestration_item(30).await.unwrap().unwrap();
+    let item = provider
+        .fetch_orchestration_item(lock_timeout_secs)
+        .await
+        .unwrap()
+        .unwrap();
     let lock_token = item.lock_token.clone();
 
     // Wait for lock to expire
