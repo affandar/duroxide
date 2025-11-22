@@ -270,13 +270,13 @@ mod otel_impl {
             let orch_history_size_events = meter
                 .u64_histogram("duroxide_orchestration_history_size")
                 .with_description("History event count at orchestration completion")
-                .with_boundaries(vec![10, 50, 100, 500, 1000, 5000, 10000])
+                .with_boundaries(vec![10.0, 50.0, 100.0, 500.0, 1000.0, 5000.0, 10000.0])
                 .build();
 
             let orch_turns = meter
                 .u64_histogram("duroxide_orchestration_turns")
                 .with_description("Number of turns to orchestration completion")
-                .with_boundaries(vec![1, 2, 5, 10, 20, 50, 100, 200, 500])
+                .with_boundaries(vec![1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 100.0, 200.0, 500.0])
                 .build();
 
             let orch_continue_as_new_total = meter
