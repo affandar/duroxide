@@ -182,7 +182,7 @@ mod otel_impl {
         // Queue depth tracking (updated by background task)
         orch_queue_depth_atomic: AtomicU64,
         worker_queue_depth_atomic: AtomicU64,
-        
+
         // Active orchestrations tracking (for gauge metrics)
         active_orchestrations_atomic: std::sync::atomic::AtomicI64,
     }

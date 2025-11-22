@@ -171,6 +171,42 @@ ObservabilityConfig {
 
 All metrics follow Prometheus naming conventions with `_total` for counters and `_seconds` for time measurements.
 
+## Metrics Summary Table
+
+| Metric Name | Type | Category | Labels | Purpose |
+|-------------|------|----------|--------|---------|
+| **Orchestration Lifecycle** |
+| `duroxide_orchestration_starts_total` | Counter | Orchestration | orchestration_name, version, initiated_by | Track which orchestrations start |
+| `duroxide_orchestration_completions_total` | Counter | Orchestration | orchestration_name, version, status, final_turn_count | Success rate, completion tracking |
+| `duroxide_orchestration_failures_total` | Counter | Orchestration | orchestration_name, version, error_type, error_category | Failure analysis |
+| `duroxide_orchestration_duration_seconds` | Histogram | Orchestration | orchestration_name, version, status | E2E duration, p95/p99 latency |
+| `duroxide_orchestration_history_size` | Histogram | Orchestration | orchestration_name | Detect history growth issues |
+| `duroxide_orchestration_turns` | Histogram | Orchestration | orchestration_name | Identify multi-turn orchestrations |
+| `duroxide_orchestration_continue_as_new_total` | Counter | Orchestration | orchestration_name, execution_id | Track CAN operations |
+| `duroxide_active_orchestrations` | Gauge | Orchestration | _(none)_ | **Current** active count |
+| **Activity Execution** |
+| `duroxide_activity_executions_total` | Counter | Activity | activity_name, outcome, retry_attempt | Track success/failure rates |
+| `duroxide_activity_duration_seconds` | Histogram | Activity | activity_name, outcome | Activity latency p95/p99 |
+| `duroxide_activity_errors_total` | Counter | Activity | activity_name, error_type, retryable | Detailed error tracking |
+| **Sub-Orchestration** |
+| `duroxide_suborchestration_calls_total` | Counter | Sub-Orch | parent_orchestration, child_orchestration, outcome | Track sub-orch calls |
+| `duroxide_suborchestration_duration_seconds` | Histogram | Sub-Orch | parent_orchestration, child_orchestration, outcome | Sub-orch latency |
+| **Provider (Storage)** |
+| `duroxide_provider_operation_duration_seconds` | Histogram | Provider | operation, status | Database operation latency |
+| `duroxide_provider_errors_total` | Counter | Provider | operation, error_type | Storage layer errors |
+| **Client Operations** |
+| `duroxide_client_orchestration_starts_total` | Counter | Client | orchestration_name | Client-initiated starts |
+| `duroxide_client_external_events_raised_total` | Counter | Client | event_name | External events raised |
+| `duroxide_client_cancellations_total` | Counter | Client | _(none)_ | Cancellation requests |
+| `duroxide_client_wait_duration_seconds` | Histogram | Client | _(none)_ | Client wait latency |
+| **Internal (Dispatcher)** |
+| `duroxide.orchestration.dispatcher.items_fetched` | Counter | Internal | _(none)_ | Items fetched by orch dispatcher |
+| `duroxide.orchestration.dispatcher.processing_duration_ms` | Histogram | Internal | _(none)_ | Orch processing time |
+| `duroxide.worker.dispatcher.items_fetched` | Counter | Internal | _(none)_ | Items fetched by worker dispatcher |
+| `duroxide.worker.dispatcher.execution_duration_ms` | Histogram | Internal | _(none)_ | Worker execution time |
+
+**Note**: Internal dispatcher metrics use dot notation and milliseconds (not exported to Prometheus by default).
+
 #### Orchestration Lifecycle Metrics
 
 **`duroxide_orchestration_starts_total`** (Counter)

@@ -868,7 +868,7 @@ async fn test_active_orchestrations_gauge() {
         .start_orchestration("active-test-1", "SimpleOrch", "")
         .await
         .unwrap();
-    
+
     tokio::time::sleep(Duration::from_millis(50)).await;
     let active_after_start = rt.get_active_orchestrations_count();
     assert!(
