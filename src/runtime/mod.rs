@@ -302,6 +302,24 @@ impl Runtime {
     }
 
     #[inline]
+    fn record_provider_operation(&self, operation: &str, duration_seconds: f64, status: &str) {
+        if let Some(handle) = &self.observability_handle {
+            if let Some(provider) = handle.metrics_provider() {
+                provider.record_provider_operation(operation, duration_seconds, status);
+            }
+        }
+    }
+
+    #[inline]
+    fn record_provider_error(&self, operation: &str, error_type: &str) {
+        if let Some(handle) = &self.observability_handle {
+            if let Some(provider) = handle.metrics_provider() {
+                provider.record_provider_error(operation, error_type);
+            }
+        }
+    }
+
+    #[inline]
     fn record_activity_execution(&self, activity_name: &str, outcome: &str, duration_seconds: f64, retry_attempt: u32) {
         if let Some(handle) = &self.observability_handle {
             if let Some(provider) = handle.metrics_provider() {
@@ -380,6 +398,28 @@ impl Runtime {
             .and_then(|h| h.metrics_provider())
             .map(|p| p.get_active_orchestrations())
             .unwrap_or(0)
+    }
+
+    /// Initialize active orchestrations gauge from provider on startup
+    async fn initialize_active_orchestrations_gauge(self: Arc<Self>) {
+        // Query provider for current active count (requires ProviderAdmin trait)
+        if let Some(admin) = self.history_store.as_management_capability() {
+            if let Ok(metrics) = admin.get_system_metrics().await {
+                let active_count = metrics.running_instances as i64;
+
+                // Set gauge to current active count
+                if let Some(handle) = &self.observability_handle {
+                    if let Some(provider) = handle.metrics_provider() {
+                        provider.set_active_orchestrations(active_count);
+                        tracing::debug!(
+                            target: "duroxide::runtime",
+                            active_count = %active_count,
+                            "Initialized active orchestrations gauge from provider"
+                        );
+                    }
+                }
+            }
+        }
     }
 
     /// Compute execution metadata from history delta without inspecting event contents.
@@ -514,6 +554,17 @@ impl Runtime {
         // Initialize observability (metrics + structured logging)
         let observability_handle = observability::ObservabilityHandle::init(&options.observability).ok(); // Gracefully degrade if observability fails to initialize
 
+        // Wrap provider with metrics instrumentation if metrics are enabled
+        let history_store: Arc<dyn Provider> = if let Some(ref handle) = observability_handle {
+            if let Some(metrics) = handle.metrics_provider() {
+                Arc::new(crate::providers::instrumented::InstrumentedProvider::new(history_store, Some(metrics.clone())))
+            } else {
+                history_store
+            }
+        } else {
+            history_store
+        };
+
         let joins: Vec<JoinHandle<()>> = Vec::new();
 
         // Generate unique runtime instance ID (4-char hex)
@@ -539,6 +590,9 @@ impl Runtime {
             observability_handle,
             runtime_id,
         });
+
+        // Initialize active orchestrations gauge from provider (if supported)
+        runtime.clone().initialize_active_orchestrations_gauge().await;
 
         // background orchestrator dispatcher (extracted from inline poller)
         let handle = runtime.clone().start_orchestration_dispatcher();

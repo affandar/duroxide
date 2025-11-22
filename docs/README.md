@@ -22,6 +22,14 @@ Welcome to the Duroxide documentation! This guide will help you understand and u
 ### Advanced Topics
 - **[Reliability & Queues](reliability-queue-and-history.md)** - Reliability guarantees
 
+### Observability & Monitoring
+- **[Metrics Specification](metrics-specification.md)** - Complete metrics reference with labels and categories
+- **[Observability Guide](observability-guide.md)** - Production monitoring and debugging
+- **[Telemetry Spec](duroxide-telemetry-spec.md)** - Detailed telemetry requirements (desired state)
+- **[Active Orchestrations Metric](duroxide-active-orchestrations-metric-spec.md)** - Gauge metric specification
+- **[Provider Observability](provider-observability.md)** - Instrumenting custom providers
+- **[Library Observability](library-observability.md)** - Observability for library developers
+
 ### Development
 - **[Persistence Analysis](persistence-failure-analysis.md)** - Failure mode analysis
 - **[Transaction Example](transaction-example.md)** - Transaction implementation
@@ -48,6 +56,8 @@ Welcome to the Duroxide documentation! This guide will help you understand and u
 1. Understand **[Reliability Guarantees](reliability-queue-and-history.md)**
 2. Learn about **[ContinueAsNew](continue-as-new.md)** for long-running workflows
 3. Plan for **[External Events](external-events.md)** integration
+4. Set up **[Observability](observability-guide.md)** with metrics and logging
+5. Review **[Metrics Specification](metrics-specification.md)** for monitoring dashboards
 
 ## 📖 Key Concepts Summary
 

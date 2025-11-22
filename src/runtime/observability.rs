@@ -145,6 +145,8 @@ mod otel_impl {
         pub orch_duration_seconds: Histogram<f64>,
         pub orch_history_size_events: Histogram<u64>,
         pub orch_turns: Histogram<u64>,
+        pub orch_infrastructure_errors_total: Counter<u64>,
+        pub orch_configuration_errors_total: Counter<u64>,
 
         // Continue-as-new metrics
         pub orch_continue_as_new_total: Counter<u64>,
@@ -161,6 +163,8 @@ mod otel_impl {
         pub activity_executions_total: Counter<u64>,
         pub activity_duration_seconds: Histogram<f64>,
         pub activity_errors_total: Counter<u64>,
+        pub activity_infrastructure_errors_total: Counter<u64>,
+        pub activity_configuration_errors_total: Counter<u64>,
 
         // Client metrics
         pub client_orch_starts_total: Counter<u64>,
@@ -282,6 +286,16 @@ mod otel_impl {
                 .with_boundaries(vec![1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 100.0, 200.0, 500.0])
                 .build();
 
+            let orch_infrastructure_errors_total = meter
+                .u64_counter("duroxide_orchestration_infrastructure_errors_total")
+                .with_description("Infrastructure-level orchestration errors")
+                .build();
+
+            let orch_configuration_errors_total = meter
+                .u64_counter("duroxide_orchestration_configuration_errors_total")
+                .with_description("Configuration-level orchestration errors (unregistered, nondeterminism)")
+                .build();
+
             let orch_continue_as_new_total = meter
                 .u64_counter("duroxide_orchestration_continue_as_new_total")
                 .with_description("Continue-as-new operations performed")
@@ -330,6 +344,16 @@ mod otel_impl {
                 .with_description("Detailed activity error tracking")
                 .build();
 
+            let activity_infrastructure_errors_total = meter
+                .u64_counter("duroxide_activity_infrastructure_errors_total")
+                .with_description("Infrastructure-level activity errors")
+                .build();
+
+            let activity_configuration_errors_total = meter
+                .u64_counter("duroxide_activity_configuration_errors_total")
+                .with_description("Configuration-level activity errors (unregistered)")
+                .build();
+
             // Client metrics (Prometheus-compliant)
             let client_orch_starts_total = meter
                 .u64_counter("duroxide_client_orchestration_starts_total")
@@ -360,9 +384,12 @@ mod otel_impl {
                 .with_description("Currently active orchestration instances")
                 .with_callback(move |observer| {
                     let count = active_orch_for_callback.load(Ordering::Relaxed);
-                    observer.observe(count, &[
-                        KeyValue::new("state", "all")  // Can add state labels later
-                    ]);
+                    observer.observe(
+                        count,
+                        &[
+                            KeyValue::new("state", "all"), // Can add state labels later
+                        ],
+                    );
                 })
                 .build();
 
@@ -378,6 +405,8 @@ mod otel_impl {
                 orch_duration_seconds,
                 orch_history_size_events,
                 orch_turns,
+                orch_infrastructure_errors_total,
+                orch_configuration_errors_total,
                 orch_continue_as_new_total,
                 suborchestration_calls_total,
                 suborchestration_duration_seconds,
@@ -386,6 +415,8 @@ mod otel_impl {
                 activity_executions_total,
                 activity_duration_seconds,
                 activity_errors_total,
+                activity_infrastructure_errors_total,
+                activity_configuration_errors_total,
                 client_orch_starts_total,
                 client_events_raised_total,
                 client_cancellations_total,
@@ -501,8 +532,30 @@ mod otel_impl {
 
             match error_type {
                 "app_error" => self.orch_application_errors_atomic.fetch_add(1, Ordering::Relaxed),
-                "infrastructure_error" => self.orch_infrastructure_errors_atomic.fetch_add(1, Ordering::Relaxed),
-                "config_error" => self.orch_configuration_errors_atomic.fetch_add(1, Ordering::Relaxed),
+                "infrastructure_error" => {
+                    self.orch_infrastructure_errors_atomic.fetch_add(1, Ordering::Relaxed);
+                    // Also record to separate infrastructure errors counter
+                    self.orch_infrastructure_errors_total.add(
+                        1,
+                        &[
+                            KeyValue::new("orchestration_name", orchestration_name.to_string()),
+                            KeyValue::new("error_category", error_category.to_string()),
+                        ],
+                    );
+                    0
+                }
+                "config_error" => {
+                    self.orch_configuration_errors_atomic.fetch_add(1, Ordering::Relaxed);
+                    // Also record to separate configuration errors counter
+                    self.orch_configuration_errors_total.add(
+                        1,
+                        &[
+                            KeyValue::new("orchestration_name", orchestration_name.to_string()),
+                            KeyValue::new("error_category", error_category.to_string()),
+                        ],
+                    );
+                    0
+                }
                 _ => 0,
             };
         }
@@ -572,7 +625,18 @@ mod otel_impl {
             match outcome {
                 "success" => self.activity_success_atomic.fetch_add(1, Ordering::Relaxed),
                 "app_error" => self.activity_app_errors_atomic.fetch_add(1, Ordering::Relaxed),
-                "infra_error" | "config_error" => self.activity_infra_errors_atomic.fetch_add(1, Ordering::Relaxed),
+                "infra_error" => {
+                    self.activity_infra_errors_atomic.fetch_add(1, Ordering::Relaxed);
+                    self.activity_infrastructure_errors_total
+                        .add(1, &[KeyValue::new("activity_name", activity_name.to_string())]);
+                    0
+                }
+                "config_error" => {
+                    self.activity_infra_errors_atomic.fetch_add(1, Ordering::Relaxed);
+                    self.activity_configuration_errors_total
+                        .add(1, &[KeyValue::new("activity_name", activity_name.to_string())]);
+                    0
+                }
                 _ => 0,
             };
         }

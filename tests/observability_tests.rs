@@ -918,3 +918,153 @@ async fn test_active_orchestrations_gauge() {
 
     rt.shutdown(None).await;
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn test_active_orchestrations_gauge_comprehensive() {
+    // This test verifies the gauge increments/decrements correctly and shows up in metrics
+    let options = RuntimeOptions {
+        observability: metrics_observability_config("active-gauge-full"),
+        ..Default::default()
+    };
+
+    let store = Arc::new(SqliteProvider::new_in_memory().await.unwrap());
+    let activities = ActivityRegistry::builder()
+        .register("Work", |_ctx: ActivityContext, _input: String| async move {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            Ok("done".to_string())
+        })
+        .register("LongWork", |_ctx: ActivityContext, _input: String| async move {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            Ok("done".to_string())
+        })
+        .build();
+
+    let orchestrations = OrchestrationRegistry::builder()
+        .register("TestOrch", |ctx: OrchestrationContext, _input: String| async move {
+            ctx.schedule_activity("Work", "").into_activity().await
+        })
+        .register("LongOrch", |ctx: OrchestrationContext, _input: String| async move {
+            ctx.schedule_activity("LongWork", "").into_activity().await
+        })
+        .build();
+
+    let rt = runtime::Runtime::start_with_options(store.clone(), Arc::new(activities), orchestrations, options).await;
+    let client = Client::new(store.clone());
+
+    // Start: gauge = 0 (or initial value)
+    let initial = rt.get_active_orchestrations_count();
+    println!("Initial active count: {}", initial);
+
+    // Start 2 quick and 1 long orchestration
+    client.start_orchestration("active-1", "TestOrch", "").await.unwrap();
+    client.start_orchestration("active-2", "TestOrch", "").await.unwrap();
+    client.start_orchestration("active-long", "LongOrch", "").await.unwrap();
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let after_starts = rt.get_active_orchestrations_count();
+    println!("After starting 3: {}", after_starts);
+    assert_eq!(
+        after_starts,
+        initial + 3,
+        "gauge should increment by 3: {} + 3 = {}",
+        initial,
+        after_starts
+    );
+
+    // Wait for first two to complete (they're quick)
+    let _ = client.wait_for_orchestration("active-1", Duration::from_secs(5)).await;
+    let _ = client.wait_for_orchestration("active-2", Duration::from_secs(5)).await;
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let after_two_complete = rt.get_active_orchestrations_count();
+    println!("After 2 complete: {} (long one still running)", after_two_complete);
+    assert_eq!(
+        after_two_complete,
+        initial + 1,
+        "gauge should decrement by 2, leaving 1: expected {}, got {}",
+        initial + 1,
+        after_two_complete
+    );
+
+    // Wait for long one
+    let _ = client
+        .wait_for_orchestration("active-long", Duration::from_secs(5))
+        .await;
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let final_count = rt.get_active_orchestrations_count();
+    println!("Final count: {}", final_count);
+    assert_eq!(
+        final_count, initial,
+        "gauge should return to initial value: expected {}, got {}",
+        initial, final_count
+    );
+
+    rt.shutdown(None).await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn test_separate_error_counters_exported() {
+    // Test that infrastructure and configuration error counters are separate metrics
+    let options = RuntimeOptions {
+        observability: metrics_observability_config("separate-errors"),
+        ..Default::default()
+    };
+
+    let store = Arc::new(SqliteProvider::new_in_memory().await.unwrap());
+    let activities = ActivityRegistry::builder()
+        .register("FailActivity", |_ctx: ActivityContext, _input: String| async move {
+            Err("app error".to_string())
+        })
+        .build();
+
+    let orchestrations = OrchestrationRegistry::builder()
+        .register(
+            "ConfigErrorOrch",
+            |ctx: OrchestrationContext, _input: String| async move {
+                // Trigger config error by calling unregistered activity
+                ctx.schedule_activity("UnregisteredActivity", "")
+                    .into_activity()
+                    .await
+                    .map_err(|e| e)?;
+                Ok("done".to_string())
+            },
+        )
+        .register("AppErrorOrch", |ctx: OrchestrationContext, _input: String| async move {
+            // Trigger app error
+            ctx.schedule_activity("FailActivity", "")
+                .into_activity()
+                .await
+                .map_err(|e| e)?;
+            Ok("done".to_string())
+        })
+        .build();
+
+    let rt = runtime::Runtime::start_with_options(store.clone(), Arc::new(activities), orchestrations, options).await;
+    let client = Client::new(store.clone());
+
+    // Trigger config error
+    client
+        .start_orchestration("config-err", "ConfigErrorOrch", "")
+        .await
+        .unwrap();
+    let _ = client
+        .wait_for_orchestration("config-err", Duration::from_secs(5))
+        .await;
+
+    // Trigger app error
+    client.start_orchestration("app-err", "AppErrorOrch", "").await.unwrap();
+    let _ = client.wait_for_orchestration("app-err", Duration::from_secs(5)).await;
+
+    let snapshot = rt.metrics_snapshot().expect("metrics should be available");
+    rt.shutdown(None).await;
+
+    // Verify separate counters are incremented
+    assert!(snapshot.orch_configuration_errors >= 1, "should have config error");
+    assert!(
+        snapshot.activity_config_errors >= 1,
+        "activity should have config error"
+    );
+    assert!(snapshot.orch_application_errors >= 1, "should have app error");
+    assert!(snapshot.activity_app_errors >= 1, "activity should have app error");
+}
