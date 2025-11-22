@@ -174,8 +174,13 @@ impl Runtime {
 
         // Log orchestration completion/failure and record metrics
         if let Some(ref status) = metadata.status {
-            let version = metadata.orchestration_version.as_deref().unwrap_or("unknown");
-            let orch_name = metadata.orchestration_name.as_deref().unwrap_or("unknown");
+            // Use actual orchestration name from work item, not metadata (which may be "unknown")
+            let orch_name = if workitem_reader.has_orchestration_name() {
+                workitem_reader.orchestration_name.as_str()
+            } else {
+                "unknown"
+            };
+            let version = metadata.orchestration_version.as_deref().unwrap_or(&version);
             let event_count = history_mgr.full_history().len();
 
             match status.as_str() {

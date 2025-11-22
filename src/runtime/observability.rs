@@ -184,7 +184,7 @@ mod otel_impl {
         worker_queue_depth_atomic: AtomicU64,
 
         // Active orchestrations tracking (for gauge metrics)
-        active_orchestrations_atomic: std::sync::atomic::AtomicI64,
+        active_orchestrations_atomic: Arc<std::sync::atomic::AtomicI64>,
     }
 
     impl MetricsProvider {
@@ -352,6 +352,20 @@ mod otel_impl {
                 .with_boundaries(vec![0.1, 0.5, 1.0, 2.0, 5.0, 10.0, 30.0, 60.0, 120.0])
                 .build();
 
+            // Observable gauge for active orchestrations
+            let active_orch_atomic_clone = Arc::new(std::sync::atomic::AtomicI64::new(0));
+            let active_orch_for_callback = active_orch_atomic_clone.clone();
+            meter
+                .i64_observable_gauge("duroxide_active_orchestrations")
+                .with_description("Currently active orchestration instances")
+                .with_callback(move |observer| {
+                    let count = active_orch_for_callback.load(Ordering::Relaxed);
+                    observer.observe(count, &[
+                        KeyValue::new("state", "all")  // Can add state labels later
+                    ]);
+                })
+                .build();
+
             Ok(Self {
                 meter_provider,
                 orch_dispatcher_items_fetched,
@@ -387,7 +401,7 @@ mod otel_impl {
                 activity_config_errors_atomic: AtomicU64::new(0),
                 orch_queue_depth_atomic: AtomicU64::new(0),
                 worker_queue_depth_atomic: AtomicU64::new(0),
-                active_orchestrations_atomic: std::sync::atomic::AtomicI64::new(0),
+                active_orchestrations_atomic: active_orch_atomic_clone,
             })
         }
 
@@ -755,7 +769,7 @@ mod stub_impl {
         activity_config_errors_atomic: AtomicU64,
         orch_queue_depth_atomic: AtomicU64,
         worker_queue_depth_atomic: AtomicU64,
-        active_orchestrations_atomic: std::sync::atomic::AtomicI64,
+        active_orchestrations_atomic: Arc<std::sync::atomic::AtomicI64>,
     }
 
     impl MetricsProvider {
@@ -772,7 +786,7 @@ mod stub_impl {
                 activity_config_errors_atomic: AtomicU64::new(0),
                 orch_queue_depth_atomic: AtomicU64::new(0),
                 worker_queue_depth_atomic: AtomicU64::new(0),
-                active_orchestrations_atomic: std::sync::atomic::AtomicI64::new(0),
+                active_orchestrations_atomic: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             })
         }
 
