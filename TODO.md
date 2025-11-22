@@ -1,6 +1,8 @@
 ## Duroxide – TODOs
 
 
+- move stress tests to cargo standard "bench"
+- separate execution loops for orchestrations and activities, communicate through channels
 - Port samples from DurableTasks and Temporal to tests/scenarios/
 - Limits everywhere, orch/activity names, input/output event sizes, history sizes etc. 
 - LLM-orchestration/provider
