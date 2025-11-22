@@ -387,6 +387,7 @@ mod otel_impl {
                 activity_config_errors_atomic: AtomicU64::new(0),
                 orch_queue_depth_atomic: AtomicU64::new(0),
                 worker_queue_depth_atomic: AtomicU64::new(0),
+                active_orchestrations_atomic: std::sync::atomic::AtomicI64::new(0),
             })
         }
 
