@@ -182,6 +182,9 @@ mod otel_impl {
         // Queue depth tracking (updated by background task)
         orch_queue_depth_atomic: AtomicU64,
         worker_queue_depth_atomic: AtomicU64,
+        
+        // Active orchestrations tracking (for gauge metrics)
+        active_orchestrations_atomic: std::sync::atomic::AtomicI64,
     }
 
     impl MetricsProvider {
@@ -665,6 +668,27 @@ mod otel_impl {
             )
         }
 
+        // Active orchestrations tracking
+        #[inline]
+        pub fn increment_active_orchestrations(&self) {
+            self.active_orchestrations_atomic.fetch_add(1, Ordering::Relaxed);
+        }
+
+        #[inline]
+        pub fn decrement_active_orchestrations(&self) {
+            self.active_orchestrations_atomic.fetch_sub(1, Ordering::Relaxed);
+        }
+
+        #[inline]
+        pub fn set_active_orchestrations(&self, count: i64) {
+            self.active_orchestrations_atomic.store(count, Ordering::Relaxed);
+        }
+
+        #[inline]
+        pub fn get_active_orchestrations(&self) -> i64 {
+            self.active_orchestrations_atomic.load(Ordering::Relaxed)
+        }
+
         pub fn snapshot(&self) -> MetricsSnapshot {
             MetricsSnapshot {
                 orch_completions: self.orch_completions_atomic.load(Ordering::Relaxed),
@@ -730,6 +754,7 @@ mod stub_impl {
         activity_config_errors_atomic: AtomicU64,
         orch_queue_depth_atomic: AtomicU64,
         worker_queue_depth_atomic: AtomicU64,
+        active_orchestrations_atomic: std::sync::atomic::AtomicI64,
     }
 
     impl MetricsProvider {
@@ -746,6 +771,7 @@ mod stub_impl {
                 activity_config_errors_atomic: AtomicU64::new(0),
                 orch_queue_depth_atomic: AtomicU64::new(0),
                 worker_queue_depth_atomic: AtomicU64::new(0),
+                active_orchestrations_atomic: std::sync::atomic::AtomicI64::new(0),
             })
         }
 
@@ -850,6 +876,27 @@ mod stub_impl {
                 self.orch_queue_depth_atomic.load(Ordering::Relaxed),
                 self.worker_queue_depth_atomic.load(Ordering::Relaxed),
             )
+        }
+
+        // Active orchestrations tracking (stub - same signature as real)
+        #[inline]
+        pub fn increment_active_orchestrations(&self) {
+            self.active_orchestrations_atomic.fetch_add(1, Ordering::Relaxed);
+        }
+
+        #[inline]
+        pub fn decrement_active_orchestrations(&self) {
+            self.active_orchestrations_atomic.fetch_sub(1, Ordering::Relaxed);
+        }
+
+        #[inline]
+        pub fn set_active_orchestrations(&self, count: i64) {
+            self.active_orchestrations_atomic.store(count, Ordering::Relaxed);
+        }
+
+        #[inline]
+        pub fn get_active_orchestrations(&self) -> i64 {
+            self.active_orchestrations_atomic.load(Ordering::Relaxed)
         }
 
         pub fn snapshot(&self) -> MetricsSnapshot {

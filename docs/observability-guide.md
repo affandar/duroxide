@@ -211,6 +211,13 @@ All metrics follow Prometheus naming conventions with `_total` for counters and 
 - **Labels**: `orchestration_name`, `execution_id`
 - **Use**: Verify continue-as-new is working, identify long-running actors
 
+**`duroxide_active_orchestrations`** (Gauge) 🆕
+- **Description**: Current number of orchestration instances that are actively running (not completed/failed)
+- **Value**: Count of orchestrations currently in progress
+- **Use**: Track concurrent orchestrations, detect leaks, capacity planning
+- **Critical**: This is a GAUGE (can increase/decrease), unlike counters that only increase
+- **Note**: Continue-as-new does NOT change this count (orchestration stays active)
+
 #### Activity Execution Metrics
 
 **`duroxide_activity_executions_total`** (Counter)
@@ -486,6 +493,15 @@ by (orchestration_name)
 ```promql
 sum(duroxide_orchestration_completions_total{final_turn_count="50+"})
 by (orchestration_name)
+```
+
+### Currently Active Orchestrations (Gauge)
+```promql
+# Total active right now
+duroxide_active_orchestrations
+
+# Detect orchestration leaks (if this keeps growing, you have a leak)
+increase(duroxide_active_orchestrations[1h]) > 100
 ```
 
 ## Best Practices

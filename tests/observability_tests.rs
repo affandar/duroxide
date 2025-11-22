@@ -821,3 +821,100 @@ async fn test_error_classification_metrics() {
         "orchestration should fail with config error"
     );
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn test_active_orchestrations_gauge() {
+    let options = RuntimeOptions {
+        observability: metrics_observability_config("active-gauge"),
+        ..Default::default()
+    };
+
+    let store = Arc::new(SqliteProvider::new_in_memory().await.unwrap());
+    let activities = ActivityRegistry::builder()
+        .register("SlowActivity", |_ctx: ActivityContext, _input: String| async move {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            Ok("done".to_string())
+        })
+        .build();
+
+    let orchestrations = OrchestrationRegistry::builder()
+        .register("SimpleOrch", |ctx: OrchestrationContext, _input: String| async move {
+            ctx.schedule_activity("SlowActivity", "").into_activity().await
+        })
+        .register("CANOrch", |ctx: OrchestrationContext, input: String| async move {
+            let count: u32 = input.parse().unwrap_or(0);
+            if count < 1 {
+                // Do some work before continuing
+                ctx.schedule_activity("SlowActivity", "").into_activity().await?;
+                ctx.continue_as_new((count + 1).to_string());
+                Ok("continuing".to_string())
+            } else {
+                // Final execution also does work
+                ctx.schedule_activity("SlowActivity", "").into_activity().await?;
+                Ok("done".to_string())
+            }
+        })
+        .build();
+
+    let rt = runtime::Runtime::start_with_options(store.clone(), Arc::new(activities), orchestrations, options).await;
+
+    // Get initial active count (might not be 0 if other tests ran)
+    let initial_active = rt.get_active_orchestrations_count();
+
+    let client = Client::new(store.clone());
+
+    // Start orchestration - should increment
+    client
+        .start_orchestration("active-test-1", "SimpleOrch", "")
+        .await
+        .unwrap();
+    
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let active_after_start = rt.get_active_orchestrations_count();
+    assert!(
+        active_after_start > initial_active,
+        "active count should increase after start: {} -> {}",
+        initial_active,
+        active_after_start
+    );
+
+    // Wait for completion - should decrement
+    let _ = client
+        .wait_for_orchestration("active-test-1", Duration::from_secs(5))
+        .await;
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let active_after_complete = rt.get_active_orchestrations_count();
+    assert_eq!(
+        active_after_complete, initial_active,
+        "active count should return to initial after completion: {} vs {}",
+        active_after_complete, initial_active
+    );
+
+    // Test continue-as-new: Active count should stay elevated during CAN
+    client
+        .start_orchestration("active-test-can", "CANOrch", "0")
+        .await
+        .unwrap();
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let active_during_can = rt.get_active_orchestrations_count();
+    assert!(
+        active_during_can > initial_active,
+        "active count should be elevated during continue-as-new"
+    );
+
+    // Wait for final completion
+    let _ = client
+        .wait_for_orchestration("active-test-can", Duration::from_secs(5))
+        .await;
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let active_final = rt.get_active_orchestrations_count();
+    assert_eq!(
+        active_final, initial_active,
+        "active count should return to initial after CAN completes"
+    );
+
+    rt.shutdown(None).await;
+}

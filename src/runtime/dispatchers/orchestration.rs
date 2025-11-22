@@ -134,6 +134,12 @@ impl Runtime {
                 "client" // Could be suborchestration but we'd need parent context
             };
             self.record_orchestration_start(&workitem_reader.orchestration_name, &version, initiated_by);
+            
+            // Increment active orchestrations gauge ONLY for brand new orchestrations
+            // Do NOT increment for continue-as-new - the orchestration was already active!
+            if history_mgr.full_history().is_empty() && !workitem_reader.is_continue_as_new {
+                self.increment_active_orchestrations();
+            }
         } else if !workitem_reader.completion_messages.is_empty() {
             // Empty orchestration name with completion messages - just warn and skip
             tracing::warn!(instance = %item.instance, "empty effective batch - this should not happen");
@@ -194,6 +200,9 @@ impl Runtime {
                         turn_count,
                         event_count as u64,
                     );
+                    
+                    // Decrement active orchestrations (truly completed)
+                    self.decrement_active_orchestrations();
                 }
                 "Failed" => {
                     // Extract error type from history_delta to determine log level
@@ -274,6 +283,9 @@ impl Runtime {
                         turn_count,
                         event_count as u64,
                     );
+                    
+                    // Decrement active orchestrations (terminal failure)
+                    self.decrement_active_orchestrations();
                 }
                 "ContinuedAsNew" => {
                     tracing::debug!(
@@ -299,6 +311,11 @@ impl Runtime {
                         turn_count,
                         event_count as u64,
                     );
+                    
+                    // NOTE: Do NOT decrement active_orchestrations on continue-as-new!
+                    // The orchestration is still active, just starting a new execution.
+                    // The increment for the new execution will happen when the ContinueAsNew
+                    // message is processed (above in the is_continue_as_new branch).
                 }
                 _ => {}
             }

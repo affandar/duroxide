@@ -284,6 +284,24 @@ impl Runtime {
     }
 
     #[inline]
+    fn increment_active_orchestrations(&self) {
+        if let Some(handle) = &self.observability_handle {
+            if let Some(provider) = handle.metrics_provider() {
+                provider.increment_active_orchestrations();
+            }
+        }
+    }
+
+    #[inline]
+    fn decrement_active_orchestrations(&self) {
+        if let Some(handle) = &self.observability_handle {
+            if let Some(provider) = handle.metrics_provider() {
+                provider.decrement_active_orchestrations();
+            }
+        }
+    }
+
+    #[inline]
     fn record_activity_execution(&self, activity_name: &str, outcome: &str, duration_seconds: f64, retry_attempt: u32) {
         if let Some(handle) = &self.observability_handle {
             if let Some(provider) = handle.metrics_provider() {
@@ -353,6 +371,15 @@ impl Runtime {
         self.observability_handle
             .as_ref()
             .and_then(|handle| handle.metrics_snapshot())
+    }
+
+    /// Get current active orchestrations count (for gauge metric)
+    pub fn get_active_orchestrations_count(&self) -> i64 {
+        self.observability_handle
+            .as_ref()
+            .and_then(|h| h.metrics_provider())
+            .map(|p| p.get_active_orchestrations())
+            .unwrap_or(0)
     }
 
     /// Compute execution metadata from history delta without inspecting event contents.
