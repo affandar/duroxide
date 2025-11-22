@@ -1,5 +1,6 @@
 use crate::Event;
 use std::any::Any;
+use std::time::Duration;
 
 pub mod error;
 pub use error::ProviderError;
@@ -500,7 +501,7 @@ pub enum WorkItem {
 /// ```ignore
 /// struct RedisProvider {
 ///     client: redis::Client,
-///     lock_timeout_ms: u64,
+///     lock_timeout: Duration,
 /// }
 ///
 /// impl Provider for RedisProvider {
@@ -514,7 +515,7 @@ pub enum WorkItem {
 ///         
 ///         // 3. Generate lock token and set expiration
 ///         let lock_token = uuid::Uuid::new_v4().to_string();
-///         self.client.setex(&format!("lock:{lock_token}"), self.lock_timeout_ms, &instance);
+///         self.client.setex(&format!("lock:{lock_token}"), self.lock_timeout.as_secs() as usize, &instance);
 ///         
 ///         Some(OrchestrationItem { instance, history, lock_token, ... })
 ///     }
@@ -809,7 +810,7 @@ pub trait Provider: Any + Send + Sync {
     ///
     /// Only return messages where `visible_at <= now()`:
     /// - Normal messages: visible immediately
-    /// - Delayed messages: `visible_at = now + delay_ms` (used for timer backpressure)
+    /// - Delayed messages: `visible_at = now + delay` (used for timer backpressure)
     ///
     /// # Instance Batching
     ///
@@ -902,7 +903,7 @@ pub trait Provider: Any + Send + Sync {
     /// ```
     async fn fetch_orchestration_item(
         &self,
-        lock_timeout_secs: u64,
+        lock_timeout: Duration,
     ) -> Result<Option<OrchestrationItem>, ProviderError>;
 
     /// Acknowledge successful orchestration processing atomically.
@@ -1139,15 +1140,15 @@ pub trait Provider: Any + Send + Sync {
     /// # Parameters
     ///
     /// * `lock_token` - Token from fetch_orchestration_item()
-    /// * `delay_ms` - Optional delay before messages become visible again
+    /// * `delay` - Optional delay before messages become visible again
     ///   - `None`: immediate retry (visible_at = now)
-    ///   - `Some(ms)`: delayed retry (visible_at = now + ms)
+    ///   - `Some(duration)`: delayed retry (visible_at = now + duration)
     ///
     /// # Implementation Pattern
     ///
     /// ```ignore
-    /// async fn abandon_orchestration_item(lock_token: &str, delay_ms: Option<u64>) -> Result<(), String> {
-    ///     let visible_at = if let Some(delay) = delay_ms {
+    /// async fn abandon_orchestration_item(lock_token: &str, delay: Option<Duration>) -> Result<(), String> {
+    ///     let visible_at = if let Some(delay) = delay {
     ///         now() + delay
     ///     } else {
     ///         now()
@@ -1177,8 +1178,8 @@ pub trait Provider: Any + Send + Sync {
     ///
     /// # Use Cases
     ///
-    /// - Database contention (SQLITE_BUSY) → delay_ms = Some(50) for backoff
-    /// - Orchestration turn failed → delay_ms = None for immediate retry
+    /// - Database contention (SQLITE_BUSY) → delay = Some(Duration::from_millis(50)) for backoff
+    /// - Orchestration turn failed → delay = None for immediate retry
     /// - Runtime shutdown during processing → messages auto-recover when lock expires
     ///
     /// # Error Handling
@@ -1188,7 +1189,11 @@ pub trait Provider: Any + Send + Sync {
     /// state corruption and should be surfaced as errors.
     ///
     /// Return `Err("Invalid lock token")` if the lock token is not found in `instance_locks`.
-    async fn abandon_orchestration_item(&self, _lock_token: &str, _delay_ms: Option<u64>) -> Result<(), ProviderError>;
+    async fn abandon_orchestration_item(
+        &self,
+        _lock_token: &str,
+        _delay: Option<Duration>,
+    ) -> Result<(), ProviderError>;
 
     /// Read the full history for the latest execution of an instance.
     ///
@@ -1340,7 +1345,7 @@ pub trait Provider: Any + Send + Sync {
     /// # Implementation Pattern
     ///
     /// ```ignore
-    /// async fn fetch_work_item(&self, lock_timeout_secs: u64) -> Result<Option<(WorkItem, String)>, ProviderError> {
+    /// async fn fetch_work_item(&self, lock_timeout: Duration) -> Result<Option<(WorkItem, String)>, ProviderError> {
     ///     let mut tx = begin_transaction()
     ///         .map_err(|e| ProviderError::retryable("fetch_work_item", e))?;
     ///     
@@ -1353,8 +1358,10 @@ pub trait Provider: Any + Send + Sync {
     ///     
     ///     // Lock it
     ///     let lock_token = generate_uuid();
+    ///     // lock_timeout is a Duration - convert to milliseconds for storage
+    ///     let locked_until_ms = now_ms + lock_timeout.as_millis();
     ///     UPDATE worker_queue
-    ///     SET lock_token = ?, locked_until = now() + 30s
+    ///     SET lock_token = ?, locked_until = locked_until_ms
     ///     WHERE id = ?;
     ///     
     ///     let item = serde_json::from_str(&row.work_item)
@@ -1374,7 +1381,7 @@ pub trait Provider: Any + Send + Sync {
     /// # Concurrency
     ///
     /// Called continuously by work dispatcher. Must prevent double-dequeue.
-    async fn fetch_work_item(&self, lock_timeout_secs: u64) -> Result<Option<(WorkItem, String)>, ProviderError>;
+    async fn fetch_work_item(&self, lock_timeout: Duration) -> Result<Option<(WorkItem, String)>, ProviderError>;
 
     /// Acknowledge successful processing of a work item.
     ///
@@ -1424,11 +1431,11 @@ pub trait Provider: Any + Send + Sync {
     /// # Parameters
     ///
     /// * `token` - Lock token from fetch_work_item
-    /// * `extend_secs` - Duration in seconds to extend lock from now (typically worker_lock_timeout_secs)
+    /// * `extend_for` - [`Duration`] to extend lock from now (typically matches `RuntimeOptions::worker_lock_timeout`)
     ///
     /// # Returns
     ///
-    /// * `Ok(())` - Lock renewed successfully, timeout extended to now() + extend_secs
+    /// * `Ok(())` - Lock renewed successfully, timeout extended to now() + `extend_for`
     /// * `Err(ProviderError)` - Lock renewal failed:
     ///   - Permanent error: Token invalid, expired, or already acked
     ///   - Retryable error: Database connection issues
@@ -1436,8 +1443,8 @@ pub trait Provider: Any + Send + Sync {
     /// # Implementation Pattern
     ///
     /// ```ignore
-    /// async fn renew_work_item_lock(&self, token: &str, extend_secs: u64) -> Result<(), ProviderError> {
-    ///     let locked_until = now() + (extend_secs * 1000);  // milliseconds
+    /// async fn renew_work_item_lock(&self, token: &str, extend_for: Duration) -> Result<(), ProviderError> {
+    ///     let locked_until = now() + extend_for;
     ///     
     ///     let result = UPDATE worker_queue
     ///                  SET locked_until = ?locked_until
@@ -1462,7 +1469,7 @@ pub trait Provider: Any + Send + Sync {
     /// Called by worker dispatcher's background renewal task:
     /// - Renewal interval calculated based on lock timeout
     /// - Stops automatically when activity completes or worker crashes
-    async fn renew_work_item_lock(&self, token: &str, extend_secs: u64) -> Result<(), ProviderError>;
+    async fn renew_work_item_lock(&self, token: &str, extend_for: Duration) -> Result<(), ProviderError>;
 
     // ===== Optional Management APIs =====
     // These have default implementations and are primarily used for testing/debugging.
@@ -1481,19 +1488,19 @@ pub trait Provider: Any + Send + Sync {
     /// # Parameters
     ///
     /// * `item` - WorkItem to enqueue (usually ExternalRaised or CancelInstance)
-    /// * `delay_ms` - Optional visibility delay
+    /// * `delay` - Optional visibility delay
     ///   - `None`: Immediate visibility (common case)
-    ///   - `Some(ms)`: Delay visibility by ms milliseconds
+    ///   - `Some(duration)`: Delay visibility by the specified duration
     ///   - Providers without delayed_visibility support can ignore this (treat as None)
     ///
     /// # Implementation Pattern
     ///
     /// ```ignore
-    /// async fn enqueue_for_orchestrator(&self, item: WorkItem, delay_ms: Option<u64>) -> Result<(), String> {
+    /// async fn enqueue_for_orchestrator(&self, item: WorkItem, delay: Option<Duration>) -> Result<(), String> {
     ///     let instance = extract_instance(&item);  // See WorkItem docs for extraction
     ///     let work_json = serde_json::to_string(&item)?;
     ///     
-    ///     let visible_at = if let Some(delay) = delay_ms {
+    ///     let visible_at = if let Some(delay) = delay {
     ///         now() + delay
     ///     } else {
     ///         now()
@@ -1522,7 +1529,7 @@ pub trait Provider: Any + Send + Sync {
     /// # Error Handling
     ///
     /// Return Err if storage fails. Return Ok if item was enqueued successfully.
-    async fn enqueue_for_orchestrator(&self, _item: WorkItem, _delay_ms: Option<u64>) -> Result<(), ProviderError>;
+    async fn enqueue_for_orchestrator(&self, _item: WorkItem, _delay: Option<Duration>) -> Result<(), ProviderError>;
 
     // - Add timeout parameter to fetch_work_item and dequeue_timer_peek_lock
     // - Add refresh_worker_lock(token, extend_ms) and refresh_timer_lock(token, extend_ms)

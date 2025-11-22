@@ -7,6 +7,7 @@ use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
 use duroxide::{ActivityContext, Client, Event, OrchestrationContext, OrchestrationRegistry, OrchestrationStatus};
 use std::sync::Arc as StdArc;
+use std::time::Duration;
 mod common;
 
 #[tokio::test]
@@ -79,7 +80,7 @@ async fn code_swap_triggers_nondeterminism() {
                 id: 999,       // Use a high ID that won't conflict with orchestration timers
                 fire_at_ms: 0, // Fire immediately
             },
-            Some(0),
+            Some(Duration::ZERO),
         )
         .await;
 

@@ -2,6 +2,7 @@ use duroxide::providers::sqlite::SqliteProvider;
 use duroxide::providers::{ExecutionMetadata, Provider, ProviderAdmin, WorkItem};
 use duroxide::{ActivityContext, Event};
 use std::sync::Arc;
+use std::time::Duration;
 use tempfile::TempDir;
 use tokio::task::JoinSet;
 
@@ -58,7 +59,7 @@ async fn test_sqlite_provider_basic() {
 
     // 2. Fetch orchestration item
     let item = store
-        .fetch_orchestration_item(30)
+        .fetch_orchestration_item(Duration::from_secs(30))
         .await
         .expect("Should have work")
         .expect("Should have item");
@@ -132,7 +133,11 @@ async fn test_execution_status_completed() {
         .unwrap();
 
     // Fetch and ack with completion
-    let item = store.fetch_orchestration_item(30).await.unwrap().unwrap();
+    let item = store
+        .fetch_orchestration_item(Duration::from_secs(30))
+        .await
+        .unwrap()
+        .unwrap();
     let metadata = ExecutionMetadata {
         status: Some("Completed".to_string()),
         output: Some("Success".to_string()),
@@ -192,7 +197,11 @@ async fn test_execution_status_failed() {
         .unwrap();
 
     // Fetch and ack with failure
-    let item = store.fetch_orchestration_item(30).await.unwrap().unwrap();
+    let item = store
+        .fetch_orchestration_item(Duration::from_secs(30))
+        .await
+        .unwrap()
+        .unwrap();
     let metadata = ExecutionMetadata {
         status: Some("Failed".to_string()),
         output: Some("Error occurred".to_string()),
@@ -282,7 +291,7 @@ async fn test_sqlite_basic_persistence() {
 
         // Dequeue and verify items
         let (item1, token1) = store
-            .fetch_work_item(30)
+            .fetch_work_item(Duration::from_secs(30))
             .await
             .expect("Fetch should succeed")
             .expect("Should have first item");
@@ -295,7 +304,7 @@ async fn test_sqlite_basic_persistence() {
         }
 
         let (item2, token2) = store
-            .fetch_work_item(30)
+            .fetch_work_item(Duration::from_secs(30))
             .await
             .expect("Fetch should succeed")
             .expect("Should have second item");
@@ -334,7 +343,7 @@ async fn test_sqlite_basic_persistence() {
             .expect("Failed to ack worker 2");
 
         // Verify no more items
-        assert!(store.fetch_work_item(30).await.unwrap().is_none());
+        assert!(store.fetch_work_item(Duration::from_secs(30)).await.unwrap().is_none());
 
         println!("Phase 2: Successfully verified persistence");
     }
@@ -393,7 +402,7 @@ async fn test_sqlite_file_concurrent_access() {
 
     // Fetch and ack all orchestration items to create instances
     let mut acked_count = 0;
-    while let Some(item) = store.fetch_orchestration_item(30).await.unwrap() {
+    while let Some(item) = store.fetch_orchestration_item(Duration::from_secs(30)).await.unwrap() {
         store
             .ack_orchestration_item(
                 &item.lock_token,
@@ -547,7 +556,7 @@ async fn test_sqlite_provider_transactional() {
         .expect("Failed to enqueue");
 
     let item = store
-        .fetch_orchestration_item(30)
+        .fetch_orchestration_item(Duration::from_secs(30))
         .await
         .expect("Should have work")
         .expect("Should have item");
@@ -625,7 +634,7 @@ async fn test_sqlite_provider_transactional() {
 
     // Verify all worker items enqueued
     let mut worker_count = 0;
-    while let Some((work_item, token)) = store.fetch_work_item(30).await.unwrap() {
+    while let Some((work_item, token)) = store.fetch_work_item(Duration::from_secs(30)).await.unwrap() {
         worker_count += 1;
         // Extract id from work item for completion
         let id = match work_item {
@@ -672,7 +681,7 @@ async fn test_sqlite_provider_timer_queue() {
         .expect("Failed to enqueue");
 
     let item = store
-        .fetch_orchestration_item(30)
+        .fetch_orchestration_item(Duration::from_secs(30))
         .await
         .expect("Should have work")
         .expect("Should have item");
@@ -720,7 +729,11 @@ async fn test_execution_status_running() {
     store.enqueue_for_orchestrator(start_work, None).await.unwrap();
 
     // Fetch and process
-    let item = store.fetch_orchestration_item(30).await.unwrap().unwrap();
+    let item = store
+        .fetch_orchestration_item(Duration::from_secs(30))
+        .await
+        .unwrap()
+        .unwrap();
 
     // Simulate orchestration running (not completed)
     let history_delta = vec![
@@ -779,7 +792,11 @@ async fn test_execution_output_captured_on_continue_as_new() {
     store.enqueue_for_orchestrator(start_work, None).await.unwrap();
 
     // Fetch and process
-    let item = store.fetch_orchestration_item(30).await.unwrap().unwrap();
+    let item = store
+        .fetch_orchestration_item(Duration::from_secs(30))
+        .await
+        .unwrap()
+        .unwrap();
 
     // Simulate orchestration continuing as new
     let history_delta = vec![

@@ -29,6 +29,7 @@
 #[cfg(feature = "provider-test")]
 use crate::providers::Provider;
 use std::sync::Arc;
+use std::time::Duration;
 
 /// Trait for creating providers in tests.
 ///
@@ -44,7 +45,7 @@ pub trait ProviderFactory: Send + Sync {
     /// file-based provider with a unique temporary path.
     async fn create_provider(&self) -> Arc<dyn Provider>;
 
-    /// Get the lock timeout in milliseconds configured for this provider.
+    /// Get the lock timeout configured for this provider.
     ///
     /// This is used by validation tests to determine sleep durations
     /// when waiting for lock expiration. The timeout should match
@@ -52,9 +53,9 @@ pub trait ProviderFactory: Send + Sync {
     ///
     /// # Default Implementation
     ///
-    /// Returns 1000ms (1 second) if not overridden.
-    fn lock_timeout_ms(&self) -> u64 {
-        1000
+    /// Returns 1 second if not overridden.
+    fn lock_timeout(&self) -> Duration {
+        Duration::from_millis(1000)
     }
 }
 

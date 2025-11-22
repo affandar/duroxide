@@ -1,6 +1,7 @@
 use duroxide::providers::Provider;
 use futures::future::{Either, select};
 use std::sync::Arc;
+use std::time::Duration;
 mod common;
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self, RuntimeOptions};
@@ -10,7 +11,7 @@ use std::sync::Arc as StdArc;
 // Helper for timing-sensitive race tests
 fn fast_runtime_options() -> RuntimeOptions {
     RuntimeOptions {
-        dispatcher_idle_sleep_ms: 10,
+        dispatcher_idle_sleep: Duration::from_millis(10),
         ..Default::default()
     }
 }

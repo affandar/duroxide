@@ -4,6 +4,7 @@ use crate::{Event, OrchestrationContext};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tracing::warn;
@@ -14,15 +15,17 @@ use tracing::warn;
 ///
 /// ```rust,no_run
 /// # use duroxide::runtime::{RuntimeOptions, ObservabilityConfig, LogFormat};
+/// # use std::time::Duration;
 /// let options = RuntimeOptions {
 ///     orchestration_concurrency: 4,
 ///     worker_concurrency: 8,
-///     orchestrator_lock_timeout_secs: 10,         // 10 seconds for orchestration turns
-///     worker_lock_timeout_secs: 300,              // 5 minutes for long-running activities
-///     worker_lock_renewal_buffer_secs: 30,        // Renew 30s before expiration (at 270s)
+///     dispatcher_idle_sleep: Duration::from_millis(25),     // Polling backoff when queues idle
+///     orchestrator_lock_timeout: Duration::from_secs(10),   // Orchestration turns retry after 10s
+///     worker_lock_timeout: Duration::from_secs(300),        // Activities retry after 5 minutes
+///     worker_lock_renewal_buffer: Duration::from_secs(30),  // Renew worker locks 30s early
 ///     observability: ObservabilityConfig {
 ///         log_format: LogFormat::Compact,
-///         log_level: "info".to_string(),
+///        log_level: "info".to_string(),
 ///         ..Default::default()
 ///     },
 ///     ..Default::default()
@@ -30,11 +33,11 @@ use tracing::warn;
 /// ```
 #[derive(Debug, Clone)]
 pub struct RuntimeOptions {
-    /// Polling interval in milliseconds when dispatcher queues are empty.
+    /// Polling interval when dispatcher queues are empty.
     /// Lower values = more responsive, higher CPU usage when idle.
     /// Higher values = less CPU usage, higher latency when idle.
     /// Default: 100ms (10 Hz)
-    pub dispatcher_idle_sleep_ms: u64,
+    pub dispatcher_idle_sleep: Duration,
 
     /// Number of concurrent orchestration workers.
     /// Each worker can process one orchestration turn at a time.
@@ -48,27 +51,27 @@ pub struct RuntimeOptions {
     /// Default: 2
     pub worker_concurrency: usize,
 
-    /// Lock timeout in seconds for orchestrator queue items.
+    /// Lock timeout for orchestrator queue items.
     /// When an orchestration message is dequeued, it's locked for this duration.
     /// Orchestration turns are typically fast (milliseconds), so a shorter timeout is appropriate.
     /// If processing doesn't complete within this time, the lock expires and the message is retried.
     /// Default: 5 seconds
-    pub orchestrator_lock_timeout_secs: u64,
+    pub orchestrator_lock_timeout: Duration,
 
-    /// Lock timeout in seconds for worker queue items (activities).
+    /// Lock timeout for worker queue items (activities).
     /// When an activity is dequeued, it's locked for this duration.
     /// Activities can be long-running (minutes), so a longer timeout is appropriate.
     /// If processing doesn't complete within this time, the lock expires and the activity is retried.
     /// Higher values = more tolerance for long-running activities.
     /// Lower values = faster retry on failures, but may timeout legitimate work.
     /// Default: 30 seconds
-    pub worker_lock_timeout_secs: u64,
+    pub worker_lock_timeout: Duration,
 
-    /// Buffer time in seconds before lock expiration to trigger renewal.
+    /// Buffer time before lock expiration to trigger renewal.
     ///
     /// Lock renewal strategy:
-    /// - If worker_lock_timeout_secs >= 15: Renew at (timeout - buffer_secs)
-    /// - If worker_lock_timeout_secs < 15: Renew at 0.5 * timeout (buffer_secs ignored)
+    /// - If `worker_lock_timeout` ≥ 15s: renew at (`timeout - worker_lock_renewal_buffer`)
+    /// - If `worker_lock_timeout` < 15s: renew at 0.5 × timeout (buffer ignored)
     ///
     /// Example with default values (timeout=30s, buffer=5s):
     /// - Initial lock: expires at T+30s
@@ -81,7 +84,7 @@ pub struct RuntimeOptions {
     /// - Second renewal: at T+10s (15*0.5), extends to T+20s
     ///
     /// Default: 5 seconds
-    pub worker_lock_renewal_buffer_secs: u64,
+    pub worker_lock_renewal_buffer: Duration,
 
     /// Observability configuration for metrics and logging.
     /// Requires the `observability` feature flag for full functionality.
@@ -92,12 +95,12 @@ pub struct RuntimeOptions {
 impl Default for RuntimeOptions {
     fn default() -> Self {
         Self {
-            dispatcher_idle_sleep_ms: 100,
+            dispatcher_idle_sleep: Duration::from_millis(100),
             orchestration_concurrency: 2,
             worker_concurrency: 2,
-            orchestrator_lock_timeout_secs: 5,
-            worker_lock_timeout_secs: 30,
-            worker_lock_renewal_buffer_secs: 5,
+            orchestrator_lock_timeout: Duration::from_secs(5),
+            worker_lock_timeout: Duration::from_secs(30),
+            worker_lock_renewal_buffer: Duration::from_secs(5),
             observability: ObservabilityConfig::default(),
         }
     }
@@ -466,7 +469,7 @@ impl Runtime {
     ///
     /// * `timeout_ms` - How long to wait for graceful shutdown:
     ///   - `None`: Default 1000ms
-    ///   - `Some(0)`: Immediate abort
+    ///   - `Some(Duration::ZERO)`: Immediate abort
     ///   - `Some(ms)`: Wait specified milliseconds
     pub async fn shutdown(self: Arc<Self>, timeout_ms: Option<u64>) {
         let timeout_ms = timeout_ms.unwrap_or(1000);

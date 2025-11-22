@@ -11,15 +11,18 @@ use duroxide::{Client, OrchestrationContext, OrchestrationRegistry};
 async fn default_lock_timeouts() {
     let options = RuntimeOptions::default();
     assert_eq!(
-        options.orchestrator_lock_timeout_secs, 5,
+        options.orchestrator_lock_timeout,
+        Duration::from_secs(5),
         "Default orchestrator lock timeout should be 5 seconds"
     );
     assert_eq!(
-        options.worker_lock_timeout_secs, 30,
+        options.worker_lock_timeout,
+        Duration::from_secs(30),
         "Default worker lock timeout should be 30 seconds"
     );
     assert_eq!(
-        options.worker_lock_renewal_buffer_secs, 5,
+        options.worker_lock_renewal_buffer,
+        Duration::from_secs(5),
         "Default worker lock renewal buffer should be 5 seconds"
     );
 }
@@ -28,20 +31,20 @@ async fn default_lock_timeouts() {
 #[tokio::test]
 async fn custom_lock_timeout_configuration() {
     let options = RuntimeOptions {
-        orchestrator_lock_timeout_secs: 10,
-        worker_lock_timeout_secs: 120,
+        orchestrator_lock_timeout: Duration::from_secs(10),
+        worker_lock_timeout: Duration::from_secs(120),
         ..Default::default()
     };
-    assert_eq!(options.orchestrator_lock_timeout_secs, 10);
-    assert_eq!(options.worker_lock_timeout_secs, 120);
+    assert_eq!(options.orchestrator_lock_timeout, Duration::from_secs(10));
+    assert_eq!(options.worker_lock_timeout, Duration::from_secs(120));
 
     let short_options = RuntimeOptions {
-        orchestrator_lock_timeout_secs: 1,
-        worker_lock_timeout_secs: 5,
+        orchestrator_lock_timeout: Duration::from_secs(1),
+        worker_lock_timeout: Duration::from_secs(5),
         ..Default::default()
     };
-    assert_eq!(short_options.orchestrator_lock_timeout_secs, 1);
-    assert_eq!(short_options.worker_lock_timeout_secs, 5);
+    assert_eq!(short_options.orchestrator_lock_timeout, Duration::from_secs(1));
+    assert_eq!(short_options.worker_lock_timeout, Duration::from_secs(5));
 }
 
 /// Test that orchestration with custom timeout completes successfully
@@ -65,8 +68,8 @@ async fn orchestration_with_custom_timeout_completes() {
 
     // Use custom lock timeouts (60 seconds - plenty of time)
     let options = RuntimeOptions {
-        orchestrator_lock_timeout_secs: 60,
-        worker_lock_timeout_secs: 60,
+        orchestrator_lock_timeout: Duration::from_secs(60),
+        worker_lock_timeout: Duration::from_secs(60),
         ..Default::default()
     };
 
@@ -119,8 +122,8 @@ async fn very_short_lock_timeout_works() {
 
     // Use very short lock timeouts (1 second)
     let options = RuntimeOptions {
-        orchestrator_lock_timeout_secs: 1,
-        worker_lock_timeout_secs: 1,
+        orchestrator_lock_timeout: Duration::from_secs(1),
+        worker_lock_timeout: Duration::from_secs(1),
         ..Default::default()
     };
 
@@ -177,8 +180,8 @@ async fn long_running_activity_with_lock_renewal() {
     // Use 3 second worker lock timeout with 1 second buffer
     // Lock should be renewed at 2s, 4s (ensuring activity completes)
     let options = RuntimeOptions {
-        worker_lock_timeout_secs: 3,
-        worker_lock_renewal_buffer_secs: 1,
+        worker_lock_timeout: Duration::from_secs(3),
+        worker_lock_renewal_buffer: Duration::from_secs(1),
         ..Default::default()
     };
 
@@ -233,8 +236,8 @@ async fn short_activity_no_renewal_needed() {
 
     // 3 second timeout, renewal at 2s - activity finishes well before
     let options = RuntimeOptions {
-        worker_lock_timeout_secs: 3,
-        worker_lock_renewal_buffer_secs: 1,
+        worker_lock_timeout: Duration::from_secs(3),
+        worker_lock_renewal_buffer: Duration::from_secs(1),
         ..Default::default()
     };
 
@@ -291,8 +294,8 @@ async fn lock_renewal_short_timeout() {
     // Second renewal at T+2s extends to T+4s
     // Activity finishes at T+3s, well within renewed lock
     let options = RuntimeOptions {
-        worker_lock_timeout_secs: 2,
-        worker_lock_renewal_buffer_secs: 1, // Ignored for short timeouts
+        worker_lock_timeout: Duration::from_secs(2),
+        worker_lock_renewal_buffer: Duration::from_secs(1), // Ignored for short timeouts
         ..Default::default()
     };
 
@@ -348,8 +351,8 @@ async fn custom_renewal_buffer() {
     // Renewal at T+3s (5-2), extends to T+8s
     // Activity finishes at T+6s, within renewed lock
     let options = RuntimeOptions {
-        worker_lock_timeout_secs: 5,
-        worker_lock_renewal_buffer_secs: 2, // Custom buffer
+        worker_lock_timeout: Duration::from_secs(5),
+        worker_lock_renewal_buffer: Duration::from_secs(2), // Custom buffer
         ..Default::default()
     };
 
@@ -412,8 +415,8 @@ async fn concurrent_activities_with_renewal() {
     // 3 second timeout with 1 second buffer
     // Each activity should have its lock renewed independently
     let options = RuntimeOptions {
-        worker_lock_timeout_secs: 3,
-        worker_lock_renewal_buffer_secs: 1,
+        worker_lock_timeout: Duration::from_secs(3),
+        worker_lock_renewal_buffer: Duration::from_secs(1),
         worker_concurrency: 3, // Allow 3 parallel activities
         ..Default::default()
     };

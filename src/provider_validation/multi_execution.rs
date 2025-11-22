@@ -1,6 +1,7 @@
 use crate::provider_validation::{Event, ExecutionMetadata};
 use crate::provider_validations::ProviderFactory;
 use crate::providers::WorkItem;
+use std::time::Duration;
 
 /// Helper to create a start item for an instance with specific execution_id
 fn start_item_with_execution(instance: &str, execution_id: u64) -> WorkItem {
@@ -26,7 +27,11 @@ pub async fn test_execution_isolation<F: ProviderFactory>(factory: &F) {
         .enqueue_for_orchestrator(start_item_with_execution("instance-A", 1), None)
         .await
         .unwrap();
-    let item1 = provider.fetch_orchestration_item(30).await.unwrap().unwrap();
+    let item1 = provider
+        .fetch_orchestration_item(Duration::from_secs(30))
+        .await
+        .unwrap()
+        .unwrap();
     provider
         .ack_orchestration_item(
             &item1.lock_token,
@@ -63,7 +68,11 @@ pub async fn test_execution_isolation<F: ProviderFactory>(factory: &F) {
         .enqueue_for_orchestrator(start_item_with_execution("instance-A", 2), None)
         .await
         .unwrap();
-    let item2 = provider.fetch_orchestration_item(30).await.unwrap().unwrap();
+    let item2 = provider
+        .fetch_orchestration_item(Duration::from_secs(30))
+        .await
+        .unwrap()
+        .unwrap();
     provider
         .ack_orchestration_item(
             &item2.lock_token,
@@ -121,7 +130,11 @@ pub async fn test_latest_execution_detection<F: ProviderFactory>(factory: &F) {
         .enqueue_for_orchestrator(start_item_with_execution("instance-A", 1), None)
         .await
         .unwrap();
-    let item1 = provider.fetch_orchestration_item(30).await.unwrap().unwrap();
+    let item1 = provider
+        .fetch_orchestration_item(Duration::from_secs(30))
+        .await
+        .unwrap()
+        .unwrap();
     provider
         .ack_orchestration_item(
             &item1.lock_token,
@@ -144,7 +157,11 @@ pub async fn test_latest_execution_detection<F: ProviderFactory>(factory: &F) {
         .enqueue_for_orchestrator(start_item_with_execution("instance-A", 2), None)
         .await
         .unwrap();
-    let item2 = provider.fetch_orchestration_item(30).await.unwrap().unwrap();
+    let item2 = provider
+        .fetch_orchestration_item(Duration::from_secs(30))
+        .await
+        .unwrap()
+        .unwrap();
     provider
         .ack_orchestration_item(
             &item2.lock_token,
@@ -193,7 +210,11 @@ pub async fn test_execution_id_sequencing<F: ProviderFactory>(factory: &F) {
         .enqueue_for_orchestrator(start_item_with_execution("instance-A", 1), None)
         .await
         .unwrap();
-    let item1 = provider.fetch_orchestration_item(30).await.unwrap().unwrap();
+    let item1 = provider
+        .fetch_orchestration_item(Duration::from_secs(30))
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(item1.execution_id, 1);
 
     // Complete execution 1 with proper metadata
@@ -225,7 +246,11 @@ pub async fn test_execution_id_sequencing<F: ProviderFactory>(factory: &F) {
         .enqueue_for_orchestrator(start_item_with_execution("instance-A", 2), None)
         .await
         .unwrap();
-    let item2 = provider.fetch_orchestration_item(30).await.unwrap().unwrap();
+    let item2 = provider
+        .fetch_orchestration_item(Duration::from_secs(30))
+        .await
+        .unwrap()
+        .unwrap();
     // The fetched item will have execution_id = 1 (from instance's current_execution_id)
     // We need to ack with execution_id = 2 to create the new execution
     provider
@@ -256,7 +281,11 @@ pub async fn test_execution_id_sequencing<F: ProviderFactory>(factory: &F) {
         .enqueue_for_orchestrator(start_item_with_execution("instance-A", 3), None)
         .await
         .unwrap();
-    let item3 = provider.fetch_orchestration_item(30).await.unwrap().unwrap();
+    let item3 = provider
+        .fetch_orchestration_item(Duration::from_secs(30))
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(item3.execution_id, 2, "Current execution should be 2");
     tracing::info!("✓ Test passed: execution ID sequencing verified");
 }
@@ -272,7 +301,11 @@ pub async fn test_continue_as_new_creates_new_execution<F: ProviderFactory>(fact
         .enqueue_for_orchestrator(start_item_with_execution("instance-A", 1), None)
         .await
         .unwrap();
-    let item1 = provider.fetch_orchestration_item(30).await.unwrap().unwrap();
+    let item1 = provider
+        .fetch_orchestration_item(Duration::from_secs(30))
+        .await
+        .unwrap()
+        .unwrap();
     provider
         .ack_orchestration_item(
             &item1.lock_token,
@@ -306,7 +339,11 @@ pub async fn test_continue_as_new_creates_new_execution<F: ProviderFactory>(fact
         .await
         .unwrap();
 
-    let item2 = provider.fetch_orchestration_item(30).await.unwrap().unwrap();
+    let item2 = provider
+        .fetch_orchestration_item(Duration::from_secs(30))
+        .await
+        .unwrap()
+        .unwrap();
     // The fetched item will have execution_id = 1 (from instance's current_execution_id)
     // We need to ack with execution_id = 2 to create the new execution
     provider
@@ -329,7 +366,10 @@ pub async fn test_continue_as_new_creates_new_execution<F: ProviderFactory>(fact
         .unwrap();
 
     // Now the instance should have current_execution_id = 2
-    let item3 = provider.fetch_orchestration_item(30).await.unwrap();
+    let item3 = provider
+        .fetch_orchestration_item(Duration::from_secs(30))
+        .await
+        .unwrap();
     if let Some(item) = item3 {
         assert_eq!(item.execution_id, 2, "Continue-as-new should create execution 2");
     }
@@ -348,7 +388,11 @@ pub async fn test_execution_history_persistence<F: ProviderFactory>(factory: &F)
             .enqueue_for_orchestrator(start_item_with_execution("instance-A", exec_id), None)
             .await
             .unwrap();
-        let item = provider.fetch_orchestration_item(30).await.unwrap().unwrap();
+        let item = provider
+            .fetch_orchestration_item(Duration::from_secs(30))
+            .await
+            .unwrap()
+            .unwrap();
         provider
             .ack_orchestration_item(
                 &item.lock_token,

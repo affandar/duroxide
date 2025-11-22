@@ -52,7 +52,7 @@ impl SqliteProvider {
     async fn enqueue_orchestrator_work_with_delay(
         &self,
         item: WorkItem,
-        delay_ms: Option<u64>,
+        delay: Option<Duration>,
     ) -> Result<(), ProviderError> {
         let work_item = serde_json::to_string(&item)
             .map_err(|e| ProviderError::permanent("enqueue_for_orchestrator", format!("Serialization error: {}", e)))?;
@@ -74,11 +74,18 @@ impl SqliteProvider {
                 ));
             }
         };
-        tracing::debug!(target: "duroxide::providers::sqlite", ?item, instance=%instance, delay_ms=?delay_ms, "enqueue_orchestrator_work_with_delay");
+        tracing::debug!(
+            target: "duroxide::providers::sqlite",
+            ?item,
+            instance = %instance,
+            delay = ?delay,
+            "enqueue_orchestrator_work_with_delay"
+        );
 
         // Calculate visible_at based on delay
-        let visible_at = if let Some(delay_ms) = delay_ms {
-            Self::now_millis() + delay_ms as i64
+        let visible_at = if let Some(delay) = delay {
+            let delay_ms = delay.as_millis().min(i64::MAX as u128) as i64;
+            Self::now_millis().saturating_add(delay_ms)
         } else {
             Self::now_millis()
         };
@@ -488,7 +495,7 @@ impl SqliteProvider {
 impl Provider for SqliteProvider {
     async fn fetch_orchestration_item(
         &self,
-        lock_timeout_secs: u64,
+        lock_timeout: Duration,
     ) -> Result<Option<OrchestrationItem>, ProviderError> {
         let mut tx = self
             .pool
@@ -539,7 +546,7 @@ impl Provider for SqliteProvider {
         tracing::debug!(target="duroxide::providers::sqlite", instance_id=%instance_id, "Selected available instance");
 
         let lock_token = Self::generate_lock_token();
-        let locked_until = Self::timestamp_after(Duration::from_secs(lock_timeout_secs));
+        let locked_until = Self::timestamp_after(lock_timeout);
 
         // Atomically acquire instance lock (INSERT OR REPLACE to handle expired locks)
         let lock_result = sqlx::query(
@@ -1098,8 +1105,8 @@ impl Provider for SqliteProvider {
         Ok(())
     }
 
-    async fn enqueue_for_orchestrator(&self, item: WorkItem, delay_ms: Option<u64>) -> Result<(), ProviderError> {
-        self.enqueue_orchestrator_work_with_delay(item, delay_ms).await
+    async fn enqueue_for_orchestrator(&self, item: WorkItem, delay: Option<Duration>) -> Result<(), ProviderError> {
+        self.enqueue_orchestrator_work_with_delay(item, delay).await
     }
 
     async fn enqueue_for_worker(&self, item: WorkItem) -> Result<(), ProviderError> {
@@ -1116,7 +1123,7 @@ impl Provider for SqliteProvider {
         Ok(())
     }
 
-    async fn fetch_work_item(&self, lock_timeout_secs: u64) -> Result<Option<(WorkItem, String)>, ProviderError> {
+    async fn fetch_work_item(&self, lock_timeout: Duration) -> Result<Option<(WorkItem, String)>, ProviderError> {
         let mut tx = self
             .pool
             .begin()
@@ -1124,7 +1131,7 @@ impl Provider for SqliteProvider {
             .map_err(|e| Self::sqlx_to_provider_error("fetch_work_item", e))?;
 
         let lock_token = Self::generate_lock_token();
-        let locked_until = Self::timestamp_after(Duration::from_secs(lock_timeout_secs));
+        let locked_until = Self::timestamp_after(lock_timeout);
 
         tracing::debug!(
             "Worker dequeue: looking for available items, locked_until will be {}",
@@ -1234,14 +1241,14 @@ impl Provider for SqliteProvider {
         Ok(())
     }
 
-    async fn renew_work_item_lock(&self, token: &str, extend_secs: u64) -> Result<(), ProviderError> {
-        let locked_until = Self::timestamp_after(Duration::from_secs(extend_secs));
+    async fn renew_work_item_lock(&self, token: &str, extend_for: Duration) -> Result<(), ProviderError> {
+        let locked_until = Self::timestamp_after(extend_for);
         let now_ms = Self::now_millis();
 
         tracing::trace!(
             target: "duroxide::providers::sqlite",
             lock_token = %token,
-            extend_secs = %extend_secs,
+            extend_secs = %extend_for.as_secs(),
             locked_until = %locked_until,
             "Renewing work item lock"
         );
@@ -1277,7 +1284,7 @@ impl Provider for SqliteProvider {
         Ok(())
     }
 
-    async fn abandon_orchestration_item(&self, lock_token: &str, delay_ms: Option<u64>) -> Result<(), ProviderError> {
+    async fn abandon_orchestration_item(&self, lock_token: &str, delay: Option<Duration>) -> Result<(), ProviderError> {
         // Get instance_id from lock before removing it
         let instance_id: Option<String> =
             sqlx::query_scalar("SELECT instance_id FROM instance_locks WHERE lock_token = ?")
@@ -1302,9 +1309,10 @@ impl Provider for SqliteProvider {
 
         // Optionally delay messages for this instance
         if let Some(instance_id) = instance_id
-            && let Some(delay_ms) = delay_ms
+            && let Some(delay) = delay
         {
-            let visible_at = Self::now_millis() + delay_ms as i64;
+            let delay_ms = delay.as_millis().min(i64::MAX as u128) as i64;
+            let visible_at = Self::now_millis().saturating_add(delay_ms);
             let _ =
                 sqlx::query("UPDATE orchestrator_queue SET visible_at = ? WHERE instance_id = ? AND visible_at <= ?")
                     .bind(visible_at)
@@ -1668,7 +1676,7 @@ mod tests {
             .await?;
 
         let item = provider
-            .fetch_orchestration_item(30)
+            .fetch_orchestration_item(Duration::from_secs(30))
             .await?
             .ok_or_else(|| "Failed to fetch orchestration item".to_string())?;
 
@@ -1725,7 +1733,7 @@ mod tests {
 
         // Fetch it
         let orch_item = store
-            .fetch_orchestration_item(30)
+            .fetch_orchestration_item(Duration::from_secs(30))
             .await
             .expect("fetch should succeed")
             .expect("item should be present");
@@ -1756,7 +1764,13 @@ mod tests {
             .unwrap();
 
         // Verify no more work
-        assert!(store.fetch_orchestration_item(30).await.unwrap().is_none());
+        assert!(
+            store
+                .fetch_orchestration_item(Duration::from_secs(30))
+                .await
+                .unwrap()
+                .is_none()
+        );
 
         // Verify history was saved
         let history = store.read("test-1").await.unwrap_or_default();
@@ -1766,6 +1780,7 @@ mod tests {
     #[tokio::test]
     async fn test_transactional_atomicity() {
         let store = create_test_store().await;
+        let lock_timeout = Duration::from_secs(30);
 
         // Start an orchestration
         let start = WorkItem::StartOrchestration {
@@ -1780,7 +1795,11 @@ mod tests {
 
         store.enqueue_for_orchestrator(start, None).await.unwrap();
 
-        let orch_item = store.fetch_orchestration_item(30).await.unwrap().unwrap();
+        let orch_item = store
+            .fetch_orchestration_item(Duration::from_secs(30))
+            .await
+            .unwrap()
+            .unwrap();
 
         // Ack with multiple outputs - all should be atomic
         let history_delta = vec![
@@ -1840,14 +1859,14 @@ mod tests {
         assert_eq!(history.len(), 3); // Start + 2 schedules
 
         // Verify worker items enqueued
-        let (work1, token1) = store.fetch_work_item(30).await.unwrap().unwrap();
-        let (work2, token2) = store.fetch_work_item(30).await.unwrap().unwrap();
+        let (work1, token1) = store.fetch_work_item(lock_timeout).await.unwrap().unwrap();
+        let (work2, token2) = store.fetch_work_item(lock_timeout).await.unwrap().unwrap();
 
         assert!(matches!(work1, WorkItem::ActivityExecute { id: 1, .. }));
         assert!(matches!(work2, WorkItem::ActivityExecute { id: 2, .. }));
 
         // No more work
-        assert!(store.fetch_work_item(30).await.unwrap().is_none());
+        assert!(store.fetch_work_item(lock_timeout).await.unwrap().is_none());
 
         // Ack the work with dummy completions
         store
@@ -1880,7 +1899,7 @@ mod tests {
     async fn test_lock_expiration() {
         // Create store - lock timeout is now passed to fetch methods
         let store = create_test_store().await;
-        let short_lock_timeout_secs = 2; // 2 seconds
+        let short_lock_timeout = Duration::from_secs(2); // 2 seconds
 
         // Enqueue work
         let item = WorkItem::StartOrchestration {
@@ -1897,7 +1916,7 @@ mod tests {
 
         // Fetch but don't ack (with short timeout)
         let orch_item = store
-            .fetch_orchestration_item(short_lock_timeout_secs)
+            .fetch_orchestration_item(short_lock_timeout)
             .await
             .unwrap()
             .unwrap();
@@ -1906,7 +1925,7 @@ mod tests {
         // Should not be available immediately
         assert!(
             store
-                .fetch_orchestration_item(short_lock_timeout_secs)
+                .fetch_orchestration_item(short_lock_timeout)
                 .await
                 .unwrap()
                 .is_none()
@@ -1916,7 +1935,7 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(2100)).await;
 
         // Should be available again
-        let redelivered = store.fetch_orchestration_item(short_lock_timeout_secs).await.unwrap();
+        let redelivered = store.fetch_orchestration_item(short_lock_timeout).await.unwrap();
         if redelivered.is_none() {
             // Debug: check the state of the queue
             eprintln!("No redelivery after lock expiry. Checking queue state...");
@@ -2027,6 +2046,7 @@ mod tests {
     #[tokio::test]
     async fn test_abandon_orchestration_item() {
         let store = create_test_store().await;
+        let lock_timeout = Duration::from_secs(30);
 
         // Enqueue an orchestration
         let item = WorkItem::StartOrchestration {
@@ -2041,17 +2061,17 @@ mod tests {
         store.enqueue_for_orchestrator(item, None).await.unwrap();
 
         // Fetch and lock it
-        let orch_item = store.fetch_orchestration_item(30).await.unwrap().unwrap();
+        let orch_item = store.fetch_orchestration_item(lock_timeout).await.unwrap().unwrap();
         let lock_token = orch_item.lock_token.clone();
 
         // Verify it's locked (can't fetch again)
-        assert!(store.fetch_orchestration_item(30).await.unwrap().is_none());
+        assert!(store.fetch_orchestration_item(lock_timeout).await.unwrap().is_none());
 
         // Abandon it
         store.abandon_orchestration_item(&lock_token, None).await.unwrap();
 
         // Should be able to fetch again
-        let orch_item2 = store.fetch_orchestration_item(30).await.unwrap().unwrap();
+        let orch_item2 = store.fetch_orchestration_item(lock_timeout).await.unwrap().unwrap();
         assert_eq!(orch_item2.instance, "test-abandon");
         assert_ne!(orch_item2.lock_token, lock_token); // Different lock token
     }
@@ -2081,6 +2101,7 @@ mod tests {
     #[tokio::test]
     async fn test_worker_queue_operations() {
         let store = create_test_store().await;
+        let lock_timeout = Duration::from_secs(30);
 
         // Enqueue activity work
         let work_item = WorkItem::ActivityExecute {
@@ -2094,11 +2115,11 @@ mod tests {
         store.enqueue_for_worker(work_item.clone()).await.unwrap();
 
         // Dequeue it
-        let (dequeued, token) = store.fetch_work_item(30).await.unwrap().unwrap();
+        let (dequeued, token) = store.fetch_work_item(lock_timeout).await.unwrap().unwrap();
         assert!(matches!(dequeued, WorkItem::ActivityExecute { name, .. } if name == "TestActivity"));
 
         // Can't dequeue again while locked
-        assert!(store.fetch_work_item(30).await.unwrap().is_none());
+        assert!(store.fetch_work_item(lock_timeout).await.unwrap().is_none());
 
         // Ack it with completion
         store
@@ -2115,12 +2136,13 @@ mod tests {
             .unwrap();
 
         // Queue should be empty
-        assert!(store.fetch_work_item(30).await.unwrap().is_none());
+        assert!(store.fetch_work_item(lock_timeout).await.unwrap().is_none());
     }
 
     #[tokio::test]
     async fn test_delayed_visibility() {
         let store = create_test_store().await;
+        let lock_timeout = Duration::from_secs(30);
 
         // Test 1: Enqueue item with delayed visibility
         let delayed_item = WorkItem::StartOrchestration {
@@ -2135,18 +2157,18 @@ mod tests {
 
         // Enqueue with 2 second delay
         store
-            .enqueue_orchestrator_work_with_delay(delayed_item.clone(), Some(2000))
+            .enqueue_orchestrator_work_with_delay(delayed_item.clone(), Some(Duration::from_secs(2)))
             .await
             .unwrap();
 
         // Should not be visible immediately
-        assert!(store.fetch_orchestration_item(30).await.unwrap().is_none());
+        assert!(store.fetch_orchestration_item(lock_timeout).await.unwrap().is_none());
 
         // Wait for delay to pass
         tokio::time::sleep(std::time::Duration::from_millis(2100)).await;
 
         // Should be visible now
-        let item = store.fetch_orchestration_item(30).await.unwrap().unwrap();
+        let item = store.fetch_orchestration_item(lock_timeout).await.unwrap().unwrap();
         assert_eq!(item.instance, "test-delayed");
 
         // Ack it with proper metadata to create instance
@@ -2179,7 +2201,7 @@ mod tests {
         };
 
         store.enqueue_for_orchestrator(start_item, None).await.unwrap();
-        let orch_item = store.fetch_orchestration_item(30).await.unwrap().unwrap();
+        let orch_item = store.fetch_orchestration_item(lock_timeout).await.unwrap().unwrap();
         store
             .ack_orchestration_item(
                 &orch_item.lock_token,
@@ -2209,18 +2231,18 @@ mod tests {
 
         // Enqueue with 2 second delay
         store
-            .enqueue_for_orchestrator(timer_fired.clone(), Some(2000))
+            .enqueue_for_orchestrator(timer_fired.clone(), Some(Duration::from_secs(2)))
             .await
             .unwrap();
 
         // TimerFired should not be visible immediately
-        assert!(store.fetch_orchestration_item(30).await.unwrap().is_none());
+        assert!(store.fetch_orchestration_item(lock_timeout).await.unwrap().is_none());
 
         // Wait for timer to be visible
         tokio::time::sleep(std::time::Duration::from_millis(2100)).await;
 
         // TimerFired should be visible now
-        let timer_item = store.fetch_orchestration_item(30).await.unwrap().unwrap();
+        let timer_item = store.fetch_orchestration_item(lock_timeout).await.unwrap().unwrap();
         assert_eq!(timer_item.instance, "test-timer-delayed");
         assert_eq!(timer_item.messages.len(), 1);
         assert!(matches!(timer_item.messages[0], WorkItem::TimerFired { .. }));
@@ -2229,6 +2251,7 @@ mod tests {
     #[tokio::test]
     async fn test_abandon_with_delay() {
         let store = create_test_store().await;
+        let lock_timeout = Duration::from_secs(30);
 
         // Enqueue item
         let item = WorkItem::StartOrchestration {
@@ -2244,26 +2267,30 @@ mod tests {
         store.enqueue_for_orchestrator(item, None).await.unwrap();
 
         // Fetch and lock it
-        let orch_item = store.fetch_orchestration_item(30).await.unwrap().unwrap();
+        let orch_item = store.fetch_orchestration_item(lock_timeout).await.unwrap().unwrap();
         let lock_token = orch_item.lock_token.clone();
 
         // Abandon with 2 second delay
-        store.abandon_orchestration_item(&lock_token, Some(2000)).await.unwrap();
+        store
+            .abandon_orchestration_item(&lock_token, Some(Duration::from_secs(2)))
+            .await
+            .unwrap();
 
         // Should not be visible immediately
-        assert!(store.fetch_orchestration_item(30).await.unwrap().is_none());
+        assert!(store.fetch_orchestration_item(lock_timeout).await.unwrap().is_none());
 
         // Wait for delay
         tokio::time::sleep(std::time::Duration::from_millis(2100)).await;
 
         // Should be visible again
-        let item2 = store.fetch_orchestration_item(30).await.unwrap().unwrap();
+        let item2 = store.fetch_orchestration_item(lock_timeout).await.unwrap().unwrap();
         assert_eq!(item2.instance, "test-abandon-delay");
     }
 
     #[tokio::test]
     async fn test_timer_queue_operations() {
         let store = create_test_store().await;
+        let lock_timeout = Duration::from_secs(30);
 
         // With timer queue removed, timers are now handled via orchestrator queue
         // First create an instance to establish the context
@@ -2277,7 +2304,7 @@ mod tests {
             execution_id: 1,
         };
         store.enqueue_for_orchestrator(start_item, None).await.unwrap();
-        let orch_item = store.fetch_orchestration_item(30).await.unwrap().unwrap();
+        let orch_item = store.fetch_orchestration_item(lock_timeout).await.unwrap().unwrap();
         store
             .ack_orchestration_item(
                 &orch_item.lock_token,
@@ -2312,10 +2339,13 @@ mod tests {
         };
 
         // Enqueue with delayed visibility via orchestrator queue
-        store.enqueue_for_orchestrator(future_timer, Some(60000)).await.unwrap();
+        store
+            .enqueue_for_orchestrator(future_timer, Some(Duration::from_secs(60)))
+            .await
+            .unwrap();
 
         // Should not dequeue immediately (future visible_at)
-        assert!(store.fetch_orchestration_item(30).await.unwrap().is_none());
+        assert!(store.fetch_orchestration_item(lock_timeout).await.unwrap().is_none());
 
         // Enqueue a timer that should fire immediately (no delay)
         let past_timer = WorkItem::TimerFired {
@@ -2328,7 +2358,7 @@ mod tests {
         store.enqueue_for_orchestrator(past_timer, None).await.unwrap();
 
         // Should dequeue the past timer
-        let item = store.fetch_orchestration_item(30).await.unwrap().unwrap();
+        let item = store.fetch_orchestration_item(lock_timeout).await.unwrap().unwrap();
         assert_eq!(item.instance, "test-timer");
 
         // Verify it's the TimerFired work item

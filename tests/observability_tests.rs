@@ -11,6 +11,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tracing::field::{Field, Visit};
 use tracing::{Dispatch, Event as TracingEvent, Level, Subscriber, dispatcher};
 use tracing_subscriber::filter::LevelFilter;
@@ -125,7 +126,7 @@ impl FailingProvider {
 impl Provider for FailingProvider {
     async fn fetch_orchestration_item(
         &self,
-        _lock_timeout_secs: u64,
+        _lock_timeout: Duration,
     ) -> Result<Option<OrchestrationItem>, ProviderError> {
         if self.fail_next_fetch_orchestration_item.swap(false, Ordering::SeqCst) {
             // Simulate transient infrastructure failure (e.g., database connection issue)
@@ -134,7 +135,7 @@ impl Provider for FailingProvider {
                 "simulated transient infrastructure failure",
             ))
         } else {
-            self.inner.fetch_orchestration_item(30).await
+            self.inner.fetch_orchestration_item(Duration::from_secs(30)).await
         }
     }
 
@@ -188,8 +189,8 @@ impl Provider for FailingProvider {
         }
     }
 
-    async fn abandon_orchestration_item(&self, lock_token: &str, delay_ms: Option<u64>) -> Result<(), ProviderError> {
-        self.inner.abandon_orchestration_item(lock_token, delay_ms).await
+    async fn abandon_orchestration_item(&self, lock_token: &str, delay: Option<Duration>) -> Result<(), ProviderError> {
+        self.inner.abandon_orchestration_item(lock_token, delay).await
     }
 
     async fn read(&self, instance: &str) -> Result<Vec<Event>, ProviderError> {
@@ -215,8 +216,8 @@ impl Provider for FailingProvider {
         self.inner.enqueue_for_worker(item).await
     }
 
-    async fn fetch_work_item(&self, lock_timeout_secs: u64) -> Result<Option<(WorkItem, String)>, ProviderError> {
-        self.inner.fetch_work_item(lock_timeout_secs).await
+    async fn fetch_work_item(&self, lock_timeout: Duration) -> Result<Option<(WorkItem, String)>, ProviderError> {
+        self.inner.fetch_work_item(lock_timeout).await
     }
 
     async fn ack_work_item(&self, token: &str, completion: WorkItem) -> Result<(), ProviderError> {
@@ -231,12 +232,12 @@ impl Provider for FailingProvider {
         }
     }
 
-    async fn renew_work_item_lock(&self, token: &str, extend_secs: u64) -> Result<(), ProviderError> {
-        self.inner.renew_work_item_lock(token, extend_secs).await
+    async fn renew_work_item_lock(&self, token: &str, extend_for: Duration) -> Result<(), ProviderError> {
+        self.inner.renew_work_item_lock(token, extend_for).await
     }
 
-    async fn enqueue_for_orchestrator(&self, item: WorkItem, delay_ms: Option<u64>) -> Result<(), ProviderError> {
-        self.inner.enqueue_for_orchestrator(item, delay_ms).await
+    async fn enqueue_for_orchestrator(&self, item: WorkItem, delay: Option<Duration>) -> Result<(), ProviderError> {
+        self.inner.enqueue_for_orchestrator(item, delay).await
     }
 
     fn as_management_capability(&self) -> Option<&dyn ProviderAdmin> {
@@ -578,14 +579,14 @@ async fn test_fetch_orchestration_item_fault_injection() {
     failing_provider.fail_next_fetch_orchestration_item();
 
     // Attempt to fetch - should return error
-    let result = provider_trait.fetch_orchestration_item(30).await;
+    let result = provider_trait.fetch_orchestration_item(Duration::from_secs(30)).await;
     assert!(result.is_err());
     let err = result.unwrap_err();
     assert!(err.is_retryable());
     assert!(err.message.contains("simulated transient infrastructure failure"));
 
     // Disable fault injection - should succeed now
-    let result = provider_trait.fetch_orchestration_item(30).await;
+    let result = provider_trait.fetch_orchestration_item(Duration::from_secs(30)).await;
     assert!(result.is_ok());
     let item = result.unwrap();
     assert!(item.is_some());

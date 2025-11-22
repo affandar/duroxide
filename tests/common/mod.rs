@@ -118,7 +118,7 @@ pub async fn test_create_execution(
 
     // Fetch to get lock token
     let item = provider
-        .fetch_orchestration_item(30)
+        .fetch_orchestration_item(Duration::from_secs(30))
         .await
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "Failed to fetch orchestration item".to_string())?;

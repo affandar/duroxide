@@ -1,6 +1,7 @@
 use crate::provider_validation::{Event, ExecutionMetadata, start_item};
 use crate::provider_validations::ProviderFactory;
 use crate::providers::WorkItem;
+use std::time::Duration;
 
 /// Test: Instance Creation via Metadata
 /// Goal: Provider should create instances via ack_orchestration_item metadata, not on enqueue.
@@ -15,7 +16,11 @@ pub async fn test_instance_creation_via_metadata<F: ProviderFactory>(factory: &F
         .unwrap();
 
     // Fetch work item - instance doesn't exist yet, should extract from work item
-    let item = provider.fetch_orchestration_item(30).await.unwrap().unwrap();
+    let item = provider
+        .fetch_orchestration_item(Duration::from_secs(30))
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(item.instance, "instance-A");
     assert_eq!(item.orchestration_name, "TestOrch");
     // Version may be None or extracted from work item - that's OK
@@ -54,7 +59,11 @@ pub async fn test_instance_creation_via_metadata<F: ProviderFactory>(factory: &F
         .enqueue_for_orchestrator(start_item("instance-A"), None)
         .await
         .unwrap();
-    let item2 = provider.fetch_orchestration_item(30).await.unwrap().unwrap();
+    let item2 = provider
+        .fetch_orchestration_item(Duration::from_secs(30))
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(item2.instance, "instance-A");
     assert_eq!(item2.orchestration_name, "TestOrch");
     assert_eq!(item2.version, "2.0.0"); // Version from metadata, not work item
@@ -94,7 +103,10 @@ pub async fn test_no_instance_creation_on_enqueue<F: ProviderFactory>(factory: &
     // The key test is that fetch_orchestration_item works without instance existing
 
     // Fetch should work even though instance doesn't exist
-    let item = provider.fetch_orchestration_item(30).await.unwrap();
+    let item = provider
+        .fetch_orchestration_item(Duration::from_secs(30))
+        .await
+        .unwrap();
     assert!(
         item.is_some(),
         "Should be able to fetch work item even if instance doesn't exist"
@@ -149,7 +161,11 @@ pub async fn test_null_version_handling<F: ProviderFactory>(factory: &F) {
     provider.enqueue_for_orchestrator(start, None).await.unwrap();
 
     // Fetch work item - should handle None version
-    let item = provider.fetch_orchestration_item(30).await.unwrap().unwrap();
+    let item = provider
+        .fetch_orchestration_item(Duration::from_secs(30))
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(item.instance, "instance-C");
 
     // Ack with metadata that has version - should set version
@@ -183,7 +199,11 @@ pub async fn test_null_version_handling<F: ProviderFactory>(factory: &F) {
         .enqueue_for_orchestrator(start_item("instance-C"), None)
         .await
         .unwrap();
-    let item2 = provider.fetch_orchestration_item(30).await.unwrap().unwrap();
+    let item2 = provider
+        .fetch_orchestration_item(Duration::from_secs(30))
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(item2.version, "3.0.0"); // Version from metadata
 
     // Clean up
@@ -213,7 +233,11 @@ pub async fn test_sub_orchestration_instance_creation<F: ProviderFactory>(factor
         .enqueue_for_orchestrator(start_item("parent-instance"), None)
         .await
         .unwrap();
-    let parent_item = provider.fetch_orchestration_item(30).await.unwrap().unwrap();
+    let parent_item = provider
+        .fetch_orchestration_item(Duration::from_secs(30))
+        .await
+        .unwrap()
+        .unwrap();
     provider
         .ack_orchestration_item(
             &parent_item.lock_token,
@@ -247,7 +271,11 @@ pub async fn test_sub_orchestration_instance_creation<F: ProviderFactory>(factor
 
     // Child instance should NOT exist yet (not created on enqueue)
     // Fetch child work item - should work without instance existing
-    let child_item = provider.fetch_orchestration_item(30).await.unwrap().unwrap();
+    let child_item = provider
+        .fetch_orchestration_item(Duration::from_secs(30))
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(child_item.instance, "parent-instance::child-instance");
     assert_eq!(child_item.orchestration_name, "ChildOrch");
 
@@ -291,7 +319,11 @@ pub async fn test_sub_orchestration_instance_creation<F: ProviderFactory>(factor
         )
         .await
         .unwrap();
-    let child_item2 = provider.fetch_orchestration_item(30).await.unwrap().unwrap();
+    let child_item2 = provider
+        .fetch_orchestration_item(Duration::from_secs(30))
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(child_item2.instance, "parent-instance::child-instance");
     assert_eq!(child_item2.version, "1.5.0"); // Version from metadata
 

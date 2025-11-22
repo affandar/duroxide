@@ -3,6 +3,7 @@ use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
 use duroxide::{ActivityContext, Event, OrchestrationContext, OrchestrationRegistry};
 mod common;
+use std::time::Duration;
 
 #[tokio::test]
 async fn cancel_parent_down_propagates_to_child() {
@@ -31,7 +32,7 @@ async fn cancel_parent_down_propagates_to_child() {
 
     // Use faster polling for cancellation timing test
     let options = runtime::RuntimeOptions {
-        dispatcher_idle_sleep_ms: 10,
+        dispatcher_idle_sleep: Duration::from_millis(10),
         ..Default::default()
     };
     let rt = runtime::Runtime::start_with_options(

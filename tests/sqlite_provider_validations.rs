@@ -65,10 +65,11 @@ mod tests {
         test_worker_queue_fifo_ordering,
     };
     use duroxide::providers::Provider;
-use duroxide::providers::sqlite::SqliteProvider;
+    use duroxide::providers::sqlite::SqliteProvider;
     use std::sync::Arc;
+    use std::time::Duration;
 
-    const TEST_LOCK_TIMEOUT_MS: u64 = 1000;
+    const TEST_LOCK_TIMEOUT: Duration = Duration::from_millis(1000);
 
     struct SqliteTestFactory;
 
@@ -79,8 +80,8 @@ use duroxide::providers::sqlite::SqliteProvider;
             Arc::new(SqliteProvider::new_in_memory().await.unwrap())
         }
 
-        fn lock_timeout_ms(&self) -> u64 {
-            TEST_LOCK_TIMEOUT_MS
+        fn lock_timeout(&self) -> Duration {
+            TEST_LOCK_TIMEOUT
         }
     }
 

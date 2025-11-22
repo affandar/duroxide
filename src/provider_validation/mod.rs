@@ -24,6 +24,8 @@ pub mod queue_semantics;
 use crate::INITIAL_EXECUTION_ID;
 #[cfg(feature = "provider-test")]
 use crate::providers::WorkItem;
+#[cfg(feature = "provider-test")]
+use std::time::Duration;
 
 /// Re-export common types for use in test modules
 #[cfg(feature = "provider-test")]
@@ -54,7 +56,7 @@ pub(crate) async fn create_instance(provider: &dyn crate::providers::Provider, i
         .map_err(|e| e.to_string())?;
 
     let item = provider
-        .fetch_orchestration_item(30)
+        .fetch_orchestration_item(Duration::from_secs(30))
         .await
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "Failed to fetch orchestration item".to_string())?;

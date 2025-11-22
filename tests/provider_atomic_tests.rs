@@ -2,6 +2,7 @@ use duroxide::Event;
 use duroxide::providers::sqlite::SqliteProvider;
 use duroxide::providers::{ExecutionMetadata, Provider, WorkItem};
 use std::sync::Arc;
+use std::time::Duration;
 
 mod common;
 use common::test_create_execution;
@@ -48,7 +49,11 @@ async fn test_ignore_work_after_terminal_event() {
         .unwrap();
 
     // Fetch orchestration item - runtime would bail and just ack
-    let item = store.fetch_orchestration_item(30).await.unwrap().unwrap();
+    let item = store
+        .fetch_orchestration_item(Duration::from_secs(30))
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(item.instance, instance);
     assert_eq!(item.messages.len(), 1);
 
@@ -66,7 +71,13 @@ async fn test_ignore_work_after_terminal_event() {
     .unwrap();
 
     // Queue should now be empty
-    assert!(store.fetch_orchestration_item(30).await.unwrap().is_none());
+    assert!(
+        store
+            .fetch_orchestration_item(Duration::from_secs(30))
+            .await
+            .unwrap()
+            .is_none()
+    );
 
     // History should remain unchanged (no new events)
     let hist = store.read(instance).await.unwrap_or_default();
@@ -99,7 +110,11 @@ async fn test_fetch_orchestration_item_new_instance() {
         .unwrap();
 
     // Fetch orchestration item
-    let item = store.fetch_orchestration_item(30).await.unwrap().unwrap();
+    let item = store
+        .fetch_orchestration_item(Duration::from_secs(30))
+        .await
+        .unwrap()
+        .unwrap();
 
     assert_eq!(item.instance, "test-instance");
     assert_eq!(item.orchestration_name, "TestOrch");
@@ -162,7 +177,11 @@ async fn test_fetch_orchestration_item_existing_instance() {
         .unwrap();
 
     // Fetch orchestration item
-    let item = store.fetch_orchestration_item(30).await.unwrap().unwrap();
+    let item = store
+        .fetch_orchestration_item(Duration::from_secs(30))
+        .await
+        .unwrap()
+        .unwrap();
 
     assert_eq!(item.instance, "test-instance");
     assert_eq!(item.orchestration_name, "TestOrch");
@@ -185,7 +204,7 @@ async fn test_fetch_orchestration_item_no_work() {
     let store: Arc<SqliteProvider> = Arc::new(SqliteProvider::new(&db_url, None).await.unwrap());
 
     // No work items
-    let item = store.fetch_orchestration_item(30).await.unwrap();
+    let item = store.fetch_orchestration_item(Duration::from_secs(30)).await.unwrap();
     assert!(item.is_none());
 }
 
@@ -215,7 +234,11 @@ async fn test_ack_orchestration_item_atomic() {
         .unwrap();
 
     // Fetch and get lock token
-    let item = store.fetch_orchestration_item(30).await.unwrap().unwrap();
+    let item = store
+        .fetch_orchestration_item(Duration::from_secs(30))
+        .await
+        .unwrap()
+        .unwrap();
     let lock_token = item.lock_token.clone();
 
     // Prepare updates
@@ -264,11 +287,17 @@ async fn test_ack_orchestration_item_atomic() {
     assert!(matches!(&history[1], Event::ActivityScheduled { .. }));
 
     // Verify worker item was enqueued
-    let (worker_item, _) = store.fetch_work_item(30).await.unwrap().unwrap();
+    let (worker_item, _) = store.fetch_work_item(Duration::from_secs(30)).await.unwrap().unwrap();
     assert!(matches!(worker_item, WorkItem::ActivityExecute { .. }));
 
     // Verify orchestrator queue is empty (item was acked)
-    assert!(store.fetch_orchestration_item(30).await.unwrap().is_none());
+    assert!(
+        store
+            .fetch_orchestration_item(Duration::from_secs(30))
+            .await
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[tokio::test]
@@ -314,14 +343,22 @@ async fn test_abandon_orchestration_item() {
         .unwrap();
 
     // Fetch and get lock token
-    let item = store.fetch_orchestration_item(30).await.unwrap().unwrap();
+    let item = store
+        .fetch_orchestration_item(Duration::from_secs(30))
+        .await
+        .unwrap()
+        .unwrap();
     let lock_token = item.lock_token.clone();
 
     // Abandon the item
     store.abandon_orchestration_item(&lock_token, None).await.unwrap();
 
     // Verify item is back in queue
-    let item2 = store.fetch_orchestration_item(30).await.unwrap().unwrap();
+    let item2 = store
+        .fetch_orchestration_item(Duration::from_secs(30))
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(item2.instance, "test-instance");
     assert!(matches!(
         &item2.messages[0],
@@ -355,16 +392,20 @@ async fn test_abandon_orchestration_item_with_delay() {
         .unwrap();
 
     // Fetch and get lock token
-    let item = store.fetch_orchestration_item(30).await.unwrap().unwrap();
+    let lock_timeout = Duration::from_secs(30);
+    let item = store.fetch_orchestration_item(lock_timeout).await.unwrap().unwrap();
     let lock_token = item.lock_token.clone();
 
     // Abandon with delay (sqlite supports delayed visibility)
-    store.abandon_orchestration_item(&lock_token, Some(500)).await.unwrap();
+    store
+        .abandon_orchestration_item(&lock_token, Some(Duration::from_millis(500)))
+        .await
+        .unwrap();
     // Should not be visible immediately
-    assert!(store.fetch_orchestration_item(30).await.unwrap().is_none());
+    assert!(store.fetch_orchestration_item(lock_timeout).await.unwrap().is_none());
     // After delay, it should be visible
     tokio::time::sleep(std::time::Duration::from_millis(600)).await;
-    let item2 = store.fetch_orchestration_item(30).await.unwrap().unwrap();
+    let item2 = store.fetch_orchestration_item(lock_timeout).await.unwrap().unwrap();
     assert_eq!(item2.instance, "test-instance");
 }
 
@@ -405,7 +446,11 @@ async fn test_in_memory_provider_atomic_operations() {
         .unwrap();
 
     // Test fetch
-    let item = store.fetch_orchestration_item(30).await.unwrap().unwrap();
+    let item = store
+        .fetch_orchestration_item(Duration::from_secs(30))
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(item.instance, "test-instance");
     assert_eq!(item.orchestration_name, "TestOrch");
     let lock_token = item.lock_token.clone();
@@ -451,12 +496,20 @@ async fn test_in_memory_provider_atomic_operations() {
         .await
         .unwrap();
 
-    let item2 = store.fetch_orchestration_item(30).await.unwrap().unwrap();
+    let item2 = store
+        .fetch_orchestration_item(Duration::from_secs(30))
+        .await
+        .unwrap()
+        .unwrap();
     let lock_token2 = item2.lock_token.clone();
 
     store.abandon_orchestration_item(&lock_token2, None).await.unwrap();
 
     // Should be available again
-    let item3 = store.fetch_orchestration_item(30).await.unwrap().unwrap();
+    let item3 = store
+        .fetch_orchestration_item(Duration::from_secs(30))
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(item3.instance, "test-instance");
 }

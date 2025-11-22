@@ -8,6 +8,7 @@
 use crate::providers::WorkItem;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 use tokio::task::JoinHandle;
 use tracing::{error, warn};
 
@@ -42,10 +43,7 @@ impl Runtime {
                             break;
                         }
 
-                        let fetch_result = rt
-                            .history_store
-                            .fetch_work_item(rt.options.worker_lock_timeout_secs)
-                            .await;
+                        let fetch_result = rt.history_store.fetch_work_item(rt.options.worker_lock_timeout).await;
 
                         match fetch_result {
                             Ok(Some((item, token))) => match item {
@@ -60,8 +58,8 @@ impl Runtime {
                                     let renewal_handle = spawn_lock_renewal_task(
                                         rt.history_store.clone(),
                                         token.clone(),
-                                        rt.options.worker_lock_timeout_secs,
-                                        rt.options.worker_lock_renewal_buffer_secs,
+                                        rt.options.worker_lock_timeout,
+                                        rt.options.worker_lock_renewal_buffer,
                                         shutdown.clone(),
                                     );
 
@@ -230,16 +228,10 @@ impl Runtime {
                             Err(e) => {
                                 warn!(error = %e, "Worker fetch failed");
                                 // Backoff on error
-                                tokio::time::sleep(std::time::Duration::from_millis(
-                                    rt.options.dispatcher_idle_sleep_ms,
-                                ))
-                                .await;
+                                tokio::time::sleep(rt.options.dispatcher_idle_sleep).await;
                             }
                             Ok(None) => {
-                                tokio::time::sleep(std::time::Duration::from_millis(
-                                    rt.options.dispatcher_idle_sleep_ms,
-                                ))
-                                .await;
+                                tokio::time::sleep(rt.options.dispatcher_idle_sleep).await;
                             }
                         }
                     }
@@ -260,16 +252,21 @@ impl Runtime {
 /// Calculate the renewal interval based on lock timeout and buffer settings.
 ///
 /// # Logic
-/// - If timeout >= 15s: renew at (timeout - buffer_secs)
-/// - If timeout < 15s: renew at 0.5 * timeout (buffer ignored)
+/// - If timeout ≥ 15s: renew at (timeout - buffer)
+/// - If timeout < 15s: renew at 0.5 × timeout (buffer ignored)
 ///
 /// # Returns
-/// Renewal interval in seconds
-fn calculate_renewal_interval(lock_timeout_secs: u64, buffer_secs: u64) -> u64 {
-    if lock_timeout_secs >= 15 {
-        lock_timeout_secs.saturating_sub(buffer_secs).max(1)
+/// Renewal interval as a [`Duration`]
+fn calculate_renewal_interval(lock_timeout: Duration, buffer: Duration) -> Duration {
+    if lock_timeout >= Duration::from_secs(15) {
+        let buffer = buffer.min(lock_timeout);
+        let interval = lock_timeout
+            .checked_sub(buffer)
+            .unwrap_or_else(|| Duration::from_secs(1));
+        interval.max(Duration::from_secs(1))
     } else {
-        ((lock_timeout_secs as f64) * 0.5).ceil() as u64
+        let half = (lock_timeout.as_secs_f64() * 0.5).ceil().max(1.0);
+        Duration::from_secs_f64(half)
     }
 }
 
@@ -293,23 +290,23 @@ fn calculate_renewal_interval(lock_timeout_secs: u64, buffer_secs: u64) -> u64 {
 fn spawn_lock_renewal_task(
     store: Arc<dyn crate::providers::Provider>,
     token: String,
-    lock_timeout_secs: u64,
-    buffer_secs: u64,
+    lock_timeout: Duration,
+    buffer: Duration,
     shutdown: Arc<std::sync::atomic::AtomicBool>,
 ) -> JoinHandle<()> {
-    let renewal_interval_secs = calculate_renewal_interval(lock_timeout_secs, buffer_secs);
+    let renewal_interval = calculate_renewal_interval(lock_timeout, buffer);
 
     tracing::debug!(
         target: "duroxide::runtime::worker",
         lock_token = %token,
-        lock_timeout_secs = %lock_timeout_secs,
-        buffer_secs = %buffer_secs,
-        renewal_interval_secs = %renewal_interval_secs,
+        lock_timeout_secs = %lock_timeout.as_secs(),
+        buffer_secs = %buffer.as_secs(),
+        renewal_interval_secs = %renewal_interval.as_secs(),
         "Spawning lock renewal task"
     );
 
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(renewal_interval_secs));
+        let mut interval = tokio::time::interval(renewal_interval);
         interval.tick().await; // Skip first immediate tick
 
         loop {
@@ -327,11 +324,11 @@ fn spawn_lock_renewal_task(
                     tracing::trace!(
                         target: "duroxide::runtime::worker",
                         lock_token = %token,
-                        extend_secs = %lock_timeout_secs,
+                        extend_secs = %lock_timeout.as_secs(),
                         "Renewing work item lock"
                     );
 
-                    match store.renew_work_item_lock(&token, lock_timeout_secs).await {
+                    match store.renew_work_item_lock(&token, lock_timeout).await {
                         Ok(()) => {
                             tracing::trace!(
                                 target: "duroxide::runtime::worker",

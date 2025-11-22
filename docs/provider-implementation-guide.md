@@ -111,7 +111,7 @@ impl Provider for MyProvider {
         todo!("See detailed docs below")
     }
     
-    async fn abandon_orchestration_item(&self, lock_token: &str, delay_ms: Option<u64>) -> Result<(), ProviderError> {
+    async fn abandon_orchestration_item(&self, lock_token: &str, delay: Option<Duration>) -> Result<(), ProviderError> {
         // Clear lock_token from messages
         // Optionally delay visibility for backoff
         
@@ -149,7 +149,7 @@ impl Provider for MyProvider {
         todo!()
     }
     
-    async fn fetch_work_item(&self, lock_timeout_secs: u64) -> Result<Option<(WorkItem, String)>, ProviderError> {
+    async fn fetch_work_item(&self, lock_timeout: Duration) -> Result<Option<(WorkItem, String)>, ProviderError> {
         // Find next unlocked item
         // Lock it with unique token
         // Return Ok(Some((item, token))) if found, Ok(None) if empty, Err(ProviderError) on storage failure
@@ -167,12 +167,12 @@ impl Provider for MyProvider {
         todo!()
     }
     
-    async fn renew_work_item_lock(&self, token: &str, extend_secs: u64) -> Result<(), ProviderError> {
+    async fn renew_work_item_lock(&self, token: &str, extend_for: Duration) -> Result<(), ProviderError> {
         // Extend lock timeout for in-flight activity
         // Called automatically by worker dispatcher for long-running activities
         // 
         // UPDATE worker_queue
-        // SET locked_until = now() + extend_secs
+        // SET locked_until = now() + extend_for
         // WHERE lock_token = token AND locked_until > now()
         //
         // Return error if token invalid/expired
@@ -182,9 +182,9 @@ impl Provider for MyProvider {
     
     // === REQUIRED: Orchestrator Queue ===
     
-    async fn enqueue_orchestrator_work(&self, item: WorkItem, delay_ms: Option<u64>) -> Result<(), ProviderError> {
+    async fn enqueue_orchestrator_work(&self, item: WorkItem, delay: Option<Duration>) -> Result<(), ProviderError> {
         // Extract instance from item (see WorkItem docs)
-        // Set visible_at = now() + delay_ms.unwrap_or(0)
+        // Set visible_at = now() + delay.unwrap_or(Duration::ZERO)
         // Enqueue work item to orchestrator_queue
         // 
         // ⚠️ CRITICAL: DO NOT create instance here - runtime will create it via ack_orchestration_item metadata
@@ -355,7 +355,8 @@ instance_id = row.instance_id
 // Step 2: Generate lock token and calculate expiration
 lock_token = generate_uuid()
 now_ms = current_timestamp_millis()
-locked_until = now_ms + (lock_timeout_secs * 1000)  // e.g., now + 30000 (30 seconds from runtime)
+// lock_timeout is a Duration - convert to milliseconds for storage
+locked_until = now_ms + lock_timeout.as_millis()  // e.g., now + 30000ms (30s from runtime)
 
 // Step 3: Atomically acquire instance lock
 // This is CRITICAL - must be atomic to prevent race conditions
@@ -457,7 +458,7 @@ RETURN Some(OrchestrationItem {
 - Empty history → Valid (new instance)
 
 **Lock Expiration and Renewal:**
-- Locks must expire after `lock_timeout_secs` (passed from RuntimeOptions: 5s for orchestrator, 30s for worker)
+- Locks must expire after `lock_timeout` (passed from RuntimeOptions: 5s for orchestrator, 30s for worker)
 - Expired locks allow automatic recovery from crashed dispatchers
 - **Worker lock renewal:** Runtime automatically extends locks for long-running activities
   - For timeouts ≥15s: renewal at `(timeout - buffer_secs)`
@@ -864,8 +865,8 @@ IF instance_id IS NULL:
     RETURN Err(ProviderError::permanent("abandon_orchestration_item", "Invalid lock token"))
 
 // Step 2: Clear lock_token from messages (unlock them)
-visible_at = IF delay_ms IS NOT NULL:
-                 current_timestamp() + delay_ms
+visible_at = IF delay IS NOT NULL:
+                 current_timestamp() + delay
              ELSE:
                  current_timestamp()
 
@@ -943,7 +944,7 @@ INSERT INTO worker_queue (work_item, lock_token, locked_until)
 VALUES (work_json, NULL, NULL)
 ```
 
-**fetch_work_item(lock_timeout_secs: u64):**
+**fetch_work_item(lock_timeout: Duration):**
 ```
 BEGIN TRANSACTION
 
@@ -957,7 +958,9 @@ IF row IS NULL:
     RETURN Ok(None)  // Empty queue - not an error
 
 lock_token = generate_uuid()
-locked_until = current_timestamp() + lock_timeout_secs
+// lock_timeout is a Duration - convert to milliseconds for storage
+now_ms = current_timestamp_ms()
+locked_until = now_ms + lock_timeout.as_millis()
 
 UPDATE worker_queue
 SET lock_token = lock_token, locked_until = locked_until
@@ -1052,9 +1055,10 @@ If a worker dequeues an item but crashes before acking (loses the lock token), t
 
 **Implementation:**
 ```
-async fn renew_work_item_lock(token: &str, extend_secs: u64) -> Result<(), ProviderError> {
-    locked_until = current_timestamp_ms() + (extend_secs * 1000)
+async fn renew_work_item_lock(token: &str, extend_for: Duration) -> Result<(), ProviderError> {
+    // extend_for is a Duration - convert to milliseconds for storage
     now_ms = current_timestamp_ms()
+    locked_until = now_ms + extend_for.as_millis()
     
     result = UPDATE worker_queue
              SET locked_until = locked_until
@@ -1224,7 +1228,7 @@ use duroxide::provider_validations::ProviderFactory;
 use std::sync::Arc;
 use std::time::Duration;
 
-const TEST_LOCK_TIMEOUT_MS: u64 = 1000;
+const TEST_LOCK_TIMEOUT: Duration = Duration::from_secs(1);
 
 struct MyProviderFactory;
 
@@ -1235,10 +1239,10 @@ impl ProviderFactory for MyProviderFactory {
         Arc::new(MyProvider::new().await.unwrap())
     }
 
-    fn lock_timeout_ms(&self) -> u64 {
+    fn lock_timeout(&self) -> Duration {
         // Return the lock timeout used in validation tests
         // Note: Actual lock timeout is now configured via RuntimeOptions
-        TEST_LOCK_TIMEOUT_MS
+        TEST_LOCK_TIMEOUT
     }
 }
 ```

@@ -41,15 +41,14 @@ impl Runtime {
 
                         if let Ok(Some(item)) = rt
                             .history_store
-                            .fetch_orchestration_item(rt.options.orchestrator_lock_timeout_secs)
+                            .fetch_orchestration_item(rt.options.orchestrator_lock_timeout)
                             .await
                         {
                             // Process orchestration item atomically
                             // Provider ensures no other worker has this instance locked
                             rt.process_orchestration_item(item, &worker_id).await;
                         } else {
-                            tokio::time::sleep(std::time::Duration::from_millis(rt.options.dispatcher_idle_sleep_ms))
-                                .await;
+                            tokio::time::sleep(rt.options.dispatcher_idle_sleep).await;
                         }
                     }
                 });
@@ -299,12 +298,18 @@ impl Runtime {
                         // Successfully committed failure event
                         warn!(instance = %instance, "Successfully committed orchestration failure event");
                         // Abandon the lock now that failure is committed
-                        drop(self.history_store.abandon_orchestration_item(lock_token, Some(50)));
+                        drop(
+                            self.history_store
+                                .abandon_orchestration_item(lock_token, Some(std::time::Duration::from_millis(50))),
+                        );
                     }
                     Err(e2) => {
                         // Failed to commit failure event - abandon lock
                         warn!(instance = %instance, error = %e2, "Failed to commit failure event, abandoning lock");
-                        drop(self.history_store.abandon_orchestration_item(lock_token, Some(50)));
+                        drop(
+                            self.history_store
+                                .abandon_orchestration_item(lock_token, Some(std::time::Duration::from_millis(50))),
+                        );
                     }
                 }
             }
@@ -438,7 +443,10 @@ impl Runtime {
                     } else {
                         warn!(attempts, error = %e, "Failed to ack_orchestration_item after max retries");
                         // Abandon the item to release lock
-                        drop(self.history_store.abandon_orchestration_item(lock_token, Some(50)));
+                        drop(
+                            self.history_store
+                                .abandon_orchestration_item(lock_token, Some(std::time::Duration::from_millis(50))),
+                        );
                         return Err(e);
                     }
                 }

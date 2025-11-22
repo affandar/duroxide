@@ -168,7 +168,7 @@ Stress testing
 Runtime Configuration
 - Configure lock timeouts, concurrency, and polling via `RuntimeOptions`
 - Worker lock renewal automatically enabled for long-running activities (no configuration needed)
-- Example: `RuntimeOptions { worker_lock_timeout_secs: 300, worker_lock_renewal_buffer_secs: 30, ... }`
+- Example: `RuntimeOptions { worker_lock_timeout: Duration::from_secs(300), worker_lock_renewal_buffer: Duration::from_secs(30), ... }`
 - Lock renewal happens at `(timeout - buffer)` for timeouts ≥15s, or `0.5 * timeout` for shorter timeouts
 - See API docs for `RuntimeOptions` for complete configuration options
 

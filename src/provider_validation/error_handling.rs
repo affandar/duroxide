@@ -30,7 +30,11 @@ pub async fn test_duplicate_event_id_rejection<F: ProviderFactory>(factory: &F) 
         .enqueue_for_orchestrator(start_item("instance-A"), None)
         .await
         .unwrap();
-    let item = provider.fetch_orchestration_item(30).await.unwrap().unwrap();
+    let item = provider
+        .fetch_orchestration_item(Duration::from_secs(30))
+        .await
+        .unwrap()
+        .unwrap();
     let lock_token = item.lock_token.clone();
 
     // Ack with event_id=1
@@ -58,7 +62,11 @@ pub async fn test_duplicate_event_id_rejection<F: ProviderFactory>(factory: &F) 
         .enqueue_for_orchestrator(start_item("instance-A"), None)
         .await
         .unwrap();
-    let item2 = provider.fetch_orchestration_item(30).await.unwrap().unwrap();
+    let item2 = provider
+        .fetch_orchestration_item(Duration::from_secs(30))
+        .await
+        .unwrap()
+        .unwrap();
     let lock_token2 = item2.lock_token.clone();
 
     let result = provider
@@ -108,7 +116,10 @@ pub async fn test_corrupted_serialization_data<F: ProviderFactory>(factory: &F) 
     // This test is primarily about graceful degradation
     // SQLite provider will handle corrupted data by returning None on deserialization failure
     // Test that provider doesn't panic
-    let item = provider.fetch_orchestration_item(30).await.unwrap();
+    let item = provider
+        .fetch_orchestration_item(Duration::from_secs(30))
+        .await
+        .unwrap();
     assert!(item.is_none() || item.is_some(), "Should not panic");
     tracing::info!("✓ Test passed: corrupted data handled gracefully");
 }
@@ -118,22 +129,18 @@ pub async fn test_corrupted_serialization_data<F: ProviderFactory>(factory: &F) 
 pub async fn test_lock_expiration_during_ack<F: ProviderFactory>(factory: &F) {
     tracing::info!("→ Testing error handling: lock expiration during ack");
     let provider = factory.create_provider().await;
-    let lock_timeout_secs = (factory.lock_timeout_ms() + 999) / 1000;
+    let lock_timeout = factory.lock_timeout();
 
     // Create and fetch item
     provider
         .enqueue_for_orchestrator(start_item("instance-A"), None)
         .await
         .unwrap();
-    let item = provider
-        .fetch_orchestration_item(lock_timeout_secs)
-        .await
-        .unwrap()
-        .unwrap();
+    let item = provider.fetch_orchestration_item(lock_timeout).await.unwrap().unwrap();
     let lock_token = item.lock_token.clone();
 
     // Wait for lock to expire
-    tokio::time::sleep(Duration::from_millis(factory.lock_timeout_ms() + 100)).await;
+    tokio::time::sleep(lock_timeout + Duration::from_millis(100)).await;
 
     // Attempt to ack with expired token
     let result = provider

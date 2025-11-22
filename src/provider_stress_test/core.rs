@@ -6,7 +6,7 @@ use crate::runtime::{self, RuntimeOptions};
 use crate::{ActivityContext, Client, OrchestrationContext, OrchestrationRegistry};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tracing::info;
 
 /// Configuration for stress tests
@@ -92,7 +92,7 @@ pub async fn run_stress_test(
 
     // Start runtime with custom options
     let options = RuntimeOptions {
-        dispatcher_idle_sleep_ms: 100,
+        dispatcher_idle_sleep: Duration::from_millis(100),
         orchestration_concurrency: config.orch_concurrency,
         worker_concurrency: config.worker_concurrency,
         ..Default::default()

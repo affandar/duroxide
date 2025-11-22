@@ -5,13 +5,14 @@ use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self, RuntimeOptions};
 use duroxide::{ActivityContext, Client, OrchestrationContext, OrchestrationRegistry};
 use std::sync::Arc;
+use std::time::Duration;
 
 mod common;
 
 // Helper to create fast-polling runtime for management tests (timing-sensitive)
 fn fast_runtime_options() -> RuntimeOptions {
     RuntimeOptions {
-        dispatcher_idle_sleep_ms: 10,
+        dispatcher_idle_sleep: Duration::from_millis(10),
         ..Default::default()
     }
 }

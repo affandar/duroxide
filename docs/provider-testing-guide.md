@@ -356,7 +356,7 @@ use duroxide::provider_validations::{
 use std::sync::Arc;
 use std::time::Duration;
 
-const TEST_LOCK_TIMEOUT_MS: u64 = 1000;
+const TEST_LOCK_TIMEOUT: Duration = Duration::from_secs(1);
 
 struct MyProviderFactory;
 
@@ -367,10 +367,10 @@ impl ProviderFactory for MyProviderFactory {
         Arc::new(MyCustomProvider::new().await?)
     }
 
-    fn lock_timeout_ms(&self) -> u64 {
+    fn lock_timeout(&self) -> Duration {
         // Return the lock timeout configured in your provider
         // This must match the timeout used when creating the provider
-        TEST_LOCK_TIMEOUT_MS
+        TEST_LOCK_TIMEOUT
     }
 }
 
@@ -508,7 +508,7 @@ async fn test_my_provider_worker_queue_fifo_ordering() {
 
 ### Creating a Test Provider Factory
 
-Your factory should create fresh, isolated provider instances for each test. **Importantly, you must implement `lock_timeout_ms()` to return the lock timeout used in validation tests** - this ensures validation tests wait for the correct duration when testing lock expiration behavior. Note that in production, lock timeouts are configured via `RuntimeOptions` (`orchestrator_lock_timeout_secs` and `worker_lock_timeout_secs`), not provider options.
+Your factory should create fresh, isolated provider instances for each test. **Importantly, you must implement `lock_timeout()` to return the lock timeout used in validation tests** - this ensures validation tests wait for the correct duration when testing lock expiration behavior. Note that in production, lock timeouts are configured via `RuntimeOptions` (`orchestrator_lock_timeout` and `worker_lock_timeout`), not provider options.
 
 ```rust
 use duroxide::providers::Provider;
@@ -516,7 +516,7 @@ use duroxide::provider_validations::ProviderFactory;
 use std::sync::Arc;
 use std::time::Duration;
 
-const TEST_LOCK_TIMEOUT_MS: u64 = 1000;
+const TEST_LOCK_TIMEOUT: Duration = Duration::from_secs(1);
 
 struct MyProviderFactory {
     // Keep temp directory alive
@@ -533,22 +533,22 @@ impl ProviderFactory for MyProviderFactory {
         std::fs::File::create(&db_path).unwrap();
         
         let options = MyProviderOptions {
-            lock_timeout: Duration::from_millis(TEST_LOCK_TIMEOUT_MS),
+            lock_timeout: TEST_LOCK_TIMEOUT,
         };
         Arc::new(MyProvider::new(&format!("sqlite:{}", db_path.display()), Some(options)).await?)
     }
 
-    fn lock_timeout_ms(&self) -> u64 {
+    fn lock_timeout(&self) -> Duration {
         // CRITICAL: This must match the lock_timeout configured in create_provider()
         // Validation tests use this value to determine sleep durations when waiting
         // for lock expiration. If this doesn't match your provider's timeout,
         // tests will fail with timing issues.
-        TEST_LOCK_TIMEOUT_MS
+        TEST_LOCK_TIMEOUT
     }
 }
 ```
 
-**Important:** The `lock_timeout_ms()` value should match the timeout you pass to `fetch_orchestration_item()` and `fetch_work_item()` in your tests. In production, lock timeouts are configured via `RuntimeOptions` (`orchestrator_lock_timeout_secs` for orchestrations, `worker_lock_timeout_secs` for activities) and passed to these methods by the runtime dispatchers.
+**Important:** The `lock_timeout()` value should match the timeout you pass to `fetch_orchestration_item()` and `fetch_work_item()` in your tests. In production, lock timeouts are configured via `RuntimeOptions` (`orchestrator_lock_timeout` for orchestrations, `worker_lock_timeout` for activities) and passed to these methods by the runtime dispatchers.
 
 ### Integration with CI/CD
 
