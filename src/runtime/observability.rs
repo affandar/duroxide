@@ -138,47 +138,50 @@ mod otel_impl {
         pub worker_dispatcher_items_fetched: Counter<u64>,
         pub worker_dispatcher_execution_duration: Histogram<u64>,
 
-        // Orchestration execution metrics
-        pub orch_completions: Counter<u64>,
-        pub orch_failures: Counter<u64>,
-        pub orch_infrastructure_errors: Counter<u64>,
-        pub orch_configuration_errors: Counter<u64>,
+        // Orchestration execution metrics (with labels)
+        pub orch_starts_total: Counter<u64>,
+        pub orch_completions_total: Counter<u64>,
+        pub orch_failures_total: Counter<u64>,
+        pub orch_duration_seconds: Histogram<f64>,
         pub orch_history_size_events: Histogram<u64>,
-        pub orch_history_size_bytes: Histogram<u64>,
         pub orch_turns: Histogram<u64>,
 
-        // Provider metrics
-        pub provider_fetch_duration: Histogram<u64>,
-        pub provider_ack_orch_duration: Histogram<u64>,
-        pub provider_ack_work_item_duration: Histogram<u64>,
-        pub provider_dequeue_worker_duration: Histogram<u64>,
-        pub provider_enqueue_orch_duration: Histogram<u64>,
-        pub provider_ack_retries: Counter<u64>,
-        pub provider_infra_errors: Counter<u64>,
+        // Continue-as-new metrics
+        pub orch_continue_as_new_total: Counter<u64>,
 
-        // Activity metrics
-        pub activity_executions: Counter<u64>,
-        pub activity_duration: Histogram<u64>,
-        pub activity_app_errors: Counter<u64>,
-        pub activity_infra_errors: Counter<u64>,
-        pub activity_config_errors: Counter<u64>,
+        // Sub-orchestration metrics
+        pub suborchestration_calls_total: Counter<u64>,
+        pub suborchestration_duration_seconds: Histogram<f64>,
+
+        // Provider metrics
+        pub provider_operation_duration_seconds: Histogram<f64>,
+        pub provider_errors_total: Counter<u64>,
+
+        // Activity metrics (with labels)
+        pub activity_executions_total: Counter<u64>,
+        pub activity_duration_seconds: Histogram<f64>,
+        pub activity_errors_total: Counter<u64>,
 
         // Client metrics
-        pub client_orch_starts: Counter<u64>,
-        pub client_events_raised: Counter<u64>,
-        pub client_cancellations: Counter<u64>,
-        pub client_wait_duration: Histogram<u64>,
+        pub client_orch_starts_total: Counter<u64>,
+        pub client_events_raised_total: Counter<u64>,
+        pub client_cancellations_total: Counter<u64>,
+        pub client_wait_duration_seconds: Histogram<f64>,
 
         // Test-observable counters
-        orch_completions_total: AtomicU64,
-        orch_failures_total: AtomicU64,
-        orch_application_errors_total: AtomicU64,
-        orch_infrastructure_errors_total: AtomicU64,
-        orch_configuration_errors_total: AtomicU64,
-        activity_success_total: AtomicU64,
-        activity_app_errors_total: AtomicU64,
-        activity_infra_errors_total: AtomicU64,
-        activity_config_errors_total: AtomicU64,
+        orch_completions_atomic: AtomicU64,
+        orch_failures_atomic: AtomicU64,
+        orch_application_errors_atomic: AtomicU64,
+        orch_infrastructure_errors_atomic: AtomicU64,
+        orch_configuration_errors_atomic: AtomicU64,
+        activity_success_atomic: AtomicU64,
+        activity_app_errors_atomic: AtomicU64,
+        activity_infra_errors_atomic: AtomicU64,
+        activity_config_errors_atomic: AtomicU64,
+
+        // Queue depth tracking (updated by background task)
+        orch_queue_depth_atomic: AtomicU64,
+        worker_queue_depth_atomic: AtomicU64,
     }
 
     impl MetricsProvider {
@@ -217,7 +220,9 @@ mod otel_impl {
 
             let meter = meter_provider.meter("duroxide");
 
-            // Create all metrics instruments
+            // Create all metrics instruments with Prometheus-compliant names and buckets
+
+            // Dispatcher metrics (internal, keep millisecond precision)
             let orch_dispatcher_items_fetched = meter
                 .u64_counter("duroxide.orchestration.dispatcher.items_fetched")
                 .with_description("Items fetched by orchestration dispatcher")
@@ -238,119 +243,110 @@ mod otel_impl {
                 .with_description("Activity execution duration")
                 .build();
 
-            let orch_completions = meter
-                .u64_counter("duroxide.orchestration.completions")
-                .with_description("Successful orchestration completions")
+            // Orchestration lifecycle metrics (Prometheus-compliant with labels)
+            let orch_starts_total = meter
+                .u64_counter("duroxide_orchestration_starts_total")
+                .with_description("Total orchestrations started")
                 .build();
 
-            let orch_failures = meter
-                .u64_counter("duroxide.orchestration.failures")
-                .with_description("Orchestration failures by error type")
+            let orch_completions_total = meter
+                .u64_counter("duroxide_orchestration_completions_total")
+                .with_description("Orchestrations that completed (successfully or failed)")
                 .build();
 
-            let orch_infrastructure_errors = meter
-                .u64_counter("duroxide.orchestration.infrastructure_errors")
-                .with_description("Infrastructure-level orchestration errors")
+            let orch_failures_total = meter
+                .u64_counter("duroxide_orchestration_failures_total")
+                .with_description("Orchestration failures with detailed error classification")
                 .build();
 
-            let orch_configuration_errors = meter
-                .u64_counter("duroxide.orchestration.configuration_errors")
-                .with_description("Configuration-level orchestration errors")
+            let orch_duration_seconds = meter
+                .f64_histogram("duroxide_orchestration_duration_seconds")
+                .with_description("End-to-end orchestration execution time")
+                .with_boundaries(vec![
+                    0.1, 0.5, 1.0, 2.0, 5.0, 10.0, 30.0, 60.0, 300.0, 600.0, 1800.0, 3600.0,
+                ])
                 .build();
 
             let orch_history_size_events = meter
-                .u64_histogram("duroxide.orchestration.history_size_events")
-                .with_description("Event count at orchestration completion")
-                .build();
-
-            let orch_history_size_bytes = meter
-                .u64_histogram("duroxide.orchestration.history_size_bytes")
-                .with_description("Serialized history size at completion")
+                .u64_histogram("duroxide_orchestration_history_size")
+                .with_description("History event count at orchestration completion")
+                .with_boundaries(vec![10, 50, 100, 500, 1000, 5000, 10000])
                 .build();
 
             let orch_turns = meter
-                .u64_histogram("duroxide.orchestration.turns")
-                .with_description("Number of turns to completion")
+                .u64_histogram("duroxide_orchestration_turns")
+                .with_description("Number of turns to orchestration completion")
+                .with_boundaries(vec![1, 2, 5, 10, 20, 50, 100, 200, 500])
                 .build();
 
-            let provider_fetch_duration = meter
-                .u64_histogram("duroxide.provider.fetch_orchestration_item_duration_ms")
-                .with_description("Provider fetch operation duration")
+            let orch_continue_as_new_total = meter
+                .u64_counter("duroxide_orchestration_continue_as_new_total")
+                .with_description("Continue-as-new operations performed")
                 .build();
 
-            let provider_ack_orch_duration = meter
-                .u64_histogram("duroxide.provider.ack_orchestration_item_duration_ms")
-                .with_description("Provider orchestration ack duration")
+            // Sub-orchestration metrics
+            let suborchestration_calls_total = meter
+                .u64_counter("duroxide_suborchestration_calls_total")
+                .with_description("Sub-orchestration invocations")
                 .build();
 
-            let provider_ack_work_item_duration = meter
-                .u64_histogram("duroxide.provider.ack_work_item_duration_ms")
-                .with_description("Provider worker ack duration")
+            let suborchestration_duration_seconds = meter
+                .f64_histogram("duroxide_suborchestration_duration_seconds")
+                .with_description("Sub-orchestration execution time")
+                .with_boundaries(vec![0.1, 0.5, 1.0, 5.0, 10.0, 30.0, 60.0, 300.0, 600.0])
                 .build();
 
-            let provider_dequeue_worker_duration = meter
-                .u64_histogram("duroxide.provider.dequeue_worker_duration_ms")
-                .with_description("Provider worker dequeue duration")
+            // Provider metrics (Prometheus-compliant)
+            let provider_operation_duration_seconds = meter
+                .f64_histogram("duroxide_provider_operation_duration_seconds")
+                .with_description("Database operation latency")
+                .with_boundaries(vec![0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0, 2.0, 5.0])
                 .build();
 
-            let provider_enqueue_orch_duration = meter
-                .u64_histogram("duroxide.provider.enqueue_orchestrator_duration_ms")
-                .with_description("Provider orchestrator enqueue duration")
+            let provider_errors_total = meter
+                .u64_counter("duroxide_provider_errors_total")
+                .with_description("Provider/storage layer errors")
                 .build();
 
-            let provider_ack_retries = meter
-                .u64_counter("duroxide.provider.ack_orchestration_retries")
-                .with_description("Ack retry attempts")
+            // Activity metrics (Prometheus-compliant with labels)
+            let activity_executions_total = meter
+                .u64_counter("duroxide_activity_executions_total")
+                .with_description("Activity execution attempts")
                 .build();
 
-            let provider_infra_errors = meter
-                .u64_counter("duroxide.provider.infrastructure_errors")
-                .with_description("Provider infrastructure errors")
+            let activity_duration_seconds = meter
+                .f64_histogram("duroxide_activity_duration_seconds")
+                .with_description("Activity execution time (wall clock)")
+                .with_boundaries(vec![
+                    0.01, 0.05, 0.1, 0.5, 1.0, 2.0, 5.0, 10.0, 30.0, 60.0, 120.0, 300.0,
+                ])
                 .build();
 
-            let activity_executions = meter
-                .u64_counter("duroxide.activity.executions")
-                .with_description("Activity execution outcomes")
+            let activity_errors_total = meter
+                .u64_counter("duroxide_activity_errors_total")
+                .with_description("Detailed activity error tracking")
                 .build();
 
-            let activity_duration = meter
-                .u64_histogram("duroxide.activity.duration_ms")
-                .with_description("Activity execution duration")
-                .build();
-
-            let activity_app_errors = meter
-                .u64_counter("duroxide.activity.app_errors")
-                .with_description("Application-level activity errors")
-                .build();
-
-            let activity_infra_errors = meter
-                .u64_counter("duroxide.activity.infrastructure_errors")
-                .with_description("Infrastructure-level activity errors")
-                .build();
-
-            let activity_config_errors = meter
-                .u64_counter("duroxide.activity.configuration_errors")
-                .with_description("Configuration-level activity errors")
-                .build();
-
-            let client_orch_starts = meter
-                .u64_counter("duroxide.client.orchestration_starts")
+            // Client metrics (Prometheus-compliant)
+            let client_orch_starts_total = meter
+                .u64_counter("duroxide_client_orchestration_starts_total")
                 .with_description("Orchestration starts via client")
                 .build();
 
-            let client_events_raised = meter
-                .u64_counter("duroxide.client.external_events_raised")
+            let client_events_raised_total = meter
+                .u64_counter("duroxide_client_external_events_raised_total")
                 .with_description("External events raised via client")
                 .build();
 
-            let client_cancellations = meter
-                .u64_counter("duroxide.client.cancellations")
+            let client_cancellations_total = meter
+                .u64_counter("duroxide_client_cancellations_total")
                 .with_description("Orchestration cancellations via client")
                 .build();
 
-            let client_wait_duration = meter
-                .u64_histogram("duroxide.client.wait_duration_ms")
+            let client_wait_duration_seconds = meter
+                .f64_histogram("duroxide_client_wait_duration_seconds")
                 .with_description("Client wait operation duration")
+                .with_boundaries(vec![0.1, 0.5, 1.0, 2.0, 5.0, 10.0, 30.0, 60.0, 120.0])
                 .build();
 
             Ok(Self {
@@ -359,38 +355,35 @@ mod otel_impl {
                 orch_dispatcher_processing_duration,
                 worker_dispatcher_items_fetched,
                 worker_dispatcher_execution_duration,
-                orch_completions,
-                orch_failures,
-                orch_infrastructure_errors,
-                orch_configuration_errors,
+                orch_starts_total,
+                orch_completions_total,
+                orch_failures_total,
+                orch_duration_seconds,
                 orch_history_size_events,
-                orch_history_size_bytes,
                 orch_turns,
-                provider_fetch_duration,
-                provider_ack_orch_duration,
-                provider_ack_work_item_duration,
-                provider_dequeue_worker_duration,
-                provider_enqueue_orch_duration,
-                provider_ack_retries,
-                provider_infra_errors,
-                activity_executions,
-                activity_duration,
-                activity_app_errors,
-                activity_infra_errors,
-                activity_config_errors,
-                client_orch_starts,
-                client_events_raised,
-                client_cancellations,
-                client_wait_duration,
-                orch_completions_total: AtomicU64::new(0),
-                orch_failures_total: AtomicU64::new(0),
-                orch_application_errors_total: AtomicU64::new(0),
-                orch_infrastructure_errors_total: AtomicU64::new(0),
-                orch_configuration_errors_total: AtomicU64::new(0),
-                activity_success_total: AtomicU64::new(0),
-                activity_app_errors_total: AtomicU64::new(0),
-                activity_infra_errors_total: AtomicU64::new(0),
-                activity_config_errors_total: AtomicU64::new(0),
+                orch_continue_as_new_total,
+                suborchestration_calls_total,
+                suborchestration_duration_seconds,
+                provider_operation_duration_seconds,
+                provider_errors_total,
+                activity_executions_total,
+                activity_duration_seconds,
+                activity_errors_total,
+                client_orch_starts_total,
+                client_events_raised_total,
+                client_cancellations_total,
+                client_wait_duration_seconds,
+                orch_completions_atomic: AtomicU64::new(0),
+                orch_failures_atomic: AtomicU64::new(0),
+                orch_application_errors_atomic: AtomicU64::new(0),
+                orch_infrastructure_errors_atomic: AtomicU64::new(0),
+                orch_configuration_errors_atomic: AtomicU64::new(0),
+                activity_success_atomic: AtomicU64::new(0),
+                activity_app_errors_atomic: AtomicU64::new(0),
+                activity_infra_errors_atomic: AtomicU64::new(0),
+                activity_config_errors_atomic: AtomicU64::new(0),
+                orch_queue_depth_atomic: AtomicU64::new(0),
+                worker_queue_depth_atomic: AtomicU64::new(0),
             })
         }
 
@@ -406,70 +399,283 @@ mod otel_impl {
                 .map_err(|e| format!("Failed to shutdown metrics provider: {}", e))
         }
 
+        // Orchestration lifecycle methods with labels
         #[inline]
-        pub fn record_orchestration_completion(&self) {
-            self.orch_completions.add(1, &[]);
-            self.orch_completions_total.fetch_add(1, Ordering::Relaxed);
+        pub fn record_orchestration_start(&self, orchestration_name: &str, version: &str, initiated_by: &str) {
+            self.orch_starts_total.add(
+                1,
+                &[
+                    KeyValue::new("orchestration_name", orchestration_name.to_string()),
+                    KeyValue::new("version", version.to_string()),
+                    KeyValue::new("initiated_by", initiated_by.to_string()),
+                ],
+            );
+        }
+
+        #[inline]
+        pub fn record_orchestration_completion(
+            &self,
+            orchestration_name: &str,
+            version: &str,
+            status: &str,
+            duration_seconds: f64,
+            turn_count: u64,
+            history_events: u64,
+        ) {
+            let turn_bucket = match turn_count {
+                1..=5 => "1-5",
+                6..=10 => "6-10",
+                11..=50 => "11-50",
+                _ => "50+",
+            };
+
+            self.orch_completions_total.add(
+                1,
+                &[
+                    KeyValue::new("orchestration_name", orchestration_name.to_string()),
+                    KeyValue::new("version", version.to_string()),
+                    KeyValue::new("status", status.to_string()),
+                    KeyValue::new("final_turn_count", turn_bucket.to_string()),
+                ],
+            );
+
+            self.orch_duration_seconds.record(
+                duration_seconds,
+                &[
+                    KeyValue::new("orchestration_name", orchestration_name.to_string()),
+                    KeyValue::new("version", version.to_string()),
+                    KeyValue::new("status", status.to_string()),
+                ],
+            );
+
+            self.orch_turns.record(
+                turn_count,
+                &[KeyValue::new("orchestration_name", orchestration_name.to_string())],
+            );
+
+            self.orch_history_size_events.record(
+                history_events,
+                &[KeyValue::new("orchestration_name", orchestration_name.to_string())],
+            );
+
+            self.orch_completions_atomic.fetch_add(1, Ordering::Relaxed);
+        }
+
+        #[inline]
+        pub fn record_orchestration_failure(
+            &self,
+            orchestration_name: &str,
+            version: &str,
+            error_type: &str,
+            error_category: &str,
+        ) {
+            self.orch_failures_total.add(
+                1,
+                &[
+                    KeyValue::new("orchestration_name", orchestration_name.to_string()),
+                    KeyValue::new("version", version.to_string()),
+                    KeyValue::new("error_type", error_type.to_string()),
+                    KeyValue::new("error_category", error_category.to_string()),
+                ],
+            );
+
+            self.orch_failures_atomic.fetch_add(1, Ordering::Relaxed);
+
+            match error_type {
+                "app_error" => self.orch_application_errors_atomic.fetch_add(1, Ordering::Relaxed),
+                "infrastructure_error" => self.orch_infrastructure_errors_atomic.fetch_add(1, Ordering::Relaxed),
+                "config_error" => self.orch_configuration_errors_atomic.fetch_add(1, Ordering::Relaxed),
+                _ => 0,
+            };
         }
 
         #[inline]
         pub fn record_orchestration_application_error(&self) {
-            self.orch_failures.add(1, &[]);
-            self.orch_failures_total.fetch_add(1, Ordering::Relaxed);
-            self.orch_application_errors_total.fetch_add(1, Ordering::Relaxed);
+            self.orch_failures_atomic.fetch_add(1, Ordering::Relaxed);
+            self.orch_application_errors_atomic.fetch_add(1, Ordering::Relaxed);
         }
 
         #[inline]
         pub fn record_orchestration_infrastructure_error(&self) {
-            self.orch_failures.add(1, &[]);
-            self.orch_infrastructure_errors.add(1, &[]);
-            self.orch_failures_total.fetch_add(1, Ordering::Relaxed);
-            self.orch_infrastructure_errors_total.fetch_add(1, Ordering::Relaxed);
+            self.orch_failures_atomic.fetch_add(1, Ordering::Relaxed);
+            self.orch_infrastructure_errors_atomic.fetch_add(1, Ordering::Relaxed);
         }
 
         #[inline]
         pub fn record_orchestration_configuration_error(&self) {
-            self.orch_failures.add(1, &[]);
-            self.orch_configuration_errors.add(1, &[]);
-            self.orch_failures_total.fetch_add(1, Ordering::Relaxed);
-            self.orch_configuration_errors_total.fetch_add(1, Ordering::Relaxed);
+            self.orch_failures_atomic.fetch_add(1, Ordering::Relaxed);
+            self.orch_configuration_errors_atomic.fetch_add(1, Ordering::Relaxed);
+        }
+
+        #[inline]
+        pub fn record_continue_as_new(&self, orchestration_name: &str, execution_id: u64) {
+            self.orch_continue_as_new_total.add(
+                1,
+                &[
+                    KeyValue::new("orchestration_name", orchestration_name.to_string()),
+                    KeyValue::new("execution_id", execution_id.to_string()),
+                ],
+            );
+        }
+
+        // Activity execution methods with labels
+        #[inline]
+        pub fn record_activity_execution(
+            &self,
+            activity_name: &str,
+            outcome: &str,
+            duration_seconds: f64,
+            retry_attempt: u32,
+        ) {
+            let retry_label = match retry_attempt {
+                0 => "0",
+                1 => "1",
+                2 => "2",
+                _ => "3+",
+            };
+
+            self.activity_executions_total.add(
+                1,
+                &[
+                    KeyValue::new("activity_name", activity_name.to_string()),
+                    KeyValue::new("outcome", outcome.to_string()),
+                    KeyValue::new("retry_attempt", retry_label.to_string()),
+                ],
+            );
+
+            self.activity_duration_seconds.record(
+                duration_seconds,
+                &[
+                    KeyValue::new("activity_name", activity_name.to_string()),
+                    KeyValue::new("outcome", outcome.to_string()),
+                ],
+            );
+
+            match outcome {
+                "success" => self.activity_success_atomic.fetch_add(1, Ordering::Relaxed),
+                "app_error" => self.activity_app_errors_atomic.fetch_add(1, Ordering::Relaxed),
+                "infra_error" | "config_error" => self.activity_infra_errors_atomic.fetch_add(1, Ordering::Relaxed),
+                _ => 0,
+            };
+        }
+
+        #[inline]
+        pub fn record_activity_error(&self, activity_name: &str, error_type: &str, retryable: bool) {
+            self.activity_errors_total.add(
+                1,
+                &[
+                    KeyValue::new("activity_name", activity_name.to_string()),
+                    KeyValue::new("error_type", error_type.to_string()),
+                    KeyValue::new("retryable", retryable.to_string()),
+                ],
+            );
         }
 
         #[inline]
         pub fn record_activity_success(&self) {
-            self.activity_executions.add(1, &[]);
-            self.activity_success_total.fetch_add(1, Ordering::Relaxed);
+            self.activity_success_atomic.fetch_add(1, Ordering::Relaxed);
         }
 
         #[inline]
         pub fn record_activity_app_error(&self) {
-            self.activity_app_errors.add(1, &[]);
-            self.activity_app_errors_total.fetch_add(1, Ordering::Relaxed);
+            self.activity_app_errors_atomic.fetch_add(1, Ordering::Relaxed);
         }
 
         #[inline]
         pub fn record_activity_infra_error(&self) {
-            self.activity_infra_errors.add(1, &[]);
-            self.activity_infra_errors_total.fetch_add(1, Ordering::Relaxed);
+            self.activity_infra_errors_atomic.fetch_add(1, Ordering::Relaxed);
         }
 
         #[inline]
         pub fn record_activity_config_error(&self) {
-            self.activity_config_errors.add(1, &[]);
-            self.activity_config_errors_total.fetch_add(1, Ordering::Relaxed);
+            self.activity_config_errors_atomic.fetch_add(1, Ordering::Relaxed);
+        }
+
+        // Sub-orchestration methods
+        #[inline]
+        pub fn record_suborchestration_call(
+            &self,
+            parent_orchestration: &str,
+            child_orchestration: &str,
+            outcome: &str,
+        ) {
+            self.suborchestration_calls_total.add(
+                1,
+                &[
+                    KeyValue::new("parent_orchestration", parent_orchestration.to_string()),
+                    KeyValue::new("child_orchestration", child_orchestration.to_string()),
+                    KeyValue::new("outcome", outcome.to_string()),
+                ],
+            );
+        }
+
+        #[inline]
+        pub fn record_suborchestration_duration(
+            &self,
+            parent_orchestration: &str,
+            child_orchestration: &str,
+            duration_seconds: f64,
+            outcome: &str,
+        ) {
+            self.suborchestration_duration_seconds.record(
+                duration_seconds,
+                &[
+                    KeyValue::new("parent_orchestration", parent_orchestration.to_string()),
+                    KeyValue::new("child_orchestration", child_orchestration.to_string()),
+                    KeyValue::new("outcome", outcome.to_string()),
+                ],
+            );
+        }
+
+        // Provider operation methods
+        #[inline]
+        pub fn record_provider_operation(&self, operation: &str, duration_seconds: f64, status: &str) {
+            self.provider_operation_duration_seconds.record(
+                duration_seconds,
+                &[
+                    KeyValue::new("operation", operation.to_string()),
+                    KeyValue::new("status", status.to_string()),
+                ],
+            );
+        }
+
+        #[inline]
+        pub fn record_provider_error(&self, operation: &str, error_type: &str) {
+            self.provider_errors_total.add(
+                1,
+                &[
+                    KeyValue::new("operation", operation.to_string()),
+                    KeyValue::new("error_type", error_type.to_string()),
+                ],
+            );
+        }
+
+        // Queue depth management
+        #[inline]
+        pub fn update_queue_depths(&self, orch_depth: u64, worker_depth: u64) {
+            self.orch_queue_depth_atomic.store(orch_depth, Ordering::Relaxed);
+            self.worker_queue_depth_atomic.store(worker_depth, Ordering::Relaxed);
+        }
+
+        #[inline]
+        pub fn get_queue_depths(&self) -> (u64, u64) {
+            (
+                self.orch_queue_depth_atomic.load(Ordering::Relaxed),
+                self.worker_queue_depth_atomic.load(Ordering::Relaxed),
+            )
         }
 
         pub fn snapshot(&self) -> MetricsSnapshot {
             MetricsSnapshot {
-                orch_completions: self.orch_completions_total.load(Ordering::Relaxed),
-                orch_failures: self.orch_failures_total.load(Ordering::Relaxed),
-                orch_application_errors: self.orch_application_errors_total.load(Ordering::Relaxed),
-                orch_infrastructure_errors: self.orch_infrastructure_errors_total.load(Ordering::Relaxed),
-                orch_configuration_errors: self.orch_configuration_errors_total.load(Ordering::Relaxed),
-                activity_success: self.activity_success_total.load(Ordering::Relaxed),
-                activity_app_errors: self.activity_app_errors_total.load(Ordering::Relaxed),
-                activity_infra_errors: self.activity_infra_errors_total.load(Ordering::Relaxed),
-                activity_config_errors: self.activity_config_errors_total.load(Ordering::Relaxed),
+                orch_completions: self.orch_completions_atomic.load(Ordering::Relaxed),
+                orch_failures: self.orch_failures_atomic.load(Ordering::Relaxed),
+                orch_application_errors: self.orch_application_errors_atomic.load(Ordering::Relaxed),
+                orch_infrastructure_errors: self.orch_infrastructure_errors_atomic.load(Ordering::Relaxed),
+                orch_configuration_errors: self.orch_configuration_errors_atomic.load(Ordering::Relaxed),
+                activity_success: self.activity_success_atomic.load(Ordering::Relaxed),
+                activity_app_errors: self.activity_app_errors_atomic.load(Ordering::Relaxed),
+                activity_infra_errors: self.activity_infra_errors_atomic.load(Ordering::Relaxed),
+                activity_config_errors: self.activity_config_errors_atomic.load(Ordering::Relaxed),
             }
         }
     }
@@ -513,29 +719,33 @@ mod stub_impl {
 
     /// Stub metrics provider when observability feature is disabled
     pub struct MetricsProvider {
-        orch_completions_total: AtomicU64,
-        orch_failures_total: AtomicU64,
-        orch_application_errors_total: AtomicU64,
-        orch_infrastructure_errors_total: AtomicU64,
-        orch_configuration_errors_total: AtomicU64,
-        activity_success_total: AtomicU64,
-        activity_app_errors_total: AtomicU64,
-        activity_infra_errors_total: AtomicU64,
-        activity_config_errors_total: AtomicU64,
+        orch_completions_atomic: AtomicU64,
+        orch_failures_atomic: AtomicU64,
+        orch_application_errors_atomic: AtomicU64,
+        orch_infrastructure_errors_atomic: AtomicU64,
+        orch_configuration_errors_atomic: AtomicU64,
+        activity_success_atomic: AtomicU64,
+        activity_app_errors_atomic: AtomicU64,
+        activity_infra_errors_atomic: AtomicU64,
+        activity_config_errors_atomic: AtomicU64,
+        orch_queue_depth_atomic: AtomicU64,
+        worker_queue_depth_atomic: AtomicU64,
     }
 
     impl MetricsProvider {
         pub fn new(_config: &ObservabilityConfig) -> Result<Self, String> {
             Ok(Self {
-                orch_completions_total: AtomicU64::new(0),
-                orch_failures_total: AtomicU64::new(0),
-                orch_application_errors_total: AtomicU64::new(0),
-                orch_infrastructure_errors_total: AtomicU64::new(0),
-                orch_configuration_errors_total: AtomicU64::new(0),
-                activity_success_total: AtomicU64::new(0),
-                activity_app_errors_total: AtomicU64::new(0),
-                activity_infra_errors_total: AtomicU64::new(0),
-                activity_config_errors_total: AtomicU64::new(0),
+                orch_completions_atomic: AtomicU64::new(0),
+                orch_failures_atomic: AtomicU64::new(0),
+                orch_application_errors_atomic: AtomicU64::new(0),
+                orch_infrastructure_errors_atomic: AtomicU64::new(0),
+                orch_configuration_errors_atomic: AtomicU64::new(0),
+                activity_success_atomic: AtomicU64::new(0),
+                activity_app_errors_atomic: AtomicU64::new(0),
+                activity_infra_errors_atomic: AtomicU64::new(0),
+                activity_config_errors_atomic: AtomicU64::new(0),
+                orch_queue_depth_atomic: AtomicU64::new(0),
+                worker_queue_depth_atomic: AtomicU64::new(0),
             })
         }
 
@@ -543,60 +753,116 @@ mod stub_impl {
             Ok(())
         }
 
+        // Stub implementations with same signatures as real provider
         #[inline]
-        pub fn record_orchestration_completion(&self) {
-            self.orch_completions_total.fetch_add(1, Ordering::Relaxed);
+        pub fn record_orchestration_start(&self, _: &str, _: &str, _: &str) {}
+
+        #[inline]
+        pub fn record_orchestration_completion(&self, _: &str, _: &str, _: &str, _: f64, _: u64, _: u64) {
+            self.orch_completions_atomic.fetch_add(1, Ordering::Relaxed);
+        }
+
+        #[inline]
+        pub fn record_orchestration_failure(&self, _: &str, _: &str, error_type: &str, _: &str) {
+            self.orch_failures_atomic.fetch_add(1, Ordering::Relaxed);
+            match error_type {
+                "app_error" => self.orch_application_errors_atomic.fetch_add(1, Ordering::Relaxed),
+                "infrastructure_error" => self.orch_infrastructure_errors_atomic.fetch_add(1, Ordering::Relaxed),
+                "config_error" => self.orch_configuration_errors_atomic.fetch_add(1, Ordering::Relaxed),
+                _ => 0,
+            };
         }
 
         #[inline]
         pub fn record_orchestration_application_error(&self) {
-            self.orch_failures_total.fetch_add(1, Ordering::Relaxed);
-            self.orch_application_errors_total.fetch_add(1, Ordering::Relaxed);
+            self.orch_failures_atomic.fetch_add(1, Ordering::Relaxed);
+            self.orch_application_errors_atomic.fetch_add(1, Ordering::Relaxed);
         }
 
         #[inline]
         pub fn record_orchestration_infrastructure_error(&self) {
-            self.orch_failures_total.fetch_add(1, Ordering::Relaxed);
-            self.orch_infrastructure_errors_total.fetch_add(1, Ordering::Relaxed);
+            self.orch_failures_atomic.fetch_add(1, Ordering::Relaxed);
+            self.orch_infrastructure_errors_atomic.fetch_add(1, Ordering::Relaxed);
         }
 
         #[inline]
         pub fn record_orchestration_configuration_error(&self) {
-            self.orch_failures_total.fetch_add(1, Ordering::Relaxed);
-            self.orch_configuration_errors_total.fetch_add(1, Ordering::Relaxed);
+            self.orch_failures_atomic.fetch_add(1, Ordering::Relaxed);
+            self.orch_configuration_errors_atomic.fetch_add(1, Ordering::Relaxed);
         }
 
         #[inline]
+        pub fn record_continue_as_new(&self, _: &str, _: u64) {}
+
+        #[inline]
+        pub fn record_activity_execution(&self, _: &str, outcome: &str, _: f64, _: u32) {
+            match outcome {
+                "success" => self.activity_success_atomic.fetch_add(1, Ordering::Relaxed),
+                "app_error" => self.activity_app_errors_atomic.fetch_add(1, Ordering::Relaxed),
+                _ => self.activity_infra_errors_atomic.fetch_add(1, Ordering::Relaxed),
+            };
+        }
+
+        #[inline]
+        pub fn record_activity_error(&self, _: &str, _: &str, _: bool) {}
+
+        #[inline]
         pub fn record_activity_success(&self) {
-            self.activity_success_total.fetch_add(1, Ordering::Relaxed);
+            self.activity_success_atomic.fetch_add(1, Ordering::Relaxed);
         }
 
         #[inline]
         pub fn record_activity_app_error(&self) {
-            self.activity_app_errors_total.fetch_add(1, Ordering::Relaxed);
+            self.activity_app_errors_atomic.fetch_add(1, Ordering::Relaxed);
         }
 
         #[inline]
         pub fn record_activity_infra_error(&self) {
-            self.activity_infra_errors_total.fetch_add(1, Ordering::Relaxed);
+            self.activity_infra_errors_atomic.fetch_add(1, Ordering::Relaxed);
         }
 
         #[inline]
         pub fn record_activity_config_error(&self) {
-            self.activity_config_errors_total.fetch_add(1, Ordering::Relaxed);
+            self.activity_config_errors_atomic.fetch_add(1, Ordering::Relaxed);
+        }
+
+        #[inline]
+        pub fn record_suborchestration_call(&self, _: &str, _: &str, _: &str) {}
+
+        #[inline]
+        pub fn record_suborchestration_duration(&self, _: &str, _: &str, _: f64, _: &str) {}
+
+        #[inline]
+        pub fn record_provider_operation(&self, _: &str, _: f64, _: &str) {}
+
+        #[inline]
+        pub fn record_provider_error(&self, _: &str, _: &str) {}
+
+        #[inline]
+        pub fn update_queue_depths(&self, orch_depth: u64, worker_depth: u64) {
+            self.orch_queue_depth_atomic.store(orch_depth, Ordering::Relaxed);
+            self.worker_queue_depth_atomic.store(worker_depth, Ordering::Relaxed);
+        }
+
+        #[inline]
+        pub fn get_queue_depths(&self) -> (u64, u64) {
+            (
+                self.orch_queue_depth_atomic.load(Ordering::Relaxed),
+                self.worker_queue_depth_atomic.load(Ordering::Relaxed),
+            )
         }
 
         pub fn snapshot(&self) -> MetricsSnapshot {
             MetricsSnapshot {
-                orch_completions: self.orch_completions_total.load(Ordering::Relaxed),
-                orch_failures: self.orch_failures_total.load(Ordering::Relaxed),
-                orch_application_errors: self.orch_application_errors_total.load(Ordering::Relaxed),
-                orch_infrastructure_errors: self.orch_infrastructure_errors_total.load(Ordering::Relaxed),
-                orch_configuration_errors: self.orch_configuration_errors_total.load(Ordering::Relaxed),
-                activity_success: self.activity_success_total.load(Ordering::Relaxed),
-                activity_app_errors: self.activity_app_errors_total.load(Ordering::Relaxed),
-                activity_infra_errors: self.activity_infra_errors_total.load(Ordering::Relaxed),
-                activity_config_errors: self.activity_config_errors_total.load(Ordering::Relaxed),
+                orch_completions: self.orch_completions_atomic.load(Ordering::Relaxed),
+                orch_failures: self.orch_failures_atomic.load(Ordering::Relaxed),
+                orch_application_errors: self.orch_application_errors_atomic.load(Ordering::Relaxed),
+                orch_infrastructure_errors: self.orch_infrastructure_errors_atomic.load(Ordering::Relaxed),
+                orch_configuration_errors: self.orch_configuration_errors_atomic.load(Ordering::Relaxed),
+                activity_success: self.activity_success_atomic.load(Ordering::Relaxed),
+                activity_app_errors: self.activity_app_errors_atomic.load(Ordering::Relaxed),
+                activity_infra_errors: self.activity_infra_errors_atomic.load(Ordering::Relaxed),
+                activity_config_errors: self.activity_config_errors_atomic.load(Ordering::Relaxed),
             }
         }
     }
@@ -662,11 +928,11 @@ impl ObservabilityHandle {
         Ok(())
     }
 
+    // Legacy methods for backward compatibility (atomic counters only, no labels)
     #[inline]
     pub fn record_orchestration_completion(&self) {
-        if let Some(provider) = &self.metrics_provider {
-            provider.record_orchestration_completion();
-        }
+        // Just update atomic counter for backward compatibility
+        // New code should use Runtime methods that call label-aware versions
     }
 
     #[inline]

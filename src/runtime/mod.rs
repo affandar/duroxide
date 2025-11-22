@@ -225,6 +225,74 @@ pub struct OrchestrationDescriptor {
 }
 
 impl Runtime {
+    // New label-aware metric recording methods
+    #[inline]
+    fn record_orchestration_start(&self, orchestration_name: &str, version: &str, initiated_by: &str) {
+        if let Some(handle) = &self.observability_handle {
+            if let Some(provider) = handle.metrics_provider() {
+                provider.record_orchestration_start(orchestration_name, version, initiated_by);
+            }
+        }
+    }
+
+    #[inline]
+    fn record_orchestration_completion_with_labels(
+        &self,
+        orchestration_name: &str,
+        version: &str,
+        status: &str,
+        duration_seconds: f64,
+        turn_count: u64,
+        history_events: u64,
+    ) {
+        if let Some(handle) = &self.observability_handle {
+            if let Some(provider) = handle.metrics_provider() {
+                provider.record_orchestration_completion(
+                    orchestration_name,
+                    version,
+                    status,
+                    duration_seconds,
+                    turn_count,
+                    history_events,
+                );
+            }
+        }
+    }
+
+    #[inline]
+    fn record_orchestration_failure_with_labels(
+        &self,
+        orchestration_name: &str,
+        version: &str,
+        error_type: &str,
+        error_category: &str,
+    ) {
+        if let Some(handle) = &self.observability_handle {
+            if let Some(provider) = handle.metrics_provider() {
+                provider.record_orchestration_failure(orchestration_name, version, error_type, error_category);
+            }
+        }
+    }
+
+    #[inline]
+    fn record_continue_as_new(&self, orchestration_name: &str, execution_id: u64) {
+        if let Some(handle) = &self.observability_handle {
+            if let Some(provider) = handle.metrics_provider() {
+                provider.record_continue_as_new(orchestration_name, execution_id);
+            }
+        }
+    }
+
+    #[inline]
+    fn record_activity_execution(&self, activity_name: &str, outcome: &str, duration_seconds: f64, retry_attempt: u32) {
+        if let Some(handle) = &self.observability_handle {
+            if let Some(provider) = handle.metrics_provider() {
+                provider.record_activity_execution(activity_name, outcome, duration_seconds, retry_attempt);
+            }
+        }
+    }
+
+    // Legacy methods for backward compatibility (used by simple internal counters)
     #[inline]
     fn record_orchestration_completion(&self) {
         if let Some(handle) = &self.observability_handle {
@@ -452,6 +520,10 @@ impl Runtime {
         // background work dispatcher (executes activities)
         let work_handle = runtime.clone().start_work_dispatcher(activity_registry);
         runtime.joins.lock().await.push(work_handle);
+
+        // Note: Queue depth monitoring could be added here, but requires ProviderAdmin trait
+        // which is not available on all providers. Providers can implement their own queue depth
+        // export via their admin interfaces.
 
         runtime
     }

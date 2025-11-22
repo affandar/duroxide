@@ -108,7 +108,11 @@ impl Runtime {
             (item.execution_id, temp_history_mgr)
         };
 
-        // Log execution start with structured context
+        // Track start time for duration metrics
+        let start_time = std::time::Instant::now();
+        let mut turn_count = 0u64; // Track turns for this execution
+
+        // Log execution start with structured context and record metrics
         if workitem_reader.has_orchestration_name() {
             tracing::debug!(
                 target: "duroxide::runtime",
@@ -120,6 +124,16 @@ impl Runtime {
                 is_continue_as_new = %workitem_reader.is_continue_as_new,
                 "Orchestration started"
             );
+
+            // Record orchestration start metric
+            let initiated_by = if workitem_reader.is_continue_as_new {
+                "continueAsNew"
+            } else if history_mgr.full_history().is_empty() {
+                "client"
+            } else {
+                "client" // Could be suborchestration but we'd need parent context
+            };
+            self.record_orchestration_start(&workitem_reader.orchestration_name, &version, initiated_by);
         } else if !workitem_reader.completion_messages.is_empty() {
             // Empty orchestration name with completion messages - just warn and skip
             tracing::warn!(instance = %item.instance, "empty effective batch - this should not happen");
@@ -148,7 +162,11 @@ impl Runtime {
         // Compute execution metadata from history_delta (runtime responsibility)
         let metadata = Runtime::compute_execution_metadata(history_delta, &orchestrator_items, item.execution_id);
 
-        // Log orchestration completion/failure
+        // Calculate metrics
+        let duration_seconds = start_time.elapsed().as_secs_f64();
+        turn_count += 1; // At least one turn was processed
+
+        // Log orchestration completion/failure and record metrics
         if let Some(ref status) = metadata.status {
             let version = metadata.orchestration_version.as_deref().unwrap_or("unknown");
             let orch_name = metadata.orchestration_name.as_deref().unwrap_or("unknown");
@@ -166,23 +184,40 @@ impl Runtime {
                         history_events = %event_count,
                         "Orchestration completed"
                     );
+
+                    // Record completion metrics with labels
+                    self.record_orchestration_completion_with_labels(
+                        orch_name,
+                        version,
+                        "success",
+                        duration_seconds,
+                        turn_count,
+                        event_count as u64,
+                    );
                 }
                 "Failed" => {
                     // Extract error type from history_delta to determine log level
-                    let error_type = history_delta
+                    let (error_type, error_category) = history_delta
                         .iter()
                         .find_map(|event| {
                             if let Event::OrchestrationFailed { details, .. } = event {
-                                Some(details.category())
+                                let category = details.category();
+                                let error_type = match category {
+                                    "infrastructure" => "infrastructure_error",
+                                    "configuration" => "config_error",
+                                    "application" => "app_error",
+                                    _ => "unknown",
+                                };
+                                Some((error_type, category))
                             } else {
                                 None
                             }
                         })
-                        .unwrap_or("unknown");
+                        .unwrap_or(("unknown", "unknown"));
 
                     // Only log as ERROR for infrastructure/configuration errors
                     // Application errors are expected business logic failures
-                    match error_type {
+                    match error_category {
                         "infrastructure" | "configuration" => {
                             tracing::error!(
                                 target: "duroxide::runtime",
@@ -192,7 +227,7 @@ impl Runtime {
                                 orchestration_version = %version,
                                 worker_id = %worker_id,
                                 history_events = %event_count,
-                                error_type = %error_type,
+                                error_type = %error_category,
                                 error = metadata.output.as_deref().unwrap_or("unknown"),
                                 "Orchestration failed"
                             );
@@ -206,7 +241,7 @@ impl Runtime {
                                 orchestration_version = %version,
                                 worker_id = %worker_id,
                                 history_events = %event_count,
-                                error_type = %error_type,
+                                error_type = %error_category,
                                 error = metadata.output.as_deref().unwrap_or("unknown"),
                                 "Orchestration failed (application error)"
                             );
@@ -220,12 +255,25 @@ impl Runtime {
                                 orchestration_version = %version,
                                 worker_id = %worker_id,
                                 history_events = %event_count,
-                                error_type = %error_type,
+                                error_type = %error_category,
                                 error = metadata.output.as_deref().unwrap_or("unknown"),
                                 "Orchestration failed (unknown error type)"
                             );
                         }
                     }
+
+                    // Record failure metrics with labels
+                    self.record_orchestration_failure_with_labels(orch_name, version, error_type, error_category);
+
+                    // Also record completion with failed status for duration tracking
+                    self.record_orchestration_completion_with_labels(
+                        orch_name,
+                        version,
+                        "failed",
+                        duration_seconds,
+                        turn_count,
+                        event_count as u64,
+                    );
                 }
                 "ContinuedAsNew" => {
                     tracing::debug!(
@@ -237,6 +285,19 @@ impl Runtime {
                         worker_id = %worker_id,
                         history_events = %event_count,
                         "Orchestration continued as new"
+                    );
+
+                    // Record continue-as-new metric
+                    self.record_continue_as_new(orch_name, execution_id_for_ack);
+
+                    // Record completion with continue-as-new status
+                    self.record_orchestration_completion_with_labels(
+                        orch_name,
+                        version,
+                        "continuedAsNew",
+                        duration_seconds,
+                        turn_count,
+                        event_count as u64,
                     );
                 }
                 _ => {}

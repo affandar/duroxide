@@ -169,34 +169,107 @@ ObservabilityConfig {
 
 ### Available Metrics
 
-#### Orchestration Metrics
-- `duroxide.orchestration.completions` - Successful completions (labels: orchestration_name, version, status)
-- `duroxide.orchestration.failures` - Failures by error type (labels: orchestration_name, error_type)
-- `duroxide.orchestration.infrastructure_errors` - Infra errors (labels: orchestration_name, operation, error_type)
-- `duroxide.orchestration.configuration_errors` - Config errors (labels: orchestration_name, error_kind)
-- `duroxide.orchestration.history_size_events` - Event count at completion
-- `duroxide.orchestration.history_size_bytes` - History size at completion
-- `duroxide.orchestration.turns` - Turns to completion
+All metrics follow Prometheus naming conventions with `_total` for counters and `_seconds` for time measurements.
 
-#### Activity Metrics
-- `duroxide.activity.executions` - Execution outcomes (labels: activity_name, outcome=success/app_error/system_error)
-- `duroxide.activity.duration_ms` - Execution duration (labels: activity_name, outcome)
-- `duroxide.activity.app_errors` - Application errors (labels: activity_name)
-- `duroxide.activity.infrastructure_errors` - Infrastructure errors (labels: activity_name, operation)
-- `duroxide.activity.configuration_errors` - Configuration errors (labels: activity_name, error_kind)
+#### Orchestration Lifecycle Metrics
+
+**`duroxide_orchestration_starts_total`** (Counter)
+- **Description**: Total orchestrations started
+- **Labels**: `orchestration_name`, `version`, `initiated_by` (client|suborchestration|continueAsNew)
+- **Use**: Track which orchestrations are running, identify version distribution
+
+**`duroxide_orchestration_completions_total`** (Counter)  
+- **Description**: Orchestrations that completed (successfully or failed)
+- **Labels**: `orchestration_name`, `version`, `status` (success|failed|cancelled), `final_turn_count` (1-5|6-10|11-50|50+)
+- **Use**: Success rate tracking, identify orchestrations with high turn counts
+
+**`duroxide_orchestration_failures_total`** (Counter)
+- **Description**: Orchestration failures with detailed error classification
+- **Labels**: `orchestration_name`, `version`, `error_type` (app_error|infrastructure_error|config_error), `error_category`
+- **Use**: Root cause analysis, distinguish infrastructure vs application errors
+
+**`duroxide_orchestration_duration_seconds`** (Histogram)
+- **Description**: End-to-end orchestration execution time
+- **Labels**: `orchestration_name`, `version`, `status`
+- **Buckets**: `[0.1, 0.5, 1, 2, 5, 10, 30, 60, 300, 600, 1800, 3600]` seconds
+- **Use**: Identify slow orchestrations, track p50/p95/p99 latency
+
+**`duroxide_orchestration_history_size`** (Histogram)
+- **Description**: History event count at orchestration completion
+- **Labels**: `orchestration_name`
+- **Buckets**: `[10, 50, 100, 500, 1000, 5000, 10000]` events
+- **Use**: Identify orchestrations with unbounded history growth
+
+**`duroxide_orchestration_turns`** (Histogram)
+- **Description**: Number of turns to orchestration completion
+- **Labels**: `orchestration_name`
+- **Buckets**: `[1, 2, 5, 10, 20, 50, 100, 200, 500]`
+- **Use**: Detect orchestrations requiring many turns (potential optimization targets)
+
+**`duroxide_orchestration_continue_as_new_total`** (Counter)
+- **Description**: Continue-as-new operations performed
+- **Labels**: `orchestration_name`, `execution_id`
+- **Use**: Verify continue-as-new is working, identify long-running actors
+
+#### Activity Execution Metrics
+
+**`duroxide_activity_executions_total`** (Counter)
+- **Description**: Activity execution attempts
+- **Labels**: `activity_name`, `outcome` (success|app_error|infra_error|config_error), `retry_attempt` (0|1|2|3+)
+- **Use**: Identify flaky activities, track retry rates
+
+**`duroxide_activity_duration_seconds`** (Histogram)
+- **Description**: Activity execution time (wall clock)
+- **Labels**: `activity_name`, `outcome`
+- **Buckets**: `[0.01, 0.05, 0.1, 0.5, 1, 2, 5, 10, 30, 60, 120, 300]` seconds
+- **Use**: Identify slow activities, set appropriate timeouts
+
+**`duroxide_activity_errors_total`** (Counter)
+- **Description**: Detailed activity error tracking
+- **Labels**: `activity_name`, `error_type` (app_error|infrastructure_error|config_error), `retryable` (true|false)
+- **Use**: Distinguish transient vs permanent errors
+
+#### Sub-Orchestration Metrics
+
+**`duroxide_suborchestration_calls_total`** (Counter)
+- **Description**: Sub-orchestration invocations
+- **Labels**: `parent_orchestration`, `child_orchestration`, `outcome`
+- **Use**: Understand orchestration composition, trace call graphs
+
+**`duroxide_suborchestration_duration_seconds`** (Histogram)
+- **Description**: Sub-orchestration execution time
+- **Labels**: `parent_orchestration`, `child_orchestration`, `outcome`
+- **Buckets**: `[0.1, 0.5, 1, 5, 10, 30, 60, 300, 600]` seconds
 
 #### Provider Metrics
-- `duroxide.provider.fetch_orchestration_item_duration_ms` - Fetch latency
-- `duroxide.provider.ack_orchestration_item_duration_ms` - Ack latency
-- `duroxide.provider.ack_worker_duration_ms` - Worker ack latency
-- `duroxide.provider.ack_orchestration_retries` - Retry attempts
-- `duroxide.provider.infrastructure_errors` - Provider errors (labels: operation, error_type)
+
+**`duroxide_provider_operation_duration_seconds`** (Histogram)
+- **Description**: Database operation latency
+- **Labels**: `operation` (fetch|ack|save_event|create_instance), `status` (success|error)
+- **Buckets**: `[0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 2, 5]` seconds
+- **Use**: Database performance monitoring, identify slow queries
+
+**`duroxide_provider_errors_total`** (Counter)
+- **Description**: Provider/storage layer errors
+- **Labels**: `operation`, `error_type` (timeout|connection|deadlock|corruption)
+- **Use**: Database health monitoring, alerting
 
 #### Client Metrics
-- `duroxide.client.orchestration_starts` - Orchestrations started
-- `duroxide.client.external_events_raised` - Events raised
-- `duroxide.client.cancellations` - Cancellations requested
-- `duroxide.client.wait_duration_ms` - Wait operation duration
+
+**`duroxide_client_orchestration_starts_total`** (Counter)
+- **Description**: Orchestrations started via client
+- **Labels**: `orchestration_name`
+
+**`duroxide_client_external_events_raised_total`** (Counter)
+- **Description**: External events raised via client
+- **Labels**: `event_name`
+
+**`duroxide_client_cancellations_total`** (Counter)
+- **Description**: Orchestration cancellations via client
+
+**`duroxide_client_wait_duration_seconds`** (Histogram)
+- **Description**: Client wait operation duration
+- **Buckets**: `[0.1, 0.5, 1, 2, 5, 10, 30, 60, 120]` seconds
 
 ## Error Classification
 
@@ -318,10 +391,16 @@ traces
 
 Query activity duration metrics:
 ```promql
-# Prometheus query
+# Prometheus query - p99 latency
 histogram_quantile(0.99, 
-  rate(duroxide_activity_duration_ms_bucket[5m])
+  rate(duroxide_activity_duration_seconds_bucket[5m])
 ) by (activity_name)
+
+# Activity success rate
+rate(duroxide_activity_executions_total{outcome="success"}[5m])
+/
+rate(duroxide_activity_executions_total[5m])
+by (activity_name)
 ```
 
 ### Identify Nondeterminism Issues
@@ -365,6 +444,50 @@ OTEL_SERVICE_NAME=duroxide-worker
 OTEL_SERVICE_VERSION=1.0.0
 ```
 
+## Example Prometheus Queries
+
+### Orchestration Success Rate
+```promql
+rate(duroxide_orchestration_completions_total{status="success"}[5m])
+/
+rate(duroxide_orchestration_completions_total[5m])
+by (orchestration_name)
+```
+
+### P95 Orchestration Duration
+```promql
+histogram_quantile(0.95,
+  rate(duroxide_orchestration_duration_seconds_bucket[5m])
+) by (orchestration_name)
+```
+
+### Activity Error Rate
+```promql
+rate(duroxide_activity_executions_total{outcome!="success"}[5m])
+by (activity_name)
+```
+
+### Top 5 Slowest Activities
+```promql
+topk(5,
+  histogram_quantile(0.95,
+    rate(duroxide_activity_duration_seconds_bucket[5m])
+  ) by (activity_name)
+)
+```
+
+### Infrastructure Errors (Actionable)
+```promql
+rate(duroxide_orchestration_failures_total{error_type="infrastructure_error"}[5m])
+by (orchestration_name)
+```
+
+### Orchestrations Requiring Many Turns
+```promql
+sum(duroxide_orchestration_completions_total{final_turn_count="50+"})
+by (orchestration_name)
+```
+
 ## Best Practices
 
 1. **Use Compact format in development** for readable logs
@@ -375,6 +498,8 @@ OTEL_SERVICE_VERSION=1.0.0
 6. **Use instance_id** as primary correlation field
 7. **Query by orchestration_name** to find patterns across instances
 8. **Enable metrics in production** for performance insights
+9. **Use histogram metrics** for p95/p99 latency tracking, not just averages
+10. **Alert on error_type labels** to distinguish actionable errors from business logic failures
 
 ## Troubleshooting
 
@@ -425,9 +550,26 @@ let options = RuntimeOptions {
 };
 ```
 
+## Grafana Dashboard
+
+A complete Grafana dashboard with 11 panels is available at:
+- [examples/grafana-dashboard.json](../examples/grafana-dashboard.json)
+
+Import this dashboard into Grafana to get:
+- Orchestration success rate by name
+- P95/P99 duration tracking
+- Activity execution rates and latency
+- Error classification
+- Continue-as-new operations
+- History size distribution
+- Provider operation latency
+- Turn count distribution
+
 ## See Also
 
+- [Telemetry Implementation Summary](telemetry-implementation-summary.md) - Complete metrics specification
 - [Provider Observability Guide](provider-observability.md) - For custom provider implementors
 - [Library Observability Guide](library-observability.md) - For library developers
 - [examples/with_observability.rs](../examples/with_observability.rs) - Working example
+- [examples/grafana-dashboard.json](../examples/grafana-dashboard.json) - Production dashboard
 
