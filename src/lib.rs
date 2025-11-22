@@ -68,9 +68,10 @@
 //!
 //! ```rust,no_run
 //! # use duroxide::OrchestrationContext;
+//! # use std::time::Duration;
 //! # async fn example(ctx: OrchestrationContext) -> Result<(), String> {
 //! // ✅ CORRECT: Orchestration-level delay using timer
-//! ctx.schedule_timer(5000).into_timer().await;  // Wait 5 seconds
+//! ctx.schedule_timer(Duration::from_secs(5)).into_timer().await;  // Wait 5 seconds
 //!
 //! // ✅ ALSO CORRECT: Activity can poll/sleep as part of its work
 //! // Example: Activity that provisions a VM and polls for readiness
@@ -152,16 +153,17 @@
 //!
 //! ```rust,no_run
 //! # use duroxide::OrchestrationContext;
+//! # use std::time::Duration;
 //! # async fn example(ctx: OrchestrationContext) -> Result<(), String> {
 //! // ✅ CORRECT patterns:
 //! let result = ctx.schedule_activity("Task", "input").into_activity().await?;
-//! ctx.schedule_timer(5000).into_timer().await;
+//! ctx.schedule_timer(Duration::from_secs(5)).into_timer().await;
 //! let event = ctx.schedule_wait("Event").into_event().await;
 //! let sub_result = ctx.schedule_sub_orchestration("Sub", "input").into_sub_orchestration().await?;
 //!
 //! // ❌ WRONG - These won't compile:
 //! // let result = ctx.schedule_activity("Task", "input").await;  // Missing .into_activity()!
-//! // ctx.schedule_timer(5000).await;                            // Missing .into_timer()!
+//! // ctx.schedule_timer(Duration::from_secs(5)).await;                            // Missing .into_timer()!
 //! // let event = ctx.schedule_wait("Event").await;              // Missing .into_event()!
 //! # Ok(())
 //! # }
@@ -202,8 +204,9 @@
 //! ### Human-in-the-Loop
 //! ```rust,no_run
 //! # use duroxide::{OrchestrationContext, DurableOutput};
+//! # use std::time::Duration;
 //! async fn approval_example(ctx: OrchestrationContext) -> String {
-//!     let timer = ctx.schedule_timer(30000); // 30 second timeout
+//!     let timer = ctx.schedule_timer(Duration::from_secs(30)); // 30 second timeout
 //!     let approval = ctx.schedule_wait("ApprovalEvent");
 //!     
 //!     let (_, result) = ctx.select2(timer, approval).await;
@@ -284,7 +287,7 @@ pub(crate) const SYSCALL_OP_TRACE_PREFIX: &str = "trace:";
 use crate::_typed_codec::Codec;
 // LogLevel is now defined locally in this file
 use serde::{Deserialize, Serialize};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration as StdDuration, SystemTime, UNIX_EPOCH};
 
 // Internal codec utilities for typed I/O (kept private; public API remains ergonomic)
 mod _typed_codec {
@@ -1073,20 +1076,59 @@ impl OrchestrationContext {
         self.schedule_system_call(SYSCALL_OP_GUID)
     }
 
-    /// Get the current UTC time in milliseconds since epoch.
-    /// Returns a future that resolves to a u64 timestamp.
-    pub fn utcnow_ms(&self) -> impl Future<Output = Result<u64, String>> {
+    /// Get the current UTC time.
+    /// Returns a future that resolves to a SystemTime.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use duroxide::OrchestrationContext;
+    /// # use std::time::{SystemTime, Duration};
+    /// # async fn example(ctx: OrchestrationContext) -> Result<(), String> {
+    /// let now = ctx.utcnow().await?;
+    /// let deadline = now + Duration::from_secs(3600); // 1 hour from now
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn utcnow(&self) -> impl Future<Output = Result<SystemTime, String>> {
         let fut = self.schedule_system_call(SYSCALL_OP_UTCNOW_MS).into_activity();
         async move {
             let s = fut.await?;
-            s.parse::<u64>().map_err(|e| e.to_string())
+            let ms = s.parse::<u64>().map_err(|e| e.to_string())?;
+            Ok(UNIX_EPOCH + StdDuration::from_millis(ms))
         }
     }
 
     /// Get the current UTC time as a DurableFuture.
     /// This variant returns a DurableFuture that can be used with join/select.
-    /// The result will be a String representation of milliseconds since epoch.
-    pub fn utcnow_ms_future(&self) -> DurableFuture {
+    ///
+    /// **Note:** When awaited, this returns a String representation of milliseconds.
+    /// For direct use, prefer `utcnow()` which returns `SystemTime`.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use duroxide::{OrchestrationContext, DurableOutput};
+    /// # use std::time::{SystemTime, Duration, UNIX_EPOCH};
+    /// # async fn example(ctx: OrchestrationContext) -> Result<(), String> {
+    /// let time_future = ctx.utcnow_future();
+    /// let activity_future = ctx.schedule_activity("Task", "input");
+    ///
+    /// let results = ctx.join(vec![time_future, activity_future]).await;
+    /// for result in results {
+    ///     match result {
+    ///         DurableOutput::Activity(Ok(s)) => {
+    ///             // Parse timestamp string to SystemTime
+    ///             let ms: u64 = s.parse().map_err(|e: std::num::ParseIntError| e.to_string())?;
+    ///             let time = UNIX_EPOCH + Duration::from_millis(ms);
+    ///         }
+    ///         _ => {}
+    ///     }
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn utcnow_future(&self) -> DurableFuture {
         self.schedule_system_call(SYSCALL_OP_UTCNOW_MS)
     }
 
@@ -1323,16 +1365,17 @@ impl OrchestrationContext {
     /// # Examples
     /// ```rust,no_run
     /// # use duroxide::OrchestrationContext;
+    /// # use std::time::Duration;
     /// # async fn example(ctx: OrchestrationContext) -> Result<(), String> {
     /// // ✅ CORRECT: Wait 5 seconds
-    /// ctx.schedule_timer(5000).into_timer().await;
+    /// ctx.schedule_timer(Duration::from_secs(5)).into_timer().await;
     ///
     /// // ❌ WRONG: This won't compile!
-    /// // ctx.schedule_timer(5000).await;  // Missing .into_timer()!
+    /// // ctx.schedule_timer(Duration::from_secs(5)).await;  // Missing .into_timer()!
     ///
     /// // Timeout pattern
     /// let work = ctx.schedule_activity("LongTask", "input");
-    /// let timeout = ctx.schedule_timer(30000); // 30 second timeout
+    /// let timeout = ctx.schedule_timer(Duration::from_secs(30)); // 30 second timeout
     /// let (winner, _) = ctx.select2(work, timeout).await;
     /// match winner {
     ///     0 => println!("Work completed"),
@@ -1342,10 +1385,10 @@ impl OrchestrationContext {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn schedule_timer(&self, delay_ms: u64) -> DurableFuture {
+    pub fn schedule_timer(&self, delay: std::time::Duration) -> DurableFuture {
         // No ID allocation here - event_id is discovered during first poll
         DurableFuture(Kind::Timer {
-            delay_ms,
+            delay_ms: delay.as_millis() as u64,
             claimed_event_id: Cell::new(None),
             ctx: self.clone(),
         })

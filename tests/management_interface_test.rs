@@ -601,7 +601,7 @@ async fn test_complex_workflow_management() {
     let orders = vec!["order-1", "order-2", "order-3", "order-4", "order-5"];
     for order in &orders {
         client
-            .start_orchestration(order, "OrderProcessing", *order)
+            .start_orchestration(*order, "OrderProcessing", *order)
             .await
             .unwrap();
     }

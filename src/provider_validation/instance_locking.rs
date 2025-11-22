@@ -637,7 +637,6 @@ pub async fn test_multi_threaded_lock_expiration_recovery<F: ProviderFactory>(fa
     // Thread 1: Fetch and hold lock (don't ack)
     let provider1 = provider.clone();
     let handle1 = tokio::spawn({
-        let lock_timeout = lock_timeout;
         async move {
             let item = provider1.fetch_orchestration_item(lock_timeout).await.unwrap().unwrap();
             assert_eq!(item.instance, "expiration-instance");
@@ -651,7 +650,6 @@ pub async fn test_multi_threaded_lock_expiration_recovery<F: ProviderFactory>(fa
     // Thread 2: Try to fetch immediately (should fail)
     let provider2 = provider.clone();
     let handle2 = tokio::spawn({
-        let lock_timeout = lock_timeout;
         async move {
             tokio::time::sleep(Duration::from_millis(10)).await;
             let result = provider2.fetch_orchestration_item(lock_timeout).await.unwrap();
@@ -663,7 +661,6 @@ pub async fn test_multi_threaded_lock_expiration_recovery<F: ProviderFactory>(fa
     // Thread 3: Wait for expiration and then fetch (should succeed)
     let provider3 = provider.clone();
     let handle3 = tokio::spawn({
-        let lock_timeout = lock_timeout;
         async move {
             tokio::time::sleep(lock_timeout + Duration::from_millis(100)).await;
             provider3.fetch_orchestration_item(lock_timeout).await.unwrap()

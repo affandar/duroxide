@@ -4,13 +4,14 @@ use duroxide::runtime::{self};
 use duroxide::{Action, ActivityContext, DurableOutput, Event, OrchestrationContext, OrchestrationRegistry, run_turn};
 use std::sync::Arc as StdArc;
 use std::sync::Arc;
+use std::time::Duration;
 mod common;
 
 async fn orchestration_completes_and_replays_deterministically_with(store: StdArc<dyn Provider>) {
     let orchestration = |ctx: OrchestrationContext, _input: String| async move {
         let start: u64 = 0; // deterministic logical start for test
         let f_a = ctx.schedule_activity("A", "1");
-        let f_t = ctx.schedule_timer(50); // Longer timer for reliability
+        let f_t = ctx.schedule_timer(Duration::from_millis(50)); // Longer timer for reliability
 
         let outputs = ctx.join(vec![f_a, f_t]).await;
 
@@ -84,7 +85,7 @@ async fn orchestration_completes_and_replays_deterministically_with(store: StdAr
     let orchestration2 = |ctx: OrchestrationContext, _input: String| async move {
         let start: u64 = 0;
         let f_a = ctx.schedule_activity("A", "1");
-        let f_t = ctx.schedule_timer(50); // Longer timer for reliability
+        let f_t = ctx.schedule_timer(Duration::from_millis(50)); // Longer timer for reliability
 
         let outputs = ctx.join(vec![f_a, f_t]).await;
 

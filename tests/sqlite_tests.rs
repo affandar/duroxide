@@ -448,7 +448,7 @@ async fn timer_recovery_after_crash_before_fire() {
     // Simple orchestration that schedules a timer and then completes
     let orch = |ctx: duroxide::OrchestrationContext, _input: String| async move {
         // Schedule a timer with enough delay that we can "crash" before it fires
-        ctx.schedule_timer(TIMER_MS).into_timer().await;
+        ctx.schedule_timer(Duration::from_millis(TIMER_MS)).into_timer().await;
 
         // Do something after timer to prove it fired
         let result = ctx.schedule_activity("PostTimer", "done").into_activity().await?;
@@ -492,7 +492,7 @@ async fn timer_recovery_after_crash_before_fire() {
 
     // Restart runtime with same store
     let orch2 = |ctx: duroxide::OrchestrationContext, _input: String| async move {
-        ctx.schedule_timer(TIMER_MS).into_timer().await;
+        ctx.schedule_timer(Duration::from_millis(TIMER_MS)).into_timer().await;
         let result = ctx.schedule_activity("PostTimer", "done").into_activity().await?;
         Ok(result)
     };

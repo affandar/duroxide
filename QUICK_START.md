@@ -21,7 +21,8 @@ Duroxide is a framework for building **reliable, long-running workflows** that c
 
 ```rust
 // ✅ CORRECT: Use timers for orchestration delays
-ctx.schedule_timer(5000).into_timer().await; // Wait 5 seconds
+use std::time::Duration;
+ctx.schedule_timer(Duration::from_secs(5)).into_timer().await; // Wait 5 seconds
 
 // ✅ ALSO CORRECT: Activities can use sleep, HTTP calls, database queries, etc.
 // Activities are just regular async functions and can do anything
@@ -33,12 +34,12 @@ ctx.schedule_timer(5000).into_timer().await; // Wait 5 seconds
 ```rust
 // ✅ CORRECT patterns:
 let result = ctx.schedule_activity("Task", "input").into_activity().await?;
-ctx.schedule_timer(5000).into_timer().await;
+ctx.schedule_timer(Duration::from_secs(5)).into_timer().await;
 let event = ctx.schedule_wait("Event").into_event().await;
 
 // ❌ WRONG - Missing conversion methods:
 // let result = ctx.schedule_activity("Task", "input").await;  // Won't compile!
-// ctx.schedule_timer(5000).await;                            // Won't compile!
+// ctx.schedule_timer(Duration::from_secs(5)).await;                            // Won't compile!
 ```
 
 ## Minimal Example
@@ -101,7 +102,7 @@ async fn process_multiple(ctx: OrchestrationContext) -> Vec<String> {
 ### 3. Human-in-the-Loop (Approvals)
 ```rust
 async fn approval_workflow(ctx: OrchestrationContext) -> String {
-    let timer = ctx.schedule_timer(30000); // 30 second timeout
+    let timer = ctx.schedule_timer(std::time::Duration::from_secs(30)); // 30 second timeout
     let approval = ctx.schedule_wait("ApprovalEvent");
     
     let (_, result) = ctx.select2(timer, approval).await;
@@ -117,7 +118,7 @@ async fn approval_workflow(ctx: OrchestrationContext) -> String {
 
 ### OrchestrationContext Methods
 - `ctx.schedule_activity(name, input)` - Schedule an activity
-- `ctx.schedule_timer(delay_ms)` - Create a timer
+- `ctx.schedule_timer(delay)` - Create a timer
 - `ctx.schedule_wait(event_name)` - Wait for external event
 - `ctx.join(futures)` - Wait for all futures to complete
 - `ctx.select2(future1, future2)` - Race between two futures
@@ -177,7 +178,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = Client::new(store);
     client.start_orchestration("order-1", "OrderProcessor", "ORDER-123").await?; // Returns Result<(), ClientError>
     
-    match client.wait_for_orchestration("order-1", std::time::Duration::from_secs(5)).await? { // Returns Result<OrchestrationStatus, WaitError>
+    match client.wait_for_orchestration("order-1", std::time::Duration::from_secs(5)).await? { // Returns Result<OrchestrationStatus, ClientError>
         OrchestrationStatus::Completed { output } => {
             println!("✅ Success: {}", output);
         }

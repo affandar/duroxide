@@ -140,7 +140,6 @@ pub async fn test_concurrent_lock_attempts_respect_expiration<F: ProviderFactory
     let handles: Vec<_> = (0..5)
         .map(|i| {
             let provider = provider.clone();
-            let lock_timeout = lock_timeout;
             tokio::spawn(async move {
                 // Stagger the attempts slightly
                 tokio::time::sleep(Duration::from_millis(i * 50)).await;

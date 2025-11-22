@@ -133,13 +133,6 @@ pub enum OrchestrationStatus {
     Failed { details: crate::ErrorDetails },
 }
 
-/// Error type returned by orchestration wait helpers.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum WaitError {
-    Timeout,
-    Other(String),
-}
-
 /// Trait implemented by orchestration handlers that can be invoked by the runtime.
 #[async_trait]
 pub trait OrchestrationHandler: Send + Sync {

@@ -2,6 +2,7 @@ use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
 use duroxide::{ActivityContext, Event, OrchestrationContext, OrchestrationRegistry};
 use std::sync::Arc as StdArc;
+use std::time::Duration;
 mod common;
 
 // Basic ContinueAsNew loop: rolls input across executions and finally completes.
@@ -350,7 +351,7 @@ async fn event_drop_then_retry_after_subscribe() {
     let orch = |ctx: OrchestrationContext, _input: String| async move {
         ctx.trace_info("subscribe after a short delay".to_string());
         // Introduce a small timer before subscribing to simulate early event arrival
-        ctx.schedule_timer(100).into_timer().await;
+        ctx.schedule_timer(Duration::from_millis(100)).into_timer().await;
         let v = ctx.schedule_wait("Data").into_event().await;
         Ok(v)
     };

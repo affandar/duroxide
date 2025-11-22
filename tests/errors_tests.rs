@@ -5,6 +5,7 @@ use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
 use duroxide::{ActivityContext, OrchestrationContext, OrchestrationRegistry};
 use std::sync::Arc as StdArc;
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use tracing::info;
@@ -333,11 +334,11 @@ async fn event_before_subscription_after_start_is_ignored() {
     let orchestration = |ctx: OrchestrationContext, _input: String| async move {
         info!("Orchestration started");
         // Delay before subscribing to simulate missing subscription window
-        ctx.schedule_timer(10).into_timer().await;
+        ctx.schedule_timer(Duration::from_millis(10)).into_timer().await;
         info!("Subscribing to event");
         // Subscribe, then wait for event with timeout
         let ev = ctx.schedule_wait("Evt");
-        let to = ctx.schedule_timer(1000);
+        let to = ctx.schedule_timer(Duration::from_millis(1000));
         match ctx.select2(ev, to).await {
             (0, duroxide::DurableOutput::External(data)) => {
                 info!("Event received: {}", data);
@@ -432,11 +433,11 @@ async fn history_cap_exceeded_with(store: StdArc<dyn Provider>) {
             panic!("expected failure due to history capacity, got: {output}")
         }
         Ok(_) => panic!("unexpected orchestration status"),
-        Err(duroxide::runtime::WaitError::Timeout) => {
+        Err(duroxide::ClientError::Timeout) => {
             // This is also acceptable - the orchestration may not be able to write a terminal event due to capacity
             // In this case, the polling JoinHandle should detect the persistence error
         }
-        Err(duroxide::runtime::WaitError::Other(_)) => {
+        Err(_) => {
             // Other errors are also acceptable for capacity exceeded scenarios
         }
     }

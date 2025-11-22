@@ -5,6 +5,7 @@ use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
 use duroxide::{Action, ActivityContext, Event, OrchestrationContext, OrchestrationRegistry, run_turn};
 use std::sync::Arc;
+use std::time::Duration;
 
 mod common;
 use common::test_create_execution;
@@ -107,7 +108,7 @@ async fn runtime_duplicate_orchestration_deduped_single_execution() {
     let orchestration_registry = OrchestrationRegistry::builder()
         .register("TestOrch", |ctx, _| async move {
             // Slow a bit to allow duplicate enqueue to happen
-            ctx.schedule_timer(20).into_timer().await;
+            ctx.schedule_timer(Duration::from_millis(20)).into_timer().await;
             Ok("ok".to_string())
         })
         .build();
@@ -212,7 +213,7 @@ async fn orchestration_status_apis() {
     let activity_registry = ActivityRegistry::builder().build();
     let orchestration_registry = OrchestrationRegistry::builder()
         .register("ShortTimer", |ctx, _| async move {
-            ctx.schedule_timer(100).into_timer().await;
+            ctx.schedule_timer(Duration::from_millis(100)).into_timer().await;
             Ok("ok".to_string())
         })
         .register("AlwaysFails", |_ctx, _| async move { Err("boom".to_string()) })

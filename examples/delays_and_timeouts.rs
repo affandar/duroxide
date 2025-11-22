@@ -49,8 +49,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // ✅ CORRECT: Use timer for delay
         ctx.trace_info("Waiting 2 seconds...");
-        ctx.schedule_timer(2000).into_timer().await; // MUST use .into_timer().await!
-        // ❌ WRONG: ctx.schedule_timer(2000).await;  // Missing .into_timer()!
+        ctx.schedule_timer(std::time::Duration::from_secs(2)).into_timer().await; // MUST use .into_timer().await!
+        // ❌ WRONG: ctx.schedule_timer(Duration::from_secs(2)).await;  // Missing .into_timer()!
         ctx.trace_info("Timer fired! Processing data...");
 
         // Process some data after the delay
@@ -70,7 +70,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // ✅ CORRECT: Use timer for timeout with select2
         let work = ctx.schedule_activity("SlowOperation", input.clone());
-        let timeout = ctx.schedule_timer(5000); // 5 second timeout
+        let timeout = ctx.schedule_timer(std::time::Duration::from_secs(5)); // 5 second timeout
 
         ctx.trace_info("Racing work against timeout...");
         let (winner_index, result) = ctx.select2(work, timeout).await;

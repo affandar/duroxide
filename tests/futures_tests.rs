@@ -3,6 +3,7 @@ use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
 use duroxide::{Event, OrchestrationContext, OrchestrationRegistry};
 use std::sync::Arc as StdArc;
+use std::time::Duration;
 
 mod common;
 
@@ -237,7 +238,7 @@ async fn select_three_mixed_history_winner() {
 
     let orchestrator = |ctx: OrchestrationContext, _input: String| async move {
         let a = ctx.schedule_wait("A");
-        let t = ctx.schedule_timer(500);
+        let t = ctx.schedule_timer(Duration::from_millis(500));
         let b = ctx.schedule_wait("B");
         let (idx, out) = ctx.select(vec![a, t, b]).await;
         match (idx, out) {

@@ -405,7 +405,7 @@ Based on complexity and portability:
    ```
    ```rust
    // Duroxide
-   ctx.schedule_timer(5000).into_timer().await;
+   ctx.schedule_timer(std::time::Duration::from_secs(5)).into_timer().await;
    ```
 
 4. **External Events**:
