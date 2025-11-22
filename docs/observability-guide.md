@@ -527,8 +527,19 @@ by (orchestration_name)
 
 ### Orchestrations Requiring Many Turns
 ```promql
+# Using completion labels (bucketed ranges)
 sum(duroxide_orchestration_completions_total{final_turn_count="50+"})
 by (orchestration_name)
+
+# Using turns histogram (p95 turn count)
+histogram_quantile(0.95,
+  rate(duroxide_orchestration_turns_bucket[5m])
+) by (orchestration_name)
+
+# Orchestrations that took >100 turns
+sum(rate(duroxide_orchestration_turns_bucket{le="+Inf"}[5m]))
+-
+sum(rate(duroxide_orchestration_turns_bucket{le="100"}[5m]))
 ```
 
 ### Currently Active Orchestrations (Gauge)
