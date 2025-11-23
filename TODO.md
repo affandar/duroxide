@@ -1,5 +1,16 @@
 ## Duroxide – TODOs
 
+### 🚫 Blockers for Public Crate Release
+
+- **[BLOCKER] Add timestamps to Event types for accurate orchestration duration metrics**
+  - Current Issue: `duroxide_orchestration_duration_seconds` only measures final turn duration (40ms), not total orchestration lifetime (could be hours/days)
+  - Solution: Add `timestamp_ms: u64` field to Event types (OrchestrationStarted, OrchestrationCompleted, OrchestrationFailed, ActivityScheduled, ActivityCompleted, etc.)
+  - Impact: Requires Event schema migration, provider storage updates, database migration for SQLite
+  - Benefits: Accurate end-to-end duration metrics, enables timeline reconstruction, useful for debugging beyond metrics
+  - Complexity: Medium - Breaking change to Event enum, requires careful migration
+  - Related: Would enable per-execution timelines, activity wait times, accurate percentile tracking
+
+### Active TODOs
 
 - Full e2e Otel test
 - Wire up suborchestration metrics, requires some linkage of names between suborch -> parent in the replayengine
