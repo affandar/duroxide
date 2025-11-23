@@ -1109,9 +1109,16 @@ async fn test_versioned_orchestration_metrics() {
         })
         .build();
 
+    fn versioned_handler(ctx: OrchestrationContext) -> impl std::future::Future<Output = Result<String, String>> {
+        async move { ctx.schedule_activity("TestActivity", "").into_activity().await }
+    }
+
     let orchestrations = OrchestrationRegistry::builder()
-        .register("VersionedOrch", |ctx: OrchestrationContext, _input: String| async move {
-            ctx.schedule_activity("TestActivity", "").into_activity().await
+        .register("VersionedOrch", |ctx: OrchestrationContext, _input: String| {
+            versioned_handler(ctx)
+        })
+        .register_versioned("VersionedOrch", "2.0.0", |ctx: OrchestrationContext, _input: String| {
+            versioned_handler(ctx)
         })
         .build();
 
