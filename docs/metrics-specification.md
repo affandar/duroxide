@@ -10,47 +10,62 @@ This document provides a complete reference of all metrics emitted by duroxide, 
 
 ## Summary Table
 
-| Metric Name | Type | Category | Labels | Test Coverage | OTel Test | Notes |
-|------------|------|----------|--------|---------------|-----------|-------|
+| Metric Name | Type | Category | Labels | Test Coverage | OTel Export | Notes |
+|------------|------|----------|--------|---------------|-------------|-------|
 | **Orchestration Lifecycle** |
-| `duroxide_orchestration_starts_total` | Counter | Orchestration | `orchestration_name`, `version`, `initiated_by` | ✅ `test_labeled_metrics_recording` | None | Tracks orchestration starts |
-| `duroxide_orchestration_completions_total` | Counter | Orchestration | `orchestration_name`, `version`, `status`, `final_turn_count` | ✅ `metrics_capture_activity_and_orchestration_outcomes` | None | Tracks completions with turn count bucketing |
-| `duroxide_orchestration_failures_total` | Counter | Orchestration | `orchestration_name`, `version`, `error_type`, `error_category` | ✅ `test_error_classification_metrics` | None | Detailed failure tracking |
-| `duroxide_orchestration_duration_seconds` | Histogram | Orchestration | `orchestration_name`, `version`, `status` | ✅ `test_activity_duration_tracking` | None | 0.1s to 1h buckets |
-| `duroxide_orchestration_history_size` | Histogram | Orchestration | `orchestration_name` | ✅ `test_labeled_metrics_recording` | None | 10 to 10,000 events |
-| `duroxide_orchestration_turns` | Histogram | Orchestration | `orchestration_name` | ✅ `test_labeled_metrics_recording` | None | 1 to 500 turns |
-| `duroxide_orchestration_infrastructure_errors_total` | Counter | Orchestration | `orchestration_name`, `error_category` | ✅ `metrics_capture_activity_and_orchestration_outcomes` | None | Infrastructure-specific errors |
-| `duroxide_orchestration_configuration_errors_total` | Counter | Orchestration | `orchestration_name`, `error_category` | ✅ `test_error_classification_metrics` | None | Config-specific errors |
-| `duroxide_orchestration_continue_as_new_total` | Counter | Orchestration | `orchestration_name`, `execution_id` | ✅ `test_continue_as_new_metrics` | None | Continue-as-new operations |
-| `duroxide_active_orchestrations` | Gauge | Orchestration | `state` | ✅ `test_active_orchestrations_gauge` | None | Current active count |
-| `duroxide_orchestrator_queue_depth` | Gauge | Runtime | _(none)_ | ✅ `test_queue_depth_gauges_initialization` | None | Current orchestrator queue backlog |
-| `duroxide_worker_queue_depth` | Gauge | Runtime | _(none)_ | ✅ `test_queue_depth_gauges_tracking` | None | Current worker queue backlog |
+| `duroxide_orchestration_starts_total` | Counter | Orchestration | `orchestration_name`, `version`, `initiated_by` | ✅ `test_labeled_metrics_recording` | ✅ Code Review | Recorded in `orchestration.rs:136` with all labels |
+| `duroxide_orchestration_completions_total` | Counter | Orchestration | `orchestration_name`, `version`, `status`, `final_turn_count` | ✅ `metrics_capture_activity_and_orchestration_outcomes` | ✅ Code Review | Recorded in `orchestration.rs:200,283` with all labels |
+| `duroxide_orchestration_failures_total` | Counter | Orchestration | `orchestration_name`, `version`, `error_type`, `error_category` | ✅ `test_error_classification_metrics` | ✅ Code Review | Recorded in `orchestration.rs:280` with all labels |
+| `duroxide_orchestration_duration_seconds` | Histogram | Orchestration | `orchestration_name`, `version`, `status` | ✅ `test_activity_duration_tracking` | ✅ Code Review | Recorded in `observability.rs:514` with labels, buckets: 0.1-3600s |
+| `duroxide_orchestration_history_size` | Histogram | Orchestration | `orchestration_name` | ✅ `test_labeled_metrics_recording` | ✅ Code Review | Recorded in `observability.rs:527` with label, buckets: 10-10000 events |
+| `duroxide_orchestration_turns` | Histogram | Orchestration | `orchestration_name` | ✅ `test_labeled_metrics_recording` | ✅ Code Review | Recorded in `observability.rs:522` with label, buckets: 1-500 turns |
+| `duroxide_orchestration_infrastructure_errors_total` | Counter | Orchestration | `orchestration_name`, `error_category` | ✅ `metrics_capture_activity_and_orchestration_outcomes` | ✅ Code Review | Recorded in `observability.rs:561` with labels |
+| `duroxide_orchestration_configuration_errors_total` | Counter | Orchestration | `orchestration_name`, `error_category` | ✅ `test_error_classification_metrics` | ✅ Code Review | Recorded in `observability.rs:573` with labels |
+| `duroxide_orchestration_continue_as_new_total` | Counter | Orchestration | `orchestration_name`, `execution_id` | ✅ `test_continue_as_new_metrics` | ✅ Code Review | Recorded in `orchestration.rs:308` with labels |
+| `duroxide_active_orchestrations` | Gauge | Orchestration | `state` | ✅ `test_active_orchestrations_gauge` | ✅ Code Review | Observable gauge with callback, updated in `orchestration.rs:141,210,293` |
+| `duroxide_orchestrator_queue_depth` | Gauge | Runtime | _(none)_ | ✅ `test_queue_depth_gauges_initialization` | ✅ Code Review | Observable gauge with callback, initialized via `initialize_gauges()` |
+| `duroxide_worker_queue_depth` | Gauge | Runtime | _(none)_ | ✅ `test_queue_depth_gauges_tracking` | ✅ Code Review | Observable gauge with callback, initialized via `initialize_gauges()` |
 | **Activity Execution** |
-| `duroxide_activity_executions_total` | Counter | Activity | `activity_name`, `outcome`, `retry_attempt` | ✅ `metrics_capture_activity_and_orchestration_outcomes` | None | Execution attempts with retry info |
-| `duroxide_activity_duration_seconds` | Histogram | Activity | `activity_name`, `outcome` | ✅ `test_activity_duration_tracking` | None | 0.01s to 5min buckets |
-| `duroxide_activity_errors_total` | Counter | Activity | `activity_name`, `error_type`, `retryable` | ✅ `test_error_classification_metrics` | None | Detailed error tracking |
-| `duroxide_activity_infrastructure_errors_total` | Counter | Activity | `activity_name` | ✅ `metrics_capture_activity_and_orchestration_outcomes` | None | Infrastructure-specific errors |
-| `duroxide_activity_configuration_errors_total` | Counter | Activity | `activity_name` | ✅ `test_error_classification_metrics` | None | Config-specific errors |
+| `duroxide_activity_executions_total` | Counter | Activity | `activity_name`, `outcome`, `retry_attempt` | ✅ `metrics_capture_activity_and_orchestration_outcomes` | ✅ Code Review | Tracks all outcomes including app_error |
+| `duroxide_activity_duration_seconds` | Histogram | Activity | `activity_name`, `outcome` | ✅ `test_activity_duration_tracking` | ✅ Code Review | Buckets: 0.01-300s |
+| `duroxide_activity_infrastructure_errors_total` | Counter | Activity | `activity_name` | ✅ `metrics_capture_activity_and_orchestration_outcomes` | ✅ Code Review | Infra-specific errors |
+| `duroxide_activity_configuration_errors_total` | Counter | Activity | `activity_name` | ✅ `test_error_classification_metrics` | ✅ Code Review | Config-specific errors |
 | **Sub-Orchestration** |
-| `duroxide_suborchestration_calls_total` | Counter | Sub-Orchestration | `parent_orchestration`, `child_orchestration`, `outcome` | ✅ `test_sub_orchestration_metrics` | None | Sub-orchestration invocations |
-| `duroxide_suborchestration_duration_seconds` | Histogram | Sub-Orchestration | `parent_orchestration`, `child_orchestration`, `outcome` | ✅ `test_sub_orchestration_metrics` | None | 0.1s to 10min buckets |
+| `duroxide_suborchestration_calls_total` | Counter | Sub-Orchestration | `parent_orchestration`, `child_orchestration`, `outcome` | ✅ `test_sub_orchestration_metrics` | ❌ Not Called | Method defined in `observability.rs:701` but never called from runtime |
+| `duroxide_suborchestration_duration_seconds` | Histogram | Sub-Orchestration | `parent_orchestration`, `child_orchestration`, `outcome` | ✅ `test_sub_orchestration_metrics` | ❌ Not Called | Method defined in `observability.rs:718` but never called from runtime |
 | **Provider (Storage)** |
-| `duroxide_provider_operation_duration_seconds` | Histogram | Provider | `operation`, `status` | ✅ `test_provider_metrics_recorded` | None | 0.001s to 5s buckets |
-| `duroxide_provider_errors_total` | Counter | Provider | `operation`, `error_type` | ✅ `test_provider_error_metrics` | None | Storage layer errors |
+| `duroxide_provider_operation_duration_seconds` | Histogram | Provider | `operation`, `status` | ✅ `test_provider_metrics_recorded` | ✅ Code Review | Recorded in `instrumented.rs` wrapper with labels |
+| `duroxide_provider_errors_total` | Counter | Provider | `operation`, `error_type` | ✅ `test_provider_error_metrics` | ✅ Code Review | Recorded in `instrumented.rs` wrapper with labels |
 | **Client Operations** |
-| `duroxide_client_orchestration_starts_total` | Counter | Client | `orchestration_name` | ❌ Not instrumented | None | ⚠️ Defined but not instrumented |
-| `duroxide_client_external_events_raised_total` | Counter | Client | `event_name` | ❌ Not instrumented | None | ⚠️ Defined but not instrumented |
-| `duroxide_client_cancellations_total` | Counter | Client | _(none)_ | ❌ Not instrumented | None | ⚠️ Defined but not instrumented |
-| `duroxide_client_wait_duration_seconds` | Histogram | Client | _(none)_ | ❌ Not instrumented | None | ⚠️ Defined but not instrumented |
+| `duroxide_client_orchestration_starts_total` | Counter | Client | `orchestration_name` | ❌ Not instrumented | ❌ Not Wired | Instrument exists but never recorded |
+| `duroxide_client_external_events_raised_total` | Counter | Client | `event_name` | ❌ Not instrumented | ❌ Not Wired | Instrument exists but never recorded |
+| `duroxide_client_cancellations_total` | Counter | Client | _(none)_ | ❌ Not instrumented | ❌ Not Wired | Instrument exists but never recorded |
+| `duroxide_client_wait_duration_seconds` | Histogram | Client | _(none)_ | ❌ Not instrumented | ❌ Not Wired | Instrument exists but never recorded |
 | **Internal Dispatcher** |
-| `duroxide.orchestration.dispatcher.items_fetched` | Counter | Internal | _(none)_ | ✅ Implicitly tested | None | Uses dot notation, milliseconds |
-| `duroxide.orchestration.dispatcher.processing_duration_ms` | Histogram | Internal | _(none)_ | ✅ Implicitly tested | None | Uses dot notation, milliseconds |
-| `duroxide.worker.dispatcher.items_fetched` | Counter | Internal | _(none)_ | ✅ Implicitly tested | None | Uses dot notation, milliseconds |
-| `duroxide.worker.dispatcher.execution_duration_ms` | Histogram | Internal | _(none)_ | ✅ Implicitly tested | None | Uses dot notation, milliseconds |
+| `duroxide.orchestration.dispatcher.items_fetched` | Counter | Internal | _(none)_ | ✅ Implicitly tested | ✅ Code Review | Recorded in dispatcher, no labels |
+| `duroxide.orchestration.dispatcher.processing_duration_ms` | Histogram | Internal | _(none)_ | ✅ Implicitly tested | ✅ Code Review | Recorded in dispatcher, no labels |
+| `duroxide.worker.dispatcher.items_fetched` | Counter | Internal | _(none)_ | ✅ Implicitly tested | ✅ Code Review | Recorded in dispatcher, no labels |
+| `duroxide.worker.dispatcher.execution_duration_ms` | Histogram | Internal | _(none)_ | ✅ Implicitly tested | ✅ Code Review | Recorded in dispatcher, no labels |
 
 **Test Location:** All tests are in `tests/observability_tests.rs`
 
-**OTel Testing:** Currently, tests validate atomic counters (that metrics are recorded) but do not validate full OpenTelemetry export with labels, histogram buckets, or metric naming conventions. Full OTel validation would require exporting to a collector and verifying the exported data.
+**OTel Export Status:**
+- **✅ Code Review** - Metric is properly wired to OTel API with correct labels/buckets (verified by code audit)
+- **⚠️ Defined** - Method exists but not called from runtime (will always be 0)
+- **❌ Not Called** - Method defined but never invoked (metric won't appear in exports)
+- **❌ Not Wired** - Instrument created but never used
+
+Tests validate atomic counters (that metrics are recorded) but do not validate full OpenTelemetry export format. OTel export status is determined by code audit to verify metrics are properly wired to the OpenTelemetry API.
+
+**Known Issues:**
+- **Sub-orchestration metrics require complex implementation** - `duroxide_suborchestration_calls_total` and `duroxide_suborchestration_duration_seconds` are defined but not wired up. Implementation is complex because: (1) Parent orchestration name is in parent execution context, (2) Child orchestration name must be extracted from `SubOrchestrationScheduled` event by looking up `parent_id` in history, (3) Duration calculation requires event timestamps or turn-based approximation, (4) Metrics must be recorded when `SubOrchCompleted`/`SubOrchFailed` work items are processed in `replay_engine.rs`. Sub-orchestrations currently appear as regular orchestrations in metrics (counted in `duroxide_orchestration_starts_total`, etc.) but parent-child relationship is not tracked.
+- **Client metrics not instrumented** - All 4 client metrics have instruments created but are never recorded from `Client` methods.
+
+**OTel Export Validation:**
+- Tests validate that metrics are recorded (via atomic counters)
+- Code review confirms most metrics use OTel API with proper labels
+- Automated validation of OTel export format (labels, buckets) is not implemented
+- For full validation, manually export to Prometheus and verify metric structure
 
 ---
 
@@ -356,12 +371,18 @@ duroxide_orchestrator_queue_depth / duroxide_worker_queue_depth
   - `"2"` - Second retry
   - `"3+"` - Third or later retry
 
-**Purpose:** Identify flaky activities, track retry rates
+**Purpose:** Identify flaky activities, track retry rates, track all error types including application errors
+
+**Note:** Application-level activity errors are tracked via `outcome="app_error"` in this metric. There is no separate `activity_errors_total` counter.
 
 **Example Queries:**
 ```promql
-# Activity failure rate
+# Activity failure rate (all types)
 rate(duroxide_activity_executions_total{outcome!="success"}[5m]) 
+by (activity_name)
+
+# Activity app error rate
+rate(duroxide_activity_executions_total{outcome="app_error"}[5m])
 by (activity_name)
 
 # Activities requiring retries
@@ -399,32 +420,7 @@ topk(5,
 
 ---
 
-### 2.3 `duroxide_activity_errors_total` (Counter)
-
-**Description:** Detailed activity error tracking
-
-**Labels:**
-- `activity_name` (string) - Activity name
-- `error_type` (string) - Error classification (app_error, infrastructure_error, config_error)
-- `retryable` (string) - Whether error is retryable:
-  - `"true"` - Transient error, will be retried
-  - `"false"` - Permanent error, no retry
-
-**Purpose:** Distinguish transient vs permanent errors, identify infrastructure issues
-
-**Example Queries:**
-```promql
-# Non-retryable errors (require intervention)
-rate(duroxide_activity_errors_total{retryable="false"}[5m])
-
-# Infrastructure errors by activity
-rate(duroxide_activity_errors_total{error_type="infrastructure_error"}[5m])
-by (activity_name)
-```
-
----
-
-### 2.4 `duroxide_activity_infrastructure_errors_total` (Counter)
+### 2.3 `duroxide_activity_infrastructure_errors_total` (Counter)
 
 **Description:** Infrastructure-level activity errors (subset of errors)
 
@@ -435,7 +431,7 @@ by (activity_name)
 
 ---
 
-### 2.5 `duroxide_activity_configuration_errors_total` (Counter)
+### 2.4 `duroxide_activity_configuration_errors_total` (Counter)
 
 **Description:** Configuration-level activity errors (unregistered activities)
 

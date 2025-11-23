@@ -162,7 +162,6 @@ mod otel_impl {
         // Activity metrics (with labels)
         pub activity_executions_total: Counter<u64>,
         pub activity_duration_seconds: Histogram<f64>,
-        pub activity_errors_total: Counter<u64>,
         pub activity_infrastructure_errors_total: Counter<u64>,
         pub activity_configuration_errors_total: Counter<u64>,
 
@@ -339,11 +338,6 @@ mod otel_impl {
                 ])
                 .build();
 
-            let activity_errors_total = meter
-                .u64_counter("duroxide_activity_errors_total")
-                .with_description("Detailed activity error tracking")
-                .build();
-
             let activity_infrastructure_errors_total = meter
                 .u64_counter("duroxide_activity_infrastructure_errors_total")
                 .with_description("Infrastructure-level activity errors")
@@ -437,7 +431,6 @@ mod otel_impl {
                 provider_errors_total,
                 activity_executions_total,
                 activity_duration_seconds,
-                activity_errors_total,
                 activity_infrastructure_errors_total,
                 activity_configuration_errors_total,
                 client_orch_starts_total,
@@ -664,17 +657,6 @@ mod otel_impl {
             };
         }
 
-        #[inline]
-        pub fn record_activity_error(&self, activity_name: &str, error_type: &str, retryable: bool) {
-            self.activity_errors_total.add(
-                1,
-                &[
-                    KeyValue::new("activity_name", activity_name.to_string()),
-                    KeyValue::new("error_type", error_type.to_string()),
-                    KeyValue::new("retryable", retryable.to_string()),
-                ],
-            );
-        }
 
         #[inline]
         pub fn record_activity_success(&self) {
@@ -930,9 +912,6 @@ mod stub_impl {
                 _ => self.activity_infra_errors_atomic.fetch_add(1, Ordering::Relaxed),
             };
         }
-
-        #[inline]
-        pub fn record_activity_error(&self, _: &str, _: &str, _: bool) {}
 
         #[inline]
         pub fn record_activity_success(&self) {

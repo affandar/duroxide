@@ -20,8 +20,10 @@ This directory contains structured prompts for LLMs working on the duroxide code
    - Proper handling of unused code
    - Code formatting
 
-3. **[duroxide-update-docs.md](duroxide-update-docs.md)**
+3. **[duroxide-update-docs-tests.md](duroxide-update-docs-tests.md)**
    - Comprehensive documentation review
+   - Proposing tests for code changes
+   - Metrics specification updates and OTel audits
    - Keeping guides accurate
    - API documentation standards
    - Example validation
@@ -117,10 +119,10 @@ Scenarios where human input is needed
 
 ### Scenario Test Creation Cycle
 ```
-1. @duroxide-create-scenario-test.md  - Convert orchestration to test
-2. @duroxide-clean-warnings.md         - Clean up warnings
-3. @duroxide-update-docs.md           - Update documentation if needed
-4. @duroxide-merge-main.md            - Commit and merge
+1. @duroxide-create-scenario-test.md      - Convert orchestration to test
+2. @duroxide-clean-warnings.md            - Clean up warnings
+3. @duroxide-update-docs-tests.md         - Update documentation and add tests
+4. @duroxide-merge-main.md                - Commit and merge
 ```
 
 ### Performance Optimization Cycle
@@ -132,11 +134,11 @@ Scenarios where human input is needed
 5. @duroxide-merge-main.md      - Commit and merge
 ```
 
-### Documentation Update Cycle
+### Documentation & Test Update Cycle
 ```
-1. @duroxide-update-docs.md     - Review and update documentation
-2. @duroxide-clean-warnings.md  - Clean up any code issues found
-3. @duroxide-merge-main.md      - Commit and merge
+1. @duroxide-update-docs-tests.md  - Review docs, propose tests, audit metrics
+2. @duroxide-clean-warnings.md     - Clean up any code issues found
+3. @duroxide-merge-main.md         - Commit and merge
 ```
 
 ## Suggested Additional Prompts
