@@ -184,8 +184,8 @@ mod otel_impl {
         activity_config_errors_atomic: AtomicU64,
 
         // Queue depth tracking (updated by background task)
-        orch_queue_depth_atomic: AtomicU64,
-        worker_queue_depth_atomic: AtomicU64,
+        orch_queue_depth_atomic: Arc<AtomicU64>,
+        worker_queue_depth_atomic: Arc<AtomicU64>,
 
         // Active orchestrations tracking (for gauge metrics)
         active_orchestrations_atomic: Arc<std::sync::atomic::AtomicI64>,
@@ -393,6 +393,29 @@ mod otel_impl {
                 })
                 .build();
 
+            // Observable gauges for queue depths
+            let orch_queue_atomic_clone = Arc::new(AtomicU64::new(0));
+            let orch_queue_for_callback = orch_queue_atomic_clone.clone();
+            meter
+                .i64_observable_gauge("duroxide_orchestrator_queue_depth")
+                .with_description("Current orchestrator queue depth (unlocked items)")
+                .with_callback(move |observer| {
+                    let depth = orch_queue_for_callback.load(Ordering::Relaxed);
+                    observer.observe(depth as i64, &[]);
+                })
+                .build();
+
+            let worker_queue_atomic_clone = Arc::new(AtomicU64::new(0));
+            let worker_queue_for_callback = worker_queue_atomic_clone.clone();
+            meter
+                .i64_observable_gauge("duroxide_worker_queue_depth")
+                .with_description("Current worker queue depth (unlocked items)")
+                .with_callback(move |observer| {
+                    let depth = worker_queue_for_callback.load(Ordering::Relaxed);
+                    observer.observe(depth as i64, &[]);
+                })
+                .build();
+
             Ok(Self {
                 meter_provider,
                 orch_dispatcher_items_fetched,
@@ -430,8 +453,8 @@ mod otel_impl {
                 activity_app_errors_atomic: AtomicU64::new(0),
                 activity_infra_errors_atomic: AtomicU64::new(0),
                 activity_config_errors_atomic: AtomicU64::new(0),
-                orch_queue_depth_atomic: AtomicU64::new(0),
-                worker_queue_depth_atomic: AtomicU64::new(0),
+                orch_queue_depth_atomic: orch_queue_atomic_clone,
+                worker_queue_depth_atomic: worker_queue_atomic_clone,
                 active_orchestrations_atomic: active_orch_atomic_clone,
             })
         }
@@ -831,8 +854,8 @@ mod stub_impl {
         activity_app_errors_atomic: AtomicU64,
         activity_infra_errors_atomic: AtomicU64,
         activity_config_errors_atomic: AtomicU64,
-        orch_queue_depth_atomic: AtomicU64,
-        worker_queue_depth_atomic: AtomicU64,
+        orch_queue_depth_atomic: Arc<AtomicU64>,
+        worker_queue_depth_atomic: Arc<AtomicU64>,
         active_orchestrations_atomic: Arc<std::sync::atomic::AtomicI64>,
     }
 
@@ -848,8 +871,8 @@ mod stub_impl {
                 activity_app_errors_atomic: AtomicU64::new(0),
                 activity_infra_errors_atomic: AtomicU64::new(0),
                 activity_config_errors_atomic: AtomicU64::new(0),
-                orch_queue_depth_atomic: AtomicU64::new(0),
-                worker_queue_depth_atomic: AtomicU64::new(0),
+                orch_queue_depth_atomic: Arc::new(AtomicU64::new(0)),
+                worker_queue_depth_atomic: Arc::new(AtomicU64::new(0)),
                 active_orchestrations_atomic: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             })
         }

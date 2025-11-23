@@ -391,32 +391,49 @@ impl Runtime {
             .and_then(|handle| handle.metrics_snapshot())
     }
 
-    /// Get current active orchestrations count (for gauge metric)
-    pub fn get_active_orchestrations_count(&self) -> i64 {
-        self.observability_handle
-            .as_ref()
-            .and_then(|h| h.metrics_provider())
-            .map(|p| p.get_active_orchestrations())
-            .unwrap_or(0)
-    }
-
-    /// Initialize active orchestrations gauge from provider on startup
-    async fn initialize_active_orchestrations_gauge(self: Arc<Self>) {
-        // Query provider for current active count (requires ProviderAdmin trait)
+    /// Initialize all gauges that need to sync with persistent state on startup.
+    ///
+    /// Gauges (unlike counters) represent current state and must be initialized
+    /// from the provider to reflect reality after a restart.
+    ///
+    /// This initializes:
+    /// - `duroxide_active_orchestrations` - Current running orchestrations
+    /// - `duroxide_orchestrator_queue_depth` - Current orchestrator queue backlog
+    /// - `duroxide_worker_queue_depth` - Current worker queue backlog
+    async fn initialize_gauges(self: Arc<Self>) {
         if let Some(admin) = self.history_store.as_management_capability() {
-            if let Ok(metrics) = admin.get_system_metrics().await {
-                let active_count = metrics.running_instances as i64;
-
-                // Set gauge to current active count
-                if let Some(handle) = &self.observability_handle {
-                    if let Some(provider) = handle.metrics_provider() {
-                        provider.set_active_orchestrations(active_count);
-                        tracing::debug!(
-                            target: "duroxide::runtime",
-                            active_count = %active_count,
-                            "Initialized active orchestrations gauge from provider"
-                        );
-                    }
+            // Query provider for current state (parallel for efficiency)
+            let system_metrics_future = admin.get_system_metrics();
+            let queue_depths_future = admin.get_queue_depths();
+            
+            let (system_result, queue_result) = tokio::join!(system_metrics_future, queue_depths_future);
+            
+            if let Some(provider) = self.observability_handle.as_ref()
+                .and_then(|h| h.metrics_provider()) 
+            {
+                // Initialize active orchestrations gauge
+                if let Ok(metrics) = system_result {
+                    let active_count = metrics.running_instances as i64;
+                    provider.set_active_orchestrations(active_count);
+                    tracing::debug!(
+                        target: "duroxide::runtime",
+                        active_count = %active_count,
+                        "Initialized active orchestrations gauge"
+                    );
+                }
+                
+                // Initialize queue depth gauges
+                if let Ok(depths) = queue_result {
+                    provider.update_queue_depths(
+                        depths.orchestrator_queue as u64,
+                        depths.worker_queue as u64
+                    );
+                    tracing::debug!(
+                        target: "duroxide::runtime",
+                        orch_queue = %depths.orchestrator_queue,
+                        worker_queue = %depths.worker_queue,
+                        "Initialized queue depth gauges"
+                    );
                 }
             }
         }
@@ -591,8 +608,8 @@ impl Runtime {
             runtime_id,
         });
 
-        // Initialize active orchestrations gauge from provider (if supported)
-        runtime.clone().initialize_active_orchestrations_gauge().await;
+        // Initialize gauges from provider (if supported)
+        runtime.clone().initialize_gauges().await;
 
         // background orchestrator dispatcher (extracted from inline poller)
         let handle = runtime.clone().start_orchestration_dispatcher();
