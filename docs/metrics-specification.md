@@ -58,6 +58,7 @@ This document provides a complete reference of all metrics emitted by duroxide, 
 Tests validate atomic counters (that metrics are recorded) but do not validate full OpenTelemetry export format. OTel export status is determined by code audit to verify metrics are properly wired to the OpenTelemetry API.
 
 **Known Issues:**
+- **Activity retry_attempt label always "0"** - The `retry_attempt` label on `duroxide_activity_executions_total` is always "0" because duroxide does not implement built-in activity retry logic. Activities fail immediately without retry. Users must implement retry in orchestration code. Future enhancement: Add `schedule_activity_with_retry()` or retry policy configuration.
 - **Sub-orchestration metrics require complex implementation** - `duroxide_suborchestration_calls_total` and `duroxide_suborchestration_duration_seconds` are defined but not wired up. Implementation is complex because: (1) Parent orchestration name is in parent execution context, (2) Child orchestration name must be extracted from `SubOrchestrationScheduled` event by looking up `parent_id` in history, (3) Duration calculation requires event timestamps or turn-based approximation, (4) Metrics must be recorded when `SubOrchCompleted`/`SubOrchFailed` work items are processed in `replay_engine.rs`. Sub-orchestrations currently appear as regular orchestrations in metrics (counted in `duroxide_orchestration_starts_total`, etc.) but parent-child relationship is not tracked.
 - **Client metrics not instrumented** - All 4 client metrics have instruments created but are never recorded from `Client` methods.
 
@@ -374,6 +375,8 @@ duroxide_orchestrator_queue_depth / duroxide_worker_queue_depth
 **Purpose:** Identify flaky activities, track retry rates, track all error types including application errors
 
 **Note:** Application-level activity errors are tracked via `outcome="app_error"` in this metric. There is no separate `activity_errors_total` counter.
+
+**⚠️ Known Issue:** The `retry_attempt` label is currently **always "0"** because duroxide does not implement built-in activity retry logic. Activities that fail are immediately enqueued as `ActivityFailed` work items without retry. Users can implement retry logic in their orchestration code if needed. A future enhancement would add `schedule_activity_with_retry()` or a retry policy parameter. See TODO for tracking.
 
 **Example Queries:**
 ```promql
