@@ -2,13 +2,16 @@
 
 ### 🚫 Blockers for Public Crate Release
 
-- **[BLOCKER] Add timestamps to Event types for accurate orchestration duration metrics**
+- **[BLOCKER] Event Schema Redesign: Common Fields + Timestamps**
   - Current Issue: `duroxide_orchestration_duration_seconds` only measures final turn duration (40ms), not total orchestration lifetime (could be hours/days)
-  - Solution: Add `timestamp_ms: u64` field to Event types (OrchestrationStarted, OrchestrationCompleted, OrchestrationFailed, ActivityScheduled, ActivityCompleted, etc.)
-  - Impact: Requires Event schema migration, provider storage updates, database migration for SQLite
-  - Benefits: Accurate end-to-end duration metrics, enables timeline reconstruction, useful for debugging beyond metrics
-  - Complexity: Medium - Breaking change to Event enum, requires careful migration
-  - Related: Would enable per-execution timelines, activity wait times, accurate percentile tracking
+  - Proposed Solution: Restructure Event from flat enum to struct + EventKind enum (see `proposals/event-schema-redesign.md`)
+  - Common fields: `event_id`, `instance_id`, `execution_id`, `timestamp_ms`, `duroxide_version` (crate semver)
+  - Event-specific fields: `kind: EventKind` enum
+  - Impact: Large refactor (~40 event creation sites, ~140+ match sites), but no DB schema changes (JSON is flexible)
+  - Benefits: Accurate duration metrics, self-contained events, cleaner API, easy to add common fields, forward compatible
+  - Complexity: High - Touches many files, but serde provides backward compat via `#[serde(default)]`
+  - Related: WorkItem should get same treatment (also persisted as JSON in queues)
+  - Design Doc: `proposals/event-schema-redesign.md`, `docs/event-schema-evolution.md`
 
 ### Active TODOs
 
