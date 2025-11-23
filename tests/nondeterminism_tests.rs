@@ -120,7 +120,7 @@ async fn completion_kind_mismatch_triggers_nondeterminism() {
     // Orchestration that creates a timer, then waits for it
     let orch = |ctx: OrchestrationContext, _input: String| async move {
         // Create a timer that fires in 1 second (1000ms)
-        let timer_future = ctx.schedule_timer(1000);
+        let timer_future = ctx.schedule_timer(Duration::from_millis(1000));
         let _result = timer_future.into_timer().await;
         Ok("timer_completed".to_string())
     };

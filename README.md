@@ -111,7 +111,7 @@ Control flow + timers + externals
 ```rust
 use duroxide::DurableOutput;
 async fn control(ctx: OrchestrationContext) -> String {
-    let a = ctx.schedule_timer(10);
+    let a = ctx.schedule_timer(std::time::Duration::from_millis(10));
     let b = ctx.schedule_wait("Evt");
     let (_idx, out) = ctx.select2(a, b).await;
     match out {
@@ -145,7 +145,7 @@ ContinueAsNew and multi-execution
 
 Status and control-plane
 - `Client::get_orchestration_status(instance)` -> `Result<OrchestrationStatus, ClientError>` where `OrchestrationStatus` is Running | Completed { output } | Failed { details: ErrorDetails } | NotFound
-- `Client::wait_for_orchestration(instance, timeout)` -> Wait for completion with timeout, returns `Result<OrchestrationStatus, WaitError>`
+- `Client::wait_for_orchestration(instance, timeout)` -> Wait for completion with timeout, returns `Result<OrchestrationStatus, ClientError>`
 - SQLite provider exposes execution-aware methods (`list_executions`, `read_with_execution`, etc.) for diagnostics.
 
 Error classification

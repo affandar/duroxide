@@ -3,6 +3,7 @@ use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
 use duroxide::{ActivityContext, Event, OrchestrationContext, OrchestrationRegistry};
 use std::sync::Arc as StdArc;
+use std::time::Duration;
 mod common;
 
 #[tokio::test]
@@ -66,7 +67,7 @@ async fn timer_duplicate_workitems_dedup() {
     let (store, _td) = common::create_sqlite_store_disk().await;
 
     let orch = |ctx: OrchestrationContext, _input: String| async move {
-        ctx.schedule_timer(100).into_timer().await;
+        ctx.schedule_timer(Duration::from_millis(100)).into_timer().await;
         Ok("t".to_string())
     };
     let orchestration_registry = OrchestrationRegistry::builder().register("OneTimer", orch).build();
@@ -291,7 +292,7 @@ async fn crash_after_append_before_ack_timer() {
     let (store, _td) = common::create_sqlite_store_disk().await;
 
     let orch = |ctx: OrchestrationContext, _input: String| async move {
-        ctx.schedule_timer(50).into_timer().await;
+        ctx.schedule_timer(Duration::from_millis(50)).into_timer().await;
         Ok("t".to_string())
     };
     let orchestration_registry = OrchestrationRegistry::builder().register("OneTimer", orch).build();

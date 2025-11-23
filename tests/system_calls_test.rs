@@ -1,6 +1,7 @@
 use duroxide::runtime::{self, registry::ActivityRegistry};
 use duroxide::{ActivityContext, OrchestrationContext, OrchestrationRegistry};
 use std::sync::Arc;
+use std::time::Duration;
 
 #[tokio::test]
 async fn test_new_guid() {
@@ -59,16 +60,22 @@ async fn test_utcnow_ms() {
 
     let orchestrations = OrchestrationRegistry::builder()
         .register("TestTime", |ctx: OrchestrationContext, _input: String| async move {
-            let time1 = ctx.utcnow_ms().await?;
+            let time1 = ctx.utcnow().await?;
 
             // Add a small timer to ensure time progresses
-            ctx.schedule_timer(100).into_timer().await;
+            ctx.schedule_timer(Duration::from_millis(100)).into_timer().await;
 
-            let time2 = ctx.utcnow_ms().await?;
+            let time2 = ctx.utcnow().await?;
 
-            // Times should be valid millisecond timestamps
-            let t1 = time1;
-            let t2 = time2;
+            // Convert to milliseconds for validation
+            let t1 = time1
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_err(|e| e.to_string())?
+                .as_millis() as u64;
+            let t2 = time2
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_err(|e| e.to_string())?
+                .as_millis() as u64;
 
             // Times should be reasonable (after year 2020)
             assert!(t1 > 1577836800000); // Jan 1, 2020
@@ -77,7 +84,7 @@ async fn test_utcnow_ms() {
             // Second time should be after first (since we had a timer in between)
             assert!(t2 >= t1);
 
-            Ok(format!("{time1},{time2}"))
+            Ok(format!("{t1},{t2}"))
         })
         .build();
 
@@ -115,10 +122,14 @@ async fn test_system_calls_deterministic_replay() {
             "TestDeterminism",
             |ctx: OrchestrationContext, _input: String| async move {
                 let guid = ctx.new_guid().await?;
-                let time = ctx.utcnow_ms().await?;
+                let time = ctx.utcnow().await?;
 
                 // Use values in some computation
-                let result = format!("guid:{guid},time:{time}");
+                let time_ms = time
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_err(|e| e.to_string())?
+                    .as_millis() as u64;
+                let result = format!("guid:{guid},time:{time_ms}");
 
                 Ok(result)
             },
@@ -204,11 +215,15 @@ async fn test_system_calls_with_select() {
             };
 
             // Get another system call to verify they work throughout the orchestration
-            let time = ctx.utcnow_ms().await?;
+            let time = ctx.utcnow().await?;
 
             // Verify both system calls returned valid values
             assert!(guid.len() == 36, "GUID should be valid");
-            assert!(time > 0, "Time should be positive");
+            let time_ms = time
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_err(|e| e.to_string())?
+                .as_millis() as u64;
+            assert!(time_ms > 0, "Time should be positive");
 
             Ok(format!(
                 "winner:{},result:{},guid_len:{},time_valid:true",
@@ -263,7 +278,7 @@ async fn test_system_calls_join_with_activities() {
         .register("TestJoin", |ctx: OrchestrationContext, _input: String| async move {
             // Test 1: Join system call futures with activity futures
             let guid_future = ctx.new_guid_future();
-            let time_future = ctx.utcnow_ms_future();
+            let time_future = ctx.utcnow_future();
             let activity_future = ctx.schedule_activity("SlowTask", "data1");
 
             let results = ctx.join(vec![guid_future, time_future, activity_future]).await;

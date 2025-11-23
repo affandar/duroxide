@@ -228,7 +228,7 @@ RETURN Ok(())
 
 ---
 
-#### `abandon_orchestration_item(lock_token, delay_ms) -> Result<()>`
+#### `abandon_orchestration_item(lock_token, delay) -> Result<()>`
 
 **Purpose**: Release instance lock without committing work (failure/timeout)
 
@@ -244,8 +244,9 @@ IF not found:
 // Remove lock immediately (not transactional - simple DELETE with auto-commit)
 DELETE FROM instance_locks WHERE lock_token = lock_token
 
-// Optionally delay messages for backoff
-IF delay_ms is Some:
+// Optionally delay messages for backoff (delay is Duration)
+IF delay is Some:
+  visible_at = now + delay.as_millis()
   UPDATE orchestrator_queue
   SET visible_at = now + delay_ms
   WHERE instance_id = instance_id AND visible_at <= now
@@ -275,7 +276,7 @@ BEGIN TRANSACTION
     VALUES (instance, 1)
   
   // Insert message with visibility
-  visible_at = IF delay_ms THEN (now + delay_ms) ELSE now
+  visible_at = IF delay THEN (now + delay.as_millis()) ELSE now
   
   INSERT INTO orchestrator_queue (instance_id, work_item, visible_at)
   VALUES (instance, serialize(item), visible_at)

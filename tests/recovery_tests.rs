@@ -6,6 +6,7 @@ use duroxide::runtime::{self};
 use duroxide::{ActivityContext, Client, Event, OrchestrationContext, OrchestrationRegistry};
 use std::sync::Arc;
 use std::sync::Arc as StdArc;
+use std::time::Duration;
 mod common;
 use common::*;
 
@@ -196,7 +197,7 @@ async fn recovery_multiple_orchestrations_sqlite_provider() {
             .into_activity()
             .await
             .unwrap();
-        ctx.schedule_timer(200).into_timer().await;
+        ctx.schedule_timer(Duration::from_millis(200)).into_timer().await;
         let _a2 = ctx
             .schedule_activity("Echo", input.clone())
             .into_activity()
@@ -219,8 +220,8 @@ async fn recovery_multiple_orchestrations_sqlite_provider() {
         Ok(format!("sum={sum}"))
     };
     let orch_two_timers = |ctx: OrchestrationContext, input: String| async move {
-        ctx.schedule_timer(150).into_timer().await;
-        ctx.schedule_timer(150).into_timer().await;
+        ctx.schedule_timer(Duration::from_millis(150)).into_timer().await;
+        ctx.schedule_timer(Duration::from_millis(150)).into_timer().await;
         let _ = ctx
             .schedule_activity("Echo", input.clone())
             .into_activity()
@@ -272,7 +273,7 @@ async fn recovery_multiple_orchestrations_sqlite_provider() {
 
     let client1 = Client::new(store1.clone());
     for (inst, name, input) in &cases {
-        client1.start_orchestration(inst, name, *input).await.unwrap();
+        client1.start_orchestration(*inst, *name, *input).await.unwrap();
     }
     // Wait for each orchestration to reach its expected pre-shutdown checkpoint
     // EchoWait: timer created but not yet fired

@@ -81,7 +81,7 @@ async fn wait_external_completes_fs() {
 
 async fn race_external_vs_timer_ordering_with(store: StdArc<dyn Provider>) {
     let orchestrator = |ctx: OrchestrationContext, _input: String| async move {
-        let race = select(ctx.schedule_timer(10), ctx.schedule_wait("Race"));
+        let race = select(ctx.schedule_timer(Duration::from_millis(10)), ctx.schedule_wait("Race"));
         match race.await {
             Either::Left((_t, _e)) => Ok("timer".to_string()),
             Either::Right((_e, _t)) => Ok("external".to_string()),
@@ -155,7 +155,7 @@ async fn race_event_vs_timer_event_wins_with(store: StdArc<dyn Provider>) {
     let orchestrator = |ctx: OrchestrationContext, _input: String| async move {
         // Subscribe first to ensure we can receive the event deterministically
         let ev = ctx.schedule_wait("Race").into_event();
-        let t = ctx.schedule_timer(100).into_timer();
+        let t = ctx.schedule_timer(Duration::from_millis(100)).into_timer();
         let race = select(ev, t);
         match race.await {
             Either::Left((data, _)) => Ok(data),

@@ -53,7 +53,7 @@ Orchestration 'MyOrchestration' not found in registry
    
    **Solution**: Add timeouts:
    ```rust
-   let timer = ctx.schedule_timer(30000); // 30 second timeout
+   let timer = ctx.schedule_timer(std::time::Duration::from_secs(30)); // 30 second timeout
    let event = ctx.schedule_wait("ApprovalEvent");
    let (_, result) = ctx.select2(timer, event).await;
    ```

@@ -267,7 +267,7 @@ async fn sample_timeout_with_timer_race_fs() {
     // Orchestration: race LongOp vs 100ms timer and error if timer wins
     let orchestration = |ctx: OrchestrationContext, _input: String| async move {
         let act = ctx.schedule_activity("LongOp", "");
-        let t = ctx.schedule_timer(100);
+        let t = ctx.schedule_timer(Duration::from_millis(100));
         let (_idx, out) = ctx.select(vec![act, t]).await;
         match out {
             duroxide::DurableOutput::Timer => Err("timeout".to_string()),
@@ -436,7 +436,7 @@ async fn dtf_legacy_gabbar_greetings_fs() {
 /// System activities: use built-in activities to get wall-clock time and a new GUID.
 ///
 /// Highlights:
-/// - Call `ctx.system_now_ms()` and `ctx.system_new_guid()`
+/// - Call `ctx.utcnow()` and `ctx.new_guid()`
 /// - Log and validate basic formatting of results
 #[tokio::test]
 async fn sample_system_activities_fs() {
@@ -445,10 +445,16 @@ async fn sample_system_activities_fs() {
     let activity_registry = ActivityRegistry::builder().build();
 
     let orchestration = |ctx: OrchestrationContext, _input: String| async move {
-        let now = ctx.utcnow_ms().await?;
+        let now = ctx.utcnow().await?;
         let guid = ctx.new_guid().await?;
-        ctx.trace_info(format!("system now={now}, guid={guid}"));
-        Ok(format!("n={now},g={guid}"))
+
+        // Convert SystemTime to milliseconds for display
+        let now_ms = now
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|e| e.to_string())?
+            .as_millis() as u64;
+        ctx.trace_info(format!("system now={now_ms}ms, guid={guid}"));
+        Ok(format!("n={now_ms},g={guid}"))
     };
 
     let orchestration_registry = OrchestrationRegistry::builder()
@@ -497,7 +503,7 @@ async fn sample_status_polling_fs() {
 
     let activity_registry = ActivityRegistry::builder().build();
     let orchestration = |ctx: OrchestrationContext, _input: String| async move {
-        ctx.schedule_timer(20).into_timer().await;
+        ctx.schedule_timer(Duration::from_millis(20)).into_timer().await;
         Ok("done".to_string())
     };
     let orchestration_registry = OrchestrationRegistry::builder()
@@ -724,7 +730,7 @@ async fn sample_detached_orchestration_scheduling_fs() {
         .build();
 
     let chained = |ctx: OrchestrationContext, input: String| async move {
-        ctx.schedule_timer(5).into_timer().await;
+        ctx.schedule_timer(Duration::from_millis(5)).into_timer().await;
         Ok(ctx.schedule_activity("Echo", input).into_activity().await.unwrap())
     };
     let coordinator = |ctx: OrchestrationContext, _input: String| async move {

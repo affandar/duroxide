@@ -596,11 +596,7 @@ fn test_register_all() {
     let handler = |_ctx: OrchestrationContext, input: String| async move { Ok(format!("processed: {}", input)) };
 
     let reg = OrchestrationRegistry::builder()
-        .register_all(vec![
-            ("orch1", handler.clone()),
-            ("orch2", handler.clone()),
-            ("orch3", handler.clone()),
-        ])
+        .register_all(vec![("orch1", handler), ("orch2", handler), ("orch3", handler)])
         .build();
 
     assert_eq!(reg.count(), 3);

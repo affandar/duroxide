@@ -1,6 +1,9 @@
 ## Duroxide – TODOs
 
 
+- Full e2e Otel test
+- Wire up suborchestration metrics, requires some linkage of names between suborch -> parent in the replayengine
+- Review DurableFuture and into_*() fns for soundness
 - move stress tests to cargo standard "bench"
 - separate execution loops for orchestrations and activities, communicate through channels
 - Port samples from DurableTasks and Temporal to tests/scenarios/

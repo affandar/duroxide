@@ -208,7 +208,7 @@ async fn safe_orchestration(ctx: OrchestrationContext, count: i32) -> Result<Str
     }
     
     // ✅ Timers for delays
-    ctx.schedule_timer(5000).into_timer().await;
+    ctx.schedule_timer(std::time::Duration::from_secs(5)).into_timer().await;
     
     // ✅ External events for signals
     let approval = ctx.schedule_wait("ApprovalEvent").into_event().await;
@@ -308,11 +308,11 @@ let result: OrderResult = ctx.schedule_activity_typed("ProcessOrder", &order_dat
 
 ```rust
 // Delay in milliseconds
-fn schedule_timer(&self, delay_ms: u64) -> DurableFuture
+fn schedule_timer(&self, delay: Duration) -> DurableFuture
 
 // Usage:
-ctx.schedule_timer(5000).into_timer().await;  // Wait 5 seconds
-ctx.schedule_timer(60_000).into_timer().await;  // Wait 1 minute
+ctx.schedule_timer(Duration::from_secs(5)).into_timer().await;  // Wait 5 seconds
+ctx.schedule_timer(Duration::from_secs(60)).into_timer().await;  // Wait 1 minute
 ```
 
 #### External Events
@@ -366,7 +366,7 @@ fn select(&self, futures: Vec<DurableFuture>) -> SelectFuture
 fn join(&self, futures: Vec<DurableFuture>) -> JoinFuture
 
 // Usage:
-let timer = ctx.schedule_timer(30_000);
+let timer = ctx.schedule_timer(Duration::from_secs(30));
 let approval = ctx.schedule_wait("Approval");
 let (winner, output) = ctx.select2(timer, approval).await;
 
@@ -818,7 +818,7 @@ match client.wait_for_orchestration("test", Duration::from_secs(10)).await {
 | `raise_event()` | Send external event | `Result<(), ClientError>` |
 | `cancel_instance()` | Request cancellation | `Result<(), ClientError>` |
 | `get_orchestration_status()` | Check status | `Result<OrchestrationStatus, ClientError>` |
-| `wait_for_orchestration()` | Wait for completion | `Result<OrchestrationStatus, WaitError>` |
+| `wait_for_orchestration()` | Wait for completion | `Result<OrchestrationStatus, ClientError>` |
 | `has_management_capability()` | Check feature availability | `bool` |
 | `list_all_instances()` | List instances | `Result<Vec<String>, ClientError>` |
 | `list_instances_by_status()` | Filter by status | `Result<Vec<String>, ClientError>` |
@@ -901,7 +901,7 @@ async fn approval_workflow(ctx: OrchestrationContext, request_json: String) -> R
         .into_activity().await?;
     
     // Wait for approval or timeout
-    let timeout = ctx.schedule_timer(86_400_000);  // 24 hours
+    let timeout = ctx.schedule_timer(std::time::Duration::from_millis(86_400_000));  // 24 hours
     let approval = ctx.schedule_wait("ApprovalEvent");
     
     let (winner, output) = ctx.select2(timeout, approval).await;
@@ -963,7 +963,7 @@ async fn saga_orchestration(ctx: OrchestrationContext, order_json: String) -> Re
 ```rust
 async fn retry_orchestration(ctx: OrchestrationContext, task_input: String) -> Result<String, String> {
     let max_attempts = 5;
-    let mut delay_ms = 1000;  // Start with 1 second
+    let mut delay = std::time::Duration::from_secs(1);  // Start with 1 second
     
     for attempt in 1..=max_attempts {
         ctx.trace_info(format!("Attempt {} of {}", attempt, max_attempts));
@@ -980,8 +980,8 @@ async fn retry_orchestration(ctx: OrchestrationContext, task_input: String) -> R
                 
                 if attempt < max_attempts {
                     // Exponential backoff
-                    ctx.schedule_timer(delay_ms).into_timer().await;
-                    delay_ms *= 2;  // Double the delay
+                    ctx.schedule_timer(delay).into_timer().await;
+                    delay *= 2;  // Double the delay
                 } else {
                     ctx.trace_error("All attempts failed");
                     return Err(format!("Failed after {} attempts", max_attempts));
@@ -1080,7 +1080,7 @@ async fn conditional_workflow(ctx: OrchestrationContext, order_json: String) -> 
         let approval_request = ctx.schedule_activity("CreateApprovalRequest", order_json.clone())
             .into_activity().await?;
         
-        let timeout = ctx.schedule_timer(3600_000);  // 1 hour
+        let timeout = ctx.schedule_timer(std::time::Duration::from_millis(3600_000));  // 1 hour
         let approval = ctx.schedule_wait("ManagerApproval");
         
         let (winner, _) = ctx.select2(timeout, approval).await;
@@ -1133,7 +1133,7 @@ async fn eternal_monitor(ctx: OrchestrationContext, state_json: String) -> Resul
         .into_activity().await?;
     
     // Wait before next check
-    ctx.schedule_timer(60_000).into_timer().await;  // 1 minute
+    ctx.schedule_timer(std::time::Duration::from_millis(60_000)).into_timer().await;  // 1 minute
     
     // Continue with updated state
     ctx.continue_as_new(check_result);
@@ -1210,7 +1210,7 @@ async fn good_orch(ctx: OrchestrationContext, order_json: String) -> Result<Stri
             .into_activity().await?;
         
         // ✅ Orchestration-level timeout control
-        let timeout = ctx.schedule_timer(3600_000);  // 1 hour
+        let timeout = ctx.schedule_timer(std::time::Duration::from_millis(3600_000));  // 1 hour
         let approval = ctx.schedule_wait("ApprovalEvent");
         let (winner, _) = ctx.select2(timeout, approval).await;
         
@@ -1301,7 +1301,7 @@ async fn bad_delay(ctx: OrchestrationContext) -> Result<String, String> {
 ```rust
 // CORRECT - Use timer for pure delays
 async fn good_delay(ctx: OrchestrationContext) -> Result<String, String> {
-    ctx.schedule_timer(30_000).into_timer().await;
+    ctx.schedule_timer(std::time::Duration::from_millis(30_000)).into_timer().await;
     // Timer doesn't block workers, handled by timer dispatcher
     Ok("done".to_string())
 }
@@ -1354,7 +1354,7 @@ async fn good_poll(ctx: OrchestrationContext, task_id: String) -> Result<String,
             return Ok(status);
         }
         
-        ctx.schedule_timer(5000).into_timer().await;  // Wait 5s before retry
+        ctx.schedule_timer(std::time::Duration::from_millis(5000)).into_timer().await;  // Wait 5s before retry
     }
     
     Err("Polling timeout".to_string())
@@ -1370,7 +1370,7 @@ async fn eternal_poll(ctx: OrchestrationContext, task_id: String) -> Result<Stri
     if status == "complete" {
         Ok(status)
     } else {
-        ctx.schedule_timer(5000).into_timer().await;
+        ctx.schedule_timer(std::time::Duration::from_millis(5000)).into_timer().await;
         ctx.continue_as_new(task_id);  // Fresh history for next iteration
         Ok(())
     }
@@ -1482,7 +1482,7 @@ async fn document_approval(
     ).into_activity().await?;
     
     // 2. Wait for approval or timeout (24 hours)
-    let manager_timeout = ctx.schedule_timer(86_400_000);
+    let manager_timeout = ctx.schedule_timer(std::time::Duration::from_millis(86_400_000));
     let manager_approval = ctx.schedule_wait(format!("ManagerApproval_{}", document_id));
     
     let (winner, output) = ctx.select2(manager_timeout, manager_approval).await;
@@ -1994,7 +1994,7 @@ let result = ctx.schedule_activity("Task", "input").into_activity().await?;
 | Method | Returns | Use For |
 |--------|---------|---------|
 | `schedule_activity(name, input)` | `DurableFuture` | Database, HTTP, file I/O |
-| `schedule_timer(delay_ms)` | `DurableFuture` | Delays, timeouts, scheduling |
+| `schedule_timer(delay)` | `DurableFuture` | Delays, timeouts, scheduling |
 | `schedule_wait(event_name)` | `DurableFuture` | External signals, human input |
 | `schedule_sub_orchestration(name, input)` | `DurableFuture` | Child workflows |
 | `schedule_orchestration(name, instance, input)` | `()` | Fire-and-forget |

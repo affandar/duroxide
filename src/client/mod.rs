@@ -22,6 +22,9 @@ pub enum ClientError {
 
     /// Invalid input (client validation)
     InvalidInput { message: String },
+
+    /// Operation timed out
+    Timeout,
 }
 
 impl ClientError {
@@ -31,6 +34,7 @@ impl ClientError {
             ClientError::Provider(e) => e.is_retryable(),
             ClientError::ManagementNotAvailable => false,
             ClientError::InvalidInput { .. } => false,
+            ClientError::Timeout => true,
         }
     }
 }
@@ -44,6 +48,7 @@ impl std::fmt::Display for ClientError {
                 "Management features not available - provider doesn't implement ProviderAdmin"
             ),
             ClientError::InvalidInput { message } => write!(f, "Invalid input: {}", message),
+            ClientError::Timeout => write!(f, "Operation timed out"),
         }
     }
 }
@@ -198,13 +203,13 @@ impl Client {
     /// ```
     pub async fn start_orchestration(
         &self,
-        instance: &str,
-        orchestration: &str,
+        instance: impl Into<String>,
+        orchestration: impl Into<String>,
         input: impl Into<String>,
     ) -> Result<(), ClientError> {
         let item = WorkItem::StartOrchestration {
-            instance: instance.to_string(),
-            orchestration: orchestration.to_string(),
+            instance: instance.into(),
+            orchestration: orchestration.into(),
             input: input.into(),
             version: None,
             parent_instance: None,
@@ -220,14 +225,14 @@ impl Client {
     /// Start an orchestration instance pinned to a specific version.
     pub async fn start_orchestration_versioned(
         &self,
-        instance: &str,
-        orchestration: &str,
+        instance: impl Into<String>,
+        orchestration: impl Into<String>,
         version: impl Into<String>,
         input: impl Into<String>,
     ) -> Result<(), ClientError> {
         let item = WorkItem::StartOrchestration {
-            instance: instance.to_string(),
-            orchestration: orchestration.to_string(),
+            instance: instance.into(),
+            orchestration: orchestration.into(),
             input: input.into(),
             version: Some(version.into()),
             parent_instance: None,
@@ -245,8 +250,8 @@ impl Client {
     /// Start an orchestration with typed input (serialized to JSON).
     pub async fn start_orchestration_typed<In: Serialize>(
         &self,
-        instance: &str,
-        orchestration: &str,
+        instance: impl Into<String>,
+        orchestration: impl Into<String>,
         input: In,
     ) -> Result<(), ClientError> {
         let payload = Json::encode(&input).map_err(|e| ClientError::InvalidInput {
@@ -258,8 +263,8 @@ impl Client {
     /// Start a versioned orchestration with typed input (serialized to JSON).
     pub async fn start_orchestration_versioned_typed<In: Serialize>(
         &self,
-        instance: &str,
-        orchestration: &str,
+        instance: impl Into<String>,
+        orchestration: impl Into<String>,
         version: impl Into<String>,
         input: In,
     ) -> Result<(), ClientError> {
@@ -321,12 +326,12 @@ impl Client {
     /// - Instance already completed: Event is ignored gracefully
     pub async fn raise_event(
         &self,
-        instance: &str,
+        instance: impl Into<String>,
         event_name: impl Into<String>,
         data: impl Into<String>,
     ) -> Result<(), ClientError> {
         let item = WorkItem::ExternalRaised {
-            instance: instance.to_string(),
+            instance: instance.into(),
             name: event_name.into(),
             data: data.into(),
         };
@@ -392,9 +397,13 @@ impl Client {
     ///
     /// - Instance already completed: Cancellation is no-op
     /// - Instance doesn't exist: Cancellation is no-op
-    pub async fn cancel_instance(&self, instance: &str, reason: impl Into<String>) -> Result<(), ClientError> {
+    pub async fn cancel_instance(
+        &self,
+        instance: impl Into<String>,
+        reason: impl Into<String>,
+    ) -> Result<(), ClientError> {
         let item = WorkItem::CancelInstance {
-            instance: instance.to_string(),
+            instance: instance.into(),
             reason: reason.into(),
         };
         self.store
@@ -485,8 +494,8 @@ impl Client {
     ///
     /// * `Ok(OrchestrationStatus::Completed { output })` - Orchestration completed successfully
     /// * `Ok(OrchestrationStatus::Failed { details })` - Orchestration failed (includes cancellations)
-    /// * `Err(WaitError::Timeout)` - Timeout elapsed while still Running
-    /// * `Err(WaitError::Other(msg))` - Unexpected error
+    /// * `Err(ClientError::Timeout)` - Timeout elapsed while still Running
+    /// * `Err(ClientError::Provider(e))` - Provider/Storage error
     ///
     /// **Note:** Never returns `NotFound` or `Running` - only terminal states or timeout.
     ///
@@ -510,7 +519,7 @@ impl Client {
     ///     Ok(OrchestrationStatus::Failed { details }) => {
     ///         eprintln!("Failed ({}): {}", details.category(), details.display_message());
     ///     }
-    ///     Err(WaitError::Timeout) => {
+    ///     Err(ClientError::Timeout) => {
     ///         println!("Still running after 30s, instance: order-123");
     ///         // Instance is still running - can wait more or cancel
     ///     }
@@ -548,13 +557,13 @@ impl Client {
         &self,
         instance: &str,
         timeout: std::time::Duration,
-    ) -> Result<OrchestrationStatus, crate::runtime::WaitError> {
+    ) -> Result<OrchestrationStatus, ClientError> {
         let deadline = std::time::Instant::now() + timeout;
         // quick path
         match self.get_orchestration_status(instance).await {
             Ok(OrchestrationStatus::Completed { output }) => return Ok(OrchestrationStatus::Completed { output }),
             Ok(OrchestrationStatus::Failed { details }) => return Ok(OrchestrationStatus::Failed { details }),
-            Err(e) => return Err(crate::runtime::WaitError::Other(e.to_string())),
+            Err(e) => return Err(e),
             _ => {}
         }
         // poll with backoff
@@ -563,14 +572,14 @@ impl Client {
             match self.get_orchestration_status(instance).await {
                 Ok(OrchestrationStatus::Completed { output }) => return Ok(OrchestrationStatus::Completed { output }),
                 Ok(OrchestrationStatus::Failed { details }) => return Ok(OrchestrationStatus::Failed { details }),
-                Err(e) => return Err(crate::runtime::WaitError::Other(e.to_string())),
+                Err(e) => return Err(e),
                 _ => {
                     tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
                     delay_ms = (delay_ms.saturating_mul(POLL_DELAY_MULTIPLIER)).min(MAX_POLL_DELAY_MS);
                 }
             }
         }
-        Err(crate::runtime::WaitError::Timeout)
+        Err(ClientError::Timeout)
     }
 
     /// Typed wait helper: decodes output on Completed, returns Err(String) on Failed.
@@ -578,11 +587,13 @@ impl Client {
         &self,
         instance: &str,
         timeout: std::time::Duration,
-    ) -> Result<Result<Out, String>, crate::runtime::WaitError> {
+    ) -> Result<Result<Out, String>, ClientError> {
         match self.wait_for_orchestration(instance, timeout).await? {
             OrchestrationStatus::Completed { output } => match Json::decode::<Out>(&output) {
                 Ok(v) => Ok(Ok(v)),
-                Err(e) => Err(crate::runtime::WaitError::Other(format!("decode failed: {e}"))),
+                Err(e) => Err(ClientError::InvalidInput {
+                    message: format!("decode failed: {e}"),
+                }),
             },
             OrchestrationStatus::Failed { details } => Ok(Err(details.display_message())),
             _ => unreachable!("wait_for_orchestration returns only terminal or timeout"),

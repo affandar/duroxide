@@ -32,7 +32,7 @@ async fn dispatcher_enqueues_timer_schedule_then_completes() {
     let store_dyn = store.clone() as StdArc<dyn duroxide::providers::Provider>;
 
     let orch = |ctx: OrchestrationContext, _input: String| async move {
-        ctx.schedule_timer(50).into_timer().await;
+        ctx.schedule_timer(Duration::from_millis(50)).into_timer().await;
         Ok("ok".to_string())
     };
     let reg = OrchestrationRegistry::builder().register("OneTimer", orch).build();

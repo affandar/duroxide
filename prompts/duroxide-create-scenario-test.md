@@ -431,7 +431,7 @@ async fn test_my_workflow_pattern() {
         //     .into_activity()
         //     .await?;
         
-        ctx.schedule_timer(50).into_timer().await; // 50ms instead of 5s
+        ctx.schedule_timer(Duration::from_millis(50)).into_timer().await; // 50ms instead of 5s
         
         let result2 = ctx
             .schedule_activity("Activity2", result1)

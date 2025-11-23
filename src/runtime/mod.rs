@@ -133,13 +133,6 @@ pub enum OrchestrationStatus {
     Failed { details: crate::ErrorDetails },
 }
 
-/// Error type returned by orchestration wait helpers.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum WaitError {
-    Timeout,
-    Other(String),
-}
-
 /// Trait implemented by orchestration handlers that can be invoked by the runtime.
 #[async_trait]
 pub trait OrchestrationHandler: Send + Sync {
@@ -232,6 +225,110 @@ pub struct OrchestrationDescriptor {
 }
 
 impl Runtime {
+    // New label-aware metric recording methods
+    #[inline]
+    fn record_orchestration_start(&self, orchestration_name: &str, version: &str, initiated_by: &str) {
+        if let Some(handle) = &self.observability_handle {
+            if let Some(provider) = handle.metrics_provider() {
+                provider.record_orchestration_start(orchestration_name, version, initiated_by);
+            }
+        }
+    }
+
+    #[inline]
+    fn record_orchestration_completion_with_labels(
+        &self,
+        orchestration_name: &str,
+        version: &str,
+        status: &str,
+        duration_seconds: f64,
+        turn_count: u64,
+        history_events: u64,
+    ) {
+        if let Some(handle) = &self.observability_handle {
+            if let Some(provider) = handle.metrics_provider() {
+                provider.record_orchestration_completion(
+                    orchestration_name,
+                    version,
+                    status,
+                    duration_seconds,
+                    turn_count,
+                    history_events,
+                );
+            }
+        }
+    }
+
+    #[inline]
+    fn record_orchestration_failure_with_labels(
+        &self,
+        orchestration_name: &str,
+        version: &str,
+        error_type: &str,
+        error_category: &str,
+    ) {
+        if let Some(handle) = &self.observability_handle {
+            if let Some(provider) = handle.metrics_provider() {
+                provider.record_orchestration_failure(orchestration_name, version, error_type, error_category);
+            }
+        }
+    }
+
+    #[inline]
+    fn record_continue_as_new(&self, orchestration_name: &str, execution_id: u64) {
+        if let Some(handle) = &self.observability_handle {
+            if let Some(provider) = handle.metrics_provider() {
+                provider.record_continue_as_new(orchestration_name, execution_id);
+            }
+        }
+    }
+
+    #[inline]
+    fn increment_active_orchestrations(&self) {
+        if let Some(handle) = &self.observability_handle {
+            if let Some(provider) = handle.metrics_provider() {
+                provider.increment_active_orchestrations();
+            }
+        }
+    }
+
+    #[inline]
+    fn decrement_active_orchestrations(&self) {
+        if let Some(handle) = &self.observability_handle {
+            if let Some(provider) = handle.metrics_provider() {
+                provider.decrement_active_orchestrations();
+            }
+        }
+    }
+
+    #[inline]
+    fn record_provider_operation(&self, operation: &str, duration_seconds: f64, status: &str) {
+        if let Some(handle) = &self.observability_handle {
+            if let Some(provider) = handle.metrics_provider() {
+                provider.record_provider_operation(operation, duration_seconds, status);
+            }
+        }
+    }
+
+    #[inline]
+    fn record_provider_error(&self, operation: &str, error_type: &str) {
+        if let Some(handle) = &self.observability_handle {
+            if let Some(provider) = handle.metrics_provider() {
+                provider.record_provider_error(operation, error_type);
+            }
+        }
+    }
+
+    #[inline]
+    fn record_activity_execution(&self, activity_name: &str, outcome: &str, duration_seconds: f64, retry_attempt: u32) {
+        if let Some(handle) = &self.observability_handle {
+            if let Some(provider) = handle.metrics_provider() {
+                provider.record_activity_execution(activity_name, outcome, duration_seconds, retry_attempt);
+            }
+        }
+    }
+
+    // Legacy methods for backward compatibility (used by simple internal counters)
     #[inline]
     fn record_orchestration_completion(&self) {
         if let Some(handle) = &self.observability_handle {
@@ -292,6 +389,54 @@ impl Runtime {
         self.observability_handle
             .as_ref()
             .and_then(|handle| handle.metrics_snapshot())
+    }
+
+    /// Initialize all gauges that need to sync with persistent state on startup.
+    ///
+    /// Gauges (unlike counters) represent current state and must be initialized
+    /// from the provider to reflect reality after a restart.
+    ///
+    /// This initializes:
+    /// - `duroxide_active_orchestrations` - Current running orchestrations
+    /// - `duroxide_orchestrator_queue_depth` - Current orchestrator queue backlog
+    /// - `duroxide_worker_queue_depth` - Current worker queue backlog
+    async fn initialize_gauges(self: Arc<Self>) {
+        if let Some(admin) = self.history_store.as_management_capability() {
+            // Query provider for current state (parallel for efficiency)
+            let system_metrics_future = admin.get_system_metrics();
+            let queue_depths_future = admin.get_queue_depths();
+            
+            let (system_result, queue_result) = tokio::join!(system_metrics_future, queue_depths_future);
+            
+            if let Some(provider) = self.observability_handle.as_ref()
+                .and_then(|h| h.metrics_provider()) 
+            {
+                // Initialize active orchestrations gauge
+                if let Ok(metrics) = system_result {
+                    let active_count = metrics.running_instances as i64;
+                    provider.set_active_orchestrations(active_count);
+                    tracing::debug!(
+                        target: "duroxide::runtime",
+                        active_count = %active_count,
+                        "Initialized active orchestrations gauge"
+                    );
+                }
+                
+                // Initialize queue depth gauges
+                if let Ok(depths) = queue_result {
+                    provider.update_queue_depths(
+                        depths.orchestrator_queue as u64,
+                        depths.worker_queue as u64
+                    );
+                    tracing::debug!(
+                        target: "duroxide::runtime",
+                        orch_queue = %depths.orchestrator_queue,
+                        worker_queue = %depths.worker_queue,
+                        "Initialized queue depth gauges"
+                    );
+                }
+            }
+        }
     }
 
     /// Compute execution metadata from history delta without inspecting event contents.
@@ -426,6 +571,17 @@ impl Runtime {
         // Initialize observability (metrics + structured logging)
         let observability_handle = observability::ObservabilityHandle::init(&options.observability).ok(); // Gracefully degrade if observability fails to initialize
 
+        // Wrap provider with metrics instrumentation if metrics are enabled
+        let history_store: Arc<dyn Provider> = if let Some(ref handle) = observability_handle {
+            if let Some(metrics) = handle.metrics_provider() {
+                Arc::new(crate::providers::instrumented::InstrumentedProvider::new(history_store, Some(metrics.clone())))
+            } else {
+                history_store
+            }
+        } else {
+            history_store
+        };
+
         let joins: Vec<JoinHandle<()>> = Vec::new();
 
         // Generate unique runtime instance ID (4-char hex)
@@ -452,6 +608,9 @@ impl Runtime {
             runtime_id,
         });
 
+        // Initialize gauges from provider (if supported)
+        runtime.clone().initialize_gauges().await;
+
         // background orchestrator dispatcher (extracted from inline poller)
         let handle = runtime.clone().start_orchestration_dispatcher();
         runtime.joins.lock().await.push(handle);
@@ -459,6 +618,10 @@ impl Runtime {
         // background work dispatcher (executes activities)
         let work_handle = runtime.clone().start_work_dispatcher(activity_registry);
         runtime.joins.lock().await.push(work_handle);
+
+        // Note: Queue depth monitoring could be added here, but requires ProviderAdmin trait
+        // which is not available on all providers. Providers can implement their own queue depth
+        // export via their admin interfaces.
 
         runtime
     }

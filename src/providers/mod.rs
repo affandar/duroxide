@@ -1578,6 +1578,7 @@ pub mod management;
 
 /// SQLite-backed provider with full transactional support.
 pub mod sqlite;
+pub mod instrumented;
 
 // Re-export management types for convenience
 pub use management::{ExecutionInfo, InstanceInfo, ManagementProvider, QueueDepths, SystemMetrics};

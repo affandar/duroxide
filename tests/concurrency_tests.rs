@@ -5,12 +5,13 @@ use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
 use duroxide::{ActivityContext, Client, Event, OrchestrationContext, OrchestrationRegistry};
 use std::sync::Arc as StdArc;
+use std::time::Duration;
 
 async fn concurrent_orchestrations_different_activities_with(store: StdArc<dyn Provider>) {
     let o1 = |ctx: OrchestrationContext, _input: String| async move {
         let f_a = ctx.schedule_activity("Add", "2,3");
         let f_e = ctx.schedule_wait("Go");
-        let f_t = ctx.schedule_timer(1);
+        let f_t = ctx.schedule_timer(Duration::from_millis(1));
         let results = ctx.join(vec![f_a, f_e, f_t]).await;
 
         // Find activity and external results (order may vary due to history ordering)
@@ -36,7 +37,7 @@ async fn concurrent_orchestrations_different_activities_with(store: StdArc<dyn P
     let o2 = |ctx: OrchestrationContext, _input: String| async move {
         let f_a = ctx.schedule_activity("Upper", "hi");
         let f_e = ctx.schedule_wait("Go");
-        let f_t = ctx.schedule_timer(1);
+        let f_t = ctx.schedule_timer(Duration::from_millis(1));
         let results = ctx.join(vec![f_a, f_e, f_t]).await;
 
         // Find activity and external results (order may vary due to history ordering)
@@ -185,7 +186,7 @@ async fn concurrent_orchestrations_same_activities_with(store: StdArc<dyn Provid
     let o1 = |ctx: OrchestrationContext, _input: String| async move {
         let f_a = ctx.schedule_activity("Proc", "10");
         let f_e = ctx.schedule_wait("Go");
-        let f_t = ctx.schedule_timer(1);
+        let f_t = ctx.schedule_timer(Duration::from_millis(1));
         let results = ctx.join(vec![f_a, f_e, f_t]).await;
 
         // Find activity and external results (order may vary due to history ordering)
@@ -212,7 +213,7 @@ async fn concurrent_orchestrations_same_activities_with(store: StdArc<dyn Provid
         let _guid = ctx.new_guid().await?;
         let f_a = ctx.schedule_activity("Proc", "20");
         let f_e = ctx.schedule_wait("Go");
-        let f_t = ctx.schedule_timer(1);
+        let f_t = ctx.schedule_timer(Duration::from_millis(1));
         let results = ctx.join(vec![f_a, f_e, f_t]).await;
 
         // Find activity and external results (order may vary due to history ordering)
@@ -343,7 +344,7 @@ async fn single_orchestration_with_join_test() {
     let o1 = |ctx: OrchestrationContext, _input: String| async move {
         let f_a = ctx.schedule_activity("Proc", "10");
         let f_e = ctx.schedule_wait("Go");
-        let f_t = ctx.schedule_timer(1);
+        let f_t = ctx.schedule_timer(Duration::from_millis(1));
         let results = ctx.join(vec![f_a, f_e, f_t]).await;
 
         let mut a = None;

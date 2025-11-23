@@ -95,7 +95,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .await?;
 
         // Set up a race between approval and timeout
-        let approval_timeout = ctx.schedule_timer(5000); // 5 second timeout
+        let approval_timeout = ctx.schedule_timer(std::time::Duration::from_secs(5)); // 5 second timeout
         let approval_event = ctx.schedule_wait("ApprovalEvent");
 
         ctx.trace_info("Waiting for approval or timeout...");
@@ -112,7 +112,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .await?;
 
                 // Wait a bit longer for approval
-                let extended_timeout = ctx.schedule_timer(3000); // 3 more seconds
+                let extended_timeout = ctx.schedule_timer(std::time::Duration::from_secs(3)); // 3 more seconds
                 let approval_event2 = ctx.schedule_wait("ApprovalEvent");
 
                 let (_, result2) = ctx.select2(extended_timeout, approval_event2).await;

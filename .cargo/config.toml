@@ -1,6 +1,6 @@
 [alias]
-t = "test --features test"
-tw = "test --features test -- --nocapture"
+t = "test --all-features"
+tw = "test --all-features -- --nocapture"
 r = "run"
 c = "clippy -- -D warnings"
 f = "fmt"
