@@ -982,9 +982,9 @@ impl OrchestrationContext {
         // Format: "trace:{level}:{message}"
         // Note: Actual logging happens inside the System future during first execution only
         let op = format!("{SYSCALL_OP_TRACE_PREFIX}{level_str}:{msg}");
-        let mut fut = self.schedule_system_call(&op);
+        let mut fut = Box::pin(self.schedule_system_call(&op));
         // Poll immediately to record the event synchronously
-        let _ = poll_once(&mut fut);
+        let _ = poll_once(fut.as_mut());
     }
 
     /// Convenience wrapper for INFO level tracing.
@@ -1583,11 +1583,10 @@ fn noop_waker() -> Waker {
     unsafe { Waker::from_raw(RawWaker::new(std::ptr::null(), &VTABLE)) }
 }
 
-fn poll_once<F: Future>(fut: &mut F) -> Poll<F::Output> {
+fn poll_once<F: Future>(mut fut: Pin<&mut F>) -> Poll<F::Output> {
     let w = noop_waker();
     let mut cx = Context::from_waker(&w);
-    let mut pinned = unsafe { Pin::new_unchecked(fut) };
-    pinned.as_mut().poll(&mut cx)
+    fut.as_mut().poll(&mut cx)
 }
 
 /// Poll the orchestrator once with the provided history, producing
@@ -1616,8 +1615,8 @@ where
         None, // No worker_id in standalone execution
     );
     ctx.inner.lock().unwrap().logging_enabled_this_poll = false;
-    let mut fut = orchestrator(ctx.clone());
-    match poll_once(&mut fut) {
+    let mut fut = Box::pin(orchestrator(ctx.clone()));
+    match poll_once(fut.as_mut()) {
         Poll::Ready(out) => {
             ctx.inner.lock().unwrap().logging_enabled_this_poll = true;
             let actions = ctx.take_actions();
@@ -1656,8 +1655,8 @@ where
         Some(worker_id),
     );
     ctx.inner.lock().unwrap().logging_enabled_this_poll = false;
-    let mut fut = orchestrator(ctx.clone());
-    match poll_once(&mut fut) {
+    let mut fut = Box::pin(orchestrator(ctx.clone()));
+    match poll_once(fut.as_mut()) {
         Poll::Ready(out) => {
             ctx.inner.lock().unwrap().logging_enabled_this_poll = true;
             let actions = ctx.take_actions();

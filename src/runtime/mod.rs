@@ -302,24 +302,6 @@ impl Runtime {
     }
 
     #[inline]
-    fn record_provider_operation(&self, operation: &str, duration_seconds: f64, status: &str) {
-        if let Some(handle) = &self.observability_handle {
-            if let Some(provider) = handle.metrics_provider() {
-                provider.record_provider_operation(operation, duration_seconds, status);
-            }
-        }
-    }
-
-    #[inline]
-    fn record_provider_error(&self, operation: &str, error_type: &str) {
-        if let Some(handle) = &self.observability_handle {
-            if let Some(provider) = handle.metrics_provider() {
-                provider.record_provider_error(operation, error_type);
-            }
-        }
-    }
-
-    #[inline]
     fn record_activity_execution(&self, activity_name: &str, outcome: &str, duration_seconds: f64, retry_attempt: u32) {
         if let Some(handle) = &self.observability_handle {
             if let Some(provider) = handle.metrics_provider() {
@@ -405,12 +387,10 @@ impl Runtime {
             // Query provider for current state (parallel for efficiency)
             let system_metrics_future = admin.get_system_metrics();
             let queue_depths_future = admin.get_queue_depths();
-            
+
             let (system_result, queue_result) = tokio::join!(system_metrics_future, queue_depths_future);
-            
-            if let Some(provider) = self.observability_handle.as_ref()
-                .and_then(|h| h.metrics_provider()) 
-            {
+
+            if let Some(provider) = self.observability_handle.as_ref().and_then(|h| h.metrics_provider()) {
                 // Initialize active orchestrations gauge
                 if let Ok(metrics) = system_result {
                     let active_count = metrics.running_instances as i64;
@@ -421,13 +401,10 @@ impl Runtime {
                         "Initialized active orchestrations gauge"
                     );
                 }
-                
+
                 // Initialize queue depth gauges
                 if let Ok(depths) = queue_result {
-                    provider.update_queue_depths(
-                        depths.orchestrator_queue as u64,
-                        depths.worker_queue as u64
-                    );
+                    provider.update_queue_depths(depths.orchestrator_queue as u64, depths.worker_queue as u64);
                     tracing::debug!(
                         target: "duroxide::runtime",
                         orch_queue = %depths.orchestrator_queue,
@@ -574,7 +551,10 @@ impl Runtime {
         // Wrap provider with metrics instrumentation if metrics are enabled
         let history_store: Arc<dyn Provider> = if let Some(ref handle) = observability_handle {
             if let Some(metrics) = handle.metrics_provider() {
-                Arc::new(crate::providers::instrumented::InstrumentedProvider::new(history_store, Some(metrics.clone())))
+                Arc::new(crate::providers::instrumented::InstrumentedProvider::new(
+                    history_store,
+                    Some(metrics.clone()),
+                ))
             } else {
                 history_store
             }

@@ -704,6 +704,13 @@ impl Future for DurableFuture {
     }
 }
 
+// Compile-time contract: DurableFuture must remain Unpin because poll() relies on freely
+// projecting &mut self into its internal Kind. This assertion fails if future changes.
+const fn assert_unpin<T: Unpin>() {}
+const _: () = {
+    assert_unpin::<DurableFuture>();
+};
+
 // Helper function to generate deterministic GUIDs
 fn generate_guid() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};

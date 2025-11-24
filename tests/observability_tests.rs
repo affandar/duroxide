@@ -892,7 +892,7 @@ async fn test_active_orchestrations_gauge() {
     // Note: The active_orchestrations gauge is automatically incremented/decremented
     // as orchestrations start/complete. It's exposed via OTel metrics for Prometheus scraping.
     // We verify it works by confirming the system functions correctly.
-    
+
     rt.shutdown(None).await;
 }
 
@@ -934,17 +934,29 @@ async fn test_active_orchestrations_gauge_comprehensive() {
     client.start_orchestration("active-long", "LongOrch", "").await.unwrap();
 
     // Wait for first two to complete
-    match client.wait_for_orchestration("active-1", Duration::from_secs(5)).await.unwrap() {
+    match client
+        .wait_for_orchestration("active-1", Duration::from_secs(5))
+        .await
+        .unwrap()
+    {
         OrchestrationStatus::Completed { .. } => {}
         other => panic!("unexpected status: {other:?}"),
     }
-    match client.wait_for_orchestration("active-2", Duration::from_secs(5)).await.unwrap() {
+    match client
+        .wait_for_orchestration("active-2", Duration::from_secs(5))
+        .await
+        .unwrap()
+    {
         OrchestrationStatus::Completed { .. } => {}
         other => panic!("unexpected status: {other:?}"),
     }
 
     // Wait for long one
-    match client.wait_for_orchestration("active-long", Duration::from_secs(5)).await.unwrap() {
+    match client
+        .wait_for_orchestration("active-long", Duration::from_secs(5))
+        .await
+        .unwrap()
+    {
         OrchestrationStatus::Completed { .. } => {}
         other => panic!("unexpected status: {other:?}"),
     }
@@ -1110,9 +1122,12 @@ async fn test_versioned_orchestration_metrics() {
         .build();
 
     let orchestrations = OrchestrationRegistry::builder()
-        .register("VersionedOrch", |ctx: OrchestrationContext, _input: String| async move {
-            ctx.schedule_activity("TestActivity", "").into_activity().await
-        })
+        .register(
+            "VersionedOrch",
+            |ctx: OrchestrationContext, _input: String| async move {
+                ctx.schedule_activity("TestActivity", "").into_activity().await
+            },
+        )
         .build();
 
     let rt = runtime::Runtime::start_with_options(store.clone(), Arc::new(activities), orchestrations, options).await;
@@ -1123,12 +1138,12 @@ async fn test_versioned_orchestration_metrics() {
         .start_orchestration_versioned("v1-test", "VersionedOrch", "1.0.0", "")
         .await
         .unwrap();
-    
+
     client
         .start_orchestration_versioned("v2-test", "VersionedOrch", "2.0.0", "")
         .await
         .unwrap();
-    
+
     client
         .start_orchestration_versioned("v3-test", "VersionedOrch", "1.0.0", "")
         .await
@@ -1207,7 +1222,7 @@ async fn test_provider_metrics_recorded() {
         snapshot.orch_completions >= 1,
         "orchestration should complete (proving provider metrics were recorded)"
     );
-    // Note: Provider metrics (duroxide_provider_operation_duration_seconds, 
+    // Note: Provider metrics (duroxide_provider_operation_duration_seconds,
     // duroxide_provider_errors_total) are recorded via InstrumentedProvider
     // but not exposed in atomic counter snapshot. They go to OTel histograms/counters.
 }
@@ -1236,16 +1251,15 @@ async fn test_provider_error_metrics() {
         ..Default::default()
     };
 
-    let rt = runtime::Runtime::start_with_options(provider_trait.clone(), Arc::new(activities), orchestrations, options).await;
+    let rt =
+        runtime::Runtime::start_with_options(provider_trait.clone(), Arc::new(activities), orchestrations, options)
+            .await;
     let client = Client::new(provider_trait.clone());
 
     // Trigger provider error on fetch
     failing_provider.fail_next_fetch_orchestration_item();
-    
-    client
-        .start_orchestration("error-test", "TestOrch", "")
-        .await
-        .unwrap();
+
+    client.start_orchestration("error-test", "TestOrch", "").await.unwrap();
 
     // Wait a bit for the error to be encountered
     tokio::time::sleep(Duration::from_millis(200)).await;
@@ -1266,7 +1280,7 @@ async fn test_queue_depth_gauges_initialization() {
     };
 
     let store = Arc::new(SqliteProvider::new_in_memory().await.unwrap());
-    
+
     // Enqueue some work items BEFORE starting runtime
     store
         .enqueue_for_orchestrator(
@@ -1283,7 +1297,7 @@ async fn test_queue_depth_gauges_initialization() {
         )
         .await
         .unwrap();
-    
+
     store
         .enqueue_for_orchestrator(
             WorkItem::StartOrchestration {
@@ -1312,7 +1326,7 @@ async fn test_queue_depth_gauges_initialization() {
     // Note: Queue depth gauges are initialized from provider and exposed via OTel metrics
     // We don't need to verify exact values - the gauges are automatically updated by the system
     // and read through Prometheus/OTel scraping, not direct API calls
-    
+
     rt.shutdown(None).await;
 }
 
@@ -1360,7 +1374,7 @@ async fn test_queue_depth_gauges_tracking() {
     // Note: Queue depth gauges are exposed via OTel metrics and scraped by Prometheus
     // We verify the system works by confirming orchestrations complete successfully
     // The gauges themselves are read through the metrics system, not direct API calls
-    
+
     rt.shutdown(None).await;
 }
 
@@ -1373,7 +1387,7 @@ async fn test_all_gauges_initialized_together() {
     };
 
     let store = Arc::new(SqliteProvider::new_in_memory().await.unwrap());
-    
+
     // Create a running orchestration by starting and NOT completing it
     let activities = ActivityRegistry::builder()
         .register("BlockingActivity", |_ctx: ActivityContext, _input: String| async move {
@@ -1388,18 +1402,16 @@ async fn test_all_gauges_initialized_together() {
         })
         .build();
 
-    let rt = runtime::Runtime::start_with_options(
-        store.clone(), 
-        Arc::new(activities), 
-        orchestrations, 
-        options
-    ).await;
-    
+    let rt = runtime::Runtime::start_with_options(store.clone(), Arc::new(activities), orchestrations, options).await;
+
     let client = Client::new(store.clone());
 
     // Start an orchestration that will block
-    client.start_orchestration("blocking-test", "BlockingOrch", "").await.unwrap();
-    
+    client
+        .start_orchestration("blocking-test", "BlockingOrch", "")
+        .await
+        .unwrap();
+
     // Wait for it to start processing
     tokio::time::sleep(Duration::from_millis(200)).await;
 
@@ -1424,12 +1436,8 @@ async fn test_all_gauges_initialized_together() {
         })
         .build();
 
-    let rt2 = runtime::Runtime::start_with_options(
-        store.clone(),
-        Arc::new(activities2),
-        orchestrations2,
-        options2,
-    ).await;
+    let rt2 =
+        runtime::Runtime::start_with_options(store.clone(), Arc::new(activities2), orchestrations2, options2).await;
 
     // Give initialization time to complete
     tokio::time::sleep(Duration::from_millis(200)).await;
@@ -1438,7 +1446,6 @@ async fn test_all_gauges_initialized_together() {
     // are initialized from the provider on startup via initialize_gauges()
     // They reflect the persistent state in the database, not just runtime state
     // The gauges are exposed via OTel metrics and read through Prometheus scraping
-    
+
     rt2.shutdown(None).await;
 }
-

@@ -1,10 +1,10 @@
 //! Instrumented provider wrapper that adds metrics to any provider implementation.
 
+use async_trait::async_trait;
 use std::sync::Arc;
 use std::time::Duration;
-use async_trait::async_trait;
 
-use super::{Provider, ProviderAdmin, ProviderError, ExecutionMetadata, OrchestrationItem, WorkItem};
+use super::{ExecutionMetadata, OrchestrationItem, Provider, ProviderAdmin, ProviderError, WorkItem};
 use crate::Event;
 use crate::runtime::observability::MetricsProvider;
 
@@ -78,12 +78,16 @@ impl Provider for InstrumentedProvider {
         let start = std::time::Instant::now();
         let result = self.inner.fetch_orchestration_item(lock_timeout).await;
         let duration = start.elapsed();
-        
-        self.record_operation("fetch_orchestration_item", duration, if result.is_ok() { "success" } else { "error" });
+
+        self.record_operation(
+            "fetch_orchestration_item",
+            duration,
+            if result.is_ok() { "success" } else { "error" },
+        );
         if let Err(ref e) = result {
             self.record_error("fetch_orchestration_item", e);
         }
-        
+
         result
     }
 
@@ -97,14 +101,28 @@ impl Provider for InstrumentedProvider {
         metadata: ExecutionMetadata,
     ) -> Result<(), ProviderError> {
         let start = std::time::Instant::now();
-        let result = self.inner.ack_orchestration_item(lock_token, execution_id, history_delta, worker_items, orchestrator_items, metadata).await;
+        let result = self
+            .inner
+            .ack_orchestration_item(
+                lock_token,
+                execution_id,
+                history_delta,
+                worker_items,
+                orchestrator_items,
+                metadata,
+            )
+            .await;
         let duration = start.elapsed();
-        
-        self.record_operation("ack_orchestration_item", duration, if result.is_ok() { "success" } else { "error" });
+
+        self.record_operation(
+            "ack_orchestration_item",
+            duration,
+            if result.is_ok() { "success" } else { "error" },
+        );
         if let Err(ref e) = result {
             self.record_error("ack_orchestration_item", e);
         }
-        
+
         result
     }
 
@@ -116,12 +134,12 @@ impl Provider for InstrumentedProvider {
         let start = std::time::Instant::now();
         let result = self.inner.read(instance).await;
         let duration = start.elapsed();
-        
+
         self.record_operation("read", duration, if result.is_ok() { "success" } else { "error" });
         if let Err(ref e) = result {
             self.record_error("read", e);
         }
-        
+
         result
     }
 
@@ -135,7 +153,9 @@ impl Provider for InstrumentedProvider {
         execution_id: u64,
         new_events: Vec<Event>,
     ) -> Result<(), ProviderError> {
-        self.inner.append_with_execution(instance, execution_id, new_events).await
+        self.inner
+            .append_with_execution(instance, execution_id, new_events)
+            .await
     }
 
     async fn enqueue_for_worker(&self, item: WorkItem) -> Result<(), ProviderError> {
@@ -146,12 +166,16 @@ impl Provider for InstrumentedProvider {
         let start = std::time::Instant::now();
         let result = self.inner.fetch_work_item(lock_timeout).await;
         let duration = start.elapsed();
-        
-        self.record_operation("fetch_work_item", duration, if result.is_ok() { "success" } else { "error" });
+
+        self.record_operation(
+            "fetch_work_item",
+            duration,
+            if result.is_ok() { "success" } else { "error" },
+        );
         if let Err(ref e) = result {
             self.record_error("fetch_work_item", e);
         }
-        
+
         result
     }
 
@@ -159,12 +183,16 @@ impl Provider for InstrumentedProvider {
         let start = std::time::Instant::now();
         let result = self.inner.ack_work_item(token, completion).await;
         let duration = start.elapsed();
-        
-        self.record_operation("ack_work_item", duration, if result.is_ok() { "success" } else { "error" });
+
+        self.record_operation(
+            "ack_work_item",
+            duration,
+            if result.is_ok() { "success" } else { "error" },
+        );
         if let Err(ref e) = result {
             self.record_error("ack_work_item", e);
         }
-        
+
         result
     }
 
@@ -176,12 +204,16 @@ impl Provider for InstrumentedProvider {
         let start = std::time::Instant::now();
         let result = self.inner.enqueue_for_orchestrator(item, delay).await;
         let duration = start.elapsed();
-        
-        self.record_operation("enqueue_orchestrator", duration, if result.is_ok() { "success" } else { "error" });
+
+        self.record_operation(
+            "enqueue_orchestrator",
+            duration,
+            if result.is_ok() { "success" } else { "error" },
+        );
         if let Err(ref e) = result {
             self.record_error("enqueue_orchestrator", e);
         }
-        
+
         result
     }
 
@@ -189,4 +221,3 @@ impl Provider for InstrumentedProvider {
         self.inner.as_management_capability()
     }
 }
-

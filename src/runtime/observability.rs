@@ -657,7 +657,6 @@ mod otel_impl {
             };
         }
 
-
         #[inline]
         pub fn record_activity_success(&self) {
             self.activity_success_atomic.fetch_add(1, Ordering::Relaxed);

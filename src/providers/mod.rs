@@ -1576,9 +1576,9 @@ pub trait Provider: Any + Send + Sync {
 /// Management and observability provider interface.
 pub mod management;
 
+pub mod instrumented;
 /// SQLite-backed provider with full transactional support.
 pub mod sqlite;
-pub mod instrumented;
 
 // Re-export management types for convenience
 pub use management::{ExecutionInfo, InstanceInfo, ManagementProvider, QueueDepths, SystemMetrics};
