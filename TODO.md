@@ -16,13 +16,14 @@
 ### Active TODOs
 
 - **Activity Retry Policy** - Implement built-in activity retry logic
-  - Current: Activities fail immediately, no retry (retry_attempt metric always "0")
-  - User workaround: Implement retry in orchestration code (for attempt in 0..3 { ... })
-  - Proposed: Add `schedule_activity_with_retry(name, input, retry_policy)` method
-  - Alternative: Add optional `RetryPolicy` parameter to existing `schedule_activity()`
-  - Considerations: Retry policy should be deterministic (not time-based), stored in ActivityScheduled event
-  - Benefits: Automatic transient failure handling, proper retry_attempt metrics, less boilerplate
-  - Complexity: Medium - Need retry state in ActivityScheduled event, worker retry logic, backoff strategy
+  - Design doc: `proposals/activity-retry-policy.md`
+
+- **Orchestration-level Metrics** - Add metric recording from orchestration code
+  - Similar to existing `ctx.trace_*()`, `ctx.new_guid()`, `ctx.utcnow()` system calls
+  - Add `ctx.record_counter(name, value, labels)`, `ctx.record_histogram(name, value, labels)` etc.
+  - Would enable retry metrics, custom business metrics from orchestration code
+  - Must be deterministic (recorded as SystemCall events for replay)
+  - Complexity: Medium - extend SystemCall machinery, wire to MetricsProvider
 - Full e2e Otel test
 - Wire up suborchestration metrics, requires some linkage of names between suborch -> parent in the replayengine
 - Review DurableFuture and into_*() fns for soundness
