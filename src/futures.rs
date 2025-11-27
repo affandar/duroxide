@@ -786,9 +786,24 @@ impl Future for AggregateDurableFuture {
 
         match this.mode {
             AggregateMode::Select => {
-                // Single-pass: return the first child that becomes ready
+                // Two-phase polling to handle replay correctly:
+                // Phase 1: Poll ALL children to ensure they claim their scheduling events.
+                //          During replay, the winner might return Ready immediately, but
+                //          losers still need to claim their scheduling events to avoid
+                //          nondeterminism when subsequent code schedules new operations.
+                // Phase 2: Check which child is ready and return the winner.
+
+                // Phase 1: Ensure all children claim their scheduling events
+                let mut ready_results: Vec<Option<DurableOutput>> = vec![None; this.children.len()];
                 for (i, child) in this.children.iter_mut().enumerate() {
                     if let Poll::Ready(output) = Pin::new(child).poll(cx) {
+                        ready_results[i] = Some(output);
+                    }
+                }
+
+                // Phase 2: Return the first ready child (maintains original select semantics)
+                for (i, result) in ready_results.into_iter().enumerate() {
+                    if let Some(output) = result {
                         return Poll::Ready(AggregateOutput::Select {
                             winner_index: i,
                             output,

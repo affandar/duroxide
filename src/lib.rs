@@ -602,6 +602,151 @@ pub enum LogLevel {
     Error,
 }
 
+/// Backoff strategy for computing delay between retry attempts.
+#[derive(Debug, Clone)]
+pub enum BackoffStrategy {
+    /// No delay between retries.
+    None,
+    /// Fixed delay between all retries.
+    Fixed {
+        /// Delay duration between each retry.
+        delay: std::time::Duration,
+    },
+    /// Linear backoff: delay = base * attempt, capped at max.
+    Linear {
+        /// Base delay multiplied by attempt number.
+        base: std::time::Duration,
+        /// Maximum delay cap.
+        max: std::time::Duration,
+    },
+    /// Exponential backoff: delay = base * multiplier^(attempt-1), capped at max.
+    Exponential {
+        /// Initial delay for first retry.
+        base: std::time::Duration,
+        /// Multiplier applied each attempt.
+        multiplier: f64,
+        /// Maximum delay cap.
+        max: std::time::Duration,
+    },
+}
+
+impl Default for BackoffStrategy {
+    fn default() -> Self {
+        BackoffStrategy::Exponential {
+            base: std::time::Duration::from_millis(100),
+            multiplier: 2.0,
+            max: std::time::Duration::from_secs(30),
+        }
+    }
+}
+
+impl BackoffStrategy {
+    /// Compute delay for given attempt (1-indexed).
+    /// Attempt 1 is after first failure, so delay_for_attempt(1) is the first backoff.
+    pub fn delay_for_attempt(&self, attempt: u32) -> std::time::Duration {
+        match self {
+            BackoffStrategy::None => std::time::Duration::ZERO,
+            BackoffStrategy::Fixed { delay } => *delay,
+            BackoffStrategy::Linear { base, max } => {
+                let delay = base.saturating_mul(attempt);
+                std::cmp::min(delay, *max)
+            }
+            BackoffStrategy::Exponential { base, multiplier, max } => {
+                // delay = base * multiplier^(attempt-1)
+                let factor = multiplier.powi(attempt.saturating_sub(1) as i32);
+                let delay_nanos = (base.as_nanos() as f64 * factor) as u128;
+                let delay = std::time::Duration::from_nanos(delay_nanos.min(u64::MAX as u128) as u64);
+                std::cmp::min(delay, *max)
+            }
+        }
+    }
+}
+
+/// Retry policy for activities.
+///
+/// Configures automatic retry behavior including maximum attempts, backoff strategy,
+/// and optional total timeout spanning all attempts.
+///
+/// # Example
+///
+/// ```rust
+/// use std::time::Duration;
+/// use duroxide::{RetryPolicy, BackoffStrategy};
+///
+/// // Simple retry with defaults (3 attempts, exponential backoff)
+/// let policy = RetryPolicy::new(3);
+///
+/// // Custom policy with timeout and fixed backoff
+/// let policy = RetryPolicy::new(5)
+///     .with_timeout(Duration::from_secs(30))
+///     .with_backoff(BackoffStrategy::Fixed {
+///         delay: Duration::from_secs(1),
+///     });
+/// ```
+#[derive(Debug, Clone)]
+pub struct RetryPolicy {
+    /// Maximum number of attempts (including initial). Must be >= 1.
+    pub max_attempts: u32,
+    /// Backoff strategy between retries.
+    pub backoff: BackoffStrategy,
+    /// Per-attempt timeout. If set, each activity attempt is raced against this
+    /// timeout. If timeout fires, returns error immediately (no retry).
+    /// Retries only occur for activity errors, not timeouts. None = no timeout.
+    pub timeout: Option<std::time::Duration>,
+}
+
+impl Default for RetryPolicy {
+    fn default() -> Self {
+        Self {
+            max_attempts: 3,
+            backoff: BackoffStrategy::default(),
+            timeout: None,
+        }
+    }
+}
+
+impl RetryPolicy {
+    /// Create a new retry policy with specified max attempts and default backoff.
+    ///
+    /// # Panics
+    /// Panics if `max_attempts` is 0.
+    pub fn new(max_attempts: u32) -> Self {
+        assert!(max_attempts >= 1, "max_attempts must be at least 1");
+        Self {
+            max_attempts,
+            ..Default::default()
+        }
+    }
+
+    /// Set per-attempt timeout.
+    ///
+    /// Each activity attempt is raced against this timeout. If the timeout fires
+    /// before the activity completes, returns an error immediately (no retry).
+    /// Retries only occur for activity errors, not timeouts.
+    pub fn with_timeout(mut self, timeout: std::time::Duration) -> Self {
+        self.timeout = Some(timeout);
+        self
+    }
+
+    /// Alias for `with_timeout` for backwards compatibility.
+    #[doc(hidden)]
+    pub fn with_total_timeout(mut self, timeout: std::time::Duration) -> Self {
+        self.timeout = Some(timeout);
+        self
+    }
+
+    /// Set backoff strategy.
+    pub fn with_backoff(mut self, backoff: BackoffStrategy) -> Self {
+        self.backoff = backoff;
+        self
+    }
+
+    /// Compute delay for given attempt using the configured backoff strategy.
+    pub fn delay_for_attempt(&self, attempt: u32) -> std::time::Duration {
+        self.backoff.delay_for_attempt(attempt)
+    }
+}
+
 /// Declarative decisions produced by an orchestration turn. The host/provider
 /// is responsible for materializing these into corresponding `Event`s.
 #[derive(Debug, Clone)]
@@ -1354,6 +1499,114 @@ impl OrchestrationContext {
     ) -> DurableFuture {
         let payload = crate::_typed_codec::Json::encode(input).expect("encode");
         self.schedule_activity(name, payload)
+    }
+
+    /// Schedule activity with automatic retry on failure.
+    ///
+    /// **Retry behavior:**
+    /// - Retries on activity **errors** up to `policy.max_attempts`
+    /// - **Timeouts are NOT retried** - if any attempt times out, returns error immediately
+    /// - Only application errors trigger retry logic
+    ///
+    /// **Timeout behavior (if `policy.total_timeout` is set):**
+    /// - Each activity attempt is raced against the timeout
+    /// - If the timeout fires before the activity completes → returns timeout error (no retry)
+    /// - If the activity fails with an error before timeout → retry according to policy
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use duroxide::{OrchestrationContext, RetryPolicy, BackoffStrategy};
+    /// # use std::time::Duration;
+    /// # async fn example(ctx: OrchestrationContext) -> Result<(), String> {
+    /// // Simple retry with defaults (no timeout)
+    /// let result = ctx.schedule_activity_with_retry(
+    ///     "CallAPI",
+    ///     "request",
+    ///     RetryPolicy::new(3),
+    /// ).await?;
+    ///
+    /// // Retry with per-attempt timeout and custom backoff
+    /// let result = ctx.schedule_activity_with_retry(
+    ///     "CallAPI",
+    ///     "request",
+    ///     RetryPolicy::new(5)
+    ///         .with_timeout(Duration::from_secs(30)) // 30s per attempt
+    ///         .with_backoff(BackoffStrategy::Fixed { delay: Duration::from_secs(1) }),
+    /// ).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn schedule_activity_with_retry(
+        &self,
+        name: impl Into<String>,
+        input: impl Into<String>,
+        policy: RetryPolicy,
+    ) -> Result<String, String> {
+        let name = name.into();
+        let input = input.into();
+        let mut last_error = String::new();
+
+        for attempt in 1..=policy.max_attempts {
+            // Each attempt: optionally race against per-attempt timeout
+            let activity_result = if let Some(timeout) = policy.timeout {
+                // Race activity vs per-attempt timeout
+                let deadline = self.schedule_timer(timeout);
+                let activity = self.schedule_activity(&name, &input);
+                let (winner, output) = self.select2(activity, deadline).await;
+
+                match winner {
+                    0 => match output {
+                        DurableOutput::Activity(result) => result,
+                        _ => unreachable!(),
+                    },
+                    1 => {
+                        // Timeout fired - exit immediately, no retry for timeouts
+                        return Err("timeout: activity timed out".to_string());
+                    }
+                    _ => unreachable!(),
+                }
+            } else {
+                // No timeout - just await the activity
+                self.schedule_activity(&name, &input).into_activity().await
+            };
+
+            match activity_result {
+                Ok(result) => return Ok(result),
+                Err(e) => {
+                    // Activity failed with error - apply retry policy
+                    last_error = e.clone();
+                    if attempt < policy.max_attempts {
+                        self.trace(
+                            "warn",
+                            format!(
+                                "Activity '{}' attempt {}/{} failed: {}. Retrying...",
+                                name, attempt, policy.max_attempts, e
+                            ),
+                        );
+                        let delay = policy.delay_for_attempt(attempt);
+                        if !delay.is_zero() {
+                            self.schedule_timer(delay).into_timer().await;
+                        }
+                    }
+                }
+            }
+        }
+        Err(last_error)
+    }
+
+    /// Typed variant of `schedule_activity_with_retry`.
+    ///
+    /// Serializes input once and deserializes the successful result.
+    pub async fn schedule_activity_with_retry_typed<In: serde::Serialize, Out: serde::de::DeserializeOwned>(
+        &self,
+        name: impl Into<String>,
+        input: &In,
+        policy: RetryPolicy,
+    ) -> Result<Out, String> {
+        let payload = crate::_typed_codec::Json::encode(input).expect("encode");
+        let result = self.schedule_activity_with_retry(name, payload, policy).await?;
+        crate::_typed_codec::Json::decode::<Out>(&result)
     }
 
     /// Schedule a timer for delays, timeouts, and scheduled execution.

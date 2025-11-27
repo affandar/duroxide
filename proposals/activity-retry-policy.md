@@ -2,12 +2,12 @@
 
 ## Summary
 
-Add orchestration-level helper methods that wrap existing `schedule_activity` calls with configurable retry logic and optional total timeout. Retries are implemented entirely in orchestration code using existing primitives (loops + timers + select), keeping history deterministic and requiring no worker/provider changes.
+Add orchestration-level helper methods that wrap existing `schedule_activity` calls with configurable retry logic and optional per-attempt timeout. Retries are implemented entirely in orchestration code using existing primitives (loops + timers + select), keeping history deterministic and requiring no worker/provider changes.
 
 ## Motivation
 
 - **Current state**: Activities fail immediately; users must manually implement retry loops and timeout logic in orchestration code.
-- **Goal**: Provide ergonomic `schedule_activity_with_retry()` helpers that encapsulate retry best practices (backoff, max attempts, total timeout) while remaining fully deterministic.
+- **Goal**: Provide ergonomic `schedule_activity_with_retry()` helpers that encapsulate retry best practices (backoff, max attempts, per-attempt timeout) while remaining fully deterministic.
 
 ## Scope
 
@@ -37,8 +37,10 @@ pub struct RetryPolicy {
     pub max_attempts: u32,
     /// Backoff strategy between retries. Default: Exponential(100ms, 2.0, 30s)
     pub backoff: BackoffStrategy,
-    /// Total timeout across all attempts. None = no timeout (retry until max_attempts exhausted).
-    pub total_timeout: Option<Duration>,
+    /// Per-attempt timeout. Each activity attempt is raced against this timeout.
+    /// If timeout fires, returns error immediately (no retry). Retries only
+    /// occur for activity errors, not timeouts. None = no timeout.
+    pub timeout: Option<Duration>,
 }
 
 /// Backoff strategy for computing delay between retry attempts.
@@ -69,14 +71,15 @@ impl Default for RetryPolicy {
         Self {
             max_attempts: 3,
             backoff: BackoffStrategy::default(),
-            total_timeout: None,
+            timeout: None,
         }
     }
 }
 
 impl RetryPolicy {
     pub fn new(max_attempts: u32) -> Self { ... }
-    pub fn with_total_timeout(mut self, timeout: Duration) -> Self { ... }
+    /// Set per-attempt timeout. Timeouts cause immediate exit (no retry).
+    pub fn with_timeout(mut self, timeout: Duration) -> Self { ... }
     pub fn with_backoff(mut self, backoff: BackoffStrategy) -> Self { ... }
     
     /// Compute delay for given attempt (1-indexed).
@@ -90,9 +93,14 @@ impl RetryPolicy {
 impl OrchestrationContext {
     /// Schedule activity with retry policy.
     /// 
-    /// Retries on failure up to `policy.max_attempts`. If `policy.total_timeout` is set,
-    /// the entire retry sequence (all attempts + backoff delays) is bounded by that duration.
-    /// Whichever limit is hit first (max_attempts or total_timeout) terminates retries.
+    /// **Retry behavior:**
+    /// - Retries on activity **errors** up to `policy.max_attempts`
+    /// - **Timeouts are NOT retried** - if any attempt times out, returns error immediately
+    /// 
+    /// **Timeout behavior (if `policy.timeout` is set):**
+    /// - Each activity attempt is raced against the timeout
+    /// - If timeout fires before activity completes → returns timeout error (no retry)
+    /// - If activity fails with error before timeout → retry according to policy
     pub async fn schedule_activity_with_retry(
         &self,
         name: impl Into<String>,
@@ -126,45 +134,36 @@ pub async fn schedule_activity_with_retry(
 ) -> Result<String, String> {
     let name = name.into();
     let input = input.into();
-
-    // If total_timeout is set, wrap the entire retry loop in a select against a deadline timer
-    match policy.total_timeout {
-        Some(timeout) => {
-            let deadline = self.schedule_timer(timeout);
-            let retry_loop = self.retry_loop_inner(&name, &input, &policy);
-            
-            // Race the retry loop against the deadline
-            let (winner, output) = self.select2(
-                Box::pin(retry_loop),
-                deadline,
-            ).await;
-            
-            match winner {
-                0 => match output {
-                    DurableOutput::Activity(r) => r,
-                    _ => unreachable!(),
-                },
-                1 => Err("timeout: retry deadline exceeded".to_string()),
-                _ => unreachable!(),
-            }
-        }
-        None => self.retry_loop_inner(&name, &input, &policy).await,
-    }
-}
-
-/// Internal retry loop without timeout wrapper.
-async fn retry_loop_inner(
-    &self,
-    name: &str,
-    input: &str,
-    policy: &RetryPolicy,
-) -> Result<String, String> {
     let mut last_error = String::new();
 
     for attempt in 1..=policy.max_attempts {
-        match self.schedule_activity(name, input).into_activity().await {
-            Ok(value) => return Ok(value),
+        // Each attempt: optionally race against per-attempt timeout
+        let activity_result = if let Some(timeout) = policy.timeout {
+            // Race activity vs per-attempt timeout
+            let deadline = self.schedule_timer(timeout);
+            let activity = self.schedule_activity(&name, &input);
+            let (winner, output) = self.select2(activity, deadline).await;
+
+            match winner {
+                0 => match output {
+                    DurableOutput::Activity(result) => result,
+                    _ => unreachable!(),
+                },
+                1 => {
+                    // Timeout fired - exit immediately, no retry for timeouts
+                    return Err("timeout: activity timed out".to_string());
+                }
+                _ => unreachable!(),
+            }
+        } else {
+            // No timeout - just await the activity
+            self.schedule_activity(&name, &input).into_activity().await
+        };
+
+        match activity_result {
+            Ok(result) => return Ok(result),
             Err(e) => {
+                // Activity failed with error - apply retry policy
                 last_error = e;
                 if attempt < policy.max_attempts {
                     let delay = policy.delay_for_attempt(attempt);
@@ -175,57 +174,59 @@ async fn retry_loop_inner(
             }
         }
     }
-
     Err(last_error)
 }
 ```
 
 ### Key Points
 
-1. **Deterministic**: Each retry attempt creates a new `ActivityScheduled` event. The total timeout (if set) creates a single `TimerCreated` at the start. Backoff delays use `schedule_timer()`. All recorded in history; replay follows the same path.
+1. **Deterministic**: Each retry attempt creates a new `ActivityScheduled` event. If timeout is set, each attempt also creates a `TimerCreated`. Backoff delays use `schedule_timer()`. All recorded in history; replay follows the same path.
 
 2. **No worker/provider changes**: Retries and timeouts are orchestration control flow.
 
-3. **Total timeout semantics**: The timeout spans all attempts including backoff delays. If the deadline timer fires before a successful completion, the helper returns immediately with a timeout error. Any in-flight activity may still complete (its completion event will be in history but ignored).
+3. **Per-attempt timeout semantics**: The timeout applies to each individual activity attempt. If the deadline timer fires before the activity completes, returns immediately with timeout error (NO retry). Only activity errors trigger retry logic.
 
 4. **Input cloning**: String inputs are cloned per attempt. Typed variants serialize once and reuse the payload string.
 
-5. **Error propagation**: Returns the last activity error after exhausting attempts, or "timeout: retry deadline exceeded" if total timeout fires first.
+5. **Error propagation**: Returns the last activity error after exhausting attempts, or "timeout: activity timed out" if timeout fires first.
 
 6. **Only Application errors reach orchestration**: Infrastructure and configuration errors abort the turn at the runtime layer—they never surface to orchestration code. All errors the retry helper sees are `ErrorDetails::Application`. The `Application` variant has a `retryable: bool` field; future work could respect this flag.
 
 ## History Example
 
-Activity with 3 max attempts, 10s total timeout, exponential backoff (100ms base):
+Activity with 3 max attempts, 10s per-attempt timeout, exponential backoff (100ms base):
 
 ```
 [1] OrchestrationStarted { ... }
-[2] TimerCreated { fire_at_ms: now+10000, ... }          // total timeout deadline
+[2] TimerCreated { fire_at_ms: now+10000, ... }          // attempt 1 timeout
 [3] ActivityScheduled { name: "Flaky", input: "x", ... }
-[4] ActivityFailed { source_event_id: 3, ... }           // attempt 1 failed
+[4] ActivityFailed { source_event_id: 3, ... }           // attempt 1 failed (before timeout)
 [5] TimerCreated { fire_at_ms: now+100, ... }            // backoff 100ms
 [6] TimerFired { source_event_id: 5, ... }
-[7] ActivityScheduled { name: "Flaky", input: "x", ... }
-[8] ActivityFailed { source_event_id: 7, ... }           // attempt 2 failed
-[9] TimerCreated { fire_at_ms: now+200, ... }            // backoff 200ms
-[10] TimerFired { source_event_id: 9, ... }
-[11] ActivityScheduled { name: "Flaky", input: "x", ... }
-[12] ActivityCompleted { source_event_id: 11, result: "ok" } // attempt 3 succeeded
-[13] OrchestrationCompleted { ... }
+[7] TimerCreated { fire_at_ms: now+10000, ... }          // attempt 2 timeout
+[8] ActivityScheduled { name: "Flaky", input: "x", ... }
+[9] ActivityFailed { source_event_id: 8, ... }           // attempt 2 failed (before timeout)
+[10] TimerCreated { fire_at_ms: now+200, ... }           // backoff 200ms
+[11] TimerFired { source_event_id: 10, ... }
+[12] TimerCreated { fire_at_ms: now+10000, ... }         // attempt 3 timeout
+[13] ActivityScheduled { name: "Flaky", input: "x", ... }
+[14] ActivityCompleted { source_event_id: 13, result: "ok" } // attempt 3 succeeded
+[15] OrchestrationCompleted { ... }
 ```
 
-Note: Timer [2] (total timeout) was never consumed because the retry loop completed first. In a timeout scenario, [2] would fire before a successful activity completion, and the orchestration would complete with an error.
+Note: The per-attempt timeout timers ([2], [7], [12]) were never consumed because activities completed first. In a timeout scenario, the timeout timer would fire before the activity completes.
 
-### Timeout Scenario
+### Timeout Scenario (Activity Too Slow)
 
 ```
 [1] OrchestrationStarted { ... }
-[2] TimerCreated { fire_at_ms: now+5000, ... }           // total timeout: 5s
+[2] TimerCreated { fire_at_ms: now+1000, ... }           // per-attempt timeout: 1s
 [3] ActivityScheduled { name: "SlowActivity", ... }
-[4] TimerCreated { fire_at_ms: now+100, ... }            // backoff (won't be reached)
-[5] TimerFired { source_event_id: 2, ... }               // timeout wins!
-[6] OrchestrationCompleted { output: "Err(timeout: ...)" }
+[4] TimerFired { source_event_id: 2, ... }               // timeout fires first!
+[5] OrchestrationCompleted { output: "Err(timeout: activity timed out)" }
 ```
+
+Note: No retry happens because timeouts exit immediately.
 
 ## Usage Examples
 
@@ -238,13 +239,13 @@ let result = ctx.schedule_activity_with_retry(
 ).await?;
 ```
 
-### Retry with total timeout and custom backoff
+### Retry with per-attempt timeout and custom backoff
 ```rust
 let result = ctx.schedule_activity_with_retry(
     "CallExternalAPI",
     request_json,
     RetryPolicy::new(5)
-        .with_total_timeout(Duration::from_secs(60))
+        .with_timeout(Duration::from_secs(30)) // 30s per attempt
         .with_backoff(BackoffStrategy::Exponential {
             base: Duration::from_millis(500),
             multiplier: 2.0,
@@ -258,7 +259,7 @@ let result = ctx.schedule_activity_with_retry(
 let result = ctx.schedule_activity_with_retry(
     "QuickTask",
     input,
-    RetryPolicy::new(1).with_total_timeout(Duration::from_secs(5)),
+    RetryPolicy::new(1).with_timeout(Duration::from_secs(5)),
 ).await?;
 ```
 
@@ -267,7 +268,7 @@ let result = ctx.schedule_activity_with_retry(
 - **Orchestration-level metrics**: Once `ctx.record_counter()` is available, retry helpers can emit `activity_retry_total`, `activity_retry_exhausted_total`, `activity_timeout_total` metrics.
 - **Retry predicate**: Allow users to specify which errors are retryable via `RetryPolicy::retry_if(|err| ...)`.
 - **Jitter**: Add optional jitter to backoff to avoid thundering herd.
-- **Per-attempt timeout**: If needed, add separate `per_attempt_timeout` field for bounding individual attempts.
+- **Total timeout**: If needed, add a separate `total_timeout` field for bounding all attempts combined.
 - **Sub-orchestration retries**: If needed, add similar helpers for sub-orchestrations.
 
 ## Alternatives Considered
@@ -276,7 +277,7 @@ let result = ctx.schedule_activity_with_retry(
 
 2. **Macro-based retry**: Could provide `#[retry(policy)]` attribute macro. Deferred until macro system is finalized.
 
-3. **Per-attempt timeout**: Could timeout each attempt individually. Total timeout is simpler and covers the common case ("give up after N seconds regardless of attempt count").
+3. **Total timeout (instead of per-attempt)**: Could timeout the entire retry sequence. Per-attempt timeout is simpler and prevents a single slow activity from consuming all retry time.
 
 ## Testing Plan
 
@@ -284,7 +285,7 @@ let result = ctx.schedule_activity_with_retry(
 
 #### RetryPolicy Construction
 - `test_retry_policy_default` — default values: max_attempts=3, exponential backoff, no timeout
-- `test_retry_policy_builder` — chained `.with_total_timeout()`, `.with_backoff()` methods
+- `test_retry_policy_builder` — chained `.with_timeout()`, `.with_backoff()` methods
 - `test_retry_policy_new` — `RetryPolicy::new(n)` sets max_attempts correctly
 
 #### BackoffStrategy::delay_for_attempt()

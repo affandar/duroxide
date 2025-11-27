@@ -126,12 +126,12 @@ impl Runtime {
             );
 
             // Record orchestration start metric
+            // Note: We can't currently distinguish client-initiated vs suborchestration-initiated
+            // since we don't have parent context information available here.
             let initiated_by = if workitem_reader.is_continue_as_new {
                 "continueAsNew"
-            } else if history_mgr.full_history().is_empty() {
-                "client"
             } else {
-                "client" // Could be suborchestration but we'd need parent context
+                "client"
             };
             self.record_orchestration_start(&workitem_reader.orchestration_name, &version, initiated_by);
 

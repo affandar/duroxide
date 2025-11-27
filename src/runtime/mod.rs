@@ -225,13 +225,20 @@ pub struct OrchestrationDescriptor {
 }
 
 impl Runtime {
+    /// Helper to get the metrics provider if available.
+    #[inline]
+    fn metrics_provider(&self) -> Option<&observability::MetricsProvider> {
+        self.observability_handle
+            .as_ref()
+            .and_then(|h| h.metrics_provider())
+            .map(|arc| arc.as_ref())
+    }
+
     // New label-aware metric recording methods
     #[inline]
     fn record_orchestration_start(&self, orchestration_name: &str, version: &str, initiated_by: &str) {
-        if let Some(handle) = &self.observability_handle {
-            if let Some(provider) = handle.metrics_provider() {
-                provider.record_orchestration_start(orchestration_name, version, initiated_by);
-            }
+        if let Some(provider) = self.metrics_provider() {
+            provider.record_orchestration_start(orchestration_name, version, initiated_by);
         }
     }
 
@@ -245,17 +252,15 @@ impl Runtime {
         turn_count: u64,
         history_events: u64,
     ) {
-        if let Some(handle) = &self.observability_handle {
-            if let Some(provider) = handle.metrics_provider() {
-                provider.record_orchestration_completion(
-                    orchestration_name,
-                    version,
-                    status,
-                    duration_seconds,
-                    turn_count,
-                    history_events,
-                );
-            }
+        if let Some(provider) = self.metrics_provider() {
+            provider.record_orchestration_completion(
+                orchestration_name,
+                version,
+                status,
+                duration_seconds,
+                turn_count,
+                history_events,
+            );
         }
     }
 
@@ -267,46 +272,36 @@ impl Runtime {
         error_type: &str,
         error_category: &str,
     ) {
-        if let Some(handle) = &self.observability_handle {
-            if let Some(provider) = handle.metrics_provider() {
-                provider.record_orchestration_failure(orchestration_name, version, error_type, error_category);
-            }
+        if let Some(provider) = self.metrics_provider() {
+            provider.record_orchestration_failure(orchestration_name, version, error_type, error_category);
         }
     }
 
     #[inline]
     fn record_continue_as_new(&self, orchestration_name: &str, execution_id: u64) {
-        if let Some(handle) = &self.observability_handle {
-            if let Some(provider) = handle.metrics_provider() {
-                provider.record_continue_as_new(orchestration_name, execution_id);
-            }
+        if let Some(provider) = self.metrics_provider() {
+            provider.record_continue_as_new(orchestration_name, execution_id);
         }
     }
 
     #[inline]
     fn increment_active_orchestrations(&self) {
-        if let Some(handle) = &self.observability_handle {
-            if let Some(provider) = handle.metrics_provider() {
-                provider.increment_active_orchestrations();
-            }
+        if let Some(provider) = self.metrics_provider() {
+            provider.increment_active_orchestrations();
         }
     }
 
     #[inline]
     fn decrement_active_orchestrations(&self) {
-        if let Some(handle) = &self.observability_handle {
-            if let Some(provider) = handle.metrics_provider() {
-                provider.decrement_active_orchestrations();
-            }
+        if let Some(provider) = self.metrics_provider() {
+            provider.decrement_active_orchestrations();
         }
     }
 
     #[inline]
     fn record_activity_execution(&self, activity_name: &str, outcome: &str, duration_seconds: f64, retry_attempt: u32) {
-        if let Some(handle) = &self.observability_handle {
-            if let Some(provider) = handle.metrics_provider() {
-                provider.record_activity_execution(activity_name, outcome, duration_seconds, retry_attempt);
-            }
+        if let Some(provider) = self.metrics_provider() {
+            provider.record_activity_execution(activity_name, outcome, duration_seconds, retry_attempt);
         }
     }
 

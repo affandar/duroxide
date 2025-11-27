@@ -70,8 +70,11 @@ where
     .await;
     let instance_for_spawn = instance.clone();
     let store2_for_client = store2.clone();
+    let store2_for_wait = store2.clone();
     tokio::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        // Wait for the subscription to be written before raising the event
+        // (for fresh in-memory stores, we need to wait for the orchestration to progress)
+        let _ = wait_for_subscription(store2_for_wait, &instance_for_spawn, "Resume", 2000).await;
         let client = Client::new(store2_for_client.clone());
         let _ = client.raise_event(&instance_for_spawn, "Resume", "go").await;
     });

@@ -304,6 +304,38 @@ let result: OrderResult = ctx.schedule_activity_typed("ProcessOrder", &order_dat
     .into_activity_typed().await?;
 ```
 
+#### Scheduling Activities with Retry
+
+```rust
+// With retry policy (string I/O)
+async fn schedule_activity_with_retry(
+    &self,
+    name: impl Into<String>,
+    input: impl Into<String>,
+    policy: RetryPolicy,
+) -> Result<String, String>
+
+// Typed variant
+async fn schedule_activity_with_retry_typed<In, Out>(
+    &self,
+    name: impl Into<String>,
+    input: &In,
+    policy: RetryPolicy,
+) -> Result<Out, String>
+
+// Usage:
+use duroxide::{RetryPolicy, BackoffStrategy};
+
+// Simple: 3 attempts with default exponential backoff
+let result = ctx.schedule_activity_with_retry("Task", input, RetryPolicy::new(3)).await?;
+
+// Custom: 5 attempts, fixed 1s backoff, 30s per-attempt timeout
+let policy = RetryPolicy::new(5)
+    .with_timeout(Duration::from_secs(30))
+    .with_backoff(BackoffStrategy::Fixed { delay: Duration::from_secs(1) });
+let result = ctx.schedule_activity_with_retry("Task", input, policy).await?;
+```
+
 #### Scheduling Timers
 
 ```rust
@@ -958,12 +990,55 @@ async fn saga_orchestration(ctx: OrchestrationContext, order_json: String) -> Re
 }
 ```
 
-### 5. Retry with Exponential Backoff
+### 5. Retry with Backoff
+
+**Preferred approach** - Use the built-in `schedule_activity_with_retry()`:
 
 ```rust
+use duroxide::{RetryPolicy, BackoffStrategy};
+
 async fn retry_orchestration(ctx: OrchestrationContext, task_input: String) -> Result<String, String> {
+    // Simple: 3 attempts with default exponential backoff
+    let result = ctx.schedule_activity_with_retry(
+        "UnreliableTask",
+        task_input,
+        RetryPolicy::new(3),
+    ).await?;
+    
+    Ok(result)
+}
+
+// Custom policy with timeout and fixed backoff
+async fn custom_retry(ctx: OrchestrationContext, input: String) -> Result<String, String> {
+    let policy = RetryPolicy::new(5)
+        .with_timeout(std::time::Duration::from_secs(30))  // Per-attempt timeout
+        .with_backoff(BackoffStrategy::Exponential {
+            base: std::time::Duration::from_millis(100),
+            multiplier: 2.0,
+            max: std::time::Duration::from_secs(10),
+        });
+    
+    ctx.schedule_activity_with_retry("Task", input, policy).await
+}
+```
+
+**Backoff strategies available:**
+- `BackoffStrategy::None` - No delay between retries
+- `BackoffStrategy::Fixed { delay }` - Same delay every retry
+- `BackoffStrategy::Linear { base, max }` - delay = base × attempt
+- `BackoffStrategy::Exponential { base, multiplier, max }` - delay = base × multiplier^(attempt-1)
+
+**Behavior notes:**
+- Activity errors trigger retries (with backoff)
+- Timeouts exit immediately (no retry)
+- A warning trace is logged on each retry attempt
+
+**Manual retry loop** (for advanced customization):
+
+```rust
+async fn manual_retry(ctx: OrchestrationContext, task_input: String) -> Result<String, String> {
     let max_attempts = 5;
-    let mut delay = std::time::Duration::from_secs(1);  // Start with 1 second
+    let mut delay = std::time::Duration::from_secs(1);
     
     for attempt in 1..=max_attempts {
         ctx.trace_info(format!("Attempt {} of {}", attempt, max_attempts));
@@ -971,25 +1046,18 @@ async fn retry_orchestration(ctx: OrchestrationContext, task_input: String) -> R
         match ctx.schedule_activity("UnreliableTask", task_input.clone())
             .into_activity().await 
         {
-            Ok(result) => {
-                ctx.trace_info("Task succeeded");
-                return Ok(result);
-            }
+            Ok(result) => return Ok(result),
             Err(e) => {
                 ctx.trace_warn(format!("Attempt {} failed: {}", attempt, e));
-                
                 if attempt < max_attempts {
-                    // Exponential backoff
                     ctx.schedule_timer(delay).into_timer().await;
-                    delay *= 2;  // Double the delay
+                    delay *= 2;
                 } else {
-                    ctx.trace_error("All attempts failed");
                     return Err(format!("Failed after {} attempts", max_attempts));
                 }
             }
         }
     }
-    
     unreachable!()
 }
 ```

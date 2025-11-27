@@ -188,11 +188,11 @@ proptest! {
 
             // Property: Terminal event should be the last event
             if let Some(last_event) = history.last() {
-                if !matches!(
+                let is_terminal = matches!(
                     last_event,
-                    Event::OrchestrationCompleted { .. }
-                        | Event::OrchestrationFailed { .. }
-                ) {
+                    Event::OrchestrationCompleted { .. } | Event::OrchestrationFailed { .. }
+                );
+                if !is_terminal {
                     return Err("Last event should be terminal".to_string());
                 }
             }

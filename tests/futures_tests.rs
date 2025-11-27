@@ -1,8 +1,9 @@
 // Use SQLite via common helper
 use duroxide::runtime::registry::ActivityRegistry;
-use duroxide::runtime::{self};
-use duroxide::{Event, OrchestrationContext, OrchestrationRegistry};
+use duroxide::runtime::{self, OrchestrationStatus};
+use duroxide::{ActivityContext, DurableOutput, Event, OrchestrationContext, OrchestrationRegistry};
 use std::sync::Arc as StdArc;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
 mod common;
@@ -439,4 +440,202 @@ async fn join_returns_history_order() {
     // Ensure output is vb,va to reflect history order B before A
     assert_eq!(output, "vb,va");
     rt2.shutdown(None).await;
+}
+
+// ============================================================================
+// select2 Scheduling Event Consumption Tests (Regression)
+// ============================================================================
+//
+// These tests verify the fix for a nondeterminism bug where select2 wouldn't
+// consume the loser's scheduling events during replay.
+//
+// Original Bug: During replay, select2 would return immediately when the winner
+// was found, leaving the loser's scheduling event (e.g., TimerCreated) unclaimed.
+// When subsequent code tried to schedule new operations, it would see the
+// unclaimed event and report a nondeterminism error.
+//
+// Fix: Modified AggregateDurableFuture::poll for AggregateMode::Select to use
+// two-phase polling: first poll ALL children to ensure they claim their
+// scheduling events, then check which one is ready.
+
+/// Regression test: select2 loser's event must be consumed during replay
+///
+/// Previously, select2 would return immediately when the winner was found,
+/// leaving the loser's scheduling event unclaimed. This caused nondeterminism
+/// when subsequent code tried to schedule new operations.
+///
+/// Fixed by polling ALL children before checking for a winner.
+#[tokio::test]
+async fn test_select2_loser_event_consumed_during_replay() {
+    let (store, _td) = common::create_sqlite_store_disk().await;
+    let attempt_counter = StdArc::new(AtomicU32::new(0));
+    let counter_clone = attempt_counter.clone();
+
+    let activities = ActivityRegistry::builder()
+        .register("FastFailActivity", move |_ctx: ActivityContext, _input: String| {
+            let counter = counter_clone.clone();
+            async move {
+                let attempt = counter.fetch_add(1, Ordering::SeqCst) + 1;
+                // Activity completes FAST with error - beats the 500ms timer
+                Err(format!("fast failure on attempt {attempt}"))
+            }
+        })
+        .build();
+
+    let orchestrations = OrchestrationRegistry::builder()
+        .register(
+            "SelectLoserOrch",
+            |ctx: OrchestrationContext, _input: String| async move {
+                // ATTEMPT 1: Race activity vs timer
+                // Activity will complete fast (with error), timer (500ms) loses
+                let timer1 = ctx.schedule_timer(Duration::from_millis(500));
+                let activity1 = ctx.schedule_activity("FastFailActivity", "");
+                let (winner, output) = ctx.select2(activity1, timer1).await;
+
+                // Activity wins (index 0)
+                let first_error = match winner {
+                    0 => match output {
+                        DurableOutput::Activity(Err(e)) => e,
+                        DurableOutput::Activity(Ok(_)) => return Ok("unexpected success".to_string()),
+                        _ => return Err("unexpected output type".to_string()),
+                    },
+                    1 => return Err("timer won unexpectedly".to_string()),
+                    _ => unreachable!(),
+                };
+
+                // ATTEMPT 2: Schedule another activity
+                // Previously this would fail with nondeterminism during replay
+                // because the timer's scheduling event wasn't consumed
+                let activity2 = ctx.schedule_activity("FastFailActivity", "");
+                let second_result = activity2.into_activity().await;
+
+                Ok(format!("first: {}, second: {:?}", first_error, second_result))
+            },
+        )
+        .build();
+
+    let rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(activities), orchestrations).await;
+    let client = duroxide::Client::new(store.clone());
+
+    client
+        .start_orchestration("select-loser-1", "SelectLoserOrch", "")
+        .await
+        .unwrap();
+
+    match client
+        .wait_for_orchestration("select-loser-1", Duration::from_secs(10))
+        .await
+        .unwrap()
+    {
+        OrchestrationStatus::Completed { output } => {
+            // Should complete successfully now that the bug is fixed
+            assert!(
+                output.contains("first:"),
+                "expected successful completion, got: {output}"
+            );
+        }
+        OrchestrationStatus::Failed { details } => {
+            let msg = details.display_message();
+            panic!("should not fail with nondeterminism anymore: {msg}");
+        }
+        other => panic!("unexpected status: {other:?}"),
+    }
+
+    // Both activities should have been called
+    assert_eq!(attempt_counter.load(Ordering::SeqCst), 2);
+
+    // Wait for the loser timer to fire (it's 500ms, so wait a bit)
+    tokio::time::sleep(Duration::from_millis(600)).await;
+
+    // Check history: the loser timer's completion event (TimerFired) should be
+    // properly handled by the runtime (eaten as stale, not causing any issues)
+    let history = store.read("select-loser-1").await.unwrap();
+
+    // There should be exactly 1 TimerCreated (the loser timer from select2)
+    let timer_created_count = history
+        .iter()
+        .filter(|e| matches!(e, duroxide::Event::TimerCreated { .. }))
+        .count();
+    assert_eq!(timer_created_count, 1, "expected 1 loser timer scheduled");
+
+    // The loser timer's TimerFired event should be present (timer fired after orchestration completed)
+    // but since the orchestration already completed, it's a stale event that gets ignored
+    let timer_fired_count = history
+        .iter()
+        .filter(|e| matches!(e, duroxide::Event::TimerFired { .. }))
+        .count();
+    // The timer fires after orchestration completes, so TimerFired may or may not be in history
+    // depending on timing. What matters is: if it's there, the runtime handled it gracefully.
+    // Since the orchestration completed successfully, any stale event was properly ignored.
+    assert!(
+        timer_fired_count <= 1,
+        "expected at most 1 timer fired event, got {timer_fired_count}"
+    );
+
+    // Verify orchestration completed (not failed due to stale event)
+    let completed = history
+        .iter()
+        .any(|e| matches!(e, duroxide::Event::OrchestrationCompleted { .. }));
+    assert!(completed, "orchestration should have completed successfully");
+
+    rt.shutdown(None).await;
+}
+
+/// Regression test: simpler variant with explicit schedule after select2
+#[tokio::test]
+async fn test_select2_schedule_after_winner_returns() {
+    let (store, _td) = common::create_sqlite_store_disk().await;
+
+    let activities = ActivityRegistry::builder()
+        .register("Instant", |_ctx: ActivityContext, _input: String| async move {
+            // Returns instantly
+            Ok("done".to_string())
+        })
+        .build();
+
+    let orchestrations = OrchestrationRegistry::builder()
+        .register("MinimalOrch", |ctx: OrchestrationContext, _input: String| async move {
+            // Race: instant activity vs 1 second timer
+            // Activity wins immediately, timer is abandoned
+            let timer = ctx.schedule_timer(Duration::from_secs(1));
+            let activity = ctx.schedule_activity("Instant", "");
+            let (winner, _) = ctx.select2(activity, timer).await;
+
+            if winner != 0 {
+                return Err("timer won unexpectedly".to_string());
+            }
+
+            // Now schedule another activity
+            // Previously this would fail because the timer's scheduling event
+            // wasn't consumed during replay
+            let result = ctx.schedule_activity("Instant", "").into_activity().await?;
+
+            Ok(result)
+        })
+        .build();
+
+    let rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(activities), orchestrations).await;
+    let client = duroxide::Client::new(store.clone());
+
+    client
+        .start_orchestration("minimal-1", "MinimalOrch", "")
+        .await
+        .unwrap();
+
+    match client
+        .wait_for_orchestration("minimal-1", Duration::from_secs(5))
+        .await
+        .unwrap()
+    {
+        OrchestrationStatus::Completed { output } => {
+            assert_eq!(output, "done");
+        }
+        OrchestrationStatus::Failed { details } => {
+            let msg = details.display_message();
+            panic!("should not fail with nondeterminism anymore: {msg}");
+        }
+        other => panic!("unexpected status: {other:?}"),
+    }
+
+    rt.shutdown(None).await;
 }
