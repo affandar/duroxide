@@ -73,39 +73,40 @@ pub enum DurableOutput {
     SubOrchestration(Result<String, String>),
 }
 
-pub struct DurableFuture(pub(crate) Kind);
+/// A durable future representing an asynchronous operation in an orchestration.
+///
+/// Common fields `claimed_event_id` and `ctx` are stored directly on the struct,
+/// while operation-specific data is stored in the `kind` variant.
+pub struct DurableFuture {
+    /// The event ID claimed by this future during scheduling (set on first poll)
+    pub(crate) claimed_event_id: Cell<Option<u64>>,
+    /// Reference to the orchestration context
+    pub(crate) ctx: OrchestrationContext,
+    /// Operation-specific data
+    pub(crate) kind: Kind,
+}
 
 pub(crate) enum Kind {
     Activity {
         name: String,
         input: String,
-        claimed_event_id: Cell<Option<u64>>,
-        ctx: OrchestrationContext,
     },
     Timer {
         delay_ms: u64,
-        claimed_event_id: Cell<Option<u64>>,
-        ctx: OrchestrationContext,
     },
     External {
         name: String,
-        claimed_event_id: Cell<Option<u64>>,
         result: RefCell<Option<String>>, // Cache result once found
-        ctx: OrchestrationContext,
     },
     SubOrch {
         name: String,
         version: Option<String>,
         instance: RefCell<String>, // Updated once event_id is known
         input: String,
-        claimed_event_id: Cell<Option<u64>>,
-        ctx: OrchestrationContext,
     },
     System {
         op: String,
-        claimed_event_id: Cell<Option<u64>>,
         value: RefCell<Option<String>>,
-        ctx: OrchestrationContext,
     },
 }
 
@@ -117,17 +118,13 @@ impl Future for DurableFuture {
         // Safety: We never move fields that are !Unpin; we only take &mut to mutate inner Cells and use ctx by reference.
         let this = unsafe { self.get_unchecked_mut() };
 
-        match &mut this.0 {
-            Kind::Activity {
-                name,
-                input,
-                claimed_event_id,
-                ctx,
-            } => {
-                let mut inner = ctx.inner.lock().unwrap();
+        // Common fields: this.claimed_event_id, this.ctx
+        match &mut this.kind {
+            Kind::Activity { name, input } => {
+                let mut inner = this.ctx.inner.lock().unwrap();
 
                 // Step 1: Claim scheduling event_id if not already claimed
-                if claimed_event_id.get().is_none() {
+                if this.claimed_event_id.get().is_none() {
                     // Find next unclaimed SCHEDULING event in history (global order enforcement)
                     let mut found_event_id = None;
                     for event in &inner.history {
@@ -203,10 +200,10 @@ impl Future for DurableFuture {
                     });
 
                     inner.claimed_scheduling_events.insert(event_id);
-                    claimed_event_id.set(Some(event_id));
+                    this.claimed_event_id.set(Some(event_id));
                 }
 
-                let our_event_id = claimed_event_id.get().unwrap();
+                let our_event_id = this.claimed_event_id.get().unwrap();
 
                 // Step 2: Look for our completion - FIFO enforcement
                 // Find our completion in history
@@ -247,15 +244,11 @@ impl Future for DurableFuture {
 
                 Poll::Pending
             }
-            Kind::Timer {
-                delay_ms,
-                claimed_event_id,
-                ctx,
-            } => {
-                let mut inner = ctx.inner.lock().unwrap();
+            Kind::Timer { delay_ms } => {
+                let mut inner = this.ctx.inner.lock().unwrap();
 
                 // Step 1: Claim scheduling event_id
-                if claimed_event_id.get().is_none() {
+                if this.claimed_event_id.get().is_none() {
                     // Enforce global scheduling order
                     let mut found_event_id = None;
                     for event in &inner.history {
@@ -323,10 +316,10 @@ impl Future for DurableFuture {
                     });
 
                     inner.claimed_scheduling_events.insert(event_id);
-                    claimed_event_id.set(Some(event_id));
+                    this.claimed_event_id.set(Some(event_id));
                 }
 
-                let our_event_id = claimed_event_id.get().unwrap();
+                let our_event_id = this.claimed_event_id.get().unwrap();
 
                 // Step 2: Look for TimerFired - FIFO enforcement
                 let our_completion = inner.history.iter().find_map(|e| {
@@ -357,21 +350,16 @@ impl Future for DurableFuture {
 
                 Poll::Pending
             }
-            Kind::External {
-                name,
-                claimed_event_id,
-                result,
-                ctx,
-            } => {
+            Kind::External { name, result } => {
                 // Check if we already have the result cached
                 if let Some(cached) = result.borrow().clone() {
                     return Poll::Ready(DurableOutput::External(cached));
                 }
 
-                let mut inner = ctx.inner.lock().unwrap();
+                let mut inner = this.ctx.inner.lock().unwrap();
 
                 // Step 1: Claim ExternalSubscribed event_id
-                if claimed_event_id.get().is_none() {
+                if this.claimed_event_id.get().is_none() {
                     // Enforce global scheduling order
                     let mut found_event_id = None;
                     for event in &inner.history {
@@ -441,10 +429,10 @@ impl Future for DurableFuture {
                     });
 
                     inner.claimed_scheduling_events.insert(event_id);
-                    claimed_event_id.set(Some(event_id));
+                    this.claimed_event_id.set(Some(event_id));
                 }
 
-                let _our_event_id = claimed_event_id.get().unwrap();
+                let _our_event_id = this.claimed_event_id.get().unwrap();
 
                 // Step 2: Look for ExternalEvent (special case - search by name)
                 // External events can arrive in any order
@@ -484,13 +472,11 @@ impl Future for DurableFuture {
                 version,
                 instance,
                 input,
-                claimed_event_id,
-                ctx,
             } => {
-                let mut inner = ctx.inner.lock().unwrap();
+                let mut inner = this.ctx.inner.lock().unwrap();
 
                 // Step 1: Claim SubOrchestrationScheduled event_id
-                if claimed_event_id.get().is_none() {
+                if this.claimed_event_id.get().is_none() {
                     // Enforce global scheduling order
                     let mut found_event_id = None;
                     for event in &inner.history {
@@ -571,10 +557,10 @@ impl Future for DurableFuture {
                     });
 
                     inner.claimed_scheduling_events.insert(event_id);
-                    claimed_event_id.set(Some(event_id));
+                    this.claimed_event_id.set(Some(event_id));
                 }
 
-                let our_event_id = claimed_event_id.get().unwrap();
+                let our_event_id = this.claimed_event_id.get().unwrap();
 
                 // Step 2: Look for SubOrch completion - FIFO enforcement
                 let our_completion = inner.history.iter().find_map(|e| match e {
@@ -614,21 +600,16 @@ impl Future for DurableFuture {
 
                 Poll::Pending
             }
-            Kind::System {
-                op,
-                claimed_event_id,
-                value,
-                ctx,
-            } => {
+            Kind::System { op, value } => {
                 // Check if we already computed the value
                 if let Some(v) = value.borrow().clone() {
                     return Poll::Ready(DurableOutput::Activity(Ok(v)));
                 }
 
-                let mut inner = ctx.inner.lock().unwrap();
+                let mut inner = this.ctx.inner.lock().unwrap();
 
                 // Step 1: Try to adopt from history (replay)
-                if claimed_event_id.get().is_none() {
+                if this.claimed_event_id.get().is_none() {
                     // Look for matching SystemCall event in history
                     let found = inner.history.iter().find_map(|e| {
                         if let Event::SystemCall {
@@ -648,14 +629,14 @@ impl Future for DurableFuture {
                     if let Some((found_event_id, found_value)) = found {
                         // Found our system call in history - adopt it
                         inner.claimed_scheduling_events.insert(found_event_id);
-                        claimed_event_id.set(Some(found_event_id));
+                        this.claimed_event_id.set(Some(found_event_id));
                         *value.borrow_mut() = Some(found_value.clone());
                         return Poll::Ready(DurableOutput::Activity(Ok(found_value)));
                     }
                 }
 
                 // Step 2: First execution - compute value synchronously
-                if claimed_event_id.get().is_none() {
+                if this.claimed_event_id.get().is_none() {
                     let computed_value = match op.as_str() {
                         crate::SYSCALL_OP_GUID => generate_guid(),
                         crate::SYSCALL_OP_UTCNOW_MS => inner.now_ms().to_string(),
@@ -741,7 +722,7 @@ impl Future for DurableFuture {
                     });
 
                     inner.claimed_scheduling_events.insert(event_id);
-                    claimed_event_id.set(Some(event_id));
+                    this.claimed_event_id.set(Some(event_id));
                     *value.borrow_mut() = Some(computed_value.clone());
 
                     return Poll::Ready(DurableOutput::Activity(Ok(computed_value)));
@@ -862,14 +843,8 @@ impl Future for AggregateDurableFuture {
                         for (i, child) in this.children.iter().enumerate() {
                             if i != winner_idx {
                                 // Get the loser's claimed_event_id (source_event_id for its completion)
-                                let loser_source_id = match &child.0 {
-                                    Kind::Activity { claimed_event_id, .. } => claimed_event_id.get(),
-                                    Kind::Timer { claimed_event_id, .. } => claimed_event_id.get(),
-                                    Kind::External { claimed_event_id, .. } => claimed_event_id.get(),
-                                    Kind::SubOrch { claimed_event_id, .. } => claimed_event_id.get(),
-                                    Kind::System { claimed_event_id, .. } => claimed_event_id.get(),
-                                };
-                                if let Some(source_id) = loser_source_id {
+                                // Now accessed directly from the DurableFuture struct
+                                if let Some(source_id) = child.claimed_event_id.get() {
                                     inner.cancelled_source_ids.insert(source_id);
                                 }
                             }
@@ -912,42 +887,38 @@ impl Future for AggregateDurableFuture {
                             // Determine completion event_id for child i
                             let eid = {
                                 let inner = this.ctx.inner.lock().unwrap();
-                                match &this.children[i].0 {
-                                    Kind::Activity { claimed_event_id, .. } => {
-                                        let sid = claimed_event_id.get().expect("activity must claim id");
-                                        inner
-                                            .history
-                                            .iter()
-                                            .find_map(|e| match e {
-                                                Event::ActivityCompleted {
-                                                    event_id,
-                                                    source_event_id,
-                                                    ..
-                                                } if *source_event_id == sid => Some(*event_id),
-                                                Event::ActivityFailed {
-                                                    event_id,
-                                                    source_event_id,
-                                                    ..
-                                                } if *source_event_id == sid => Some(*event_id),
-                                                _ => None,
-                                            })
-                                            .unwrap_or(u64::MAX)
-                                    }
-                                    Kind::Timer { claimed_event_id, .. } => {
-                                        let sid = claimed_event_id.get().expect("timer must claim id");
-                                        inner
-                                            .history
-                                            .iter()
-                                            .find_map(|e| match e {
-                                                Event::TimerFired {
-                                                    event_id,
-                                                    source_event_id,
-                                                    ..
-                                                } if *source_event_id == sid => Some(*event_id),
-                                                _ => None,
-                                            })
-                                            .unwrap_or(u64::MAX)
-                                    }
+                                let child = &this.children[i];
+                                let sid = child.claimed_event_id.get().expect("child must claim id");
+                                match &child.kind {
+                                    Kind::Activity { .. } => inner
+                                        .history
+                                        .iter()
+                                        .find_map(|e| match e {
+                                            Event::ActivityCompleted {
+                                                event_id,
+                                                source_event_id,
+                                                ..
+                                            } if *source_event_id == sid => Some(*event_id),
+                                            Event::ActivityFailed {
+                                                event_id,
+                                                source_event_id,
+                                                ..
+                                            } if *source_event_id == sid => Some(*event_id),
+                                            _ => None,
+                                        })
+                                        .unwrap_or(u64::MAX),
+                                    Kind::Timer { .. } => inner
+                                        .history
+                                        .iter()
+                                        .find_map(|e| match e {
+                                            Event::TimerFired {
+                                                event_id,
+                                                source_event_id,
+                                                ..
+                                            } if *source_event_id == sid => Some(*event_id),
+                                            _ => None,
+                                        })
+                                        .unwrap_or(u64::MAX),
                                     Kind::External { name, .. } => {
                                         let n = name.clone();
                                         inner
@@ -961,29 +932,26 @@ impl Future for AggregateDurableFuture {
                                             })
                                             .unwrap_or(u64::MAX)
                                     }
-                                    Kind::SubOrch { claimed_event_id, .. } => {
-                                        let sid = claimed_event_id.get().expect("suborch must claim id");
-                                        inner
-                                            .history
-                                            .iter()
-                                            .find_map(|e| match e {
-                                                Event::SubOrchestrationCompleted {
-                                                    event_id,
-                                                    source_event_id,
-                                                    ..
-                                                } if *source_event_id == sid => Some(*event_id),
-                                                Event::SubOrchestrationFailed {
-                                                    event_id,
-                                                    source_event_id,
-                                                    ..
-                                                } if *source_event_id == sid => Some(*event_id),
-                                                _ => None,
-                                            })
-                                            .unwrap_or(u64::MAX)
-                                    }
-                                    Kind::System { claimed_event_id, .. } => {
+                                    Kind::SubOrch { .. } => inner
+                                        .history
+                                        .iter()
+                                        .find_map(|e| match e {
+                                            Event::SubOrchestrationCompleted {
+                                                event_id,
+                                                source_event_id,
+                                                ..
+                                            } if *source_event_id == sid => Some(*event_id),
+                                            Event::SubOrchestrationFailed {
+                                                event_id,
+                                                source_event_id,
+                                                ..
+                                            } if *source_event_id == sid => Some(*event_id),
+                                            _ => None,
+                                        })
+                                        .unwrap_or(u64::MAX),
+                                    Kind::System { .. } => {
                                         // For system calls, the event itself is the completion
-                                        claimed_event_id.get().expect("system call must claim id")
+                                        sid
                                     }
                                 }
                             };

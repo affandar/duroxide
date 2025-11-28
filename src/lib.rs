@@ -1205,12 +1205,14 @@ impl OrchestrationContext {
 
     /// Schedule a system call operation (internal helper).
     pub(crate) fn schedule_system_call(&self, op: &str) -> DurableFuture {
-        DurableFuture(Kind::System {
-            op: op.to_string(),
+        DurableFuture {
             claimed_event_id: Cell::new(None),
-            value: RefCell::new(None),
             ctx: self.clone(),
-        })
+            kind: Kind::System {
+                op: op.to_string(),
+                value: RefCell::new(None),
+            },
+        }
     }
 
     /// Generate a new deterministic GUID.
@@ -1487,12 +1489,14 @@ impl OrchestrationContext {
     /// - ❌ Activity that ONLY sleeps (use orchestration timer instead)
     pub fn schedule_activity(&self, name: impl Into<String>, input: impl Into<String>) -> DurableFuture {
         // event_id will be claimed during first poll
-        DurableFuture(Kind::Activity {
-            name: name.into(),
-            input: input.into(),
+        DurableFuture {
             claimed_event_id: Cell::new(None),
             ctx: self.clone(),
-        })
+            kind: Kind::Activity {
+                name: name.into(),
+                input: input.into(),
+            },
+        }
     }
 
     /// Typed helper that serializes input and later decodes output via `into_activity_typed`.
@@ -1644,22 +1648,26 @@ impl OrchestrationContext {
     /// ```
     pub fn schedule_timer(&self, delay: std::time::Duration) -> DurableFuture {
         // No ID allocation here - event_id is discovered during first poll
-        DurableFuture(Kind::Timer {
-            delay_ms: delay.as_millis() as u64,
+        DurableFuture {
             claimed_event_id: Cell::new(None),
             ctx: self.clone(),
-        })
+            kind: Kind::Timer {
+                delay_ms: delay.as_millis() as u64,
+            },
+        }
     }
 
     /// Subscribe to an external event by name and return its `DurableFuture`.
     pub fn schedule_wait(&self, name: impl Into<String>) -> DurableFuture {
         // No ID allocation here - event_id is discovered during first poll
-        DurableFuture(Kind::External {
-            name: name.into(),
+        DurableFuture {
             claimed_event_id: Cell::new(None),
-            result: RefCell::new(None),
             ctx: self.clone(),
-        })
+            kind: Kind::External {
+                name: name.into(),
+                result: RefCell::new(None),
+            },
+        }
     }
 
     /// Typed external wait adapter pairs with `into_event_typed` for decoding.
@@ -1677,14 +1685,16 @@ impl OrchestrationContext {
         // Use a placeholder for now
         let child_instance = RefCell::new(String::from("sub::pending"));
 
-        DurableFuture(Kind::SubOrch {
-            name,
-            version: None,
-            instance: child_instance,
-            input,
+        DurableFuture {
             claimed_event_id: Cell::new(None),
             ctx: self.clone(),
-        })
+            kind: Kind::SubOrch {
+                name,
+                version: None,
+                instance: child_instance,
+                input,
+            },
+        }
     }
 
     pub fn schedule_sub_orchestration_typed<In: serde::Serialize, Out: serde::de::DeserializeOwned>(
@@ -1705,14 +1715,16 @@ impl OrchestrationContext {
     ) -> DurableFuture {
         let child_instance = RefCell::new(String::from("sub::pending"));
 
-        DurableFuture(Kind::SubOrch {
-            name: name.into(),
-            version,
-            instance: child_instance,
-            input: input.into(),
+        DurableFuture {
             claimed_event_id: Cell::new(None),
             ctx: self.clone(),
-        })
+            kind: Kind::SubOrch {
+                name: name.into(),
+                version,
+                instance: child_instance,
+                input: input.into(),
+            },
+        }
     }
 
     /// Versioned typed sub-orchestration.

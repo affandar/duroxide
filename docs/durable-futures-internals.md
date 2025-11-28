@@ -33,6 +33,7 @@ This is achieved through a **claim system** where each `DurableFuture` claims ow
 │  │  • actions: Vec<Action>          // Pending runtime actions   │  │
 │  │  • claimed_scheduling_events: HashSet<u64>  // Claimed IDs    │  │
 │  │  • consumed_completions: HashSet<u64>       // FIFO tracking  │  │
+│  │  • cancelled_source_ids: HashSet<u64>       // Select losers  │  │
 │  │  • next_event_id: u64            // Counter for new events    │  │
 │  └───────────────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────────────┘
@@ -41,11 +42,14 @@ This is achieved through a **claim system** where each `DurableFuture` claims ow
                               ▼
 ┌─────────────────────────────────────────────────────────────────────┐
 │                      DurableFuture                                   │
-│  Kind::Activity { name, input, claimed_event_id, ctx }              │
-│  Kind::Timer { delay_ms, claimed_event_id, ctx }                    │
-│  Kind::External { name, claimed_event_id, result, ctx }             │
-│  Kind::SubOrch { name, instance, input, claimed_event_id, ctx }     │
-│  Kind::System { op, claimed_event_id, value, ctx }                  │
+│  • claimed_event_id: Cell<Option<u64>>  // Common field            │
+│  • ctx: OrchestrationContext            // Common field            │
+│  • kind: Kind                           // Operation-specific data │
+│    ├─ Activity { name, input }                                      │
+│    ├─ Timer { delay_ms }                                            │
+│    ├─ External { name, result }                                     │
+│    ├─ SubOrch { name, version, instance, input }                    │
+│    └─ System { op, value }                                          │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -53,53 +57,49 @@ This is achieved through a **claim system** where each `DurableFuture` claims ow
 
 ## The DurableFuture Type
 
-`DurableFuture` is a unified future type that wraps different kinds of durable operations:
+`DurableFuture` is a unified future type that wraps different kinds of durable operations. Common fields are stored directly on the struct, while operation-specific data is in the `kind` variant:
 
 ```rust
-pub struct DurableFuture(pub(crate) Kind);
+pub struct DurableFuture {
+    pub(crate) claimed_event_id: Cell<Option<u64>>,  // Claimed scheduling event ID
+    pub(crate) ctx: OrchestrationContext,            // Shared orchestration context
+    pub(crate) kind: Kind,                           // Operation-specific data
+}
 
 pub(crate) enum Kind {
     Activity {
         name: String,
         input: String,
-        claimed_event_id: Cell<Option<u64>>,  // Claimed scheduling event ID
-        ctx: OrchestrationContext,
     },
     Timer {
         delay_ms: u64,
-        claimed_event_id: Cell<Option<u64>>,
-        ctx: OrchestrationContext,
     },
     External {
         name: String,
-        claimed_event_id: Cell<Option<u64>>,
         result: RefCell<Option<String>>,  // Cached result
-        ctx: OrchestrationContext,
     },
     SubOrch {
         name: String,
         version: Option<String>,
         instance: RefCell<String>,
         input: String,
-        claimed_event_id: Cell<Option<u64>>,
-        ctx: OrchestrationContext,
     },
     System {
         op: String,
-        claimed_event_id: Cell<Option<u64>>,
         value: RefCell<Option<String>>,
-        ctx: OrchestrationContext,
     },
 }
 ```
 
 ### Key Design Choices
 
-1. **`Cell<Option<u64>>` for `claimed_event_id`**: Interior mutability allows the future to claim an event ID during polling without requiring `&mut self` at the `Kind` level.
+1. **Common Fields on Struct**: `claimed_event_id` and `ctx` are stored directly on `DurableFuture`, not inside each `Kind` variant. This eliminates the need to match all variants just to access these common fields.
 
-2. **Cloned `OrchestrationContext`**: Each future holds a clone of the context (which is `Arc<Mutex<CtxInner>>`). This allows multiple futures to exist simultaneously and all access the shared state.
+2. **`Cell<Option<u64>>` for `claimed_event_id`**: Interior mutability allows the future to claim an event ID during polling without requiring `&mut self`.
 
-3. **Lazy Event ID Assignment**: Event IDs are not assigned when `schedule_*` is called. They're discovered/created during the first poll.
+3. **Cloned `OrchestrationContext`**: Each future holds a clone of the context (which is `Arc<Mutex<CtxInner>>`). This allows multiple futures to exist simultaneously and all access the shared state.
+
+4. **Lazy Event ID Assignment**: Event IDs are not assigned when `schedule_*` is called. They're discovered/created during the first poll.
 
 ---
 
@@ -223,8 +223,13 @@ struct CtxInner {
     
     // External events consumed by name (since they're matched by name, not source_event_id)
     consumed_external_events: HashSet<String>,
+    
+    // Source event IDs whose completions should be auto-skipped (select2 losers)
+    cancelled_source_ids: HashSet<u64>,
 }
 ```
+
+The `cancelled_source_ids` set tracks the `source_event_id` values of operations that lost a `select2` race. Their completion events are automatically skipped in FIFO ordering checks, preventing stale completions from blocking subsequent operations.
 
 ### Claim Process (During First Poll)
 
@@ -437,23 +442,31 @@ Poll::Pending
 
 ### FIFO Completion Consumption
 
-The `can_consume_completion` function enforces that completions are consumed in history order:
+The `can_consume_completion` function enforces that completions are consumed in history order, while accounting for cancelled select2 losers:
 
 ```rust
 fn can_consume_completion(
     history: &[Event],
     consumed_completions: &HashSet<u64>,
+    cancelled_source_ids: &HashSet<u64>,  // Select2 losers to skip
     completion_event_id: u64,
 ) -> bool {
     history.iter().all(|e| {
         match e {
-            Event::ActivityCompleted { event_id, .. }
-            | Event::ActivityFailed { event_id, .. }
-            | Event::TimerFired { event_id, .. }
-            | Event::SubOrchestrationCompleted { event_id, .. }
-            | Event::SubOrchestrationFailed { event_id, .. }
-            | Event::ExternalEvent { event_id, .. } => {
-                // All completions before ours must already be consumed
+            Event::ActivityCompleted { event_id, source_event_id, .. }
+            | Event::ActivityFailed { event_id, source_event_id, .. }
+            | Event::TimerFired { event_id, source_event_id, .. }
+            | Event::SubOrchestrationCompleted { event_id, source_event_id, .. }
+            | Event::SubOrchestrationFailed { event_id, source_event_id, .. } => {
+                // Cancelled completions (select2 losers) don't block - skip them
+                if cancelled_source_ids.contains(source_event_id) {
+                    return true;
+                }
+                // Otherwise: all completions before ours must be consumed
+                *event_id >= completion_event_id || consumed_completions.contains(event_id)
+            }
+            Event::ExternalEvent { event_id, .. } => {
+                // External events don't have source_event_id - can't be cancelled via select2
                 *event_id >= completion_event_id || consumed_completions.contains(event_id)
             }
             _ => true,
@@ -461,6 +474,8 @@ fn can_consume_completion(
     })
 }
 ```
+
+**Select2 Loser Handling**: When `select2` returns with a winner, the loser's `source_event_id` is added to `cancelled_source_ids`. This ensures the loser's eventual completion (e.g., `TimerFired`) doesn't block subsequent operations waiting for their own completions.
 
 ---
 
@@ -481,11 +496,12 @@ enum AggregateMode {
 }
 ```
 
-### Select Semantics (Two-Phase Polling)
+### Select Semantics (Three-Phase Polling)
 
-The select operation races multiple futures and returns when the first completes. **Critical implementation detail**: During replay, we must poll ALL children, not just until we find a winner.
+The select operation races multiple futures and returns when the first completes. **Critical implementation details**:
 
-**Why?** Each child needs to claim its scheduling event during replay. If we return early when the winner is found, loser children won't claim their events, causing nondeterminism when subsequent code schedules new operations.
+1. During replay, we must poll ALL children, not just until we find a winner (to claim scheduling events)
+2. When returning a winner, we must mark losers' `source_event_id`s as cancelled (to prevent FIFO blocking)
 
 ```rust
 AggregateMode::Select => {
@@ -497,18 +513,34 @@ AggregateMode::Select => {
         }
     }
 
-    // Phase 2: Return the first ready child (maintains select semantics)
-    for (i, result) in ready_results.into_iter().enumerate() {
-        if let Some(output) = result {
-            return Poll::Ready(AggregateOutput::Select {
-                winner_index: i,
-                output,
-            });
+    // Phase 2: Find the first ready child (winner)
+    let winner_index = ready_results.iter().position(|r| r.is_some());
+
+    if let Some(winner_idx) = winner_index {
+        // Phase 3: Mark all loser source_event_ids as cancelled
+        let mut inner = this.ctx.inner.lock().unwrap();
+        for (i, child) in this.children.iter().enumerate() {
+            if i != winner_idx {
+                // Common field: access claimed_event_id directly from DurableFuture
+                if let Some(source_id) = child.claimed_event_id.get() {
+                    inner.cancelled_source_ids.insert(source_id);
+                }
+            }
         }
+        
+        // Return the winner
+        let output = ready_results[winner_idx].take().expect("winner is ready");
+        return Poll::Ready(AggregateOutput::Select {
+            winner_index: winner_idx,
+            output,
+        });
     }
+
     Poll::Pending
 }
 ```
+
+**Phase 3 is critical**: Without marking losers as cancelled, their eventual completion events (e.g., `TimerFired` from a timeout that lost to an activity) would block FIFO ordering for subsequent operations. This is analogous to how `tokio::select!` drops the losing futures - we can't drop them (they're already in history), but we mark them as "don't wait for their completions".
 
 ### Example: Select with Timeout
 
@@ -574,10 +606,13 @@ Replay:
   3. select2.await polls aggregate
   4. Phase 1: Poll activity → claims event_id: 2, finds completion → Ready!
   5. Phase 1: Poll timer → claims event_id: 3, no TimerFired → Pending
-  6. Phase 2: Activity (index 0) is ready → return (0, Activity(Ok("task result")))
+  6. Phase 2: Activity (index 0) is ready → winner found
+  7. Phase 3: Mark timer (source_event_id: 3) as cancelled
+  8. Return (0, Activity(Ok("task result")))
 
 claimed_scheduling_events: {2, 3}  // BOTH claimed even though timer lost
 consumed_completions: {4}
+cancelled_source_ids: {3}          // Timer's eventual TimerFired won't block FIFO
 
 History (after turn):
 ┌────────────────────────────────────────────────────────────────────┐
@@ -645,6 +680,59 @@ Correct replay:
   4. schedule_activity("Next") polls
   5. Scans for unclaimed → finds ActivityScheduled("Next") at event_id: 5 ✓
 ```
+
+### Example: Why Phase 3 (Loser Cancellation) is Critical
+
+Two-phase polling solves the nondeterminism problem, but there's another issue: **stale completions from losers can block FIFO ordering**.
+
+**Scenario:** Multiple `select2` calls with activity winners, then a final timer:
+
+```rust
+async fn retry_then_sleep(ctx: OrchestrationContext, _: String) -> Result<String, String> {
+    // Two retries with timeouts (activity wins both times)
+    for _ in 0..2 {
+        let activity = ctx.schedule_activity("Task", "");
+        let timeout = ctx.schedule_timer(Duration::from_secs(30));
+        ctx.select2(activity, timeout).await;
+    }
+    
+    // Final sleep timer
+    ctx.schedule_timer(Duration::from_secs(10)).into_timer().await;
+    Ok("done".to_string())
+}
+```
+
+**Turn 3 History (after both activities complete):**
+
+```
+History:
+┌────────────────────────────────────────────────────────────────────┐
+│ [2] ActivityScheduled { event_id: 2, name: "Task", ... }           │
+│ [3] TimerCreated { event_id: 3, fire_at_ms: ... }                  │  ← Retry 1 timeout
+│ [4] ActivityCompleted { event_id: 4, source_event_id: 2, ... }     │  ← Activity wins
+│ [5] ActivityScheduled { event_id: 5, name: "Task", ... }           │
+│ [6] TimerCreated { event_id: 6, fire_at_ms: ... }                  │  ← Retry 2 timeout
+│ [7] ActivityCompleted { event_id: 7, source_event_id: 5, ... }     │  ← Activity wins
+│ [8] TimerCreated { event_id: 8, fire_at_ms: 10000 }                │  ← Final sleep
+│ [9] TimerFired { event_id: 9, source_event_id: 3, ... }            │  ← STALE: retry 1's loser
+│ [10] TimerFired { event_id: 10, source_event_id: 6, ... }          │  ← STALE: retry 2's loser
+│ [11] TimerFired { event_id: 11, source_event_id: 8, ... }          │  ← Final sleep fires
+└────────────────────────────────────────────────────────────────────┘
+```
+
+**Without loser cancellation (buggy - orchestration hangs!):**
+
+The final timer (event_id: 8) looks for its completion (event_id: 11). But `can_consume_completion` checks: "Are events 9 and 10 consumed?" They're not - no one is waiting for them! The orchestration hangs forever.
+
+**With loser cancellation (correct):**
+
+When each `select2` returns, the losing timer's `source_event_id` is added to `cancelled_source_ids`:
+- After retry 1: `cancelled_source_ids = {3}`
+- After retry 2: `cancelled_source_ids = {3, 6}`
+
+Now `can_consume_completion(11)` checks event 9 (`source_event_id: 3` → in cancelled set → skip) and event 10 (`source_event_id: 6` → in cancelled set → skip). The check passes, and the final timer completes!
+
+**This is analogous to Tokio's `select!`**: In `tokio::select!`, losing futures are dropped and their resources released. We can't drop history events, but marking them as cancelled achieves the same semantic - their completions are no longer relevant.
 
 ### Join Semantics (Fixed-Point Polling)
 
@@ -968,12 +1056,10 @@ fn poll_once<F: Future>(mut fut: Pin<&mut F>) -> Poll<F::Output> {
 Standard async Rust typically uses `&mut self` for stateful operations. Duroxide uses `Cell` and `RefCell` for interior mutability:
 
 ```rust
-pub struct DurableFuture(pub(crate) Kind);
-
-// Interior mutability allows mutation through &self
-Kind::Activity {
+pub struct DurableFuture {
     claimed_event_id: Cell<Option<u64>>,  // Mutated during poll
     ctx: OrchestrationContext,            // Contains Arc<Mutex<...>>
+    kind: Kind,                           // Operation-specific data
 }
 ```
 
@@ -1129,11 +1215,12 @@ let now = ctx.utc_now().await;   // Same value on replay
 
 | Concept | Description |
 |---------|-------------|
-| **DurableFuture** | Unified future type for activities, timers, external events, sub-orchestrations, system calls |
+| **DurableFuture** | Unified future type with common fields (`claimed_event_id`, `ctx`) and operation-specific `kind` |
 | **Claim System** | Each future claims a scheduling event from history (or creates new) on first poll |
 | **Global Order** | Scheduling events must be claimed in exact history order (nondeterminism detection) |
-| **FIFO Completions** | Completion events must be consumed in history order |
-| **Two-Phase Select** | Poll ALL children to ensure scheduling events claimed, then return winner |
+| **FIFO Completions** | Completion events must be consumed in history order (unless cancelled) |
+| **Cancelled Source IDs** | Select2 losers are marked cancelled; their completions are skipped in FIFO checks |
+| **Three-Phase Select** | Poll ALL children, find winner, mark losers as cancelled, return |
 | **Fixed-Point Join** | Repeatedly poll until all children ready (FIFO may block some) |
 | **Turn-Based** | Orchestration polled once per turn; future dropped after turn |
 | **No Waker** | Uses noop_waker; progress driven by runtime, not wake notifications |
