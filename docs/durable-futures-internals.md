@@ -4,23 +4,126 @@ This document provides a detailed technical explanation of how Duroxide's replay
 
 ## Table of Contents
 
-1. [High-Level Architecture](#high-level-architecture)
-2. [The DurableFuture Type](#the-durablefuture-type)
-3. [Event Model](#event-model)
-4. [The Claim System](#the-claim-system)
-5. [Polling and Replay](#polling-and-replay)
-6. [Aggregate Futures (Select/Join)](#aggregate-futures-selectjoin)
-7. [Runtime Integration](#runtime-integration)
-8. [Rust Async Differences](#rust-async-differences)
+1. [Core Concept: History-Based Execution](#core-concept-history-based-execution)
+2. [High-Level Architecture](#high-level-architecture)
+3. [The DurableFuture Type](#the-durablefuture-type)
+4. [Event Model](#event-model)
+5. [The Claim System](#the-claim-system)
+6. [Polling and Replay](#polling-and-replay)
+7. [Aggregate Futures (Select/Join)](#aggregate-futures-selectjoin)
+8. [Runtime Integration](#runtime-integration)
+9. [Rust Async Differences](#rust-async-differences)
+
+---
+
+## Core Concept: History-Based Execution
+
+Duroxide orchestrations are **deterministic functions** that execute incrementally across multiple "turns". The key insight: **execution generates history, and history enables replay**.
+
+### The Execution Model
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                     Orchestration Lifecycle                          │
+│                                                                      │
+│   ┌──────────┐     ┌──────────┐     ┌──────────┐     ┌──────────┐  │
+│   │  Turn 1  │────▶│  Turn 2  │────▶│  Turn 3  │────▶│  Turn N  │  │
+│   │ (fresh)  │     │ (replay) │     │ (replay) │     │(complete)│  │
+│   └──────────┘     └──────────┘     └──────────┘     └──────────┘  │
+│        │                │                │                │         │
+│        ▼                ▼                ▼                ▼         │
+│   [history]        [history]        [history]        [history]      │
+│   grows            grows            grows            final          │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+**Each turn:**
+1. The runtime creates a **fresh orchestration future** with the current history
+2. The future is **polled once** - it runs until it awaits something not yet complete
+3. The future is **dropped** (dehydrated) - only the history persists
+4. When new completions arrive, the process repeats (rehydration)
+
+### Example: A Simple Orchestration
+
+```rust
+async fn order_workflow(ctx: OrchestrationContext) -> String {
+    let item = ctx.schedule_activity("ValidateOrder", "order-123")
+        .into_activity().await.unwrap();
+    
+    ctx.schedule_timer(Duration::from_secs(60)).into_timer().await;
+    
+    let result = ctx.schedule_activity("ProcessPayment", &item)
+        .into_activity().await.unwrap();
+    
+    result
+}
+```
+
+**Turn 1** - First execution, nothing in history:
+```
+Execute: ValidateOrder scheduled → await → BLOCKED (no completion)
+History: [OrchestrationStarted, ActivityScheduled("ValidateOrder")]
+Actions: [CallActivity("ValidateOrder")]
+State:   DEHYDRATED (future dropped, waiting for activity)
+```
+
+**Turn 2** - Activity completed, replay + continue:
+```
+Execute: ValidateOrder scheduled → await → READY (completion found!)
+         Timer scheduled → await → BLOCKED (timer not fired)
+History: [OrchestrationStarted, ActivityScheduled, ActivityCompleted, TimerCreated]
+Actions: [CreateTimer]
+State:   DEHYDRATED (waiting for timer)
+```
+
+**Turn 3** - Timer fired, replay + continue:
+```
+Execute: ValidateOrder → READY (replay)
+         Timer → READY (replay)
+         ProcessPayment scheduled → await → BLOCKED
+History: [..., TimerFired, ActivityScheduled("ProcessPayment")]
+Actions: [CallActivity("ProcessPayment")]
+State:   DEHYDRATED (waiting for activity)
+```
+
+**Turn 4** - Payment completed, replay + finish:
+```
+Execute: ValidateOrder → READY (replay)
+         Timer → READY (replay)
+         ProcessPayment → READY (replay)
+         Return "success"
+History: [..., ActivityCompleted, OrchestrationCompleted]
+State:   COMPLETED
+```
+
+### Why This Works
+
+The orchestration function is **deterministic** - given the same history, it always:
+- Schedules the same operations in the same order
+- Makes the same decisions based on results
+- Reaches the same state
+
+This allows us to:
+- **Drop the future** after each turn (no in-memory state to preserve)
+- **Recreate it** with history to resume exactly where we left off
+- **Survive crashes** - history is persisted, state is reconstructed
+
+### The Replay Rules
+
+This document covers the rules that make replay work:
+1. **Claim System**: Each future claims its corresponding scheduling event from history
+2. **FIFO Ordering**: Completions must be consumed in history order
+3. **Nondeterminism Detection**: If code tries to schedule differently than history shows, it's caught
+4. **Loser Cancellation**: Select2 losers are marked so their completions don't block
 
 ---
 
 ## High-Level Architecture
 
-Duroxide implements **deterministic replay** for durable orchestrations. The core insight is:
+Duroxide implements **deterministic replay** for durable orchestrations. The mechanics are:
 
 1. **First Execution**: When orchestration code runs for the first time, each `schedule_*` call creates a new event and records an `Action` for the runtime.
-2. **Replay**: When the runtime restarts or re-processes work, it replays the same orchestration code with the existing history. The futures "adopt" their corresponding events from history rather than creating new ones.
+2. **Replay**: When the runtime re-processes work, it replays the same orchestration code with the existing history. The futures "adopt" their corresponding events from history rather than creating new ones.
 
 This is achieved through a **claim system** where each `DurableFuture` claims ownership of specific events in the history.
 
