@@ -1,6 +1,6 @@
 # DurableFuture Internals: Scheduling, Polling, and Event Claim System
 
-This document provides a detailed technical explanation of how Duroxide's replay engine works, focusing on `DurableFuture` scheduling, polling, the claim system, and aggregate futures (select/join). It also covers important differences from standard Rust async/Tokio programming.
+This document explains how Duroxide creates the illusion of durable code—code that survives process crashes, restarts, and machine failures. We cover how `DurableFuture` scheduling, polling, the claim system, and aggregate futures (select/join) work together to reconstruct execution state from history. We also cover the rules programmers must follow to preserve this illusion, and important differences from standard Rust async/Tokio programming.
 
 ## Table of Contents
 
@@ -17,6 +17,20 @@ This document provides a detailed technical explanation of how Duroxide's replay
 ---
 
 ## Core Concept: History-Based Execution
+
+### What Are We Actually Doing?
+
+The fundamental goal of Duroxide is to make a piece of code **durable**—it continues running through process resets, machine restarts, and crashes. Think of it this way: the instruction pointer, in some sense, is persisted across these catastrophic events. So is the state around it—the stack, the heap, local variables, everything the code needs to resume.
+
+But we're not actually persisting CPU registers or memory pages. That would be impractical (and platform-specific, and fragile). Instead, we give programmers an **illusion** using three ingredients:
+
+1. **Futures**: The familiar Rust async abstraction, but with durable semantics
+2. **Replay**: Re-executing the orchestration function from the beginning each time
+3. **Execution History**: A persistent log of what happened, enabling replay to "fast-forward"
+
+This illusion is not free. The programmer must follow certain rules to make it work—rules about determinism, side effects, and what operations are allowed. This document explains how the illusion is constructed and what rules you must follow to preserve it. While we try to keep the programming model as close to idiomatic Rust async as possible, the constraints of durability mean some patterns simply don't apply.
+
+### The Core Insight
 
 Duroxide orchestrations are **deterministic functions** that execute incrementally across multiple "turns". The key insight: **execution generates history, and history enables replay**.
 
