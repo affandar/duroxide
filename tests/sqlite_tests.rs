@@ -1,6 +1,6 @@
 use duroxide::providers::sqlite::SqliteProvider;
 use duroxide::providers::{ExecutionMetadata, Provider, ProviderAdmin, WorkItem};
-use duroxide::{ActivityContext, Event};
+use duroxide::{ActivityContext, Event, EventKind};
 use std::sync::Arc;
 use std::time::Duration;
 use tempfile::TempDir;
@@ -73,20 +73,29 @@ async fn test_sqlite_provider_basic() {
 
     // 3. Process and acknowledge with history
     let history_delta = vec![
-        Event::OrchestrationStarted {
-            event_id: 1,
-            name: "TestOrchestration".to_string(),
-            version: "1.0.0".to_string(),
-            input: r#"{"test": true}"#.to_string(),
-            parent_instance: None,
-            parent_id: None,
-        },
-        Event::ActivityScheduled {
-            event_id: 2,
-            execution_id: 1,
-            name: "TestActivity".to_string(),
-            input: "test-input".to_string(),
-        },
+        Event::with_event_id(
+            1,
+            instance,
+            1,
+            None,
+            EventKind::OrchestrationStarted {
+                name: "TestOrchestration".to_string(),
+                version: "1.0.0".to_string(),
+                input: r#"{"test": true}"#.to_string(),
+                parent_instance: None,
+                parent_id: None,
+            },
+        ),
+        Event::with_event_id(
+            2,
+            instance,
+            1,
+            None,
+            EventKind::ActivityScheduled {
+                name: "TestActivity".to_string(),
+                input: "test-input".to_string(),
+            },
+        ),
     ];
 
     let metadata = ExecutionMetadata {
@@ -104,8 +113,8 @@ async fn test_sqlite_provider_basic() {
     // 4. Verify history was persisted
     let history = store.read(instance).await.unwrap_or_default();
     assert_eq!(history.len(), 2);
-    assert!(matches!(history[0], Event::OrchestrationStarted { .. }));
-    assert!(matches!(history[1], Event::ActivityScheduled { .. }));
+    assert!(matches!(&history[0].kind, EventKind::OrchestrationStarted { .. }));
+    assert!(matches!(&history[1].kind, EventKind::ActivityScheduled { .. }));
 }
 
 #[tokio::test]
@@ -149,10 +158,15 @@ async fn test_execution_status_completed() {
         .ack_orchestration_item(
             &item.lock_token,
             execution_id,
-            vec![Event::OrchestrationCompleted {
-                event_id: 1,
-                output: "Success".to_string(),
-            }],
+            vec![Event::with_event_id(
+                1,
+                instance,
+                execution_id,
+                None,
+                EventKind::OrchestrationCompleted {
+                    output: "Success".to_string(),
+                },
+            )],
             vec![],
             vec![],
             metadata,

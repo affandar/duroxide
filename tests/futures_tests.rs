@@ -1,7 +1,7 @@
 // Use SQLite via common helper
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self, OrchestrationStatus};
-use duroxide::{ActivityContext, DurableOutput, Event, OrchestrationContext, OrchestrationRegistry};
+use duroxide::{ActivityContext, DurableOutput, Event, EventKind, OrchestrationContext, OrchestrationRegistry};
 use std::sync::Arc as StdArc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
@@ -40,7 +40,7 @@ async fn select2_two_externals_history_order_wins() {
                 let mut seen_a = false;
                 let mut seen_b = false;
                 for e in h.iter() {
-                    if let Event::ExternalSubscribed { name, .. } = e {
+                    if let EventKind::ExternalSubscribed { name } = &e.kind {
                         if name == "A" {
                             seen_a = true;
                         }
@@ -81,15 +81,15 @@ async fn select2_two_externals_history_order_wins() {
         common::wait_for_history(
             store.clone(),
             "inst-ab2",
-            |h| { h.iter().any(|e| matches!(e, Event::OrchestrationCompleted { .. })) },
+            |h| { h.iter().any(|e| matches!(&e.kind, EventKind::OrchestrationCompleted { .. })) },
             5_000
         )
         .await,
         "timeout waiting for completion"
     );
     let hist = store.read("inst-ab2").await.unwrap_or_default();
-    let output = match hist.last() {
-        Some(Event::OrchestrationCompleted { output, .. }) => output.clone(),
+    let output = match hist.last().map(|e| &e.kind) {
+        Some(EventKind::OrchestrationCompleted { output }) => output.clone(),
         _ => String::new(),
     };
 
@@ -97,10 +97,10 @@ async fn select2_two_externals_history_order_wins() {
     // The key is that select picks the first one in history order
     let b_index = hist
         .iter()
-        .position(|e| matches!(e, Event::ExternalEvent { name, .. } if name == "B"));
+        .position(|e| matches!(&e.kind, EventKind::ExternalEvent { name, .. } if name == "B"));
     let a_index = hist
         .iter()
-        .position(|e| matches!(e, Event::ExternalEvent { name, .. } if name == "A"));
+        .position(|e| matches!(&e.kind, EventKind::ExternalEvent { name, .. } if name == "A"));
 
     assert!(b_index.is_some(), "expected ExternalEvent B in history: {hist:#?}");
 
@@ -152,7 +152,7 @@ async fn select_two_externals_history_order_wins() {
                 let mut seen_a = false;
                 let mut seen_b = false;
                 for e in h.iter() {
-                    if let Event::ExternalSubscribed { name, .. } = e {
+                    if let EventKind::ExternalSubscribed { name } = &e.kind {
                         if name == "A" {
                             seen_a = true;
                         }
@@ -193,7 +193,7 @@ async fn select_two_externals_history_order_wins() {
         common::wait_for_history(
             store.clone(),
             "inst-ab",
-            |h| { h.iter().any(|e| matches!(e, Event::OrchestrationCompleted { .. })) },
+            |h| { h.iter().any(|e| matches!(&e.kind, EventKind::OrchestrationCompleted { .. })) },
             5_000
         )
         .await,
@@ -201,7 +201,7 @@ async fn select_two_externals_history_order_wins() {
     );
     let hist = store.read("inst-ab").await.unwrap_or_default();
     let output = match hist.last() {
-        Some(Event::OrchestrationCompleted { output, .. }) => output.clone(),
+        Some(EventKind::OrchestrationCompleted { output }) if hist.last().is_some() => if let Some(EventKind::OrchestrationCompleted { output }) = hist.last().map(|e| &e.kind) { => output.clone(),
         _ => String::new(),
     };
 
@@ -209,10 +209,10 @@ async fn select_two_externals_history_order_wins() {
     // The key is that select picks the first one in history order
     let b_index = hist
         .iter()
-        .position(|e| matches!(e, Event::ExternalEvent { name, .. } if name == "B"));
+        .position(|e| matches!(&e.kind, EventKind::ExternalEvent { name, .. } if name == "B"));
     let a_index = hist
         .iter()
-        .position(|e| matches!(e, Event::ExternalEvent { name, .. } if name == "A"));
+        .position(|e| matches!(&e.kind, EventKind::ExternalEvent { name, .. } if name == "A"));
 
     assert!(b_index.is_some(), "expected ExternalEvent B in history: {hist:#?}");
 
@@ -266,7 +266,7 @@ async fn select_three_mixed_history_winner() {
                 let mut seen_a = false;
                 let mut seen_b = false;
                 for e in h.iter() {
-                    if let Event::ExternalSubscribed { name, .. } = e {
+                    if let EventKind::ExternalSubscribed { name } = &e.kind {
                         if name == "A" {
                             seen_a = true;
                         }
@@ -312,14 +312,14 @@ async fn select_three_mixed_history_winner() {
         common::wait_for_history(
             store.clone(),
             "inst-atb",
-            |h| { h.iter().any(|e| matches!(e, Event::OrchestrationCompleted { .. })) },
+            |h| { h.iter().any(|e| matches!(&e.kind, EventKind::OrchestrationCompleted { .. })) },
             5_000
         )
         .await
     );
     let hist = store.read("inst-atb").await.unwrap_or_default();
     let output = match hist.last() {
-        Some(Event::OrchestrationCompleted { output, .. }) => output.clone(),
+        Some(EventKind::OrchestrationCompleted { output }) if hist.last().is_some() => if let Some(EventKind::OrchestrationCompleted { output }) = hist.last().map(|e| &e.kind) { => output.clone(),
         _ => String::new(),
     };
 
@@ -327,10 +327,10 @@ async fn select_three_mixed_history_winner() {
     // The key is that select picks the first one in history order
     let b_index = hist
         .iter()
-        .position(|e| matches!(e, Event::ExternalEvent { name, .. } if name == "B"));
+        .position(|e| matches!(&e.kind, EventKind::ExternalEvent { name, .. } if name == "B"));
     let a_index = hist
         .iter()
-        .position(|e| matches!(e, Event::ExternalEvent { name, .. } if name == "A"));
+        .position(|e| matches!(&e.kind, EventKind::ExternalEvent { name, .. } if name == "A"));
 
     assert!(b_index.is_some(), "expected ExternalEvent B in history: {hist:#?}");
 
@@ -386,7 +386,7 @@ async fn join_returns_history_order() {
                 let mut seen_a = false;
                 let mut seen_b = false;
                 for e in h.iter() {
-                    if let Event::ExternalSubscribed { name, .. } = e {
+                    if let EventKind::ExternalSubscribed { name } = &e.kind {
                         if name == "A" {
                             seen_a = true;
                         }
@@ -427,14 +427,14 @@ async fn join_returns_history_order() {
         common::wait_for_history(
             store.clone(),
             "inst-join",
-            |h| { h.iter().any(|e| matches!(e, Event::OrchestrationCompleted { .. })) },
+            |h| { h.iter().any(|e| matches!(&e.kind, EventKind::OrchestrationCompleted { .. })) },
             5_000
         )
         .await
     );
     let hist = store.read("inst-join").await.unwrap_or_default();
     let output = match hist.last() {
-        Some(Event::OrchestrationCompleted { output, .. }) => output.clone(),
+        Some(EventKind::OrchestrationCompleted { output }) if hist.last().is_some() => if let Some(EventKind::OrchestrationCompleted { output }) = hist.last().map(|e| &e.kind) { => output.clone(),
         _ => String::new(),
     };
     // Ensure output is vb,va to reflect history order B before A

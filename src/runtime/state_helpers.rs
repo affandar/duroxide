@@ -1,4 +1,4 @@
-use crate::{Event, providers::WorkItem};
+use crate::{Event, EventKind, providers::WorkItem};
 use tracing::warn;
 
 /// Reader for extracting metadata from orchestration history
@@ -67,14 +67,13 @@ impl HistoryManager {
         let mut execution_id_counter = 0u64;
         let mut last_started_index = None;
         for (idx, event) in history.iter().enumerate() {
-            if let Event::OrchestrationStarted {
+            if let EventKind::OrchestrationStarted {
                 name,
                 version,
                 input,
                 parent_instance,
                 parent_id,
-                ..
-            } = event
+            } = &event.kind
             {
                 execution_id_counter += 1;
                 metadata.orchestration_name = Some(name.clone());
@@ -91,16 +90,16 @@ impl HistoryManager {
         // Check for terminal states AFTER the most recent OrchestrationStarted
         if let Some(start_idx) = last_started_index {
             for event in history[(start_idx + 1)..].iter() {
-                match event {
-                    Event::OrchestrationCompleted { .. } => {
+                match &event.kind {
+                    EventKind::OrchestrationCompleted { .. } => {
                         metadata.is_completed = true;
                         break;
                     }
-                    Event::OrchestrationFailed { .. } => {
+                    EventKind::OrchestrationFailed { .. } => {
                         metadata.is_failed = true;
                         break;
                     }
-                    Event::OrchestrationContinuedAsNew { .. } => {
+                    EventKind::OrchestrationContinuedAsNew { .. } => {
                         metadata.is_continued_as_new = true;
                         break;
                     }
@@ -156,10 +155,15 @@ impl HistoryManager {
     /// Append an OrchestrationFailed event with the next event_id
     pub fn append_failed(&mut self, details: crate::ErrorDetails) {
         let next_id = self.next_event_id();
-        self.append(Event::OrchestrationFailed {
-            event_id: next_id,
-            details,
-        });
+        // Note: instance_id and execution_id should be set from context
+        // For now, use placeholder values as this will be set by the caller
+        self.append(Event::with_event_id(
+            next_id,
+            "", // instance_id should be set by caller
+            0,  // execution_id should be set by caller
+            None,
+            EventKind::OrchestrationFailed { details },
+        ));
     }
 
     /// Extend delta with multiple events
@@ -196,7 +200,7 @@ impl HistoryManager {
 
         // If no cached version, check delta for newly appended OrchestrationStarted
         for e in self.delta.iter().rev() {
-            if let Event::OrchestrationStarted { version, .. } = e {
+            if let EventKind::OrchestrationStarted { version, .. } = &e.kind {
                 if version == "0.0.0" {
                     return None;
                 }
@@ -227,12 +231,12 @@ impl HistoryManager {
 
         // If no metadata yet (empty initial history), check the delta for OrchestrationStarted
         for e in self.delta.iter().rev() {
-            if let Event::OrchestrationStarted {
+            if let EventKind::OrchestrationStarted {
                 input,
                 parent_instance,
                 parent_id,
                 ..
-            } = e
+            } = &e.kind
             {
                 let parent_link = if let (Some(pinst), Some(pid)) = (parent_instance.clone(), *parent_id) {
                     Some((pinst, pid))
@@ -388,14 +392,19 @@ mod tests {
 
     #[test]
     fn test_history_reader_from_started_only() {
-        let history = vec![Event::OrchestrationStarted {
-            event_id: 1,
-            name: "test-orch".to_string(),
-            version: "1.0.0".to_string(),
-            input: "test-input".to_string(),
-            parent_instance: None,
-            parent_id: None,
-        }];
+        let history = vec![Event::with_event_id(
+            1,
+            "test-inst",
+            1,
+            None,
+            EventKind::OrchestrationStarted {
+                name: "test-orch".to_string(),
+                version: "1.0.0".to_string(),
+                input: "test-input".to_string(),
+                parent_instance: None,
+                parent_id: None,
+            },
+        )];
 
         let metadata = HistoryManager::from_history(&history);
         assert_eq!(metadata.orchestration_name, Some("test-orch".to_string()));
@@ -409,18 +418,28 @@ mod tests {
     #[test]
     fn test_history_reader_completed() {
         let history = vec![
-            Event::OrchestrationStarted {
-                event_id: 1,
-                name: "test-orch".to_string(),
-                version: "1.0.0".to_string(),
-                input: "test-input".to_string(),
-                parent_instance: None,
-                parent_id: None,
-            },
-            Event::OrchestrationCompleted {
-                event_id: 2,
-                output: "success".to_string(),
-            },
+            Event::with_event_id(
+                1,
+                "test-inst",
+                1,
+                None,
+                EventKind::OrchestrationStarted {
+                    name: "test-orch".to_string(),
+                    version: "1.0.0".to_string(),
+                    input: "test-input".to_string(),
+                    parent_instance: None,
+                    parent_id: None,
+                },
+            ),
+            Event::with_event_id(
+                2,
+                "test-inst",
+                1,
+                None,
+                EventKind::OrchestrationCompleted {
+                    output: "success".to_string(),
+                },
+            ),
         ];
 
         let metadata = HistoryManager::from_history(&history);
@@ -432,22 +451,32 @@ mod tests {
     #[test]
     fn test_history_reader_failed() {
         let history = vec![
-            Event::OrchestrationStarted {
-                event_id: 1,
-                name: "test-orch".to_string(),
-                version: "1.0.0".to_string(),
-                input: "test-input".to_string(),
-                parent_instance: None,
-                parent_id: None,
-            },
-            Event::OrchestrationFailed {
-                event_id: 2,
-                details: crate::ErrorDetails::Application {
-                    kind: crate::AppErrorKind::OrchestrationFailed,
-                    message: "boom".to_string(),
-                    retryable: false,
+            Event::with_event_id(
+                1,
+                "test-inst",
+                1,
+                None,
+                EventKind::OrchestrationStarted {
+                    name: "test-orch".to_string(),
+                    version: "1.0.0".to_string(),
+                    input: "test-input".to_string(),
+                    parent_instance: None,
+                    parent_id: None,
                 },
-            },
+            ),
+            Event::with_event_id(
+                2,
+                "test-inst",
+                1,
+                None,
+                EventKind::OrchestrationFailed {
+                    details: crate::ErrorDetails::Application {
+                        kind: crate::AppErrorKind::OrchestrationFailed,
+                        message: "boom".to_string(),
+                        retryable: false,
+                    },
+                },
+            ),
         ];
 
         let metadata = HistoryManager::from_history(&history);
@@ -459,26 +488,41 @@ mod tests {
     #[test]
     fn test_history_reader_continued_as_new() {
         let history = vec![
-            Event::OrchestrationStarted {
-                event_id: 1,
-                name: "test-orch".to_string(),
-                version: "1.0.0".to_string(),
-                input: "input1".to_string(),
-                parent_instance: None,
-                parent_id: None,
-            },
-            Event::OrchestrationContinuedAsNew {
-                event_id: 2,
-                input: "input2".to_string(),
-            },
-            Event::OrchestrationStarted {
-                event_id: 3,
-                name: "test-orch".to_string(),
-                version: "1.0.0".to_string(),
-                input: "input2".to_string(),
-                parent_instance: None,
-                parent_id: None,
-            },
+            Event::with_event_id(
+                1,
+                "test-inst",
+                1,
+                None,
+                EventKind::OrchestrationStarted {
+                    name: "test-orch".to_string(),
+                    version: "1.0.0".to_string(),
+                    input: "input1".to_string(),
+                    parent_instance: None,
+                    parent_id: None,
+                },
+            ),
+            Event::with_event_id(
+                2,
+                "test-inst",
+                1,
+                None,
+                EventKind::OrchestrationContinuedAsNew {
+                    input: "input2".to_string(),
+                },
+            ),
+            Event::with_event_id(
+                3,
+                "test-inst",
+                2,
+                None,
+                EventKind::OrchestrationStarted {
+                    name: "test-orch".to_string(),
+                    version: "1.0.0".to_string(),
+                    input: "input2".to_string(),
+                    parent_instance: None,
+                    parent_id: None,
+                },
+            ),
         ];
 
         let metadata = HistoryManager::from_history(&history);
@@ -490,14 +534,19 @@ mod tests {
 
     #[test]
     fn test_history_reader_with_parent() {
-        let history = vec![Event::OrchestrationStarted {
-            event_id: 1,
-            name: "child-orch".to_string(),
-            version: "1.0.0".to_string(),
-            input: "test".to_string(),
-            parent_instance: Some("parent-instance".to_string()),
-            parent_id: Some(42),
-        }];
+        let history = vec![Event::with_event_id(
+            1,
+            "child-inst",
+            1,
+            None,
+            EventKind::OrchestrationStarted {
+                name: "child-orch".to_string(),
+                version: "1.0.0".to_string(),
+                input: "test".to_string(),
+                parent_instance: Some("parent-instance".to_string()),
+                parent_id: Some(42),
+            },
+        )];
 
         let metadata = HistoryManager::from_history(&history);
         assert_eq!(metadata.parent_instance, Some("parent-instance".to_string()));

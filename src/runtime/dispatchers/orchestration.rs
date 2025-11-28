@@ -5,7 +5,7 @@
 //! - Fetches and processes orchestration items from the queue
 //! - Handles orchestration execution and atomic commits
 
-use crate::Event;
+use crate::{Event, EventKind};
 use crate::providers::{ExecutionMetadata, ProviderError, WorkItem};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -214,7 +214,7 @@ impl Runtime {
                     let (error_type, error_category) = history_delta
                         .iter()
                         .find_map(|event| {
-                            if let Event::OrchestrationFailed { details, .. } = event {
+                            if let EventKind::OrchestrationFailed { details } = &event.kind {
                                 let category = details.category();
                                 let error_type = match category {
                                     "infrastructure" => "infrastructure_error",
@@ -432,14 +432,19 @@ impl Runtime {
             None => {
                 // Not found in registry - fail with unregistered error
                 if history_mgr.is_empty() {
-                    history_mgr.append(Event::OrchestrationStarted {
-                        event_id: crate::INITIAL_EVENT_ID,
-                        name: workitem_reader.orchestration_name.clone(),
-                        version: "0.0.0".to_string(), // Placeholder version for unregistered
-                        input: workitem_reader.input.clone(),
-                        parent_instance: workitem_reader.parent_instance.clone(),
-                        parent_id: workitem_reader.parent_id,
-                    });
+                    history_mgr.append(Event::with_event_id(
+                        crate::INITIAL_EVENT_ID,
+                        instance,
+                        execution_id,
+                        None,
+                        EventKind::OrchestrationStarted {
+                            name: workitem_reader.orchestration_name.clone(),
+                            version: "0.0.0".to_string(), // Placeholder version for unregistered
+                            input: workitem_reader.input.clone(),
+                            parent_instance: workitem_reader.parent_instance.clone(),
+                            parent_id: workitem_reader.parent_id,
+                        },
+                    ));
 
                     history_mgr.append_failed(crate::ErrorDetails::Configuration {
                         kind: crate::ConfigErrorKind::UnregisteredOrchestration,
@@ -454,14 +459,19 @@ impl Runtime {
 
         // Create started event if this is a new instance
         if history_mgr.is_empty() {
-            history_mgr.append(Event::OrchestrationStarted {
-                event_id: 1, // First event always has event_id=1
-                name: workitem_reader.orchestration_name.clone(),
-                version: resolved_version.to_string(),
-                input: workitem_reader.input.clone(),
-                parent_instance: workitem_reader.parent_instance.clone(),
-                parent_id: workitem_reader.parent_id,
-            });
+            history_mgr.append(Event::with_event_id(
+                1, // First event always has event_id=1
+                instance,
+                execution_id,
+                None,
+                EventKind::OrchestrationStarted {
+                    name: workitem_reader.orchestration_name.clone(),
+                    version: resolved_version.to_string(),
+                    input: workitem_reader.input.clone(),
+                    parent_instance: workitem_reader.parent_instance.clone(),
+                    parent_id: workitem_reader.parent_id,
+                },
+            ));
         }
 
         // Run the atomic execution to get all changes, passing the resolved handler
