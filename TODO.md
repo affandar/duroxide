@@ -15,6 +15,7 @@
 
 ### Active TODOs
 
+- RaiseEvent pub/sub
 - RaiseEvent should target any Wait for Event, even if it was to come in the future.
 - **Nested Select2 Support** - Enable `select2(select2(a, b), c)` composition
   - Currently `select2` only accepts `DurableFuture`, not `SelectFuture`
