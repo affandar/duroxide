@@ -20,15 +20,17 @@ This document explains how Duroxide creates the illusion of durable code—code 
 
 ### What Are We Actually Doing?
 
-The fundamental goal of Duroxide is to make a piece of code **durable**—it continues running through process resets, machine restarts, and crashes. Think of it this way: the instruction pointer, in some sense, is persisted across these catastrophic events. So is the state around it—the stack, the heap, local variables, everything the code needs to resume.
+The fundamental goal of Duroxide is to make a piece of code durable—it continues running through process resets, machine restarts, and crashes. We call this piece of code an orchestration function. Think of it this way: the instruction pointer, in some sense, is persisted across these catastrophic events. So is the state around it—the stack, the heap, local variables, everything the orchestration needs to resume.
 
-But we're not actually persisting CPU registers or memory pages. That would be impractical (and platform-specific, and fragile). Instead, we give programmers an **illusion** using three ingredients:
+But we're not actually persisting CPU registers or memory pages. That would be impractical (and platform-specific, and fragile). Instead, we give programmers an illusion using three ingredients:
 
-1. **Futures**: The familiar Rust async abstraction, but with durable semantics
-2. **Replay**: Re-executing the orchestration function from the beginning each time
-3. **Execution History**: A persistent log of what happened, enabling replay to "fast-forward"
+1. Futures: the familiar Rust async abstraction, but with durable semantics
+2. Replay: re-executing the orchestration function from the beginning each time
+3. Execution history: a persistent log of what happened, enabling replay to "fast-forward"
 
 This illusion is not free. The programmer must follow certain rules to make it work—rules about determinism, side effects, and what operations are allowed. This document explains how the illusion is constructed and what rules you must follow to preserve it. While we try to keep the programming model as close to idiomatic Rust async as possible, the constraints of durability mean some patterns simply don't apply.
+
+This durable execution model was pioneered by AWS Simple Workflow Service over a decade ago, and later implemented for .NET as Durable Task Framework (and Azure Durable Functions). Uber's Cadence and more recently Temporal follow the same fundamental approach. Duroxide brings this model to Rust.
 
 ### The Core Insight
 
