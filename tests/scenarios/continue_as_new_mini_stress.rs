@@ -657,3 +657,175 @@ async fn instance_actor_pattern_stress_test() {
 
     rt.shutdown(None).await;
 }
+
+/// Regression test: stale TimerFired events from select2 losers block subsequent select2 calls
+///
+/// **Root Cause Bug (duroxide):**
+/// When `schedule_activity_with_retry` uses `select2(activity, timer)` with timeout, and the
+/// activity wins the race, the timer's `TimerFired` event is never consumed. These "stale"
+/// completions block later completions due to FIFO ordering enforcement.
+///
+/// **Timeline in the orchestration:**
+/// 1. GET_INSTANCE_CONNECTION with 15s timeout → Activity completes first (event 5), timer fires later (event 19) - NOT consumed
+/// 2. TEST_CONNECTION with 30s timeout → Activity completes first (event 9), timer fires later (event 20) - NOT consumed
+/// 3. 30s sleep timer → Timer fires (event 21)
+/// 4. select2(timer, external) → Tries to consume event 21
+/// 5. **BLOCKED** because events 19 and 20 are unconsumed completions before event 21
+///
+/// This test reproduces this scenario using run_turn with a crafted history.
+#[test]
+fn stale_timer_from_select2_loser_blocks_subsequent_select2() {
+    use duroxide::run_turn;
+
+    // Orchestration that mimics the toygres instance actor pattern:
+    // 1. select2(activity, timer) - activity wins, timer becomes stale
+    // 2. select2(timer, external) - timer fires, but stale timer blocks consumption
+    let orchestrator = |ctx: OrchestrationContext| async move {
+        // Step 1: First select2 - activity races with timeout timer
+        // Activity will win, leaving the timer's eventual TimerFired as stale
+        let activity1 = ctx.schedule_activity("FastActivity", "input1");
+        let timeout1 = ctx.schedule_timer(Duration::from_secs(15));
+        let (winner1, _) = ctx.select2(activity1, timeout1).await;
+        assert_eq!(winner1, 0, "activity should win the first race");
+
+        // Step 2: Second select2 - another activity with timeout
+        // Activity will win again, another stale timer
+        let activity2 = ctx.schedule_activity("FastActivity", "input2");
+        let timeout2 = ctx.schedule_timer(Duration::from_secs(30));
+        let (winner2, _) = ctx.select2(activity2, timeout2).await;
+        assert_eq!(winner2, 0, "activity should win the second race");
+
+        // Step 3: Wait with select2(timer, external)
+        // This timer WILL fire, but the stale TimerFired events from steps 1 and 2
+        // should NOT block this timer's consumption
+        let sleep_timer = ctx.schedule_timer(Duration::from_secs(30));
+        let deletion_signal = ctx.schedule_wait("InstanceDeleted");
+        let (winner3, _) = ctx.select2(sleep_timer, deletion_signal).await;
+
+        // If FIFO ordering bug exists, we'll never get here - we'll be stuck
+        // waiting because events 19 and 20 (stale timers) block event 21 (our timer)
+        if winner3 == 0 {
+            "timer_fired"
+        } else {
+            "signal_received"
+        }
+    };
+
+    // Craft a history that simulates the problematic scenario:
+    // - Two activities with timeout timers where activities won
+    // - Both timeout timers eventually fired (stale events)
+    // - A third timer that also fired
+    // - The orchestration should be able to consume the third timer despite the stale ones
+    let history = vec![
+        // Orchestration started
+        Event::OrchestrationStarted {
+            event_id: 1,
+            name: "TestOrch".to_string(),
+            version: "1.0.0".to_string(),
+            input: "test".to_string(),
+            parent_instance: None,
+            parent_id: None,
+        },
+        // First select2: activity scheduled (event 2)
+        Event::ActivityScheduled {
+            event_id: 2,
+            name: "FastActivity".to_string(),
+            input: "input1".to_string(),
+            execution_id: 1,
+        },
+        // First select2: timeout timer created (event 3)
+        Event::TimerCreated {
+            event_id: 3,
+            fire_at_ms: 15000,
+            execution_id: 1,
+        },
+        // First activity completes (event 4) - WINS the race
+        Event::ActivityCompleted {
+            event_id: 4,
+            source_event_id: 2,
+            result: "result1".to_string(),
+        },
+        // Second select2: activity scheduled (event 5)
+        Event::ActivityScheduled {
+            event_id: 5,
+            name: "FastActivity".to_string(),
+            input: "input2".to_string(),
+            execution_id: 1,
+        },
+        // Second select2: timeout timer created (event 6)
+        Event::TimerCreated {
+            event_id: 6,
+            fire_at_ms: 30000,
+            execution_id: 1,
+        },
+        // Second activity completes (event 7) - WINS the race
+        Event::ActivityCompleted {
+            event_id: 7,
+            source_event_id: 5,
+            result: "result2".to_string(),
+        },
+        // Third select2: sleep timer created (event 8)
+        Event::TimerCreated {
+            event_id: 8,
+            fire_at_ms: 30000,
+            execution_id: 1,
+        },
+        // External wait subscription (event 9)
+        Event::ExternalSubscribed {
+            event_id: 9,
+            name: "InstanceDeleted".to_string(),
+        },
+        // First stale timer fires (event 10) - from first select2, LOSER
+        Event::TimerFired {
+            event_id: 10,
+            source_event_id: 3,
+            fire_at_ms: 15000,
+        },
+        // Second stale timer fires (event 11) - from second select2, LOSER
+        Event::TimerFired {
+            event_id: 11,
+            source_event_id: 6,
+            fire_at_ms: 30000,
+        },
+        // Third timer fires (event 12) - from third select2, should be consumed
+        Event::TimerFired {
+            event_id: 12,
+            source_event_id: 8,
+            fire_at_ms: 30000,
+        },
+    ];
+
+    // Run the orchestrator with this history
+    // If the bug exists, the orchestration will block trying to consume event 12
+    // because events 10 and 11 (stale timers) are unconsumed and have lower event_ids
+    let (final_history, actions, output) = run_turn(history, orchestrator);
+
+    // Debug output
+    eprintln!("\n=== Final History ({} events) ===", final_history.len());
+    for (i, event) in final_history.iter().enumerate() {
+        eprintln!(
+            "  Event {}: {}",
+            i + 1,
+            serde_json::to_string(event).unwrap_or_else(|_| format!("{:?}", event))
+        );
+    }
+    eprintln!("\n=== Actions ({}) ===", actions.len());
+    for action in &actions {
+        eprintln!("  {:?}", action);
+    }
+    eprintln!("\n=== Output ===");
+    eprintln!("  {:?}", output);
+    eprintln!();
+
+    // The orchestration should complete with the timer winning
+    // If output is None, the orchestration is stuck (bug confirmed)
+    assert!(
+        output.is_some(),
+        "Orchestration should complete! If None, it's blocked by stale TimerFired events (FIFO bug)"
+    );
+    assert_eq!(
+        output.unwrap(),
+        "timer_fired",
+        "The sleep timer should have won the third select2"
+    );
+}

@@ -15,6 +15,19 @@
 
 ### Active TODOs
 
+- **[BUG] Select2 Loser Completions Block FIFO Ordering**
+  - When `select2(activity, timer)` returns with activity winning, the timer's eventual `TimerFired` is never consumed
+  - These stale completions block later completions due to FIFO ordering in `can_consume_completion()`
+  - Fix: Mark loser `source_event_id`s as cancelled, auto-consume their completions
+  - Test file: `tests/scenarios/orchestration_stall_tests.rs`
+  - Related: `schedule_activity_with_retry` uses select2 internally for timeouts
+
+- **History Validation**
+  - Need to validate histories are well-formed before replay
+  - Checks: event_id ordering, source_event_id references valid scheduling events, no duplicate event_ids
+  - Invalid histories should fail fast with clear error, not cause undefined behavior
+  - Related to select2 loser fix: tests assume valid histories
+
 - **Activity Retry Policy** - Implement built-in activity retry logic
   - Design doc: `proposals/activity-retry-policy.md`
 
