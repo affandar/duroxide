@@ -309,7 +309,7 @@ impl Future for DurableFuture {
 
                         inner.record_action(Action::CreateTimer {
                             scheduling_event_id: new_id,
-                            delay_ms: *delay_ms,
+                            fire_at_ms,
                         });
 
                         new_id

@@ -498,3 +498,110 @@ async fn multiple_timers_recovery_after_crash() {
 
     drop(rt2);
 }
+
+// ============================================================================
+// TIMER FIRE TIME REGRESSION TESTS
+// ============================================================================
+
+/// Regression test: Timer must fire at correct time even when previous TimerFired exists in history
+///
+/// NOTE: This test is duplicated in tests/scenarios/toygres.rs as timer_fires_at_correct_time_regression
+/// since the bug was discovered via the toygres instance actor pattern.
+///
+/// Bug summary:
+/// 1. A poll timer fires, creating TimerFired in history
+/// 2. Later, a timeout timer is scheduled
+/// 3. BUG (fixed): The timeout timer fired early because calculate_timer_fire_time()
+///    used the PREVIOUS TimerFired.fire_at_ms as "now" instead of actual system time
+///
+/// FIX: Action::CreateTimer now includes fire_at_ms (computed in futures.rs using system time)
+///      instead of delay_ms. execution.rs uses this directly instead of recalculating.
+#[tokio::test]
+async fn timer_fires_at_correct_time_after_previous_timer() {
+    let (store, _td) = create_sqlite_store().await;
+
+    // Activity that takes a configurable time to complete
+    async fn slow_activity(_ctx: ActivityContext, input: String) -> Result<String, String> {
+        let delay_ms: u64 = input.parse().unwrap_or(2000);
+        tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+        Ok("activity_done".to_string())
+    }
+
+    // Orchestration that:
+    // 1. Waits for a short timer (creates TimerFired in history)
+    // 2. Waits significant real time to pass via slow activity
+    // 3. Races a timer against a fast activity
+    // 4. The fast activity should win (timer fires at correct future time)
+    let test_orch = |ctx: OrchestrationContext, _input: String| async move {
+        // Phase 1: Wait for a 100ms timer - this creates TimerFired in history at time T0+100
+        ctx.schedule_timer(Duration::from_millis(100)).await;
+
+        // Phase 2: Do a slow activity (2 seconds of real time passes)
+        // After this, system time is approximately T0 + 2100ms
+        let _ = ctx.schedule_activity("SlowActivity", "2000").await;
+
+        // Phase 3: Now race a 1-second timer against a fast activity (100ms)
+        //
+        // Expected behavior (after fix):
+        // - Timer fire_at = now + 1000 = (T0 + 2100) + 1000 = T0 + 3100
+        // - Activity completes at T0 + 2200 (100ms from now)
+        // - Activity wins because T0 + 2200 < T0 + 3100
+        let timer = ctx.schedule_timer(Duration::from_secs(1));
+        let activity = ctx.schedule_activity("SlowActivity", "100"); // 100ms activity
+
+        let (winner, output) = ctx.select2(timer, activity).await;
+
+        let result = if winner == 0 {
+            // Timer won - would indicate regression
+            "timer_won".to_string()
+        } else {
+            // Activity won - correct behavior
+            match output {
+                duroxide::DurableOutput::Activity(result) => {
+                    result.unwrap_or_else(|e| format!("activity_failed: {}", e))
+                }
+                _ => "unexpected_output".to_string(),
+            }
+        };
+        Ok(result)
+    };
+
+    let orchestrations = OrchestrationRegistry::builder()
+        .register("TimerFireTimeTest", test_orch)
+        .build();
+
+    let activities = ActivityRegistry::builder()
+        .register("SlowActivity", slow_activity)
+        .build();
+
+    let rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(activities), orchestrations).await;
+
+    let client = duroxide::Client::new(store.clone());
+
+    client
+        .start_orchestration("timer-fire-time-test", "TimerFireTimeTest", "")
+        .await
+        .unwrap();
+
+    let status = client
+        .wait_for_orchestration("timer-fire-time-test", Duration::from_secs(15))
+        .await
+        .unwrap();
+
+    rt.shutdown(None).await;
+
+    match status {
+        duroxide::runtime::OrchestrationStatus::Completed { output } => {
+            assert_ne!(
+                output, "timer_won",
+                "Timer fired early! The 1-second timer should not beat a 100ms activity. \
+                This indicates calculate_timer_fire_time bug has regressed."
+            );
+            assert_eq!(output, "activity_done", "Activity should have won the race");
+        }
+        duroxide::runtime::OrchestrationStatus::Failed { details } => {
+            panic!("Orchestration failed: {}", details.display_message());
+        }
+        _ => panic!("Unexpected status: {:?}", status),
+    }
+}

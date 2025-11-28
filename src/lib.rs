@@ -757,8 +757,10 @@ pub enum Action {
         name: String,
         input: String,
     },
-    /// Create a timer that will fire after the requested delay. scheduling_event_id is the event_id of the TimerCreated event.
-    CreateTimer { scheduling_event_id: u64, delay_ms: u64 },
+    /// Create a timer that will fire at the specified absolute time.
+    /// scheduling_event_id is the event_id of the TimerCreated event.
+    /// fire_at_ms is the absolute timestamp (ms since epoch) when the timer should fire.
+    CreateTimer { scheduling_event_id: u64, fire_at_ms: u64 },
     /// Subscribe to an external event by name. scheduling_event_id is the event_id of the ExternalSubscribed event.
     WaitExternal { scheduling_event_id: u64, name: String },
     /// Start a detached orchestration (no result routing back to parent).

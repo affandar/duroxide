@@ -119,23 +119,19 @@ impl Runtime {
                         }
                         crate::Action::CreateTimer {
                             scheduling_event_id,
-                            delay_ms,
+                            fire_at_ms,
                         } => {
                             let execution_id = self.get_execution_id_for_instance(instance, Some(execution_id)).await;
-                            let fire_at_ms = Self::calculate_timer_fire_time(&turn.final_history(), *delay_ms);
-
-                            // Record TimerCreated in history for deterministic replay
-                            // The turn has already added this via schedule_timer(), but we need to ensure
-                            // the event_id matches the scheduling_event_id
-                            // Actually, the turn already adds it, so we don't need to add it again here
 
                             // Enqueue TimerFired to orchestrator queue with delayed visibility
                             // Provider will use fire_at_ms for the visible_at timestamp
+                            // Note: fire_at_ms is computed in futures.rs using system time at scheduling,
+                            // ensuring timers fire at the correct absolute time regardless of history state.
                             orchestrator_items.push(WorkItem::TimerFired {
                                 instance: instance.to_string(),
                                 execution_id,
                                 id: *scheduling_event_id,
-                                fire_at_ms,
+                                fire_at_ms: *fire_at_ms,
                             });
                         }
                         crate::Action::StartSubOrchestration {
@@ -322,26 +318,5 @@ impl Runtime {
             }
         }
         cancel_items
-    }
-
-    /// Calculate timer fire time based on history
-    fn calculate_timer_fire_time(history: &[Event], delay_ms: u64) -> u64 {
-        // Find the current logical time from the most recent timer event
-        let current_time = history
-            .iter()
-            .rev()
-            .find_map(|e| match e {
-                Event::TimerFired { fire_at_ms, .. } => Some(*fire_at_ms),
-                _ => None,
-            })
-            .unwrap_or_else(|| {
-                // Fallback to system time
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_millis() as u64
-            });
-
-        current_time.saturating_add(delay_ms)
     }
 }

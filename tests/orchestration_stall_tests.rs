@@ -1184,3 +1184,67 @@ fn sequential_select2s_accumulate_cancelled_sources() {
     assert!(output.is_some(), "Should complete with 5 accumulated stale timers");
     assert_eq!(output.unwrap(), "all_done");
 }
+
+/// Verify that schedule order mismatch triggers nondeterminism error
+#[test]
+fn schedule_order_mismatch_triggers_nondeterminism() {
+    use duroxide::run_turn_with_status;
+
+    // Orchestration schedules ACTIVITY first, then TIMER
+    let orchestrator = |ctx: OrchestrationContext| async move {
+        let activity = ctx.schedule_activity("Task", "input");
+        let timer = ctx.schedule_timer(Duration::from_secs(10));
+        ctx.select2(activity, timer).await;
+        "done"
+    };
+
+    // But history shows TIMER was scheduled first (wrong order!)
+    let mismatched_history = vec![
+        Event::OrchestrationStarted {
+            event_id: 1,
+            name: "Test".to_string(),
+            version: "1.0.0".to_string(),
+            input: "".to_string(),
+            parent_instance: None,
+            parent_id: None,
+        },
+        // History: TIMER first (event_id: 2)
+        Event::TimerCreated {
+            event_id: 2,
+            fire_at_ms: 10000,
+            execution_id: 1,
+        },
+        // History: ACTIVITY second (event_id: 3)
+        Event::ActivityScheduled {
+            event_id: 3,
+            name: "Task".to_string(),
+            input: "input".to_string(),
+            execution_id: 1,
+        },
+    ];
+
+    let (_history, _actions, _output, nondeterminism_error) = run_turn_with_status(
+        mismatched_history,
+        1,
+        "test-instance".to_string(),
+        Some("Test".to_string()),
+        Some("1.0.0".to_string()),
+        "worker-1".to_string(),
+        orchestrator,
+    );
+
+    // Should detect nondeterminism: code schedules Activity first, but history has Timer first
+    assert!(
+        nondeterminism_error.is_some(),
+        "Expected nondeterminism error when schedule order doesn't match history"
+    );
+
+    let err = nondeterminism_error.unwrap();
+    assert!(
+        err.contains("TimerCreated") && err.contains("ActivityScheduled"),
+        "Error should mention the mismatch: got '{}'",
+        err
+    );
+
+    eprintln!("\n✅ Nondeterminism detected: {}", err);
+}

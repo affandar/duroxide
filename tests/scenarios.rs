@@ -10,5 +10,5 @@
 //! - Concurrent orchestration execution
 //! - Complex activity workflows
 
-#[path = "scenarios/continue_as_new_mini_stress.rs"]
-mod continue_as_new_mini_stress;
+#[path = "scenarios/toygres.rs"]
+mod toygres;
