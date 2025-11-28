@@ -30,7 +30,7 @@ But we're not actually persisting CPU registers or memory pages. That would be i
 
 This illusion is not free. The programmer must follow certain rules to make it work—rules about determinism, side effects, and what operations are allowed. This document explains how the illusion is constructed and what rules you must follow to preserve it. While we try to keep the programming model as close to idiomatic Rust async as possible, the constraints of durability mean some patterns simply don't apply.
 
-This durable execution model was pioneered by AWS Simple Workflow Service over a decade ago, and later implemented for .NET as Durable Task Framework (and Azure Durable Functions). Uber's Cadence and more recently Temporal follow the same fundamental approach. Duroxide brings this model to Rust.
+This durable execution model was pioneered by AWS Simple Workflow Service over a decade ago, and later implemented for .NET as Durable Task Framework (and Azure Durable Functions). Uber's Cadence and more recently Temporal follow the same fundamental approach.
 
 ### The Core Insight
 
