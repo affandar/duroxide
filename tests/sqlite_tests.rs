@@ -1,3 +1,4 @@
+use duroxide::EventKind;
 use duroxide::providers::sqlite::SqliteProvider;
 use duroxide::providers::{ExecutionMetadata, Provider, ProviderAdmin, WorkItem};
 use duroxide::{ActivityContext, Event, EventKind};

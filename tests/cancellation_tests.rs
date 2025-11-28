@@ -1,3 +1,4 @@
+use duroxide::EventKind;
 use duroxide::Client;
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
@@ -71,7 +72,7 @@ async fn cancel_parent_down_propagates_to_child() {
         }) {
             assert!(
                 hist.iter()
-                    .any(|e| matches!(e, Event::OrchestrationCancelRequested { .. })),
+                    .any(|e| matches!(&e.kind, EventKind::OrchestrationCancelRequested { .. })),
                 "missing cancel requested event for parent"
             );
             break;
@@ -100,7 +101,7 @@ async fn cancel_parent_down_propagates_to_child() {
             let hist = store.read(&child).await.unwrap_or_default();
             let has_cancel = hist
                 .iter()
-                .any(|e| matches!(e, Event::OrchestrationCancelRequested { .. }));
+                .any(|e| matches!(&e.kind, EventKind::OrchestrationCancelRequested { .. }));
             let has_failed = hist.iter().any(|e| {
                 matches!(
                     e,
@@ -166,12 +167,12 @@ async fn cancel_after_completion_is_noop() {
     let hist = store.read("inst-cancel-noop").await.unwrap_or_default();
     assert!(
         hist.iter()
-            .any(|e| matches!(e, Event::OrchestrationCompleted { output, .. } if output == "ok"))
+            .any(|e| matches!(&e.kind, EventKind::OrchestrationCompleted { output, .. } if output == "ok"))
     );
     assert!(
         !hist
             .iter()
-            .any(|e| matches!(e, Event::OrchestrationCancelRequested { .. }))
+            .any(|e| matches!(&e.kind, EventKind::OrchestrationCancelRequested { .. }))
     );
 
     rt.shutdown(None).await;
@@ -337,7 +338,7 @@ async fn cancel_continue_as_new_second_exec() {
     let hist = store.read("inst-can-can").await.unwrap_or_default();
     assert!(
         hist.iter()
-            .any(|e| matches!(e, Event::OrchestrationCancelRequested { .. }))
+            .any(|e| matches!(&e.kind, EventKind::OrchestrationCancelRequested { .. }))
     );
 
     rt.shutdown(None).await;
@@ -390,7 +391,7 @@ async fn orchestration_completes_before_activity_finishes() {
     let hist = store.read("inst-orch-done-first").await.unwrap_or_default();
     assert!(
         hist.iter()
-            .any(|e| matches!(e, Event::OrchestrationCompleted { output, .. } if output == "done"))
+            .any(|e| matches!(&e.kind, EventKind::OrchestrationCompleted { output, .. } if output == "done"))
     );
 
     rt.shutdown(None).await;

@@ -1,6 +1,6 @@
 use duroxide::runtime;
 use duroxide::runtime::registry::ActivityRegistry;
-use duroxide::{Event, OrchestrationContext, OrchestrationRegistry, OrchestrationStatus};
+use duroxide::{Event, EventKind, OrchestrationContext, OrchestrationRegistry, OrchestrationStatus};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -70,14 +70,14 @@ async fn continue_as_new_chain_5_iterations() {
 
         // Each execution should have OrchestrationStarted
         assert!(
-            hist.iter().any(|e| matches!(e, Event::OrchestrationStarted { .. })),
+            hist.iter().any(|e| matches!(&e.kind, EventKind::OrchestrationStarted { .. })),
             "Execution {} missing OrchestrationStarted",
             exec_id
         );
 
         // Verify version consistency - all should use default version
-        if let Some(Event::OrchestrationStarted { version, .. }) =
-            hist.iter().find(|e| matches!(e, Event::OrchestrationStarted { .. }))
+        if let Some(EventKind::OrchestrationStarted { version, .. }) =
+            hist.iter().find(|e| matches!(&e.kind, EventKind::OrchestrationStarted { .. }))
         {
             // Version should be resolved to 1.0.0 (default)
             assert!(
@@ -92,14 +92,14 @@ async fn continue_as_new_chain_5_iterations() {
         let last = hist.last().unwrap();
         if exec_id <= 4 {
             assert!(
-                matches!(last, Event::OrchestrationContinuedAsNew { .. }),
+                matches!(&last.kind, EventKind::OrchestrationContinuedAsNew { .. }),
                 "Execution {} should end with ContinuedAsNew, got {:?}",
                 exec_id,
                 last
             );
         } else {
             assert!(
-                matches!(last, Event::OrchestrationCompleted { .. }),
+                matches!(&last.kind, EventKind::OrchestrationCompleted { .. }),
                 "Execution 5 should end with Completed, got {:?}",
                 last
             );
@@ -182,12 +182,12 @@ async fn continue_as_new_chain_with_activities() {
 
         // Should have ActivityScheduled and ActivityCompleted
         assert!(
-            hist.iter().any(|e| matches!(e, Event::ActivityScheduled { .. })),
+            hist.iter().any(|e| matches!(&e.kind, EventKind::ActivityScheduled { .. })),
             "Execution {} missing ActivityScheduled",
             exec_id
         );
         assert!(
-            hist.iter().any(|e| matches!(e, Event::ActivityCompleted { .. })),
+            hist.iter().any(|e| matches!(&e.kind, EventKind::ActivityCompleted { .. })),
             "Execution {} missing ActivityCompleted",
             exec_id
         );
@@ -599,7 +599,7 @@ async fn instance_actor_pattern_stress_test() {
             // Count activities scheduled in this execution
             let activity_count = hist
                 .iter()
-                .filter(|e| matches!(e, Event::ActivityScheduled { .. }))
+                .filter(|e| matches!(&e.kind, EventKind::ActivityScheduled { .. }))
                 .count();
 
             // Executions 1-4 have full cycle (4 activities), execution 5 exits immediately (0 activities)
@@ -614,8 +614,8 @@ async fn instance_actor_pattern_stress_test() {
             }
 
             // Verify OrchestrationStarted has proper version
-            if let Some(Event::OrchestrationStarted { name, version, .. }) =
-                hist.iter().find(|e| matches!(e, Event::OrchestrationStarted { .. }))
+            if let Some(EventKind::OrchestrationStarted { name, version, .. }) =
+                hist.iter().find(|e| matches!(&e.kind, EventKind::OrchestrationStarted { .. }))
             {
                 assert_eq!(name, "InstanceActor");
                 assert!(
@@ -632,14 +632,14 @@ async fn instance_actor_pattern_stress_test() {
             if exec_id < 5 {
                 assert!(
                     hist.iter()
-                        .any(|e| matches!(e, Event::OrchestrationContinuedAsNew { .. })),
+                        .any(|e| matches!(&e.kind, EventKind::OrchestrationContinuedAsNew { .. })),
                     "{} execution {} should have ContinuedAsNew",
                     instance_id,
                     exec_id
                 );
             } else {
                 assert!(
-                    hist.iter().any(|e| matches!(e, Event::OrchestrationCompleted { .. })),
+                    hist.iter().any(|e| matches!(&e.kind, EventKind::OrchestrationCompleted { .. })),
                     "{} execution {} should have Completed",
                     instance_id,
                     exec_id

@@ -200,8 +200,8 @@ async fn select_two_externals_history_order_wins() {
         "timeout waiting for completion"
     );
     let hist = store.read("inst-ab").await.unwrap_or_default();
-    let output = match hist.last() {
-        Some(EventKind::OrchestrationCompleted { output }) if hist.last().is_some() => if let Some(EventKind::OrchestrationCompleted { output }) = hist.last().map(|e| &e.kind) { => output.clone(),
+    let output = match hist.last().map(|e| &e.kind) {
+        Some(EventKind::OrchestrationCompleted { output }) => output.clone(),
         _ => String::new(),
     };
 
@@ -318,8 +318,8 @@ async fn select_three_mixed_history_winner() {
         .await
     );
     let hist = store.read("inst-atb").await.unwrap_or_default();
-    let output = match hist.last() {
-        Some(EventKind::OrchestrationCompleted { output }) if hist.last().is_some() => if let Some(EventKind::OrchestrationCompleted { output }) = hist.last().map(|e| &e.kind) { => output.clone(),
+    let output = match hist.last().map(|e| &e.kind) {
+        Some(EventKind::OrchestrationCompleted { output }) => output.clone(),
         _ => String::new(),
     };
 
@@ -433,8 +433,8 @@ async fn join_returns_history_order() {
         .await
     );
     let hist = store.read("inst-join").await.unwrap_or_default();
-    let output = match hist.last() {
-        Some(EventKind::OrchestrationCompleted { output }) if hist.last().is_some() => if let Some(EventKind::OrchestrationCompleted { output }) = hist.last().map(|e| &e.kind) { => output.clone(),
+    let output = match hist.last().map(|e| &e.kind) {
+        Some(EventKind::OrchestrationCompleted { output }) => output.clone(),
         _ => String::new(),
     };
     // Ensure output is vb,va to reflect history order B before A
@@ -554,7 +554,7 @@ async fn test_select2_loser_event_consumed_during_replay() {
     // There should be exactly 1 TimerCreated (the loser timer from select2)
     let timer_created_count = history
         .iter()
-        .filter(|e| matches!(e, duroxide::Event::TimerCreated { .. }))
+        .filter(|e| matches!(&e.kind, duroxide::EventKind::TimerCreated { .. }))
         .count();
     assert_eq!(timer_created_count, 1, "expected 1 loser timer scheduled");
 
@@ -562,7 +562,7 @@ async fn test_select2_loser_event_consumed_during_replay() {
     // but since the orchestration already completed, it's a stale event that gets ignored
     let timer_fired_count = history
         .iter()
-        .filter(|e| matches!(e, duroxide::Event::TimerFired { .. }))
+        .filter(|e| matches!(&e.kind, duroxide::EventKind::TimerFired { .. }))
         .count();
     // The timer fires after orchestration completes, so TimerFired may or may not be in history
     // depending on timing. What matters is: if it's there, the runtime handled it gracefully.
@@ -575,7 +575,7 @@ async fn test_select2_loser_event_consumed_during_replay() {
     // Verify orchestration completed (not failed due to stale event)
     let completed = history
         .iter()
-        .any(|e| matches!(e, duroxide::Event::OrchestrationCompleted { .. }));
+        .any(|e| matches!(&e.kind, duroxide::EventKind::OrchestrationCompleted { .. }));
     assert!(completed, "orchestration should have completed successfully");
 
     rt.shutdown(None).await;

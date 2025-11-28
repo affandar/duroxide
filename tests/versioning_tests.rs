@@ -1,3 +1,4 @@
+use duroxide::EventKind;
 use duroxide::providers::sqlite::SqliteProvider;
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
@@ -400,7 +401,7 @@ async fn parent_calls_child_upgrade_child_and_verify_latest_used() {
     // History should include SubOrchestrationCompleted
     assert!(
         hist.iter()
-            .any(|e| matches!(e, Event::SubOrchestrationCompleted { .. }))
+            .any(|e| matches!(&e.kind, EventKind::SubOrchestrationCompleted { .. }))
     );
     rt.shutdown(None).await;
 }

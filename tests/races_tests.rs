@@ -5,7 +5,7 @@ use std::time::Duration;
 mod common;
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self, RuntimeOptions};
-use duroxide::{Event, OrchestrationContext, OrchestrationRegistry};
+use duroxide::{Event, EventKind, OrchestrationContext, OrchestrationRegistry};
 use std::sync::Arc as StdArc;
 
 // Helper for timing-sensitive race tests
@@ -130,11 +130,11 @@ async fn race_external_vs_timer_ordering_with(store: StdArc<dyn Provider>) {
     let final_history = client.read_execution_history("inst-race-order-1", 1).await.unwrap();
     let idx_t = final_history
         .iter()
-        .position(|e| matches!(e, Event::TimerFired { .. }))
+        .position(|e| matches!(&e.kind, EventKind::TimerFired { .. }))
         .unwrap();
     if let Some(idx_e) = final_history
         .iter()
-        .position(|e| matches!(e, Event::ExternalEvent { .. }))
+        .position(|e| matches!(&e.kind, EventKind::ExternalEvent { .. }))
     {
         assert!(
             idx_t < idx_e,
@@ -206,9 +206,9 @@ async fn race_event_vs_timer_event_wins_with(store: StdArc<dyn Provider>) {
     let final_history = client.read_execution_history("inst-race-order-2", 1).await.unwrap();
     let idx_e = final_history
         .iter()
-        .position(|e| matches!(e, Event::ExternalEvent { .. }))
+        .position(|e| matches!(&e.kind, EventKind::ExternalEvent { .. }))
         .unwrap();
-    if let Some(idx_t) = final_history.iter().position(|e| matches!(e, Event::TimerFired { .. })) {
+    if let Some(idx_t) = final_history.iter().position(|e| matches!(&e.kind, EventKind::TimerFired { .. })) {
         assert!(idx_e < idx_t, "expected external before timer: {final_history:#?}");
     }
 

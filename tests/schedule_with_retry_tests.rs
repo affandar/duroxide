@@ -5,6 +5,7 @@
 //! - Integration tests for retry behavior
 //! - Stale event / cross-execution tests
 //! - Timeout vs error behavior tests
+use duroxide::EventKind;
 
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self, OrchestrationStatus};
@@ -548,7 +549,7 @@ async fn test_retry_with_fixed_backoff() {
     let history = store.read("retry-backoff-1").await.unwrap();
     let timer_created_count = history
         .iter()
-        .filter(|e| matches!(e, duroxide::Event::TimerCreated { .. }))
+        .filter(|e| matches!(&e.kind, duroxide::EventKind::TimerCreated { .. }))
         .count();
     // Should have 2 backoff timers (after attempt 1 and 2, not after attempt 3 which succeeded)
     assert_eq!(
@@ -614,7 +615,7 @@ async fn test_retry_with_no_backoff() {
     let history = store.read("retry-no-backoff-1").await.unwrap();
     let timer_created_count = history
         .iter()
-        .filter(|e| matches!(e, duroxide::Event::TimerCreated { .. }))
+        .filter(|e| matches!(&e.kind, duroxide::EventKind::TimerCreated { .. }))
         .count();
     assert_eq!(
         timer_created_count, 0,
@@ -792,7 +793,7 @@ async fn test_timeout_exits_immediately_without_retry() {
     // Should have exactly 1 ActivityScheduled (no retries)
     let activity_scheduled_count = history
         .iter()
-        .filter(|e| matches!(e, duroxide::Event::ActivityScheduled { .. }))
+        .filter(|e| matches!(&e.kind, duroxide::EventKind::ActivityScheduled { .. }))
         .count();
     assert_eq!(
         activity_scheduled_count, 1,
@@ -802,7 +803,7 @@ async fn test_timeout_exits_immediately_without_retry() {
     // Should have exactly 1 TimerCreated (the deadline timer)
     let timer_created_count = history
         .iter()
-        .filter(|e| matches!(e, duroxide::Event::TimerCreated { .. }))
+        .filter(|e| matches!(&e.kind, duroxide::EventKind::TimerCreated { .. }))
         .count();
     assert_eq!(
         timer_created_count, 1,
@@ -812,7 +813,7 @@ async fn test_timeout_exits_immediately_without_retry() {
     // Should have exactly 1 TimerFired (deadline won the race)
     let timer_fired_count = history
         .iter()
-        .filter(|e| matches!(e, duroxide::Event::TimerFired { .. }))
+        .filter(|e| matches!(&e.kind, duroxide::EventKind::TimerFired { .. }))
         .count();
     assert_eq!(
         timer_fired_count, 1,
@@ -891,7 +892,7 @@ async fn test_error_retries_but_timeout_exits() {
     let history = store.read("error-then-timeout-1").await.unwrap();
     let activity_scheduled_count = history
         .iter()
-        .filter(|e| matches!(e, duroxide::Event::ActivityScheduled { .. }))
+        .filter(|e| matches!(&e.kind, duroxide::EventKind::ActivityScheduled { .. }))
         .count();
     assert_eq!(
         activity_scheduled_count, 2,
@@ -901,7 +902,7 @@ async fn test_error_retries_but_timeout_exits() {
     // First activity should have failed (with error)
     let activity_failed_count = history
         .iter()
-        .filter(|e| matches!(e, duroxide::Event::ActivityFailed { .. }))
+        .filter(|e| matches!(&e.kind, duroxide::EventKind::ActivityFailed { .. }))
         .count();
     assert_eq!(
         activity_failed_count, 1,
@@ -911,7 +912,7 @@ async fn test_error_retries_but_timeout_exits() {
     // Should have at least 2 TimerCreated (one per-attempt timeout)
     let timer_created_count = history
         .iter()
-        .filter(|e| matches!(e, duroxide::Event::TimerCreated { .. }))
+        .filter(|e| matches!(&e.kind, duroxide::EventKind::TimerCreated { .. }))
         .count();
     assert!(
         timer_created_count >= 2,
@@ -1040,7 +1041,7 @@ async fn test_history_contains_all_activity_scheduled_events() {
     let history = store.read("retry-history-1").await.unwrap();
     let scheduled_count = history
         .iter()
-        .filter(|e| matches!(e, duroxide::Event::ActivityScheduled { .. }))
+        .filter(|e| matches!(&e.kind, duroxide::EventKind::ActivityScheduled { .. }))
         .count();
     assert_eq!(scheduled_count, 4, "expected 4 ActivityScheduled events");
 
@@ -1214,11 +1215,11 @@ async fn test_timeout_history_replays_correctly() {
     // Should have: OrchestrationStarted, TimerCreated (deadline), ActivityScheduled, TimerFired (deadline won), OrchestrationCompleted
     let timer_created = history
         .iter()
-        .filter(|e| matches!(e, duroxide::Event::TimerCreated { .. }))
+        .filter(|e| matches!(&e.kind, duroxide::EventKind::TimerCreated { .. }))
         .count();
     let timer_fired = history
         .iter()
-        .filter(|e| matches!(e, duroxide::Event::TimerFired { .. }))
+        .filter(|e| matches!(&e.kind, duroxide::EventKind::TimerFired { .. }))
         .count();
 
     assert!(timer_created >= 1, "expected at least 1 TimerCreated");

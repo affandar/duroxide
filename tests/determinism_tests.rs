@@ -1,7 +1,7 @@
 use duroxide::providers::Provider;
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
-use duroxide::{Action, ActivityContext, DurableOutput, Event, OrchestrationContext, OrchestrationRegistry, run_turn};
+use duroxide::{Action, ActivityContext, DurableOutput, Event, EventKind, OrchestrationContext, OrchestrationRegistry, run_turn};
 use std::sync::Arc as StdArc;
 use std::sync::Arc;
 use std::time::Duration;
@@ -208,7 +208,7 @@ async fn test_trace_deterministic_in_history() {
     let history = history_store.read("instance-2").await.unwrap_or_default();
     let trace_events: Vec<_> = history
         .iter()
-        .filter(|e| matches!(e, duroxide::Event::SystemCall { op, .. } if op.starts_with("trace:")))
+        .filter(|e| matches!(&e.kind, duroxide::EventKind::SystemCall { op, .. } if op.starts_with("trace:")))
         .collect();
 
     assert_eq!(trace_events.len(), 3, "Expected 3 trace events (info, warn, error)");
@@ -372,7 +372,7 @@ async fn test_trace_fire_and_forget() {
         .unwrap_or_default();
     let trace_events: Vec<_> = history
         .iter()
-        .filter(|e| matches!(e, duroxide::Event::SystemCall { op, .. } if op.starts_with("trace:")))
+        .filter(|e| matches!(&e.kind, duroxide::EventKind::SystemCall { op, .. } if op.starts_with("trace:")))
         .collect();
 
     assert_eq!(

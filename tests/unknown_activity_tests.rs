@@ -1,3 +1,4 @@
+use duroxide::EventKind;
 mod common;
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
@@ -61,7 +62,7 @@ async fn unknown_activity_is_isolated_from_other_orchestrations_fs() {
 
     let hist_ok = client.read_execution_history("inst-healthy-1", 1).await.unwrap();
     assert!(
-        !hist_ok.iter().any(|e| matches!(e, Event::ActivityFailed { .. })),
+        !hist_ok.iter().any(|e| matches!(&e.kind, EventKind::ActivityFailed { .. })),
         "healthy orchestration should not see failures"
     );
     assert!(matches!(hist_ok.last().unwrap(), Event::OrchestrationCompleted { .. }));

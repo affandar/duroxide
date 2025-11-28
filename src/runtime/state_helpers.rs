@@ -623,14 +623,19 @@ mod tests {
             },
         ];
 
-        let history = vec![Event::OrchestrationStarted {
-            event_id: 1,
-            name: "test-orch".to_string(),
-            version: "1.0.0".to_string(),
-            input: "test-input".to_string(),
-            parent_instance: None,
-            parent_id: None,
-        }];
+        let history = vec![Event::with_event_id(
+            1,
+            "test-inst".to_string(),
+            1,
+            None,
+            EventKind::OrchestrationStarted {
+                name: "test-orch".to_string(),
+                version: "1.0.0".to_string(),
+                input: "test-input".to_string(),
+                parent_instance: None,
+                parent_id: None,
+            },
+        )];
 
         let history_mgr = HistoryManager::from_history(&history);
         let reader = WorkItemReader::from_messages(&messages, &history_mgr, "test-inst");

@@ -1,3 +1,4 @@
+use duroxide::EventKind;
 // Test: Various nondeterminism detection scenarios
 // This file consolidates all nondeterminism-related tests to verify the robust detection system
 
@@ -61,7 +62,7 @@ async fn code_swap_triggers_nondeterminism() {
     )
     .await;
     match evt {
-        Some(Event::ActivityScheduled { .. }) => {}
+        Some(EventKind::ActivityScheduled { .. }) => {}
         _ => panic!("timed out waiting for A1 schedule"),
     }
 
@@ -375,7 +376,7 @@ async fn continue_as_new_with_unconsumed_completion_triggers_nondeterminism() {
         "inst-can-nondet",
         |hist| {
             hist.iter()
-                .any(|e| matches!(e, Event::ExternalSubscribed { name, .. } if name == "proceed_signal"))
+                .any(|e| matches!(&e.kind, EventKind::ExternalSubscribed { name, .. } if name == "proceed_signal"))
         },
         2000,
     )

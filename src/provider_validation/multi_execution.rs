@@ -1,4 +1,4 @@
-use crate::provider_validation::{Event, ExecutionMetadata};
+use crate::provider_validation::{Event, EventKind, ExecutionMetadata};
 use crate::provider_validations::ProviderFactory;
 use crate::providers::WorkItem;
 use std::time::Duration;
@@ -37,24 +37,38 @@ pub async fn test_execution_isolation<F: ProviderFactory>(factory: &F) {
             &item1.lock_token,
             1,
             vec![
-                Event::OrchestrationStarted {
-                    event_id: 1,
-                    name: "TestOrch".to_string(),
-                    version: "1.0.0".to_string(),
-                    input: "{}".to_string(),
-                    parent_instance: None,
-                    parent_id: None,
-                },
-                Event::ActivityScheduled {
-                    event_id: 2,
-                    name: "Activity1".to_string(),
-                    input: "input1".to_string(),
-                    execution_id: 1,
-                },
-                Event::OrchestrationCompleted {
-                    event_id: 3,
-                    output: "result1".to_string(),
-                },
+                Event::with_event_id(
+                    1,
+                    "instance-A".to_string(),
+                    1,
+                    None,
+                    EventKind::OrchestrationStarted {
+                        name: "TestOrch".to_string(),
+                        version: "1.0.0".to_string(),
+                        input: "{}".to_string(),
+                        parent_instance: None,
+                        parent_id: None,
+                    },
+                ),
+                Event::with_event_id(
+                    2,
+                    "instance-A".to_string(),
+                    1,
+                    None,
+                    EventKind::ActivityScheduled {
+                        name: "Activity1".to_string(),
+                        input: "input1".to_string(),
+                    },
+                ),
+                Event::with_event_id(
+                    3,
+                    "instance-A".to_string(),
+                    1,
+                    None,
+                    EventKind::OrchestrationCompleted {
+                        output: "result1".to_string(),
+                    },
+                ),
             ],
             vec![],
             vec![],
@@ -78,18 +92,28 @@ pub async fn test_execution_isolation<F: ProviderFactory>(factory: &F) {
             &item2.lock_token,
             2,
             vec![
-                Event::OrchestrationStarted {
-                    event_id: 1,
-                    name: "TestOrch".to_string(),
-                    version: "1.0.0".to_string(),
-                    input: "{}".to_string(),
-                    parent_instance: None,
-                    parent_id: None,
-                },
-                Event::OrchestrationCompleted {
-                    event_id: 2,
-                    output: "result2".to_string(),
-                },
+                Event::with_event_id(
+                    1,
+                    "instance-A".to_string(),
+                    2,
+                    None,
+                    EventKind::OrchestrationStarted {
+                        name: "TestOrch".to_string(),
+                        version: "1.0.0".to_string(),
+                        input: "{}".to_string(),
+                        parent_instance: None,
+                        parent_id: None,
+                    },
+                ),
+                Event::with_event_id(
+                    2,
+                    "instance-A".to_string(),
+                    2,
+                    None,
+                    EventKind::OrchestrationCompleted {
+                        output: "result2".to_string(),
+                    },
+                ),
             ],
             vec![],
             vec![],
@@ -101,21 +125,21 @@ pub async fn test_execution_isolation<F: ProviderFactory>(factory: &F) {
     // Read execution 1 → should return 3 events
     let history1 = provider.read_with_execution("instance-A", 1).await.unwrap_or_default();
     assert_eq!(history1.len(), 3);
-    assert!(matches!(history1[0], Event::OrchestrationStarted { .. }));
-    assert!(matches!(history1[1], Event::ActivityScheduled { .. }));
-    assert!(matches!(history1[2], Event::OrchestrationCompleted { .. }));
+    assert!(matches!(&history1[0].kind, EventKind::OrchestrationStarted { .. }));
+    assert!(matches!(&history1[1].kind, EventKind::ActivityScheduled { .. }));
+    assert!(matches!(&history1[2].kind, EventKind::OrchestrationCompleted { .. }));
 
     // Read execution 2 → should return 2 events
     let history2 = provider.read_with_execution("instance-A", 2).await.unwrap_or_default();
     assert_eq!(history2.len(), 2);
-    assert!(matches!(history2[0], Event::OrchestrationStarted { .. }));
-    assert!(matches!(history2[1], Event::OrchestrationCompleted { .. }));
+    assert!(matches!(&history2[0].kind, EventKind::OrchestrationStarted { .. }));
+    assert!(matches!(&history2[1].kind, EventKind::OrchestrationCompleted { .. }));
 
     // Read latest (default) → should return execution 2's events
     let latest = provider.read("instance-A").await.unwrap_or_default();
     assert_eq!(latest.len(), 2);
-    assert!(matches!(latest[0], Event::OrchestrationStarted { .. }));
-    assert!(matches!(latest[1], Event::OrchestrationCompleted { .. }));
+    assert!(matches!(&latest[0].kind, EventKind::OrchestrationStarted { .. }));
+    assert!(matches!(&latest[1].kind, EventKind::OrchestrationCompleted { .. }));
     tracing::info!("✓ Test passed: execution isolation verified");
 }
 
@@ -139,12 +163,16 @@ pub async fn test_latest_execution_detection<F: ProviderFactory>(factory: &F) {
         .ack_orchestration_item(
             &item1.lock_token,
             1,
-            vec![Event::ActivityScheduled {
-                event_id: 1,
-                name: "A".to_string(),
-                input: "".to_string(),
-                execution_id: 1,
-            }],
+            vec![Event::with_event_id(
+                1,
+                "instance-A".to_string(),
+                1,
+                None,
+                EventKind::ActivityScheduled {
+                    name: "A".to_string(),
+                    input: "".to_string(),
+                },
+            )],
             vec![],
             vec![],
             ExecutionMetadata::default(),
@@ -166,12 +194,16 @@ pub async fn test_latest_execution_detection<F: ProviderFactory>(factory: &F) {
         .ack_orchestration_item(
             &item2.lock_token,
             2,
-            vec![Event::ActivityScheduled {
-                event_id: 1,
-                name: "B".to_string(),
-                input: "".to_string(),
-                execution_id: 2,
-            }],
+            vec![Event::with_event_id(
+                1,
+                "instance-A".to_string(),
+                2,
+                None,
+                EventKind::ActivityScheduled {
+                    name: "B".to_string(),
+                    input: "".to_string(),
+                },
+            )],
             vec![],
             vec![],
             ExecutionMetadata::default(),
@@ -182,7 +214,7 @@ pub async fn test_latest_execution_detection<F: ProviderFactory>(factory: &F) {
     // Call read() → should return execution 2 (latest)
     let latest = provider.read("instance-A").await.unwrap_or_default();
     assert_eq!(latest.len(), 1);
-    if let Event::ActivityScheduled { name, .. } = &latest[0] {
+    if let EventKind::ActivityScheduled { name, .. } = &latest[0].kind {
         assert_eq!(name, "B");
     } else {
         panic!("Expected ActivityScheduled");
@@ -191,7 +223,7 @@ pub async fn test_latest_execution_detection<F: ProviderFactory>(factory: &F) {
     // Call read_with_execution(instance, 1) → should return execution 1
     let exec1 = provider.read_with_execution("instance-A", 1).await.unwrap_or_default();
     assert_eq!(exec1.len(), 1);
-    if let Event::ActivityScheduled { name, .. } = &exec1[0] {
+    if let EventKind::ActivityScheduled { name, .. } = &exec1[0].kind {
         assert_eq!(name, "A");
     } else {
         panic!("Expected ActivityScheduled");
@@ -222,14 +254,19 @@ pub async fn test_execution_id_sequencing<F: ProviderFactory>(factory: &F) {
         .ack_orchestration_item(
             &item1.lock_token,
             1,
-            vec![Event::OrchestrationStarted {
-                event_id: 1,
-                name: "TestOrch".to_string(),
-                version: "1.0.0".to_string(),
-                input: "{}".to_string(),
-                parent_instance: None,
-                parent_id: None,
-            }],
+            vec![Event::with_event_id(
+                1,
+                "instance-A".to_string(),
+                1,
+                None,
+                EventKind::OrchestrationStarted {
+                    name: "TestOrch".to_string(),
+                    version: "1.0.0".to_string(),
+                    input: "{}".to_string(),
+                    parent_instance: None,
+                    parent_id: None,
+                },
+            )],
             vec![],
             vec![],
             ExecutionMetadata {
@@ -257,14 +294,19 @@ pub async fn test_execution_id_sequencing<F: ProviderFactory>(factory: &F) {
         .ack_orchestration_item(
             &item2.lock_token,
             2, // Explicitly ack with execution_id = 2
-            vec![Event::OrchestrationStarted {
-                event_id: 1,
-                name: "TestOrch".to_string(),
-                version: "1.0.0".to_string(),
-                input: "{}".to_string(),
-                parent_instance: None,
-                parent_id: None,
-            }],
+            vec![Event::with_event_id(
+                1,
+                "instance-A".to_string(),
+                2,
+                None,
+                EventKind::OrchestrationStarted {
+                    name: "TestOrch".to_string(),
+                    version: "1.0.0".to_string(),
+                    input: "{}".to_string(),
+                    parent_instance: None,
+                    parent_id: None,
+                },
+            )],
             vec![],
             vec![],
             ExecutionMetadata {
@@ -310,14 +352,19 @@ pub async fn test_continue_as_new_creates_new_execution<F: ProviderFactory>(fact
         .ack_orchestration_item(
             &item1.lock_token,
             1,
-            vec![Event::OrchestrationStarted {
-                event_id: 1,
-                name: "TestOrch".to_string(),
-                version: "1.0.0".to_string(),
-                input: "{}".to_string(),
-                parent_instance: None,
-                parent_id: None,
-            }],
+            vec![Event::with_event_id(
+                1,
+                "instance-A".to_string(),
+                1,
+                None,
+                EventKind::OrchestrationStarted {
+                    name: "TestOrch".to_string(),
+                    version: "1.0.0".to_string(),
+                    input: "{}".to_string(),
+                    parent_instance: None,
+                    parent_id: None,
+                },
+            )],
             vec![],
             vec![],
             ExecutionMetadata::default(),
@@ -350,14 +397,19 @@ pub async fn test_continue_as_new_creates_new_execution<F: ProviderFactory>(fact
         .ack_orchestration_item(
             &item2.lock_token,
             2, // Explicitly ack with execution_id = 2 for ContinueAsNew
-            vec![Event::OrchestrationStarted {
-                event_id: 1,
-                name: "TestOrch".to_string(),
-                version: "1.0.0".to_string(),
-                input: "new-input".to_string(),
-                parent_instance: None,
-                parent_id: None,
-            }],
+            vec![Event::with_event_id(
+                1,
+                "instance-A".to_string(),
+                2,
+                None,
+                EventKind::OrchestrationStarted {
+                    name: "TestOrch".to_string(),
+                    version: "1.0.0".to_string(),
+                    input: "new-input".to_string(),
+                    parent_instance: None,
+                    parent_id: None,
+                },
+            )],
             vec![],
             vec![],
             ExecutionMetadata::default(),
@@ -397,12 +449,16 @@ pub async fn test_execution_history_persistence<F: ProviderFactory>(factory: &F)
             .ack_orchestration_item(
                 &item.lock_token,
                 exec_id,
-                vec![Event::ActivityScheduled {
-                    event_id: 1,
-                    name: format!("Activity-{}", exec_id),
-                    input: format!("input-{}", exec_id),
-                    execution_id: exec_id,
-                }],
+                vec![Event::with_event_id(
+                    1,
+                    "instance-A".to_string(),
+                    exec_id,
+                    None,
+                    EventKind::ActivityScheduled {
+                        name: format!("Activity-{}", exec_id),
+                        input: format!("input-{}", exec_id),
+                    },
+                )],
                 vec![],
                 vec![],
                 ExecutionMetadata::default(),
@@ -418,7 +474,7 @@ pub async fn test_execution_history_persistence<F: ProviderFactory>(factory: &F)
             .await
             .unwrap_or_default();
         assert_eq!(history.len(), 1);
-        if let Event::ActivityScheduled { name, .. } = &history[0] {
+        if let EventKind::ActivityScheduled { name, .. } = &history[0].kind {
             assert_eq!(name, &format!("Activity-{}", exec_id));
         } else {
             panic!("Expected ActivityScheduled");
@@ -428,7 +484,7 @@ pub async fn test_execution_history_persistence<F: ProviderFactory>(factory: &F)
     // Latest should be execution 3
     let latest = provider.read("instance-A").await.unwrap_or_default();
     assert_eq!(latest.len(), 1);
-    if let Event::ActivityScheduled { name, .. } = &latest[0] {
+    if let EventKind::ActivityScheduled { name, .. } = &latest[0].kind {
         assert_eq!(name, "Activity-3");
     } else {
         panic!("Expected ActivityScheduled");

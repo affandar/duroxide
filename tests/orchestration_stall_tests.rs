@@ -12,7 +12,7 @@
 //! Loser `source_event_id`s are marked as "cancelled" when select2 returns. Their
 //! completions are automatically skipped in FIFO ordering checks.
 
-use duroxide::{Event, OrchestrationContext, run_turn};
+use duroxide::{Event, EventKind, OrchestrationContext, run_turn};
 use std::time::Duration;
 
 /// Core repro: Two select2s with activity winners create stale timers that

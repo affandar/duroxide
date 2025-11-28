@@ -1,3 +1,4 @@
+use duroxide::EventKind;
 use duroxide::runtime;
 use duroxide::runtime::registry::{ActivityRegistry, OrchestrationRegistry};
 use duroxide::*;
@@ -69,7 +70,7 @@ async fn activity_reliability_after_crash_before_completion_enqueue() {
         common::wait_for_history(
             store1.clone(),
             instance,
-            |h| h.iter().any(|e| matches!(e, Event::ActivityScheduled { .. })),
+            |h| h.iter().any(|e| matches!(&e.kind, EventKind::ActivityScheduled { .. })),
             2_000
         )
         .await,
@@ -79,7 +80,7 @@ async fn activity_reliability_after_crash_before_completion_enqueue() {
     // Verify activity hasn't completed yet (we'll simulate crash before completion)
     let hist_before = store1.read(instance).await.unwrap_or_default();
     assert!(
-        !hist_before.iter().any(|e| matches!(e, Event::ActivityCompleted { .. })),
+        !hist_before.iter().any(|e| matches!(&e.kind, EventKind::ActivityCompleted { .. })),
         "Activity should not have completed yet"
     );
 
@@ -87,12 +88,12 @@ async fn activity_reliability_after_crash_before_completion_enqueue() {
     assert!(
         hist_before
             .iter()
-            .any(|e| matches!(e, Event::ActivityScheduled { name, .. } if name == "TestActivity"))
+            .any(|e| matches!(&e.kind, EventKind::ActivityScheduled { name, .. } if name == "TestActivity"))
     );
     assert!(
         !hist_before
             .iter()
-            .any(|e| matches!(e, Event::ActivityCompleted { result, .. } if result == "Processed: test-data"))
+            .any(|e| matches!(&e.kind, EventKind::ActivityCompleted { result, .. } if result == "Processed: test-data"))
     );
 
     // Simulate crash by shutting down runtime
@@ -142,14 +143,14 @@ async fn activity_reliability_after_crash_before_completion_enqueue() {
     let test_activity_scheduled_count = hist_after
         .iter()
         .filter(|e| {
-            matches!(e, Event::ActivityScheduled { name, .. } 
+            matches!(&e.kind, EventKind::ActivityScheduled { name, .. } 
                            if name == "TestActivity")
         })
         .count();
     let test_activity_completed_count = hist_after
         .iter()
         .filter(|e| {
-            matches!(e, Event::ActivityCompleted { result, .. } 
+            matches!(&e.kind, EventKind::ActivityCompleted { result, .. } 
                            if result == "Processed: test-data")
         })
         .count();
@@ -257,7 +258,7 @@ async fn multiple_activities_reliability_after_crash() {
             instance,
             |h| h
                 .iter()
-                .filter(|e| matches!(e, Event::ActivityScheduled { .. }))
+                .filter(|e| matches!(&e.kind, EventKind::ActivityScheduled { .. }))
                 .count()
                 >= 3,
             2_000
@@ -271,7 +272,7 @@ async fn multiple_activities_reliability_after_crash() {
     assert_eq!(
         hist_before
             .iter()
-            .filter(|e| matches!(e, Event::ActivityCompleted { .. }))
+            .filter(|e| matches!(&e.kind, EventKind::ActivityCompleted { .. }))
             .count(),
         0,
         "No activities should have completed yet"
@@ -311,7 +312,7 @@ async fn multiple_activities_reliability_after_crash() {
     let test_activity_completed_count = hist_after
         .iter()
         .filter(|e| {
-            matches!(e, Event::ActivityCompleted { result, .. } 
+            matches!(&e.kind, EventKind::ActivityCompleted { result, .. } 
                            if result.starts_with("Processed: task"))
         })
         .count();

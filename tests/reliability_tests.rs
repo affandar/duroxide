@@ -1,3 +1,4 @@
+use duroxide::EventKind;
 use duroxide::providers::WorkItem;
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
@@ -39,7 +40,7 @@ async fn external_duplicate_workitems_dedup() {
         inst,
         |h| {
             h.iter()
-                .any(|e| matches!(e, Event::OrchestrationCompleted { output, .. } if output == "ok"))
+                .any(|e| matches!(&e.kind, EventKind::OrchestrationCompleted { output, .. } if output == "ok"))
         },
         5_000,
     )
@@ -50,7 +51,7 @@ async fn external_duplicate_workitems_dedup() {
     let hist = store.read(inst).await.unwrap_or_default();
     let external_events: Vec<&Event> = hist
         .iter()
-        .filter(|e| matches!(e, Event::ExternalEvent { name, .. } if name == "Evt"))
+        .filter(|e| matches!(&e.kind, EventKind::ExternalEvent { name, .. } if name == "Evt"))
         .collect();
     assert_eq!(
         external_events.len(),
@@ -84,7 +85,7 @@ async fn timer_duplicate_workitems_dedup() {
         common::wait_for_history(
             store.clone(),
             inst,
-            |h| h.iter().any(|e| matches!(e, Event::TimerCreated { .. })),
+            |h| h.iter().any(|e| matches!(&e.kind, EventKind::TimerCreated { .. })),
             2_000
         )
         .await
@@ -94,7 +95,7 @@ async fn timer_duplicate_workitems_dedup() {
         let mut t_id = 0u64;
         let mut t_fire = 0u64;
         for e in hist.iter() {
-            if let Event::TimerCreated {
+            if let EventKind::TimerCreated {
                 event_id,
                 fire_at_ms,
                 execution_id: _,
@@ -124,7 +125,7 @@ async fn timer_duplicate_workitems_dedup() {
         inst,
         |h| {
             h.iter()
-                .any(|e| matches!(e, Event::OrchestrationCompleted { output, .. } if output == "t"))
+                .any(|e| matches!(&e.kind, EventKind::OrchestrationCompleted { output, .. } if output == "t"))
         },
         5_000,
     )
@@ -133,7 +134,7 @@ async fn timer_duplicate_workitems_dedup() {
 
     // exactly one TimerFired in history
     let hist = store.read(inst).await.unwrap_or_default();
-    let fired: Vec<&Event> = hist.iter().filter(|e| matches!(e, Event::TimerFired { .. })).collect();
+    let fired: Vec<&Event> = hist.iter().filter(|e| matches!(&e.kind, EventKind::TimerFired { .. })).collect();
     assert_eq!(fired.len(), 1, "expected 1 TimerFired, got {}", fired.len());
 
     rt.shutdown(None).await;
@@ -173,7 +174,7 @@ async fn activity_duplicate_completion_workitems_dedup() {
             inst,
             |h| h
                 .iter()
-                .any(|e| matches!(e, Event::ActivityScheduled { name, .. } if name == "SlowEcho")),
+                .any(|e| matches!(&e.kind, EventKind::ActivityScheduled { name, .. } if name == "SlowEcho")),
             2_000
         )
         .await
@@ -182,11 +183,11 @@ async fn activity_duplicate_completion_workitems_dedup() {
         let hist = store.read(inst).await.unwrap_or_default();
         let mut t_id = 0u64;
         for e in hist.iter() {
-            if let Event::ActivityScheduled { event_id, name, .. } = e
-                && name == "SlowEcho"
-            {
-                t_id = *event_id;
-                break;
+            if let EventKind::ActivityScheduled { name, .. } = &e.kind {
+                if name == "SlowEcho" {
+                    t_id = e.event_id;
+                    break;
+                }
             }
         }
         t_id
@@ -208,7 +209,7 @@ async fn activity_duplicate_completion_workitems_dedup() {
         inst,
         |h| {
             h.iter()
-                .any(|e| matches!(e, Event::OrchestrationCompleted { output, .. } if output == "x"))
+                .any(|e| matches!(&e.kind, EventKind::OrchestrationCompleted { output, .. } if output == "x"))
         },
         5_000,
     )
@@ -218,7 +219,7 @@ async fn activity_duplicate_completion_workitems_dedup() {
     let hist = store.read(inst).await.unwrap_or_default();
     let acts: Vec<&Event> = hist
         .iter()
-        .filter(|e| matches!(e, Event::ActivityCompleted { source_event_id, .. } if *source_event_id == id))
+        .filter(|e| matches!(&e.kind, EventKind::ActivityCompleted { .. }) && e.source_event_id == Some(id))
         .collect();
     assert_eq!(
         acts.len(),
@@ -271,7 +272,7 @@ async fn crash_after_dequeue_before_append_completion() {
         inst,
         |h| {
             h.iter()
-                .any(|e| matches!(e, Event::OrchestrationCompleted { output, .. } if output == "ok"))
+                .any(|e| matches!(&e.kind, EventKind::OrchestrationCompleted { output, .. } if output == "ok"))
         },
         5_000,
     )
@@ -280,7 +281,7 @@ async fn crash_after_dequeue_before_append_completion() {
     let hist = store.read(inst).await.unwrap_or_default();
     let evs: Vec<&Event> = hist
         .iter()
-        .filter(|e| matches!(e, Event::ExternalEvent { .. }))
+        .filter(|e| matches!(&e.kind, EventKind::ExternalEvent { .. }))
         .collect();
     assert_eq!(evs.len(), 1);
 
@@ -308,7 +309,7 @@ async fn crash_after_append_before_ack_timer() {
         common::wait_for_history(
             store.clone(),
             inst,
-            |h| h.iter().any(|e| matches!(e, Event::TimerCreated { .. })),
+            |h| h.iter().any(|e| matches!(&e.kind, EventKind::TimerCreated { .. })),
             2_000
         )
         .await
@@ -319,7 +320,7 @@ async fn crash_after_append_before_ack_timer() {
         let mut t_id = 0u64;
         let mut t_fire = 0u64;
         for e in hist.iter() {
-            if let Event::TimerCreated {
+            if let EventKind::TimerCreated {
                 event_id,
                 fire_at_ms,
                 execution_id: _,
@@ -348,14 +349,14 @@ async fn crash_after_append_before_ack_timer() {
         inst,
         |h| {
             h.iter()
-                .any(|e| matches!(e, Event::OrchestrationCompleted { output, .. } if output == "t"))
+                .any(|e| matches!(&e.kind, EventKind::OrchestrationCompleted { output, .. } if output == "t"))
         },
         5_000,
     )
     .await;
     assert!(ok, "timeout waiting for completion");
     let hist = store.read(inst).await.unwrap_or_default();
-    let fired: Vec<&Event> = hist.iter().filter(|e| matches!(e, Event::TimerFired { .. })).collect();
+    let fired: Vec<&Event> = hist.iter().filter(|e| matches!(&e.kind, EventKind::TimerFired { .. })).collect();
     assert_eq!(fired.len(), 1);
 
     rt.shutdown(None).await;

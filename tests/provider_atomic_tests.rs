@@ -1,3 +1,4 @@
+use duroxide::EventKind;
 use duroxide::Event;
 use duroxide::providers::sqlite::SqliteProvider;
 use duroxide::providers::{ExecutionMetadata, Provider, WorkItem};
@@ -27,10 +28,15 @@ async fn test_ignore_work_after_terminal_event() {
         .append_with_execution(
             instance,
             1,
-            vec![Event::OrchestrationCompleted {
-                event_id: 2,
-                output: "done".to_string(),
-            }],
+            vec![Event::with_event_id(
+                2,
+                instance.to_string(),
+                1,
+                None,
+                EventKind::OrchestrationCompleted {
+                    output: "done".to_string(),
+                },
+            )],
         )
         .await
         .unwrap();
@@ -81,7 +87,7 @@ async fn test_ignore_work_after_terminal_event() {
 
     // History should remain unchanged (no new events)
     let hist = store.read(instance).await.unwrap_or_default();
-    assert!(hist.iter().any(|e| matches!(e, Event::OrchestrationCompleted { .. })));
+    assert!(hist.iter().any(|e| matches!(&e.kind, EventKind::OrchestrationCompleted { .. })));
 }
 
 #[tokio::test]

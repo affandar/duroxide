@@ -1,3 +1,4 @@
+use duroxide::EventKind;
 use duroxide::providers::Provider;
 use duroxide::providers::ProviderAdmin;
 use duroxide::providers::sqlite::SqliteProvider;
@@ -155,7 +156,7 @@ async fn runtime_duplicate_orchestration_deduped_single_execution() {
     // Both handles observed the same execution: only one start/terminal
     let started_count = hist1
         .iter()
-        .filter(|e| matches!(e, Event::OrchestrationStarted { .. }))
+        .filter(|e| matches!(&e.kind, EventKind::OrchestrationStarted { .. }))
         .count();
     assert_eq!(started_count, 1);
 

@@ -1,6 +1,6 @@
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
-use duroxide::{Event, OrchestrationRegistry};
+use duroxide::{Event, EventKind, OrchestrationRegistry};
 use std::sync::Arc as StdArc;
 mod common;
 
@@ -43,10 +43,10 @@ async fn unknown_orchestration_fails_gracefully() {
 
     // History should be well-formed: start with OrchestrationStarted, end with OrchestrationFailed
     assert_eq!(hist.len(), 2);
-    assert!(matches!(&hist[0], Event::OrchestrationStarted { .. }));
+    assert!(matches!(&hist[0].kind, EventKind::OrchestrationStarted { .. }));
     assert!(matches!(
-        &hist[1],
-        Event::OrchestrationFailed { details, .. } if matches!(
+        &hist[1].kind,
+        EventKind::OrchestrationFailed { details, .. } if matches!(
             details,
             duroxide::ErrorDetails::Configuration {
                 kind: duroxide::ConfigErrorKind::UnregisteredOrchestration,
@@ -59,10 +59,10 @@ async fn unknown_orchestration_fails_gracefully() {
     // Store history should also include both events
     let persisted = store.read("inst-unknown-1").await.unwrap_or_default();
     assert_eq!(persisted.len(), 2);
-    assert!(matches!(&persisted[0], Event::OrchestrationStarted { .. }));
+    assert!(matches!(&persisted[0].kind, EventKind::OrchestrationStarted { .. }));
     assert!(matches!(
-        &persisted[1],
-        Event::OrchestrationFailed { details, .. } if matches!(
+        &persisted[1].kind,
+        EventKind::OrchestrationFailed { details, .. } if matches!(
             details,
             duroxide::ErrorDetails::Configuration {
                 kind: duroxide::ConfigErrorKind::UnregisteredOrchestration,
