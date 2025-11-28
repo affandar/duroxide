@@ -804,6 +804,9 @@ struct CtxInner {
     // Track consumed completions by event_id (FIFO enforcement)
     consumed_completions: std::collections::HashSet<u64>,
 
+    // Track cancelled source_event_ids (select2 losers) - their completions are auto-skipped in FIFO
+    cancelled_source_ids: std::collections::HashSet<u64>,
+
     // Track consumed external events (by name) since they're searched, not cursor-based
     consumed_external_events: std::collections::HashSet<String>,
 
@@ -843,6 +846,7 @@ impl CtxInner {
             next_event_id,
             claimed_scheduling_events: Default::default(),
             consumed_completions: Default::default(),
+            cancelled_source_ids: Default::default(),
             consumed_external_events: Default::default(),
             execution_id,
             instance_id,

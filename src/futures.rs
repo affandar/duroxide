@@ -8,27 +8,56 @@ use crate::{Action, Event, OrchestrationContext};
 /// Helper function to check if a completion event can be consumed according to FIFO ordering.
 ///
 /// Returns `true` if all completion events in history that occurred before the given
-/// `completion_event_id` have already been consumed. This enforces the invariant that
-/// completions must be consumed in the order they appear in history.
+/// `completion_event_id` have already been consumed (or are cancelled select2 losers).
 ///
 /// # Arguments
 /// * `history` - The full event history
 /// * `consumed_completions` - Set of already consumed completion event IDs
+/// * `cancelled_source_ids` - Set of source_event_ids whose completions should be auto-skipped (select2 losers)
 /// * `completion_event_id` - The event ID we want to consume
 fn can_consume_completion(
     history: &[Event],
     consumed_completions: &std::collections::HashSet<u64>,
+    cancelled_source_ids: &std::collections::HashSet<u64>,
     completion_event_id: u64,
 ) -> bool {
     history.iter().all(|e| {
         match e {
-            Event::ActivityCompleted { event_id, .. }
-            | Event::ActivityFailed { event_id, .. }
-            | Event::TimerFired { event_id, .. }
-            | Event::SubOrchestrationCompleted { event_id, .. }
-            | Event::SubOrchestrationFailed { event_id, .. }
-            | Event::ExternalEvent { event_id, .. } => {
-                // If this completion is before ours, it must be consumed
+            // Completions with source_event_id - check if cancelled
+            Event::ActivityCompleted {
+                event_id,
+                source_event_id,
+                ..
+            }
+            | Event::ActivityFailed {
+                event_id,
+                source_event_id,
+                ..
+            }
+            | Event::TimerFired {
+                event_id,
+                source_event_id,
+                ..
+            }
+            | Event::SubOrchestrationCompleted {
+                event_id,
+                source_event_id,
+                ..
+            }
+            | Event::SubOrchestrationFailed {
+                event_id,
+                source_event_id,
+                ..
+            } => {
+                // Cancelled completions (select2 losers) don't block - skip them
+                if cancelled_source_ids.contains(source_event_id) {
+                    return true;
+                }
+                // Otherwise: if before ours, must be consumed
+                *event_id >= completion_event_id || consumed_completions.contains(event_id)
+            }
+            // External events don't have source_event_id - can't be cancelled via select2
+            Event::ExternalEvent { event_id, .. } => {
                 *event_id >= completion_event_id || consumed_completions.contains(event_id)
             }
             _ => true, // Non-completions don't affect ordering
@@ -205,7 +234,12 @@ impl Future for DurableFuture {
 
                 if let Some((completion_event_id, result)) = our_completion {
                     // Check: Are all completion events BEFORE ours consumed?
-                    if can_consume_completion(&inner.history, &inner.consumed_completions, completion_event_id) {
+                    if can_consume_completion(
+                        &inner.history,
+                        &inner.consumed_completions,
+                        &inner.cancelled_source_ids,
+                        completion_event_id,
+                    ) {
                         inner.consumed_completions.insert(completion_event_id);
                         return Poll::Ready(DurableOutput::Activity(result));
                     }
@@ -310,7 +344,12 @@ impl Future for DurableFuture {
 
                 if let Some(completion_event_id) = our_completion {
                     // Check: Are all completion events BEFORE ours consumed?
-                    if can_consume_completion(&inner.history, &inner.consumed_completions, completion_event_id) {
+                    if can_consume_completion(
+                        &inner.history,
+                        &inner.consumed_completions,
+                        &inner.cancelled_source_ids,
+                        completion_event_id,
+                    ) {
                         inner.consumed_completions.insert(completion_event_id);
                         return Poll::Ready(DurableOutput::Timer);
                     }
@@ -425,7 +464,12 @@ impl Future for DurableFuture {
                     })
                 {
                     // Check: Are all completions BEFORE ours consumed?
-                    if can_consume_completion(&inner.history, &inner.consumed_completions, event_id) {
+                    if can_consume_completion(
+                        &inner.history,
+                        &inner.consumed_completions,
+                        &inner.cancelled_source_ids,
+                        event_id,
+                    ) {
                         inner.consumed_completions.insert(event_id);
                         inner.consumed_external_events.insert(name.clone());
                         *result.borrow_mut() = Some(data.clone());
@@ -557,7 +601,12 @@ impl Future for DurableFuture {
 
                 if let Some((completion_event_id, result)) = our_completion {
                     // Check: Are all completions BEFORE ours consumed?
-                    if can_consume_completion(&inner.history, &inner.consumed_completions, completion_event_id) {
+                    if can_consume_completion(
+                        &inner.history,
+                        &inner.consumed_completions,
+                        &inner.cancelled_source_ids,
+                        completion_event_id,
+                    ) {
                         inner.consumed_completions.insert(completion_event_id);
                         return Poll::Ready(DurableOutput::SubOrchestration(result));
                     }
@@ -792,6 +841,8 @@ impl Future for AggregateDurableFuture {
                 //          losers still need to claim their scheduling events to avoid
                 //          nondeterminism when subsequent code schedules new operations.
                 // Phase 2: Check which child is ready and return the winner.
+                // Phase 3: Mark loser source_event_ids as cancelled so their completions
+                //          don't block FIFO ordering for subsequent operations.
 
                 // Phase 1: Ensure all children claim their scheduling events
                 let mut ready_results: Vec<Option<DurableOutput>> = vec![None; this.children.len()];
@@ -801,15 +852,40 @@ impl Future for AggregateDurableFuture {
                     }
                 }
 
-                // Phase 2: Return the first ready child (maintains original select semantics)
-                for (i, result) in ready_results.into_iter().enumerate() {
-                    if let Some(output) = result {
-                        return Poll::Ready(AggregateOutput::Select {
-                            winner_index: i,
-                            output,
-                        });
+                // Phase 2: Find the first ready child (winner)
+                let winner_index = ready_results.iter().position(|r| r.is_some());
+
+                if let Some(winner_idx) = winner_index {
+                    // Phase 3: Mark all loser source_event_ids as cancelled
+                    {
+                        let mut inner = this.ctx.inner.lock().unwrap();
+                        for (i, child) in this.children.iter().enumerate() {
+                            if i != winner_idx {
+                                // Get the loser's claimed_event_id (source_event_id for its completion)
+                                let loser_source_id = match &child.0 {
+                                    Kind::Activity { claimed_event_id, .. } => claimed_event_id.get(),
+                                    Kind::Timer { claimed_event_id, .. } => claimed_event_id.get(),
+                                    Kind::External { claimed_event_id, .. } => claimed_event_id.get(),
+                                    Kind::SubOrch { claimed_event_id, .. } => claimed_event_id.get(),
+                                    Kind::System { claimed_event_id, .. } => claimed_event_id.get(),
+                                };
+                                if let Some(source_id) = loser_source_id {
+                                    inner.cancelled_source_ids.insert(source_id);
+                                }
+                            }
+                        }
                     }
+
+                    // Return the winner - safe to unwrap since winner_idx came from position() finding Some
+                    let output = ready_results[winner_idx]
+                        .take()
+                        .expect("winner_idx points to Ready result");
+                    return Poll::Ready(AggregateOutput::Select {
+                        winner_index: winner_idx,
+                        output,
+                    });
                 }
+
                 Poll::Pending
             }
             AggregateMode::Join => {

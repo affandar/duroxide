@@ -15,12 +15,18 @@
 
 ### Active TODOs
 
-- **[BUG] Select2 Loser Completions Block FIFO Ordering**
+- **[FIXED] Select2 Loser Completions Block FIFO Ordering**
   - When `select2(activity, timer)` returns with activity winning, the timer's eventual `TimerFired` is never consumed
   - These stale completions block later completions due to FIFO ordering in `can_consume_completion()`
-  - Fix: Mark loser `source_event_id`s as cancelled, auto-consume their completions
-  - Test file: `tests/scenarios/orchestration_stall_tests.rs`
+  - Fix: Mark loser `source_event_id`s as cancelled, auto-skip their completions in FIFO check
+  - Test file: `tests/orchestration_stall_tests.rs` (13 tests)
   - Related: `schedule_activity_with_retry` uses select2 internally for timeouts
+
+- **Nested Select2 Support** - Enable `select2(select2(a, b), c)` composition
+  - Currently `select2` only accepts `DurableFuture`, not `SelectFuture`
+  - Options: (1) Add trait for select2 args that both types implement, (2) Add `SelectFuture::into_selectable()` wrapper
+  - Would enable more expressive race patterns like `select2(select2(fast_path, timeout), fallback)`
+  - Complexity: Medium - API change, need to handle nested loser tracking
 
 - **History Validation**
   - Need to validate histories are well-formed before replay
