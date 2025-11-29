@@ -1,4 +1,4 @@
-use crate::provider_validation::{Event, ExecutionMetadata, start_item};
+use crate::provider_validation::{Event, EventKind, ExecutionMetadata, start_item};
 use crate::provider_validations::ProviderFactory;
 use crate::providers::WorkItem;
 use std::time::Duration;
@@ -130,14 +130,19 @@ pub async fn test_worker_ack_atomicity<F: ProviderFactory>(factory: &F) {
         .ack_orchestration_item(
             &item.lock_token,
             1,
-            vec![Event::OrchestrationStarted {
-                event_id: 1,
-                name: "TestOrch".to_string(),
-                version: "1.0.0".to_string(),
-                input: "{}".to_string(),
-                parent_instance: None,
-                parent_id: None,
-            }],
+            vec![Event::with_event_id(
+                1,
+                "instance-A".to_string(),
+                1,
+                None,
+                EventKind::OrchestrationStarted {
+                    name: "TestOrch".to_string(),
+                    version: "1.0.0".to_string(),
+                    input: "{}".to_string(),
+                    parent_instance: None,
+                    parent_id: None,
+                },
+            )],
             vec![],
             vec![],
             ExecutionMetadata::default(),
@@ -223,14 +228,19 @@ pub async fn test_timer_delayed_visibility<F: ProviderFactory>(factory: &F) {
         .ack_orchestration_item(
             &item.lock_token,
             1,
-            vec![Event::OrchestrationStarted {
-                event_id: 1,
-                name: "TestOrch".to_string(),
-                version: "1.0.0".to_string(),
-                input: "{}".to_string(),
-                parent_instance: None,
-                parent_id: None,
-            }],
+            vec![Event::with_event_id(
+                1,
+                "instance-A".to_string(),
+                1,
+                None,
+                EventKind::OrchestrationStarted {
+                    name: "TestOrch".to_string(),
+                    version: "1.0.0".to_string(),
+                    input: "{}".to_string(),
+                    parent_instance: None,
+                    parent_id: None,
+                },
+            )],
             vec![],
             vec![],
             ExecutionMetadata::default(),

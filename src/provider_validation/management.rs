@@ -1,4 +1,4 @@
-use crate::provider_validation::{Event, ExecutionMetadata, start_item};
+use crate::provider_validation::{Event, EventKind, ExecutionMetadata, start_item};
 use crate::provider_validations::ProviderFactory;
 use std::time::Duration;
 
@@ -52,14 +52,19 @@ pub async fn test_list_instances_by_status<F: ProviderFactory>(factory: &F) {
         .ack_orchestration_item(
             &item.lock_token,
             1,
-            vec![Event::OrchestrationStarted {
-                event_id: 1,
-                name: "TestOrch".to_string(),
-                version: "1.0.0".to_string(),
-                input: "{}".to_string(),
-                parent_instance: None,
-                parent_id: None,
-            }],
+            vec![Event::with_event_id(
+                1,
+                "mgmt-completed".to_string(),
+                1,
+                None,
+                EventKind::OrchestrationStarted {
+                    name: "TestOrch".to_string(),
+                    version: "1.0.0".to_string(),
+                    input: "{}".to_string(),
+                    parent_instance: None,
+                    parent_id: None,
+                },
+            )],
             vec![],
             vec![],
             ExecutionMetadata {
@@ -101,14 +106,19 @@ pub async fn test_list_executions<F: ProviderFactory>(factory: &F) {
         .ack_orchestration_item(
             &item.lock_token,
             1,
-            vec![Event::OrchestrationStarted {
-                event_id: 1,
-                name: "TestOrch".to_string(),
-                version: "1.0.0".to_string(),
-                input: "{}".to_string(),
-                parent_instance: None,
-                parent_id: None,
-            }],
+            vec![Event::with_event_id(
+                1,
+                "mgmt-multi-exec".to_string(),
+                1,
+                None,
+                EventKind::OrchestrationStarted {
+                    name: "TestOrch".to_string(),
+                    version: "1.0.0".to_string(),
+                    input: "{}".to_string(),
+                    parent_instance: None,
+                    parent_id: None,
+                },
+            )],
             vec![],
             vec![],
             ExecutionMetadata::default(),
@@ -142,14 +152,19 @@ pub async fn test_get_instance_info<F: ProviderFactory>(factory: &F) {
         .ack_orchestration_item(
             &item.lock_token,
             1,
-            vec![Event::OrchestrationStarted {
-                event_id: 1,
-                name: "InfoOrch".to_string(),
-                version: "2.0.0".to_string(),
-                input: "test".to_string(),
-                parent_instance: None,
-                parent_id: None,
-            }],
+            vec![Event::with_event_id(
+                1,
+                "mgmt-info".to_string(),
+                1,
+                None,
+                EventKind::OrchestrationStarted {
+                    name: "InfoOrch".to_string(),
+                    version: "2.0.0".to_string(),
+                    input: "test".to_string(),
+                    parent_instance: None,
+                    parent_id: None,
+                },
+            )],
             vec![],
             vec![],
             ExecutionMetadata {
@@ -190,14 +205,19 @@ pub async fn test_get_execution_info<F: ProviderFactory>(factory: &F) {
         .ack_orchestration_item(
             &item.lock_token,
             1,
-            vec![Event::OrchestrationStarted {
-                event_id: 1,
-                name: "TestOrch".to_string(),
-                version: "1.0.0".to_string(),
-                input: "{}".to_string(),
-                parent_instance: None,
-                parent_id: None,
-            }],
+            vec![Event::with_event_id(
+                1,
+                "mgmt-purge".to_string(),
+                1,
+                None,
+                EventKind::OrchestrationStarted {
+                    name: "TestOrch".to_string(),
+                    version: "1.0.0".to_string(),
+                    input: "{}".to_string(),
+                    parent_instance: None,
+                    parent_id: None,
+                },
+            )],
             vec![],
             vec![],
             ExecutionMetadata {
@@ -241,14 +261,19 @@ pub async fn test_get_system_metrics<F: ProviderFactory>(factory: &F) {
         .ack_orchestration_item(
             &item.lock_token,
             1,
-            vec![Event::OrchestrationStarted {
-                event_id: 1,
-                name: "TestOrch".to_string(),
-                version: "1.0.0".to_string(),
-                input: "{}".to_string(),
-                parent_instance: None,
-                parent_id: None,
-            }],
+            vec![Event::with_event_id(
+                1,
+                "mgmt-cancel".to_string(),
+                1,
+                None,
+                EventKind::OrchestrationStarted {
+                    name: "TestOrch".to_string(),
+                    version: "1.0.0".to_string(),
+                    input: "{}".to_string(),
+                    parent_instance: None,
+                    parent_id: None,
+                },
+            )],
             vec![],
             vec![],
             ExecutionMetadata {

@@ -279,10 +279,10 @@ async fn test_execution_info() {
     // Should contain at least OrchestrationStarted and OrchestrationCompleted events
     let has_started = history
         .iter()
-        .any(|e| matches!(e, duroxide::Event::OrchestrationStarted { .. }));
+        .any(|e| matches!(&e.kind, duroxide::EventKind::OrchestrationStarted { .. }));
     let has_completed = history
         .iter()
-        .any(|e| matches!(e, duroxide::Event::OrchestrationCompleted { .. }));
+        .any(|e| matches!(&e.kind, duroxide::EventKind::OrchestrationCompleted { .. }));
     assert!(has_started);
     assert!(has_completed);
 
@@ -649,13 +649,13 @@ async fn test_complex_workflow_management() {
         // Should contain OrchestrationStarted, ActivityCompleted, and OrchestrationCompleted events
         let has_started = history
             .iter()
-            .any(|e| matches!(e, duroxide::Event::OrchestrationStarted { .. }));
+            .any(|e| matches!(&e.kind, duroxide::EventKind::OrchestrationStarted { .. }));
         let has_completed = history
             .iter()
-            .any(|e| matches!(e, duroxide::Event::OrchestrationCompleted { .. }));
+            .any(|e| matches!(&e.kind, duroxide::EventKind::OrchestrationCompleted { .. }));
         let has_activity = history
             .iter()
-            .any(|e| matches!(e, duroxide::Event::ActivityCompleted { .. }));
+            .any(|e| matches!(&e.kind, duroxide::EventKind::ActivityCompleted { .. }));
 
         assert!(has_started);
         assert!(has_completed);

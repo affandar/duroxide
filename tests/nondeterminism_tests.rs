@@ -1,3 +1,4 @@
+use duroxide::EventKind;
 // Test: Various nondeterminism detection scenarios
 // This file consolidates all nondeterminism-related tests to verify the robust detection system
 
@@ -5,7 +6,7 @@ use duroxide::providers::WorkItem;
 // Use SQLite provider via common helper
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
-use duroxide::{ActivityContext, Client, Event, OrchestrationContext, OrchestrationRegistry, OrchestrationStatus};
+use duroxide::{ActivityContext, Client, OrchestrationContext, OrchestrationRegistry, OrchestrationStatus};
 use std::sync::Arc as StdArc;
 use std::time::Duration;
 mod common;
@@ -52,8 +53,8 @@ async fn code_swap_triggers_nondeterminism() {
         store.clone(),
         "inst-swap",
         |hist| {
-            hist.iter().find_map(|e| match e {
-                Event::ActivityScheduled { name, .. } if name == "A1" => Some(e.clone()),
+            hist.iter().find_map(|e| match &e.kind {
+                EventKind::ActivityScheduled { name, .. } if name == "A1" => Some(e.clone()),
                 _ => None,
             })
         },
@@ -61,7 +62,7 @@ async fn code_swap_triggers_nondeterminism() {
     )
     .await;
     match evt {
-        Some(Event::ActivityScheduled { .. }) => {}
+        Some(e) if matches!(&e.kind, EventKind::ActivityScheduled { .. }) => {}
         _ => panic!("timed out waiting for A1 schedule"),
     }
 
@@ -142,8 +143,8 @@ async fn completion_kind_mismatch_triggers_nondeterminism() {
         store.clone(),
         "inst-mismatch",
         |hist| {
-            hist.iter().find_map(|e| match e {
-                Event::TimerCreated { event_id, .. } => Some(*event_id),
+            hist.iter().find_map(|e| match &e.kind {
+                EventKind::TimerCreated { .. } => Some(e.event_id),
                 _ => None,
             })
         },
@@ -375,7 +376,7 @@ async fn continue_as_new_with_unconsumed_completion_triggers_nondeterminism() {
         "inst-can-nondet",
         |hist| {
             hist.iter()
-                .any(|e| matches!(e, Event::ExternalSubscribed { name, .. } if name == "proceed_signal"))
+                .any(|e| matches!(&e.kind, EventKind::ExternalSubscribed { name, .. } if name == "proceed_signal"))
         },
         2000,
     )

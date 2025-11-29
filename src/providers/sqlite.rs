@@ -7,7 +7,7 @@ use super::{
     ExecutionInfo, InstanceInfo, OrchestrationItem, Provider, ProviderAdmin, ProviderError, QueueDepths, SystemMetrics,
     WorkItem,
 };
-use crate::Event;
+use crate::{Event, EventKind};
 
 /// Configuration options for SQLiteProvider
 #[derive(Debug, Clone, Default)]
@@ -444,24 +444,24 @@ impl SqliteProvider {
 
         // Insert events
         for event in &events {
-            let event_type = match event {
-                Event::OrchestrationStarted { .. } => "OrchestrationStarted",
-                Event::OrchestrationCompleted { .. } => "OrchestrationCompleted",
-                Event::OrchestrationFailed { .. } => "OrchestrationFailed",
-                Event::OrchestrationContinuedAsNew { .. } => "OrchestrationContinuedAsNew",
-                Event::ActivityScheduled { .. } => "ActivityScheduled",
-                Event::ActivityCompleted { .. } => "ActivityCompleted",
-                Event::ActivityFailed { .. } => "ActivityFailed",
-                Event::TimerCreated { .. } => "TimerCreated",
-                Event::TimerFired { .. } => "TimerFired",
-                Event::ExternalSubscribed { .. } => "ExternalSubscribed",
-                Event::ExternalEvent { .. } => "ExternalEvent",
-                Event::SubOrchestrationScheduled { .. } => "SubOrchestrationScheduled",
-                Event::SubOrchestrationCompleted { .. } => "SubOrchestrationCompleted",
-                Event::SubOrchestrationFailed { .. } => "SubOrchestrationFailed",
-                Event::OrchestrationCancelRequested { .. } => "OrchestrationCancelRequested",
-                Event::OrchestrationChained { .. } => "OrchestrationChained",
-                Event::SystemCall { .. } => crate::EVENT_TYPE_SYSTEM_CALL,
+            let event_type = match &event.kind {
+                EventKind::OrchestrationStarted { .. } => "OrchestrationStarted",
+                EventKind::OrchestrationCompleted { .. } => "OrchestrationCompleted",
+                EventKind::OrchestrationFailed { .. } => "OrchestrationFailed",
+                EventKind::OrchestrationContinuedAsNew { .. } => "OrchestrationContinuedAsNew",
+                EventKind::ActivityScheduled { .. } => "ActivityScheduled",
+                EventKind::ActivityCompleted { .. } => "ActivityCompleted",
+                EventKind::ActivityFailed { .. } => "ActivityFailed",
+                EventKind::TimerCreated { .. } => "TimerCreated",
+                EventKind::TimerFired { .. } => "TimerFired",
+                EventKind::ExternalSubscribed { .. } => "ExternalSubscribed",
+                EventKind::ExternalEvent { .. } => "ExternalEvent",
+                EventKind::SubOrchestrationScheduled { .. } => "SubOrchestrationScheduled",
+                EventKind::SubOrchestrationCompleted { .. } => "SubOrchestrationCompleted",
+                EventKind::SubOrchestrationFailed { .. } => "SubOrchestrationFailed",
+                EventKind::OrchestrationCancelRequested { .. } => "OrchestrationCancelRequested",
+                EventKind::OrchestrationChained { .. } => "OrchestrationChained",
+                EventKind::SystemCall { .. } => crate::EVENT_TYPE_SYSTEM_CALL,
             };
 
             let event_data = serde_json::to_string(&event)
@@ -686,7 +686,7 @@ impl Provider for SqliteProvider {
                 debug_assert!(
                     !hist
                         .iter()
-                        .any(|e| matches!(e, crate::Event::OrchestrationStarted { .. })),
+                        .any(|e| matches!(&e.kind, EventKind::OrchestrationStarted { .. })),
                     "Instance exists with NULL version but history contains OrchestrationStarted event"
                 );
                 "unknown".to_string()
@@ -700,7 +700,7 @@ impl Provider for SqliteProvider {
                 .await
                 .unwrap_or_default();
             if let Some(first_started) = hist.iter().find_map(|e| {
-                if let crate::Event::OrchestrationStarted { name, version, .. } = e {
+                if let EventKind::OrchestrationStarted { name, version, .. } = &e.kind {
                     Some((name.clone(), version.clone()))
                 } else {
                     None
@@ -1684,14 +1684,19 @@ mod tests {
             .ack_orchestration_item(
                 &item.lock_token,
                 next_execution_id,
-                vec![Event::OrchestrationStarted {
-                    event_id: crate::INITIAL_EVENT_ID,
-                    name: orchestration.to_string(),
-                    version: version.to_string(),
-                    input: input.to_string(),
-                    parent_instance: parent_instance.map(|s| s.to_string()),
-                    parent_id,
-                }],
+                vec![Event::with_event_id(
+                    crate::INITIAL_EVENT_ID,
+                    instance,
+                    next_execution_id,
+                    None,
+                    EventKind::OrchestrationStarted {
+                        name: orchestration.to_string(),
+                        version: version.to_string(),
+                        input: input.to_string(),
+                        parent_instance: parent_instance.map(|s| s.to_string()),
+                        parent_id,
+                    },
+                )],
                 vec![],
                 vec![],
                 ExecutionMetadata {
@@ -1742,14 +1747,19 @@ mod tests {
         assert_eq!(orch_item.history.len(), 0); // No history yet
 
         // Ack with some history
-        let history_delta = vec![Event::OrchestrationStarted {
-            event_id: 1,
-            name: "TestOrch".to_string(),
-            version: "1.0.0".to_string(),
-            input: "{}".to_string(),
-            parent_instance: None,
-            parent_id: None,
-        }];
+        let history_delta = vec![Event::with_event_id(
+            1,
+            "test-1",
+            1,
+            None,
+            EventKind::OrchestrationStarted {
+                name: "TestOrch".to_string(),
+                version: "1.0.0".to_string(),
+                input: "{}".to_string(),
+                parent_instance: None,
+                parent_id: None,
+            },
+        )];
 
         store
             .ack_orchestration_item(
@@ -1803,26 +1813,39 @@ mod tests {
 
         // Ack with multiple outputs - all should be atomic
         let history_delta = vec![
-            Event::OrchestrationStarted {
-                event_id: 1,
-                name: "AtomicTest".to_string(),
-                version: "1.0.0".to_string(),
-                input: "{}".to_string(),
-                parent_instance: None,
-                parent_id: None,
-            },
-            Event::ActivityScheduled {
-                event_id: 2,
-                name: "Activity1".to_string(),
-                input: "{}".to_string(),
-                execution_id: 1,
-            },
-            Event::ActivityScheduled {
-                event_id: 3,
-                name: "Activity2".to_string(),
-                input: "{}".to_string(),
-                execution_id: 1,
-            },
+            Event::with_event_id(
+                1,
+                "test-atomic",
+                1,
+                None,
+                EventKind::OrchestrationStarted {
+                    name: "AtomicTest".to_string(),
+                    version: "1.0.0".to_string(),
+                    input: "{}".to_string(),
+                    parent_instance: None,
+                    parent_id: None,
+                },
+            ),
+            Event::with_event_id(
+                2,
+                "test-atomic",
+                1,
+                None,
+                EventKind::ActivityScheduled {
+                    name: "Activity1".to_string(),
+                    input: "{}".to_string(),
+                },
+            ),
+            Event::with_event_id(
+                3,
+                "test-atomic",
+                1,
+                None,
+                EventKind::ActivityScheduled {
+                    name: "Activity2".to_string(),
+                    input: "{}".to_string(),
+                },
+            ),
         ];
 
         let worker_items = vec![
@@ -2002,17 +2025,22 @@ mod tests {
         // Read history from first execution
         let hist1 = store.read_with_execution(instance, 1).await.unwrap_or_default();
         assert_eq!(hist1.len(), 1);
-        assert!(matches!(hist1[0], Event::OrchestrationStarted { .. }));
+        assert!(matches!(&hist1[0].kind, EventKind::OrchestrationStarted { .. }));
 
         // Append to first execution
         store
             .append_with_execution(
                 instance,
                 1,
-                vec![Event::OrchestrationCompleted {
-                    event_id: 2,
-                    output: "result1".to_string(),
-                }],
+                vec![Event::with_event_id(
+                    2,
+                    instance,
+                    1,
+                    None,
+                    EventKind::OrchestrationCompleted {
+                        output: "result1".to_string(),
+                    },
+                )],
             )
             .await
             .unwrap();
@@ -2040,7 +2068,7 @@ mod tests {
         // Default read should return latest execution
         let hist_latest = store.read(instance).await.unwrap_or_default();
         assert_eq!(hist_latest.len(), 1);
-        assert!(matches!(&hist_latest[0], Event::OrchestrationStarted { input, .. } if input == "input2"));
+        assert!(matches!(&hist_latest[0].kind, EventKind::OrchestrationStarted { input, .. } if input == "input2"));
     }
 
     #[tokio::test]
@@ -2309,14 +2337,19 @@ mod tests {
             .ack_orchestration_item(
                 &orch_item.lock_token,
                 1,
-                vec![Event::OrchestrationStarted {
-                    event_id: 1,
-                    name: "TestOrch".to_string(),
-                    version: "1.0.0".to_string(),
-                    input: "{}".to_string(),
-                    parent_instance: None,
-                    parent_id: None,
-                }],
+                vec![Event::with_event_id(
+                    1,
+                    "test-timer",
+                    1,
+                    None,
+                    EventKind::OrchestrationStarted {
+                        name: "TestOrch".to_string(),
+                        version: "1.0.0".to_string(),
+                        input: "{}".to_string(),
+                        parent_instance: None,
+                        parent_id: None,
+                    },
+                )],
                 vec![],
                 vec![],
                 ExecutionMetadata::default(),

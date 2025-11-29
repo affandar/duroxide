@@ -1,4 +1,4 @@
-use crate::provider_validation::{Event, ExecutionMetadata, start_item};
+use crate::provider_validation::{Event, EventKind, ExecutionMetadata, start_item};
 use crate::provider_validations::ProviderFactory;
 use std::time::Duration;
 
@@ -42,14 +42,19 @@ pub async fn test_duplicate_event_id_rejection<F: ProviderFactory>(factory: &F) 
         .ack_orchestration_item(
             &lock_token,
             1,
-            vec![Event::OrchestrationStarted {
-                event_id: 1,
-                name: "TestOrch".to_string(),
-                version: "1.0.0".to_string(),
-                input: "{}".to_string(),
-                parent_instance: None,
-                parent_id: None,
-            }],
+            vec![Event::with_event_id(
+                1,
+                "instance-A".to_string(),
+                1,
+                None,
+                EventKind::OrchestrationStarted {
+                    name: "TestOrch".to_string(),
+                    version: "1.0.0".to_string(),
+                    input: "{}".to_string(),
+                    parent_instance: None,
+                    parent_id: None,
+                },
+            )],
             vec![],
             vec![],
             ExecutionMetadata::default(),
@@ -73,12 +78,16 @@ pub async fn test_duplicate_event_id_rejection<F: ProviderFactory>(factory: &F) 
         .ack_orchestration_item(
             &lock_token2,
             1,
-            vec![Event::ActivityScheduled {
-                event_id: 1, // DUPLICATE!
-                name: "Activity".to_string(),
-                input: "{}".to_string(),
-                execution_id: 1,
-            }],
+            vec![Event::with_event_id(
+                1, // DUPLICATE!
+                "instance-A".to_string(),
+                1,
+                None,
+                EventKind::ActivityScheduled {
+                    name: "Activity".to_string(),
+                    input: "{}".to_string(),
+                },
+            )],
             vec![],
             vec![],
             ExecutionMetadata::default(),
@@ -91,7 +100,7 @@ pub async fn test_duplicate_event_id_rejection<F: ProviderFactory>(factory: &F) 
     // Verify history unchanged
     let history = provider.read("instance-A").await.unwrap_or_default();
     assert_eq!(history.len(), 1);
-    assert!(matches!(history[0], Event::OrchestrationStarted { .. }));
+    assert!(matches!(&history[0].kind, EventKind::OrchestrationStarted { .. }));
     tracing::info!("✓ Test passed: duplicate event_id rejected");
 }
 
@@ -147,14 +156,19 @@ pub async fn test_lock_expiration_during_ack<F: ProviderFactory>(factory: &F) {
         .ack_orchestration_item(
             &lock_token,
             1,
-            vec![Event::OrchestrationStarted {
-                event_id: 1,
-                name: "TestOrch".to_string(),
-                version: "1.0.0".to_string(),
-                input: "{}".to_string(),
-                parent_instance: None,
-                parent_id: None,
-            }],
+            vec![Event::with_event_id(
+                1,
+                "instance-A".to_string(),
+                1,
+                None,
+                EventKind::OrchestrationStarted {
+                    name: "TestOrch".to_string(),
+                    version: "1.0.0".to_string(),
+                    input: "{}".to_string(),
+                    parent_instance: None,
+                    parent_id: None,
+                },
+            )],
             vec![],
             vec![],
             ExecutionMetadata::default(),

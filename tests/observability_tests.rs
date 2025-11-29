@@ -1,4 +1,5 @@
 //! Observability-focused tests covering tracing for activities and orchestrations.
+use duroxide::EventKind;
 
 use async_trait::async_trait;
 use duroxide::providers::sqlite::SqliteProvider;
@@ -153,7 +154,7 @@ impl Provider for FailingProvider {
             // This allows the runtime to commit the orchestration failure event
             let is_failure_commit = history_delta
                 .iter()
-                .any(|e| matches!(e, Event::OrchestrationFailed { .. }));
+                .any(|e| matches!(&e.kind, EventKind::OrchestrationFailed { .. }));
             if is_failure_commit {
                 // Allow failure event commit to succeed
                 return self

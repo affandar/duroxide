@@ -427,170 +427,206 @@ impl ErrorDetails {
     }
 }
 
-/// Append-only orchestration history entries persisted by a provider and
-/// consumed during replay. All events have a monotonically increasing event_id
-/// representing their position in history. Scheduling and completion events
-/// are linked via source_event_id.
+/// Unified event with common metadata and type-specific payload.
+///
+/// All events have common fields (event_id, source_event_id, instance_id, etc.)
+/// plus type-specific data in the `kind` field.
+///
+/// Events are append-only history entries persisted by a provider and consumed during replay.
+/// The `event_id` is a monotonically increasing position in history.
+/// Scheduling and completion events are linked via `source_event_id`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub enum Event {
+pub struct Event {
+    /// Sequential position in history (monotonically increasing per execution)
+    pub event_id: u64,
+
+    /// For completion events: references the scheduling event this completes.
+    /// None for lifecycle events (OrchestrationStarted, etc.) and scheduling events.
+    /// Some(id) for completion events (ActivityCompleted, TimerFired, etc.).
+    pub source_event_id: Option<u64>,
+
+    /// Instance this event belongs to.
+    /// Denormalized from DB key for self-contained events.
+    pub instance_id: String,
+
+    /// Execution this event belongs to.
+    /// Denormalized from DB key for self-contained events.
+    pub execution_id: u64,
+
+    /// Timestamp when event was created (milliseconds since Unix epoch).
+    pub timestamp_ms: u64,
+
+    /// Crate semver version that generated this event.
+    /// Format: "0.1.0", "0.2.0", etc.
+    pub duroxide_version: String,
+
+    /// Event type and associated data.
+    #[serde(flatten)]
+    pub kind: EventKind,
+}
+
+/// Event-specific payloads.
+///
+/// Common fields have been extracted to the Event struct:
+/// - event_id: moved to Event.event_id
+/// - source_event_id: moved to Event.source_event_id (Option<u64>)
+/// - execution_id: moved to Event.execution_id (was in 4 variants)
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type")]
+pub enum EventKind {
     /// Orchestration instance was created and started by name with input.
     /// Version is required; parent linkage is present when this is a child orchestration.
+    #[serde(rename = "OrchestrationStarted")]
     OrchestrationStarted {
-        event_id: u64,
         name: String,
         version: String,
         input: String,
         parent_instance: Option<String>,
         parent_id: Option<u64>,
     },
+
     /// Orchestration completed with a final result.
-    OrchestrationCompleted { event_id: u64, output: String },
+    #[serde(rename = "OrchestrationCompleted")]
+    OrchestrationCompleted { output: String },
+
     /// Orchestration failed with a final error.
-    OrchestrationFailed { event_id: u64, details: ErrorDetails },
-    /// Activity was scheduled. event_id is THE id for this operation.
-    ActivityScheduled {
-        event_id: u64,
-        name: String,
-        input: String,
-        execution_id: u64,
-    },
+    #[serde(rename = "OrchestrationFailed")]
+    OrchestrationFailed { details: ErrorDetails },
+
+    /// Activity was scheduled.
+    #[serde(rename = "ActivityScheduled")]
+    ActivityScheduled { name: String, input: String },
+
     /// Activity completed successfully with a result.
-    ActivityCompleted {
-        event_id: u64,
-        source_event_id: u64,
-        result: String,
-    },
+    #[serde(rename = "ActivityCompleted")]
+    ActivityCompleted { result: String },
+
     /// Activity failed with error details.
-    ActivityFailed {
-        event_id: u64,
-        source_event_id: u64,
-        details: ErrorDetails,
-    },
+    #[serde(rename = "ActivityFailed")]
+    ActivityFailed { details: ErrorDetails },
 
     /// Timer was created and will logically fire at `fire_at_ms`.
-    TimerCreated {
-        event_id: u64,
-        fire_at_ms: u64,
-        execution_id: u64,
-    },
+    #[serde(rename = "TimerCreated")]
+    TimerCreated { fire_at_ms: u64 },
+
     /// Timer fired at logical time `fire_at_ms`.
-    TimerFired {
-        event_id: u64,
-        source_event_id: u64,
-        fire_at_ms: u64,
-    },
+    #[serde(rename = "TimerFired")]
+    TimerFired { fire_at_ms: u64 },
 
     /// Subscription to an external event by name was recorded.
-    ExternalSubscribed { event_id: u64, name: String },
-    /// An external event was raised. No source_event_id - matched by name.
-    ExternalEvent { event_id: u64, name: String, data: String },
+    #[serde(rename = "ExternalSubscribed")]
+    ExternalSubscribed { name: String },
+
+    /// An external event was raised. Matched by name (no source_event_id).
+    #[serde(rename = "ExternalEvent")]
+    ExternalEvent { name: String, data: String },
 
     /// Fire-and-forget orchestration scheduling (detached).
+    #[serde(rename = "OrchestrationChained")]
     OrchestrationChained {
-        event_id: u64,
         name: String,
         instance: String,
         input: String,
     },
 
     /// Sub-orchestration was scheduled with deterministic child instance id.
+    #[serde(rename = "SubOrchestrationScheduled")]
     SubOrchestrationScheduled {
-        event_id: u64,
         name: String,
         instance: String,
         input: String,
-        execution_id: u64,
     },
+
     /// Sub-orchestration completed and returned a result to the parent.
-    SubOrchestrationCompleted {
-        event_id: u64,
-        source_event_id: u64,
-        result: String,
-    },
+    #[serde(rename = "SubOrchestrationCompleted")]
+    SubOrchestrationCompleted { result: String },
+
     /// Sub-orchestration failed and returned error details to the parent.
-    SubOrchestrationFailed {
-        event_id: u64,
-        source_event_id: u64,
-        details: ErrorDetails,
-    },
+    #[serde(rename = "SubOrchestrationFailed")]
+    SubOrchestrationFailed { details: ErrorDetails },
 
     /// Orchestration continued as new with fresh input (terminal for this execution).
-    OrchestrationContinuedAsNew { event_id: u64, input: String },
+    #[serde(rename = "OrchestrationContinuedAsNew")]
+    OrchestrationContinuedAsNew { input: String },
 
     /// Cancellation has been requested for the orchestration (terminal will follow deterministically).
-    OrchestrationCancelRequested { event_id: u64, reason: String },
+    #[serde(rename = "OrchestrationCancelRequested")]
+    OrchestrationCancelRequested { reason: String },
 
     /// System call executed synchronously during orchestration turn (single event for schedule+completion).
-    SystemCall {
-        event_id: u64,
-        op: String,
-        value: String,
-        execution_id: u64,
-    },
+    #[serde(rename = "SystemCall")]
+    SystemCall { op: String, value: String },
 }
 
 // Event type name for SystemCall (used by providers for persistence)
 pub(crate) const EVENT_TYPE_SYSTEM_CALL: &str = "SystemCall";
 
 impl Event {
-    /// Get the event_id (position in history) for any event.
-    pub fn event_id(&self) -> u64 {
-        match self {
-            Event::OrchestrationStarted { event_id, .. } => *event_id,
-            Event::OrchestrationCompleted { event_id, .. } => *event_id,
-            Event::OrchestrationFailed { event_id, .. } => *event_id,
-            Event::ActivityScheduled { event_id, .. } => *event_id,
-            Event::ActivityCompleted { event_id, .. } => *event_id,
-            Event::ActivityFailed { event_id, .. } => *event_id,
-            Event::TimerCreated { event_id, .. } => *event_id,
-            Event::TimerFired { event_id, .. } => *event_id,
-            Event::ExternalSubscribed { event_id, .. } => *event_id,
-            Event::ExternalEvent { event_id, .. } => *event_id,
-            Event::OrchestrationChained { event_id, .. } => *event_id,
-            Event::SubOrchestrationScheduled { event_id, .. } => *event_id,
-            Event::SubOrchestrationCompleted { event_id, .. } => *event_id,
-            Event::SubOrchestrationFailed { event_id, .. } => *event_id,
-            Event::OrchestrationContinuedAsNew { event_id, .. } => *event_id,
-            Event::OrchestrationCancelRequested { event_id, .. } => *event_id,
-            Event::SystemCall { event_id, .. } => *event_id,
+    /// Create a new event with common fields populated and a specific event_id.
+    ///
+    /// Use this when you know the event_id upfront (e.g., during replay or when
+    /// creating events inline).
+    pub fn with_event_id(
+        event_id: u64,
+        instance_id: impl Into<String>,
+        execution_id: u64,
+        source_event_id: Option<u64>,
+        kind: EventKind,
+    ) -> Self {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        Event {
+            event_id,
+            source_event_id,
+            instance_id: instance_id.into(),
+            execution_id,
+            timestamp_ms: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0),
+            duroxide_version: env!("CARGO_PKG_VERSION").to_string(),
+            kind,
         }
     }
 
+    /// Create a new event with common fields populated.
+    ///
+    /// The event_id will be 0 and should be set by the history manager.
+    pub fn new(
+        instance_id: impl Into<String>,
+        execution_id: u64,
+        source_event_id: Option<u64>,
+        kind: EventKind,
+    ) -> Self {
+        Self::with_event_id(0, instance_id, execution_id, source_event_id, kind)
+    }
+
+    /// Get the event_id (position in history).
+    #[inline]
+    pub fn event_id(&self) -> u64 {
+        self.event_id
+    }
+
     /// Set the event_id (used by runtime when adding events to history).
+    #[inline]
     pub(crate) fn set_event_id(&mut self, id: u64) {
-        match self {
-            Event::OrchestrationStarted { event_id, .. } => *event_id = id,
-            Event::OrchestrationCompleted { event_id, .. } => *event_id = id,
-            Event::OrchestrationFailed { event_id, .. } => *event_id = id,
-            Event::ActivityScheduled { event_id, .. } => *event_id = id,
-            Event::ActivityCompleted { event_id, .. } => *event_id = id,
-            Event::ActivityFailed { event_id, .. } => *event_id = id,
-            Event::TimerCreated { event_id, .. } => *event_id = id,
-            Event::TimerFired { event_id, .. } => *event_id = id,
-            Event::ExternalSubscribed { event_id, .. } => *event_id = id,
-            Event::ExternalEvent { event_id, .. } => *event_id = id,
-            Event::OrchestrationChained { event_id, .. } => *event_id = id,
-            Event::SubOrchestrationScheduled { event_id, .. } => *event_id = id,
-            Event::SubOrchestrationCompleted { event_id, .. } => *event_id = id,
-            Event::SubOrchestrationFailed { event_id, .. } => *event_id = id,
-            Event::OrchestrationContinuedAsNew { event_id, .. } => *event_id = id,
-            Event::OrchestrationCancelRequested { event_id, .. } => *event_id = id,
-            Event::SystemCall { event_id, .. } => *event_id = id,
-        }
+        self.event_id = id;
     }
 
     /// Get the source_event_id if this is a completion event.
     /// Returns None for lifecycle and scheduling events.
-    /// Note: ExternalEvent does not have source_event_id (matched by name).
+    #[inline]
     pub fn source_event_id(&self) -> Option<u64> {
-        match self {
-            Event::ActivityCompleted { source_event_id, .. } => Some(*source_event_id),
-            Event::ActivityFailed { source_event_id, .. } => Some(*source_event_id),
-            Event::TimerFired { source_event_id, .. } => Some(*source_event_id),
-            Event::SubOrchestrationCompleted { source_event_id, .. } => Some(*source_event_id),
-            Event::SubOrchestrationFailed { source_event_id, .. } => Some(*source_event_id),
-            _ => None,
-        }
+        self.source_event_id
+    }
+
+    /// Check if this event is a terminal event (ends the orchestration).
+    pub fn is_terminal(&self) -> bool {
+        matches!(
+            self.kind,
+            EventKind::OrchestrationCompleted { .. }
+                | EventKind::OrchestrationFailed { .. }
+                | EventKind::OrchestrationContinuedAsNew { .. }
+        )
     }
 }
 
@@ -1756,13 +1792,20 @@ impl OrchestrationContext {
         // Assign event_id for the chained orchestration event
         let event_id = inner.next_event_id;
         inner.next_event_id += 1;
+        let exec_id = inner.execution_id;
+        let inst_id = inner.instance_id.clone();
 
-        inner.history.push(Event::OrchestrationChained {
+        inner.history.push(Event::with_event_id(
             event_id,
-            name: name.clone(),
-            instance: instance.clone(),
-            input: input.clone(),
-        });
+            inst_id,
+            exec_id,
+            None,
+            EventKind::OrchestrationChained {
+                name: name.clone(),
+                instance: instance.clone(),
+                input: input.clone(),
+            },
+        ));
         inner.record_action(Action::StartOrchestrationDetached {
             scheduling_event_id: event_id,
             name,
@@ -1797,13 +1840,20 @@ impl OrchestrationContext {
 
         let event_id = inner.next_event_id;
         inner.next_event_id += 1;
+        let exec_id = inner.execution_id;
+        let inst_id = inner.instance_id.clone();
 
-        inner.history.push(Event::OrchestrationChained {
+        inner.history.push(Event::with_event_id(
             event_id,
-            name: name.clone(),
-            instance: instance.clone(),
-            input: input.clone(),
-        });
+            inst_id,
+            exec_id,
+            None,
+            EventKind::OrchestrationChained {
+                name: name.clone(),
+                instance: instance.clone(),
+                input: input.clone(),
+            },
+        ));
 
         inner.record_action(Action::StartOrchestrationDetached {
             scheduling_event_id: event_id,

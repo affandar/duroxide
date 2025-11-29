@@ -4,7 +4,7 @@ use crate::_typed_codec::{Codec, Json};
 use crate::providers::{
     ExecutionInfo, InstanceInfo, Provider, ProviderAdmin, ProviderError, QueueDepths, SystemMetrics, WorkItem,
 };
-use crate::{Event, OrchestrationStatus};
+use crate::{EventKind, OrchestrationStatus};
 use serde::Serialize;
 
 /// Client-specific error type that wraps provider errors and adds client-specific errors.
@@ -459,11 +459,11 @@ impl Client {
         let hist = self.store.read(instance).await.map_err(ClientError::from)?;
         // Find terminal events first
         for e in hist.iter().rev() {
-            match e {
-                Event::OrchestrationCompleted { output, .. } => {
+            match &e.kind {
+                EventKind::OrchestrationCompleted { output } => {
                     return Ok(OrchestrationStatus::Completed { output: output.clone() });
                 }
-                Event::OrchestrationFailed { details, .. } => {
+                EventKind::OrchestrationFailed { details } => {
                     return Ok(OrchestrationStatus::Failed {
                         details: details.clone(),
                     });
@@ -472,7 +472,7 @@ impl Client {
             }
         }
         // If we ever saw a start, it's running
-        if hist.iter().any(|e| matches!(e, Event::OrchestrationStarted { .. })) {
+        if hist.iter().any(|e| matches!(&e.kind, EventKind::OrchestrationStarted { .. })) {
             Ok(OrchestrationStatus::Running)
         } else {
             Ok(OrchestrationStatus::NotFound)
