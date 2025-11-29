@@ -1263,7 +1263,7 @@ async fn sample_versioning_continue_as_new_upgrade_fs() {
 /// - The child is also canceled (downward propagation), and its history shows cancellation
 #[tokio::test]
 async fn sample_cancellation_parent_cascades_to_children_fs() {
-    use duroxide::Event;
+    
     let (store, _temp_dir) = common::create_sqlite_store_disk().await;
 
     // Child: waits forever (until canceled). This demonstrates cooperative cancellation via runtime.
@@ -1320,8 +1320,8 @@ async fn sample_cancellation_parent_cascades_to_children_fs() {
         |hist| {
             hist.iter().rev().any(|e| {
                 matches!(
-                    e,
-                    Event::OrchestrationFailed { details, .. } if matches!(
+                    &e.kind,
+                    EventKind::OrchestrationFailed { details, .. } if matches!(
                         details,
                         duroxide::ErrorDetails::Application {
                             kind: duroxide::AppErrorKind::Cancelled { reason },
@@ -1355,8 +1355,8 @@ async fn sample_cancellation_parent_cascades_to_children_fs() {
                     .any(|e| matches!(&e.kind, EventKind::OrchestrationCancelRequested { .. }))
                     && hist.iter().any(|e| {
                         matches!(
-                            e,
-                            Event::OrchestrationFailed { details, .. } if matches!(
+                            &e.kind,
+                            EventKind::OrchestrationFailed { details, .. } if matches!(
                                 details,
                                 duroxide::ErrorDetails::Application {
                                     kind: duroxide::AppErrorKind::Cancelled { reason },

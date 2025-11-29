@@ -95,13 +95,8 @@ async fn timer_duplicate_workitems_dedup() {
         let mut t_id = 0u64;
         let mut t_fire = 0u64;
         for e in hist.iter() {
-            if let EventKind::TimerCreated {
-                event_id,
-                fire_at_ms,
-                execution_id: _,
-            } = e
-            {
-                t_id = *event_id;
+            if let EventKind::TimerCreated { fire_at_ms } = &e.kind {
+                t_id = e.event_id;
                 t_fire = *fire_at_ms;
                 break;
             }
@@ -320,13 +315,8 @@ async fn crash_after_append_before_ack_timer() {
         let mut t_id = 0u64;
         let mut t_fire = 0u64;
         for e in hist.iter() {
-            if let EventKind::TimerCreated {
-                event_id,
-                fire_at_ms,
-                execution_id: _,
-            } = e
-            {
-                t_id = *event_id;
+            if let EventKind::TimerCreated { fire_at_ms } = &e.kind {
+                t_id = e.event_id;
                 t_fire = *fire_at_ms;
                 break;
             }

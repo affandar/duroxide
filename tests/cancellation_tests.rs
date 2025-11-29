@@ -2,7 +2,7 @@ use duroxide::EventKind;
 use duroxide::Client;
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
-use duroxide::{ActivityContext, Event, OrchestrationContext, OrchestrationRegistry};
+use duroxide::{ActivityContext, OrchestrationContext, OrchestrationRegistry};
 mod common;
 use std::time::Duration;
 
@@ -60,8 +60,8 @@ async fn cancel_parent_down_propagates_to_child() {
         let hist = store.read("inst-cancel-1").await.unwrap_or_default();
         if hist.iter().any(|e| {
             matches!(
-                e,
-                Event::OrchestrationFailed { details, .. } if matches!(
+                &e.kind,
+                EventKind::OrchestrationFailed { details, .. } if matches!(
                     details,
                     duroxide::ErrorDetails::Application {
                         kind: duroxide::AppErrorKind::Cancelled { reason },
@@ -103,9 +103,7 @@ async fn cancel_parent_down_propagates_to_child() {
                 .iter()
                 .any(|e| matches!(&e.kind, EventKind::OrchestrationCancelRequested { .. }));
             let has_failed = hist.iter().any(|e| {
-                matches!(
-                    e,
-                    Event::OrchestrationFailed { details, .. } if matches!(
+                matches!(&e.kind, EventKind::OrchestrationFailed { details, .. } if matches!(
                         details,
                         duroxide::ErrorDetails::Application {
                             kind: duroxide::AppErrorKind::Cancelled { reason },
@@ -239,9 +237,9 @@ async fn cancel_child_directly_signals_parent() {
     // Parent should have SubOrchestrationFailed for the child id 2
     let ph = store.read("inst-chdirect").await.unwrap_or_default();
     assert!(ph.iter().any(|e| matches!(
-        e,
-        Event::SubOrchestrationFailed { source_event_id, details, .. }
-        if *source_event_id == 2 && matches!(
+        &e.kind,
+        EventKind::SubOrchestrationFailed { details, .. }
+        if e.source_event_id == Some(2) && matches!(
             details,
             duroxide::ErrorDetails::Application {
                 kind: duroxide::AppErrorKind::Cancelled { reason },
@@ -317,9 +315,7 @@ async fn cancel_continue_as_new_second_exec() {
         "inst-can-can",
         |hist| {
             hist.iter().rev().any(|e| {
-                matches!(
-                    e,
-                    Event::OrchestrationFailed { details, .. } if matches!(
+                matches!(&e.kind, EventKind::OrchestrationFailed { details, .. } if matches!(
                         details,
                         duroxide::ErrorDetails::Application {
                             kind: duroxide::AppErrorKind::Cancelled { reason },
@@ -440,9 +436,7 @@ async fn orchestration_fails_before_activity_finishes() {
     // Give activity time to finish; no change to terminal failure
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
     let hist = store.read("inst-orch-fail-first").await.unwrap_or_default();
-    assert!(hist.iter().any(|e| matches!(
-        e,
-        Event::OrchestrationFailed { details, .. } if matches!(
+    assert!(hist.iter().any(|e| matches!(&e.kind, EventKind::OrchestrationFailed { details, .. } if matches!(
             details,
             duroxide::ErrorDetails::Application {
                 kind: duroxide::AppErrorKind::OrchestrationFailed,

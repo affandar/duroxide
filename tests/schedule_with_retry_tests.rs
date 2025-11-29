@@ -5,7 +5,6 @@
 //! - Integration tests for retry behavior
 //! - Stale event / cross-execution tests
 //! - Timeout vs error behavior tests
-use duroxide::EventKind;
 
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self, OrchestrationStatus};

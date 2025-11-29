@@ -216,8 +216,8 @@ async fn test_trace_deterministic_in_history() {
     // Verify trace events are in correct order
     let trace_ops: Vec<&str> = trace_events
         .iter()
-        .map(|e| match e {
-            duroxide::Event::SystemCall { op, .. } => op.as_str(),
+        .map(|e| match &e.kind {
+            duroxide::EventKind::SystemCall { op, .. } => op.as_str(),
             _ => unreachable!(),
         })
         .collect();
@@ -259,7 +259,7 @@ fn action_emission_single_turn() {
         _ => panic!("unexpected action kind"),
     }
     // History should already contain ActivityScheduled
-    assert!(matches!(hist_after[0], Event::ActivityScheduled { .. }));
+    assert!(matches!(&hist_after[0].kind, EventKind::ActivityScheduled { .. }));
 }
 
 #[tokio::test]
@@ -384,8 +384,8 @@ async fn test_trace_fire_and_forget() {
     // Verify trace events are in correct order
     let trace_ops: Vec<&str> = trace_events
         .iter()
-        .map(|e| match e {
-            duroxide::Event::SystemCall { op, .. } => op.as_str(),
+        .map(|e| match &e.kind {
+            duroxide::EventKind::SystemCall { op, .. } => op.as_str(),
             _ => unreachable!(),
         })
         .collect();

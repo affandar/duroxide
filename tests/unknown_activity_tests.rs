@@ -2,7 +2,7 @@ use duroxide::EventKind;
 mod common;
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
-use duroxide::{ActivityContext, Event, OrchestrationContext, OrchestrationRegistry, OrchestrationStatus};
+use duroxide::{ActivityContext, OrchestrationContext, OrchestrationRegistry, OrchestrationStatus};
 use std::sync::Arc as StdArc;
 
 #[tokio::test]
@@ -65,7 +65,7 @@ async fn unknown_activity_is_isolated_from_other_orchestrations_fs() {
         !hist_ok.iter().any(|e| matches!(&e.kind, EventKind::ActivityFailed { .. })),
         "healthy orchestration should not see failures"
     );
-    assert!(matches!(hist_ok.last().unwrap(), Event::OrchestrationCompleted { .. }));
+    assert!(matches!(&hist_ok.last().unwrap().kind, EventKind::OrchestrationCompleted { .. }));
 
     let status_fail = client
         .wait_for_orchestration("inst-missing-1", std::time::Duration::from_secs(5))
@@ -87,8 +87,8 @@ async fn unknown_activity_is_isolated_from_other_orchestrations_fs() {
 
     let hist_fail = client.read_execution_history("inst-missing-1", 1).await.unwrap();
     assert!(hist_fail.iter().any(|e| matches!(
-        e,
-        Event::ActivityFailed { details, .. } if matches!(
+        &e.kind,
+        EventKind::ActivityFailed { details, .. } if matches!(
             details,
             duroxide::ErrorDetails::Configuration {
                 kind: duroxide::ConfigErrorKind::UnregisteredActivity,
@@ -98,8 +98,8 @@ async fn unknown_activity_is_isolated_from_other_orchestrations_fs() {
         )
     )));
     assert!(matches!(
-        hist_fail.last().unwrap(),
-        Event::OrchestrationFailed { details, .. } if matches!(
+        &hist_fail.last().unwrap().kind,
+        EventKind::OrchestrationFailed { details, .. } if matches!(
             details,
             duroxide::ErrorDetails::Configuration {
                 kind: duroxide::ConfigErrorKind::UnregisteredActivity,

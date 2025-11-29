@@ -1,6 +1,6 @@
 use duroxide::runtime;
 use duroxide::runtime::registry::ActivityRegistry;
-use duroxide::{Event, EventKind, OrchestrationContext, OrchestrationRegistry, OrchestrationStatus};
+use duroxide::{EventKind, OrchestrationContext, OrchestrationRegistry, OrchestrationStatus};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -76,16 +76,16 @@ async fn continue_as_new_chain_5_iterations() {
         );
 
         // Verify version consistency - all should use default version
-        if let Some(EventKind::OrchestrationStarted { version, .. }) =
-            hist.iter().find(|e| matches!(&e.kind, EventKind::OrchestrationStarted { .. }))
-        {
-            // Version should be resolved to 1.0.0 (default)
-            assert!(
-                version.starts_with("1."),
-                "Execution {} has unexpected version: {}",
-                exec_id,
-                version
-            );
+        if let Some(event) = hist.iter().find(|e| matches!(&e.kind, EventKind::OrchestrationStarted { .. })) {
+            if let EventKind::OrchestrationStarted { version, .. } = &event.kind {
+                // Version should be resolved to 1.0.0 (default)
+                assert!(
+                    version.starts_with("1."),
+                    "Execution {} has unexpected version: {}",
+                    exec_id,
+                    version
+                );
+            }
         }
 
         // Verify terminal event
@@ -614,17 +614,17 @@ async fn instance_actor_pattern_stress_test() {
             }
 
             // Verify OrchestrationStarted has proper version
-            if let Some(EventKind::OrchestrationStarted { name, version, .. }) =
-                hist.iter().find(|e| matches!(&e.kind, EventKind::OrchestrationStarted { .. }))
-            {
-                assert_eq!(name, "InstanceActor");
-                assert!(
-                    version.starts_with("1."),
-                    "{} execution {} has unexpected version: {}",
-                    instance_id,
-                    exec_id,
-                    version
-                );
+            if let Some(event) = hist.iter().find(|e| matches!(&e.kind, EventKind::OrchestrationStarted { .. })) {
+                if let EventKind::OrchestrationStarted { name, version, .. } = &event.kind {
+                    assert_eq!(name, "InstanceActor");
+                    assert!(
+                        version.starts_with("1."),
+                        "{} execution {} has unexpected version: {}",
+                        instance_id,
+                        exec_id,
+                        version
+                    );
+                }
             }
 
             // Verify terminal event

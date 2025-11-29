@@ -1,5 +1,4 @@
 //! Tests for OrchestrationStatus determination across all scenarios
-use duroxide::EventKind;
 
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self, OrchestrationStatus};

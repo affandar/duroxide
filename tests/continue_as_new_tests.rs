@@ -403,7 +403,7 @@ async fn event_drop_then_retry_after_subscribe() {
     let e = store.read("inst-drop-retry").await.unwrap_or_default();
     let events: Vec<&Event> = e
         .iter()
-        .filter(|ev| matches!(ev, Event::ExternalEvent { name, .. } if name == "Data"))
+        .filter(|ev| matches!(&ev.kind, EventKind::ExternalEvent { name, .. } if name == "Data"))
         .collect();
     assert_eq!(events.len(), 1);
 
@@ -466,8 +466,8 @@ async fn old_execution_completions_are_ignored() {
 
     // Verify the completion was ignored - check that it's not in history
     let history = store.read("inst-exec-test").await.unwrap_or_default();
-    let has_old_completion = history.iter().any(|e| match e {
-        duroxide::Event::ActivityCompleted { result, .. } => result == "old_execution_result",
+    let has_old_completion = history.iter().any(|e| match &e.kind {
+        EventKind::ActivityCompleted { result, .. } => result == "old_execution_result",
         _ => false,
     });
 
@@ -524,8 +524,8 @@ async fn future_execution_completions_are_ignored() {
 
     // Verify the completion was ignored
     let history = store.read("inst-future").await.unwrap_or_default();
-    let has_future_completion = history.iter().any(|e| match e {
-        duroxide::Event::ActivityCompleted { result, .. } => result == "future_completion",
+    let has_future_completion = history.iter().any(|e| match &e.kind {
+        EventKind::ActivityCompleted { result, .. } => result == "future_completion",
         _ => false,
     });
 

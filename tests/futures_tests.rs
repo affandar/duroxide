@@ -1,7 +1,7 @@
 // Use SQLite via common helper
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self, OrchestrationStatus};
-use duroxide::{ActivityContext, DurableOutput, Event, EventKind, OrchestrationContext, OrchestrationRegistry};
+use duroxide::{ActivityContext, DurableOutput, EventKind, OrchestrationContext, OrchestrationRegistry};
 use std::sync::Arc as StdArc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;

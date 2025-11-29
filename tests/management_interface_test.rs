@@ -1,5 +1,4 @@
 //! Comprehensive tests for the management interface including metrics
-use duroxide::EventKind;
 
 use duroxide::providers::sqlite::SqliteProvider;
 use duroxide::runtime::registry::ActivityRegistry;

@@ -1,6 +1,6 @@
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
-use duroxide::{Event, EventKind, OrchestrationRegistry};
+use duroxide::{EventKind, OrchestrationRegistry};
 use std::sync::Arc as StdArc;
 mod common;
 

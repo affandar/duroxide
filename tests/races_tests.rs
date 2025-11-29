@@ -5,7 +5,7 @@ use std::time::Duration;
 mod common;
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self, RuntimeOptions};
-use duroxide::{Event, EventKind, OrchestrationContext, OrchestrationRegistry};
+use duroxide::{EventKind, OrchestrationContext, OrchestrationRegistry};
 use std::sync::Arc as StdArc;
 
 // Helper for timing-sensitive race tests
