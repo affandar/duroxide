@@ -1655,13 +1655,20 @@ async fn test_my_orchestration_logic() {
     };
     
     // Turn 1: Schedule activity
-    let history1 = vec![Event::OrchestrationStarted {
+    let history1 = vec![Event {
         event_id: 1,
-        name: "TestOrch".to_string(),
-        version: "1.0.0".to_string(),
-        input: "test".to_string(),
-        parent_instance: None,
-        parent_id: None,
+        source_event_id: None,
+        instance_id: "test-instance".to_string(),
+        execution_id: 1,
+        timestamp_ms: 0,
+        duroxide_version: env!("CARGO_PKG_VERSION").to_string(),
+        kind: EventKind::OrchestrationStarted {
+            name: "TestOrch".to_string(),
+            version: "1.0.0".to_string(),
+            input: "test".to_string(),
+            parent_instance: None,
+            parent_id: None,
+        },
     }];
     
     let (history2, actions1, output1) = run_turn(history1, orch);
@@ -1671,10 +1678,16 @@ async fn test_my_orchestration_logic() {
     
     // Simulate activity completion
     let mut history2 = history2;
-    history2.push(Event::ActivityCompleted {
+    history2.push(Event {
         event_id: 3,
-        source_event_id: 2,
-        result: "success".to_string(),
+        source_event_id: Some(2),
+        instance_id: "test-instance".to_string(),
+        execution_id: 1,
+        timestamp_ms: 0,
+        duroxide_version: env!("CARGO_PKG_VERSION").to_string(),
+        kind: EventKind::ActivityCompleted {
+            result: "success".to_string(),
+        },
     });
     
     // Turn 2: Resume from completion

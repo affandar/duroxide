@@ -1134,11 +1134,12 @@ async fn renew_work_item_lock(token: &str, extend_for: Duration) -> Result<(), P
 ```rust
 // WRONG - Provider inspecting events
 for event in &history_delta {
-    match event {
-        Event::OrchestrationCompleted { output, .. } => {
+    match &event.kind {
+        EventKind::OrchestrationCompleted { output } => {
             // Provider understanding orchestration semantics
             self.update_status("Completed", output)?;
         }
+        _ => {}
     }
 }
 ```

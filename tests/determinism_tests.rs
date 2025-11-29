@@ -1,7 +1,9 @@
 use duroxide::providers::Provider;
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
-use duroxide::{Action, ActivityContext, DurableOutput, Event, OrchestrationContext, OrchestrationRegistry, run_turn};
+use duroxide::{
+    Action, ActivityContext, DurableOutput, Event, EventKind, OrchestrationContext, OrchestrationRegistry, run_turn,
+};
 use std::sync::Arc as StdArc;
 use std::sync::Arc;
 use std::time::Duration;
@@ -208,7 +210,7 @@ async fn test_trace_deterministic_in_history() {
     let history = history_store.read("instance-2").await.unwrap_or_default();
     let trace_events: Vec<_> = history
         .iter()
-        .filter(|e| matches!(e, duroxide::Event::SystemCall { op, .. } if op.starts_with("trace:")))
+        .filter(|e| matches!(&e.kind, duroxide::EventKind::SystemCall { op, .. } if op.starts_with("trace:")))
         .collect();
 
     assert_eq!(trace_events.len(), 3, "Expected 3 trace events (info, warn, error)");
@@ -216,8 +218,8 @@ async fn test_trace_deterministic_in_history() {
     // Verify trace events are in correct order
     let trace_ops: Vec<&str> = trace_events
         .iter()
-        .map(|e| match e {
-            duroxide::Event::SystemCall { op, .. } => op.as_str(),
+        .map(|e| match &e.kind {
+            duroxide::EventKind::SystemCall { op, .. } => op.as_str(),
             _ => unreachable!(),
         })
         .collect();
@@ -259,7 +261,7 @@ fn action_emission_single_turn() {
         _ => panic!("unexpected action kind"),
     }
     // History should already contain ActivityScheduled
-    assert!(matches!(hist_after[0], Event::ActivityScheduled { .. }));
+    assert!(matches!(&hist_after[0].kind, EventKind::ActivityScheduled { .. }));
 }
 
 #[tokio::test]
@@ -372,7 +374,7 @@ async fn test_trace_fire_and_forget() {
         .unwrap_or_default();
     let trace_events: Vec<_> = history
         .iter()
-        .filter(|e| matches!(e, duroxide::Event::SystemCall { op, .. } if op.starts_with("trace:")))
+        .filter(|e| matches!(&e.kind, duroxide::EventKind::SystemCall { op, .. } if op.starts_with("trace:")))
         .collect();
 
     assert_eq!(
@@ -384,8 +386,8 @@ async fn test_trace_fire_and_forget() {
     // Verify trace events are in correct order
     let trace_ops: Vec<&str> = trace_events
         .iter()
-        .map(|e| match e {
-            duroxide::Event::SystemCall { op, .. } => op.as_str(),
+        .map(|e| match &e.kind {
+            duroxide::EventKind::SystemCall { op, .. } => op.as_str(),
             _ => unreachable!(),
         })
         .collect();

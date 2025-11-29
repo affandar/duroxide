@@ -1,3 +1,4 @@
+use duroxide::EventKind;
 use duroxide::OrchestrationStatus;
 use duroxide::providers::Provider;
 use duroxide::providers::sqlite::SqliteProvider;
@@ -27,7 +28,7 @@ where
     let count_scheduled = |hist: &Vec<Event>, input: &str| -> usize {
         hist.iter()
             .filter(
-                |e| matches!(e, Event::ActivityScheduled { name, input: inp, .. } if name == "Step" && inp == input),
+                |e| matches!(&e.kind, EventKind::ActivityScheduled { name, input: inp, .. } if name == "Step" && inp == input),
             )
             .count()
     };
@@ -141,7 +142,7 @@ async fn recovery_across_restart_sqlite_provider() {
     let hist = store.read(&instance).await.unwrap_or_default();
     let count = |inp: &str| {
         hist.iter()
-            .filter(|e| matches!(e, Event::ActivityScheduled { name, input, .. } if name == "Step" && input == inp))
+            .filter(|e| matches!(&e.kind, EventKind::ActivityScheduled { name, input, .. } if name == "Step" && input == inp))
             .count()
     };
     assert_eq!(count("1"), 1);
@@ -170,7 +171,7 @@ async fn recovery_across_restart_sqlite_memory() {
 
     let count = |hist: &Vec<Event>, inp: &str| {
         hist.iter()
-            .filter(|e| matches!(e, Event::ActivityScheduled { name, input, .. } if name == "Step" && input == inp))
+            .filter(|e| matches!(&e.kind, EventKind::ActivityScheduled { name, input, .. } if name == "Step" && input == inp))
             .count()
     };
     assert_eq!(count(&hist_before, "1"), 0);
@@ -285,8 +286,8 @@ async fn recovery_multiple_orchestrations_sqlite_provider() {
             store1.clone(),
             "inst-echo-wait",
             |h| {
-                let has_timer_created = h.iter().any(|e| matches!(e, Event::TimerCreated { .. }));
-                let has_timer_fired = h.iter().any(|e| matches!(e, Event::TimerFired { .. }));
+                let has_timer_created = h.iter().any(|e| matches!(&e.kind, EventKind::TimerCreated { .. }));
+                let has_timer_fired = h.iter().any(|e| matches!(&e.kind, EventKind::TimerFired { .. }));
                 has_timer_created && !has_timer_fired
             },
             2000
@@ -299,7 +300,7 @@ async fn recovery_multiple_orchestrations_sqlite_provider() {
         wait_for_history(
             store1.clone(),
             "inst-upper",
-            |h| { h.iter().any(|e| matches!(e, Event::ActivityCompleted { .. })) },
+            |h| { h.iter().any(|e| matches!(&e.kind, EventKind::ActivityCompleted { .. })) },
             1000
         )
         .await
@@ -315,8 +316,8 @@ async fn recovery_multiple_orchestrations_sqlite_provider() {
             "inst-sum",
             |h| {
                 h.iter()
-                    .any(|e| matches!(e, Event::ActivityScheduled { name, .. } if name == "Add"))
-                    || h.iter().any(|e| matches!(e, Event::ActivityCompleted { .. }))
+                    .any(|e| matches!(&e.kind, EventKind::ActivityScheduled { name, .. } if name == "Add"))
+                    || h.iter().any(|e| matches!(&e.kind, EventKind::ActivityCompleted { .. }))
             },
             2000
         )
@@ -328,7 +329,12 @@ async fn recovery_multiple_orchestrations_sqlite_provider() {
         wait_for_history(
             store1.clone(),
             "inst-2timers",
-            |h| { h.iter().filter(|e| matches!(e, Event::TimerCreated { .. })).count() >= 2 },
+            |h| {
+                h.iter()
+                    .filter(|e| matches!(&e.kind, EventKind::TimerCreated { .. }))
+                    .count()
+                    >= 2
+            },
             1000
         )
         .await

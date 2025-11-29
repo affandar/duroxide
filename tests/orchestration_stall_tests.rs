@@ -12,7 +12,7 @@
 //! Loser `source_event_id`s are marked as "cancelled" when select2 returns. Their
 //! completions are automatically skipped in FIFO ordering checks.
 
-use duroxide::{Event, OrchestrationContext, run_turn};
+use duroxide::{Event, EventKind, OrchestrationContext, run_turn};
 use std::time::Duration;
 
 /// Core repro: Two select2s with activity winners create stale timers that
@@ -42,82 +42,103 @@ fn select2_loser_timer_does_not_block_later_timer() {
     };
 
     // History with stale timers from select2 losers
+    let inst = "test-inst".to_string();
     let history = vec![
-        Event::OrchestrationStarted {
-            event_id: 1,
-            name: "TestOrch".to_string(),
-            version: "1.0.0".to_string(),
-            input: "test".to_string(),
-            parent_instance: None,
-            parent_id: None,
-        },
+        Event::with_event_id(
+            1,
+            inst.clone(),
+            1,
+            None,
+            EventKind::OrchestrationStarted {
+                name: "TestOrch".to_string(),
+                version: "1.0.0".to_string(),
+                input: "test".to_string(),
+                parent_instance: None,
+                parent_id: None,
+            },
+        ),
         // First select2: activity scheduled (event 2)
-        Event::ActivityScheduled {
-            event_id: 2,
-            name: "FastActivity".to_string(),
-            input: "input1".to_string(),
-            execution_id: 1,
-        },
+        Event::with_event_id(
+            2,
+            inst.clone(),
+            1,
+            None,
+            EventKind::ActivityScheduled {
+                name: "FastActivity".to_string(),
+                input: "input1".to_string(),
+            },
+        ),
         // First select2: timeout timer created (event 3)
-        Event::TimerCreated {
-            event_id: 3,
-            fire_at_ms: 15000,
-            execution_id: 1,
-        },
+        Event::with_event_id(3, inst.clone(), 1, None, EventKind::TimerCreated { fire_at_ms: 15000 }),
         // First activity completes (event 4) - WINS the race
-        Event::ActivityCompleted {
-            event_id: 4,
-            source_event_id: 2,
-            result: "result1".to_string(),
-        },
+        Event::with_event_id(
+            4,
+            inst.clone(),
+            1,
+            Some(2),
+            EventKind::ActivityCompleted {
+                result: "result1".to_string(),
+            },
+        ),
         // Second select2: activity scheduled (event 5)
-        Event::ActivityScheduled {
-            event_id: 5,
-            name: "FastActivity".to_string(),
-            input: "input2".to_string(),
-            execution_id: 1,
-        },
+        Event::with_event_id(
+            5,
+            inst.clone(),
+            1,
+            None,
+            EventKind::ActivityScheduled {
+                name: "FastActivity".to_string(),
+                input: "input2".to_string(),
+            },
+        ),
         // Second select2: timeout timer created (event 6)
-        Event::TimerCreated {
-            event_id: 6,
-            fire_at_ms: 30000,
-            execution_id: 1,
-        },
+        Event::with_event_id(6, inst.clone(), 1, None, EventKind::TimerCreated { fire_at_ms: 30000 }),
         // Second activity completes (event 7) - WINS the race
-        Event::ActivityCompleted {
-            event_id: 7,
-            source_event_id: 5,
-            result: "result2".to_string(),
-        },
+        Event::with_event_id(
+            7,
+            inst.clone(),
+            1,
+            Some(5),
+            EventKind::ActivityCompleted {
+                result: "result2".to_string(),
+            },
+        ),
         // Third select2: sleep timer created (event 8)
-        Event::TimerCreated {
-            event_id: 8,
-            fire_at_ms: 30000,
-            execution_id: 1,
-        },
+        Event::with_event_id(8, inst.clone(), 1, None, EventKind::TimerCreated { fire_at_ms: 30000 }),
         // External wait subscription (event 9)
-        Event::ExternalSubscribed {
-            event_id: 9,
-            name: "InstanceDeleted".to_string(),
-        },
+        Event::with_event_id(
+            9,
+            inst.clone(),
+            1,
+            None,
+            EventKind::ExternalSubscribed {
+                name: "InstanceDeleted".to_string(),
+            },
+        ),
         // First stale timer fires (event 10) - from first select2, LOSER
-        Event::TimerFired {
-            event_id: 10,
-            source_event_id: 3,
-            fire_at_ms: 15000,
-        },
+        Event::with_event_id(
+            10,
+            inst.clone(),
+            1,
+            Some(3),
+            EventKind::TimerFired { fire_at_ms: 15000 },
+        ),
         // Second stale timer fires (event 11) - from second select2, LOSER
-        Event::TimerFired {
-            event_id: 11,
-            source_event_id: 6,
-            fire_at_ms: 30000,
-        },
+        Event::with_event_id(
+            11,
+            inst.clone(),
+            1,
+            Some(6),
+            EventKind::TimerFired { fire_at_ms: 30000 },
+        ),
         // Third timer fires (event 12) - from third select2, should be consumed
-        Event::TimerFired {
-            event_id: 12,
-            source_event_id: 8,
-            fire_at_ms: 30000,
-        },
+        Event::with_event_id(
+            12,
+            inst.clone(),
+            1,
+            Some(8),
+            EventKind::TimerFired { fire_at_ms: 30000 },
+        ),
     ];
 
     let (final_history, actions, output) = run_turn(history, orchestrator);
@@ -151,48 +172,46 @@ fn single_stale_loser_handled() {
         "completed"
     };
 
+    let inst = "test-inst".to_string();
     let history = vec![
-        Event::OrchestrationStarted {
-            event_id: 1,
-            name: "Test".to_string(),
-            version: "1.0.0".to_string(),
-            input: "".to_string(),
-            parent_instance: None,
-            parent_id: None,
-        },
-        Event::ActivityScheduled {
-            event_id: 2,
-            name: "Fast".to_string(),
-            input: "input".to_string(),
-            execution_id: 1,
-        },
-        Event::TimerCreated {
-            event_id: 3,
-            fire_at_ms: 10000,
-            execution_id: 1,
-        },
-        Event::ActivityCompleted {
-            event_id: 4,
-            source_event_id: 2,
-            result: "done".to_string(),
-        },
-        Event::TimerCreated {
-            event_id: 5,
-            fire_at_ms: 5000,
-            execution_id: 1,
-        },
+        Event::with_event_id(
+            1,
+            inst.clone(),
+            1,
+            None,
+            EventKind::OrchestrationStarted {
+                name: "Test".to_string(),
+                version: "1.0.0".to_string(),
+                input: "".to_string(),
+                parent_instance: None,
+                parent_id: None,
+            },
+        ),
+        Event::with_event_id(
+            2,
+            inst.clone(),
+            1,
+            None,
+            EventKind::ActivityScheduled {
+                name: "Fast".to_string(),
+                input: "input".to_string(),
+            },
+        ),
+        Event::with_event_id(3, inst.clone(), 1, None, EventKind::TimerCreated { fire_at_ms: 10000 }),
+        Event::with_event_id(
+            4,
+            inst.clone(),
+            1,
+            Some(2),
+            EventKind::ActivityCompleted {
+                result: "done".to_string(),
+            },
+        ),
+        Event::with_event_id(5, inst.clone(), 1, None, EventKind::TimerCreated { fire_at_ms: 5000 }),
         // Stale timer from select2 loser
-        Event::TimerFired {
-            event_id: 6,
-            source_event_id: 3,
-            fire_at_ms: 10000,
-        },
+        Event::with_event_id(6, inst.clone(), 1, Some(3), EventKind::TimerFired { fire_at_ms: 10000 }),
         // Timer we want to consume
-        Event::TimerFired {
-            event_id: 7,
-            source_event_id: 5,
-            fire_at_ms: 5000,
-        },
+        Event::with_event_id(7, inst.clone(), 1, Some(5), EventKind::TimerFired { fire_at_ms: 5000 }),
     ];
 
     let (_history, _actions, output) = run_turn(history, orchestrator);
@@ -217,50 +236,48 @@ fn select2_loser_activity_does_not_block_later_timer() {
         "completed"
     };
 
+    let inst = "test-inst".to_string();
     let history = vec![
-        Event::OrchestrationStarted {
-            event_id: 1,
-            name: "Test".to_string(),
-            version: "1.0.0".to_string(),
-            input: "".to_string(),
-            parent_instance: None,
-            parent_id: None,
-        },
-        Event::ActivityScheduled {
-            event_id: 2,
-            name: "SlowActivity".to_string(),
-            input: "input".to_string(),
-            execution_id: 1,
-        },
-        Event::TimerCreated {
-            event_id: 3,
-            fire_at_ms: 1000,
-            execution_id: 1,
-        },
+        Event::with_event_id(
+            1,
+            inst.clone(),
+            1,
+            None,
+            EventKind::OrchestrationStarted {
+                name: "Test".to_string(),
+                version: "1.0.0".to_string(),
+                input: "".to_string(),
+                parent_instance: None,
+                parent_id: None,
+            },
+        ),
+        Event::with_event_id(
+            2,
+            inst.clone(),
+            1,
+            None,
+            EventKind::ActivityScheduled {
+                name: "SlowActivity".to_string(),
+                input: "input".to_string(),
+            },
+        ),
+        Event::with_event_id(3, inst.clone(), 1, None, EventKind::TimerCreated { fire_at_ms: 1000 }),
         // Timer fires first - WINS
-        Event::TimerFired {
-            event_id: 4,
-            source_event_id: 3,
-            fire_at_ms: 1000,
-        },
+        Event::with_event_id(4, inst.clone(), 1, Some(3), EventKind::TimerFired { fire_at_ms: 1000 }),
         // Second timer scheduled
-        Event::TimerCreated {
-            event_id: 5,
-            fire_at_ms: 5000,
-            execution_id: 1,
-        },
+        Event::with_event_id(5, inst.clone(), 1, None, EventKind::TimerCreated { fire_at_ms: 5000 }),
         // Stale activity completes (loser)
-        Event::ActivityCompleted {
-            event_id: 6,
-            source_event_id: 2,
-            result: "slow_result".to_string(),
-        },
+        Event::with_event_id(
+            6,
+            inst.clone(),
+            1,
+            Some(2),
+            EventKind::ActivityCompleted {
+                result: "slow_result".to_string(),
+            },
+        ),
         // Second timer fires - should be consumable
-        Event::TimerFired {
-            event_id: 7,
-            source_event_id: 5,
-            fire_at_ms: 5000,
-        },
+        Event::with_event_id(7, inst.clone(), 1, Some(5), EventKind::TimerFired { fire_at_ms: 5000 }),
     ];
 
     let (_history, _actions, output) = run_turn(history, orchestrator);
@@ -288,94 +305,116 @@ fn multiple_retry_pattern_then_timer_completes() {
         "all_retries_done"
     };
 
+    let inst = "test-inst".to_string();
     let history = vec![
-        Event::OrchestrationStarted {
-            event_id: 1,
-            name: "Test".to_string(),
-            version: "1.0.0".to_string(),
-            input: "".to_string(),
-            parent_instance: None,
-            parent_id: None,
-        },
+        Event::with_event_id(
+            1,
+            inst.clone(),
+            1,
+            None,
+            EventKind::OrchestrationStarted {
+                name: "Test".to_string(),
+                version: "1.0.0".to_string(),
+                input: "".to_string(),
+                parent_instance: None,
+                parent_id: None,
+            },
+        ),
         // Retry 1
-        Event::ActivityScheduled {
-            event_id: 2,
-            name: "Task".to_string(),
-            input: "input0".to_string(),
-            execution_id: 1,
-        },
-        Event::TimerCreated {
-            event_id: 3,
-            fire_at_ms: 30000,
-            execution_id: 1,
-        },
-        Event::ActivityCompleted {
-            event_id: 4,
-            source_event_id: 2,
-            result: "ok".to_string(),
-        },
+        Event::with_event_id(
+            2,
+            inst.clone(),
+            1,
+            None,
+            EventKind::ActivityScheduled {
+                name: "Task".to_string(),
+                input: "input0".to_string(),
+            },
+        ),
+        Event::with_event_id(3, inst.clone(), 1, None, EventKind::TimerCreated { fire_at_ms: 30000 }),
+        Event::with_event_id(
+            4,
+            inst.clone(),
+            1,
+            Some(2),
+            EventKind::ActivityCompleted {
+                result: "ok".to_string(),
+            },
+        ),
         // Retry 2
-        Event::ActivityScheduled {
-            event_id: 5,
-            name: "Task".to_string(),
-            input: "input1".to_string(),
-            execution_id: 1,
-        },
-        Event::TimerCreated {
-            event_id: 6,
-            fire_at_ms: 30000,
-            execution_id: 1,
-        },
-        Event::ActivityCompleted {
-            event_id: 7,
-            source_event_id: 5,
-            result: "ok".to_string(),
-        },
+        Event::with_event_id(
+            5,
+            inst.clone(),
+            1,
+            None,
+            EventKind::ActivityScheduled {
+                name: "Task".to_string(),
+                input: "input1".to_string(),
+            },
+        ),
+        Event::with_event_id(6, inst.clone(), 1, None, EventKind::TimerCreated { fire_at_ms: 30000 }),
+        Event::with_event_id(
+            7,
+            inst.clone(),
+            1,
+            Some(5),
+            EventKind::ActivityCompleted {
+                result: "ok".to_string(),
+            },
+        ),
         // Retry 3
-        Event::ActivityScheduled {
-            event_id: 8,
-            name: "Task".to_string(),
-            input: "input2".to_string(),
-            execution_id: 1,
-        },
-        Event::TimerCreated {
-            event_id: 9,
-            fire_at_ms: 30000,
-            execution_id: 1,
-        },
-        Event::ActivityCompleted {
-            event_id: 10,
-            source_event_id: 8,
-            result: "ok".to_string(),
-        },
+        Event::with_event_id(
+            8,
+            inst.clone(),
+            1,
+            None,
+            EventKind::ActivityScheduled {
+                name: "Task".to_string(),
+                input: "input2".to_string(),
+            },
+        ),
+        Event::with_event_id(9, inst.clone(), 1, None, EventKind::TimerCreated { fire_at_ms: 30000 }),
+        Event::with_event_id(
+            10,
+            inst.clone(),
+            1,
+            Some(8),
+            EventKind::ActivityCompleted {
+                result: "ok".to_string(),
+            },
+        ),
         // Final timer
-        Event::TimerCreated {
-            event_id: 11,
-            fire_at_ms: 10000,
-            execution_id: 1,
-        },
+        Event::with_event_id(11, inst.clone(), 1, None, EventKind::TimerCreated { fire_at_ms: 10000 }),
         // Stale timers from all 3 retries
-        Event::TimerFired {
-            event_id: 12,
-            source_event_id: 3,
-            fire_at_ms: 30000,
-        },
-        Event::TimerFired {
-            event_id: 13,
-            source_event_id: 6,
-            fire_at_ms: 30000,
-        },
-        Event::TimerFired {
-            event_id: 14,
-            source_event_id: 9,
-            fire_at_ms: 30000,
-        },
+        Event::with_event_id(
+            12,
+            inst.clone(),
+            1,
+            Some(3),
+            EventKind::TimerFired { fire_at_ms: 30000 },
+        ),
+        Event::with_event_id(
+            13,
+            inst.clone(),
+            1,
+            Some(6),
+            EventKind::TimerFired { fire_at_ms: 30000 },
+        ),
+        Event::with_event_id(
+            14,
+            inst.clone(),
+            1,
+            Some(9),
+            EventKind::TimerFired { fire_at_ms: 30000 },
+        ),
         // Final timer fires
-        Event::TimerFired {
-            event_id: 15,
-            source_event_id: 11,
-            fire_at_ms: 10000,
-        },
+        Event::with_event_id(
+            15,
+            inst.clone(),
+            1,
+            Some(11),
+            EventKind::TimerFired { fire_at_ms: 10000 },
+        ),
     ];
 
     let (_history, _actions, output) = run_turn(history, orchestrator);
@@ -406,76 +445,97 @@ fn instance_actor_pattern_completes() {
         if winner == 0 { "sleep_done" } else { "deleted" }
     };
 
+    let inst = "test-inst".to_string();
     let history = vec![
-        Event::OrchestrationStarted {
-            event_id: 1,
-            name: "InstanceActor".to_string(),
-            version: "1.0.0".to_string(),
-            input: "{}".to_string(),
-            parent_instance: None,
-            parent_id: None,
-        },
+        Event::with_event_id(
+            1,
+            inst.clone(),
+            1,
+            None,
+            EventKind::OrchestrationStarted {
+                name: "InstanceActor".to_string(),
+                version: "1.0.0".to_string(),
+                input: "{}".to_string(),
+                parent_instance: None,
+                parent_id: None,
+            },
+        ),
         // First retry
-        Event::ActivityScheduled {
-            event_id: 2,
-            name: "GetConnection".to_string(),
-            input: "input".to_string(),
-            execution_id: 1,
-        },
-        Event::TimerCreated {
-            event_id: 3,
-            fire_at_ms: 15000,
-            execution_id: 1,
-        },
-        Event::ActivityCompleted {
-            event_id: 4,
-            source_event_id: 2,
-            result: "conn".to_string(),
-        },
+        Event::with_event_id(
+            2,
+            inst.clone(),
+            1,
+            None,
+            EventKind::ActivityScheduled {
+                name: "GetConnection".to_string(),
+                input: "input".to_string(),
+            },
+        ),
+        Event::with_event_id(3, inst.clone(), 1, None, EventKind::TimerCreated { fire_at_ms: 15000 }),
+        Event::with_event_id(
+            4,
+            inst.clone(),
+            1,
+            Some(2),
+            EventKind::ActivityCompleted {
+                result: "conn".to_string(),
+            },
+        ),
         // Second retry
-        Event::ActivityScheduled {
-            event_id: 5,
-            name: "TestConnection".to_string(),
-            input: "input".to_string(),
-            execution_id: 1,
-        },
-        Event::TimerCreated {
-            event_id: 6,
-            fire_at_ms: 30000,
-            execution_id: 1,
-        },
-        Event::ActivityCompleted {
-            event_id: 7,
-            source_event_id: 5,
-            result: "ok".to_string(),
-        },
+        Event::with_event_id(
+            5,
+            inst.clone(),
+            1,
+            None,
+            EventKind::ActivityScheduled {
+                name: "TestConnection".to_string(),
+                input: "input".to_string(),
+            },
+        ),
+        Event::with_event_id(6, inst.clone(), 1, None, EventKind::TimerCreated { fire_at_ms: 30000 }),
+        Event::with_event_id(
+            7,
+            inst.clone(),
+            1,
+            Some(5),
+            EventKind::ActivityCompleted {
+                result: "ok".to_string(),
+            },
+        ),
         // Sleep/signal select2
-        Event::TimerCreated {
-            event_id: 8,
-            fire_at_ms: 30000,
-            execution_id: 1,
-        },
-        Event::ExternalSubscribed {
-            event_id: 9,
-            name: "InstanceDeleted".to_string(),
-        },
+        Event::with_event_id(8, inst.clone(), 1, None, EventKind::TimerCreated { fire_at_ms: 30000 }),
+        Event::with_event_id(
+            9,
+            inst.clone(),
+            1,
+            None,
+            EventKind::ExternalSubscribed {
+                name: "InstanceDeleted".to_string(),
+            },
+        ),
         // Stale timers from retries
-        Event::TimerFired {
-            event_id: 10,
-            source_event_id: 3,
-            fire_at_ms: 15000,
-        },
-        Event::TimerFired {
-            event_id: 11,
-            source_event_id: 6,
-            fire_at_ms: 30000,
-        },
+        Event::with_event_id(
+            10,
+            inst.clone(),
+            1,
+            Some(3),
+            EventKind::TimerFired { fire_at_ms: 15000 },
+        ),
+        Event::with_event_id(
+            11,
+            inst.clone(),
+            1,
+            Some(6),
+            EventKind::TimerFired { fire_at_ms: 30000 },
+        ),
         // Sleep timer fires
-        Event::TimerFired {
-            event_id: 12,
-            source_event_id: 8,
-            fire_at_ms: 30000,
-        },
+        Event::with_event_id(
+            12,
+            inst.clone(),
+            1,
+            Some(8),
+            EventKind::TimerFired { fire_at_ms: 30000 },
+        ),
     ];
 
     let (_history, _actions, output) = run_turn(history, orchestrator);
@@ -497,37 +557,43 @@ fn both_ready_first_argument_wins() {
     };
 
     // Both complete, but activity is first in select2 order
+    let inst = "test-inst".to_string();
     let history = vec![
-        Event::OrchestrationStarted {
-            event_id: 1,
-            name: "Test".to_string(),
-            version: "1.0.0".to_string(),
-            input: "".to_string(),
-            parent_instance: None,
-            parent_id: None,
-        },
-        Event::ActivityScheduled {
-            event_id: 2,
-            name: "Fast".to_string(),
-            input: "input".to_string(),
-            execution_id: 1,
-        },
-        Event::TimerCreated {
-            event_id: 3,
-            fire_at_ms: 1000,
-            execution_id: 1,
-        },
+        Event::with_event_id(
+            1,
+            inst.clone(),
+            1,
+            None,
+            EventKind::OrchestrationStarted {
+                name: "Test".to_string(),
+                version: "1.0.0".to_string(),
+                input: "".to_string(),
+                parent_instance: None,
+                parent_id: None,
+            },
+        ),
+        Event::with_event_id(
+            2,
+            inst.clone(),
+            1,
+            None,
+            EventKind::ActivityScheduled {
+                name: "Fast".to_string(),
+                input: "input".to_string(),
+            },
+        ),
+        Event::with_event_id(3, inst.clone(), 1, None, EventKind::TimerCreated { fire_at_ms: 1000 }),
         // Both complete - activity has lower event_id, consumable first
-        Event::ActivityCompleted {
-            event_id: 4,
-            source_event_id: 2,
-            result: "done".to_string(),
-        },
-        Event::TimerFired {
-            event_id: 5,
-            source_event_id: 3,
-            fire_at_ms: 1000,
-        },
+        Event::with_event_id(
+            4,
+            inst.clone(),
+            1,
+            Some(2),
+            EventKind::ActivityCompleted {
+                result: "done".to_string(),
+            },
+        ),
+        Event::with_event_id(5, inst.clone(), 1, Some(3), EventKind::TimerFired { fire_at_ms: 1000 }),
     ];
 
     let (_history, _actions, output) = run_turn(history, orchestrator);
@@ -561,31 +627,41 @@ fn new_execution_starts_clean() {
     // The history does NOT include stale completions from execution 1 because
     // each execution has its own history. This test verifies the orchestrator
     // works correctly with a fresh execution.
+    let inst = "test-inst".to_string();
     let history = vec![
-        Event::OrchestrationStarted {
-            event_id: 1,
-            name: "Test".to_string(),
-            version: "1.0.0".to_string(),
-            input: "continued".to_string(),
-            parent_instance: None,
-            parent_id: None,
-        },
-        Event::ActivityScheduled {
-            event_id: 2,
-            name: "Task".to_string(),
-            input: "input".to_string(),
-            execution_id: 2, // Note: execution 2
-        },
-        Event::TimerCreated {
-            event_id: 3,
-            fire_at_ms: 10000,
-            execution_id: 2,
-        },
-        Event::ActivityCompleted {
-            event_id: 4,
-            source_event_id: 2,
-            result: "done".to_string(),
-        },
+        Event::with_event_id(
+            1,
+            inst.clone(),
+            2,
+            None,
+            EventKind::OrchestrationStarted {
+                name: "Test".to_string(),
+                version: "1.0.0".to_string(),
+                input: "continued".to_string(),
+                parent_instance: None,
+                parent_id: None,
+            },
+        ),
+        Event::with_event_id(
+            2,
+            inst.clone(),
+            2,
+            None,
+            EventKind::ActivityScheduled {
+                name: "Task".to_string(),
+                input: "input".to_string(),
+            },
+        ),
+        Event::with_event_id(3, inst.clone(), 2, None, EventKind::TimerCreated { fire_at_ms: 10000 }),
+        Event::with_event_id(
+            4,
+            inst.clone(),
+            2,
+            Some(2),
+            EventKind::ActivityCompleted {
+                result: "done".to_string(),
+            },
+        ),
     ];
 
     // Run as execution 2
@@ -622,51 +698,65 @@ fn stale_completion_same_execution_handled() {
         "completed_before_can"
     };
 
+    let inst = "test-inst".to_string();
     let history = vec![
-        Event::OrchestrationStarted {
-            event_id: 1,
-            name: "Test".to_string(),
-            version: "1.0.0".to_string(),
-            input: "".to_string(),
-            parent_instance: None,
-            parent_id: None,
-        },
+        Event::with_event_id(
+            1,
+            inst.clone(),
+            1,
+            None,
+            EventKind::OrchestrationStarted {
+                name: "Test".to_string(),
+                version: "1.0.0".to_string(),
+                input: "".to_string(),
+                parent_instance: None,
+                parent_id: None,
+            },
+        ),
         // First select2
-        Event::ActivityScheduled {
-            event_id: 2,
-            name: "Fast".to_string(),
-            input: "input".to_string(),
-            execution_id: 1,
-        },
-        Event::TimerCreated {
-            event_id: 3,
-            fire_at_ms: 30000,
-            execution_id: 1,
-        },
-        Event::ActivityCompleted {
-            event_id: 4,
-            source_event_id: 2,
-            result: "fast_done".to_string(),
-        },
+        Event::with_event_id(
+            2,
+            inst.clone(),
+            1,
+            None,
+            EventKind::ActivityScheduled {
+                name: "Fast".to_string(),
+                input: "input".to_string(),
+            },
+        ),
+        Event::with_event_id(3, inst.clone(), 1, None, EventKind::TimerCreated { fire_at_ms: 30000 }),
+        Event::with_event_id(
+            4,
+            inst.clone(),
+            1,
+            Some(2),
+            EventKind::ActivityCompleted {
+                result: "fast_done".to_string(),
+            },
+        ),
         // Second activity
-        Event::ActivityScheduled {
-            event_id: 5,
-            name: "MoreWork".to_string(),
-            input: "data".to_string(),
-            execution_id: 1,
-        },
+        Event::with_event_id(
+            5,
+            inst.clone(),
+            1,
+            None,
+            EventKind::ActivityScheduled {
+                name: "MoreWork".to_string(),
+                input: "data".to_string(),
+            },
+        ),
         // Stale timer fires (from select2 loser) - this should NOT block
-        Event::TimerFired {
-            event_id: 6,
-            source_event_id: 3,
-            fire_at_ms: 30000,
-        },
+        Event::with_event_id(6, inst.clone(), 1, Some(3), EventKind::TimerFired { fire_at_ms: 30000 }),
         // Second activity completes
-        Event::ActivityCompleted {
-            event_id: 7,
-            source_event_id: 5,
-            result: "more_done".to_string(),
-        },
+        Event::with_event_id(
+            7,
+            inst.clone(),
+            1,
+            Some(5),
+            EventKind::ActivityCompleted {
+                result: "more_done".to_string(),
+            },
+        ),
     ];
 
     let (_history, _actions, output) = run_turn(history, orchestrator);
@@ -701,62 +791,74 @@ fn sequential_select2s_loser_from_first_does_not_block_second() {
         }
     };
 
+    let inst = "test-inst".to_string();
     let history = vec![
-        Event::OrchestrationStarted {
-            event_id: 1,
-            name: "Test".to_string(),
-            version: "1.0.0".to_string(),
-            input: "".to_string(),
-            parent_instance: None,
-            parent_id: None,
-        },
+        Event::with_event_id(
+            1,
+            inst.clone(),
+            1,
+            None,
+            EventKind::OrchestrationStarted {
+                name: "Test".to_string(),
+                version: "1.0.0".to_string(),
+                input: "".to_string(),
+                parent_instance: None,
+                parent_id: None,
+            },
+        ),
         // First select2
-        Event::ActivityScheduled {
-            event_id: 2,
-            name: "Fast1".to_string(),
-            input: "input".to_string(),
-            execution_id: 1,
-        },
-        Event::TimerCreated {
-            event_id: 3,
-            fire_at_ms: 100000,
-            execution_id: 1,
-        },
-        Event::ActivityCompleted {
-            event_id: 4,
-            source_event_id: 2,
-            result: "done1".to_string(),
-        },
+        Event::with_event_id(
+            2,
+            inst.clone(),
+            1,
+            None,
+            EventKind::ActivityScheduled {
+                name: "Fast1".to_string(),
+                input: "input".to_string(),
+            },
+        ),
+        Event::with_event_id(3, inst.clone(), 1, None, EventKind::TimerCreated { fire_at_ms: 100000 }),
+        Event::with_event_id(
+            4,
+            inst.clone(),
+            1,
+            Some(2),
+            EventKind::ActivityCompleted {
+                result: "done1".to_string(),
+            },
+        ),
         // Second select2
-        Event::ActivityScheduled {
-            event_id: 5,
-            name: "Slow2".to_string(),
-            input: "input".to_string(),
-            execution_id: 1,
-        },
-        Event::TimerCreated {
-            event_id: 6,
-            fire_at_ms: 1000,
-            execution_id: 1,
-        },
+        Event::with_event_id(
+            5,
+            inst.clone(),
+            1,
+            None,
+            EventKind::ActivityScheduled {
+                name: "Slow2".to_string(),
+                input: "input".to_string(),
+            },
+        ),
+        Event::with_event_id(6, inst.clone(), 1, None, EventKind::TimerCreated { fire_at_ms: 1000 }),
         // Stale timer from first select2
-        Event::TimerFired {
-            event_id: 7,
-            source_event_id: 3,
-            fire_at_ms: 100000,
-        },
+        Event::with_event_id(
+            7,
+            inst.clone(),
+            1,
+            Some(3),
+            EventKind::TimerFired { fire_at_ms: 100000 },
+        ),
         // Second timer wins
-        Event::TimerFired {
-            event_id: 8,
-            source_event_id: 6,
-            fire_at_ms: 1000,
-        },
+        Event::with_event_id(8, inst.clone(), 1, Some(6), EventKind::TimerFired { fire_at_ms: 1000 }),
         // Stale activity from second select2
-        Event::ActivityCompleted {
-            event_id: 9,
-            source_event_id: 5,
-            result: "done2".to_string(),
-        },
+        Event::with_event_id(
+            9,
+            inst.clone(),
+            1,
+            Some(5),
+            EventKind::ActivityCompleted {
+                result: "done2".to_string(),
+            },
+        ),
     ];
 
     let (_history, _actions, output) = run_turn(history, orchestrator);
@@ -782,61 +884,83 @@ fn join_then_select2_completes() {
         if winner == 0 { "activity_won" } else { "timeout" }
     };
 
+    let inst = "test-inst".to_string();
     let history = vec![
-        Event::OrchestrationStarted {
-            event_id: 1,
-            name: "Test".to_string(),
-            version: "1.0.0".to_string(),
-            input: "".to_string(),
-            parent_instance: None,
-            parent_id: None,
-        },
+        Event::with_event_id(
+            1,
+            inst.clone(),
+            1,
+            None,
+            EventKind::OrchestrationStarted {
+                name: "Test".to_string(),
+                version: "1.0.0".to_string(),
+                input: "".to_string(),
+                parent_instance: None,
+                parent_id: None,
+            },
+        ),
         // Join activities
-        Event::ActivityScheduled {
-            event_id: 2,
-            name: "Task1".to_string(),
-            input: "input1".to_string(),
-            execution_id: 1,
-        },
-        Event::ActivityScheduled {
-            event_id: 3,
-            name: "Task2".to_string(),
-            input: "input2".to_string(),
-            execution_id: 1,
-        },
-        Event::ActivityCompleted {
-            event_id: 4,
-            source_event_id: 2,
-            result: "r1".to_string(),
-        },
-        Event::ActivityCompleted {
-            event_id: 5,
-            source_event_id: 3,
-            result: "r2".to_string(),
-        },
+        Event::with_event_id(
+            2,
+            inst.clone(),
+            1,
+            None,
+            EventKind::ActivityScheduled {
+                name: "Task1".to_string(),
+                input: "input1".to_string(),
+            },
+        ),
+        Event::with_event_id(
+            3,
+            inst.clone(),
+            1,
+            None,
+            EventKind::ActivityScheduled {
+                name: "Task2".to_string(),
+                input: "input2".to_string(),
+            },
+        ),
+        Event::with_event_id(
+            4,
+            inst.clone(),
+            1,
+            Some(2),
+            EventKind::ActivityCompleted {
+                result: "r1".to_string(),
+            },
+        ),
+        Event::with_event_id(
+            5,
+            inst.clone(),
+            1,
+            Some(3),
+            EventKind::ActivityCompleted {
+                result: "r2".to_string(),
+            },
+        ),
         // Select2
-        Event::ActivityScheduled {
-            event_id: 6,
-            name: "Task3".to_string(),
-            input: "input3".to_string(),
-            execution_id: 1,
-        },
-        Event::TimerCreated {
-            event_id: 7,
-            fire_at_ms: 30000,
-            execution_id: 1,
-        },
-        Event::ActivityCompleted {
-            event_id: 8,
-            source_event_id: 6,
-            result: "r3".to_string(),
-        },
+        Event::with_event_id(
+            6,
+            inst.clone(),
+            1,
+            None,
+            EventKind::ActivityScheduled {
+                name: "Task3".to_string(),
+                input: "input3".to_string(),
+            },
+        ),
+        Event::with_event_id(7, inst.clone(), 1, None, EventKind::TimerCreated { fire_at_ms: 30000 }),
+        Event::with_event_id(
+            8,
+            inst.clone(),
+            1,
+            Some(6),
+            EventKind::ActivityCompleted {
+                result: "r3".to_string(),
+            },
+        ),
         // Stale timeout
-        Event::TimerFired {
-            event_id: 9,
-            source_event_id: 7,
-            fire_at_ms: 30000,
-        },
+        Event::with_event_id(9, inst.clone(), 1, Some(7), EventKind::TimerFired { fire_at_ms: 30000 }),
     ];
 
     let (_history, _actions, output) = run_turn(history, orchestrator);
@@ -863,62 +987,84 @@ fn select2_then_join_completes() {
         "join_completed"
     };
 
+    let inst = "test-inst".to_string();
     let history = vec![
-        Event::OrchestrationStarted {
-            event_id: 1,
-            name: "Test".to_string(),
-            version: "1.0.0".to_string(),
-            input: "".to_string(),
-            parent_instance: None,
-            parent_id: None,
-        },
+        Event::with_event_id(
+            1,
+            inst.clone(),
+            1,
+            None,
+            EventKind::OrchestrationStarted {
+                name: "Test".to_string(),
+                version: "1.0.0".to_string(),
+                input: "".to_string(),
+                parent_instance: None,
+                parent_id: None,
+            },
+        ),
         // Select2
-        Event::ActivityScheduled {
-            event_id: 2,
-            name: "Fast".to_string(),
-            input: "input".to_string(),
-            execution_id: 1,
-        },
-        Event::TimerCreated {
-            event_id: 3,
-            fire_at_ms: 30000,
-            execution_id: 1,
-        },
-        Event::ActivityCompleted {
-            event_id: 4,
-            source_event_id: 2,
-            result: "done".to_string(),
-        },
+        Event::with_event_id(
+            2,
+            inst.clone(),
+            1,
+            None,
+            EventKind::ActivityScheduled {
+                name: "Fast".to_string(),
+                input: "input".to_string(),
+            },
+        ),
+        Event::with_event_id(3, inst.clone(), 1, None, EventKind::TimerCreated { fire_at_ms: 30000 }),
+        Event::with_event_id(
+            4,
+            inst.clone(),
+            1,
+            Some(2),
+            EventKind::ActivityCompleted {
+                result: "done".to_string(),
+            },
+        ),
         // Join activities
-        Event::ActivityScheduled {
-            event_id: 5,
-            name: "Task2".to_string(),
-            input: "input2".to_string(),
-            execution_id: 1,
-        },
-        Event::ActivityScheduled {
-            event_id: 6,
-            name: "Task3".to_string(),
-            input: "input3".to_string(),
-            execution_id: 1,
-        },
+        Event::with_event_id(
+            5,
+            inst.clone(),
+            1,
+            None,
+            EventKind::ActivityScheduled {
+                name: "Task2".to_string(),
+                input: "input2".to_string(),
+            },
+        ),
+        Event::with_event_id(
+            6,
+            inst.clone(),
+            1,
+            None,
+            EventKind::ActivityScheduled {
+                name: "Task3".to_string(),
+                input: "input3".to_string(),
+            },
+        ),
         // Stale timer from select2 (should not block join)
-        Event::TimerFired {
-            event_id: 7,
-            source_event_id: 3,
-            fire_at_ms: 30000,
-        },
+        Event::with_event_id(7, inst.clone(), 1, Some(3), EventKind::TimerFired { fire_at_ms: 30000 }),
         // Join completions
-        Event::ActivityCompleted {
-            event_id: 8,
-            source_event_id: 5,
-            result: "r2".to_string(),
-        },
-        Event::ActivityCompleted {
-            event_id: 9,
-            source_event_id: 6,
-            result: "r3".to_string(),
-        },
+        Event::with_event_id(
+            8,
+            inst.clone(),
+            1,
+            Some(5),
+            EventKind::ActivityCompleted {
+                result: "r2".to_string(),
+            },
+        ),
+        Event::with_event_id(
+            9,
+            inst.clone(),
+            1,
+            Some(6),
+            EventKind::ActivityCompleted {
+                result: "r3".to_string(),
+            },
+        ),
     ];
 
     let (_history, _actions, output) = run_turn(history, orchestrator);
@@ -952,73 +1098,77 @@ fn mixed_loser_types_do_not_block() {
         "completed"
     };
 
+    let inst = "test-inst".to_string();
     let history = vec![
-        Event::OrchestrationStarted {
-            event_id: 1,
-            name: "Test".to_string(),
-            version: "1.0.0".to_string(),
-            input: "".to_string(),
-            parent_instance: None,
-            parent_id: None,
-        },
+        Event::with_event_id(
+            1,
+            inst.clone(),
+            1,
+            None,
+            EventKind::OrchestrationStarted {
+                name: "Test".to_string(),
+                version: "1.0.0".to_string(),
+                input: "".to_string(),
+                parent_instance: None,
+                parent_id: None,
+            },
+        ),
         // First select2: timer wins
-        Event::ActivityScheduled {
-            event_id: 2,
-            name: "SlowActivity".to_string(),
-            input: "input".to_string(),
-            execution_id: 1,
-        },
-        Event::TimerCreated {
-            event_id: 3,
-            fire_at_ms: 1000,
-            execution_id: 1,
-        },
-        Event::TimerFired {
-            event_id: 4,
-            source_event_id: 3,
-            fire_at_ms: 1000,
-        },
+        Event::with_event_id(
+            2,
+            inst.clone(),
+            1,
+            None,
+            EventKind::ActivityScheduled {
+                name: "SlowActivity".to_string(),
+                input: "input".to_string(),
+            },
+        ),
+        Event::with_event_id(3, inst.clone(), 1, None, EventKind::TimerCreated { fire_at_ms: 1000 }),
+        Event::with_event_id(4, inst.clone(), 1, Some(3), EventKind::TimerFired { fire_at_ms: 1000 }),
         // Second select2: activity wins
-        Event::ActivityScheduled {
-            event_id: 5,
-            name: "FastActivity".to_string(),
-            input: "input".to_string(),
-            execution_id: 1,
-        },
-        Event::TimerCreated {
-            event_id: 6,
-            fire_at_ms: 100000,
-            execution_id: 1,
-        },
-        Event::ActivityCompleted {
-            event_id: 7,
-            source_event_id: 5,
-            result: "fast".to_string(),
-        },
+        Event::with_event_id(
+            5,
+            inst.clone(),
+            1,
+            None,
+            EventKind::ActivityScheduled {
+                name: "FastActivity".to_string(),
+                input: "input".to_string(),
+            },
+        ),
+        Event::with_event_id(6, inst.clone(), 1, None, EventKind::TimerCreated { fire_at_ms: 100000 }),
+        Event::with_event_id(
+            7,
+            inst.clone(),
+            1,
+            Some(5),
+            EventKind::ActivityCompleted {
+                result: "fast".to_string(),
+            },
+        ),
         // Final timer
-        Event::TimerCreated {
-            event_id: 8,
-            fire_at_ms: 5000,
-            execution_id: 1,
-        },
+        Event::with_event_id(8, inst.clone(), 1, None, EventKind::TimerCreated { fire_at_ms: 5000 }),
         // Stale activity (from first select2 loser)
-        Event::ActivityCompleted {
-            event_id: 9,
-            source_event_id: 2,
-            result: "slow".to_string(),
-        },
+        Event::with_event_id(
+            9,
+            inst.clone(),
+            1,
+            Some(2),
+            EventKind::ActivityCompleted {
+                result: "slow".to_string(),
+            },
+        ),
         // Stale timer (from second select2 loser)
-        Event::TimerFired {
-            event_id: 10,
-            source_event_id: 6,
-            fire_at_ms: 100000,
-        },
+        Event::with_event_id(
+            10,
+            inst.clone(),
+            1,
+            Some(6),
+            EventKind::TimerFired { fire_at_ms: 100000 },
+        ),
         // Final timer fires
-        Event::TimerFired {
-            event_id: 11,
-            source_event_id: 8,
-            fire_at_ms: 5000,
-        },
+        Event::with_event_id(11, inst.clone(), 1, Some(8), EventKind::TimerFired { fire_at_ms: 5000 }),
     ];
 
     let (_history, _actions, output) = run_turn(history, orchestrator);
@@ -1045,138 +1195,172 @@ fn sequential_select2s_accumulate_cancelled_sources() {
         "all_done"
     };
 
+    let inst = "test-inst".to_string();
     let history = vec![
-        Event::OrchestrationStarted {
-            event_id: 1,
-            name: "Test".to_string(),
-            version: "1.0.0".to_string(),
-            input: "".to_string(),
-            parent_instance: None,
-            parent_id: None,
-        },
+        Event::with_event_id(
+            1,
+            inst.clone(),
+            1,
+            None,
+            EventKind::OrchestrationStarted {
+                name: "Test".to_string(),
+                version: "1.0.0".to_string(),
+                input: "".to_string(),
+                parent_instance: None,
+                parent_id: None,
+            },
+        ),
         // select2 #0
-        Event::ActivityScheduled {
-            event_id: 2,
-            name: "Task".to_string(),
-            input: "input0".to_string(),
-            execution_id: 1,
-        },
-        Event::TimerCreated {
-            event_id: 3,
-            fire_at_ms: 30000,
-            execution_id: 1,
-        },
-        Event::ActivityCompleted {
-            event_id: 4,
-            source_event_id: 2,
-            result: "ok".to_string(),
-        },
+        Event::with_event_id(
+            2,
+            inst.clone(),
+            1,
+            None,
+            EventKind::ActivityScheduled {
+                name: "Task".to_string(),
+                input: "input0".to_string(),
+            },
+        ),
+        Event::with_event_id(3, inst.clone(), 1, None, EventKind::TimerCreated { fire_at_ms: 30000 }),
+        Event::with_event_id(
+            4,
+            inst.clone(),
+            1,
+            Some(2),
+            EventKind::ActivityCompleted {
+                result: "ok".to_string(),
+            },
+        ),
         // select2 #1
-        Event::ActivityScheduled {
-            event_id: 5,
-            name: "Task".to_string(),
-            input: "input1".to_string(),
-            execution_id: 1,
-        },
-        Event::TimerCreated {
-            event_id: 6,
-            fire_at_ms: 30000,
-            execution_id: 1,
-        },
-        Event::ActivityCompleted {
-            event_id: 7,
-            source_event_id: 5,
-            result: "ok".to_string(),
-        },
+        Event::with_event_id(
+            5,
+            inst.clone(),
+            1,
+            None,
+            EventKind::ActivityScheduled {
+                name: "Task".to_string(),
+                input: "input1".to_string(),
+            },
+        ),
+        Event::with_event_id(6, inst.clone(), 1, None, EventKind::TimerCreated { fire_at_ms: 30000 }),
+        Event::with_event_id(
+            7,
+            inst.clone(),
+            1,
+            Some(5),
+            EventKind::ActivityCompleted {
+                result: "ok".to_string(),
+            },
+        ),
         // select2 #2
-        Event::ActivityScheduled {
-            event_id: 8,
-            name: "Task".to_string(),
-            input: "input2".to_string(),
-            execution_id: 1,
-        },
-        Event::TimerCreated {
-            event_id: 9,
-            fire_at_ms: 30000,
-            execution_id: 1,
-        },
-        Event::ActivityCompleted {
-            event_id: 10,
-            source_event_id: 8,
-            result: "ok".to_string(),
-        },
+        Event::with_event_id(
+            8,
+            inst.clone(),
+            1,
+            None,
+            EventKind::ActivityScheduled {
+                name: "Task".to_string(),
+                input: "input2".to_string(),
+            },
+        ),
+        Event::with_event_id(9, inst.clone(), 1, None, EventKind::TimerCreated { fire_at_ms: 30000 }),
+        Event::with_event_id(
+            10,
+            inst.clone(),
+            1,
+            Some(8),
+            EventKind::ActivityCompleted {
+                result: "ok".to_string(),
+            },
+        ),
         // select2 #3
-        Event::ActivityScheduled {
-            event_id: 11,
-            name: "Task".to_string(),
-            input: "input3".to_string(),
-            execution_id: 1,
-        },
-        Event::TimerCreated {
-            event_id: 12,
-            fire_at_ms: 30000,
-            execution_id: 1,
-        },
-        Event::ActivityCompleted {
-            event_id: 13,
-            source_event_id: 11,
-            result: "ok".to_string(),
-        },
+        Event::with_event_id(
+            11,
+            inst.clone(),
+            1,
+            None,
+            EventKind::ActivityScheduled {
+                name: "Task".to_string(),
+                input: "input3".to_string(),
+            },
+        ),
+        Event::with_event_id(12, inst.clone(), 1, None, EventKind::TimerCreated { fire_at_ms: 30000 }),
+        Event::with_event_id(
+            13,
+            inst.clone(),
+            1,
+            Some(11),
+            EventKind::ActivityCompleted {
+                result: "ok".to_string(),
+            },
+        ),
         // select2 #4
-        Event::ActivityScheduled {
-            event_id: 14,
-            name: "Task".to_string(),
-            input: "input4".to_string(),
-            execution_id: 1,
-        },
-        Event::TimerCreated {
-            event_id: 15,
-            fire_at_ms: 30000,
-            execution_id: 1,
-        },
-        Event::ActivityCompleted {
-            event_id: 16,
-            source_event_id: 14,
-            result: "ok".to_string(),
-        },
+        Event::with_event_id(
+            14,
+            inst.clone(),
+            1,
+            None,
+            EventKind::ActivityScheduled {
+                name: "Task".to_string(),
+                input: "input4".to_string(),
+            },
+        ),
+        Event::with_event_id(15, inst.clone(), 1, None, EventKind::TimerCreated { fire_at_ms: 30000 }),
+        Event::with_event_id(
+            16,
+            inst.clone(),
+            1,
+            Some(14),
+            EventKind::ActivityCompleted {
+                result: "ok".to_string(),
+            },
+        ),
         // Final timer
-        Event::TimerCreated {
-            event_id: 17,
-            fire_at_ms: 1000,
-            execution_id: 1,
-        },
+        Event::with_event_id(17, inst.clone(), 1, None, EventKind::TimerCreated { fire_at_ms: 1000 }),
         // All 5 stale timers fire
-        Event::TimerFired {
-            event_id: 18,
-            source_event_id: 3,
-            fire_at_ms: 30000,
-        },
-        Event::TimerFired {
-            event_id: 19,
-            source_event_id: 6,
-            fire_at_ms: 30000,
-        },
-        Event::TimerFired {
-            event_id: 20,
-            source_event_id: 9,
-            fire_at_ms: 30000,
-        },
-        Event::TimerFired {
-            event_id: 21,
-            source_event_id: 12,
-            fire_at_ms: 30000,
-        },
-        Event::TimerFired {
-            event_id: 22,
-            source_event_id: 15,
-            fire_at_ms: 30000,
-        },
+        Event::with_event_id(
+            18,
+            inst.clone(),
+            1,
+            Some(3),
+            EventKind::TimerFired { fire_at_ms: 30000 },
+        ),
+        Event::with_event_id(
+            19,
+            inst.clone(),
+            1,
+            Some(6),
+            EventKind::TimerFired { fire_at_ms: 30000 },
+        ),
+        Event::with_event_id(
+            20,
+            inst.clone(),
+            1,
+            Some(9),
+            EventKind::TimerFired { fire_at_ms: 30000 },
+        ),
+        Event::with_event_id(
+            21,
+            inst.clone(),
+            1,
+            Some(12),
+            EventKind::TimerFired { fire_at_ms: 30000 },
+        ),
+        Event::with_event_id(
+            22,
+            inst.clone(),
+            1,
+            Some(15),
+            EventKind::TimerFired { fire_at_ms: 30000 },
+        ),
         // Final timer fires
-        Event::TimerFired {
-            event_id: 23,
-            source_event_id: 17,
-            fire_at_ms: 1000,
-        },
+        Event::with_event_id(
+            23,
+            inst.clone(),
+            1,
+            Some(17),
+            EventKind::TimerFired { fire_at_ms: 1000 },
+        ),
     ];
 
     let (_history, _actions, output) = run_turn(history, orchestrator);
@@ -1199,28 +1383,34 @@ fn schedule_order_mismatch_triggers_nondeterminism() {
     };
 
     // But history shows TIMER was scheduled first (wrong order!)
+    let inst = "test-inst".to_string();
     let mismatched_history = vec![
-        Event::OrchestrationStarted {
-            event_id: 1,
-            name: "Test".to_string(),
-            version: "1.0.0".to_string(),
-            input: "".to_string(),
-            parent_instance: None,
-            parent_id: None,
-        },
+        Event::with_event_id(
+            1,
+            inst.clone(),
+            1,
+            None,
+            EventKind::OrchestrationStarted {
+                name: "Test".to_string(),
+                version: "1.0.0".to_string(),
+                input: "".to_string(),
+                parent_instance: None,
+                parent_id: None,
+            },
+        ),
         // History: TIMER first (event_id: 2)
-        Event::TimerCreated {
-            event_id: 2,
-            fire_at_ms: 10000,
-            execution_id: 1,
-        },
+        Event::with_event_id(2, inst.clone(), 1, None, EventKind::TimerCreated { fire_at_ms: 10000 }),
         // History: ACTIVITY second (event_id: 3)
-        Event::ActivityScheduled {
-            event_id: 3,
-            name: "Task".to_string(),
-            input: "input".to_string(),
-            execution_id: 1,
-        },
+        Event::with_event_id(
+            3,
+            inst.clone(),
+            1,
+            None,
+            EventKind::ActivityScheduled {
+                name: "Task".to_string(),
+                input: "input".to_string(),
+            },
+        ),
     ];
 
     let (_history, _actions, _output, nondeterminism_error) = run_turn_with_status(

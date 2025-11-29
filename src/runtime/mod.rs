@@ -1,6 +1,6 @@
 //
 use crate::providers::{ExecutionMetadata, Provider, WorkItem};
-use crate::{Event, OrchestrationContext};
+use crate::{Event, EventKind, OrchestrationContext};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -423,23 +423,23 @@ impl Runtime {
 
         // Scan history_delta for OrchestrationStarted (first event) and terminal events
         for event in history_delta {
-            match event {
-                Event::OrchestrationStarted { name, version, .. } => {
+            match &event.kind {
+                EventKind::OrchestrationStarted { name, version, .. } => {
                     // Capture orchestration metadata from start event
                     metadata.orchestration_name = Some(name.clone());
                     metadata.orchestration_version = Some(version.clone());
                 }
-                Event::OrchestrationCompleted { output, .. } => {
+                EventKind::OrchestrationCompleted { output } => {
                     metadata.status = Some("Completed".to_string());
                     metadata.output = Some(output.clone());
                     break;
                 }
-                Event::OrchestrationFailed { details, .. } => {
+                EventKind::OrchestrationFailed { details } => {
                     metadata.status = Some("Failed".to_string());
                     metadata.output = Some(details.display_message());
                     break;
                 }
-                Event::OrchestrationContinuedAsNew { input, .. } => {
+                EventKind::OrchestrationContinuedAsNew { input } => {
                     metadata.status = Some("ContinuedAsNew".to_string());
                     metadata.output = Some(input.clone());
                     // Don't set create_next_execution - the new execution will be started
@@ -462,13 +462,13 @@ impl Runtime {
     ) -> Option<crate::runtime::OrchestrationDescriptor> {
         let hist = self.history_store.read(instance).await.unwrap_or_default();
         for e in hist.iter().rev() {
-            if let Event::OrchestrationStarted {
+            if let EventKind::OrchestrationStarted {
                 name,
                 version,
                 parent_instance,
                 parent_id,
                 ..
-            } = e
+            } = &e.kind
             {
                 return Some(crate::runtime::OrchestrationDescriptor {
                     name: name.clone(),

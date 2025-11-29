@@ -3,7 +3,7 @@ use tracing::debug;
 
 use super::replay_engine::{ReplayEngine, TurnResult};
 use crate::{
-    Event,
+    Event, EventKind,
     providers::WorkItem,
     runtime::{OrchestrationHandler, Runtime},
 };
@@ -182,10 +182,13 @@ impl Runtime {
 
                 // Add completion event with next event_id
                 let next_id = history_mgr.next_event_id();
-                history_mgr.append(Event::OrchestrationCompleted {
-                    event_id: next_id,
-                    output: output.clone(),
-                });
+                history_mgr.append(Event::with_event_id(
+                    next_id,
+                    instance,
+                    execution_id,
+                    None,
+                    EventKind::OrchestrationCompleted { output: output.clone() },
+                ));
                 self.record_orchestration_completion();
 
                 // Notify parent if this is a sub-orchestration
@@ -229,10 +232,13 @@ impl Runtime {
             TurnResult::ContinueAsNew { input, version } => {
                 // Add ContinuedAsNew terminal event to history
                 let next_id = history_mgr.next_event_id();
-                history_mgr.append(Event::OrchestrationContinuedAsNew {
-                    event_id: next_id,
-                    input: input.clone(),
-                });
+                history_mgr.append(Event::with_event_id(
+                    next_id,
+                    instance,
+                    execution_id,
+                    None,
+                    EventKind::OrchestrationContinuedAsNew { input: input.clone() },
+                ));
 
                 // Enqueue continue as new work item
                 orchestrator_items.push(WorkItem::ContinueAsNew {
@@ -286,12 +292,8 @@ impl Runtime {
         // Find all scheduled sub-orchestrations
         let scheduled_children: Vec<(u64, String)> = history
             .iter()
-            .filter_map(|e| match e {
-                Event::SubOrchestrationScheduled {
-                    event_id,
-                    instance: child,
-                    ..
-                } => Some((*event_id, child.clone())),
+            .filter_map(|e| match &e.kind {
+                EventKind::SubOrchestrationScheduled { instance: child, .. } => Some((e.event_id, child.clone())),
                 _ => None,
             })
             .collect();
@@ -299,9 +301,10 @@ impl Runtime {
         // Find all completed sub-orchestrations (by source_event_id)
         let completed_ids: std::collections::HashSet<u64> = history
             .iter()
-            .filter_map(|e| match e {
-                Event::SubOrchestrationCompleted { source_event_id, .. }
-                | Event::SubOrchestrationFailed { source_event_id, .. } => Some(*source_event_id),
+            .filter_map(|e| match &e.kind {
+                EventKind::SubOrchestrationCompleted { .. } | EventKind::SubOrchestrationFailed { .. } => {
+                    e.source_event_id
+                }
                 _ => None,
             })
             .collect();

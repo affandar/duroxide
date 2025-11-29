@@ -266,15 +266,11 @@ pub enum Event {
 // Helper to check if event has valid timestamp
 impl Event {
     pub fn has_timestamp(&self) -> bool {
-        self.timestamp_ms() > 0
+        self.timestamp_ms > 0
     }
     
-    pub fn timestamp_ms(&self) -> u64 {
-        match self {
-            Event::OrchestrationStarted { timestamp_ms, .. } => *timestamp_ms,
-            // ... all events
-        }
-    }
+    // timestamp_ms is now a direct field on Event struct
+    // No match needed - just access event.timestamp_ms
 }
 
 // In metrics calculation:

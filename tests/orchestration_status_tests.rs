@@ -244,7 +244,7 @@ async fn test_status_after_continue_as_new() {
     assert!(
         history
             .iter()
-            .any(|e| matches!(e, duroxide::Event::OrchestrationStarted { input, .. } if input == "2")),
+            .any(|e| matches!(&e.kind, duroxide::EventKind::OrchestrationStarted { input, .. } if input == "2")),
         "History should contain the final execution's start event with input=2"
     );
 

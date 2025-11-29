@@ -125,7 +125,9 @@ DELETE FROM orchestrator_queue WHERE lock_token = ?our_token
 **Current code in ack:**
 ```rust
 // Update instance metadata if this is OrchestrationStarted
-if let Some(crate::Event::OrchestrationStarted { name, version, .. }) = history_delta.first() {
+if let Some(event) = history_delta.first()
+    && let crate::EventKind::OrchestrationStarted { name, version, .. } = &event.kind
+{
     UPDATE instances 
     SET orchestration_name = ?, orchestration_version = ?
     WHERE instance_id = ?

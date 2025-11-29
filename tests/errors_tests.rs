@@ -490,12 +490,12 @@ async fn orchestration_immediate_fail_fs() {
     // Expect OrchestrationStarted + OrchestrationFailed
     assert_eq!(hist.len(), 2);
     assert!(matches!(
-        hist.first().unwrap(),
-        duroxide::Event::OrchestrationStarted { .. }
+        &hist.first().unwrap().kind,
+        duroxide::EventKind::OrchestrationStarted { .. }
     ));
     assert!(matches!(
-        hist.last().unwrap(),
-        duroxide::Event::OrchestrationFailed { .. }
+        &hist.last().unwrap().kind,
+        duroxide::EventKind::OrchestrationFailed { .. }
     ));
     // Status API should report Failed with same error
     match client.get_orchestration_status("inst-fail-imm").await.unwrap() {
@@ -560,8 +560,8 @@ async fn orchestration_propagates_activity_failure_fs() {
     // Check history for failure event
     let hist = client.read_execution_history("inst-fail-prop", 1).await.unwrap();
     assert!(matches!(
-        hist.last().unwrap(),
-        duroxide::Event::OrchestrationFailed { .. }
+        &hist.last().unwrap().kind,
+        duroxide::EventKind::OrchestrationFailed { .. }
     ));
     match client.get_orchestration_status("inst-fail-prop").await.unwrap() {
         duroxide::OrchestrationStatus::Failed { details } => {

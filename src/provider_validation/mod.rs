@@ -27,11 +27,11 @@ use crate::providers::WorkItem;
 #[cfg(feature = "provider-test")]
 use std::time::Duration;
 
-/// Re-export common types for use in test modules
-#[cfg(feature = "provider-test")]
-pub use crate::Event;
 #[cfg(feature = "provider-test")]
 pub use crate::providers::ExecutionMetadata;
+/// Re-export common types for use in test modules
+#[cfg(feature = "provider-test")]
+pub use crate::{Event, EventKind};
 
 /// Helper function to create a start item for an instance
 #[cfg(feature = "provider-test")]
@@ -65,14 +65,19 @@ pub(crate) async fn create_instance(provider: &dyn crate::providers::Provider, i
         .ack_orchestration_item(
             &item.lock_token,
             INITIAL_EXECUTION_ID,
-            vec![Event::OrchestrationStarted {
-                event_id: crate::INITIAL_EVENT_ID,
-                name: "TestOrch".to_string(),
-                version: "1.0.0".to_string(),
-                input: "{}".to_string(),
-                parent_instance: None,
-                parent_id: None,
-            }],
+            vec![Event::with_event_id(
+                crate::INITIAL_EVENT_ID,
+                instance.to_string(),
+                INITIAL_EXECUTION_ID,
+                None,
+                EventKind::OrchestrationStarted {
+                    name: "TestOrch".to_string(),
+                    version: "1.0.0".to_string(),
+                    input: "{}".to_string(),
+                    parent_instance: None,
+                    parent_id: None,
+                },
+            )],
             vec![],
             vec![],
             ExecutionMetadata {

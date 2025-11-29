@@ -4,7 +4,7 @@ This document captures the design rules that govern the runtime, with rationale.
 
 ## 1) History is the single source of truth
 - All orchestration state derives from event history; no separate metadata store.
-- `Event::OrchestrationStarted` holds required orchestration metadata: `{ name, version: String, parent_instance?, parent_id? }`.
+- `EventKind::OrchestrationStarted` holds required orchestration metadata: `{ name, version: String, parent_instance?, parent_id? }`.
 - Removed Provider metadata APIs (`set/get_instance_orchestration`) and `ParentLinked` event.
 - Rationale: avoids divergence between metadata and history; simplifies recovery and replay.
 

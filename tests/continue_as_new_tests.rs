@@ -1,3 +1,4 @@
+use duroxide::EventKind;
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
 use duroxide::{ActivityContext, Event, OrchestrationContext, OrchestrationRegistry};
@@ -55,7 +56,7 @@ async fn continue_as_new_multiexec() {
         |hist| {
             hist.iter()
                 .rev()
-                .any(|e| matches!(e, Event::OrchestrationCompleted { output, .. } if output == "done:2"))
+                .any(|e| matches!(&e.kind, EventKind::OrchestrationCompleted { output, .. } if output == "done:2"))
         },
         1_000,
     )
@@ -82,13 +83,16 @@ async fn continue_as_new_multiexec() {
         .unwrap_or_default();
     assert!(
         e1.iter()
-            .any(|e| matches!(e, Event::OrchestrationStarted { input, .. } if input == "0"))
+            .any(|e| matches!(&e.kind, EventKind::OrchestrationStarted { input, .. } if input == "0"))
     );
     assert!(
         e1.iter()
-            .any(|e| matches!(e, Event::OrchestrationContinuedAsNew { input, .. } if input == "1"))
+            .any(|e| matches!(&e.kind, EventKind::OrchestrationContinuedAsNew { input, .. } if input == "1"))
     );
-    assert!(!e1.iter().any(|e| matches!(e, Event::OrchestrationCompleted { .. })));
+    assert!(
+        !e1.iter()
+            .any(|e| matches!(&e.kind, EventKind::OrchestrationCompleted { .. }))
+    );
 
     let e2 = mgmt
         .read_history_with_execution_id("inst-can-1", 2)
@@ -96,13 +100,16 @@ async fn continue_as_new_multiexec() {
         .unwrap_or_default();
     assert!(
         e2.iter()
-            .any(|e| matches!(e, Event::OrchestrationStarted { input, .. } if input == "1"))
+            .any(|e| matches!(&e.kind, EventKind::OrchestrationStarted { input, .. } if input == "1"))
     );
     assert!(
         e2.iter()
-            .any(|e| matches!(e, Event::OrchestrationContinuedAsNew { input, .. } if input == "2"))
+            .any(|e| matches!(&e.kind, EventKind::OrchestrationContinuedAsNew { input, .. } if input == "2"))
     );
-    assert!(!e2.iter().any(|e| matches!(e, Event::OrchestrationCompleted { .. })));
+    assert!(
+        !e2.iter()
+            .any(|e| matches!(&e.kind, EventKind::OrchestrationCompleted { .. }))
+    );
 
     let e3 = mgmt
         .read_history_with_execution_id("inst-can-1", 3)
@@ -110,11 +117,11 @@ async fn continue_as_new_multiexec() {
         .unwrap_or_default();
     assert!(
         e3.iter()
-            .any(|e| matches!(e, Event::OrchestrationStarted { input, .. } if input == "2"))
+            .any(|e| matches!(&e.kind, EventKind::OrchestrationStarted { input, .. } if input == "2"))
     );
     assert!(
         e3.iter()
-            .any(|e| matches!(e, Event::OrchestrationCompleted { output, .. } if output == "done:2"))
+            .any(|e| matches!(&e.kind, EventKind::OrchestrationCompleted { output, .. } if output == "done:2"))
     );
 
     rt.shutdown(None).await;
@@ -184,7 +191,7 @@ async fn continue_as_new_event_routes_to_latest() {
         |hist| {
             hist.iter()
                 .rev()
-                .any(|e| matches!(e, Event::OrchestrationCompleted { output, .. } if output == "ok"))
+                .any(|e| matches!(&e.kind, EventKind::OrchestrationCompleted { output, .. } if output == "ok"))
         },
         1_000,
     )
@@ -199,11 +206,11 @@ async fn continue_as_new_event_routes_to_latest() {
         .unwrap_or_default();
     assert!(
         e1.iter()
-            .any(|e| matches!(e, Event::OrchestrationContinuedAsNew { input, .. } if input == "wait"))
+            .any(|e| matches!(&e.kind, EventKind::OrchestrationContinuedAsNew { input, .. } if input == "wait"))
     );
     assert!(
         !e1.iter()
-            .any(|e| matches!(e, Event::ExternalEvent { name, .. } if name == "Go"))
+            .any(|e| matches!(&e.kind, EventKind::ExternalEvent { name, .. } if name == "Go"))
     );
 
     let e2 = mgmt2
@@ -212,11 +219,11 @@ async fn continue_as_new_event_routes_to_latest() {
         .unwrap_or_default();
     assert!(
         e2.iter()
-            .any(|e| matches!(e, Event::ExternalSubscribed { name, .. } if name == "Go"))
+            .any(|e| matches!(&e.kind, EventKind::ExternalSubscribed { name, .. } if name == "Go"))
     );
     assert!(
         e2.iter()
-            .any(|e| matches!(e, Event::ExternalEvent { name, .. } if name == "Go"))
+            .any(|e| matches!(&e.kind, EventKind::ExternalEvent { name, .. } if name == "Go"))
     );
 
     // read() must reflect the latest execution's history
@@ -308,7 +315,7 @@ async fn continue_as_new_event_drop_then_process() {
         |hist| {
             hist.iter()
                 .rev()
-                .any(|e| matches!(e, Event::OrchestrationCompleted { output, .. } if output == "late"))
+                .any(|e| matches!(&e.kind, EventKind::OrchestrationCompleted { output, .. } if output == "late"))
         },
         1_000,
     )
@@ -323,11 +330,11 @@ async fn continue_as_new_event_drop_then_process() {
         .unwrap_or_default();
     assert!(
         e2.iter()
-            .any(|e| matches!(e, Event::ExternalSubscribed { name, .. } if name == "Go"))
+            .any(|e| matches!(&e.kind, EventKind::ExternalSubscribed { name, .. } if name == "Go"))
     );
     assert!(
         e2.iter()
-            .any(|e| matches!(e, Event::ExternalEvent { name, .. } if name == "Go"))
+            .any(|e| matches!(&e.kind, EventKind::ExternalEvent { name, .. } if name == "Go"))
     );
 
     // Exec1 must not have ExternalEvent
@@ -337,7 +344,7 @@ async fn continue_as_new_event_drop_then_process() {
         .unwrap_or_default();
     assert!(
         !e1.iter()
-            .any(|e| matches!(e, Event::ExternalEvent { name, .. } if name == "Go"))
+            .any(|e| matches!(&e.kind, EventKind::ExternalEvent { name, .. } if name == "Go"))
     );
 
     rt.shutdown(None).await;
@@ -402,7 +409,7 @@ async fn event_drop_then_retry_after_subscribe() {
     let e = store.read("inst-drop-retry").await.unwrap_or_default();
     let events: Vec<&Event> = e
         .iter()
-        .filter(|ev| matches!(ev, Event::ExternalEvent { name, .. } if name == "Data"))
+        .filter(|ev| matches!(&ev.kind, EventKind::ExternalEvent { name, .. } if name == "Data"))
         .collect();
     assert_eq!(events.len(), 1);
 
@@ -465,8 +472,8 @@ async fn old_execution_completions_are_ignored() {
 
     // Verify the completion was ignored - check that it's not in history
     let history = store.read("inst-exec-test").await.unwrap_or_default();
-    let has_old_completion = history.iter().any(|e| match e {
-        duroxide::Event::ActivityCompleted { result, .. } => result == "old_execution_result",
+    let has_old_completion = history.iter().any(|e| match &e.kind {
+        EventKind::ActivityCompleted { result, .. } => result == "old_execution_result",
         _ => false,
     });
 
@@ -523,8 +530,8 @@ async fn future_execution_completions_are_ignored() {
 
     // Verify the completion was ignored
     let history = store.read("inst-future").await.unwrap_or_default();
-    let has_future_completion = history.iter().any(|e| match e {
-        duroxide::Event::ActivityCompleted { result, .. } => result == "future_completion",
+    let has_future_completion = history.iter().any(|e| match &e.kind {
+        EventKind::ActivityCompleted { result, .. } => result == "future_completion",
         _ => false,
     });
 

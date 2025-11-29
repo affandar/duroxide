@@ -17,7 +17,7 @@ This document explains how the runtime maintains reliability guarantees using pe
 ## StartOrchestration
 Flow:
 1. Orchestrator queue delivers `WorkItem::StartOrchestration { instance, orchestration, input }`.
-2. Runtime calls `start_internal_rx`, which appends `Event::OrchestrationStarted { name, version, ... }` if the instance has no history.
+2. Runtime calls `start_internal_rx`, which appends an `Event` with `EventKind::OrchestrationStarted { name, version, ... }` if the instance has no history.
 3. After append succeeds (or if history already exists), the dispatcher acks the start item.
 
 Outcome:

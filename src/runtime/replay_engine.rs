@@ -1,4 +1,4 @@
-use crate::{Event, providers::WorkItem, runtime::OrchestrationHandler};
+use crate::{Event, EventKind, providers::WorkItem, runtime::OrchestrationHandler};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
 use tracing::{debug, warn};
@@ -80,29 +80,30 @@ impl ReplayEngine {
             // Drop duplicates already staged in this run's history_delta
             let already_in_delta = match &msg {
                 WorkItem::ActivityCompleted { id, .. } | WorkItem::ActivityFailed { id, .. } => {
-                    self.history_delta.iter().any(|e| match e {
-                        Event::ActivityCompleted { source_event_id, .. } if source_event_id == id => true,
-                        Event::ActivityFailed { source_event_id, .. } if source_event_id == id => true,
-                        _ => false,
+                    self.history_delta.iter().any(|e| {
+                        e.source_event_id == Some(*id)
+                            && matches!(
+                                &e.kind,
+                                EventKind::ActivityCompleted { .. } | EventKind::ActivityFailed { .. }
+                            )
                     })
                 }
                 WorkItem::TimerFired { id, .. } => self
                     .history_delta
                     .iter()
-                    .any(|e| matches!(e, Event::TimerFired { source_event_id, .. } if source_event_id == id)),
+                    .any(|e| e.source_event_id == Some(*id) && matches!(&e.kind, EventKind::TimerFired { .. })),
                 WorkItem::SubOrchCompleted { parent_id, .. } | WorkItem::SubOrchFailed { parent_id, .. } => {
-                    self.history_delta.iter().any(|e| match e {
-                        Event::SubOrchestrationCompleted { source_event_id, .. } if source_event_id == parent_id => {
-                            true
-                        }
-                        Event::SubOrchestrationFailed { source_event_id, .. } if source_event_id == parent_id => true,
-                        _ => false,
+                    self.history_delta.iter().any(|e| {
+                        e.source_event_id == Some(*parent_id)
+                            && matches!(
+                                &e.kind,
+                                EventKind::SubOrchestrationCompleted { .. } | EventKind::SubOrchestrationFailed { .. }
+                            )
                     })
                 }
-                WorkItem::ExternalRaised { name, data, .. } => self
-                    .history_delta
-                    .iter()
-                    .any(|e| matches!(e, Event::ExternalEvent { name: n, data: d, .. } if n == name && d == data)),
+                WorkItem::ExternalRaised { name, data, .. } => self.history_delta.iter().any(
+                    |e| matches!(&e.kind, EventKind::ExternalEvent { name: n, data: d } if n == name && d == data),
+                ),
                 WorkItem::CancelInstance { .. } => false,
                 _ => false, // Non-completion work items
             };
@@ -114,12 +115,13 @@ impl ReplayEngine {
             // Nondeterminism detection: ensure completion has a matching schedule and kind
             let schedule_kind = |id: &u64| -> Option<&'static str> {
                 for e in self.baseline_history.iter().chain(self.history_delta.iter()) {
-                    match e {
-                        Event::ActivityScheduled { event_id, .. } if event_id == id => return Some("activity"),
-                        Event::TimerCreated { event_id, .. } if event_id == id => return Some("timer"),
-                        Event::SubOrchestrationScheduled { event_id, .. } if event_id == id => {
-                            return Some("suborchestration");
-                        }
+                    if e.event_id != *id {
+                        continue;
+                    }
+                    match &e.kind {
+                        EventKind::ActivityScheduled { .. } => return Some("activity"),
+                        EventKind::TimerCreated { .. } => return Some("timer"),
+                        EventKind::SubOrchestrationScheduled { .. } => return Some("suborchestration"),
                         _ => {}
                     }
                 }
@@ -199,20 +201,22 @@ impl ReplayEngine {
 
             // Convert message to event
             let event_opt = match msg {
-                WorkItem::ActivityCompleted { id, result, .. } => {
-                    Some(Event::ActivityCompleted {
-                        event_id: 0, // Will be assigned
-                        source_event_id: id,
-                        result,
-                    })
-                }
+                WorkItem::ActivityCompleted { id, result, .. } => Some(Event::new(
+                    &self.instance,
+                    self.execution_id,
+                    Some(id),
+                    EventKind::ActivityCompleted { result },
+                )),
                 WorkItem::ActivityFailed { id, details, .. } => {
                     // Always create event in history for audit trail
-                    let event = Event::ActivityFailed {
-                        event_id: 0,
-                        source_event_id: id,
-                        details: details.clone(),
-                    };
+                    let event = Event::new(
+                        &self.instance,
+                        self.execution_id,
+                        Some(id),
+                        EventKind::ActivityFailed {
+                            details: details.clone(),
+                        },
+                    );
 
                     // Check if system error (abort turn)
                     match &details {
@@ -234,40 +238,45 @@ impl ReplayEngine {
 
                     Some(event)
                 }
-                WorkItem::TimerFired { id, fire_at_ms, .. } => Some(Event::TimerFired {
-                    event_id: 0,
-                    source_event_id: id,
-                    fire_at_ms,
-                }),
+                WorkItem::TimerFired { id, fire_at_ms, .. } => Some(Event::new(
+                    &self.instance,
+                    self.execution_id,
+                    Some(id),
+                    EventKind::TimerFired { fire_at_ms },
+                )),
                 WorkItem::ExternalRaised { name, data, .. } => {
                     // Only materialize ExternalEvent if a subscription exists in this execution
-                    let subscribed = self
-                        .baseline_history
-                        .iter()
-                        .any(|e| matches!(e, Event::ExternalSubscribed { name: hist_name, .. } if hist_name == &name));
+                    let subscribed = self.baseline_history.iter().any(
+                        |e| matches!(&e.kind, EventKind::ExternalSubscribed { name: hist_name } if hist_name == &name),
+                    );
                     if subscribed {
-                        Some(Event::ExternalEvent {
-                            event_id: 0, // Will be assigned
-                            name,
-                            data,
-                        })
+                        Some(Event::new(
+                            &self.instance,
+                            self.execution_id,
+                            None, // ExternalEvent doesn't have source_event_id
+                            EventKind::ExternalEvent { name, data },
+                        ))
                     } else {
                         warn!(instance = %self.instance, event_name=%name, "dropping ExternalByName with no matching subscription in history");
                         None
                     }
                 }
-                WorkItem::SubOrchCompleted { parent_id, result, .. } => Some(Event::SubOrchestrationCompleted {
-                    event_id: 0,
-                    source_event_id: parent_id,
-                    result,
-                }),
+                WorkItem::SubOrchCompleted { parent_id, result, .. } => Some(Event::new(
+                    &self.instance,
+                    self.execution_id,
+                    Some(parent_id),
+                    EventKind::SubOrchestrationCompleted { result },
+                )),
                 WorkItem::SubOrchFailed { parent_id, details, .. } => {
                     // Always create event in history for audit trail
-                    let event = Event::SubOrchestrationFailed {
-                        event_id: 0,
-                        source_event_id: parent_id,
-                        details: details.clone(),
-                    };
+                    let event = Event::new(
+                        &self.instance,
+                        self.execution_id,
+                        Some(parent_id),
+                        EventKind::SubOrchestrationFailed {
+                            details: details.clone(),
+                        },
+                    );
 
                     // Check if system error (abort parent turn)
                     match &details {
@@ -287,18 +296,23 @@ impl ReplayEngine {
                 WorkItem::CancelInstance { reason, .. } => {
                     let already_terminated = self.baseline_history.iter().any(|e| {
                         matches!(
-                            e,
-                            Event::OrchestrationCompleted { .. } | Event::OrchestrationFailed { .. }
+                            &e.kind,
+                            EventKind::OrchestrationCompleted { .. } | EventKind::OrchestrationFailed { .. }
                         )
                     });
                     let already_cancelled = self
                         .baseline_history
                         .iter()
                         .chain(self.history_delta.iter())
-                        .any(|e| matches!(e, Event::OrchestrationCancelRequested { .. }));
+                        .any(|e| matches!(&e.kind, EventKind::OrchestrationCancelRequested { .. }));
 
                     if !already_terminated && !already_cancelled {
-                        Some(Event::OrchestrationCancelRequested { event_id: 0, reason })
+                        Some(Event::new(
+                            &self.instance,
+                            self.execution_id,
+                            None,
+                            EventKind::OrchestrationCancelRequested { reason },
+                        ))
                     } else {
                         None
                     }
@@ -351,20 +365,19 @@ impl ReplayEngine {
             WorkItem::ActivityCompleted { id, .. } => self
                 .baseline_history
                 .iter()
-                .any(|e| matches!(e, Event::ActivityCompleted { source_event_id, .. } if *source_event_id == *id)),
+                .any(|e| e.source_event_id == Some(*id) && matches!(&e.kind, EventKind::ActivityCompleted { .. })),
             WorkItem::TimerFired { id, .. } => self
                 .baseline_history
                 .iter()
-                .any(|e| matches!(e, Event::TimerFired { source_event_id, .. } if *source_event_id == *id)),
-            WorkItem::SubOrchCompleted { parent_id, .. } => self.baseline_history.iter().any(
-                |e| matches!(e, Event::SubOrchestrationCompleted { source_event_id, .. } if *source_event_id == *parent_id),
-            ),
-            WorkItem::SubOrchFailed { parent_id, .. } => self
-                .baseline_history
-                .iter()
-                .any(|e| matches!(e, Event::SubOrchestrationFailed { source_event_id, .. } if *source_event_id == *parent_id)),
+                .any(|e| e.source_event_id == Some(*id) && matches!(&e.kind, EventKind::TimerFired { .. })),
+            WorkItem::SubOrchCompleted { parent_id, .. } => self.baseline_history.iter().any(|e| {
+                e.source_event_id == Some(*parent_id) && matches!(&e.kind, EventKind::SubOrchestrationCompleted { .. })
+            }),
+            WorkItem::SubOrchFailed { parent_id, .. } => self.baseline_history.iter().any(|e| {
+                e.source_event_id == Some(*parent_id) && matches!(&e.kind, EventKind::SubOrchestrationFailed { .. })
+            }),
             WorkItem::ExternalRaised { name, data, .. } => self.baseline_history.iter().any(|e| {
-                matches!(e, Event::ExternalEvent { name: hist_name, data: hist_data, .. }
+                matches!(&e.kind, EventKind::ExternalEvent { name: hist_name, data: hist_data }
                         if hist_name == name && hist_data == data)
             }),
             _ => false,
@@ -375,7 +388,7 @@ impl ReplayEngine {
     fn has_continue_as_new_in_history(&self) -> bool {
         self.baseline_history
             .iter()
-            .any(|e| matches!(e, Event::OrchestrationContinuedAsNew { .. }))
+            .any(|e| matches!(&e.kind, EventKind::OrchestrationContinuedAsNew { .. }))
     }
 
     /// Stage 2: Execute one turn of the orchestration using the replay engine
@@ -469,9 +482,11 @@ impl ReplayEngine {
             .baseline_history
             .iter()
             .chain(self.history_delta.iter())
-            .find(|e| matches!(e, Event::OrchestrationCancelRequested { .. }));
+            .find(|e| matches!(&e.kind, EventKind::OrchestrationCancelRequested { .. }));
 
-        if let Some(Event::OrchestrationCancelRequested { reason, .. }) = cancel_event {
+        if let Some(e) = cancel_event
+            && let EventKind::OrchestrationCancelRequested { reason } = &e.kind
+        {
             return TurnResult::Cancelled(reason.clone());
         }
 
@@ -528,21 +543,26 @@ impl ReplayEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Event;
+    use crate::{Event, EventKind};
 
     #[test]
     fn test_engine_creation() {
         let engine = ReplayEngine::new(
             "test-instance".to_string(),
             1, // execution_id
-            vec![Event::OrchestrationStarted {
-                event_id: 0,
-                name: "test-orch".to_string(),
-                version: "1.0.0".to_string(),
-                input: "test-input".to_string(),
-                parent_instance: None,
-                parent_id: None,
-            }],
+            vec![Event::with_event_id(
+                0,
+                "test-instance",
+                1,
+                None,
+                EventKind::OrchestrationStarted {
+                    name: "test-orch".to_string(),
+                    version: "1.0.0".to_string(),
+                    input: "test-input".to_string(),
+                    parent_instance: None,
+                    parent_id: None,
+                },
+            )],
         );
 
         assert_eq!(engine.instance, "test-instance");

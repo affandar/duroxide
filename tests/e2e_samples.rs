@@ -2,6 +2,7 @@
 //!
 //! Each test demonstrates a common orchestration pattern using
 //! `OrchestrationContext` and the in-process `Runtime`.
+use duroxide::EventKind;
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
 use duroxide::{ActivityContext, Client, OrchestrationContext, OrchestrationRegistry};
@@ -1238,7 +1239,7 @@ async fn sample_versioning_continue_as_new_upgrade_fs() {
         .unwrap_or_default();
     assert!(
         e1.iter()
-            .any(|e| matches!(e, duroxide::Event::OrchestrationContinuedAsNew { .. }))
+            .any(|e| matches!(&e.kind, duroxide::EventKind::OrchestrationContinuedAsNew { .. }))
     );
     // Exec2 must start with the v1-marked payload, proving v1 ran first and handed off via CAN
     let e2 = mgmt2
@@ -1247,7 +1248,7 @@ async fn sample_versioning_continue_as_new_upgrade_fs() {
         .unwrap_or_default();
     assert!(
         e2.iter()
-            .any(|e| matches!(e, duroxide::Event::OrchestrationStarted { input, .. } if input == "v1:state"))
+            .any(|e| matches!(&e.kind, duroxide::EventKind::OrchestrationStarted { input, .. } if input == "v1:state"))
     );
 
     rt.shutdown(None).await;
@@ -1262,7 +1263,6 @@ async fn sample_versioning_continue_as_new_upgrade_fs() {
 /// - The child is also canceled (downward propagation), and its history shows cancellation
 #[tokio::test]
 async fn sample_cancellation_parent_cascades_to_children_fs() {
-    use duroxide::Event;
     let (store, _temp_dir) = common::create_sqlite_store_disk().await;
 
     // Child: waits forever (until canceled). This demonstrates cooperative cancellation via runtime.
@@ -1319,8 +1319,8 @@ async fn sample_cancellation_parent_cascades_to_children_fs() {
         |hist| {
             hist.iter().rev().any(|e| {
                 matches!(
-                    e,
-                    Event::OrchestrationFailed { details, .. } if matches!(
+                    &e.kind,
+                    EventKind::OrchestrationFailed { details, .. } if matches!(
                         details,
                         duroxide::ErrorDetails::Application {
                             kind: duroxide::AppErrorKind::Cancelled { reason },
@@ -1351,11 +1351,11 @@ async fn sample_cancellation_parent_cascades_to_children_fs() {
             &child,
             |hist| {
                 hist.iter()
-                    .any(|e| matches!(e, Event::OrchestrationCancelRequested { .. }))
+                    .any(|e| matches!(&e.kind, EventKind::OrchestrationCancelRequested { .. }))
                     && hist.iter().any(|e| {
                         matches!(
-                            e,
-                            Event::OrchestrationFailed { details, .. } if matches!(
+                            &e.kind,
+                            EventKind::OrchestrationFailed { details, .. } if matches!(
                                 details,
                                 duroxide::ErrorDetails::Application {
                                     kind: duroxide::AppErrorKind::Cancelled { reason },

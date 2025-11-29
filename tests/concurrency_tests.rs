@@ -1,9 +1,10 @@
+use duroxide::EventKind;
 use duroxide::providers::Provider;
 use std::sync::Arc;
 mod common;
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
-use duroxide::{ActivityContext, Client, Event, OrchestrationContext, OrchestrationRegistry};
+use duroxide::{ActivityContext, Client, OrchestrationContext, OrchestrationRegistry};
 use std::sync::Arc as StdArc;
 use std::time::Duration;
 
@@ -153,25 +154,25 @@ async fn concurrent_orchestrations_different_activities_with(store: StdArc<dyn P
     assert!(
         hist1
             .iter()
-            .any(|e| matches!(e, Event::ActivityCompleted { source_event_id, result, .. } if *source_event_id == 2 && result == "5"))
+            .any(|e| matches!(&e.kind, EventKind::ActivityCompleted { result, .. } if e.source_event_id == Some(2) && result == "5"))
     );
     assert!(
         hist2
             .iter()
-            .any(|e| matches!(e, Event::ActivityCompleted { source_event_id, result, .. } if *source_event_id == 2 && result == "HI"))
+            .any(|e| matches!(&e.kind, EventKind::ActivityCompleted { result, .. } if e.source_event_id == Some(2) && result == "HI"))
     );
     assert!(
         hist1
             .iter()
-            .any(|e| matches!(e, Event::ExternalEvent { data, .. } if data == "E1"))
+            .any(|e| matches!(&e.kind, EventKind::ExternalEvent { data, .. } if data == "E1"))
     );
     assert!(
         hist2
             .iter()
-            .any(|e| matches!(e, Event::ExternalEvent { data, .. } if data == "E2"))
+            .any(|e| matches!(&e.kind, EventKind::ExternalEvent { data, .. } if data == "E2"))
     );
-    assert!(hist1.iter().any(|e| matches!(e, Event::TimerFired { .. })));
-    assert!(hist2.iter().any(|e| matches!(e, Event::TimerFired { .. })));
+    assert!(hist1.iter().any(|e| matches!(&e.kind, EventKind::TimerFired { .. })));
+    assert!(hist2.iter().any(|e| matches!(&e.kind, EventKind::TimerFired { .. })));
 
     rt.shutdown(None).await;
 }
@@ -305,27 +306,27 @@ async fn concurrent_orchestrations_same_activities_with(store: StdArc<dyn Provid
     assert!(
         hist1
             .iter()
-            .any(|e| matches!(e, Event::ActivityCompleted { source_event_id, result, .. } if *source_event_id == 2 && result == "11"))
+            .any(|e| matches!(&e.kind, EventKind::ActivityCompleted { result, .. } if e.source_event_id == Some(2) && result == "11"))
     );
     // Note: system calls now use 1 event instead of 2 (ActivityScheduled + ActivityCompleted)
     // So event IDs shifted: new_guid is event 2 (SystemCall), Proc activity is event 3 (scheduled), 4 (completed)
     assert!(
         hist2
             .iter()
-            .any(|e| matches!(e, Event::ActivityCompleted { source_event_id, result, .. } if *source_event_id == 3 && result == "21"))
+            .any(|e| matches!(&e.kind, EventKind::ActivityCompleted { result, .. } if e.source_event_id == Some(3) && result == "21"))
     );
     assert!(
         hist1
             .iter()
-            .any(|e| matches!(e, Event::ExternalEvent { data, .. } if data == "P1"))
+            .any(|e| matches!(&e.kind, EventKind::ExternalEvent { data, .. } if data == "P1"))
     );
     assert!(
         hist2
             .iter()
-            .any(|e| matches!(e, Event::ExternalEvent { data, .. } if data == "P2"))
+            .any(|e| matches!(&e.kind, EventKind::ExternalEvent { data, .. } if data == "P2"))
     );
-    assert!(hist1.iter().any(|e| matches!(e, Event::TimerFired { .. })));
-    assert!(hist2.iter().any(|e| matches!(e, Event::TimerFired { .. })));
+    assert!(hist1.iter().any(|e| matches!(&e.kind, EventKind::TimerFired { .. })));
+    assert!(hist2.iter().any(|e| matches!(&e.kind, EventKind::TimerFired { .. })));
 
     rt.shutdown(None).await;
 }

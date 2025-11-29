@@ -1,6 +1,6 @@
-use duroxide::Event;
 use duroxide::providers::sqlite::SqliteProvider;
 use duroxide::providers::{ExecutionMetadata, Provider, WorkItem};
+use duroxide::{Event, EventKind};
 use std::sync::Arc as StdArc;
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
@@ -27,7 +27,7 @@ pub async fn wait_for_subscription(store: StdArc<dyn Provider>, instance: &str, 
         instance,
         |hist| {
             hist.iter()
-                .any(|e| matches!(e, Event::ExternalSubscribed { name: n, .. } if n == name))
+                .any(|e| matches!(&e.kind, EventKind::ExternalSubscribed { name: n } if n == name))
         },
         timeout_ms,
     )
@@ -131,14 +131,19 @@ pub async fn test_create_execution(
         .ack_orchestration_item(
             &item.lock_token,
             execution_id,
-            vec![Event::OrchestrationStarted {
-                event_id: duroxide::INITIAL_EVENT_ID,
-                name: orchestration.to_string(),
-                version: version.to_string(),
-                input: input.to_string(),
-                parent_instance: parent_instance.map(|s| s.to_string()),
-                parent_id,
-            }],
+            vec![Event::with_event_id(
+                duroxide::INITIAL_EVENT_ID,
+                instance,
+                execution_id,
+                None,
+                EventKind::OrchestrationStarted {
+                    name: orchestration.to_string(),
+                    version: version.to_string(),
+                    input: input.to_string(),
+                    parent_instance: parent_instance.map(|s| s.to_string()),
+                    parent_id,
+                },
+            )],
             vec![], // no worker items
             vec![], // no orchestrator items
             ExecutionMetadata {

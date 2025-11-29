@@ -175,9 +175,9 @@ proptest! {
 
             let terminal_count = history.iter().filter(|e| {
                 matches!(
-                    e,
-                    Event::OrchestrationCompleted { .. }
-                        | Event::OrchestrationFailed { .. }
+                    &e.kind,
+                    EventKind::OrchestrationCompleted { .. }
+                        | EventKind::OrchestrationFailed { .. }
                 )
             }).count();
 
@@ -189,8 +189,8 @@ proptest! {
             // Property: Terminal event should be the last event
             if let Some(last_event) = history.last() {
                 let is_terminal = matches!(
-                    last_event,
-                    Event::OrchestrationCompleted { .. } | Event::OrchestrationFailed { .. }
+                    &last_event.kind,
+                    EventKind::OrchestrationCompleted { .. } | EventKind::OrchestrationFailed { .. }
                 );
                 if !is_terminal {
                     return Err("Last event should be terminal".to_string());
@@ -283,8 +283,8 @@ proptest! {
             // Collect scheduled activity event IDs
             let scheduled_ids: std::collections::HashSet<u64> = history
                 .iter()
-                .filter_map(|e| match e {
-                    Event::ActivityScheduled { event_id, .. } => Some(*event_id),
+                .filter_map(|e| match &e.kind {
+                    EventKind::ActivityScheduled { .. } => Some(e.event_id),
                     _ => None,
                 })
                 .collect();
@@ -292,9 +292,9 @@ proptest! {
             // Collect completed activity source event IDs
             let completed_source_ids: std::collections::HashSet<u64> = history
                 .iter()
-                .filter_map(|e| match e {
-                    Event::ActivityCompleted { source_event_id, .. }
-                    | Event::ActivityFailed { source_event_id, .. } => Some(*source_event_id),
+                .filter_map(|e| match &e.kind {
+                    EventKind::ActivityCompleted { .. }
+                    | EventKind::ActivityFailed { .. } => e.source_event_id,
                     _ => None,
                 })
                 .collect();

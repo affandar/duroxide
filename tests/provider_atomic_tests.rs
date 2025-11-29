@@ -1,4 +1,5 @@
 use duroxide::Event;
+use duroxide::EventKind;
 use duroxide::providers::sqlite::SqliteProvider;
 use duroxide::providers::{ExecutionMetadata, Provider, WorkItem};
 use std::sync::Arc;
@@ -27,10 +28,15 @@ async fn test_ignore_work_after_terminal_event() {
         .append_with_execution(
             instance,
             1,
-            vec![Event::OrchestrationCompleted {
-                event_id: 2,
-                output: "done".to_string(),
-            }],
+            vec![Event::with_event_id(
+                2,
+                instance.to_string(),
+                1,
+                None,
+                EventKind::OrchestrationCompleted {
+                    output: "done".to_string(),
+                },
+            )],
         )
         .await
         .unwrap();
@@ -81,7 +87,10 @@ async fn test_ignore_work_after_terminal_event() {
 
     // History should remain unchanged (no new events)
     let hist = store.read(instance).await.unwrap_or_default();
-    assert!(hist.iter().any(|e| matches!(e, Event::OrchestrationCompleted { .. })));
+    assert!(
+        hist.iter()
+            .any(|e| matches!(&e.kind, EventKind::OrchestrationCompleted { .. }))
+    );
 }
 
 #[tokio::test]
@@ -152,12 +161,16 @@ async fn test_fetch_orchestration_item_existing_instance() {
         .append_with_execution(
             "test-instance",
             1,
-            vec![Event::ActivityScheduled {
-                event_id: 2,
-                name: "TestActivity".to_string(),
-                input: "activity-input".to_string(),
-                execution_id: 1,
-            }],
+            vec![Event::with_event_id(
+                2,
+                "test-instance".to_string(),
+                1,
+                None,
+                EventKind::ActivityScheduled {
+                    name: "TestActivity".to_string(),
+                    input: "activity-input".to_string(),
+                },
+            )],
         )
         .await
         .unwrap();
@@ -243,20 +256,29 @@ async fn test_ack_orchestration_item_atomic() {
 
     // Prepare updates
     let history_delta = vec![
-        Event::OrchestrationStarted {
-            event_id: 1,
-            name: "TestOrch".to_string(),
-            version: "1.0.0".to_string(),
-            input: "test-input".to_string(),
-            parent_instance: None,
-            parent_id: None,
-        },
-        Event::ActivityScheduled {
-            event_id: 2,
-            name: "TestActivity".to_string(),
-            input: "activity-input".to_string(),
-            execution_id: 1,
-        },
+        Event::with_event_id(
+            1,
+            "test-instance".to_string(),
+            1,
+            None,
+            EventKind::OrchestrationStarted {
+                name: "TestOrch".to_string(),
+                version: "1.0.0".to_string(),
+                input: "test-input".to_string(),
+                parent_instance: None,
+                parent_id: None,
+            },
+        ),
+        Event::with_event_id(
+            2,
+            "test-instance".to_string(),
+            1,
+            None,
+            EventKind::ActivityScheduled {
+                name: "TestActivity".to_string(),
+                input: "activity-input".to_string(),
+            },
+        ),
     ];
 
     let worker_items = vec![WorkItem::ActivityExecute {
@@ -283,8 +305,8 @@ async fn test_ack_orchestration_item_atomic() {
     // Verify history was updated
     let history = store.read("test-instance").await.unwrap_or_default();
     assert_eq!(history.len(), 2);
-    assert!(matches!(&history[0], Event::OrchestrationStarted { .. }));
-    assert!(matches!(&history[1], Event::ActivityScheduled { .. }));
+    assert!(matches!(&history[0].kind, EventKind::OrchestrationStarted { .. }));
+    assert!(matches!(&history[1].kind, EventKind::ActivityScheduled { .. }));
 
     // Verify worker item was enqueued
     let (worker_item, _) = store.fetch_work_item(Duration::from_secs(30)).await.unwrap().unwrap();
@@ -456,14 +478,19 @@ async fn test_in_memory_provider_atomic_operations() {
     let lock_token = item.lock_token.clone();
 
     // Test ack with updates
-    let history_delta = vec![Event::OrchestrationStarted {
-        event_id: 1,
-        name: "TestOrch".to_string(),
-        version: "1.0.0".to_string(),
-        input: "test-input".to_string(),
-        parent_instance: None,
-        parent_id: None,
-    }];
+    let history_delta = vec![Event::with_event_id(
+        1,
+        "test-instance".to_string(),
+        1,
+        None,
+        EventKind::OrchestrationStarted {
+            name: "TestOrch".to_string(),
+            version: "1.0.0".to_string(),
+            input: "test-input".to_string(),
+            parent_instance: None,
+            parent_id: None,
+        },
+    )];
 
     store
         .ack_orchestration_item(
@@ -480,7 +507,7 @@ async fn test_in_memory_provider_atomic_operations() {
     // Verify history
     let history = store.read("test-instance").await.unwrap_or_default();
     assert_eq!(history.len(), 1);
-    assert!(matches!(&history[0], Event::OrchestrationStarted { .. }));
+    assert!(matches!(&history[0].kind, EventKind::OrchestrationStarted { .. }));
 
     // Test abandon
     store

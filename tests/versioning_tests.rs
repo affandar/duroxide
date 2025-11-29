@@ -1,7 +1,8 @@
+use duroxide::EventKind;
 use duroxide::providers::sqlite::SqliteProvider;
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
-use duroxide::{Client, Event, OrchestrationContext, OrchestrationRegistry};
+use duroxide::{Client, OrchestrationContext, OrchestrationRegistry};
 use std::sync::Arc as StdArc;
 
 #[tokio::test]
@@ -239,7 +240,10 @@ async fn start_uses_latest_version() {
 
     // Check history for completion event
     let hist = client.read_execution_history("inst-vlatest", 1).await.unwrap();
-    assert!(matches!(hist.last().unwrap(), Event::OrchestrationCompleted { .. }));
+    assert!(matches!(
+        &hist.last().unwrap().kind,
+        EventKind::OrchestrationCompleted { .. }
+    ));
     rt.shutdown(None).await;
 }
 
@@ -396,11 +400,14 @@ async fn parent_calls_child_upgrade_child_and_verify_latest_used() {
         .read_execution_history("inst-parent-child-upgrade", 1)
         .await
         .unwrap();
-    assert!(matches!(hist.last().unwrap(), Event::OrchestrationCompleted { .. }));
+    assert!(matches!(
+        &hist.last().unwrap().kind,
+        EventKind::OrchestrationCompleted { .. }
+    ));
     // History should include SubOrchestrationCompleted
     assert!(
         hist.iter()
-            .any(|e| matches!(e, Event::SubOrchestrationCompleted { .. }))
+            .any(|e| matches!(&e.kind, EventKind::SubOrchestrationCompleted { .. }))
     );
     rt.shutdown(None).await;
 }

@@ -53,7 +53,7 @@ async fn my_orchestration(ctx: OrchestrationContext) -> String {
 3. First `schedule_activity("Activity1", ...)` creates a `DurableFuture`
 4. The `.await` causes `poll_once` on this future:
    - Checks history for `ActivityCompleted/Failed` - not found
-   - Adds `Event::ActivityScheduled` to history
+   - Adds `Event` with `EventKind::ActivityScheduled` to history
    - Records `Action::CallActivity` in pending actions
    - Returns `Poll::Pending`
 5. Orchestration execution stops at this await point

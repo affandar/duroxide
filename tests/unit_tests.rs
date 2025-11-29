@@ -1,3 +1,4 @@
+use duroxide::EventKind;
 use duroxide::providers::Provider;
 use duroxide::providers::ProviderAdmin;
 use duroxide::providers::sqlite::SqliteProvider;
@@ -39,7 +40,7 @@ fn action_emission_single_turn() {
         _ => panic!("unexpected action kind"),
     }
     // History should already contain ActivityScheduled
-    assert!(matches!(hist_after[0], Event::ActivityScheduled { .. }));
+    assert!(matches!(&hist_after[0].kind, EventKind::ActivityScheduled { .. }));
 }
 
 // Test removed: correlation_out_of_order_completion
@@ -145,8 +146,8 @@ async fn runtime_duplicate_orchestration_deduped_single_execution() {
         .iter()
         .filter(|e| {
             matches!(
-                e,
-                Event::OrchestrationCompleted { .. } | Event::OrchestrationFailed { .. }
+                &e.kind,
+                EventKind::OrchestrationCompleted { .. } | EventKind::OrchestrationFailed { .. }
             )
         })
         .count();
@@ -155,7 +156,7 @@ async fn runtime_duplicate_orchestration_deduped_single_execution() {
     // Both handles observed the same execution: only one start/terminal
     let started_count = hist1
         .iter()
-        .filter(|e| matches!(e, Event::OrchestrationStarted { .. }))
+        .filter(|e| matches!(&e.kind, EventKind::OrchestrationStarted { .. }))
         .count();
     assert_eq!(started_count, 1);
 
@@ -302,10 +303,13 @@ async fn providers_fs_multi_execution_persistence_and_latest_read() {
     fs.append_with_execution(
         "pfs",
         1,
-        vec![Event::OrchestrationContinuedAsNew {
-            event_id: 2,
-            input: "1".into(),
-        }],
+        vec![Event::with_event_id(
+            2,
+            "pfs".to_string(),
+            1,
+            None,
+            EventKind::OrchestrationContinuedAsNew { input: "1".into() },
+        )],
     )
     .await
     .unwrap();
@@ -318,10 +322,13 @@ async fn providers_fs_multi_execution_persistence_and_latest_read() {
     fs.append_with_execution(
         "pfs",
         2,
-        vec![Event::OrchestrationCompleted {
-            event_id: 2,
-            output: "ok".into(),
-        }],
+        vec![Event::with_event_id(
+            2,
+            "pfs".to_string(),
+            2,
+            None,
+            EventKind::OrchestrationCompleted { output: "ok".into() },
+        )],
     )
     .await
     .unwrap();
@@ -351,10 +358,13 @@ async fn providers_inmem_multi_execution_persistence_and_latest_read() {
     mem.append_with_execution(
         "pmem",
         1,
-        vec![Event::OrchestrationContinuedAsNew {
-            event_id: 2,
-            input: "1".into(),
-        }],
+        vec![Event::with_event_id(
+            2,
+            "pmem".to_string(),
+            1,
+            None,
+            EventKind::OrchestrationContinuedAsNew { input: "1".into() },
+        )],
     )
     .await
     .unwrap();
@@ -366,10 +376,13 @@ async fn providers_inmem_multi_execution_persistence_and_latest_read() {
     mem.append_with_execution(
         "pmem",
         2,
-        vec![Event::OrchestrationCompleted {
-            event_id: 2,
-            output: "ok".into(),
-        }],
+        vec![Event::with_event_id(
+            2,
+            "pmem".to_string(),
+            2,
+            None,
+            EventKind::OrchestrationCompleted { output: "ok".into() },
+        )],
     )
     .await
     .unwrap();

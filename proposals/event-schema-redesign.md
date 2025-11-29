@@ -6,8 +6,11 @@ Every Event variant repeats the same fields:
 ```rust
 Event::OrchestrationStarted { event_id: u64, name, version, ... }
 Event::OrchestrationCompleted { event_id: u64, output }
-Event::ActivityScheduled { event_id: u64, name, input, ... }
+Event::ActivityScheduled { event_id: u64, name, input, execution_id, ... }
+Event::ActivityCompleted { event_id: u64, source_event_id: u64, result }
 // event_id repeated 17 times!
+// source_event_id repeated in 5 completion variants!
+// execution_id repeated in 4 scheduling variants!
 ```
 
 This makes adding common fields (like timestamps) tedious and error-prone.
@@ -25,12 +28,17 @@ pub struct Event {
     /// Sequential position in history (monotonically increasing per execution)
     pub event_id: u64,
     
+    /// For completion events: references the scheduling event this completes
+    /// None for lifecycle events (OrchestrationStarted, etc.) and scheduling events
+    /// Some(id) for completion events (ActivityCompleted, TimerFired, etc.)
+    pub source_event_id: Option<u64>,
+    
     /// Instance this event belongs to
     /// Previously: Only in DB key, now self-contained in event
     pub instance_id: String,
     
     /// Execution this event belongs to
-    /// Previously: Only in DB key, now self-contained in event
+    /// Previously: Only in DB key (and in 4 variants), now self-contained in event
     pub execution_id: u64,
     
     /// Timestamp when event was created (milliseconds since Unix epoch)
@@ -39,7 +47,6 @@ pub struct Event {
     /// Crate semver version that generated this event
     /// Format: "0.1.0", "0.2.0", etc.
     /// Enables compatibility detection across duroxide versions
-    #[serde(default = "default_duroxide_version")]
     pub duroxide_version: String,
     
     // ===== Event-Specific Data =====
@@ -49,11 +56,12 @@ pub struct Event {
     pub kind: EventKind,
 }
 
-fn default_duroxide_version() -> String { 
-    env!("CARGO_PKG_VERSION").to_string()
-}
-
 /// Event-specific payloads
+/// 
+/// Note: Common fields have been extracted to Event struct:
+/// - event_id: moved to Event.event_id
+/// - source_event_id: moved to Event.source_event_id (Option<u64>)
+/// - execution_id: moved to Event.execution_id (was in 4 variants)
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type")]  // Discriminator field in JSON
 pub enum EventKind {
@@ -80,30 +88,30 @@ pub enum EventKind {
     ActivityScheduled {
         name: String,
         input: String,
-        // execution_id removed - now in Event.execution_id
+        // execution_id REMOVED - now in Event.execution_id
     },
     
     #[serde(rename = "ActivityCompleted")]
     ActivityCompleted {
-        source_event_id: u64,
+        // source_event_id REMOVED - now in Event.source_event_id
         result: String,
     },
     
     #[serde(rename = "ActivityFailed")]
     ActivityFailed {
-        source_event_id: u64,
+        // source_event_id REMOVED - now in Event.source_event_id
         details: ErrorDetails,
     },
     
     #[serde(rename = "TimerCreated")]
     TimerCreated {
         fire_at_ms: u64,
-        // execution_id removed - now in Event.execution_id
+        // execution_id REMOVED - now in Event.execution_id
     },
     
     #[serde(rename = "TimerFired")]
     TimerFired {
-        source_event_id: u64,
+        // source_event_id REMOVED - now in Event.source_event_id
         fire_at_ms: u64,
     },
     
@@ -130,18 +138,18 @@ pub enum EventKind {
         name: String,
         instance: String,
         input: String,
-        // execution_id removed - now in Event.execution_id
+        // execution_id REMOVED - now in Event.execution_id
     },
     
     #[serde(rename = "SubOrchestrationCompleted")]
     SubOrchestrationCompleted {
-        source_event_id: u64,
+        // source_event_id REMOVED - now in Event.source_event_id
         result: String,
     },
     
     #[serde(rename = "SubOrchestrationFailed")]
     SubOrchestrationFailed {
-        source_event_id: u64,
+        // source_event_id REMOVED - now in Event.source_event_id
         details: ErrorDetails,
     },
     
@@ -159,19 +167,62 @@ pub enum EventKind {
     SystemCall {
         op: String,
         value: String,
-        // execution_id removed - now in Event.execution_id
+        // execution_id REMOVED - now in Event.execution_id
     },
 }
 ```
 
+### Fields Moved to Common Event Struct
+
+| Field | Previously In | Now In | Notes |
+|-------|--------------|--------|-------|
+| `event_id` | All 17 variants | `Event.event_id` | Always present |
+| `source_event_id` | 5 completion variants | `Event.source_event_id` | `Option<u64>` - None for non-completions |
+| `execution_id` | 4 scheduling variants | `Event.execution_id` | Always present (denormalized from DB key) |
+| `instance_id` | DB key only | `Event.instance_id` | NEW - denormalized from DB key |
+| `timestamp_ms` | Nowhere | `Event.timestamp_ms` | NEW - enables duration metrics |
+| `duroxide_version` | Nowhere | `Event.duroxide_version` | NEW - enables compatibility detection |
+
+### source_event_id Semantics
+
+Events with `source_event_id = Some(id)` (completion events):
+- `ActivityCompleted` - references `ActivityScheduled`
+- `ActivityFailed` - references `ActivityScheduled`
+- `TimerFired` - references `TimerCreated`
+- `SubOrchestrationCompleted` - references `SubOrchestrationScheduled`
+- `SubOrchestrationFailed` - references `SubOrchestrationScheduled`
+
+Events with `source_event_id = None`:
+- All lifecycle events (OrchestrationStarted, OrchestrationCompleted, etc.)
+- All scheduling events (ActivityScheduled, TimerCreated, etc.)
+- External events (ExternalSubscribed, ExternalEvent)
+- System calls (SystemCall)
+
 ### JSON Serialization Format
 
-**New format:**
+**New format (ActivityCompleted example):**
+```json
+{
+  "event_id": 2,
+  "source_event_id": 1,
+  "instance_id": "order-123",
+  "execution_id": 1,
+  "timestamp_ms": 1700000000000,
+  "duroxide_version": "0.1.0",
+  "type": "ActivityCompleted",
+  "result": "\"success\""
+}
+```
+
+**New format (OrchestrationStarted example - no source_event_id):**
 ```json
 {
   "event_id": 1,
+  "source_event_id": null,
+  "instance_id": "order-123",
+  "execution_id": 1,
   "timestamp_ms": 1700000000000,
-  "schema_version": 1,
+  "duroxide_version": "0.1.0",
   "type": "OrchestrationStarted",
   "name": "ProcessOrder",
   "version": "1.0.0",
@@ -181,46 +232,14 @@ pub enum EventKind {
 }
 ```
 
-**Old format (still deserializes):**
+**Old format (NO BACKWARD COMPATIBILITY - breaking change):**
 ```json
 {
-  "OrchestrationStarted": {
-    "event_id": 1,
-    "name": "ProcessOrder",
-    "version": "1.0.0",
-    "input": "{...}",
-    "parent_instance": null,
-    "parent_id": null
+  "ActivityCompleted": {
+    "event_id": 2,
+    "source_event_id": 1,
+    "result": "\"success\""
   }
-}
-```
-
-### Backward Compatibility via Serde
-
-```rust
-// Custom deserializer to handle both formats
-#[derive(Deserialize)]
-#[serde(untagged)]
-enum EventCompat {
-    New(Event),      // New struct format
-    Old(OldEvent),   // Old enum format
-}
-
-impl From<EventCompat> for Event {
-    fn from(compat: EventCompat) -> Event {
-        match compat {
-            EventCompat::New(event) => event,
-            EventCompat::Old(old_event) => {
-                // Convert old enum to new struct+kind
-                Event {
-                    event_id: old_event.event_id(),
-                    timestamp_ms: 0,  // Old events don't have timestamp
-                    schema_version: 1,
-                    kind: old_event.into_kind(),
-                }
-            }
-        }
-    }
 }
 ```
 
@@ -229,35 +248,36 @@ impl From<EventCompat> for Event {
 ### 1. Clean API
 ```rust
 // Access common fields without matching
-let timestamp = event.timestamp_ms;
 let id = event.event_id;
+let source = event.source_event_id;  // Option<u64>
 let instance = &event.instance_id;
 let exec_id = event.execution_id;
+let timestamp = event.timestamp_ms;
 
 // Match only on event-specific data
-match event.kind {
+match &event.kind {
     EventKind::OrchestrationStarted { name, version, .. } => { /* ... */ },
-    EventKind::ActivityCompleted { result, .. } => { /* ... */ },
+    EventKind::ActivityCompleted { result } => { 
+        // source_event_id available via event.source_event_id
+        /* ... */ 
+    },
 }
 ```
 
-**No More Duplication:**
+### 2. No More Duplication
 - `event_id` was in all 17 variants → now once in Event struct
-- `execution_id` was in 4 variants (ActivityScheduled, TimerCreated, SubOrchestrationScheduled, SystemCall) → now once in Event struct
+- `source_event_id` was in 5 completion variants → now once in Event struct (as Option)
+- `execution_id` was in 4 variants → now once in Event struct
 - `instance_id` implicitly from DB context → now explicit in Event struct
 - Future common fields added once, apply to all events automatically
 
-**Storage Savings:**
-- Removing `execution_id` from 4 EventKind variants saves ~8 bytes per event (offset by adding to Event struct once)
-- Net effect: Slightly larger due to instance_id, but worth it for self-containment
-
-### 2. Easy to Add Common Fields
+### 3. Easy to Add Common Fields
 ```rust
 // Future: Add trace_id to ALL events
 pub struct Event {
     pub event_id: u64,
-    pub timestamp_ms: u64,
-    pub schema_version: u32,
+    pub source_event_id: Option<u64>,
+    // ...existing fields...
     
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trace_id: Option<String>,  // ← One line adds to ALL events!
@@ -266,38 +286,12 @@ pub struct Event {
 }
 ```
 
-### 3. Forward Compatible
-```rust
-// Schema version allows handling multiple versions
-match event.schema_version {
-    1 => { /* current */ },
-    2 => { /* future version with new fields */ },
-    _ if event.schema_version > 2 => {
-        // Forward compat: Accept unknown versions, ignore new fields
-        tracing::warn!("Event schema version {} not recognized, treating as v2", event.schema_version);
-    },
-    _ => return Err("Unsupported schema version"),
-}
-```
-
-### 4. Type Safety
-```rust
-impl Event {
-    /// Get event timestamp (always available)
-    pub fn timestamp_ms(&self) -> u64 {
-        self.timestamp_ms  // No matching needed!
-    }
-    
-    /// Check if this is a terminal event
-    pub fn is_terminal(&self) -> bool {
-        matches!(self.kind, 
-            EventKind::OrchestrationCompleted { .. } |
-            EventKind::OrchestrationFailed { .. } |
-            EventKind::OrchestrationContinuedAsNew { .. }
-        )
-    }
-}
-```
+### 4. Self-Contained Events
+Events now contain all context needed to understand them:
+- Can be exported/imported independently
+- Can be streamed to external systems
+- Query results are self-documenting
+- No hidden dependency on DB key context
 
 ## Migration Impact Analysis
 
@@ -306,26 +300,22 @@ impl Event {
 **1. Event Creation Sites (~40 locations):**
 ```rust
 // Old:
-Event::OrchestrationStarted {
+Event::ActivityCompleted {
     event_id: 0,
-    name: name.clone(),
-    version: version.clone(),
-    input,
-    parent_instance: None,
-    parent_id: None,
+    source_event_id: scheduling_id,
+    result: output,
 }
 
 // New:
 Event {
     event_id: 0,
+    source_event_id: Some(scheduling_id),
+    instance_id: instance.clone(),
+    execution_id,
     timestamp_ms: current_time_ms(),
-    schema_version: 1,
-    kind: EventKind::OrchestrationStarted {
-        name: name.clone(),
-        version: version.clone(),
-        input,
-        parent_instance: None,
-        parent_id: None,
+    duroxide_version: env!("CARGO_PKG_VERSION").to_string(),
+    kind: EventKind::ActivityCompleted {
+        result: output,
     },
 }
 ```
@@ -334,28 +324,45 @@ Event {
 ```rust
 // Old:
 match event {
-    Event::OrchestrationStarted { event_id, name, .. } => { /* ... */ }
+    Event::ActivityCompleted { event_id, source_event_id, result } => { /* ... */ }
 }
 
 // New:
 match &event.kind {
-    EventKind::OrchestrationStarted { name, .. } => {
-        let event_id = event.event_id;  // Access from outer struct
+    EventKind::ActivityCompleted { result } => {
+        let event_id = event.event_id;
+        let source_event_id = event.source_event_id;  // Option<u64>
         /* ... */
     }
 }
 ```
 
-**3. Helper Methods:**
+**3. source_event_id Access:**
+```rust
+// Old:
+impl Event {
+    pub fn source_event_id(&self) -> Option<u64> {
+        match self {
+            Event::ActivityCompleted { source_event_id, .. } => Some(*source_event_id),
+            Event::ActivityFailed { source_event_id, .. } => Some(*source_event_id),
+            // ... 5 arms total
+            _ => None,
+        }
+    }
+}
+
+// New:
+// Just access event.source_event_id directly!
+let source = event.source_event_id;  // Option<u64>
+```
+
+**4. Helper Methods Simplified:**
 ```rust
 impl Event {
-    pub fn event_id(&self) -> u64 {
-        self.event_id  // Simple!
-    }
-    
-    pub fn set_event_id(&mut self, id: u64) {
-        self.event_id = id;  // Simple!
-    }
+    // These become trivial
+    pub fn event_id(&self) -> u64 { self.event_id }
+    pub fn source_event_id(&self) -> Option<u64> { self.source_event_id }
+    pub fn set_event_id(&mut self, id: u64) { self.event_id = id; }
     
     // No more 17-arm match statements!
 }
@@ -363,291 +370,178 @@ impl Event {
 
 ### Database Changes
 
-**None required!** JSON is stored as TEXT, serde handles it.
+**None required!** 
 
-### Provider Changes
-
-**Minimal:**
-- Event serialization/deserialization automatic
-- `event_type` extraction needs update (match on `event.kind`)
-- Otherwise transparent
-
-## Recommended Fields for Phase 1
-
-```rust
-pub struct Event {
-    /// Sequential position in history
-    pub event_id: u64,
-    
-    /// When event was created (milliseconds since Unix epoch)
-    pub timestamp_ms: u64,
-    
-    /// Schema version (1 = current)
-    #[serde(default = "default_schema_version")]
-    pub schema_version: u32,
-    
-    /// Optional: Instance this event belongs to (for multi-instance queries)
-    /// Not strictly needed (already in DB key) but useful for event processing
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub instance_id: Option<String>,
-    
-    /// Optional: Execution this event belongs to
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub execution_id: Option<u64>,
-    
-    /// Event-specific payload
-    #[serde(flatten)]
-    pub kind: EventKind,
-}
-```
-
-## Summary: All Persisted Structs Requiring Versioning
-
-Duroxide persists 3 types of data structures as JSON:
-
-| Struct | Persisted In | Versioning Status | Recommendation |
-|--------|-------------|-------------------|----------------|
-| `Event` | `history.event_data` | ❌ None | ✅ Add struct with common fields + EventKind enum |
-| `WorkItem` | `orchestrator_queue.work_item`, `worker_queue.work_item` | ❌ None | ✅ Add struct with common fields + WorkItemKind enum |
-| `ErrorDetails` | Embedded in Event/WorkItem | ❌ None | ⚠️ Keep as enum (inherits version from parent) |
-
-**Key Insight:** DB stores these as TEXT (JSON), so schema changes are backward compatible via serde defaults.
-
-## Other Structs Requiring Versioning
-
-### WorkItem (Persisted in Queue Tables)
-
-**Current:**
-```rust
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub enum WorkItem {
-    StartOrchestration { instance, orchestration, input, version, ... },
-    ActivityExecute { instance, execution_id, id, name, input },
-    ActivityCompleted { instance, execution_id, id, result },
-    // ... 10 variants total
-}
-```
-
-**Should become:**
-```rust
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct WorkItem {
-    /// Crate semver version that created this work item
-    #[serde(default = "default_duroxide_version")]
-    pub duroxide_version: String,
-    
-    /// When work item was enqueued
-    #[serde(default)]
-    pub enqueued_at_ms: u64,
-    
-    /// Work item type and payload
-    #[serde(flatten)]
-    pub kind: WorkItemKind,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(tag = "type")]
-pub enum WorkItemKind {
-    #[serde(rename = "StartOrchestration")]
-    StartOrchestration {
-        instance: String,
-        orchestration: String,
-        input: String,
-        version: Option<String>,
-        parent_instance: Option<String>,
-        parent_id: Option<u64>,
-        execution_id: u64,
-    },
-    
-    #[serde(rename = "ActivityExecute")]
-    ActivityExecute {
-        instance: String,
-        execution_id: u64,
-        id: u64,
-        name: String,
-        input: String,
-    },
-    
-    // ... etc for all 10 work item types
-}
-```
-
-**Why:** 
-- WorkItems persisted in queues, read back by potentially different runtime version
-- `enqueued_at_ms` enables queue age metrics (how long items wait)
-- Version tracking enables compatibility checks
-- Same pattern as Event for consistency
-
-**Benefits:**
-- Can track queue wait times: `current_time - work_item.enqueued_at_ms`
-- Can detect old work items in queue during upgrade
-- Self-contained (no hidden dependencies on DB context)
-
-### ErrorDetails (Embedded in Events/WorkItems)
-
-**Current:**
-```rust
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub enum ErrorDetails {
-    Infrastructure { operation, message, retryable },
-    Configuration { kind, resource, message },
-    Application { kind, message, retryable },
-}
-```
-
-**Recommendation:** Keep as-is (enum), but consider:
-```rust
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub enum ErrorDetails {
-    // Add version if error handling changes significantly
-    #[serde(rename = "infra_v1")]
-    Infrastructure { operation, message, retryable },
-    // ...
-}
-```
-
-**Reason:** ErrorDetails is embedded in Event/WorkItem (gets their version), not standalone.
-
-## Database Implications
-
-### With instance_id and execution_id in Event
-
-**Before (DB is smart):**
+The `history` table stores events as JSON in the `event_data` TEXT column:
 ```sql
-SELECT event_data FROM history 
-WHERE instance_id = ? AND execution_id = ?
--- DB enforces these are correct via PRIMARY KEY
+CREATE TABLE IF NOT EXISTS history (
+    instance_id TEXT NOT NULL,
+    execution_id INTEGER NOT NULL,
+    event_id INTEGER NOT NULL,
+    event_type TEXT NOT NULL,
+    event_data TEXT NOT NULL,  -- JSON serialized Event
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (instance_id, execution_id, event_id)
+);
 ```
 
-**After (DB is dumb):**
-```sql
-SELECT event_data FROM history
-WHERE instance_id = ? AND execution_id = ?
--- DB still filters, but events are self-contained
-```
+The new Event struct serializes to JSON automatically via serde. No schema migration needed.
 
-**Benefits:**
-- Events can be moved between databases without losing context
-- Events can be exported/imported independently
-- Query results are self-documenting
-- Easier to build event streaming/audit log systems
+Note: `instance_id` and `execution_id` are now **denormalized** - they exist both as DB columns (for indexing/querying) and inside the JSON (for self-containment). The provider continues to use the parameters passed to it for the column values.
 
-**Trade-offs:**
-- Slight storage overhead (~30 bytes per event)
-- Must ensure runtime sets these fields correctly
-- Denormalization (instance_id repeated for each event)
+### Provider Changes (SQLite)
 
-**Recommendation:** Worth it for self-contained events.
-
-## Migration Strategy
-
-### Phase 1: Add Common Fields with Defaults
-
+**1. `event_type` extraction in `append_history_in_tx()`:**
 ```rust
-pub struct Event {
-    pub event_id: u64,
-    
-    #[serde(default)]  // Empty string for old events
-    pub instance_id: String,
-    
-    #[serde(default = "default_execution_id")]  // 1 for old events
-    pub execution_id: u64,
-    
-    #[serde(default)]  // 0 for old events
-    pub timestamp_ms: u64,
-    
-    #[serde(default = "default_duroxide_version")]  // "0.0.0" for old events
-    pub duroxide_version: String,
-    
-    #[serde(flatten)]
-    pub kind: EventKind,
+// Old:
+let event_type = match event {
+    Event::OrchestrationStarted { .. } => "OrchestrationStarted",
+    Event::ActivityCompleted { .. } => "ActivityCompleted",
+    // ... 17 arms
+};
+
+// New:
+let event_type = match &event.kind {
+    EventKind::OrchestrationStarted { .. } => "OrchestrationStarted",
+    EventKind::ActivityCompleted { .. } => "ActivityCompleted",
+    // ... 17 arms
+};
+```
+
+**2. `event.event_id()` → direct field access:**
+```rust
+// Old:
+if event.event_id() == 0 { ... }
+let event_id = event.event_id() as i64;
+
+// New:
+if event.event_id == 0 { ... }
+let event_id = event.event_id as i64;
+```
+
+**3. Pattern matching on `Event::OrchestrationStarted`:**
+```rust
+// Old:
+if let crate::Event::OrchestrationStarted { name, version, .. } = e {
+    Some((name.clone(), version.clone()))
 }
 
-fn default_execution_id() -> u64 { 1 }
-fn default_duroxide_version() -> String { "0.0.0".to_string() }
+// New:
+if let crate::EventKind::OrchestrationStarted { name, version, .. } = &e.kind {
+    Some((name.clone(), version.clone()))
+}
 ```
 
-**Backward Compat:**
-- Old events deserialize with default values
-- Runtime can detect old events: `if event.duroxide_version == "0.0.0" { /* old */ }`
-- Metrics skip old events: `if event.timestamp_ms > 0 { /* use timestamp */ }`
+**4. No changes needed for:**
+- SQL schema (JSON is flexible)
+- `instance_id`/`execution_id` handling (provider uses parameters, not event fields)
+- Queue operations (WorkItem unchanged in this phase)
 
-### Phase 2: Runtime Changes
+### Provider Changes Summary
 
-**Update ALL Event creation sites:**
+| Change | Location | Impact |
+|--------|----------|--------|
+| `event_type` extraction | `append_history_in_tx()` | Match on `event.kind` instead of `event` |
+| `event.event_id()` calls | 2 locations | Direct field access `event.event_id` |
+| Pattern matching | `fetch_orchestration_item()` | Match on `event.kind` |
+| SQL schema | None | JSON handles new format |
+| Tests | Multiple | Update event construction |
+
+## Runtime Changes
+
+The runtime must populate all common fields when creating events:
+
 ```rust
-// Helper method
-fn create_event(instance: &str, execution_id: u64, kind: EventKind) -> Event {
+/// Helper to create events with all common fields populated
+fn create_event(
+    instance_id: &str,
+    execution_id: u64,
+    source_event_id: Option<u64>,
+    kind: EventKind,
+) -> Event {
     Event {
         event_id: 0,  // Will be set by history manager
-        instance_id: instance.to_string(),
+        source_event_id,
+        instance_id: instance_id.to_string(),
         execution_id,
-        timestamp_ms: current_time_ms(),
+        timestamp_ms: SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64,
         duroxide_version: env!("CARGO_PKG_VERSION").to_string(),
         kind,
     }
 }
 
-// Usage:
-history.push(create_event(
+// Usage for scheduling event (no source):
+let event = create_event(
     instance,
     execution_id,
-    EventKind::OrchestrationStarted {
-        name: name.clone(),
-        version,
-        input,
-        parent_instance: None,
-        parent_id: None,
-    }
-));
+    None,  // No source for scheduling events
+    EventKind::ActivityScheduled {
+        name: activity_name.clone(),
+        input: input.clone(),
+    },
+);
+
+// Usage for completion event (has source):
+let event = create_event(
+    instance,
+    execution_id,
+    Some(scheduling_event_id),  // References the ActivityScheduled
+    EventKind::ActivityCompleted {
+        result: output.clone(),
+    },
+);
 ```
 
-### Phase 3: Update Duration Calculations
+## Files to Update
 
-```rust
-// In orchestration dispatcher:
-let start_event = history.iter()
-    .find(|e| matches!(e.kind, EventKind::OrchestrationStarted { .. }))
-    .unwrap();
+| File | Estimated Changes |
+|------|-------------------|
+| `src/lib.rs` | Event struct + EventKind enum definition, remove helper methods |
+| `src/futures.rs` | ~25 pattern matches on source_event_id |
+| `src/runtime/replay_engine.rs` | ~15 pattern matches |
+| `src/runtime/execution.rs` | ~3 pattern matches |
+| `src/runtime/dispatchers/orchestration.rs` | Event creation sites |
+| `src/runtime/dispatchers/worker.rs` | Event creation sites |
+| `src/providers/sqlite.rs` | event_type extraction, pattern matches |
+| `tests/*.rs` | Event construction in tests |
 
-let end_event = history.last().unwrap();
+## Backward Compatibility
 
-let duration_seconds = if start_event.timestamp_ms > 0 && end_event.timestamp_ms > 0 {
-    // Accurate end-to-end duration
-    (end_event.timestamp_ms - start_event.timestamp_ms) as f64 / 1000.0
-} else {
-    // Fallback for old events without timestamps
-    start_time.elapsed().as_secs_f64()
-};
-```
+**None.** This is a breaking change to the event JSON format.
+
+Existing histories will NOT deserialize with the new format. This is acceptable because:
+1. Duroxide is pre-1.0 and not yet released publicly
+2. Test databases can be recreated
+3. Clean break is simpler than compatibility shims
 
 ## Next Steps
 
-1. **Implement Event struct redesign** with common fields
-2. **Implement WorkItem struct redesign** (same pattern)
-3. **Add helper functions** for event creation with auto-timestamp
-4. **Update all event creation sites** (~40 locations)
-5. **Update all event matching sites** (~140+ locations)
-6. **Update duration calculations** to use timestamps
-7. **Test backward compatibility** with old JSON
-8. **Update metrics specification** to note timestamp-based duration
+1. **Update Event struct** in `src/lib.rs` with new design
+2. **Update all event creation sites** (~40 locations)
+3. **Update all event matching sites** (~100+ locations)
+4. **Update provider** event_type extraction
+5. **Update tests** with new event construction
+6. **Run full test suite** to verify
 
 ## Risk Assessment
 
 **Low Risk:**
-- Serde handles schema evolution gracefully
 - No database schema changes
-- Gradual migration (old events work, new events better)
+- Provider changes are minimal
+- Compiler will catch all pattern match updates
 
 **Medium Risk:**
 - Large refactor touching many files
-- Must update all pattern matches
-- Need comprehensive testing
+- Must update all pattern matches (compiler helps)
 
 **High Value:**
 - Fixes critical metrics bug (duration calculation)
 - Enables accurate observability
 - Future-proof schema
 - Cleaner codebase
+- Self-contained events
 
 **Recommendation:** This is the right architectural fix. Worth the refactoring effort.

@@ -2,7 +2,7 @@
 mod tests {
     use crate::providers::WorkItem;
     use crate::runtime::replay_engine::*;
-    use crate::{Event, OrchestrationContext, OrchestrationHandler};
+    use crate::{Event, EventKind, OrchestrationContext, OrchestrationHandler};
     use async_trait::async_trait;
     use std::sync::Arc;
 
@@ -20,14 +20,19 @@ mod tests {
 
     #[test]
     fn test_engine_creation() {
-        let baseline_history = vec![Event::OrchestrationStarted {
-            event_id: 0,
-            name: "test-orch".to_string(),
-            version: "1.0.0".to_string(),
-            input: "test-input".to_string(),
-            parent_instance: None,
-            parent_id: None,
-        }];
+        let baseline_history = vec![Event::with_event_id(
+            0,
+            "test-instance".to_string(),
+            1,
+            None,
+            EventKind::OrchestrationStarted {
+                name: "test-orch".to_string(),
+                version: "1.0.0".to_string(),
+                input: "test-input".to_string(),
+                parent_instance: None,
+                parent_id: None,
+            },
+        )];
 
         let engine = ReplayEngine::new(
             "test-instance".to_string(),
@@ -47,18 +52,26 @@ mod tests {
     fn test_prep_completions() {
         // Provide matching schedules for injected completions
         let baseline = vec![
-            Event::ActivityScheduled {
-                event_id: 1,
-                name: "a1".to_string(),
-                input: "i1".to_string(),
-                execution_id: 1,
-            },
-            Event::ActivityScheduled {
-                event_id: 2,
-                name: "a2".to_string(),
-                input: "i2".to_string(),
-                execution_id: 1,
-            },
+            Event::with_event_id(
+                1,
+                "test-instance".to_string(),
+                1,
+                None,
+                EventKind::ActivityScheduled {
+                    name: "a1".to_string(),
+                    input: "i1".to_string(),
+                },
+            ),
+            Event::with_event_id(
+                2,
+                "test-instance".to_string(),
+                1,
+                None,
+                EventKind::ActivityScheduled {
+                    name: "a2".to_string(),
+                    input: "i2".to_string(),
+                },
+            ),
         ];
         let mut engine = ReplayEngine::new("test-instance".to_string(), 1, baseline);
 
@@ -87,18 +100,28 @@ mod tests {
     #[test]
     fn test_prep_completions_with_external_events() {
         let baseline_history = vec![
-            Event::OrchestrationStarted {
-                event_id: 0,
-                name: "test-orch".to_string(),
-                version: "1.0.0".to_string(),
-                input: "test-input".to_string(),
-                parent_instance: None,
-                parent_id: None,
-            },
-            Event::ExternalSubscribed {
-                event_id: 5,
-                name: "test-event".to_string(),
-            },
+            Event::with_event_id(
+                0,
+                "test-instance".to_string(),
+                1,
+                None,
+                EventKind::OrchestrationStarted {
+                    name: "test-orch".to_string(),
+                    version: "1.0.0".to_string(),
+                    input: "test-input".to_string(),
+                    parent_instance: None,
+                    parent_id: None,
+                },
+            ),
+            Event::with_event_id(
+                5,
+                "test-instance".to_string(),
+                1,
+                None,
+                EventKind::ExternalSubscribed {
+                    name: "test-event".to_string(),
+                },
+            ),
         ];
 
         let mut engine = ReplayEngine::new(
@@ -140,17 +163,25 @@ mod tests {
         ];
 
         engine.baseline_history = vec![
-            Event::ActivityScheduled {
-                event_id: 1,
-                name: "test".to_string(),
-                input: "test".to_string(),
-                execution_id: 1,
-            },
-            Event::ActivityCompleted {
-                event_id: 2,
-                source_event_id: 1,
-                result: "first-result".to_string(),
-            },
+            Event::with_event_id(
+                1,
+                "test-instance".to_string(),
+                1,
+                None,
+                EventKind::ActivityScheduled {
+                    name: "test".to_string(),
+                    input: "test".to_string(),
+                },
+            ),
+            Event::with_event_id(
+                2,
+                "test-instance".to_string(),
+                1,
+                Some(1),
+                EventKind::ActivityCompleted {
+                    result: "first-result".to_string(),
+                },
+            ),
         ];
 
         engine.prep_completions(messages);
@@ -161,14 +192,19 @@ mod tests {
 
     #[test]
     fn test_execute_orchestration_completed() {
-        let baseline_history = vec![Event::OrchestrationStarted {
-            event_id: 0,
-            name: "test-orch".to_string(),
-            version: "1.0.0".to_string(),
-            input: "test-input".to_string(),
-            parent_instance: None,
-            parent_id: None,
-        }];
+        let baseline_history = vec![Event::with_event_id(
+            0,
+            "test-instance".to_string(),
+            1,
+            None,
+            EventKind::OrchestrationStarted {
+                name: "test-orch".to_string(),
+                version: "1.0.0".to_string(),
+                input: "test-input".to_string(),
+                parent_instance: None,
+                parent_id: None,
+            },
+        )];
 
         let mut engine = ReplayEngine::new(
             "test-instance".to_string(),
@@ -198,14 +234,19 @@ mod tests {
 
     #[test]
     fn test_execute_orchestration_failed() {
-        let baseline_history = vec![Event::OrchestrationStarted {
-            event_id: 0,
-            name: "test-orch".to_string(),
-            version: "1.0.0".to_string(),
-            input: "test-input".to_string(),
-            parent_instance: None,
-            parent_id: None,
-        }];
+        let baseline_history = vec![Event::with_event_id(
+            0,
+            "test-instance".to_string(),
+            1,
+            None,
+            EventKind::OrchestrationStarted {
+                name: "test-orch".to_string(),
+                version: "1.0.0".to_string(),
+                input: "test-input".to_string(),
+                parent_instance: None,
+                parent_id: None,
+            },
+        )];
 
         let mut engine = ReplayEngine::new(
             "test-instance".to_string(),
@@ -242,14 +283,19 @@ mod tests {
 
     #[test]
     fn test_execute_orchestration_with_unconsumed_completions() {
-        let baseline_history = vec![Event::OrchestrationStarted {
-            event_id: 0,
-            name: "test-orch".to_string(),
-            version: "1.0.0".to_string(),
-            input: "test-input".to_string(),
-            parent_instance: None,
-            parent_id: None,
-        }];
+        let baseline_history = vec![Event::with_event_id(
+            0,
+            "test-instance".to_string(),
+            1,
+            None,
+            EventKind::OrchestrationStarted {
+                name: "test-orch".to_string(),
+                version: "1.0.0".to_string(),
+                input: "test-input".to_string(),
+                parent_instance: None,
+                parent_id: None,
+            },
+        )];
 
         let mut engine = ReplayEngine::new(
             "test-instance".to_string(),
@@ -265,12 +311,16 @@ mod tests {
             result: "test-result".to_string(),
         }];
         // Provide matching schedule for id=999
-        engine.baseline_history.push(Event::ActivityScheduled {
-            event_id: 999,
-            name: "test-activity".to_string(),
-            input: "test-input".to_string(),
-            execution_id: 1,
-        });
+        engine.baseline_history.push(Event::with_event_id(
+            999,
+            "test-instance".to_string(),
+            1,
+            None,
+            EventKind::ActivityScheduled {
+                name: "test-activity".to_string(),
+                input: "test-input".to_string(),
+            },
+        ));
         engine.prep_completions(messages);
 
         let handler = Arc::new(MockHandler {
@@ -297,14 +347,19 @@ mod tests {
 
     #[test]
     fn test_final_history() {
-        let baseline_history = vec![Event::OrchestrationStarted {
-            event_id: 0,
-            name: "test-orch".to_string(),
-            version: "1.0.0".to_string(),
-            input: "test-input".to_string(),
-            parent_instance: None,
-            parent_id: None,
-        }];
+        let baseline_history = vec![Event::with_event_id(
+            0,
+            "test-instance".to_string(),
+            1,
+            None,
+            EventKind::OrchestrationStarted {
+                name: "test-orch".to_string(),
+                version: "1.0.0".to_string(),
+                input: "test-input".to_string(),
+                parent_instance: None,
+                parent_id: None,
+            },
+        )];
 
         let mut engine = ReplayEngine::new(
             "test-instance".to_string(),
@@ -314,25 +369,33 @@ mod tests {
 
         // Add some delta events (simulating orchestration execution)
         engine.history_delta = vec![
-            Event::ActivityScheduled {
-                event_id: 1,
-                name: "test-activity".to_string(),
-                input: "activity-input".to_string(),
-                execution_id: 1,
-            },
-            Event::ActivityCompleted {
-                event_id: 2,
-                source_event_id: 1,
-                result: "activity-result".to_string(),
-            },
+            Event::with_event_id(
+                1,
+                "test-instance".to_string(),
+                1,
+                None,
+                EventKind::ActivityScheduled {
+                    name: "test-activity".to_string(),
+                    input: "activity-input".to_string(),
+                },
+            ),
+            Event::with_event_id(
+                2,
+                "test-instance".to_string(),
+                1,
+                Some(1),
+                EventKind::ActivityCompleted {
+                    result: "activity-result".to_string(),
+                },
+            ),
         ];
 
         let final_history = engine.final_history();
 
         assert_eq!(final_history.len(), 3); // baseline + 2 delta events
         assert_eq!(final_history[0], baseline_history[0]);
-        assert!(matches!(final_history[1], Event::ActivityScheduled { .. }));
-        assert!(matches!(final_history[2], Event::ActivityCompleted { .. }));
+        assert!(matches!(&final_history[1].kind, EventKind::ActivityScheduled { .. }));
+        assert!(matches!(&final_history[2].kind, EventKind::ActivityCompleted { .. }));
     }
 
     #[test]
@@ -340,12 +403,16 @@ mod tests {
         let mut engine = ReplayEngine::new(
             "test-instance".to_string(),
             1,
-            vec![Event::ActivityScheduled {
-                event_id: 1,
-                name: "test".to_string(),
-                input: "input".to_string(),
-                execution_id: 1,
-            }],
+            vec![Event::with_event_id(
+                1,
+                "test-instance".to_string(),
+                1,
+                None,
+                EventKind::ActivityScheduled {
+                    name: "test".to_string(),
+                    input: "input".to_string(),
+                },
+            )],
         );
 
         // Initially no progress
@@ -363,12 +430,16 @@ mod tests {
         assert!(engine.made_progress());
 
         // Add history delta - should still show progress
-        engine.history_delta = vec![Event::ActivityScheduled {
-            event_id: 1,
-            name: "test".to_string(),
-            input: "input".to_string(),
-            execution_id: 1,
-        }];
+        engine.history_delta = vec![Event::with_event_id(
+            1,
+            "test-instance".to_string(),
+            1,
+            None,
+            EventKind::ActivityScheduled {
+                name: "test".to_string(),
+                input: "input".to_string(),
+            },
+        )];
         assert!(engine.made_progress());
 
         // Clear both - no progress
