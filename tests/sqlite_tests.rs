@@ -1,4 +1,3 @@
-use duroxide::EventKind;
 use duroxide::providers::sqlite::SqliteProvider;
 use duroxide::providers::{ExecutionMetadata, Provider, ProviderAdmin, WorkItem};
 use duroxide::{ActivityContext, Event, EventKind};
@@ -228,14 +227,19 @@ async fn test_execution_status_failed() {
         .ack_orchestration_item(
             &item.lock_token,
             execution_id,
-            vec![Event::OrchestrationFailed {
-                event_id: 1,
-                details: duroxide::ErrorDetails::Application {
-                    kind: duroxide::AppErrorKind::OrchestrationFailed,
-                    message: "Error occurred".to_string(),
-                    retryable: false,
+            vec![Event::with_event_id(
+                1,
+                instance.to_string(),
+                execution_id,
+                None,
+                EventKind::OrchestrationFailed {
+                    details: duroxide::ErrorDetails::Application {
+                        kind: duroxide::AppErrorKind::OrchestrationFailed,
+                        message: "Error occurred".to_string(),
+                        retryable: false,
+                    },
                 },
-            }],
+            )],
             vec![],
             vec![],
             metadata,
@@ -422,14 +426,19 @@ async fn test_sqlite_file_concurrent_access() {
             .ack_orchestration_item(
                 &item.lock_token,
                 item.execution_id,
-                vec![Event::OrchestrationStarted {
-                    event_id: duroxide::INITIAL_EVENT_ID,
-                    name: "TestOrch".to_string(),
-                    version: "1.0.0".to_string(),
-                    input: format!("{{\"id\": {}}}", acked_count),
-                    parent_instance: None,
-                    parent_id: None,
-                }],
+                vec![Event::with_event_id(
+                    duroxide::INITIAL_EVENT_ID,
+                    item.instance.clone(),
+                    item.execution_id,
+                    None,
+                    EventKind::OrchestrationStarted {
+                        name: "TestOrch".to_string(),
+                        version: "1.0.0".to_string(),
+                        input: format!("{{\"id\": {}}}", acked_count),
+                        parent_instance: None,
+                        parent_id: None,
+                    },
+                )],
                 vec![],
                 vec![],
                 ExecutionMetadata {
@@ -578,32 +587,49 @@ async fn test_sqlite_provider_transactional() {
 
     // Simulate orchestration that schedules multiple activities atomically
     let history_delta = vec![
-        Event::OrchestrationStarted {
-            event_id: 1,
-            name: "TransactionalTest".to_string(),
-            version: "1.0.0".to_string(),
-            input: "{}".to_string(),
-            parent_instance: None,
-            parent_id: None,
-        },
-        Event::ActivityScheduled {
-            event_id: 2,
-            execution_id: 1,
-            name: "Activity1".to_string(),
-            input: "{}".to_string(),
-        },
-        Event::ActivityScheduled {
-            event_id: 3,
-            execution_id: 1,
-            name: "Activity2".to_string(),
-            input: "{}".to_string(),
-        },
-        Event::ActivityScheduled {
-            event_id: 4,
-            execution_id: 1,
-            name: "Activity3".to_string(),
-            input: "{}".to_string(),
-        },
+        Event::with_event_id(
+            1,
+            "transactional-test".to_string(),
+            1,
+            None,
+            EventKind::OrchestrationStarted {
+                name: "TransactionalTest".to_string(),
+                version: "1.0.0".to_string(),
+                input: "{}".to_string(),
+                parent_instance: None,
+                parent_id: None,
+            },
+        ),
+        Event::with_event_id(
+            2,
+            "transactional-test".to_string(),
+            1,
+            None,
+            EventKind::ActivityScheduled {
+                name: "Activity1".to_string(),
+                input: "{}".to_string(),
+            },
+        ),
+        Event::with_event_id(
+            3,
+            "transactional-test".to_string(),
+            1,
+            None,
+            EventKind::ActivityScheduled {
+                name: "Activity2".to_string(),
+                input: "{}".to_string(),
+            },
+        ),
+        Event::with_event_id(
+            4,
+            "transactional-test".to_string(),
+            1,
+            None,
+            EventKind::ActivityScheduled {
+                name: "Activity3".to_string(),
+                input: "{}".to_string(),
+            },
+        ),
     ];
 
     let worker_items = vec![
@@ -705,14 +731,19 @@ async fn test_sqlite_provider_timer_queue() {
         .ack_orchestration_item(
             &item.lock_token,
             1, // execution_id
-            vec![Event::OrchestrationStarted {
-                event_id: 1,
-                name: "TimerTest".to_string(),
-                version: "1.0.0".to_string(),
-                input: "{}".to_string(),
-                parent_instance: None,
-                parent_id: None,
-            }],
+            vec![Event::with_event_id(
+                1,
+                instance.to_string(),
+                1,
+                None,
+                EventKind::OrchestrationStarted {
+                    name: "TimerTest".to_string(),
+                    version: "1.0.0".to_string(),
+                    input: "{}".to_string(),
+                    parent_instance: None,
+                    parent_id: None,
+                },
+            )],
             vec![],
             vec![],
             ExecutionMetadata::default(),
@@ -752,20 +783,29 @@ async fn test_execution_status_running() {
 
     // Simulate orchestration running (not completed)
     let history_delta = vec![
-        Event::OrchestrationStarted {
-            event_id: 1,
-            name: "TestOrch".to_string(),
-            version: "1.0.0".to_string(),
-            input: "test".to_string(),
-            parent_instance: None,
-            parent_id: None,
-        },
-        Event::ActivityScheduled {
-            event_id: 2,
-            execution_id: 1,
-            name: "TestActivity".to_string(),
-            input: "test".to_string(),
-        },
+        Event::with_event_id(
+            1,
+            instance.to_string(),
+            1,
+            None,
+            EventKind::OrchestrationStarted {
+                name: "TestOrch".to_string(),
+                version: "1.0.0".to_string(),
+                input: "test".to_string(),
+                parent_instance: None,
+                parent_id: None,
+            },
+        ),
+        Event::with_event_id(
+            2,
+            instance.to_string(),
+            1,
+            None,
+            EventKind::ActivityScheduled {
+                name: "TestActivity".to_string(),
+                input: "test".to_string(),
+            },
+        ),
     ];
 
     store
@@ -815,18 +855,28 @@ async fn test_execution_output_captured_on_continue_as_new() {
 
     // Simulate orchestration continuing as new
     let history_delta = vec![
-        Event::OrchestrationStarted {
-            event_id: 1,
-            name: "TestOrch".to_string(),
-            version: "1.0.0".to_string(),
-            input: "test".to_string(),
-            parent_instance: None,
-            parent_id: None,
-        },
-        Event::OrchestrationContinuedAsNew {
-            event_id: 2,
-            input: "new-input".to_string(),
-        },
+        Event::with_event_id(
+            1,
+            instance.to_string(),
+            1,
+            None,
+            EventKind::OrchestrationStarted {
+                name: "TestOrch".to_string(),
+                version: "1.0.0".to_string(),
+                input: "test".to_string(),
+                parent_instance: None,
+                parent_id: None,
+            },
+        ),
+        Event::with_event_id(
+            2,
+            instance.to_string(),
+            1,
+            None,
+            EventKind::OrchestrationContinuedAsNew {
+                input: "new-input".to_string(),
+            },
+        ),
     ];
 
     store

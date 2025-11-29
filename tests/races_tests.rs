@@ -61,12 +61,12 @@ async fn wait_external_completes_with(store: StdArc<dyn Provider>) {
     // Check history for expected events
     let final_history = client.read_execution_history("inst-wait-1", 1).await.unwrap();
     // First event is OrchestrationStarted; then subscription, event, and terminal completion
-    assert!(matches!(final_history[0], Event::OrchestrationStarted { .. }));
-    assert!(matches!(final_history[1], Event::ExternalSubscribed { .. }));
-    assert!(matches!(final_history[2], Event::ExternalEvent { .. }));
+    assert!(matches!(&final_history[0].kind, EventKind::OrchestrationStarted { .. }));
+    assert!(matches!(&final_history[1].kind, EventKind::ExternalSubscribed { .. }));
+    assert!(matches!(&final_history[2].kind, EventKind::ExternalEvent { .. }));
     assert!(matches!(
-        final_history.last().unwrap(),
-        Event::OrchestrationCompleted { .. }
+        &final_history.last().unwrap().kind,
+        EventKind::OrchestrationCompleted { .. }
     ));
     assert_eq!(final_history.len(), 4);
 
