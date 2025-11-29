@@ -1,6 +1,6 @@
 # Cross-Crate Registry Pattern
 
-**Version:** 1.0  
+**Version:** 1.1  
 **Status:** Specification
 
 ---
@@ -30,8 +30,9 @@ duroxide-azure-arm/
 ├── Cargo.toml
 ├── src/
 │   ├── lib.rs
-│   ├── names.rs              # Name constants with documentation
-│   ├── types.rs              # Input/output types
+│   ├── names.rs              # Orchestration name constants (centralized)
+│   ├── types.rs              # Orchestration input/output types
+│   ├── activity_types.rs     # Activity input/output types
 │   ├── registry.rs           # Registry builders
 │   ├── inventory.rs          # Discovery API (optional)
 │   ├── orchestrations/
@@ -40,17 +41,20 @@ duroxide-azure-arm/
 │   │   └── deploy_webapp.rs
 │   └── activities/
 │       ├── mod.rs
-│       ├── provision_vm.rs
+│       ├── provision_vm.rs      # Contains NAME + activity fn
 │       └── configure_firewall.rs
 └── README.md
 ```
 
-### 2. Define Name Constants
+### 2. Define Orchestration Name Constants
 
-Create `src/names.rs` with const strings for all orchestrations and activities:
+Create `src/names.rs` with const strings for **orchestrations only**:
 
 ```rust
-//! Name constants for orchestrations and activities
+//! Name constants for orchestrations
+//!
+//! Note: Activity names are co-located with their implementations
+//! in the activities/ module for better IDE navigation (F12 support).
 
 /// Orchestration names
 pub mod orchestrations {
@@ -59,51 +63,71 @@ pub mod orchestrations {
     /// **Input:** [`crate::types::ProvisionPostgresInput`]  
     /// **Output:** [`crate::types::ProvisionPostgresOutput`]  
     /// **Activities used:**
-    /// - [`super::activities::PROVISION_VM`]
-    /// - [`super::activities::CONFIGURE_FIREWALL`]
+    /// - [`crate::activities::provision_vm::NAME`]
+    /// - [`crate::activities::configure_firewall::NAME`]
     pub const PROVISION_POSTGRES: &str = "duroxide-azure-arm::orchestration::provision-postgres";
     
     /// Deploy an Azure Web App
     pub const DEPLOY_WEBAPP: &str = "duroxide-azure-arm::orchestration::deploy-webapp";
 }
+```
 
-/// Activity names
-pub mod activities {
-    /// Provision an Azure VM
-    /// 
-    /// **Input:** [`crate::types::ProvisionVMInput`]  
-    /// **Output:** [`crate::types::ProvisionVMOutput`]  
-    /// **Idempotent:** Yes
-    pub const PROVISION_VM: &str = "duroxide-azure-arm::activity::provision-vm";
+**Why centralized orchestration names?**
+- Orchestrations are referenced externally (client.start_orchestration)
+- Having them in one file makes discovery easy
+- Consumers import `names::orchestrations::PROVISION_POSTGRES`
+
+### 3. Define Activity Names (Co-located with Implementation)
+
+**Activity names live in each activity file**, not a centralized names file. This enables IDE navigation (F12 jumps to implementation):
+
+```rust
+// src/activities/provision_vm.rs
+
+use duroxide::ActivityContext;
+use crate::activity_types::{ProvisionVMInput, ProvisionVMOutput};
+
+/// Activity name for registration and scheduling
+/// 
+/// **Input:** [`ProvisionVMInput`]  
+/// **Output:** [`ProvisionVMOutput`]  
+/// **Idempotent:** Yes
+pub const NAME: &str = "duroxide-azure-arm::activity::provision-vm";
+
+pub async fn activity(
+    ctx: ActivityContext,
+    input: ProvisionVMInput,
+) -> Result<ProvisionVMOutput, String> {
+    ctx.trace_info(format!("Provisioning VM: {}", input.name));
     
-    /// Configure Azure firewall rules
-    /// 
-    /// **Input:** [`crate::types::FirewallConfig`]  
-    /// **Output:** [`crate::types::FirewallRuleId`]  
-    /// **Idempotent:** Yes
-    pub const CONFIGURE_FIREWALL: &str = "duroxide-azure-arm::activity::configure-firewall";
+    // Implementation...
+    
+    Ok(ProvisionVMOutput {
+        vm_id: "vm-123".to_string(),
+        ip_address: "10.0.0.4".to_string(),
+    })
 }
 ```
 
+**Benefits:**
+- F12 in IDE → jumps directly to implementation
+- Name can't get out of sync with implementation
+- Doc comments on NAME are right next to the code
+
 **Requirements:**
 - Use your crate name as the prefix (e.g., `duroxide-azure-arm`)
-- Use `::orchestration::` for orchestrations
 - Use `::activity::` for activities
-- Use kebab-case for names (e.g., `provision-postgres`, not `ProvisionPostgres`)
-- Document input/output types in doc comments
-- Document whether activities are idempotent
-- List dependencies (which activities an orchestration uses)
+- Use kebab-case for names (e.g., `provision-vm`, not `ProvisionVM`)
 
-### 3. Define Strongly-Typed Inputs and Outputs
+### 4. Define Strongly-Typed Inputs and Outputs
 
-Create `src/types.rs` with serde-enabled types:
+Create **separate files** for orchestration and activity types:
 
+**`src/types.rs`** - Orchestration types:
 ```rust
-//! Input and output types for orchestrations and activities
+//! Input and output types for orchestrations
 
 use serde::{Deserialize, Serialize};
-
-// Orchestration types
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProvisionPostgresInput {
@@ -119,8 +143,13 @@ pub struct ProvisionPostgresOutput {
     pub connection_string: String,
     pub admin_password: String,
 }
+```
 
-// Activity types
+**`src/activity_types.rs`** - Activity types:
+```rust
+//! Input and output types for activities
+
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProvisionVMInput {
@@ -132,7 +161,19 @@ pub struct ProvisionVMInput {
 pub struct ProvisionVMOutput {
     pub vm_id: String,
     pub ip_address: String,
-    pub admin_password: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FirewallConfig {
+    pub resource_group: String,
+    pub rules: Vec<FirewallRule>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FirewallRule {
+    pub name: String,
+    pub port: u16,
+    pub protocol: String,
 }
 ```
 
@@ -142,126 +183,115 @@ pub struct ProvisionVMOutput {
 - Document fields with doc comments
 - Version types when breaking changes occur (e.g., `ProvisionPostgresInputV2`)
 
-### 4. Implement Orchestrations
+### 5. Implement Orchestrations (Typed)
 
-Create orchestration functions in `src/orchestrations/`:
+Create orchestration functions in `src/orchestrations/` using typed signatures:
 
 ```rust
 // src/orchestrations/provision_postgres.rs
 
 use duroxide::OrchestrationContext;
-use crate::names::activities;
-use crate::types::*;
+use crate::activities;
+use crate::types::{ProvisionPostgresInput, ProvisionPostgresOutput};
+use crate::activity_types::ProvisionVMInput;
 
 pub async fn provision_postgres_orchestration(
     ctx: OrchestrationContext,
-    input: String,
-) -> Result<String, String> {
-    // 1. Deserialize input
-    let input: ProvisionPostgresInput = serde_json::from_str(&input)
-        .map_err(|e| format!("Invalid input: {}", e))?;
-    
+    input: ProvisionPostgresInput,
+) -> Result<ProvisionPostgresOutput, String> {
     ctx.trace_info(format!("Provisioning PostgreSQL: {}", input.database_name));
     
-    // 2. Call activities using name constants
+    // Call activities using NAME from the activity module
     let vm_input = ProvisionVMInput {
         name: format!("{}-vm", input.database_name),
         resource_group: input.resource_group.clone(),
     };
     
-    let vm_result = ctx
-        .schedule_activity(activities::PROVISION_VM, serde_json::to_string(&vm_input).unwrap())
-        .into_activity()
+    let vm_output = ctx
+        .schedule_activity_typed(activities::provision_vm::NAME, vm_input)
+        .into_activity_typed()
         .await?;
     
-    let vm_output: ProvisionVMOutput = serde_json::from_str(&vm_result)
-        .map_err(|e| format!("Failed to parse VM output: {}", e))?;
-    
-    // 3. Build and serialize output
-    let output = ProvisionPostgresOutput {
+    // Build output
+    Ok(ProvisionPostgresOutput {
         server_id: vm_output.vm_id,
         connection_string: format!("postgresql://{}:5432/{}", vm_output.ip_address, input.database_name),
-        admin_password: vm_output.admin_password,
-    };
-    
-    serde_json::to_string(&output).map_err(|e| format!("Failed to serialize output: {}", e))
+        admin_password: "generated".to_string(),
+    })
 }
 ```
 
 **Requirements:**
-- Accept `String` input, return `Result<String, String>`
-- Deserialize input to strongly-typed struct
-- Serialize output from strongly-typed struct
-- Use name constants from `crate::names` when calling activities
+- Accept typed input, return `Result<TypedOutput, String>`
+- Use activity NAME constants from the activities module
 - Add trace logging for observability
 
-### 5. Implement Activities
+### 6. Implement Activities (Typed)
 
-Create activity functions in `src/activities/`:
+Activities have their NAME co-located with implementation:
 
 ```rust
 // src/activities/provision_vm.rs
 
 use duroxide::ActivityContext;
-use crate::types::*;
+use crate::activity_types::{ProvisionVMInput, ProvisionVMOutput};
 
-pub async fn provision_vm_activity(ctx: ActivityContext, input: String) -> Result<String, String> {
-    let input: ProvisionVMInput = serde_json::from_str(&input)
-        .map_err(|e| format!("Invalid input: {}", e))?;
-    
+/// Activity name for registration and scheduling
+pub const NAME: &str = "duroxide-azure-arm::activity::provision-vm";
+
+pub async fn activity(
+    ctx: ActivityContext,
+    input: ProvisionVMInput,
+) -> Result<ProvisionVMOutput, String> {
     ctx.trace_info(format!("Provisioning VM: {}", input.name));
     
-    // Implement your activity logic
-    // Best practice: Make idempotent
+    // Check idempotency - does resource already exist?
+    if let Some(existing) = get_existing_vm(&input.name).await? {
+        ctx.trace_info("VM already exists, returning existing");
+        return Ok(existing);
+    }
     
-    let output = ProvisionVMOutput {
-        vm_id: create_or_get_vm(&input).await?,
-        ip_address: "10.0.0.4".to_string(),
-        admin_password: generate_password(),
-    };
+    // Create the resource
+    let vm = create_vm(&input).await?;
     
     ctx.trace_info("VM provisioned successfully");
     
-    serde_json::to_string(&output).map_err(|e| format!("Failed to serialize output: {}", e))
+    Ok(ProvisionVMOutput {
+        vm_id: vm.id,
+        ip_address: vm.ip,
+    })
 }
 ```
 
 **Requirements:**
-- Accept `ActivityContext` as first parameter, then `String` input
-- Return `Result<String, String>`
-- Deserialize input, serialize output
+- Define `pub const NAME: &str` at the top of each activity file
+- Accept `ActivityContext` as first parameter, then typed input
+- Return `Result<TypedOutput, String>`
 - Make activities idempotent when possible
-- Handle errors gracefully
-- Activities can use any async operations (sleep, HTTP, database, etc.)
 - Use `ctx.trace_*()` for logging with automatic correlation IDs
 
-### 6. Create Registry Builders
+### 7. Create Registry Builders
 
-Create `src/registry.rs` with a function that returns a complete registry:
+Create `src/registry.rs` using `register_typed()`:
 
 ```rust
 //! Registry builders for exporting orchestrations and activities
 
 use duroxide::OrchestrationRegistry;
 use duroxide::runtime::registry::ActivityRegistry;
-use crate::names::{orchestrations, activities};
+use crate::names::orchestrations;
+use crate::activities;
 
 /// Create an OrchestrationRegistry with all orchestrations from this crate.
 ///
 /// Consumers can merge this into their own registry using `.merge()`.
-///
-/// # Example
-///
-/// ```rust
-/// let orchestrations = duroxide_azure_arm::registry::create_orchestration_registry();
-/// ```
 pub fn create_orchestration_registry() -> OrchestrationRegistry {
     OrchestrationRegistry::builder()
-        .register(
+        .register_typed(
             orchestrations::PROVISION_POSTGRES,
             crate::orchestrations::provision_postgres::provision_postgres_orchestration,
         )
-        .register(
+        .register_typed(
             orchestrations::DEPLOY_WEBAPP,
             crate::orchestrations::deploy_webapp::deploy_webapp_orchestration,
         )
@@ -271,32 +301,42 @@ pub fn create_orchestration_registry() -> OrchestrationRegistry {
 /// Create an ActivityRegistry with all activities from this crate.
 ///
 /// Consumers can merge this into their own registry using `.merge()`.
-///
-/// # Example
-///
-/// ```rust
-/// let activities = duroxide_azure_arm::registry::create_activity_registry();
-/// ```
 pub fn create_activity_registry() -> ActivityRegistry {
     ActivityRegistry::builder()
-        .register(
-            activities::PROVISION_VM,
-            crate::activities::provision_vm::provision_vm_activity,
+        // Use NAME from each activity module
+        .register_typed(
+            activities::provision_vm::NAME,
+            activities::provision_vm::activity,
         )
-        .register(
-            activities::CONFIGURE_FIREWALL,
-            crate::activities::configure_firewall::configure_firewall_activity,
+        .register_typed(
+            activities::configure_firewall::NAME,
+            activities::configure_firewall::activity,
         )
         .build()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[test]
+    fn test_orchestration_registry_can_be_created() {
+        let _registry = create_orchestration_registry();
+    }
+    
+    #[test]
+    fn test_activity_registry_can_be_created() {
+        let _registry = create_activity_registry();
+    }
+}
 ```
 
-**Requirements:**
-- Provide `create_orchestration_registry()` that returns a complete `OrchestrationRegistry`
-- Provide `create_activity_registry()` that returns a complete `ActivityRegistry`
-- **No need for separate `extend_*` functions** - consumers use `.merge()` instead
+**Key points:**
+- Use `register_typed()` for automatic serde - no manual JSON serialization!
+- Reference activity names via `activities::module_name::NAME`
+- Reference orchestration names via `orchestrations::CONSTANT`
 
-### 7. Create lib.rs Exports
+### 8. Create lib.rs Exports
 
 Export all modules in `src/lib.rs`:
 
@@ -328,11 +368,12 @@ Export all modules in `src/lib.rs`:
 //!
 //! # Available Activities
 //!
-//! - [`names::activities::PROVISION_VM`] - Provision Azure VM
-//! - [`names::activities::CONFIGURE_FIREWALL`] - Configure firewall rules
+//! - [`activities::provision_vm::NAME`] - Provision Azure VM
+//! - [`activities::configure_firewall::NAME`] - Configure firewall rules
 
 pub mod names;
 pub mod types;
+pub mod activity_types;
 pub mod orchestrations;
 pub mod activities;
 pub mod registry;
@@ -342,9 +383,29 @@ pub mod inventory;
 
 // Re-export commonly used types for convenience
 pub use types::*;
+pub use activity_types::*;
 ```
 
-### 8. Optional: Add Inventory/Discovery
+### 9. Activities Module Structure
+
+Organize `src/activities/mod.rs`:
+
+```rust
+//! Activities for Azure ARM operations
+//!
+//! Each activity module exports:
+//! - `NAME`: The activity name constant for registration
+//! - `activity`: The async activity function
+
+pub mod provision_vm;
+pub mod configure_firewall;
+
+// Submodules for related activities
+pub mod storage;
+pub mod networking;
+```
+
+### 10. Optional: Add Inventory/Discovery
 
 Create `src/inventory.rs` for runtime discovery:
 
@@ -379,29 +440,27 @@ pub fn list_orchestrations() -> Vec<OrchestrationInfo> {
             input_type: "ProvisionPostgresInput",
             output_type: "ProvisionPostgresOutput",
             activities_used: vec![
-                crate::names::activities::PROVISION_VM,
-                crate::names::activities::CONFIGURE_FIREWALL,
+                crate::activities::provision_vm::NAME,
+                crate::activities::configure_firewall::NAME,
             ],
         },
-        // ... more orchestrations
     ]
 }
 
 pub fn list_activities() -> Vec<ActivityInfo> {
     vec![
         ActivityInfo {
-            name: crate::names::activities::PROVISION_VM,
+            name: crate::activities::provision_vm::NAME,
             description: "Provision an Azure VM",
             input_type: "ProvisionVMInput",
             output_type: "ProvisionVMOutput",
             idempotent: true,
         },
-        // ... more activities
     ]
 }
 ```
 
-### 9. Document in README
+### 11. Document in README
 
 Your crate's `README.md` should include:
 
@@ -425,7 +484,7 @@ Azure ARM orchestrations and activities for Duroxide.
 See examples below for importing into your Duroxide application.
 ```
 
-### 10. Cargo.toml Configuration
+### 12. Cargo.toml Configuration
 
 ```toml
 [package]
@@ -516,9 +575,8 @@ Import only specific orchestrations and activities you need:
 ```rust
 use duroxide::{OrchestrationRegistry, Client};
 use duroxide::runtime::registry::ActivityRegistry;
-use duroxide_azure_arm::names::{orchestrations, activities};
-use duroxide_azure_arm::orchestrations;
-use duroxide_azure_arm::activities;
+use duroxide_azure_arm::names::orchestrations;
+use duroxide_azure_arm::{orchestrations as orch_impl, activities};
 use std::sync::Arc;
 
 #[tokio::main]
@@ -527,22 +585,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     // Import only specific items
     let orchestrations = OrchestrationRegistry::builder()
-        .register(
+        .register_typed(
             orchestrations::PROVISION_POSTGRES,
-            orchestrations::provision_postgres::provision_postgres_orchestration,
+            orch_impl::provision_postgres::provision_postgres_orchestration,
         )
         // Don't import DEPLOY_WEBAPP - we don't need it
         .build();
     
     let activities = Arc::new(
         ActivityRegistry::builder()
-            .register(
-                activities::PROVISION_VM,
-                activities::provision_vm::provision_vm_activity,
+            .register_typed(
+                activities::provision_vm::NAME,
+                activities::provision_vm::activity,
             )
-            .register(
-                activities::CONFIGURE_FIREWALL,
-                activities::configure_firewall::configure_firewall_activity,
+            .register_typed(
+                activities::configure_firewall::NAME,
+                activities::configure_firewall::activity,
             )
             .build()
     );
@@ -555,7 +613,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ### Pattern 4: Using Orchestrations
 
-Start orchestrations using name constants:
+Start orchestrations using name constants with typed input:
 
 ```rust
 use duroxide::Client;
@@ -574,24 +632,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         admin_username: "dbadmin".to_string(),
     };
     
-    // Start orchestration with name constant
-    client.start_orchestration(
+    // Start orchestration with typed input
+    client.start_orchestration_typed(
         "postgres-prod-1",                      // instance ID
         orchestrations::PROVISION_POSTGRES,     // orchestration name
-        serde_json::to_string(&input)?,         // serialized input
+        input,                                  // typed input (auto-serialized)
     ).await?;
     
-    // Wait for completion
-    let result = client.wait_for_orchestration(
+    // Wait for completion with typed output
+    let output: ProvisionPostgresOutput = client.wait_for_orchestration_typed(
         "postgres-prod-1",
         std::time::Duration::from_secs(300),
     ).await?;
     
-    // Deserialize result
-    if let OrchestrationStatus::Completed { output } = result {
-        let output: ProvisionPostgresOutput = serde_json::from_str(&output)?;
-        println!("Connection string: {}", output.connection_string);
-    }
+    println!("Connection string: {}", output.connection_string);
     
     Ok(())
 }
@@ -610,36 +664,39 @@ use duroxide_aws_ec2::names::orchestrations as aws;
 
 async fn deploy_multi_cloud_app(
     ctx: OrchestrationContext,
-    input: String,
-) -> Result<String, String> {
+    input: DeployMultiCloudInput,
+) -> Result<DeployMultiCloudOutput, String> {
     // Deploy database on Azure
     let db_result = ctx
-        .schedule_sub_orchestration(
+        .schedule_sub_orchestration_typed(
             azure::PROVISION_POSTGRES,
             "db-instance",
             db_config,
         )
-        .into_sub_orchestration()
+        .into_sub_orchestration_typed()
         .await?;
     
     // Deploy compute on AWS
     let compute_result = ctx
-        .schedule_sub_orchestration(
+        .schedule_sub_orchestration_typed(
             aws::CREATE_EC2_CLUSTER,
             "app-cluster",
             cluster_config,
         )
-        .into_sub_orchestration()
+        .into_sub_orchestration_typed()
         .await?;
     
-    Ok(format!("Deployed: DB={}, Compute={}", db_result, compute_result))
+    Ok(DeployMultiCloudOutput {
+        db_connection: db_result.connection_string,
+        cluster_endpoint: compute_result.endpoint,
+    })
 }
 
 // Register your custom orchestration alongside imported ones using .merge()
 let orchestrations = OrchestrationRegistry::builder()
     .merge(duroxide_azure_arm::registry::create_orchestration_registry())
     .merge(duroxide_aws_ec2::registry::create_orchestration_registry())
-    .register("my-app::orchestration::deploy-multi-cloud", deploy_multi_cloud_app)
+    .register_typed("my-app::orchestration::deploy-multi-cloud", deploy_multi_cloud_app)
     .build();
 ```
 
@@ -682,6 +739,9 @@ for activity in inventory::list_activities() {
 "duroxide-stripe::orchestration::process-payment"
 "duroxide-stripe::activity::create-charge"
 "duroxide-stripe::activity::refund-charge"
+
+// Good: Consistent prefix for ALL items in a crate
+// All activities from duroxide-azure-arm use "duroxide-azure-arm::activity::"
 ```
 
 ### DON'T ❌
@@ -699,6 +759,10 @@ for activity in inventory::list_activities() {
 
 // Bad: Generic names
 "duroxide-azure-arm::orchestration::workflow1"
+
+// Bad: Inconsistent crate prefixes within same crate
+"duroxide-azure-arm::activity::provision-vm"
+"azure-activities::activity::configure-firewall"  // Different prefix!
 ```
 
 ---
@@ -731,19 +795,26 @@ mod tests {
         
         let client = Client::new(store);
         
-        client.start_orchestration(
+        let input = ProvisionPostgresInput {
+            database_name: "test-db".to_string(),
+            resource_group: "test-rg".to_string(),
+            sku: "Basic".to_string(),
+            admin_username: "admin".to_string(),
+        };
+        
+        client.start_orchestration_typed(
             "test-instance",
             crate::names::orchestrations::PROVISION_POSTGRES,
-            test_input_json,
+            input,
         ).await.unwrap();
         
         // Wait and verify
-        let status = client.wait_for_orchestration(
+        let output: ProvisionPostgresOutput = client.wait_for_orchestration_typed(
             "test-instance",
             std::time::Duration::from_secs(10),
         ).await.unwrap();
         
-        assert!(matches!(status, OrchestrationStatus::Completed { .. }));
+        assert!(!output.connection_string.is_empty());
         
         runtime.shutdown(None).await;
     }
@@ -787,7 +858,7 @@ Or use Duroxide's built-in versioning:
 
 ```rust
 // Register with explicit version
-builder.register_with_version(
+builder.register_versioned_typed(
     "duroxide-azure-arm::orchestration::provision-postgres",
     "2.0.0",
     provision_postgres_v2_orchestration,
@@ -800,15 +871,17 @@ builder.register_with_version(
 
 Before publishing your Duroxide library crate:
 
-- [ ] All orchestration and activity names follow the pattern
-- [ ] Name constants defined in `names` module
+- [ ] All orchestration and activity names follow `{crate}::{type}::{name}` pattern
+- [ ] Orchestration names centralized in `names.rs`
+- [ ] Activity names co-located with implementations (each file has `pub const NAME`)
 - [ ] Input/output types are strongly-typed with serde
-- [ ] Registry builders (`create_*` and `extend_*`) are provided
+- [ ] Registry uses `register_typed()` for type-safe registration
 - [ ] Documentation includes input/output types for each orchestration/activity
 - [ ] Activities document whether they're idempotent
 - [ ] Unit tests verify orchestrations work end-to-end
 - [ ] README lists all available orchestrations and activities
 - [ ] Cargo.toml has correct duroxide dependency
+- [ ] All names use consistent crate prefix
 
 ---
 
@@ -816,18 +889,24 @@ Before publishing your Duroxide library crate:
 
 ### Pattern: Configuration Injection
 
-Pass configuration to orchestrations through dependency injection:
+Pass configuration to activities through dependency injection:
 
 ```rust
 // Library provides a factory
 pub fn create_activity_registry_with_config(azure_config: AzureConfig) -> ActivityRegistry {
+    let config = Arc::new(azure_config);
+    
     ActivityRegistry::builder()
-        .register(activities::PROVISION_VM, move |ctx: ActivityContext, input: String| {
-            let config = azure_config.clone();
-            async move {
-                ctx.trace_info("Provisioning VM with Azure SDK");
-                let client = AzureClient::new(config);
-                // Use client...
+        .register_typed(activities::provision_vm::NAME, {
+            let config = config.clone();
+            move |ctx: ActivityContext, input: ProvisionVMInput| {
+                let config = config.clone();
+                async move {
+                    ctx.trace_info("Provisioning VM with Azure SDK");
+                    let client = AzureClient::new(&config);
+                    // Use client...
+                    Ok(ProvisionVMOutput { /* ... */ })
+                }
             }
         })
         .build()
@@ -850,8 +929,11 @@ pub enum AzureError {
     AuthenticationFailed,
 }
 
-// Activities return Result<String, String> but can serialize rich errors
-pub async fn provision_vm_activity(ctx: ActivityContext, input: String) -> Result<String, String> {
+// Activities can return rich errors (serialized to String)
+pub async fn activity(
+    ctx: ActivityContext,
+    input: ProvisionVMInput,
+) -> Result<ProvisionVMOutput, String> {
     // ... on error:
     ctx.trace_error("Quota exceeded for VM provisioning");
     Err(serde_json::to_string(&AzureError::QuotaExceeded {
@@ -860,24 +942,31 @@ pub async fn provision_vm_activity(ctx: ActivityContext, input: String) -> Resul
 }
 ```
 
-### Pattern: Idempotency Tokens
+### Pattern: Idempotency
 
-Use instance IDs for idempotency:
+Make activities idempotent by checking existing state:
 
 ```rust
-pub async fn provision_vm_activity(ctx: ActivityContext, input: String) -> Result<String, String> {
-    let input: ProvisionVMInput = serde_json::from_str(&input)?;
-    
+pub async fn activity(
+    ctx: ActivityContext,
+    input: ProvisionVMInput,
+) -> Result<ProvisionVMOutput, String> {
     // Check if VM already exists (idempotency)
     if let Some(existing_vm) = azure_client.get_vm(&input.name).await? {
         ctx.trace_info("VM already exists, returning existing");
-        return Ok(serde_json::to_string(&existing_vm)?);
+        return Ok(ProvisionVMOutput {
+            vm_id: existing_vm.id,
+            ip_address: existing_vm.ip,
+        });
     }
     
     // Create only if it doesn't exist
     ctx.trace_info(format!("Creating new VM: {}", input.name));
     let vm = azure_client.create_vm(input).await?;
-    Ok(serde_json::to_string(&vm)?)
+    Ok(ProvisionVMOutput {
+        vm_id: vm.id,
+        ip_address: vm.ip,
+    })
 }
 ```
 
@@ -889,9 +978,9 @@ pub async fn provision_vm_activity(ctx: ActivityContext, input: String) -> Resul
 
 **A:** No, if you follow the naming convention. Each crate prefixes names with its own crate name (e.g., `duroxide-azure-arm::`, `duroxide-aws-ec2::`).
 
-### Q: Can I rename an orchestration after publishing?
+### Q: Why are activity names in the activity files, not centralized?
 
-**A:** You can add a new name and deprecate the old one, but avoid removing old names (breaks consumers). Use versioning instead.
+**A:** For IDE navigation. When you F12 on `activities::provision_vm::NAME` in the registry, you jump directly to the implementation file. Centralized names require an extra hop.
 
 ### Q: Should I use sub-orchestrations or activities for complex operations?
 
@@ -913,17 +1002,16 @@ let activities = create_activity_registry_with_config(AzureConfig {
 
 ### Q: Can consumers override my orchestrations?
 
-**A:** Yes, they can register their own implementation with the same name:
+**A:** Yes, they can register their own implementation with the same name (last registration wins):
 
 ```rust
-// This will override the library's implementation
-let orchestrations = OrchestrationRegistry::builder();
-let orchestrations = duroxide_azure_arm::registry::extend_orchestration_registry(orchestrations);
-let orchestrations = orchestrations.register(
-    duroxide_azure_arm::names::orchestrations::PROVISION_POSTGRES,
-    my_custom_implementation,  // Overrides the library version
-);
-let orchestrations = orchestrations.build();
+let orchestrations = OrchestrationRegistry::builder()
+    .merge(duroxide_azure_arm::registry::create_orchestration_registry())
+    .register_typed(
+        duroxide_azure_arm::names::orchestrations::PROVISION_POSTGRES,
+        my_custom_implementation,  // Overrides the library version
+    )
+    .build();
 ```
 
 ---
@@ -949,14 +1037,18 @@ let orchestrations = orchestrations.build();
 
 ### For Library Builders:
 
-1. Create `names.rs` with const strings following `{crate}::{type}::{name}` pattern
-2. Create `types.rs` with strongly-typed serde structs
-3. Implement orchestrations and activities
-4. Create `registry.rs` with `create_orchestration_registry()` and `create_activity_registry()` functions
-5. Document all exports with input/output types
-6. Test thoroughly
+1. Create `names.rs` with orchestration constants (centralized for external reference)
+2. Put activity `NAME` constants in each activity file (for IDE navigation)
+3. Create `types.rs` for orchestration types, `activity_types.rs` for activity types
+4. Use `register_typed()` in registry for automatic serde
+5. Implement typed orchestrations and activities
+6. Document all exports with input/output types
+7. Test thoroughly
 
-**Key point:** Just provide `create_*()` functions that return complete registries. No need for `extend_*()` helpers - consumers use `.merge()`.
+**Key points:**
+- Orchestration names → centralized in `names.rs`
+- Activity names → co-located with implementation (`pub const NAME`)
+- Use `register_typed()` → no manual JSON serialization
 
 ### For Library Consumers:
 
@@ -969,11 +1061,11 @@ let orchestrations = orchestrations.build();
        .build()
    ```
 3. Use name constants when starting orchestrations
-4. Deserialize outputs to strongly-typed structs
+4. Use typed methods for automatic serde
 
 **Key features:**
 - `.merge()` - Combine registries from multiple crates
-- `.builder_from()` - Extend an existing registry
-- `.register_versioned_typed()` - Type-safe versioned orchestrations
+- `register_typed()` / `start_orchestration_typed()` - Type-safe with auto-serde
+- Activity names via `activities::module::NAME` - IDE navigation works
 
 **This pattern enables a rich ecosystem of reusable Duroxide workflows!**
