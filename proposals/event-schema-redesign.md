@@ -1,4 +1,4 @@
-# Event Schema Redesign: Common Fields + Kind Enum
+# Event Schema Redesign: Common Fields + Kind Enum [IMPLEMENTED]
 
 ## Problem with Current Schema
 

@@ -1,4 +1,4 @@
-# System Call Redesign Specification
+# System Call Redesign Specification [IMPLEMENTED]
 
 ## Overview
 

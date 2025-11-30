@@ -1,4 +1,4 @@
-# Activity Retry Policy
+# Activity Retry Policy [IMPLEMENTED]
 
 ## Summary
 
