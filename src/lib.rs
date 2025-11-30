@@ -218,12 +218,96 @@
 //! }
 //! ```
 //!
+//! ### Delays and Timeouts
+//! ```rust,no_run
+//! # use duroxide::{OrchestrationContext, DurableOutput};
+//! # use std::time::Duration;
+//! async fn delay_example(ctx: OrchestrationContext) -> Result<String, String> {
+//!     // ✅ CORRECT: Use timer for orchestration-level delays
+//!     ctx.schedule_timer(Duration::from_secs(5)).into_timer().await;
+//!     
+//!     // Process after delay
+//!     let result = ctx.schedule_activity("ProcessData", "input")
+//!         .into_activity().await?;
+//!     Ok(result)
+//! }
+//!
+//! async fn timeout_example(ctx: OrchestrationContext) -> Result<String, String> {
+//!     // Race work against timeout
+//!     let work = ctx.schedule_activity("SlowOperation", "input");
+//!     let timeout = ctx.schedule_timer(Duration::from_secs(5));
+//!     
+//!     let (winner_index, result) = ctx.select2(work, timeout).await;
+//!     match winner_index {
+//!         0 => match result {
+//!             DurableOutput::Activity(Ok(value)) => Ok(value),
+//!             DurableOutput::Activity(Err(e)) => Err(format!("Work failed: {e}")),
+//!             _ => unreachable!(),
+//!         },
+//!         1 => Err("Operation timed out".to_string()),
+//!         _ => unreachable!(),
+//!     }
+//! }
+//! ```
+//!
+//! ### Fan-Out/Fan-In with Error Handling
+//! ```rust,no_run
+//! # use duroxide::{OrchestrationContext, DurableOutput};
+//! async fn fanout_with_errors(ctx: OrchestrationContext, items: Vec<String>) -> Result<Vec<String>, String> {
+//!     // Schedule all work in parallel
+//!     let futures: Vec<_> = items.iter()
+//!         .map(|item| ctx.schedule_activity("ProcessItem", item.clone()))
+//!         .collect();
+//!     
+//!     // Wait for all to complete (deterministic order preserved)
+//!     let results = ctx.join(futures).await;
+//!     
+//!     // Process results with error handling
+//!     let mut successes = Vec::new();
+//!     for result in results {
+//!         match result {
+//!             DurableOutput::Activity(Ok(value)) => successes.push(value),
+//!             DurableOutput::Activity(Err(e)) => {
+//!                 // Log error but continue processing other items
+//!                 ctx.trace_error(format!("Item processing failed: {e}"));
+//!             }
+//!             _ => return Err("Unexpected result type".to_string()),
+//!         }
+//!     }
+//!     
+//!     Ok(successes)
+//! }
+//! ```
+//!
+//! ### Retry Pattern
+//! ```rust,no_run
+//! # use duroxide::{OrchestrationContext, RetryPolicy, BackoffStrategy};
+//! # use std::time::Duration;
+//! async fn retry_example(ctx: OrchestrationContext) -> Result<String, String> {
+//!     // Retry with linear backoff: 5 attempts, delay increases linearly (1s, 2s, 3s, 4s)
+//!     let result = ctx.schedule_activity_with_retry(
+//!         "UnreliableOperation",
+//!         "input",
+//!         RetryPolicy::new(5)
+//!             .with_backoff(BackoffStrategy::Linear {
+//!                 base: Duration::from_secs(1),
+//!                 max: Duration::from_secs(10),
+//!             }),
+//!     ).await?;
+//!     
+//!     Ok(result)
+//! }
+//! ```
+//!
 //! ## Examples
 //!
 //! See the `examples/` directory for complete, runnable examples:
 //! - `hello_world.rs` - Basic orchestration setup
-//! - `fan_out_fan_in.rs` - Parallel processing pattern
-//! - `timers_and_events.rs` - Human-in-the-loop workflows
+//! - `fan_out_fan_in.rs` - Parallel processing pattern with error handling
+//! - `timers_and_events.rs` - Human-in-the-loop workflows with timeouts
+//! - `delays_and_timeouts.rs` - Correct usage of timers for delays and timeouts
+//! - `with_observability.rs` - Using observability features (tracing, metrics)
+//! - `metrics_cli.rs` - Querying system metrics via CLI
 //!
 //! Run examples with: `cargo run --example <name>`
 //!
@@ -236,6 +320,94 @@
 //! - **DurableFuture**: Unified futures that can be composed with `join`/`select`
 //! - **Runtime**: In-process execution engine with dispatchers and workers
 //! - **Providers**: Pluggable storage backends (filesystem, in-memory)
+//!
+//! ### End-to-End System Architecture
+//!
+//! ```text
+//! +-------------------------------------------------------------------------+
+//! |                           Application Layer                             |
+//! +-------------------------------------------------------------------------+
+//! |                                                                         |
+//! |  +--------------+         +------------------------------------+        |
+//! |  |    Client    |-------->|  start_orchestration()             |        |
+//! |  |              |         |  raise_event()                     |        |
+//! |  |              |         |  wait_for_orchestration()          |        |
+//! |  +--------------+         +------------------------------------+        |
+//! |                                                                         |
+//! +-------------------------------------------------------------------------+
+//!                                    |
+//!                                    v
+//! +-------------------------------------------------------------------------+
+//! |                            Runtime Layer                                |
+//! +-------------------------------------------------------------------------+
+//! |                                                                         |
+//! |  +-------------------------------------------------------------------+  |
+//! |  |                         Runtime                                   |  |
+//! |  |  +----------------------+         +----------------------+        |  |
+//! |  |  | Orchestration        |         | Work                 |        |  |
+//! |  |  | Dispatcher           |         | Dispatcher           |        |  |
+//! |  |  | (N concurrent)       |         | (N concurrent)       |        |  |
+//! |  |  +----------+-----------+         +----------+-----------+        |  |
+//! |  |             |                                |                    |  |
+//! |  |             | Processes turns                | Executes activities|  |
+//! |  |             |                                |                    |  |
+//! |  +-------------+--------------------------------+--------------------+  |
+//! |                |                                |                       |
+//! |  +-------------v--------------------------------v--------------------+  |
+//! |  |  OrchestrationRegistry: maps names -> orchestration handlers     |  |
+//! |  +-------------------------------------------------------------------+  |
+//! |                                                                         |
+//! |  +-------------------------------------------------------------------+  |
+//! |  |  ActivityRegistry: maps names -> activity handlers               |  |
+//! |  +-------------------------------------------------------------------+  |
+//! |                                                                         |
+//! +-------------------------------------------------------------------------+
+//!                |                                |
+//!                | Fetches work items             | Fetches work items
+//!                | (peek-lock)                    | (peek-lock)
+//!                v                                v
+//! +-------------------------------------------------------------------------+
+//! |                          Provider Layer                                 |
+//! +-------------------------------------------------------------------------+
+//! |                                                                         |
+//! |  +----------------------------+    +----------------------------+       |
+//! |  |  Orchestrator Queue        |    |  Worker Queue              |       |
+//! |  |  - StartOrchestration      |    |  - ActivityExecute         |       |
+//! |  |  - ActivityCompleted       |    |                            |       |
+//! |  |  - ActivityFailed          |    |                            |       |
+//! |  |  - TimerFired (delayed)    |    |                            |       |
+//! |  |  - ExternalRaised          |    |                            |       |
+//! |  |  - ContinueAsNew           |    |                            |       |
+//! |  +----------------------------+    +----------------------------+       |
+//! |                                                                         |
+//! |  +-------------------------------------------------------------------+  |
+//! |  |                     Provider (Storage)                            |  |
+//! |  |  - History (Events per instance/execution)                        |  |
+//! |  |  - Instance metadata                                              |  |
+//! |  |  - Execution metadata                                             |  |
+//! |  |  - Instance locks (peek-lock semantics)                           |  |
+//! |  |  - Queue management (enqueue/dequeue with visibility)             |  |
+//! |  +-------------------------------------------------------------------+  |
+//! |                                                                         |
+//! |  +-------------------------------------------------------------------+  |
+//! |  |                Storage Backend (SQLite, etc.)                     |  |
+//! |  +-------------------------------------------------------------------+  |
+//! |                                                                         |
+//! +-------------------------------------------------------------------------+
+//!
+//! ### Execution Flow
+//!
+//! 1. **Client** starts orchestration → enqueues `StartOrchestration` to orchestrator queue
+//! 2. **OrchestrationDispatcher** fetches work item (peek-lock), loads history from Provider
+//! 3. **Runtime** calls user's orchestration function with `OrchestrationContext`
+//! 4. **Orchestration** schedules activities/timers → Runtime appends `Event`s to history
+//! 5. **Runtime** enqueues `ActivityExecute` to worker queue, `TimerFired` (delayed) to orchestrator queue
+//! 6. **WorkDispatcher** fetches activity work item, executes via `ActivityRegistry`
+//! 7. **Activity** completes → enqueues `ActivityCompleted`/`ActivityFailed` to orchestrator queue
+//! 8. **OrchestrationDispatcher** processes completion → next orchestration turn
+//! 9. **Runtime** atomically commits history + queue changes via `ack_orchestration_item()`
+//!
+//! All operations are deterministic and replayable from history.
 use std::cell::{Cell, RefCell};
 use std::future::Future;
 use std::pin::Pin;

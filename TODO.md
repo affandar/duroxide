@@ -2,8 +2,6 @@
 
 ### Active TODOs
 
-- Github actions/pipeline
-- Docs review for duroxide, duroxide-pg.
 - Write big rocks docs.
 - Publish crate, docs
 - RaiseEvent pub/sub
@@ -92,6 +90,8 @@
 
 ## DONE
 
+- Github actions/pipeline
+- Docs review for duroxide, duroxide-pg.
 - **[BLOCKER] Event Schema Redesign: Common Fields + Timestamps**
   - Current Issue: `duroxide_orchestration_duration_seconds` only measures final turn duration (40ms), not total orchestration lifetime (could be hours/days)
   - Proposed Solution: Restructure Event from flat enum to struct + EventKind enum (see `proposals/event-schema-redesign.md`)
