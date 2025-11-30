@@ -1,7 +1,7 @@
 ![Banner](duroxide_banner.jpg)
 ## duroxide
 
-> Notice: This is an experimental project exploring how AI can help build and iteratively improve a moderately complex framework. It’s intended for learning and fun, not for production use.
+> Notice: This is an experimental project exploring how AI can help build and iteratively improve a moderately complex framework. It’s intended for learning and fun, not for production use (yet).
 
 Deterministic task orchestration in Rust, inspired by Durable Task.
 
@@ -190,4 +190,4 @@ Notes
 - Logging is replay-safe by treating it as a system activity via `ctx.trace_*` helpers; logs are emitted through tracing at completion time (not persisted as history events).
 
 Provenance
-- This codebase was generated entirely by AI with guidance from a human
+- This codebase was generated entirely by AI with explicit guidance and reviews from a human
