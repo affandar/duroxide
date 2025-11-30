@@ -950,7 +950,7 @@ pub trait Provider: Any + Send + Sync {
     /// - Filter or reorder events
     ///
     /// SQLite example:
-    /// ```ignore
+    /// ```text
     /// for event in &history_delta {
     ///     let event_json = serde_json::to_string(&event)?;
     ///     let event_type = extract_discriminant_name(&event); // For indexing only
@@ -964,7 +964,7 @@ pub trait Provider: Any + Send + Sync {
     /// **The runtime has ALREADY inspected events and computed metadata.**
     /// Provider just stores it:
     ///
-    /// ```ignore
+    /// ```text
     /// // Update execution status/output from metadata
     /// if let Some(status) = &metadata.status {
     ///     UPDATE executions
@@ -987,7 +987,7 @@ pub trait Provider: Any + Send + Sync {
     ///
     /// Worker items and orchestrator items must be enqueued within the same transaction:
     ///
-    /// ```ignore
+    /// ```text
     /// // Worker queue (no special handling)
     /// for item in worker_items {
     ///     INSERT INTO worker_queue (work_item) VALUES (serde_json::to_string(&item))
@@ -1861,7 +1861,7 @@ pub trait ProviderAdmin: Any + Send + Sync {
     ///
     /// # Implementation Example
     ///
-    /// ```ignore
+    /// ```text
     /// async fn get_system_metrics(&self) -> Result<SystemMetrics, String> {
     ///     SELECT
     ///         COUNT(*) as total_instances,

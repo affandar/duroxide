@@ -764,7 +764,7 @@ impl Client {
 
     /// List all execution IDs for an instance.
     ///
-    /// Returns execution IDs in ascending order: [1], [1, 2], [1, 2, 3], etc.
+    /// Returns execution IDs in ascending order: \[1\], \[1, 2\], \[1, 2, 3\], etc.
     /// Each execution represents either the initial run or a continuation via ContinueAsNew.
     ///
     /// # Parameters

@@ -15,7 +15,7 @@ pub enum LogFormat {
     Json,
     /// Human-readable format for development (with all fields)
     Pretty,
-    /// Compact format: timestamp level module [instance_id] message
+    /// Compact format: timestamp level module \[instance_id\] message
     #[default]
     Compact,
 }
