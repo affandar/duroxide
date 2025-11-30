@@ -469,7 +469,7 @@ pub struct Event {
 ///
 /// Common fields have been extracted to the Event struct:
 /// - event_id: moved to Event.event_id
-/// - source_event_id: moved to Event.source_event_id (Option<u64>)
+/// - source_event_id: moved to Event.source_event_id (`Option<u64>`)
 /// - execution_id: moved to Event.execution_id (was in 4 variants)
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type")]

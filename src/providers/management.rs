@@ -100,7 +100,7 @@ pub trait ManagementProvider: Send + Sync {
     ///
     /// # Returns
     ///
-    /// Vector of execution IDs in ascending order: [1], [1, 2], [1, 2, 3], etc.
+    /// Vector of execution IDs in ascending order: \[1\], \[1, 2\], \[1, 2, 3\], etc.
     ///
     /// # Multi-Execution Context
     ///
@@ -127,7 +127,7 @@ pub trait ManagementProvider: Send + Sync {
     ///
     /// # Default
     ///
-    /// Returns [1] if instance exists, empty Vec otherwise.
+    /// Returns \[1\] if instance exists, empty Vec otherwise.
     async fn list_executions(&self, _instance: &str) -> Result<Vec<u64>, ProviderError> {
         // Default: assume single execution
         Ok(vec![1])
@@ -289,7 +289,7 @@ pub trait ManagementProvider: Send + Sync {
     ///
     /// # Implementation Example
     ///
-    /// ```ignore
+    /// ```text
     /// async fn get_system_metrics(&self) -> Result<SystemMetrics, ProviderError> {
     ///     SELECT
     ///         COUNT(DISTINCT i.instance_id) as total_instances,
