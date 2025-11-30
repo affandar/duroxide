@@ -178,7 +178,7 @@ done
 
 After running these examples:
 
-1. **Read the documentation**: Check `docs/README.md` for detailed architecture information
+1. **Read the documentation**: Check `docs/ORCHESTRATION-GUIDE.md` for the complete guide
 2. **Explore the test suite**: Look at `tests/e2e_samples.rs` for more complex scenarios
 3. **Build your own**: Start with a simple orchestration and gradually add complexity
 4. **Join the community**: This is an experimental project - contributions welcome!
