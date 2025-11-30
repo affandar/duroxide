@@ -8,8 +8,8 @@ repository = "https://github.com/affandar/duroxide"
 homepage = "https://github.com/affandar/duroxide"
 documentation = "https://docs.rs/duroxide"
 readme = "README.md"
-keywords = ["durable", "execution", "workflow", "orchestration", "deterministic", "replay", "async", "tasks"]
-categories = ["asynchronous", "concurrency", "workflow", "durable"]
+keywords = ["durable", "workflow", "orchestration", "async", "tasks"]
+categories = ["asynchronous", "concurrency"]
 
 [features]
 default = []
