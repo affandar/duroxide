@@ -1445,6 +1445,64 @@ async fn eternal_poll(ctx: OrchestrationContext, task_id: String) -> Result<Stri
 }
 ```
 
+### ❌ Anti-Pattern 6: Non-Deterministic Data Structures
+
+```rust
+use std::collections::HashMap;
+
+// WRONG - HashMap iteration order is not guaranteed
+async fn bad_graph(ctx: OrchestrationContext, _input: String) -> Result<String, String> {
+    let mut nodes: HashMap<String, Node> = HashMap::new();
+    nodes.insert("a".to_string(), Node { ... });
+    nodes.insert("b".to_string(), Node { ... });
+    nodes.insert("c".to_string(), Node { ... });
+    
+    // Serializing to JSON - order varies between runs!
+    let graph_json = serde_json::to_string(&nodes)?;
+    
+    // This activity may receive different JSON on replay,
+    // causing nondeterminism detection to fail
+    ctx.schedule_activity("ProcessGraph", graph_json)
+        .into_activity().await
+}
+```
+
+```rust
+use std::collections::BTreeMap;
+
+// CORRECT - BTreeMap maintains consistent ordering
+async fn good_graph(ctx: OrchestrationContext, _input: String) -> Result<String, String> {
+    let mut nodes: BTreeMap<String, Node> = BTreeMap::new();
+    nodes.insert("a".to_string(), Node { ... });
+    nodes.insert("b".to_string(), Node { ... });
+    nodes.insert("c".to_string(), Node { ... });
+    
+    // BTreeMap serializes in consistent key order
+    let graph_json = serde_json::to_string(&nodes)?;
+    
+    ctx.schedule_activity("ProcessGraph", graph_json)
+        .into_activity().await
+}
+```
+
+**Data structures to AVOID in orchestration code:**
+
+| Avoid | Use Instead | Why |
+|-------|-------------|-----|
+| `HashMap<K, V>` | `BTreeMap<K, V>` | HashMap iteration order varies between runs |
+| `HashSet<T>` | `BTreeSet<T>` | HashSet iteration order is non-deterministic |
+| `IndexMap` with `into_iter()` after remove | `BTreeMap` | IndexMap preserves insertion order but remove+insert can change it |
+| `dashmap`, `flurry`, etc. | `BTreeMap` | Concurrent maps have non-deterministic iteration |
+
+**Why this matters:**
+When an orchestration replays, it must make the same decisions as the original run. If you serialize a `HashMap` to pass to an activity, the JSON key order can differ between the original run and replay. The runtime detects this as a nondeterminism violation because the activity input changed.
+
+**Safe patterns:**
+- Use `BTreeMap`/`BTreeSet` when order matters for serialization
+- `Vec` is fine—maintains insertion order
+- `IndexMap` is safe IF you only insert (never remove then re-insert)
+- Build ordered structures in activities if you need hash-based performance
+
 ---
 
 ## Complete Examples
