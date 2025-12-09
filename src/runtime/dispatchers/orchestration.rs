@@ -26,10 +26,10 @@ impl Runtime {
             let mut worker_handles = Vec::new();
 
             for worker_idx in 0..concurrency {
-                let rt = self.clone();
-                let shutdown = shutdown.clone();
+                let rt = Arc::clone(&self);
+                let shutdown = Arc::clone(&shutdown);
                 // Generate unique worker ID: orch-{index}-{runtime_id}
-                let worker_id = format!("orch-{}-{}", worker_idx, rt.runtime_id);
+                let worker_id = format!("orch-{worker_idx}-{}", rt.runtime_id);
                 let handle = tokio::spawn(async move {
                     // debug!("Orchestration worker {} started", worker_id);
                     loop {
@@ -475,8 +475,7 @@ impl Runtime {
         }
 
         // Run the atomic execution to get all changes, passing the resolved handler
-        let (_exec_history_delta, exec_worker_items, exec_orchestrator_items, _result) = self
-            .clone()
+        let (_exec_history_delta, exec_worker_items, exec_orchestrator_items, _result) = Arc::clone(&self)
             .run_single_execution_atomic(instance, history_mgr, workitem_reader, execution_id, worker_id, handler)
             .await;
 

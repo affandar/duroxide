@@ -29,11 +29,11 @@ impl Runtime {
             let mut worker_handles = Vec::new();
 
             for worker_idx in 0..concurrency {
-                let rt = self.clone();
-                let activities = activities.clone();
-                let shutdown = shutdown.clone();
+                let rt = Arc::clone(&self);
+                let activities = Arc::clone(&activities);
+                let shutdown = Arc::clone(&shutdown);
                 // Generate unique worker ID: work-{index}-{runtime_id}
-                let worker_id = format!("work-{}-{}", worker_idx, rt.runtime_id);
+                let worker_id = format!("work-{worker_idx}-{}", rt.runtime_id);
                 let handle = tokio::spawn(async move {
                     // debug!("Worker dispatcher {} started", worker_id);
                     loop {
@@ -56,11 +56,11 @@ impl Runtime {
                                 } => {
                                     // Spawn lock renewal task for this activity
                                     let renewal_handle = spawn_lock_renewal_task(
-                                        rt.history_store.clone(),
+                                        Arc::clone(&rt.history_store),
                                         token.clone(),
                                         rt.options.worker_lock_timeout,
                                         rt.options.worker_lock_renewal_buffer,
-                                        shutdown.clone(),
+                                        Arc::clone(&shutdown),
                                     );
 
                                     let descriptor = rt.get_orchestration_descriptor(&instance).await;

@@ -206,7 +206,7 @@ mod otel_impl {
                     .with_tonic()
                     .with_endpoint(endpoint)
                     .build()
-                    .map_err(|e| format!("Failed to create metrics exporter: {}", e))?;
+                    .map_err(|e| format!("Failed to create metrics exporter: {e}"))?;
 
                 let reader = PeriodicReader::builder(exporter, opentelemetry_sdk::runtime::Tokio)
                     .with_interval(Duration::from_millis(config.metrics_export_interval_ms))
@@ -461,7 +461,7 @@ mod otel_impl {
         pub async fn shutdown(self) -> Result<(), String> {
             self.meter_provider
                 .shutdown()
-                .map_err(|e| format!("Failed to shutdown metrics provider: {}", e))
+                .map_err(|e| format!("Failed to shutdown metrics provider: {e}"))
         }
 
         // Orchestration lifecycle methods with labels
@@ -797,14 +797,14 @@ mod otel_impl {
                     .with(env_filter)
                     .with(tracing_subscriber::fmt::layer().json())
                     .try_init()
-                    .map_err(|e| format!("Failed to initialize JSON logging: {}", e))?;
+                    .map_err(|e| format!("Failed to initialize JSON logging: {e}"))?;
             }
             LogFormat::Pretty => {
                 tracing_subscriber::registry()
                     .with(env_filter)
                     .with(tracing_subscriber::fmt::layer())
                     .try_init()
-                    .map_err(|e| format!("Failed to initialize pretty logging: {}", e))?;
+                    .map_err(|e| format!("Failed to initialize pretty logging: {e}"))?;
             }
             LogFormat::Compact => {
                 // Custom compact format: timestamp level module [instance_id] message
@@ -812,7 +812,7 @@ mod otel_impl {
                     .with(env_filter)
                     .with(tracing_subscriber::fmt::layer().compact())
                     .try_init()
-                    .map_err(|e| format!("Failed to initialize compact logging: {}", e))?;
+                    .map_err(|e| format!("Failed to initialize compact logging: {e}"))?;
             }
         }
 
@@ -1003,7 +1003,7 @@ mod stub_impl {
         tracing_subscriber::fmt()
             .with_env_filter(env_filter)
             .try_init()
-            .map_err(|e| format!("Failed to initialize logging: {}", e))?;
+            .map_err(|e| format!("Failed to initialize logging: {e}"))?;
 
         Ok(())
     }

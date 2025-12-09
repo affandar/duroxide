@@ -34,8 +34,8 @@ pub struct Registry<H: ?Sized> {
 impl<H: ?Sized> Clone for Registry<H> {
     fn clone(&self) -> Self {
         Self {
-            inner: self.inner.clone(),
-            policy: self.policy.clone(),
+            inner: Arc::clone(&self.inner),
+            policy: Arc::clone(&self.policy),
         }
     }
 }
@@ -78,7 +78,8 @@ impl<H: ?Sized> Registry<H> {
     pub fn builder_from(reg: &Registry<H>) -> RegistryBuilder<H> {
         RegistryBuilder {
             map: reg.inner.as_ref().clone(),
-            policy: reg.policy.lock().unwrap().clone(),
+            // Mutex lock should never fail in normal operation - if poisoned, it indicates a serious bug
+            policy: reg.policy.lock().expect("Mutex should not be poisoned").clone(),
             errors: Vec::new(),
         }
     }
@@ -88,7 +89,8 @@ impl<H: ?Sized> Registry<H> {
         let pol = self
             .policy
             .lock()
-            .unwrap()
+            // Mutex lock should never fail in normal operation - if poisoned, it indicates a serious bug
+            .expect("Mutex should not be poisoned")
             .get(name)
             .cloned()
             .unwrap_or(VersionPolicy::Latest);
@@ -142,7 +144,8 @@ impl<H: ?Sized> Registry<H> {
 
     /// Set version policy (SYNC)
     pub fn set_version_policy(&self, name: &str, policy: VersionPolicy) {
-        self.policy.lock().unwrap().insert(name.to_string(), policy);
+        // Mutex lock should never fail in normal operation - if poisoned, it indicates a serious bug
+        self.policy.lock().expect("Mutex should not be poisoned").insert(name.to_string(), policy);
     }
 
     /// List all registered names
@@ -184,7 +187,8 @@ impl<H: ?Sized> Registry<H> {
     ) {
         let all_names = self.list_names();
         let contents = self.debug_dump();
-        let policy_map = self.policy.lock().unwrap().clone();
+        // Mutex lock should never fail in normal operation - if poisoned, it indicates a serious bug
+        let policy_map = self.policy.lock().expect("Mutex should not be poisoned").clone();
         let available_versions = self.list_versions(name);
 
         tracing::debug!(
@@ -229,7 +233,7 @@ impl<H: ?Sized> RegistryBuilder<H> {
             for (version, handler) in versions.iter() {
                 if entry.contains_key(version) {
                     self.errors
-                        .push(format!("duplicate {} in merge: {}@{}", error_prefix, name, version));
+                        .push(format!("duplicate {error_prefix} in merge: {name}@{version}"));
                 } else {
                     entry.insert(version.clone(), handler.clone());
                 }
@@ -253,7 +257,7 @@ impl<H: ?Sized> RegistryBuilder<H> {
         let entry = self.map.entry(name.to_string()).or_default();
         if entry.contains_key(version) {
             self.errors
-                .push(format!("duplicate {} registration: {}@{}", error_prefix, name, version));
+                .push(format!("duplicate {error_prefix} registration: {name}@{version}"));
             true
         } else {
             false
@@ -313,7 +317,8 @@ impl OrchestrationRegistryBuilder {
         Fut: std::future::Future<Output = Result<String, String>> + Send + 'static,
     {
         let name = name.into();
-        let v = Version::parse(version.as_ref()).expect("semver");
+        // Version parsing should never fail for valid semver strings from registry
+        let v = Version::parse(version.as_ref()).expect("Version should be valid semver");
         if self.check_duplicate(&name, &v, "orchestration") {
             return self;
         }
@@ -341,7 +346,8 @@ impl OrchestrationRegistryBuilder {
     {
         use super::FnOrchestration;
         let name = name.into();
-        let v = Version::parse(version.as_ref()).expect("semver");
+        // Version parsing should never fail for valid semver strings from registry
+        let v = Version::parse(version.as_ref()).expect("Version should be valid semver");
         if self.check_duplicate(&name, &v, "orchestration") {
             return self;
         }

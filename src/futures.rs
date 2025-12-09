@@ -104,7 +104,8 @@ impl Future for DurableFuture {
         // Common fields: this.claimed_event_id, this.ctx
         match &mut this.kind {
             Kind::Activity { name, input } => {
-                let mut inner = this.ctx.inner.lock().unwrap();
+                // Mutex lock should never fail in normal operation - if poisoned, it indicates a serious bug
+                let mut inner = this.ctx.inner.lock().expect("Mutex should not be poisoned");
 
                 // Step 1: Claim scheduling event_id if not already claimed
                 if this.claimed_event_id.get().is_none() {
@@ -183,7 +184,8 @@ impl Future for DurableFuture {
                     this.claimed_event_id.set(Some(event_id));
                 }
 
-                let our_event_id = this.claimed_event_id.get().unwrap();
+                // claimed_event_id is guaranteed to be Some after the above block sets it
+                let our_event_id = this.claimed_event_id.get().expect("claimed_event_id should be set after claiming");
 
                 // Step 2: Look for our completion - FIFO enforcement
                 // Find our completion in history
@@ -221,7 +223,8 @@ impl Future for DurableFuture {
                 Poll::Pending
             }
             Kind::Timer { delay_ms } => {
-                let mut inner = this.ctx.inner.lock().unwrap();
+                // Mutex lock should never fail in normal operation - if poisoned, it indicates a serious bug
+                let mut inner = this.ctx.inner.lock().expect("Mutex should not be poisoned");
 
                 // Step 1: Claim scheduling event_id
                 if this.claimed_event_id.get().is_none() {
@@ -290,7 +293,8 @@ impl Future for DurableFuture {
                     this.claimed_event_id.set(Some(event_id));
                 }
 
-                let our_event_id = this.claimed_event_id.get().unwrap();
+                // claimed_event_id is guaranteed to be Some after the above block sets it
+                let our_event_id = this.claimed_event_id.get().expect("claimed_event_id should be set after claiming");
 
                 // Step 2: Look for TimerFired - FIFO enforcement
                 let our_completion = inner.history.iter().find_map(|e| {
@@ -321,7 +325,8 @@ impl Future for DurableFuture {
                     return Poll::Ready(DurableOutput::External(cached));
                 }
 
-                let mut inner = this.ctx.inner.lock().unwrap();
+                // Mutex lock should never fail in normal operation - if poisoned, it indicates a serious bug
+                let mut inner = this.ctx.inner.lock().expect("Mutex should not be poisoned");
 
                 // Step 1: Claim ExternalSubscribed event_id
                 if this.claimed_event_id.get().is_none() {
@@ -394,7 +399,8 @@ impl Future for DurableFuture {
                     this.claimed_event_id.set(Some(event_id));
                 }
 
-                let _our_event_id = this.claimed_event_id.get().unwrap();
+                // claimed_event_id is guaranteed to be Some after the above block sets it
+                let _our_event_id = this.claimed_event_id.get().expect("claimed_event_id should be set after claiming");
 
                 // Step 2: Look for ExternalEvent (special case - search by name)
                 // External events can arrive in any order
@@ -430,7 +436,8 @@ impl Future for DurableFuture {
                 instance,
                 input,
             } => {
-                let mut inner = this.ctx.inner.lock().unwrap();
+                // Mutex lock should never fail in normal operation - if poisoned, it indicates a serious bug
+                let mut inner = this.ctx.inner.lock().expect("Mutex should not be poisoned");
 
                 // Step 1: Claim SubOrchestrationScheduled event_id
                 if this.claimed_event_id.get().is_none() {
@@ -515,7 +522,8 @@ impl Future for DurableFuture {
                     this.claimed_event_id.set(Some(event_id));
                 }
 
-                let our_event_id = this.claimed_event_id.get().unwrap();
+                // claimed_event_id is guaranteed to be Some after the above block sets it
+                let our_event_id = this.claimed_event_id.get().expect("claimed_event_id should be set after claiming");
 
                 // Step 2: Look for SubOrch completion - FIFO enforcement
                 let our_completion = inner.history.iter().find_map(|e| {
@@ -557,7 +565,8 @@ impl Future for DurableFuture {
                     return Poll::Ready(DurableOutput::Activity(Ok(v)));
                 }
 
-                let mut inner = this.ctx.inner.lock().unwrap();
+                // Mutex lock should never fail in normal operation - if poisoned, it indicates a serious bug
+                let mut inner = this.ctx.inner.lock().expect("Mutex should not be poisoned");
 
                 // Step 1: Try to adopt from history (replay)
                 if this.claimed_event_id.get().is_none() {
@@ -794,7 +803,8 @@ impl Future for AggregateDurableFuture {
                 if let Some(winner_idx) = winner_index {
                     // Phase 3: Mark all loser source_event_ids as cancelled
                     {
-                        let mut inner = this.ctx.inner.lock().unwrap();
+                        // Mutex lock should never fail in normal operation - if poisoned, it indicates a serious bug
+                        let mut inner = this.ctx.inner.lock().expect("Mutex should not be poisoned");
                         for (i, child) in this.children.iter().enumerate() {
                             if i != winner_idx {
                                 // Get the loser's claimed_event_id (source_event_id for its completion)
@@ -838,11 +848,14 @@ impl Future for AggregateDurableFuture {
                         // All outputs ready: return in persisted history order of completions
                         let mut items: Vec<(u64, usize, DurableOutput)> = Vec::with_capacity(results.len());
                         for (i, out_opt) in results.into_iter().enumerate() {
-                            let out = out_opt.unwrap();
+                            // All results are guaranteed to be Some due to the check above
+                            let out = out_opt.expect("All results should be Some at this point");
                             // Determine completion event_id for child i
                             let eid = {
-                                let inner = this.ctx.inner.lock().unwrap();
+                                // Mutex lock should never fail in normal operation - if poisoned, it indicates a serious bug
+                                let inner = this.ctx.inner.lock().expect("Mutex should not be poisoned");
                                 let child = &this.children[i];
+                                // All children must have claimed an event_id before reaching completion
                                 let sid = child.claimed_event_id.get().expect("child must claim id");
                                 match &child.kind {
                                     Kind::Activity { .. } => inner

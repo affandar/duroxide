@@ -31,17 +31,17 @@ impl SqliteProvider {
 
         // Check for SQLITE_BUSY (database locked) - retryable
         if error_msg.contains("database is locked") || error_msg.contains("SQLITE_BUSY") {
-            return ProviderError::retryable(operation, format!("Database locked: {}", error_msg));
+            return ProviderError::retryable(operation, format!("Database locked: {error_msg}"));
         }
 
         // Check for constraint violations (duplicate events, etc.) - permanent
         if error_msg.contains("UNIQUE constraint") || error_msg.contains("PRIMARY KEY") {
-            return ProviderError::permanent(operation, format!("Constraint violation: {}", error_msg));
+            return ProviderError::permanent(operation, format!("Constraint violation: {error_msg}"));
         }
 
         // Check for connection errors - retryable
         if error_msg.contains("connection") || error_msg.contains("timeout") {
-            return ProviderError::retryable(operation, format!("Connection error: {}", error_msg));
+            return ProviderError::retryable(operation, format!("Connection error: {error_msg}"));
         }
 
         // Default: treat as retryable (conservative approach)
@@ -55,7 +55,7 @@ impl SqliteProvider {
         delay: Option<Duration>,
     ) -> Result<(), ProviderError> {
         let work_item = serde_json::to_string(&item)
-            .map_err(|e| ProviderError::permanent("enqueue_for_orchestrator", format!("Serialization error: {}", e)))?;
+            .map_err(|e| ProviderError::permanent("enqueue_for_orchestrator", format!("Serialization error: {e}")))?;
         let instance = match &item {
             WorkItem::StartOrchestration { instance, .. }
             | WorkItem::ActivityCompleted { instance, .. }
@@ -366,7 +366,7 @@ impl SqliteProvider {
             .duration_since(UNIX_EPOCH)
             .expect("system clock should be after UNIX epoch")
             .as_nanos();
-        format!("lock_{}_{}", now, std::process::id())
+        format!("lock_{now}_{}", std::process::id())
     }
 
     /// Get current timestamp in milliseconds
@@ -541,7 +541,7 @@ impl Provider for SqliteProvider {
             .ok_or_else(|| ProviderError::permanent("fetch_orchestration_item", "No instance found"))?
             .try_get("instance_id")
             .map_err(|e| {
-                ProviderError::permanent("fetch_orchestration_item", format!("Failed to get instance_id: {}", e))
+                ProviderError::permanent("fetch_orchestration_item", format!("Failed to get instance_id: {e}"))
             })?;
         tracing::debug!(target="duroxide::providers::sqlite", instance_id=%instance_id, "Selected available instance");
 
@@ -660,14 +660,14 @@ impl Provider for SqliteProvider {
             let name: String = info.try_get("orchestration_name").map_err(|e| {
                 ProviderError::permanent(
                     "fetch_orchestration_item",
-                    format!("Failed to get orchestration_name: {}", e),
+                    format!("Failed to get orchestration_name: {e}"),
                 )
             })?;
             let version: Option<String> = info.try_get("orchestration_version").ok();
             let exec_id: i64 = info.try_get("current_execution_id").map_err(|e| {
                 ProviderError::permanent(
                     "fetch_orchestration_item",
-                    format!("Failed to get current_execution_id: {}", e),
+                    format!("Failed to get current_execution_id: {e}"),
                 )
             })?;
 
@@ -676,7 +676,7 @@ impl Provider for SqliteProvider {
                 .read_history_in_tx(&mut tx, &instance_id, Some(exec_id as u64))
                 .await
                 .map_err(|e| {
-                    ProviderError::permanent("fetch_orchestration_item", format!("Failed to read history: {}", e))
+                    ProviderError::permanent("fetch_orchestration_item", format!("Failed to read history: {e}"))
                 })?;
 
             // If version is NULL in database, use "unknown"
@@ -784,7 +784,7 @@ impl Provider for SqliteProvider {
             .ok_or_else(|| ProviderError::permanent("ack_orchestration_item", "Invalid lock token"))?;
 
         let instance_id: String = row.try_get("instance_id").map_err(|e| {
-            ProviderError::permanent("ack_orchestration_item", format!("Failed to decode instance_id: {}", e))
+            ProviderError::permanent("ack_orchestration_item", format!("Failed to decode instance_id: {e}"))
         })?;
 
         // Delete only the messages we fetched (marked with our lock_token)
@@ -875,7 +875,7 @@ impl Provider for SqliteProvider {
             self.append_history_in_tx(&mut tx, &instance_id, execution_id, history_delta.clone())
                 .await
                 .map_err(|e| {
-                    ProviderError::permanent("ack_orchestration_item", format!("Failed to append history: {}", e))
+                    ProviderError::permanent("ack_orchestration_item", format!("Failed to append history: {e}"))
                 })?;
 
             // Update execution status and output from pre-computed metadata (no event inspection!)
@@ -912,7 +912,7 @@ impl Provider for SqliteProvider {
         );
         for item in worker_items {
             let work_item = serde_json::to_string(&item).map_err(|e| {
-                ProviderError::permanent("enqueue_for_orchestrator", format!("Serialization error: {}", e))
+                ProviderError::permanent("enqueue_for_orchestrator", format!("Serialization error: {e}"))
             })?;
             sqlx::query("INSERT INTO worker_queue (work_item) VALUES (?)")
                 .bind(work_item)
@@ -924,7 +924,7 @@ impl Provider for SqliteProvider {
         // Enqueue orchestrator items within the transaction
         for item in orchestrator_items {
             let work_item = serde_json::to_string(&item).map_err(|e| {
-                ProviderError::permanent("enqueue_for_orchestrator", format!("Serialization error: {}", e))
+                ProviderError::permanent("enqueue_for_orchestrator", format!("Serialization error: {e}"))
             })?;
             let instance = match &item {
                 WorkItem::StartOrchestration { instance, .. }
@@ -1037,9 +1037,9 @@ impl Provider for SqliteProvider {
         for row in rows {
             let event_data: String = row
                 .try_get("event_data")
-                .map_err(|e| ProviderError::permanent("read", format!("Failed to get event_data: {}", e)))?;
+                .map_err(|e| ProviderError::permanent("read", format!("Failed to get event_data: {e}")))?;
             let event: Event = serde_json::from_str(&event_data)
-                .map_err(|e| ProviderError::permanent("read", format!("Failed to deserialize event: {}", e)))?;
+                .map_err(|e| ProviderError::permanent("read", format!("Failed to deserialize event: {e}")))?;
             events.push(event);
         }
 
@@ -1070,10 +1070,10 @@ impl Provider for SqliteProvider {
         let mut events = Vec::new();
         for row in rows {
             let event_data: String = row.try_get("event_data").map_err(|e| {
-                ProviderError::permanent("read_with_execution", format!("Failed to get event_data: {}", e))
+                ProviderError::permanent("read_with_execution", format!("Failed to get event_data: {e}"))
             })?;
             let event: Event = serde_json::from_str(&event_data).map_err(|e| {
-                ProviderError::permanent("read_with_execution", format!("Failed to deserialize event: {}", e))
+                ProviderError::permanent("read_with_execution", format!("Failed to deserialize event: {e}"))
             })?;
             events.push(event);
         }
@@ -1096,7 +1096,7 @@ impl Provider for SqliteProvider {
         self.append_history_in_tx(&mut tx, instance, execution_id, new_events)
             .await
             .map_err(|e| {
-                ProviderError::permanent("append_with_execution", format!("Failed to append history: {}", e))
+                ProviderError::permanent("append_with_execution", format!("Failed to append history: {e}"))
             })?;
 
         tx.commit()
@@ -1112,7 +1112,7 @@ impl Provider for SqliteProvider {
     async fn enqueue_for_worker(&self, item: WorkItem) -> Result<(), ProviderError> {
         tracing::debug!(target: "duroxide::providers::sqlite", ?item, "enqueue_for_worker");
         let work_item = serde_json::to_string(&item)
-            .map_err(|e| ProviderError::permanent("enqueue_for_worker", format!("Serialization error: {}", e)))?;
+            .map_err(|e| ProviderError::permanent("enqueue_for_worker", format!("Serialization error: {e}")))?;
 
         sqlx::query("INSERT INTO worker_queue (work_item) VALUES (?)")
             .bind(work_item)
@@ -1164,10 +1164,10 @@ impl Provider for SqliteProvider {
 
         let id: i64 = next_item
             .try_get("id")
-            .map_err(|e| ProviderError::permanent("fetch_work_item", format!("Failed to get id: {}", e)))?;
+            .map_err(|e| ProviderError::permanent("fetch_work_item", format!("Failed to get id: {e}")))?;
         let work_item_str: String = next_item
             .try_get("work_item")
-            .map_err(|e| ProviderError::permanent("fetch_work_item", format!("Failed to get work_item: {}", e)))?;
+            .map_err(|e| ProviderError::permanent("fetch_work_item", format!("Failed to get work_item: {e}")))?;
 
         // Update with lock
         sqlx::query(
@@ -1185,7 +1185,7 @@ impl Provider for SqliteProvider {
         .map_err(|e| Self::sqlx_to_provider_error("fetch_work_item", e))?;
 
         let work_item: WorkItem = serde_json::from_str(&work_item_str)
-            .map_err(|e| ProviderError::permanent("fetch_work_item", format!("Deserialization error: {}", e)))?;
+            .map_err(|e| ProviderError::permanent("fetch_work_item", format!("Deserialization error: {e}")))?;
 
         tx.commit()
             .await
@@ -1222,7 +1222,7 @@ impl Provider for SqliteProvider {
 
         // Enqueue completion to orchestrator queue
         let work_item = serde_json::to_string(&completion)
-            .map_err(|e| ProviderError::permanent("ack_work_item", format!("Serialization error: {}", e)))?;
+            .map_err(|e| ProviderError::permanent("ack_work_item", format!("Serialization error: {e}")))?;
         let now_ms = Self::now_millis();
 
         sqlx::query("INSERT INTO orchestrator_queue (instance_id, work_item, visible_at) VALUES (?, ?, ?)")
@@ -1411,7 +1411,7 @@ impl ProviderAdmin for SqliteProvider {
             let event: Event = serde_json::from_str(&event_data).map_err(|e| {
                 ProviderError::permanent(
                     "read_history_with_execution_id",
-                    format!("Failed to deserialize event: {}", e),
+                    format!("Failed to deserialize event: {e}"),
                 )
             })?;
             events.push(event);

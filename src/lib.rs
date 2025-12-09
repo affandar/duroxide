@@ -1538,7 +1538,8 @@ impl OrchestrationContext {
         &self,
         input: &In,
     ) -> impl Future<Output = Result<String, String>> {
-        let payload = crate::_typed_codec::Json::encode(input).expect("encode");
+        // Serialization should never fail for valid input types - if it does, it's a programming error
+        let payload = crate::_typed_codec::Json::encode(input).expect("Serialization should never fail for valid input");
         self.continue_as_new(payload)
     }
 
@@ -1665,7 +1666,8 @@ impl DurableFuture {
 
     /// Await an external event decoded to a typed value.
     pub async fn into_event_typed<T: serde::de::DeserializeOwned>(self) -> T {
-        crate::_typed_codec::Json::decode::<T>(&Self::into_event(self).await).expect("decode")
+        // Deserialization should never fail if the type matches the stored data - if it does, it's a programming error
+        crate::_typed_codec::Json::decode::<T>(&Self::into_event(self).await).expect("Deserialization should never fail for matching types")
     }
 
     /// Converts this unified future into a future that resolves only for

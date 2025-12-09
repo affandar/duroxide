@@ -201,6 +201,10 @@ impl Client {
     /// # Ok(())
     /// # }
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns `ClientError::Provider` if the provider fails to enqueue the orchestration.
     pub async fn start_orchestration(
         &self,
         instance: impl Into<String>,
@@ -223,6 +227,10 @@ impl Client {
     }
 
     /// Start an orchestration instance pinned to a specific version.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ClientError::Provider` if the provider fails to enqueue the orchestration.
     pub async fn start_orchestration_versioned(
         &self,
         instance: impl Into<String>,
@@ -248,6 +256,11 @@ impl Client {
     // Note: No delayed scheduling API. Clients should use normal start APIs.
 
     /// Start an orchestration with typed input (serialized to JSON).
+    ///
+    /// # Errors
+    ///
+    /// Returns `ClientError::InvalidInput` if serialization fails.
+    /// Returns `ClientError::Provider` if the provider fails to enqueue the orchestration.
     pub async fn start_orchestration_typed<In: Serialize>(
         &self,
         instance: impl Into<String>,
@@ -261,6 +274,11 @@ impl Client {
     }
 
     /// Start a versioned orchestration with typed input (serialized to JSON).
+    ///
+    /// # Errors
+    ///
+    /// Returns `ClientError::InvalidInput` if serialization fails.
+    /// Returns `ClientError::Provider` if the provider fails to enqueue the orchestration.
     pub async fn start_orchestration_versioned_typed<In: Serialize>(
         &self,
         instance: impl Into<String>,
@@ -324,6 +342,10 @@ impl Client {
     ///
     /// - Instance doesn't exist: Event is buffered, orchestration processes when started
     /// - Instance already completed: Event is ignored gracefully
+    ///
+    /// # Errors
+    ///
+    /// Returns `ClientError::Provider` if the provider fails to enqueue the event.
     pub async fn raise_event(
         &self,
         instance: impl Into<String>,
@@ -397,6 +419,10 @@ impl Client {
     ///
     /// - Instance already completed: Cancellation is no-op
     /// - Instance doesn't exist: Cancellation is no-op
+    ///
+    /// # Errors
+    ///
+    /// Returns `ClientError::Provider` if the provider fails to enqueue the cancellation.
     pub async fn cancel_instance(
         &self,
         instance: impl Into<String>,
@@ -455,6 +481,10 @@ impl Client {
     /// # Ok(())
     /// # }
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns `ClientError::Provider` if the provider fails to read the orchestration history.
     pub async fn get_orchestration_status(&self, instance: &str) -> Result<OrchestrationStatus, ClientError> {
         let hist = self.store.read(instance).await.map_err(ClientError::from)?;
         // Find terminal events first
@@ -556,6 +586,11 @@ impl Client {
     ///     }
     /// }
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns `ClientError::Provider` if the provider fails to read the orchestration status.
+    /// Returns `ClientError::Timeout` if the orchestration doesn't complete within the timeout.
     pub async fn wait_for_orchestration(
         &self,
         instance: &str,
@@ -586,6 +621,12 @@ impl Client {
     }
 
     /// Typed wait helper: decodes output on Completed, returns Err(String) on Failed.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ClientError::Provider` if the provider fails to read the orchestration status.
+    /// Returns `ClientError::Timeout` if the orchestration doesn't complete within the timeout.
+    /// Returns `ClientError::InvalidInput` if deserialization of the output fails.
     pub async fn wait_for_orchestration_typed<Out: serde::de::DeserializeOwned>(
         &self,
         instance: &str,
