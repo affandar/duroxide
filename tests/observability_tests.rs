@@ -668,8 +668,7 @@ async fn test_continue_as_new_metrics() {
         .register("CANOrch", |ctx: OrchestrationContext, input: String| async move {
             let count: u32 = input.parse().unwrap_or(0);
             if count < 2 {
-                ctx.continue_as_new((count + 1).to_string());
-                Ok("continuing".to_string())
+                return ctx.continue_as_new((count + 1).to_string()).await;
             } else {
                 Ok("done".to_string())
             }
@@ -847,8 +846,7 @@ async fn test_active_orchestrations_gauge() {
             if count < 1 {
                 // Do some work before continuing
                 ctx.schedule_activity("SlowActivity", "").into_activity().await?;
-                ctx.continue_as_new((count + 1).to_string());
-                Ok("continuing".to_string())
+                return ctx.continue_as_new((count + 1).to_string()).await;
             } else {
                 // Final execution also does work
                 ctx.schedule_activity("SlowActivity", "").into_activity().await?;

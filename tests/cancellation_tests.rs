@@ -258,8 +258,7 @@ async fn cancel_continue_as_new_second_exec() {
     let orch = |ctx: OrchestrationContext, input: String| async move {
         match input.as_str() {
             "start" => {
-                ctx.continue_as_new("wait");
-                Ok(String::new())
+                return ctx.continue_as_new("wait").await;
             }
             "wait" => {
                 // Park until canceled

@@ -690,6 +690,7 @@ impl Future for DurableFuture {
 
 // Compile-time contract: DurableFuture must remain Unpin because poll() relies on freely
 // projecting &mut self into its internal Kind. This assertion fails if future changes.
+#[allow(dead_code)] // Used in const assertion below
 const fn assert_unpin<T: Unpin>() {}
 const _: () = {
     assert_unpin::<DurableFuture>();

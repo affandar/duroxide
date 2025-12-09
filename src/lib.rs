@@ -1258,6 +1258,23 @@ pub struct OrchestrationContext {
     inner: Arc<Mutex<CtxInner>>,
 }
 
+/// A future that never resolves, used by `continue_as_new()` to prevent further execution.
+///
+/// This future always returns `Poll::Pending`, ensuring that code after `await ctx.continue_as_new()`
+/// is unreachable. The runtime extracts actions before checking the future's state, so the
+/// `ContinueAsNew` action is properly recorded and processed.
+struct ContinueAsNewFuture;
+
+impl Future for ContinueAsNewFuture {
+    type Output = Result<String, String>; // Matches orchestration return type, but never resolves
+
+    fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
+        // Always pending - never resolves, making code after await unreachable
+        // The runtime checks pending_actions before using the output, so this value is never used
+        Poll::Pending
+    }
+}
+
 impl OrchestrationContext {
     /// Construct a new context from an existing history vector.
     ///
@@ -1493,24 +1510,50 @@ impl OrchestrationContext {
         self.schedule_system_call(SYSCALL_OP_UTCNOW_MS)
     }
 
-    pub fn continue_as_new(&self, input: impl Into<String>) {
+    /// Continue the current execution as a new execution with fresh input.
+    ///
+    /// This terminates the current execution and starts a new execution with the provided input.
+    /// Returns a future that never resolves, ensuring code after `await` is unreachable.
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// # use duroxide::OrchestrationContext;
+    /// # async fn example(ctx: OrchestrationContext) -> Result<String, String> {
+    /// let n: u32 = 0;
+    /// if n < 2 {
+    ///     return ctx.continue_as_new("next_input").await; // Execution terminates here
+    ///     // This code is unreachable - compiler will warn
+    /// }
+    /// Ok("completed".to_string())
+    /// # }
+    /// ```
+    pub fn continue_as_new(&self, input: impl Into<String>) -> impl Future<Output = Result<String, String>> {
         let mut inner = self.inner.lock().unwrap();
         let input: String = input.into();
         inner.record_action(Action::ContinueAsNew { input, version: None });
+        ContinueAsNewFuture
     }
 
-    pub fn continue_as_new_typed<In: serde::Serialize>(&self, input: &In) {
+    pub fn continue_as_new_typed<In: serde::Serialize>(
+        &self,
+        input: &In,
+    ) -> impl Future<Output = Result<String, String>> {
         let payload = crate::_typed_codec::Json::encode(input).expect("encode");
-        self.continue_as_new(payload);
+        self.continue_as_new(payload)
     }
 
     /// ContinueAsNew to a specific target version (string is parsed as semver later).
-    pub fn continue_as_new_versioned(&self, version: impl Into<String>, input: impl Into<String>) {
+    pub fn continue_as_new_versioned(
+        &self,
+        version: impl Into<String>,
+        input: impl Into<String>,
+    ) -> impl Future<Output = Result<String, String>> {
         let mut inner = self.inner.lock().unwrap();
         inner.record_action(Action::ContinueAsNew {
             input: input.into(),
             version: Some(version.into()),
         });
+        ContinueAsNewFuture
     }
 }
 

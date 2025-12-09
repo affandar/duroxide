@@ -303,8 +303,7 @@ async fn test_multi_execution_support() {
             |ctx: OrchestrationContext, count_str: String| async move {
                 let count: u32 = count_str.parse().unwrap_or(0);
                 if count < 3 {
-                    ctx.continue_as_new((count + 1).to_string());
-                    Ok(format!("Continued: {count}"))
+                    return ctx.continue_as_new((count + 1).to_string()).await;
                 } else {
                     Ok(format!("Final: {count}"))
                 }

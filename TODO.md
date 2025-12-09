@@ -2,8 +2,9 @@
 
 ### Active TODOs
 
-- Write big rocks docs.
-- Publish crate, docs
+- RaiseEvent with payload
+- Longpoll support
+- Size limits 
 - RaiseEvent pub/sub
 - RaiseEvent should target any Wait for Event, even if it was to come in the future.
 - **Nested Select2 Support** - Enable `select2(select2(a, b), c)` composition
@@ -90,6 +91,8 @@
 
 ## DONE
 
+- Write big rocks docs.
+- Publish crate, docs
 - Github actions/pipeline
 - Docs review for duroxide, duroxide-pg.
 - **[BLOCKER] Event Schema Redesign: Common Fields + Timestamps**

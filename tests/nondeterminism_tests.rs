@@ -345,12 +345,11 @@ async fn continue_as_new_with_unconsumed_completion_triggers_nondeterminism() {
             let _activity_future = ctx.schedule_activity("MyActivity", "test_input");
 
             // Wait for an external event - this blocks the orchestration
-            let signal = ctx.schedule_wait("proceed_signal").await;
+            let _ = ctx.schedule_wait("proceed_signal").into_event().await;
 
             // When we get the signal, call continue_as_new
             // The activity is still pending and its completion might be in the batch
-            ctx.continue_as_new("1");
-            Ok(format!("continuing with signal: {signal:?}"))
+            return ctx.continue_as_new("1").await;
         } else {
             // Second iteration: just complete
             Ok(format!("final:iteration_{n}"))

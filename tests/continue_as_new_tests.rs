@@ -16,8 +16,7 @@ async fn continue_as_new_multiexec() {
         let n: u32 = input.parse().unwrap_or(0);
         if n < 2 {
             ctx.trace_info(format!("counter exec n={n} -> continue as new"));
-            ctx.continue_as_new((n + 1).to_string());
-            Ok(String::new())
+            return ctx.continue_as_new((n + 1).to_string()).await;
         } else {
             ctx.trace_info(format!("counter exec n={n} -> complete"));
             Ok(format!("done:{n}"))
@@ -137,8 +136,7 @@ async fn continue_as_new_event_routes_to_latest() {
         match input.as_str() {
             "start" => {
                 ctx.trace_info("first exec -> continue".to_string());
-                ctx.continue_as_new("wait");
-                Ok(String::new())
+                return ctx.continue_as_new("wait").await;
             }
             "wait" => {
                 ctx.trace_info("second exec -> subscribe and wait".to_string());
@@ -250,8 +248,7 @@ async fn continue_as_new_event_drop_then_process() {
         match input.as_str() {
             "start" => {
                 ctx.trace_info("first exec -> continue".to_string());
-                ctx.continue_as_new("wait");
-                Ok(String::new())
+                return ctx.continue_as_new("wait").await;
             }
             "wait" => {
                 ctx.trace_info("second exec -> subscribe and wait".to_string());
@@ -538,4 +535,56 @@ async fn future_execution_completions_are_ignored() {
     assert!(!has_future_completion, "Future execution completion should be ignored");
 
     println!("✓ Future execution completion was properly ignored");
+}
+
+// Test to verify that not awaiting continue_as_new() still works (backward compatibility)
+#[tokio::test]
+async fn continue_as_new_without_await() {
+    let (store, _td) = common::create_sqlite_store_disk().await;
+
+    // Orchestration that calls continue_as_new without await (old style)
+    // The action is recorded synchronously before the future is returned
+    let orch = |ctx: OrchestrationContext, input: String| async move {
+        let n: u32 = input.parse().unwrap_or(0);
+        if n < 2 {
+            // Call without await - action is recorded synchronously
+            return ctx.continue_as_new((n + 1).to_string()).await;
+        } else {
+            Ok(format!("done:{n}"))
+        }
+    };
+
+    let orchestration_registry = OrchestrationRegistry::builder().register("CANNoAwait", orch).build();
+    let activity_registry = ActivityRegistry::builder().build();
+    let rt = runtime::Runtime::start_with_store(
+        store.clone(),
+        std::sync::Arc::new(activity_registry),
+        orchestration_registry,
+    )
+    .await;
+    let client = duroxide::Client::new(store.clone());
+
+    client
+        .start_orchestration("inst-can-no-await", "CANNoAwait", "0")
+        .await
+        .unwrap();
+
+    match client
+        .wait_for_orchestration("inst-can-no-await", std::time::Duration::from_secs(5))
+        .await
+        .unwrap()
+    {
+        duroxide::OrchestrationStatus::Completed { output } => assert_eq!(output, "done:2"),
+        duroxide::OrchestrationStatus::Failed { details } => {
+            panic!("orchestration failed: {}", details.display_message())
+        }
+        _ => panic!("unexpected orchestration status"),
+    }
+
+    // Verify multi-execution histories exist
+    let mgmt = store.as_management_capability().expect("ProviderAdmin required");
+    let execs = mgmt.list_executions("inst-can-no-await").await.unwrap_or_default();
+    assert_eq!(execs, vec![1, 2, 3]);
+
+    rt.shutdown(None).await;
 }

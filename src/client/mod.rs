@@ -42,12 +42,12 @@ impl ClientError {
 impl std::fmt::Display for ClientError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ClientError::Provider(e) => write!(f, "{}", e),
+            ClientError::Provider(e) => write!(f, "{e}"),
             ClientError::ManagementNotAvailable => write!(
                 f,
                 "Management features not available - provider doesn't implement ProviderAdmin"
             ),
-            ClientError::InvalidInput { message } => write!(f, "Invalid input: {}", message),
+            ClientError::InvalidInput { message } => write!(f, "Invalid input: {message}"),
             ClientError::Timeout => write!(f, "Operation timed out"),
         }
     }

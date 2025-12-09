@@ -1256,7 +1256,7 @@ async fn test_activity_completes_after_continue_as_new() {
             let result = ctx.schedule_activity("TrackedActivity", &input).into_activity().await?;
 
             if count < 2 {
-                ctx.continue_as_new((count + 1).to_string());
+                return ctx.continue_as_new((count + 1).to_string()).await;
             }
 
             Ok(result)
@@ -1329,8 +1329,7 @@ async fn test_retry_timeout_with_continue_as_new() {
                 Ok(v) => Ok(v),
                 Err(_) if exec < 1 => {
                     // Continue to next execution
-                    ctx.continue_as_new((exec + 1).to_string());
-                    Ok("continuing".to_string())
+                    return ctx.continue_as_new((exec + 1).to_string()).await;
                 }
                 Err(e) => Err(e),
             }

@@ -178,8 +178,7 @@ async fn detached_versioned_uses_policy_latest() {
 #[tokio::test]
 async fn continue_as_new_versioned_typed_explicit() {
     let v1 = |ctx: OrchestrationContext, _in: String| async move {
-        ctx.continue_as_new_versioned("2.0.0", "payload");
-        Ok(String::new())
+        return ctx.continue_as_new_versioned("2.0.0", "payload").await;
     };
     let v2 = |_ctx: OrchestrationContext, _input: String| async move { Ok("done".to_string()) };
     let reg = OrchestrationRegistry::builder()
@@ -417,8 +416,7 @@ async fn continue_as_new_upgrades_version_deterministically() {
     // v1 continues-as-new to v2; v2 completes
     let v1 = |ctx: OrchestrationContext, _input: String| async move {
         // Explicitly upgrade to v2 on CAN
-        ctx.continue_as_new_versioned("2.0.0", "from_v1_to_v2");
-        Ok(String::new())
+        return ctx.continue_as_new_versioned("2.0.0", "from_v1_to_v2").await;
     };
     let v2 = |_ctx: OrchestrationContext, input: String| async move { Ok(format!("v2_done:{input}")) };
 

@@ -193,8 +193,7 @@ async fn test_status_after_continue_as_new() {
 
         if n < 2 {
             // Continue to next iteration
-            ctx.continue_as_new((n + 1).to_string());
-            Ok("continuing".to_string())
+            return ctx.continue_as_new((n + 1).to_string()).await;
         } else {
             // Done
             Ok(format!("done: {n}"))
