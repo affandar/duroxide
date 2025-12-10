@@ -9,6 +9,7 @@ use crate::providers::{ExecutionMetadata, ProviderError, WorkItem};
 use crate::{Event, EventKind};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 use tokio::task::JoinHandle;
 use tracing::warn;
 
@@ -39,16 +40,52 @@ impl Runtime {
                             break;
                         }
 
-                        if let Ok(Some(item)) = rt
+                        let min_interval = rt.options.dispatcher_min_poll_interval;
+                        let long_poll_timeout = rt.options.dispatcher_long_poll_timeout;
+                        let start_time = std::time::Instant::now();
+                        let mut work_found = false;
+
+                        // Determine poll timeout based on provider capabilities
+                        let poll_timeout = if rt.history_store.supports_long_polling() {
+                            Some(long_poll_timeout)
+                        } else {
+                            None
+                        };
+
+                        match rt
                             .history_store
-                            .fetch_orchestration_item(rt.options.orchestrator_lock_timeout)
+                            .fetch_orchestration_item(rt.options.orchestrator_lock_timeout, poll_timeout)
                             .await
                         {
-                            // Process orchestration item atomically
-                            // Provider ensures no other worker has this instance locked
-                            rt.process_orchestration_item(item, &worker_id).await;
-                        } else {
-                            tokio::time::sleep(rt.options.dispatcher_idle_sleep).await;
+                            Ok(Some(item)) => {
+                                // Process orchestration item atomically
+                                // Provider ensures no other worker has this instance locked
+                                rt.process_orchestration_item(item, &worker_id).await;
+                                work_found = true;
+                            }
+                            Ok(None) => {
+                                // No work available
+                            }
+                            Err(e) => {
+                                warn!("Error fetching orchestration item: {:?}", e);
+                                // Backoff on error
+                                tokio::time::sleep(Duration::from_millis(100)).await;
+                                continue;
+                            }
+                        }
+
+                        // Enforce minimum polling interval to prevent hot loops
+                        if !work_found {
+                            let elapsed = start_time.elapsed();
+                            if elapsed < min_interval {
+                                let sleep_duration = min_interval - elapsed;
+                                if !shutdown.load(Ordering::Relaxed) {
+                                    tokio::time::sleep(sleep_duration).await;
+                                }
+                            } else {
+                                // Waited long enough (e.g. long poll timeout expired), yield to prevent starvation
+                                tokio::task::yield_now().await;
+                            }
                         }
                     }
                 });

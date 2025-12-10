@@ -11,7 +11,7 @@ use std::sync::Arc as StdArc;
 // Helper for timing-sensitive race tests
 fn fast_runtime_options() -> RuntimeOptions {
     RuntimeOptions {
-        dispatcher_idle_sleep: Duration::from_millis(10),
+        dispatcher_min_poll_interval: Duration::from_millis(10),
         ..Default::default()
     }
 }

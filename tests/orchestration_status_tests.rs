@@ -334,7 +334,7 @@ async fn test_status_lifecycle_transitions() {
 
     // TIMING-SENSITIVE: Test checks status after 50ms, needs fast polling to see Running state
     let options = runtime::RuntimeOptions {
-        dispatcher_idle_sleep: Duration::from_millis(10),
+        dispatcher_min_poll_interval: Duration::from_millis(10),
         ..Default::default()
     };
     let rt = runtime::Runtime::start_with_options(store.clone(), Arc::new(activities), orchestrations, options).await;

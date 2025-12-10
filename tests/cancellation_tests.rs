@@ -33,7 +33,7 @@ async fn cancel_parent_down_propagates_to_child() {
 
     // Use faster polling for cancellation timing test
     let options = runtime::RuntimeOptions {
-        dispatcher_idle_sleep: Duration::from_millis(10),
+        dispatcher_min_poll_interval: Duration::from_millis(10),
         ..Default::default()
     };
     let rt = runtime::Runtime::start_with_options(

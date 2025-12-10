@@ -774,6 +774,14 @@ pub trait Provider: Any + Send + Sync {
     //
     // The provider's role is to STORE these IDs, not generate them.
 
+    /// Check if the provider supports long polling.
+    ///
+    /// If true, the runtime may pass a `poll_timeout` to `fetch_*` methods,
+    /// expecting the provider to block until work is available or the timeout expires.
+    fn supports_long_polling(&self) -> bool {
+        false
+    }
+
     /// Fetch the next orchestration work item atomically.
     ///
     /// # What This Does
@@ -904,6 +912,7 @@ pub trait Provider: Any + Send + Sync {
     async fn fetch_orchestration_item(
         &self,
         lock_timeout: Duration,
+        poll_timeout: Option<Duration>,
     ) -> Result<Option<OrchestrationItem>, ProviderError>;
 
     /// Acknowledge successful orchestration processing atomically.
@@ -1339,38 +1348,20 @@ pub trait Provider: Any + Send + Sync {
     /// # What This Does
     ///
     /// 1. Find next unlocked worker queue item
+    /// Fetch next available worker task.
+    ///
+    /// # What This Does
+    ///
+    /// 1. Find an available task in the worker queue (visible_at <= now, not locked)
     /// 2. Lock it with a unique token
     /// 3. Return item + token (item stays in queue until ack)
     ///
-    /// # Implementation Pattern
+    /// # Parameters
     ///
-    /// ```ignore
-    /// async fn fetch_work_item(&self, lock_timeout: Duration) -> Result<Option<(WorkItem, String)>, ProviderError> {
-    ///     let mut tx = begin_transaction()
-    ///         .map_err(|e| ProviderError::retryable("fetch_work_item", e))?;
-    ///     
-    ///     // Find next available item
-    ///     let row = SELECT id, work_item FROM worker_queue
-    ///         WHERE lock_token IS NULL OR locked_until <= now()
-    ///         ORDER BY id LIMIT 1;
-    ///     
-    ///     if row.is_none() { return Ok(None); }
-    ///     
-    ///     // Lock it
-    ///     let lock_token = generate_uuid();
-    ///     // lock_timeout is a Duration - convert to milliseconds for storage
-    ///     let locked_until_ms = now_ms + lock_timeout.as_millis();
-    ///     UPDATE worker_queue
-    ///     SET lock_token = ?, locked_until = locked_until_ms
-    ///     WHERE id = ?;
-    ///     
-    ///     let item = serde_json::from_str(&row.work_item)
-    ///         .map_err(|e| ProviderError::permanent("fetch_work_item", e))?;
-    ///     commit_transaction()
-    ///         .map_err(|e| ProviderError::retryable("fetch_work_item", e))?;
-    ///     Ok(Some((item, lock_token)))
-    /// }
-    /// ```
+    /// - `lock_timeout`: Duration to lock the item for processing.
+    /// - `poll_timeout`: Maximum time to wait for work.
+    ///   - `Some(duration)`: Provider MAY wait up to this duration if supported.
+    ///   - `None`: Provider MUST return immediately if no work is found.
     ///
     /// # Return Value
     ///
@@ -1381,7 +1372,11 @@ pub trait Provider: Any + Send + Sync {
     /// # Concurrency
     ///
     /// Called continuously by work dispatcher. Must prevent double-dequeue.
-    async fn fetch_work_item(&self, lock_timeout: Duration) -> Result<Option<(WorkItem, String)>, ProviderError>;
+    async fn fetch_work_item(
+        &self,
+        lock_timeout: Duration,
+        poll_timeout: Option<Duration>,
+    ) -> Result<Option<(WorkItem, String)>, ProviderError>;
 
     /// Acknowledge successful processing of a work item.
     ///

@@ -16,7 +16,7 @@ pub async fn test_atomicity_failure_rollback<F: ProviderFactory>(factory: &F) {
         .await
         .unwrap();
     let item = provider
-        .fetch_orchestration_item(Duration::from_secs(30))
+        .fetch_orchestration_item(Duration::from_secs(30), None)
         .await
         .unwrap()
         .unwrap();
@@ -57,7 +57,7 @@ pub async fn test_atomicity_failure_rollback<F: ProviderFactory>(factory: &F) {
         .await
         .unwrap();
     let item2 = provider
-        .fetch_orchestration_item(Duration::from_secs(30))
+        .fetch_orchestration_item(Duration::from_secs(30), None)
         .await
         .unwrap()
         .unwrap();
@@ -100,7 +100,7 @@ pub async fn test_atomicity_failure_rollback<F: ProviderFactory>(factory: &F) {
     // Lock should still be held, preventing another fetch
     assert!(
         provider
-            .fetch_orchestration_item(Duration::from_secs(30))
+            .fetch_orchestration_item(Duration::from_secs(30), None)
             .await
             .unwrap()
             .is_none()
@@ -120,7 +120,7 @@ pub async fn test_multi_operation_atomic_ack<F: ProviderFactory>(factory: &F) {
         .await
         .unwrap();
     let item = provider
-        .fetch_orchestration_item(Duration::from_secs(30))
+        .fetch_orchestration_item(Duration::from_secs(30), None)
         .await
         .unwrap()
         .unwrap();
@@ -240,7 +240,7 @@ pub async fn test_multi_operation_atomic_ack<F: ProviderFactory>(factory: &F) {
     for _ in 0..3 {
         assert!(
             provider
-                .fetch_work_item(Duration::from_secs(30))
+                .fetch_work_item(Duration::from_secs(30), None)
                 .await
                 .unwrap()
                 .is_some()
@@ -248,7 +248,7 @@ pub async fn test_multi_operation_atomic_ack<F: ProviderFactory>(factory: &F) {
     }
     assert!(
         provider
-            .fetch_work_item(Duration::from_secs(30))
+            .fetch_work_item(Duration::from_secs(30), None)
             .await
             .unwrap()
             .is_none()
@@ -256,7 +256,7 @@ pub async fn test_multi_operation_atomic_ack<F: ProviderFactory>(factory: &F) {
 
     // 3. Orchestrator queue should have 2 items
     let item1 = provider
-        .fetch_orchestration_item(Duration::from_secs(30))
+        .fetch_orchestration_item(Duration::from_secs(30), None)
         .await
         .unwrap()
         .unwrap();
@@ -278,11 +278,11 @@ pub async fn test_lock_released_only_on_successful_ack<F: ProviderFactory>(facto
         .enqueue_for_orchestrator(start_item("instance-A"), None)
         .await
         .unwrap();
-    let item = provider.fetch_orchestration_item(lock_timeout).await.unwrap().unwrap();
+    let item = provider.fetch_orchestration_item(lock_timeout, None).await.unwrap().unwrap();
     let _lock_token = item.lock_token.clone();
 
     // Verify lock is held (can't fetch again)
-    assert!(provider.fetch_orchestration_item(lock_timeout).await.unwrap().is_none());
+    assert!(provider.fetch_orchestration_item(lock_timeout, None).await.unwrap().is_none());
 
     // Attempt ack with invalid lock token (should fail)
     let _result = provider
@@ -312,13 +312,13 @@ pub async fn test_lock_released_only_on_successful_ack<F: ProviderFactory>(facto
     assert!(_result.is_err());
 
     // Lock should still be held
-    assert!(provider.fetch_orchestration_item(lock_timeout).await.unwrap().is_none());
+    assert!(provider.fetch_orchestration_item(lock_timeout, None).await.unwrap().is_none());
 
     // Wait for lock expiration
     tokio::time::sleep(lock_timeout + Duration::from_millis(100)).await;
 
     // Now should be able to fetch again
-    let item2 = provider.fetch_orchestration_item(lock_timeout).await.unwrap().unwrap();
+    let item2 = provider.fetch_orchestration_item(lock_timeout, None).await.unwrap().unwrap();
     assert_eq!(item2.instance, "instance-A");
     tracing::info!("✓ Test passed: lock release on successful ack verified");
 }
@@ -335,7 +335,7 @@ pub async fn test_concurrent_ack_prevention<F: ProviderFactory>(factory: &F) {
         .await
         .unwrap();
     let item = provider
-        .fetch_orchestration_item(Duration::from_secs(30))
+        .fetch_orchestration_item(Duration::from_secs(30), None)
         .await
         .unwrap()
         .unwrap();

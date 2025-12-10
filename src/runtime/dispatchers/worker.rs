@@ -43,10 +43,27 @@ impl Runtime {
                             break;
                         }
 
-                        let fetch_result = rt.history_store.fetch_work_item(rt.options.worker_lock_timeout).await;
+                        let min_interval = rt.options.dispatcher_min_poll_interval;
+                        let long_poll_timeout = rt.options.dispatcher_long_poll_timeout;
+                        let start_time = std::time::Instant::now();
+                        let mut work_found = false;
+
+                        // Determine poll timeout based on provider capabilities
+                        let poll_timeout = if rt.history_store.supports_long_polling() {
+                            Some(long_poll_timeout)
+                        } else {
+                            None
+                        };
+
+                        let fetch_result = rt
+                            .history_store
+                            .fetch_work_item(rt.options.worker_lock_timeout, poll_timeout)
+                            .await;
 
                         match fetch_result {
-                            Ok(Some((item, token))) => match item {
+                            Ok(Some((item, token))) => {
+                                work_found = true;
+                                match item {
                                 WorkItem::ActivityExecute {
                                     instance,
                                     execution_id,
@@ -240,14 +257,30 @@ impl Runtime {
                                     error!(?other, "unexpected WorkItem in Worker dispatcher; state corruption");
                                     panic!("unexpected WorkItem in Worker dispatcher");
                                 }
-                            },
-                            Err(e) => {
-                                warn!(error = %e, "Worker fetch failed");
+                            }
+                        },
+                        Err(e) => {
+                                warn!("Error fetching work item: {:?}", e);
                                 // Backoff on error
-                                tokio::time::sleep(rt.options.dispatcher_idle_sleep).await;
+                                tokio::time::sleep(Duration::from_millis(100)).await;
+                                continue;
                             }
                             Ok(None) => {
-                                tokio::time::sleep(rt.options.dispatcher_idle_sleep).await;
+                                // No work available
+                            }
+                        }
+
+                        // Enforce minimum polling interval to prevent hot loops
+                        if !work_found {
+                            let elapsed = start_time.elapsed();
+                            if elapsed < min_interval {
+                                let sleep_duration = min_interval - elapsed;
+                                if !shutdown.load(Ordering::Relaxed) {
+                                    tokio::time::sleep(sleep_duration).await;
+                                }
+                            } else {
+                                // Waited long enough, yield to prevent starvation
+                                tokio::task::yield_now().await;
                             }
                         }
                     }

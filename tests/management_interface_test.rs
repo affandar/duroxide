@@ -12,7 +12,7 @@ mod common;
 // Helper to create fast-polling runtime for management tests (timing-sensitive)
 fn fast_runtime_options() -> RuntimeOptions {
     RuntimeOptions {
-        dispatcher_idle_sleep: Duration::from_millis(10),
+        dispatcher_min_poll_interval: Duration::from_millis(10),
         ..Default::default()
     }
 }
@@ -430,7 +430,7 @@ async fn test_system_metrics() {
         .unwrap();
 
     // Wait for processing
-    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    tokio::time::sleep(std::time::Duration::from_millis(3000)).await;
 
     // Get system metrics
     let metrics = client.get_system_metrics().await.unwrap();

@@ -1286,7 +1286,7 @@ async fn sample_cancellation_parent_cascades_to_children_fs() {
 
     // Use faster polling for cancellation timing test
     let options = runtime::RuntimeOptions {
-        dispatcher_idle_sleep: Duration::from_millis(10),
+        dispatcher_min_poll_interval: Duration::from_millis(10),
         ..Default::default()
     };
     let rt = runtime::Runtime::start_with_options(

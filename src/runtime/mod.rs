@@ -19,8 +19,9 @@ use tracing::warn;
 /// let options = RuntimeOptions {
 ///     orchestration_concurrency: 4,
 ///     worker_concurrency: 8,
-///     dispatcher_idle_sleep: Duration::from_millis(25),     // Polling backoff when queues idle
-///     orchestrator_lock_timeout: Duration::from_secs(10),   // Orchestration turns retry after 10s
+///     dispatcher_min_poll_interval: Duration::from_millis(25), // Polling backoff when queues idle
+///     dispatcher_long_poll_timeout: Duration::from_secs(300),  // Long polling timeout (5 mins)
+///     orchestrator_lock_timeout: Duration::from_secs(10),      // Orchestration turns retry after 10s
 ///     worker_lock_timeout: Duration::from_secs(300),        // Activities retry after 5 minutes
 ///     worker_lock_renewal_buffer: Duration::from_secs(30),  // Renew worker locks 30s early
 ///     observability: ObservabilityConfig {
@@ -33,11 +34,22 @@ use tracing::warn;
 /// ```
 #[derive(Debug, Clone)]
 pub struct RuntimeOptions {
-    /// Polling interval when dispatcher queues are empty.
-    /// Lower values = more responsive, higher CPU usage when idle.
-    /// Higher values = less CPU usage, higher latency when idle.
+    /// Minimum polling cycle duration when idle.
+    ///
+    /// If a provider returns 'None' (no work) faster than this duration,
+    /// the dispatcher will sleep for the remainder of the time.
+    /// This prevents hot loops for providers that do not support long polling
+    /// or return early.
+    ///
     /// Default: 100ms (10 Hz)
-    pub dispatcher_idle_sleep: Duration,
+    pub dispatcher_min_poll_interval: Duration,
+
+    /// Maximum time to wait for work inside the provider (Long Polling).
+    ///
+    /// Only used if the provider supports long polling.
+    ///
+    /// Default: 5 minutes
+    pub dispatcher_long_poll_timeout: Duration,
 
     /// Number of concurrent orchestration workers.
     /// Each worker can process one orchestration turn at a time.
@@ -95,7 +107,8 @@ pub struct RuntimeOptions {
 impl Default for RuntimeOptions {
     fn default() -> Self {
         Self {
-            dispatcher_idle_sleep: Duration::from_millis(100),
+            dispatcher_min_poll_interval: Duration::from_millis(100),
+            dispatcher_long_poll_timeout: Duration::from_secs(300), // 5 minutes
             orchestration_concurrency: 2,
             worker_concurrency: 2,
             orchestrator_lock_timeout: Duration::from_secs(5),

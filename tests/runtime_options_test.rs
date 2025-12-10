@@ -69,7 +69,7 @@ async fn test_custom_polling_frequency() {
 
     // Start with slower polling (50ms)
     let options = RuntimeOptions {
-        dispatcher_idle_sleep: Duration::from_millis(50),
+        dispatcher_min_poll_interval: Duration::from_millis(50),
         ..Default::default()
     };
 
@@ -107,7 +107,7 @@ async fn test_fast_polling() {
 
     // Very responsive: 1ms polling
     let options = RuntimeOptions {
-        dispatcher_idle_sleep: Duration::from_millis(1),
+        dispatcher_min_poll_interval: Duration::from_millis(1),
         ..Default::default()
     };
 

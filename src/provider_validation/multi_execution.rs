@@ -28,7 +28,7 @@ pub async fn test_execution_isolation<F: ProviderFactory>(factory: &F) {
         .await
         .unwrap();
     let item1 = provider
-        .fetch_orchestration_item(Duration::from_secs(30))
+        .fetch_orchestration_item(Duration::from_secs(30), None)
         .await
         .unwrap()
         .unwrap();
@@ -83,7 +83,7 @@ pub async fn test_execution_isolation<F: ProviderFactory>(factory: &F) {
         .await
         .unwrap();
     let item2 = provider
-        .fetch_orchestration_item(Duration::from_secs(30))
+        .fetch_orchestration_item(Duration::from_secs(30), None)
         .await
         .unwrap()
         .unwrap();
@@ -155,7 +155,7 @@ pub async fn test_latest_execution_detection<F: ProviderFactory>(factory: &F) {
         .await
         .unwrap();
     let item1 = provider
-        .fetch_orchestration_item(Duration::from_secs(30))
+        .fetch_orchestration_item(Duration::from_secs(30), None)
         .await
         .unwrap()
         .unwrap();
@@ -186,7 +186,7 @@ pub async fn test_latest_execution_detection<F: ProviderFactory>(factory: &F) {
         .await
         .unwrap();
     let item2 = provider
-        .fetch_orchestration_item(Duration::from_secs(30))
+        .fetch_orchestration_item(Duration::from_secs(30), None)
         .await
         .unwrap()
         .unwrap();
@@ -243,7 +243,7 @@ pub async fn test_execution_id_sequencing<F: ProviderFactory>(factory: &F) {
         .await
         .unwrap();
     let item1 = provider
-        .fetch_orchestration_item(Duration::from_secs(30))
+        .fetch_orchestration_item(Duration::from_secs(30), None)
         .await
         .unwrap()
         .unwrap();
@@ -284,7 +284,7 @@ pub async fn test_execution_id_sequencing<F: ProviderFactory>(factory: &F) {
         .await
         .unwrap();
     let item2 = provider
-        .fetch_orchestration_item(Duration::from_secs(30))
+        .fetch_orchestration_item(Duration::from_secs(30), None)
         .await
         .unwrap()
         .unwrap();
@@ -324,7 +324,7 @@ pub async fn test_execution_id_sequencing<F: ProviderFactory>(factory: &F) {
         .await
         .unwrap();
     let item3 = provider
-        .fetch_orchestration_item(Duration::from_secs(30))
+        .fetch_orchestration_item(Duration::from_secs(30), None)
         .await
         .unwrap()
         .unwrap();
@@ -344,7 +344,7 @@ pub async fn test_continue_as_new_creates_new_execution<F: ProviderFactory>(fact
         .await
         .unwrap();
     let item1 = provider
-        .fetch_orchestration_item(Duration::from_secs(30))
+        .fetch_orchestration_item(Duration::from_secs(30), None)
         .await
         .unwrap()
         .unwrap();
@@ -387,7 +387,7 @@ pub async fn test_continue_as_new_creates_new_execution<F: ProviderFactory>(fact
         .unwrap();
 
     let item2 = provider
-        .fetch_orchestration_item(Duration::from_secs(30))
+        .fetch_orchestration_item(Duration::from_secs(30), None)
         .await
         .unwrap()
         .unwrap();
@@ -419,7 +419,7 @@ pub async fn test_continue_as_new_creates_new_execution<F: ProviderFactory>(fact
 
     // Now the instance should have current_execution_id = 2
     let item3 = provider
-        .fetch_orchestration_item(Duration::from_secs(30))
+        .fetch_orchestration_item(Duration::from_secs(30), None)
         .await
         .unwrap();
     if let Some(item) = item3 {
@@ -441,7 +441,7 @@ pub async fn test_execution_history_persistence<F: ProviderFactory>(factory: &F)
             .await
             .unwrap();
         let item = provider
-            .fetch_orchestration_item(Duration::from_secs(30))
+            .fetch_orchestration_item(Duration::from_secs(30), None)
             .await
             .unwrap()
             .unwrap();

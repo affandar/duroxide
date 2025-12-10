@@ -31,7 +31,7 @@ pub async fn test_duplicate_event_id_rejection<F: ProviderFactory>(factory: &F) 
         .await
         .unwrap();
     let item = provider
-        .fetch_orchestration_item(Duration::from_secs(30))
+        .fetch_orchestration_item(Duration::from_secs(30), None)
         .await
         .unwrap()
         .unwrap();
@@ -68,7 +68,7 @@ pub async fn test_duplicate_event_id_rejection<F: ProviderFactory>(factory: &F) 
         .await
         .unwrap();
     let item2 = provider
-        .fetch_orchestration_item(Duration::from_secs(30))
+        .fetch_orchestration_item(Duration::from_secs(30), None)
         .await
         .unwrap()
         .unwrap();
@@ -126,7 +126,7 @@ pub async fn test_corrupted_serialization_data<F: ProviderFactory>(factory: &F) 
     // SQLite provider will handle corrupted data by returning None on deserialization failure
     // Test that provider doesn't panic
     let item = provider
-        .fetch_orchestration_item(Duration::from_secs(30))
+        .fetch_orchestration_item(Duration::from_secs(30), None)
         .await
         .unwrap();
     assert!(item.is_none() || item.is_some(), "Should not panic");
@@ -145,7 +145,7 @@ pub async fn test_lock_expiration_during_ack<F: ProviderFactory>(factory: &F) {
         .enqueue_for_orchestrator(start_item("instance-A"), None)
         .await
         .unwrap();
-    let item = provider.fetch_orchestration_item(lock_timeout).await.unwrap().unwrap();
+    let item = provider.fetch_orchestration_item(lock_timeout, None).await.unwrap().unwrap();
     let lock_token = item.lock_token.clone();
 
     // Wait for lock to expire

@@ -92,7 +92,7 @@ pub async fn run_stress_test(
 
     // Start runtime with custom options
     let options = RuntimeOptions {
-        dispatcher_idle_sleep: Duration::from_millis(100),
+        dispatcher_min_poll_interval: Duration::from_millis(100),
         orchestration_concurrency: config.orch_concurrency,
         worker_concurrency: config.worker_concurrency,
         ..Default::default()
