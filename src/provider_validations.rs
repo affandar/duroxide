@@ -192,3 +192,12 @@ pub use crate::provider_validation::management::{
     test_get_execution_info, test_get_instance_info, test_get_queue_depths, test_get_system_metrics,
     test_list_executions, test_list_instances, test_list_instances_by_status,
 };
+
+#[cfg(feature = "provider-test")]
+pub mod long_polling {
+    pub use crate::provider_validation::long_polling::{
+        test_fetch_respects_timeout_upper_bound, test_long_poll_waits_for_timeout,
+        test_long_poll_work_item_waits_for_timeout, test_short_poll_returns_immediately,
+        test_short_poll_work_item_returns_immediately,
+    };
+}

@@ -125,14 +125,10 @@ impl FailingProvider {
 
 #[async_trait]
 impl Provider for FailingProvider {
-    fn supports_long_polling(&self) -> bool {
-        self.inner.supports_long_polling()
-    }
-
     async fn fetch_orchestration_item(
         &self,
         _lock_timeout: Duration,
-        poll_timeout: Option<Duration>,
+        poll_timeout: Duration,
     ) -> Result<Option<OrchestrationItem>, ProviderError> {
         if self.fail_next_fetch_orchestration_item.swap(false, Ordering::SeqCst) {
             // Simulate transient infrastructure failure (e.g., database connection issue)
@@ -225,7 +221,7 @@ impl Provider for FailingProvider {
     async fn fetch_work_item(
         &self,
         lock_timeout: Duration,
-        poll_timeout: Option<Duration>,
+        poll_timeout: Duration,
     ) -> Result<Option<(WorkItem, String)>, ProviderError> {
         self.inner.fetch_work_item(lock_timeout, poll_timeout).await
     }
@@ -599,14 +595,14 @@ async fn test_fetch_orchestration_item_fault_injection() {
     failing_provider.fail_next_fetch_orchestration_item();
 
     // Attempt to fetch - should return error
-    let result = provider_trait.fetch_orchestration_item(Duration::from_secs(30), None).await;
+    let result = provider_trait.fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO).await;
     assert!(result.is_err());
     let err = result.unwrap_err();
     assert!(err.is_retryable());
     assert!(err.message.contains("simulated transient infrastructure failure"));
 
     // Disable fault injection - should succeed now
-    let result = provider_trait.fetch_orchestration_item(Duration::from_secs(30), None).await;
+    let result = provider_trait.fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO).await;
     assert!(result.is_ok());
     let item = result.unwrap();
     assert!(item.is_some());

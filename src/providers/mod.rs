@@ -774,14 +774,6 @@ pub trait Provider: Any + Send + Sync {
     //
     // The provider's role is to STORE these IDs, not generate them.
 
-    /// Check if the provider supports long polling.
-    ///
-    /// If true, the runtime may pass a `poll_timeout` to `fetch_*` methods,
-    /// expecting the provider to block until work is available or the timeout expires.
-    fn supports_long_polling(&self) -> bool {
-        false
-    }
-
     /// Fetch the next orchestration work item atomically.
     ///
     /// # What This Does
@@ -912,7 +904,7 @@ pub trait Provider: Any + Send + Sync {
     async fn fetch_orchestration_item(
         &self,
         lock_timeout: Duration,
-        poll_timeout: Option<Duration>,
+        poll_timeout: Duration,
     ) -> Result<Option<OrchestrationItem>, ProviderError>;
 
     /// Acknowledge successful orchestration processing atomically.
@@ -1359,9 +1351,8 @@ pub trait Provider: Any + Send + Sync {
     /// # Parameters
     ///
     /// - `lock_timeout`: Duration to lock the item for processing.
-    /// - `poll_timeout`: Maximum time to wait for work.
-    ///   - `Some(duration)`: Provider MAY wait up to this duration if supported.
-    ///   - `None`: Provider MUST return immediately if no work is found.
+    /// - `poll_timeout`: Maximum time to wait for work. Provider MAY wait up to this
+    ///   duration if it supports long polling, or return immediately if it doesn't.
     ///
     /// # Return Value
     ///
@@ -1375,7 +1366,7 @@ pub trait Provider: Any + Send + Sync {
     async fn fetch_work_item(
         &self,
         lock_timeout: Duration,
-        poll_timeout: Option<Duration>,
+        poll_timeout: Duration,
     ) -> Result<Option<(WorkItem, String)>, ProviderError>;
 
     /// Acknowledge successful processing of a work item.

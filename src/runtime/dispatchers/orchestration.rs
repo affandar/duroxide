@@ -41,16 +41,9 @@ impl Runtime {
                         }
 
                         let min_interval = rt.options.dispatcher_min_poll_interval;
-                        let long_poll_timeout = rt.options.dispatcher_long_poll_timeout;
+                        let poll_timeout = rt.options.dispatcher_long_poll_timeout;
                         let start_time = std::time::Instant::now();
                         let mut work_found = false;
-
-                        // Determine poll timeout based on provider capabilities
-                        let poll_timeout = if rt.history_store.supports_long_polling() {
-                            Some(long_poll_timeout)
-                        } else {
-                            None
-                        };
 
                         match rt
                             .history_store

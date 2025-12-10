@@ -19,6 +19,8 @@ pub mod management;
 pub mod multi_execution;
 #[cfg(feature = "provider-test")]
 pub mod queue_semantics;
+#[cfg(feature = "provider-test")]
+pub mod long_polling;
 
 #[cfg(feature = "provider-test")]
 use crate::INITIAL_EXECUTION_ID;
@@ -56,7 +58,7 @@ pub(crate) async fn create_instance(provider: &dyn crate::providers::Provider, i
         .map_err(|e| e.to_string())?;
 
     let item = provider
-        .fetch_orchestration_item(Duration::from_secs(30), None)
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
         .await
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "Failed to fetch orchestration item".to_string())?;
@@ -90,4 +92,18 @@ pub(crate) async fn create_instance(provider: &dyn crate::providers::Provider, i
         .map_err(|e| e.to_string())?;
 
     Ok(())
+}
+
+/// Trait to create fresh provider instances for tests.
+/// Essential for multi-threaded/concurrent tests.
+#[cfg(feature = "provider-test")]
+#[async_trait::async_trait]
+pub trait ProviderFactory: Sync + Send {
+    /// Create a new, isolated provider instance connected to the same backend.
+    async fn create_provider(&self) -> std::sync::Arc<dyn crate::providers::Provider>;
+    
+    /// Default lock timeout to use in tests
+    fn lock_timeout(&self) -> Duration {
+        Duration::from_secs(5)
+    }
 }

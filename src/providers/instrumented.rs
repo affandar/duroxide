@@ -71,13 +71,10 @@ impl InstrumentedProvider {
 
 #[async_trait]
 impl Provider for InstrumentedProvider {
-    fn supports_long_polling(&self) -> bool {
-        self.inner.supports_long_polling()
-    }
     async fn fetch_orchestration_item(
         &self,
         lock_timeout: Duration,
-        poll_timeout: Option<Duration>,
+        poll_timeout: Duration,
     ) -> Result<Option<OrchestrationItem>, ProviderError> {
         let start = std::time::Instant::now();
         let result = self.inner.fetch_orchestration_item(lock_timeout, poll_timeout).await;
@@ -169,7 +166,7 @@ impl Provider for InstrumentedProvider {
     async fn fetch_work_item(
         &self,
         lock_timeout: Duration,
-        poll_timeout: Option<Duration>,
+        poll_timeout: Duration,
     ) -> Result<Option<(WorkItem, String)>, ProviderError> {
         let start = std::time::Instant::now();
         let result = self.inner.fetch_work_item(lock_timeout, poll_timeout).await;

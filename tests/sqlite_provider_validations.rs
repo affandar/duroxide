@@ -63,6 +63,12 @@ mod tests {
         test_worker_peek_lock_semantics,
         // Queue semantics tests
         test_worker_queue_fifo_ordering,
+        // Long polling tests
+        long_polling::{
+            test_fetch_respects_timeout_upper_bound,
+            test_short_poll_returns_immediately,
+            test_short_poll_work_item_returns_immediately,
+        },
     };
     use duroxide::providers::Provider;
     use duroxide::providers::sqlite::SqliteProvider;
@@ -316,5 +322,24 @@ mod tests {
     #[tokio::test]
     async fn test_sqlite_sub_orchestration_instance_creation() {
         test_sub_orchestration_instance_creation(&SqliteTestFactory).await;
+    }
+
+    // Long polling tests (SQLite uses short polling)
+    #[tokio::test]
+    async fn test_sqlite_short_poll_returns_immediately() {
+        let provider = SqliteTestFactory.create_provider().await;
+        test_short_poll_returns_immediately(&*provider).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_short_poll_work_item_returns_immediately() {
+        let provider = SqliteTestFactory.create_provider().await;
+        test_short_poll_work_item_returns_immediately(&*provider).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_fetch_respects_timeout_upper_bound() {
+        let provider = SqliteTestFactory.create_provider().await;
+        test_fetch_respects_timeout_upper_bound(&*provider).await;
     }
 }
