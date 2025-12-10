@@ -2,8 +2,7 @@
 
 ### Active TODOs
 
-- RaiseEvent with payload
-- Longpoll support
+- Add a Cancelled OrchestrationStatus
 - Size limits 
 - RaiseEvent pub/sub
 - RaiseEvent should target any Wait for Event, even if it was to come in the future.
@@ -91,6 +90,7 @@
 
 ## DONE
 
+- Longpoll support
 - Write big rocks docs.
 - Publish crate, docs
 - Github actions/pipeline
