@@ -2,10 +2,9 @@
 
 ### Active TODOs
 
-- Add a Cancelled OrchestrationStatus
+- Fetch item batch in dispatchers!!
 - Size limits 
 - RaiseEvent pub/sub
-- RaiseEvent should target any Wait for Event, even if it was to come in the future.
 - **Nested Select2 Support** - Enable `select2(select2(a, b), c)` composition
   - Currently `select2` only accepts `DurableFuture`, not `SelectFuture`
   - Options: (1) Add trait for select2 args that both types implement, (2) Add `SelectFuture::into_selectable()` wrapper
@@ -26,7 +25,6 @@
   - Complexity: Medium - extend SystemCall machinery, wire to MetricsProvider
 - Full e2e Otel test
 - Wire up suborchestration metrics, requires some linkage of names between suborch -> parent in the replayengine
-- Review DurableFuture and into_*() fns for soundness
 - move stress tests to cargo standard "bench"
 - separate execution loops for orchestrations and activities, communicate through channels
 - Port samples from DurableTasks and Temporal to tests/scenarios/
@@ -90,6 +88,7 @@
 
 ## DONE
 
+- Review DurableFuture and into_*() fns for soundness
 - Longpoll support
 - Write big rocks docs.
 - Publish crate, docs
@@ -177,6 +176,8 @@
 
 ## POSTPONED
 
+- RaiseEvent should target any Wait for Event, even if it was to come in the future.
+- Add a Cancelled OrchestrationStatus
 - clients should be able to query registered activities and orchestrations
   - implemented in branch runtime-registry, but it needs much more than just the orch name/version
 - implement Unpin typed future wrappers for `_typed` adapters
