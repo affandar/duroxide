@@ -1,9 +1,22 @@
 ![Banner](duroxide_banner.jpg)
 ## duroxide
 
-> Notice: This is an experimental project exploring how AI can help build and iteratively improve a moderately complex framework. It’s intended for learning and fun, not for production use (yet).
+[![Crates.io](https://img.shields.io/crates/v/duroxide.svg)](https://crates.io/crates/duroxide)
+[![Documentation](https://docs.rs/duroxide/badge.svg)](https://docs.rs/duroxide)
+
+> Notice: This is an experimental project exploring how AI can help build and iteratively improve a moderately complex framework. It's intended for learning and fun, not for production use (yet).
 
 Deterministic task orchestration in Rust, inspired by Durable Task.
+
+### Latest Release: v0.1.1
+
+**Long polling support and `continue_as_new()` awaitable API**
+
+- Added `poll_timeout` parameter to Provider trait for efficient long polling
+- Renamed `dispatcher_idle_sleep` → `dispatcher_min_poll_interval`
+- `continue_as_new()` now returns an awaitable future: `return ctx.continue_as_new(input).await`
+
+See [CHANGELOG.md](CHANGELOG.md) for full release notes and migration guide.
 
 What you can build with this (inspired by .NET Durable Task/Durable Functions patterns)
 - Function chaining: model a multi-step process as sequential awaits where each step depends on prior results.
