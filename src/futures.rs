@@ -185,7 +185,10 @@ impl Future for DurableFuture {
                 }
 
                 // claimed_event_id is guaranteed to be Some after the above block sets it
-                let our_event_id = this.claimed_event_id.get().expect("claimed_event_id should be set after claiming");
+                let our_event_id = this
+                    .claimed_event_id
+                    .get()
+                    .expect("claimed_event_id should be set after claiming");
 
                 // Step 2: Look for our completion - FIFO enforcement
                 // Find our completion in history
@@ -294,7 +297,10 @@ impl Future for DurableFuture {
                 }
 
                 // claimed_event_id is guaranteed to be Some after the above block sets it
-                let our_event_id = this.claimed_event_id.get().expect("claimed_event_id should be set after claiming");
+                let our_event_id = this
+                    .claimed_event_id
+                    .get()
+                    .expect("claimed_event_id should be set after claiming");
 
                 // Step 2: Look for TimerFired - FIFO enforcement
                 let our_completion = inner.history.iter().find_map(|e| {
@@ -400,7 +406,10 @@ impl Future for DurableFuture {
                 }
 
                 // claimed_event_id is guaranteed to be Some after the above block sets it
-                let _our_event_id = this.claimed_event_id.get().expect("claimed_event_id should be set after claiming");
+                let _our_event_id = this
+                    .claimed_event_id
+                    .get()
+                    .expect("claimed_event_id should be set after claiming");
 
                 // Step 2: Look for ExternalEvent (special case - search by name)
                 // External events can arrive in any order
@@ -523,7 +532,10 @@ impl Future for DurableFuture {
                 }
 
                 // claimed_event_id is guaranteed to be Some after the above block sets it
-                let our_event_id = this.claimed_event_id.get().expect("claimed_event_id should be set after claiming");
+                let our_event_id = this
+                    .claimed_event_id
+                    .get()
+                    .expect("claimed_event_id should be set after claiming");
 
                 // Step 2: Look for SubOrch completion - FIFO enforcement
                 let our_completion = inner.history.iter().find_map(|e| {

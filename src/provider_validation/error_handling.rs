@@ -145,7 +145,11 @@ pub async fn test_lock_expiration_during_ack<F: ProviderFactory>(factory: &F) {
         .enqueue_for_orchestrator(start_item("instance-A"), None)
         .await
         .unwrap();
-    let item = provider.fetch_orchestration_item(lock_timeout, Duration::ZERO).await.unwrap().unwrap();
+    let item = provider
+        .fetch_orchestration_item(lock_timeout, Duration::ZERO)
+        .await
+        .unwrap()
+        .unwrap();
     let lock_token = item.lock_token.clone();
 
     // Wait for lock to expire

@@ -145,7 +145,10 @@ impl<H: ?Sized> Registry<H> {
     /// Set version policy (SYNC)
     pub fn set_version_policy(&self, name: &str, policy: VersionPolicy) {
         // Mutex lock should never fail in normal operation - if poisoned, it indicates a serious bug
-        self.policy.lock().expect("Mutex should not be poisoned").insert(name.to_string(), policy);
+        self.policy
+            .lock()
+            .expect("Mutex should not be poisoned")
+            .insert(name.to_string(), policy);
     }
 
     /// List all registered names

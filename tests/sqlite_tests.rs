@@ -362,7 +362,13 @@ async fn test_sqlite_basic_persistence() {
             .expect("Failed to ack worker 2");
 
         // Verify no more items
-        assert!(store.fetch_work_item(Duration::from_secs(30), Duration::ZERO).await.unwrap().is_none());
+        assert!(
+            store
+                .fetch_work_item(Duration::from_secs(30), Duration::ZERO)
+                .await
+                .unwrap()
+                .is_none()
+        );
 
         println!("Phase 2: Successfully verified persistence");
     }
@@ -421,7 +427,11 @@ async fn test_sqlite_file_concurrent_access() {
 
     // Fetch and ack all orchestration items to create instances
     let mut acked_count = 0;
-    while let Some(item) = store.fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO).await.unwrap() {
+    while let Some(item) = store
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+        .await
+        .unwrap()
+    {
         store
             .ack_orchestration_item(
                 &item.lock_token,
@@ -675,7 +685,11 @@ async fn test_sqlite_provider_transactional() {
 
     // Verify all worker items enqueued
     let mut worker_count = 0;
-    while let Some((work_item, token)) = store.fetch_work_item(Duration::from_secs(30), Duration::ZERO).await.unwrap() {
+    while let Some((work_item, token)) = store
+        .fetch_work_item(Duration::from_secs(30), Duration::ZERO)
+        .await
+        .unwrap()
+    {
         worker_count += 1;
         // Extract id from work item for completion
         let id = match work_item {

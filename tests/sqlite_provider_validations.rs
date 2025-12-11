@@ -10,6 +10,11 @@
 mod tests {
     use duroxide::provider_validations::{
         ProviderFactory,
+        // Long polling tests
+        long_polling::{
+            test_fetch_respects_timeout_upper_bound, test_short_poll_returns_immediately,
+            test_short_poll_work_item_returns_immediately,
+        },
         test_abandon_releases_lock_immediately,
         test_ack_only_affects_locked_messages,
         // Atomicity tests
@@ -63,12 +68,6 @@ mod tests {
         test_worker_peek_lock_semantics,
         // Queue semantics tests
         test_worker_queue_fifo_ordering,
-        // Long polling tests
-        long_polling::{
-            test_fetch_respects_timeout_upper_bound,
-            test_short_poll_returns_immediately,
-            test_short_poll_work_item_returns_immediately,
-        },
     };
     use duroxide::providers::Provider;
     use duroxide::providers::sqlite::SqliteProvider;

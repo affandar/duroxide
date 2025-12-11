@@ -278,11 +278,21 @@ pub async fn test_lock_released_only_on_successful_ack<F: ProviderFactory>(facto
         .enqueue_for_orchestrator(start_item("instance-A"), None)
         .await
         .unwrap();
-    let item = provider.fetch_orchestration_item(lock_timeout, Duration::ZERO).await.unwrap().unwrap();
+    let item = provider
+        .fetch_orchestration_item(lock_timeout, Duration::ZERO)
+        .await
+        .unwrap()
+        .unwrap();
     let _lock_token = item.lock_token.clone();
 
     // Verify lock is held (can't fetch again)
-    assert!(provider.fetch_orchestration_item(lock_timeout, Duration::ZERO).await.unwrap().is_none());
+    assert!(
+        provider
+            .fetch_orchestration_item(lock_timeout, Duration::ZERO)
+            .await
+            .unwrap()
+            .is_none()
+    );
 
     // Attempt ack with invalid lock token (should fail)
     let _result = provider
@@ -312,13 +322,23 @@ pub async fn test_lock_released_only_on_successful_ack<F: ProviderFactory>(facto
     assert!(_result.is_err());
 
     // Lock should still be held
-    assert!(provider.fetch_orchestration_item(lock_timeout, Duration::ZERO).await.unwrap().is_none());
+    assert!(
+        provider
+            .fetch_orchestration_item(lock_timeout, Duration::ZERO)
+            .await
+            .unwrap()
+            .is_none()
+    );
 
     // Wait for lock expiration
     tokio::time::sleep(lock_timeout + Duration::from_millis(100)).await;
 
     // Now should be able to fetch again
-    let item2 = provider.fetch_orchestration_item(lock_timeout, Duration::ZERO).await.unwrap().unwrap();
+    let item2 = provider
+        .fetch_orchestration_item(lock_timeout, Duration::ZERO)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(item2.instance, "instance-A");
     tracing::info!("✓ Test passed: lock release on successful ack verified");
 }

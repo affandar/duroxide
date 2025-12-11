@@ -217,7 +217,10 @@ async fn test_fetch_orchestration_item_no_work() {
     let store: Arc<SqliteProvider> = Arc::new(SqliteProvider::new(&db_url, None).await.unwrap());
 
     // No work items
-    let item = store.fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO).await.unwrap();
+    let item = store
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+        .await
+        .unwrap();
     assert!(item.is_none());
 }
 
@@ -309,7 +312,11 @@ async fn test_ack_orchestration_item_atomic() {
     assert!(matches!(&history[1].kind, EventKind::ActivityScheduled { .. }));
 
     // Verify worker item was enqueued
-    let (worker_item, _) = store.fetch_work_item(Duration::from_secs(30), Duration::ZERO).await.unwrap().unwrap();
+    let (worker_item, _) = store
+        .fetch_work_item(Duration::from_secs(30), Duration::ZERO)
+        .await
+        .unwrap()
+        .unwrap();
     assert!(matches!(worker_item, WorkItem::ActivityExecute { .. }));
 
     // Verify orchestrator queue is empty (item was acked)
@@ -415,7 +422,11 @@ async fn test_abandon_orchestration_item_with_delay() {
 
     // Fetch and get lock token
     let lock_timeout = Duration::from_secs(30);
-    let item = store.fetch_orchestration_item(lock_timeout, Duration::ZERO).await.unwrap().unwrap();
+    let item = store
+        .fetch_orchestration_item(lock_timeout, Duration::ZERO)
+        .await
+        .unwrap()
+        .unwrap();
     let lock_token = item.lock_token.clone();
 
     // Abandon with delay (sqlite supports delayed visibility)
@@ -424,10 +435,20 @@ async fn test_abandon_orchestration_item_with_delay() {
         .await
         .unwrap();
     // Should not be visible immediately
-    assert!(store.fetch_orchestration_item(lock_timeout, Duration::ZERO).await.unwrap().is_none());
+    assert!(
+        store
+            .fetch_orchestration_item(lock_timeout, Duration::ZERO)
+            .await
+            .unwrap()
+            .is_none()
+    );
     // After delay, it should be visible
     tokio::time::sleep(std::time::Duration::from_millis(600)).await;
-    let item2 = store.fetch_orchestration_item(lock_timeout, Duration::ZERO).await.unwrap().unwrap();
+    let item2 = store
+        .fetch_orchestration_item(lock_timeout, Duration::ZERO)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(item2.instance, "test-instance");
 }
 

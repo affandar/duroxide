@@ -13,19 +13,19 @@ use std::time::{Duration, Instant};
 /// The provider should ignore the `poll_timeout` and return `None` immediately.
 pub async fn test_short_poll_returns_immediately(provider: &dyn Provider) {
     tracing::info!("→ Testing long polling: short poll returns immediately");
-    
+
     let lock_timeout = Duration::from_secs(30);
     let poll_timeout = Duration::from_millis(500); // Provider should ignore this
-    
+
     let start = Instant::now();
     let result = provider
         .fetch_orchestration_item(lock_timeout, poll_timeout)
         .await
         .expect("Fetch failed");
     let elapsed = start.elapsed();
-    
+
     assert!(result.is_none(), "Queue should be empty");
-    
+
     // Short polling provider should return much faster than poll_timeout
     assert!(
         elapsed < Duration::from_millis(100),
@@ -33,7 +33,7 @@ pub async fn test_short_poll_returns_immediately(provider: &dyn Provider) {
         elapsed,
         poll_timeout
     );
-    
+
     tracing::info!("✓ Short poll returned in {:?}", elapsed);
 }
 
@@ -43,19 +43,19 @@ pub async fn test_short_poll_returns_immediately(provider: &dyn Provider) {
 /// The provider should block for approximately `poll_timeout` before returning `None`.
 pub async fn test_long_poll_waits_for_timeout(provider: &dyn Provider) {
     tracing::info!("→ Testing long polling: long poll waits for timeout");
-    
+
     let lock_timeout = Duration::from_secs(30);
     let poll_timeout = Duration::from_millis(500);
-    
+
     let start = Instant::now();
     let result = provider
         .fetch_orchestration_item(lock_timeout, poll_timeout)
         .await
         .expect("Fetch failed");
     let elapsed = start.elapsed();
-    
+
     assert!(result.is_none(), "Queue should be empty");
-    
+
     // Long polling provider should wait for at least the timeout
     assert!(
         elapsed >= poll_timeout,
@@ -63,7 +63,7 @@ pub async fn test_long_poll_waits_for_timeout(provider: &dyn Provider) {
         elapsed,
         poll_timeout
     );
-    
+
     tracing::info!("✓ Long poll waited {:?} (timeout was {:?})", elapsed, poll_timeout);
 }
 
@@ -73,20 +73,20 @@ pub async fn test_long_poll_waits_for_timeout(provider: &dyn Provider) {
 /// the provider respects the upper bound of the timeout (with some tolerance).
 pub async fn test_fetch_respects_timeout_upper_bound(provider: &dyn Provider) {
     tracing::info!("→ Testing long polling: fetch respects timeout upper bound");
-    
+
     let lock_timeout = Duration::from_secs(30);
     let poll_timeout = Duration::from_millis(300);
     let tolerance = Duration::from_millis(200); // Allow some slack for scheduling
-    
+
     let start = Instant::now();
     let result = provider
         .fetch_orchestration_item(lock_timeout, poll_timeout)
         .await
         .expect("Fetch failed");
     let elapsed = start.elapsed();
-    
+
     assert!(result.is_none(), "Queue should be empty");
-    
+
     // Provider must not block excessively beyond timeout
     assert!(
         elapsed < poll_timeout + tolerance,
@@ -94,57 +94,57 @@ pub async fn test_fetch_respects_timeout_upper_bound(provider: &dyn Provider) {
         elapsed,
         poll_timeout + tolerance
     );
-    
+
     tracing::info!("✓ Fetch completed in {:?} (within bounds)", elapsed);
 }
 
 /// Test for SHORT POLLING providers: Verify fetch_work_item returns immediately.
 pub async fn test_short_poll_work_item_returns_immediately(provider: &dyn Provider) {
     tracing::info!("→ Testing long polling: short poll work item returns immediately");
-    
+
     let lock_timeout = Duration::from_secs(30);
     let poll_timeout = Duration::from_millis(500);
-    
+
     let start = Instant::now();
     let result = provider
         .fetch_work_item(lock_timeout, poll_timeout)
         .await
         .expect("Fetch failed");
     let elapsed = start.elapsed();
-    
+
     assert!(result.is_none(), "Worker queue should be empty");
-    
+
     assert!(
         elapsed < Duration::from_millis(100),
         "Short polling provider should return immediately (elapsed: {:?})",
         elapsed
     );
-    
+
     tracing::info!("✓ Short poll work item returned in {:?}", elapsed);
 }
 
 /// Test for LONG POLLING providers: Verify fetch_work_item blocks for timeout.
 pub async fn test_long_poll_work_item_waits_for_timeout(provider: &dyn Provider) {
     tracing::info!("→ Testing long polling: long poll work item waits for timeout");
-    
+
     let lock_timeout = Duration::from_secs(30);
     let poll_timeout = Duration::from_millis(500);
-    
+
     let start = Instant::now();
     let result = provider
         .fetch_work_item(lock_timeout, poll_timeout)
         .await
         .expect("Fetch failed");
     let elapsed = start.elapsed();
-    
+
     assert!(result.is_none(), "Worker queue should be empty");
-    
+
     assert!(
         elapsed >= poll_timeout,
         "Long polling provider should wait for timeout (elapsed: {:?}, expected: {:?})",
         elapsed,
         poll_timeout
     );
-    
+
     tracing::info!("✓ Long poll work item waited {:?}", elapsed);
 }

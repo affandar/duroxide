@@ -18,17 +18,31 @@ pub async fn test_exclusive_instance_lock<F: ProviderFactory>(factory: &F) {
         .unwrap();
 
     // Fetch orchestration item (acquires lock)
-    let item1 = provider.fetch_orchestration_item(lock_timeout, Duration::ZERO).await.unwrap().unwrap();
+    let item1 = provider
+        .fetch_orchestration_item(lock_timeout, Duration::ZERO)
+        .await
+        .unwrap()
+        .unwrap();
     let lock_token1 = item1.lock_token.clone();
 
     // Second fetch should fail (instance locked)
-    assert!(provider.fetch_orchestration_item(lock_timeout, Duration::ZERO).await.unwrap().is_none());
+    assert!(
+        provider
+            .fetch_orchestration_item(lock_timeout, Duration::ZERO)
+            .await
+            .unwrap()
+            .is_none()
+    );
 
     // Wait for lock to expire
     tokio::time::sleep(lock_timeout + Duration::from_millis(100)).await;
 
     // Now should be able to fetch again
-    let item2 = provider.fetch_orchestration_item(lock_timeout, Duration::ZERO).await.unwrap().unwrap();
+    let item2 = provider
+        .fetch_orchestration_item(lock_timeout, Duration::ZERO)
+        .await
+        .unwrap()
+        .unwrap();
     assert_ne!(item2.lock_token, lock_token1);
     tracing::info!("✓ Test passed: exclusive lock verified");
 }
@@ -123,7 +137,9 @@ pub async fn test_concurrent_instance_fetching<F: ProviderFactory>(factory: &F) 
             tokio::spawn(async move {
                 // Add small random delay to reduce contention
                 tokio::time::sleep(Duration::from_millis(i * 30)).await;
-                p.fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO).await.unwrap()
+                p.fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+                    .await
+                    .unwrap()
             })
         })
         .collect();
@@ -159,7 +175,11 @@ pub async fn test_completions_arriving_during_lock_blocked<F: ProviderFactory>(f
         .unwrap();
 
     // Step 2: Fetch and acquire lock
-    let item1 = provider.fetch_orchestration_item(lock_timeout, Duration::ZERO).await.unwrap().unwrap();
+    let item1 = provider
+        .fetch_orchestration_item(lock_timeout, Duration::ZERO)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(item1.instance, "instance-A");
     let _lock_token = item1.lock_token.clone();
 
@@ -180,14 +200,21 @@ pub async fn test_completions_arriving_during_lock_blocked<F: ProviderFactory>(f
     }
 
     // Step 4: Another dispatcher tries to fetch "instance-A"
-    let item2 = provider.fetch_orchestration_item(lock_timeout, Duration::ZERO).await.unwrap();
+    let item2 = provider
+        .fetch_orchestration_item(lock_timeout, Duration::ZERO)
+        .await
+        .unwrap();
     assert!(item2.is_none(), "Instance still locked, no fetch possible");
 
     // Step 5: Wait for lock expiration
     tokio::time::sleep(lock_timeout + Duration::from_millis(100)).await;
 
     // Step 6: Now completions should be fetchable
-    let item3 = provider.fetch_orchestration_item(lock_timeout, Duration::ZERO).await.unwrap().unwrap();
+    let item3 = provider
+        .fetch_orchestration_item(lock_timeout, Duration::ZERO)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(item3.instance, "instance-A");
     // Should have StartOrchestration + 3 ActivityCompleted messages = 4 total
     assert_eq!(
@@ -497,7 +524,10 @@ pub async fn test_multi_threaded_lock_contention<F: ProviderFactory>(factory: &F
             tokio::spawn(async move {
                 // Small delay to stagger attempts
                 tokio::time::sleep(Duration::from_millis(i * 5)).await;
-                let result = p.fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO).await.unwrap();
+                let result = p
+                    .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+                    .await
+                    .unwrap();
                 (i, result)
             })
         })
@@ -571,7 +601,10 @@ pub async fn test_multi_threaded_no_duplicate_processing<F: ProviderFactory>(fac
 
                 // Retry on deadlock (SQLite in-memory can deadlock under heavy concurrent load)
                 for attempt in 0..3 {
-                    match p.fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO).await {
+                    match p
+                        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+                        .await
+                    {
                         Ok(item) => return Ok(item.map(|i| i.instance.clone())),
                         Err(e) if e.retryable && attempt < 2 => {
                             tokio::time::sleep(Duration::from_millis(10 * (attempt + 1) as u64)).await;
@@ -638,7 +671,11 @@ pub async fn test_multi_threaded_lock_expiration_recovery<F: ProviderFactory>(fa
     let provider1 = provider.clone();
     let handle1 = tokio::spawn({
         async move {
-            let item = provider1.fetch_orchestration_item(lock_timeout, Duration::ZERO).await.unwrap().unwrap();
+            let item = provider1
+                .fetch_orchestration_item(lock_timeout, Duration::ZERO)
+                .await
+                .unwrap()
+                .unwrap();
             assert_eq!(item.instance, "expiration-instance");
             let lock_token = item.lock_token;
             // Hold lock but don't ack - simulate crashed worker
@@ -652,7 +689,10 @@ pub async fn test_multi_threaded_lock_expiration_recovery<F: ProviderFactory>(fa
     let handle2 = tokio::spawn({
         async move {
             tokio::time::sleep(Duration::from_millis(10)).await;
-            let result = provider2.fetch_orchestration_item(lock_timeout, Duration::ZERO).await.unwrap();
+            let result = provider2
+                .fetch_orchestration_item(lock_timeout, Duration::ZERO)
+                .await
+                .unwrap();
             assert!(result.is_none(), "Instance should be locked");
             result
         }
@@ -663,7 +703,10 @@ pub async fn test_multi_threaded_lock_expiration_recovery<F: ProviderFactory>(fa
     let handle3 = tokio::spawn({
         async move {
             tokio::time::sleep(lock_timeout + Duration::from_millis(100)).await;
-            provider3.fetch_orchestration_item(lock_timeout, Duration::ZERO).await.unwrap()
+            provider3
+                .fetch_orchestration_item(lock_timeout, Duration::ZERO)
+                .await
+                .unwrap()
         }
     });
 

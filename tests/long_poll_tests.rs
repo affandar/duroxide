@@ -1,11 +1,7 @@
-use duroxide::providers::{
-    ExecutionMetadata, OrchestrationItem, Provider, ProviderError, WorkItem,
-};
+use duroxide::providers::{ExecutionMetadata, OrchestrationItem, Provider, ProviderError, WorkItem};
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self, RuntimeOptions};
-use duroxide::{
-    ActivityContext, Client, Event, OrchestrationContext, OrchestrationRegistry,
-};
+use duroxide::{ActivityContext, Client, Event, OrchestrationContext, OrchestrationRegistry};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -25,11 +21,7 @@ impl LongPollingSqliteProvider {
     }
 
     /// Helper to poll inner provider until timeout
-    async fn poll_until<T, F, Fut>(
-        &self,
-        poll_timeout: Duration,
-        f: F,
-    ) -> Result<Option<T>, ProviderError>
+    async fn poll_until<T, F, Fut>(&self, poll_timeout: Duration, f: F) -> Result<Option<T>, ProviderError>
     where
         F: Fn() -> Fut,
         Fut: std::future::Future<Output = Result<Option<T>, ProviderError>>,
@@ -99,14 +91,8 @@ impl Provider for LongPollingSqliteProvider {
             .await
     }
 
-    async fn abandon_orchestration_item(
-        &self,
-        lock_token: &str,
-        delay: Option<Duration>,
-    ) -> Result<(), ProviderError> {
-        self.inner
-            .abandon_orchestration_item(lock_token, delay)
-            .await
+    async fn abandon_orchestration_item(&self, lock_token: &str, delay: Option<Duration>) -> Result<(), ProviderError> {
+        self.inner.abandon_orchestration_item(lock_token, delay).await
     }
 
     async fn read(&self, instance: &str) -> Result<Vec<Event>, ProviderError> {
@@ -128,30 +114,18 @@ impl Provider for LongPollingSqliteProvider {
         self.inner.enqueue_for_worker(item).await
     }
 
-    async fn ack_work_item(
-        &self,
-        token: &str,
-        completion: WorkItem,
-    ) -> Result<(), ProviderError> {
+    async fn ack_work_item(&self, token: &str, completion: WorkItem) -> Result<(), ProviderError> {
         self.inner.ack_work_item(token, completion).await
     }
 
-    async fn renew_work_item_lock(
-        &self,
-        token: &str,
-        extend_for: Duration,
-    ) -> Result<(), ProviderError> {
+    async fn renew_work_item_lock(&self, token: &str, extend_for: Duration) -> Result<(), ProviderError> {
         self.inner.renew_work_item_lock(token, extend_for).await
     }
 
-    async fn enqueue_for_orchestrator(
-        &self,
-        item: WorkItem,
-        delay: Option<Duration>,
-    ) -> Result<(), ProviderError> {
+    async fn enqueue_for_orchestrator(&self, item: WorkItem, delay: Option<Duration>) -> Result<(), ProviderError> {
         self.inner.enqueue_for_orchestrator(item, delay).await
     }
-    
+
     // Optional methods
     async fn read_with_execution(&self, instance: &str, execution_id: u64) -> Result<Vec<Event>, ProviderError> {
         self.inner.read_with_execution(instance, execution_id).await
@@ -168,20 +142,21 @@ async fn test_long_poll_waits_for_timeout() {
 
     let start = Instant::now();
     let timeout = Duration::from_millis(500);
-    
+
     // Fetch with timeout
     let result = provider
         .fetch_orchestration_item(Duration::from_secs(5), timeout)
         .await
         .unwrap();
-    
+
     let elapsed = start.elapsed();
-    
+
     assert!(result.is_none(), "Should return None");
     assert!(
         elapsed >= timeout,
         "Should wait at least timeout duration (elapsed: {:?}, expected: {:?})",
-        elapsed, timeout
+        elapsed,
+        timeout
     );
 }
 
@@ -197,32 +172,31 @@ async fn test_long_poll_returns_early_on_work() {
     // Spawn a task to enqueue work after a delay (e.g. 200ms)
     tokio::spawn(async move {
         tokio::time::sleep(Duration::from_millis(200)).await;
-        client
-            .start_orchestration(instance_id, "TestOrch", "")
-            .await
-            .unwrap();
+        client.start_orchestration(instance_id, "TestOrch", "").await.unwrap();
     });
 
     let start = Instant::now();
     let timeout = Duration::from_secs(2); // Long timeout
-    
+
     // Fetch should block but return when work arrives
     let result = provider
         .fetch_orchestration_item(Duration::from_secs(5), timeout)
         .await
         .unwrap();
-    
+
     let elapsed = start.elapsed();
-    
+
     assert!(result.is_some(), "Should return Some item");
     assert!(
         elapsed < timeout,
         "Should return before timeout (elapsed: {:?}, timeout: {:?})",
-        elapsed, timeout
+        elapsed,
+        timeout
     );
     assert!(
-        elapsed >= Duration::from_millis(150), 
-        "Should wait for work to arrive (elapsed: {:?})", elapsed
+        elapsed >= Duration::from_millis(150),
+        "Should wait for work to arrive (elapsed: {:?})",
+        elapsed
     );
 }
 
@@ -242,9 +216,7 @@ async fn test_dispatcher_uses_long_polling() {
         ctx.schedule_activity("QuickTask", "").into_activity().await
     };
 
-    let orchestrations = OrchestrationRegistry::builder()
-        .register("TestOrch", orch)
-        .build();
+    let orchestrations = OrchestrationRegistry::builder().register("TestOrch", orch).build();
 
     // Configure runtime with long polling
     let options = RuntimeOptions {
@@ -255,16 +227,11 @@ async fn test_dispatcher_uses_long_polling() {
         ..Default::default()
     };
 
-    let rt = runtime::Runtime::start_with_options(
-        provider.clone(),
-        Arc::new(activities),
-        orchestrations,
-        options,
-    )
-    .await;
+    let rt =
+        runtime::Runtime::start_with_options(provider.clone(), Arc::new(activities), orchestrations, options).await;
 
     let client = Client::new(provider.clone());
-    
+
     // Start orchestration
     client
         .start_orchestration("test-long-poll-flow", "TestOrch", "")
@@ -278,6 +245,6 @@ async fn test_dispatcher_uses_long_polling() {
         .unwrap();
 
     assert!(matches!(status, runtime::OrchestrationStatus::Completed { .. }));
-    
+
     rt.shutdown(None).await;
 }

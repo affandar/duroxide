@@ -14,13 +14,13 @@ pub mod instance_locking;
 #[cfg(feature = "provider-test")]
 pub mod lock_expiration;
 #[cfg(feature = "provider-test")]
+pub mod long_polling;
+#[cfg(feature = "provider-test")]
 pub mod management;
 #[cfg(feature = "provider-test")]
 pub mod multi_execution;
 #[cfg(feature = "provider-test")]
 pub mod queue_semantics;
-#[cfg(feature = "provider-test")]
-pub mod long_polling;
 
 #[cfg(feature = "provider-test")]
 use crate::INITIAL_EXECUTION_ID;
@@ -101,7 +101,7 @@ pub(crate) async fn create_instance(provider: &dyn crate::providers::Provider, i
 pub trait ProviderFactory: Sync + Send {
     /// Create a new, isolated provider instance connected to the same backend.
     async fn create_provider(&self) -> std::sync::Arc<dyn crate::providers::Provider>;
-    
+
     /// Default lock timeout to use in tests
     fn lock_timeout(&self) -> Duration {
         Duration::from_secs(5)
