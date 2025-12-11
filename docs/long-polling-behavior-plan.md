@@ -1,95 +1,65 @@
-# Long Polling Behavior Plan
+# Long Polling Behavior
 
-## Current Behavior
+## Overview
 
-### Short Polling (Current Implementation)
+Duroxide supports both short-polling and long-polling providers through a unified interface. The key insight is that providers don't need to advertise their polling capability - they simply respect (or ignore) the `poll_timeout` parameter.
 
-**Provider Interface:**
-- `fetch_orchestration_item()` returns `Ok(None)` immediately if no work available
-- `fetch_work_item()` returns `Ok(None)` immediately if no work available
-
-**Dispatcher Behavior:**
-- Check for work -> if None, sleep `idle_sleep` (100ms) -> repeat.
-
-## Long Polling Behavior
-
-### Proposed Provider Interface Change
-
-1. **Capability Check:** Add `supports_long_polling()` method.
-2. **Timeout Parameter:** Add `poll_timeout` to fetch methods.
+## Provider Interface
 
 ```rust
 trait Provider {
-    /// Whether this provider supports long polling (blocking wait for work).
-    fn supports_long_polling(&self) -> bool { false }
-
     async fn fetch_orchestration_item(
         &self,
         lock_timeout: Duration,
-        poll_timeout: Option<Duration>, // None = return immediately
+        poll_timeout: Duration,
     ) -> Result<Option<OrchestrationItem>, ProviderError>;
 
     async fn fetch_work_item(
         &self,
         lock_timeout: Duration,
-        poll_timeout: Option<Duration>, // None = return immediately
+        poll_timeout: Duration,
     ) -> Result<Option<(WorkItem, String)>, ProviderError>;
 }
 ```
 
-### Dispatcher Behavior Changes
+### poll_timeout Semantics
 
-We introduce two settings to control polling behavior:
+- **Long-polling providers** (e.g., Azure Service Bus, Redis with BLPOP): MAY block up to `poll_timeout` waiting for work to arrive. Should return early if work becomes available.
+  
+- **Short-polling providers** (e.g., SQLite, PostgreSQL): Ignore `poll_timeout` and return immediately. The dispatcher handles the waiting.
 
-1. `dispatcher_long_poll_timeout`: Maximum time to wait *inside* the provider (e.g., 5 mins).
-2. `dispatcher_min_poll_interval`: Minimum duration of a polling cycle (e.g., 1s). Prevents hot loops.
+## Dispatcher Behavior
+
+The dispatcher uses two settings to control polling:
+
+1. **`dispatcher_long_poll_timeout`**: Maximum time passed to provider's `poll_timeout` (default: 5 minutes)
+2. **`dispatcher_min_poll_interval`**: Minimum cycle duration when no work found (default: 100ms)
 
 ```rust
 loop {
     if shutdown.load(Ordering::Relaxed) { break; }
     
-    let min_interval = rt.options.dispatcher_min_poll_interval; // e.g. 1s
-    let long_poll_timeout = rt.options.dispatcher_long_poll_timeout; // e.g. 5m
+    let min_interval = rt.options.dispatcher_min_poll_interval;
+    let long_poll_timeout = rt.options.dispatcher_long_poll_timeout;
     
     let start_time = Instant::now();
     let mut work_found = false;
     
-    if provider.supports_long_polling() {
-        // --- LONG POLL MODE ---
-        // Provider blocks up to long_poll_timeout.
-        let fetch_result = provider.fetch_orchestration_item(
-            lock_timeout, 
-            Some(long_poll_timeout)
-        ).await;
-        
-        match fetch_result {
-            Ok(Some(item)) => {
-                process(item);
-                work_found = true;
-            },
-            Ok(None) => { /* Continue to wait logic */ },
-            Err(e) => { /* log and sleep short delay */ }
-        }
-        
-    } else {
-        // --- SHORT POLL MODE ---
-        // Explicitly pass None to force immediate return.
-        let fetch_result = provider.fetch_orchestration_item(
-            lock_timeout, 
-            None
-        ).await;
-        
-        match fetch_result {
-            Ok(Some(item)) => {
-                process(item);
-                work_found = true;
-            },
-            Ok(None) => { /* Continue to wait logic */ },
-            Err(e) => { /* log and sleep short delay */ }
+    // Always pass the timeout - provider decides whether to use it
+    match provider.fetch_orchestration_item(lock_timeout, long_poll_timeout).await {
+        Ok(Some(item)) => {
+            process(item);
+            work_found = true;
+        },
+        Ok(None) => { /* No work available */ },
+        Err(e) => {
+            log_error(e);
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            continue;
         }
     }
     
-    // Logic for "None" result: enforce min_poll_interval
+    // Enforce min_poll_interval to prevent hot loops
     if !work_found {
         let elapsed = start_time.elapsed();
         if elapsed < min_interval {
@@ -98,63 +68,85 @@ loop {
                 tokio::time::sleep(sleep_duration).await;
             }
         } else {
-            // Waited long enough (e.g. long poll timeout expired), loop immediately
+            // Waited long enough (long poll expired), yield and continue
             tokio::task::yield_now().await;
         }
     }
 }
 ```
 
-## Configuration Changes
+## Configuration
 
 ### RuntimeOptions
 
 ```rust
 pub struct RuntimeOptions {
-    // ... existing fields ...
-    
-    // RENAME: dispatcher_idle_sleep -> dispatcher_min_poll_interval
-    
     /// Minimum duration of a polling cycle when no work is found.
     /// 
-    /// If a provider returns 'None' (no work) faster than this duration,
-    /// the dispatcher will sleep for the remainder of the time.
-    /// This prevents hot loops for providers that do not support long polling
-    /// or return early.
+    /// If a provider returns 'None' faster than this duration,
+    /// the dispatcher sleeps for the remainder. Prevents hot loops
+    /// for short-polling providers.
     /// 
-    /// Default: `1s`
+    /// Default: 100ms
     pub dispatcher_min_poll_interval: Duration,
 
-    /// Maximum time to wait for work inside the provider (Long Polling).
+    /// Maximum time to wait for work inside the provider.
     /// 
-    /// Only used if the provider supports long polling.
+    /// Passed to provider's fetch methods. Long-polling providers
+    /// may block up to this duration. Short-polling providers ignore it.
     /// 
-    /// Default: `30s` (can be set much higher, e.g., 5 mins)
+    /// Default: 5 minutes
     pub dispatcher_long_poll_timeout: Duration,
 }
 ```
 
-## Implementation Strategy
+## Provider Implementations
 
-1.  **Provider Trait Update**:
-    *   Add `supports_long_polling()` default `false`.
-    *   Update `fetch_*` signatures with `poll_timeout: Option<Duration>`.
-2.  **Provider Implementations**:
-    *   `SqliteProvider`: Return `false` for support. Ignore `poll_timeout`.
-    *   `InstrumentedProvider`: Pass through.
-3.  **Runtime Options**:
-    *   Rename `dispatcher_idle_sleep` to `dispatcher_min_poll_interval`.
-    *   Add `dispatcher_long_poll_timeout`.
-    *   Update defaults/builders.
-4.  **Dispatcher Update**:
-    *   Implement the branched logic based on capability check.
-    *   Implement the start/elapsed/sleep logic.
-5.  **Test Updates**:
-    *   Update all test calls to `fetch_*` to pass `None`.
-    *   This preserves existing test behavior (Short Poll mode).
+### Short-Polling (SQLite)
+
+```rust
+async fn fetch_orchestration_item(
+    &self,
+    lock_timeout: Duration,
+    poll_timeout: Duration,  // Ignored
+) -> Result<Option<OrchestrationItem>, ProviderError> {
+    // Immediately check queue and return
+    // poll_timeout is ignored - dispatcher handles waiting
+}
+```
+
+### Long-Polling (Example: Redis)
+
+```rust
+async fn fetch_orchestration_item(
+    &self,
+    lock_timeout: Duration,
+    poll_timeout: Duration,
+) -> Result<Option<OrchestrationItem>, ProviderError> {
+    // Use BLPOP with poll_timeout
+    // Returns early if work arrives, or None after timeout
+    let result = redis.blpop(&self.queue_key, poll_timeout).await?;
+    // ... process result
+}
+```
 
 ## Benefits
 
--   **Robustness**: Prevents hot loops even if long-polling providers misbehave (return early).
--   **Efficiency**: Allows very long polls (minutes) while keeping short-polling checks reasonable (seconds).
--   **Explicit Contract**: Separates "waiting" (provider responsibility) from "throttling" (runtime responsibility).
+- **Unified interface**: No capability flags needed
+- **Robustness**: `min_poll_interval` prevents hot loops even if long-polling providers misbehave
+- **Efficiency**: Long-polling providers can wait minutes without wasting CPU
+- **Backward compatible**: Existing providers work unchanged (just ignore `poll_timeout`)
+
+## Testing
+
+Tests typically pass `Duration::ZERO` for `poll_timeout` to ensure immediate return behavior, which is correct for testing short-polling scenarios:
+
+```rust
+provider.fetch_orchestration_item(lock_timeout, Duration::ZERO).await
+```
+
+For long-polling validation tests, use non-zero timeouts:
+
+```rust
+provider.fetch_orchestration_item(lock_timeout, Duration::from_secs(1)).await
+```

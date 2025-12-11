@@ -421,20 +421,22 @@ let results = ctx.join(futs).await;  // Wait for all 3
 
 ```rust
 // End current execution, start fresh with new input
-fn continue_as_new(&self, input: impl Into<String>)
+// Returns a future that never resolves - use with `return` to terminate
+fn continue_as_new(&self, input: impl Into<String>) -> impl Future<Output = Result<String, String>>
 
 // Usage:
-async fn pagination(ctx: OrchestrationContext, cursor: String) -> Result<(), String> {
+async fn pagination(ctx: OrchestrationContext, cursor: String) -> Result<String, String> {
     let next_cursor = ctx.schedule_activity("ProcessPage", cursor).into_activity().await?;
     
     if next_cursor == "EOF" {
-        Ok(())
+        Ok("done".to_string())
     } else {
-        ctx.continue_as_new(next_cursor);  // Start new execution
-        Ok(())
+        return ctx.continue_as_new(next_cursor).await;  // Terminates execution
     }
 }
 ```
+
+**Important:** `continue_as_new()` returns a future that never resolves. You must `await` it and use `return` to ensure code after is unreachable. The compiler will warn about unreachable code if you forget `return`.
 
 Note: Each Continue As New starts a new execution with an empty history. The runtime stamps a fresh `OrchestrationStarted { event_id: 1 }` for the new execution; activities, timers, and external events always target the currently active execution only.
 
@@ -1203,10 +1205,8 @@ async fn eternal_monitor(ctx: OrchestrationContext, state_json: String) -> Resul
     // Wait before next check
     ctx.schedule_timer(std::time::Duration::from_millis(60_000)).into_timer().await;  // 1 minute
     
-    // Continue with updated state
-    ctx.continue_as_new(check_result);
-    
-    Ok(())  // This execution ends, new one begins
+    // Continue with updated state - await and return to terminate this execution
+    return ctx.continue_as_new(check_result).await;
 }
 ```
 
@@ -1439,8 +1439,7 @@ async fn eternal_poll(ctx: OrchestrationContext, task_id: String) -> Result<Stri
         Ok(status)
     } else {
         ctx.schedule_timer(std::time::Duration::from_millis(5000)).into_timer().await;
-        ctx.continue_as_new(task_id);  // Fresh history for next iteration
-        Ok(())
+        return ctx.continue_as_new(task_id).await;  // Fresh history for next iteration
     }
 }
 ```
@@ -1680,8 +1679,7 @@ async fn batch_processor(
     // Continue to next batch or complete
     if let Some(next_cursor) = batch.next_cursor {
         ctx.trace_info("More batches to process, continuing");
-        ctx.continue_as_new(next_cursor);  // Start fresh with new cursor
-        Ok(())
+        return ctx.continue_as_new(next_cursor).await;  // Start fresh with new cursor
     } else {
         ctx.trace_info("All batches processed");
         Ok(format!("Batch processing complete"))
@@ -2000,13 +1998,11 @@ async fn order_actor(ctx: OrchestrationContext, state_json: String) -> Result<()
             ctx.schedule_activity("ShipOrder", serde_json::to_string(&state)?).into_activity().await?;
             
             // Continue waiting for more commands
-            ctx.continue_as_new(serde_json::to_string(&state)?);
-            Ok(())
+            return ctx.continue_as_new(serde_json::to_string(&state)?).await;
         }
         _ => {
             // Unknown command, continue waiting
-            ctx.continue_as_new(state_json);
-            Ok(())
+            return ctx.continue_as_new(state_json).await;
         }
     }
 }
@@ -2044,8 +2040,7 @@ async fn good_loop(ctx: OrchestrationContext, state_json: String) -> Result<Stri
     state.offset += 100;
     
     if state.offset < state.total {
-        ctx.continue_as_new(serde_json::to_string(&state)?);  // Fresh history
-        Ok(())
+        return ctx.continue_as_new(serde_json::to_string(&state)?).await;  // Fresh history
     } else {
         Ok("All processed".to_string())
     }
@@ -2139,7 +2134,7 @@ let result = ctx.schedule_activity("Task", "input").into_activity().await?;
 | `schedule_orchestration(name, instance, input)` | `()` | Fire-and-forget |
 | `select2(a, b)` / `select(vec)` | `SelectFuture` | First to complete |
 | `join(vec)` | `JoinFuture` | Wait for all |
-| `continue_as_new(input)` | `()` | Reset history, keep running |
+| `continue_as_new(input)` | `impl Future` (never resolves) | Reset history, keep running |
 | `new_guid()` | `Future<String>` | Correlation IDs |
 | `utcnow_ms()` | `Future<u64>` | Timestamps |
 | `trace_info/warn/error(msg)` | `()` | Logging |

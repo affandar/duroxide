@@ -80,12 +80,20 @@ pub struct MyProvider {
 impl Provider for MyProvider {
     // === REQUIRED: Core Orchestration Methods ===
     
-    async fn fetch_orchestration_item(&self) -> Option<OrchestrationItem> {
+    async fn fetch_orchestration_item(
+        &self,
+        lock_timeout: Duration,
+        poll_timeout: Duration,
+    ) -> Result<Option<OrchestrationItem>, ProviderError> {
         // 1. Find next available message in orchestrator queue
         // 2. Lock ALL messages for that instance
         // 3. Load instance metadata (name, version, execution_id)
         // 4. Load history for current execution_id
         // 5. Return OrchestrationItem with unique lock_token
+        //
+        // poll_timeout: Maximum time to wait for work. Providers that support
+        // long polling MAY block up to this duration. Short-polling providers
+        // (like SQLite) should ignore this and return immediately.
         
         todo!("See detailed docs below")
     }
@@ -149,11 +157,19 @@ impl Provider for MyProvider {
         todo!()
     }
     
-    async fn fetch_work_item(&self, lock_timeout: Duration) -> Result<Option<(WorkItem, String)>, ProviderError> {
+    async fn fetch_work_item(
+        &self,
+        lock_timeout: Duration,
+        poll_timeout: Duration,
+    ) -> Result<Option<(WorkItem, String)>, ProviderError> {
         // Find next unlocked item
         // Lock it with unique token
         // Return Ok(Some((item, token))) if found, Ok(None) if empty, Err(ProviderError) on storage failure
         // Item stays in queue until acked
+        //
+        // poll_timeout: Maximum time to wait for work. Providers that support
+        // long polling MAY block up to this duration. Short-polling providers
+        // should ignore this and return immediately.
         
         todo!()
     }
@@ -944,8 +960,12 @@ INSERT INTO worker_queue (work_item, lock_token, locked_until)
 VALUES (work_json, NULL, NULL)
 ```
 
-**fetch_work_item(lock_timeout: Duration):**
+**fetch_work_item(lock_timeout: Duration, poll_timeout: Duration):**
 ```
+// poll_timeout: Maximum time to wait for work. 
+// Short-polling providers (like SQLite) ignore this and return immediately.
+// Long-polling providers MAY block up to this duration.
+
 BEGIN TRANSACTION
 
 row = SELECT id, work_item FROM worker_queue
