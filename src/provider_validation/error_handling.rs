@@ -30,12 +30,11 @@ pub async fn test_duplicate_event_id_rejection<F: ProviderFactory>(factory: &F) 
         .enqueue_for_orchestrator(start_item("instance-A"), None)
         .await
         .unwrap();
-    let item = provider
+    let (_item, lock_token, _attempt_count) = provider
         .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
         .await
         .unwrap()
         .unwrap();
-    let lock_token = item.lock_token.clone();
 
     // Ack with event_id=1
     provider
@@ -67,12 +66,11 @@ pub async fn test_duplicate_event_id_rejection<F: ProviderFactory>(factory: &F) 
         .enqueue_for_orchestrator(start_item("instance-A"), None)
         .await
         .unwrap();
-    let item2 = provider
+    let (_item2, lock_token2, _attempt_count2) = provider
         .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
         .await
         .unwrap()
         .unwrap();
-    let lock_token2 = item2.lock_token.clone();
 
     let result = provider
         .ack_orchestration_item(
@@ -145,12 +143,11 @@ pub async fn test_lock_expiration_during_ack<F: ProviderFactory>(factory: &F) {
         .enqueue_for_orchestrator(start_item("instance-A"), None)
         .await
         .unwrap();
-    let item = provider
+    let (_item, lock_token, _attempt_count) = provider
         .fetch_orchestration_item(lock_timeout, Duration::ZERO)
         .await
         .unwrap()
         .unwrap();
-    let lock_token = item.lock_token.clone();
 
     // Wait for lock to expire
     tokio::time::sleep(lock_timeout + Duration::from_millis(100)).await;

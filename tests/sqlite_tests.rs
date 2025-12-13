@@ -58,7 +58,7 @@ async fn test_sqlite_provider_basic() {
         .expect("Failed to enqueue work");
 
     // 2. Fetch orchestration item
-    let item = store
+    let (item, lock_token, _attempt_count) = store
         .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
         .await
         .expect("Should have work")
@@ -106,7 +106,7 @@ async fn test_sqlite_provider_basic() {
     };
 
     store
-        .ack_orchestration_item(&item.lock_token, 1, history_delta, vec![], vec![], metadata)
+        .ack_orchestration_item(&lock_token, 1, history_delta, vec![], vec![], metadata)
         .await
         .expect("Failed to ack orchestration item");
 
@@ -142,7 +142,7 @@ async fn test_execution_status_completed() {
         .unwrap();
 
     // Fetch and ack with completion
-    let item = store
+    let (_item, lock_token, _attempt_count) = store
         .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
         .await
         .unwrap()
@@ -156,7 +156,7 @@ async fn test_execution_status_completed() {
 
     store
         .ack_orchestration_item(
-            &item.lock_token,
+            &lock_token,
             execution_id,
             vec![Event::with_event_id(
                 1,
@@ -211,7 +211,7 @@ async fn test_execution_status_failed() {
         .unwrap();
 
     // Fetch and ack with failure
-    let item = store
+    let (_item, lock_token, _attempt_count) = store
         .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
         .await
         .unwrap()
@@ -225,7 +225,7 @@ async fn test_execution_status_failed() {
 
     store
         .ack_orchestration_item(
-            &item.lock_token,
+            &lock_token,
             execution_id,
             vec![Event::with_event_id(
                 1,
@@ -309,7 +309,7 @@ async fn test_sqlite_basic_persistence() {
         let store: Arc<dyn Provider> = Arc::new(store);
 
         // Dequeue and verify items
-        let (item1, token1) = store
+        let (item1, token1, _) = store
             .fetch_work_item(Duration::from_secs(30), Duration::ZERO)
             .await
             .expect("Fetch should succeed")
@@ -322,7 +322,7 @@ async fn test_sqlite_basic_persistence() {
             _ => panic!("Expected ActivityExecute"),
         }
 
-        let (item2, token2) = store
+        let (item2, token2, _) = store
             .fetch_work_item(Duration::from_secs(30), Duration::ZERO)
             .await
             .expect("Fetch should succeed")
@@ -427,14 +427,14 @@ async fn test_sqlite_file_concurrent_access() {
 
     // Fetch and ack all orchestration items to create instances
     let mut acked_count = 0;
-    while let Some(item) = store
+    while let Some((item, lock_token, _attempt_count)) = store
         .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
         .await
         .unwrap()
     {
         store
             .ack_orchestration_item(
-                &item.lock_token,
+                &lock_token,
                 item.execution_id,
                 vec![Event::with_event_id(
                     duroxide::INITIAL_EVENT_ID,
@@ -589,7 +589,7 @@ async fn test_sqlite_provider_transactional() {
         .await
         .expect("Failed to enqueue");
 
-    let item = store
+    let (_item, lock_token, _attempt_count) = store
         .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
         .await
         .expect("Should have work")
@@ -669,7 +669,7 @@ async fn test_sqlite_provider_transactional() {
     // All operations should be atomic
     store
         .ack_orchestration_item(
-            &item.lock_token,
+            &lock_token,
             1, // execution_id
             history_delta,
             worker_items,
@@ -685,7 +685,7 @@ async fn test_sqlite_provider_transactional() {
 
     // Verify all worker items enqueued
     let mut worker_count = 0;
-    while let Some((work_item, token)) = store
+    while let Some((work_item, token, _)) = store
         .fetch_work_item(Duration::from_secs(30), Duration::ZERO)
         .await
         .unwrap()
@@ -735,7 +735,7 @@ async fn test_sqlite_provider_timer_queue() {
         .await
         .expect("Failed to enqueue");
 
-    let item = store
+    let (_item, lock_token, _attempt_count) = store
         .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
         .await
         .expect("Should have work")
@@ -743,7 +743,7 @@ async fn test_sqlite_provider_timer_queue() {
 
     store
         .ack_orchestration_item(
-            &item.lock_token,
+            &lock_token,
             1, // execution_id
             vec![Event::with_event_id(
                 1,
@@ -789,7 +789,7 @@ async fn test_execution_status_running() {
     store.enqueue_for_orchestrator(start_work, None).await.unwrap();
 
     // Fetch and process
-    let item = store
+    let (_item, lock_token, _attempt_count) = store
         .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
         .await
         .unwrap()
@@ -824,7 +824,7 @@ async fn test_execution_status_running() {
 
     store
         .ack_orchestration_item(
-            &item.lock_token,
+            &lock_token,
             1,
             history_delta,
             vec![],
@@ -861,7 +861,7 @@ async fn test_execution_output_captured_on_continue_as_new() {
     store.enqueue_for_orchestrator(start_work, None).await.unwrap();
 
     // Fetch and process
-    let item = store
+    let (_item, lock_token, _attempt_count) = store
         .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
         .await
         .unwrap()
@@ -895,7 +895,7 @@ async fn test_execution_output_captured_on_continue_as_new() {
 
     store
         .ack_orchestration_item(
-            &item.lock_token,
+            &lock_token,
             1,
             history_delta,
             vec![],

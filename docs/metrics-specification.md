@@ -1,7 +1,7 @@
 # Duroxide Metrics Specification
 
-**Version:** 1.0  
-**Last Updated:** 2025-11-22  
+**Version:** 1.1  
+**Last Updated:** 2025-12-13  
 **Status:** Current Implementation
 
 This document provides a complete reference of all metrics emitted by duroxide, organized by functional area with detailed label specifications and bucket configurations.
@@ -30,6 +30,9 @@ This document provides a complete reference of all metrics emitted by duroxide, 
 | `duroxide_activity_duration_seconds` | Histogram | Activity | `activity_name`, `outcome` | ✅ `test_activity_duration_tracking` | ✅ Code Review | Buckets: 0.01-300s |
 | `duroxide_activity_infrastructure_errors_total` | Counter | Activity | `activity_name` | ✅ `metrics_capture_activity_and_orchestration_outcomes` | ✅ Code Review | Infra-specific errors |
 | `duroxide_activity_configuration_errors_total` | Counter | Activity | `activity_name` | ✅ `test_error_classification_metrics` | ✅ Code Review | Config-specific errors |
+| **Poison Message** |
+| `duroxide_orchestration_poison_total` | Counter | Poison | _(none)_ | ✅ `test_poison_message_metrics` | ✅ Code Review | Orchestrations exceeding max_attempts |
+| `duroxide_activity_poison_total` | Counter | Poison | _(none)_ | ✅ `test_poison_message_metrics` | ✅ Code Review | Activities exceeding max_attempts |
 | **Sub-Orchestration** |
 | `duroxide_suborchestration_calls_total` | Counter | Sub-Orchestration | `parent_orchestration`, `child_orchestration`, `outcome` | ✅ `test_sub_orchestration_metrics` | ❌ Not Called | Method defined in `observability.rs:701` but never called from runtime |
 | `duroxide_suborchestration_duration_seconds` | Histogram | Sub-Orchestration | `parent_orchestration`, `child_orchestration`, `outcome` | ✅ `test_sub_orchestration_metrics` | ❌ Not Called | Method defined in `observability.rs:718` but never called from runtime |
@@ -238,6 +241,8 @@ sum(rate(duroxide_orchestration_turns_bucket{le="100"}[5m]))
 
 **Purpose:** Track infrastructure issues separately for alerting
 
+**Note:** **Poison messages** (messages that exceed `max_attempts` and cannot be processed) are counted in this metric. When an orchestration message is detected as poison, this counter is incremented. See [Poison Message Handling](#poison-message-handling) for details.
+
 ---
 
 ### 1.8 `duroxide_orchestration_configuration_errors_total` (Counter)
@@ -431,6 +436,8 @@ topk(5,
 - `activity_name` (string) - Activity name
 
 **Purpose:** Track infrastructure issues separately for alerting
+
+**Note:** **Poison messages** (activity messages that exceed `max_attempts`) are counted in this metric. When an activity message is detected as poison, this counter is incremented. See [Poison Message Handling](#poison-message-handling) for details.
 
 ---
 
@@ -830,6 +837,52 @@ This is currently **not implemented** due to complexity and external dependencie
 
 ---
 
+## Poison Message Handling
+
+Duroxide implements poison message detection to handle messages that repeatedly fail to process. When a message is fetched more than `max_attempts` times (default: 10), it is marked as **poison** and immediately failed without executing user code.
+
+### Dedicated Poison Metrics
+
+Poison messages have dedicated metrics for direct observability:
+
+| Metric Name | Type | Description |
+|-------------|------|-------------|
+| `duroxide_orchestration_poison_total` | Counter | Count of orchestration items that exceeded max_attempts |
+| `duroxide_activity_poison_total` | Counter | Count of activity items that exceeded max_attempts |
+
+### Error Details
+
+When a poison message is detected, an `ErrorDetails::Poison` error is created containing:
+- `attempt_count` - Number of times the message was fetched
+- `max_attempts` - Configured maximum attempts
+- `message_type` - Whether it was an orchestration or activity
+- `message` - Serialized message content for debugging
+
+### Example Queries
+
+```promql
+# Total poisoned orchestrations
+duroxide_orchestration_poison_total
+
+# Total poisoned activities
+duroxide_activity_poison_total
+
+# Poison rate over time
+rate(duroxide_orchestration_poison_total[5m])
+rate(duroxide_activity_poison_total[5m])
+```
+
+### Configuration
+
+```rust
+RuntimeOptions {
+    max_attempts: 10,  // Default: 10. Messages exceeding this are poisoned.
+    ..Default::default()
+}
+```
+
+---
+
 ## See Also
 
 - [Observability Guide](observability-guide.md) - User-facing observability documentation
@@ -839,5 +892,5 @@ This is currently **not implemented** due to complexity and external dependencie
 
 ---
 
-**Document Status:** This specification reflects the **current implementation** as of 2025-11-23. Client metrics are defined but not yet instrumented. All implemented metrics have test coverage in `tests/observability_tests.rs`.
+**Document Status:** This specification reflects the **current implementation** as of 2025-12-13. Client metrics are defined but not yet instrumented. All implemented metrics have test coverage in `tests/observability_tests.rs`. Poison message handling was added in v1.1.
 

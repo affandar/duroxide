@@ -194,6 +194,9 @@ pub async fn run_stress_test(
                         crate::ErrorDetails::Application { .. } => {
                             *failed_application_clone.lock().await += 1;
                         }
+                        crate::ErrorDetails::Poison { .. } => {
+                            *failed_infrastructure_clone.lock().await += 1;
+                        }
                     }
                 }
                 Err(e) => {

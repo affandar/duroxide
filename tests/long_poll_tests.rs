@@ -51,7 +51,7 @@ impl Provider for LongPollingSqliteProvider {
         &self,
         lock_timeout: Duration,
         poll_timeout: Duration,
-    ) -> Result<Option<OrchestrationItem>, ProviderError> {
+    ) -> Result<Option<(OrchestrationItem, String, u32)>, ProviderError> {
         self.poll_until(poll_timeout, || {
             self.inner.fetch_orchestration_item(lock_timeout, Duration::ZERO)
         })
@@ -62,7 +62,7 @@ impl Provider for LongPollingSqliteProvider {
         &self,
         lock_timeout: Duration,
         poll_timeout: Duration,
-    ) -> Result<Option<(WorkItem, String)>, ProviderError> {
+    ) -> Result<Option<(WorkItem, String, u32)>, ProviderError> {
         self.poll_until(poll_timeout, || {
             self.inner.fetch_work_item(lock_timeout, Duration::ZERO)
         })

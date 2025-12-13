@@ -1,0 +1,320 @@
+//! Poison Message Detection Validation Tests
+//!
+//! These tests validate that providers correctly track attempt counts
+//! for poison message detection.
+
+use std::time::Duration;
+
+use crate::INITIAL_EXECUTION_ID;
+use crate::providers::WorkItem;
+
+use super::{ExecutionMetadata, ProviderFactory};
+
+/// Test that orchestration item attempt_count is 1 on first fetch
+pub async fn orchestration_attempt_count_starts_at_one(factory: &dyn ProviderFactory) {
+    let provider = factory.create_provider().await;
+    let lock_timeout = factory.lock_timeout();
+
+    // Enqueue a start orchestration
+    provider
+        .enqueue_for_orchestrator(
+            WorkItem::StartOrchestration {
+                instance: "poison-test-1".to_string(),
+                orchestration: "TestOrch".to_string(),
+                input: "{}".to_string(),
+                version: Some("1.0.0".to_string()),
+                parent_instance: None,
+                parent_id: None,
+                execution_id: INITIAL_EXECUTION_ID,
+            },
+            None,
+        )
+        .await
+        .expect("enqueue should succeed");
+
+    // Fetch the item
+    let (_item, lock_token, attempt_count) = provider
+        .fetch_orchestration_item(lock_timeout, Duration::ZERO)
+        .await
+        .expect("fetch should succeed")
+        .expect("item should be present");
+
+    // First fetch should have attempt_count = 1
+    assert_eq!(attempt_count, 1, "First fetch should have attempt_count = 1");
+
+    // Ack the item
+    provider
+        .ack_orchestration_item(
+            &lock_token,
+            INITIAL_EXECUTION_ID,
+            vec![],
+            vec![],
+            vec![],
+            ExecutionMetadata::default(),
+        )
+        .await
+        .expect("ack should succeed");
+
+    tracing::info!("✓ Test passed: orchestration attempt_count starts at 1");
+}
+
+/// Test that orchestration attempt_count increments on each fetch after abandon
+pub async fn orchestration_attempt_count_increments_on_refetch(factory: &dyn ProviderFactory) {
+    let provider = factory.create_provider().await;
+    let lock_timeout = factory.lock_timeout();
+
+    // Enqueue a start orchestration
+    provider
+        .enqueue_for_orchestrator(
+            WorkItem::StartOrchestration {
+                instance: "poison-test-2".to_string(),
+                orchestration: "TestOrch".to_string(),
+                input: "{}".to_string(),
+                version: Some("1.0.0".to_string()),
+                parent_instance: None,
+                parent_id: None,
+                execution_id: INITIAL_EXECUTION_ID,
+            },
+            None,
+        )
+        .await
+        .expect("enqueue should succeed");
+
+    // First fetch - attempt_count = 1
+    let (_item1, lock_token1, attempt_count1) = provider
+        .fetch_orchestration_item(lock_timeout, Duration::ZERO)
+        .await
+        .expect("fetch should succeed")
+        .expect("item should be present");
+    assert_eq!(attempt_count1, 1, "First fetch should have attempt_count = 1");
+
+    // Abandon the item
+    provider
+        .abandon_orchestration_item(&lock_token1, None)
+        .await
+        .expect("abandon should succeed");
+
+    // Second fetch - attempt_count = 2
+    let (_item2, lock_token2, attempt_count2) = provider
+        .fetch_orchestration_item(lock_timeout, Duration::ZERO)
+        .await
+        .expect("fetch should succeed")
+        .expect("item should be present");
+    assert_eq!(attempt_count2, 2, "Second fetch should have attempt_count = 2");
+
+    // Abandon again
+    provider
+        .abandon_orchestration_item(&lock_token2, None)
+        .await
+        .expect("abandon should succeed");
+
+    // Third fetch - attempt_count = 3
+    let (_item3, lock_token3, attempt_count3) = provider
+        .fetch_orchestration_item(lock_timeout, Duration::ZERO)
+        .await
+        .expect("fetch should succeed")
+        .expect("item should be present");
+    assert_eq!(attempt_count3, 3, "Third fetch should have attempt_count = 3");
+
+    // Clean up
+    provider
+        .ack_orchestration_item(
+            &lock_token3,
+            INITIAL_EXECUTION_ID,
+            vec![],
+            vec![],
+            vec![],
+            ExecutionMetadata::default(),
+        )
+        .await
+        .expect("ack should succeed");
+
+    tracing::info!("✓ Test passed: orchestration attempt_count increments on refetch");
+}
+
+/// Test that worker item attempt_count is 1 on first fetch
+pub async fn worker_attempt_count_starts_at_one(factory: &dyn ProviderFactory) {
+    let provider = factory.create_provider().await;
+    let lock_timeout = factory.lock_timeout();
+
+    // Enqueue a worker item
+    provider
+        .enqueue_for_worker(WorkItem::ActivityExecute {
+            instance: "poison-test-3".to_string(),
+            execution_id: INITIAL_EXECUTION_ID,
+            id: 1,
+            name: "TestActivity".to_string(),
+            input: "{}".to_string(),
+        })
+        .await
+        .expect("enqueue should succeed");
+
+    // Fetch the item
+    let (item, token, attempt_count) = provider
+        .fetch_work_item(lock_timeout, Duration::ZERO)
+        .await
+        .expect("fetch should succeed")
+        .expect("item should be present");
+
+    // First fetch should have attempt_count = 1
+    assert_eq!(attempt_count, 1, "First fetch should have attempt_count = 1");
+
+    // Ack the item
+    provider
+        .ack_work_item(
+            &token,
+            WorkItem::ActivityCompleted {
+                instance: "poison-test-3".to_string(),
+                execution_id: INITIAL_EXECUTION_ID,
+                id: 1,
+                result: "done".to_string(),
+            },
+        )
+        .await
+        .expect("ack should succeed");
+
+    assert!(matches!(item, WorkItem::ActivityExecute { .. }));
+
+    tracing::info!("✓ Test passed: worker attempt_count starts at 1");
+}
+
+/// Test that worker attempt_count increments when lock expires and item is refetched
+pub async fn worker_attempt_count_increments_on_lock_expiry(factory: &dyn ProviderFactory) {
+    let provider = factory.create_provider().await;
+    let short_timeout = Duration::from_secs(1);
+
+    // Enqueue a worker item
+    provider
+        .enqueue_for_worker(WorkItem::ActivityExecute {
+            instance: "poison-test-4".to_string(),
+            execution_id: INITIAL_EXECUTION_ID,
+            id: 1,
+            name: "TestActivity".to_string(),
+            input: "{}".to_string(),
+        })
+        .await
+        .expect("enqueue should succeed");
+
+    // First fetch with short lock timeout - attempt_count = 1
+    let (_item1, _token1, attempt_count1) = provider
+        .fetch_work_item(short_timeout, Duration::ZERO)
+        .await
+        .expect("fetch should succeed")
+        .expect("item should be present");
+    assert_eq!(attempt_count1, 1, "First fetch should have attempt_count = 1");
+
+    // Wait for lock to expire
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+
+    // Second fetch after lock expiry - attempt_count = 2
+    let (_item2, token2, attempt_count2) = provider
+        .fetch_work_item(short_timeout, Duration::ZERO)
+        .await
+        .expect("fetch should succeed")
+        .expect("item should be present after lock expiry");
+    assert_eq!(
+        attempt_count2, 2,
+        "Second fetch after lock expiry should have attempt_count = 2"
+    );
+
+    // Clean up
+    provider
+        .ack_work_item(
+            &token2,
+            WorkItem::ActivityCompleted {
+                instance: "poison-test-4".to_string(),
+                execution_id: INITIAL_EXECUTION_ID,
+                id: 1,
+                result: "done".to_string(),
+            },
+        )
+        .await
+        .expect("ack should succeed");
+
+    tracing::info!("✓ Test passed: worker attempt_count increments on lock expiry");
+}
+
+/// Test that attempt_count is tracked per message, not globally
+pub async fn attempt_count_is_per_message(factory: &dyn ProviderFactory) {
+    let provider = factory.create_provider().await;
+    let lock_timeout = factory.lock_timeout();
+
+    // Enqueue two different worker items
+    provider
+        .enqueue_for_worker(WorkItem::ActivityExecute {
+            instance: "poison-test-5a".to_string(),
+            execution_id: INITIAL_EXECUTION_ID,
+            id: 1,
+            name: "Activity1".to_string(),
+            input: "{}".to_string(),
+        })
+        .await
+        .expect("enqueue should succeed");
+
+    provider
+        .enqueue_for_worker(WorkItem::ActivityExecute {
+            instance: "poison-test-5b".to_string(),
+            execution_id: INITIAL_EXECUTION_ID,
+            id: 2,
+            name: "Activity2".to_string(),
+            input: "{}".to_string(),
+        })
+        .await
+        .expect("enqueue should succeed");
+
+    // Fetch first item
+    let (item1, token1, attempt1) = provider
+        .fetch_work_item(lock_timeout, Duration::ZERO)
+        .await
+        .expect("fetch should succeed")
+        .expect("item should be present");
+    assert_eq!(attempt1, 1, "First item first fetch should have attempt_count = 1");
+
+    // Fetch second item
+    let (item2, token2, attempt2) = provider
+        .fetch_work_item(lock_timeout, Duration::ZERO)
+        .await
+        .expect("fetch should succeed")
+        .expect("item should be present");
+    assert_eq!(attempt2, 1, "Second item first fetch should have attempt_count = 1");
+
+    // Both items should have independent attempt counts
+    let id1 = match &item1 {
+        WorkItem::ActivityExecute { id, .. } => *id,
+        _ => panic!("Expected ActivityExecute"),
+    };
+    let id2 = match &item2 {
+        WorkItem::ActivityExecute { id, .. } => *id,
+        _ => panic!("Expected ActivityExecute"),
+    };
+    assert_ne!(id1, id2, "Should be different items");
+
+    // Clean up
+    provider
+        .ack_work_item(
+            &token1,
+            WorkItem::ActivityCompleted {
+                instance: "poison-test-5a".to_string(),
+                execution_id: INITIAL_EXECUTION_ID,
+                id: id1,
+                result: "done".to_string(),
+            },
+        )
+        .await
+        .expect("ack should succeed");
+
+    provider
+        .ack_work_item(
+            &token2,
+            WorkItem::ActivityCompleted {
+                instance: "poison-test-5b".to_string(),
+                execution_id: INITIAL_EXECUTION_ID,
+                id: id2,
+                result: "done".to_string(),
+            },
+        )
+        .await
+        .expect("ack should succeed");
+
+    tracing::info!("✓ Test passed: attempt_count is tracked per message");
+}

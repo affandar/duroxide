@@ -102,6 +102,14 @@ pub struct RuntimeOptions {
     /// Requires the `observability` feature flag for full functionality.
     /// Default: Disabled with basic logging
     pub observability: ObservabilityConfig,
+
+    /// Maximum fetch attempts before a message is considered poison.
+    ///
+    /// After this many fetch attempts, the runtime will immediately fail
+    /// the orchestration/activity with a Poison error instead of processing.
+    ///
+    /// Default: 10
+    pub max_attempts: u32,
 }
 
 impl Default for RuntimeOptions {
@@ -115,6 +123,7 @@ impl Default for RuntimeOptions {
             worker_lock_timeout: Duration::from_secs(30),
             worker_lock_renewal_buffer: Duration::from_secs(5),
             observability: ObservabilityConfig::default(),
+            max_attempts: 10,
         }
     }
 }
@@ -372,6 +381,20 @@ impl Runtime {
     fn record_activity_infra_error(&self) {
         if let Some(handle) = &self.observability_handle {
             handle.record_activity_infra_error();
+        }
+    }
+
+    #[inline]
+    fn record_orchestration_poison(&self) {
+        if let Some(handle) = &self.observability_handle {
+            handle.record_orchestration_poison();
+        }
+    }
+
+    #[inline]
+    fn record_activity_poison(&self) {
+        if let Some(handle) = &self.observability_handle {
+            handle.record_activity_poison();
         }
     }
 

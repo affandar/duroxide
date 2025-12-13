@@ -54,8 +54,12 @@ impl Runtime {
                             .await;
 
                         match fetch_result {
-                            Ok(Some((item, token))) => {
+                            Ok(Some((item, token, attempt_count))) => {
                                 work_found = true;
+
+                                // Serialize item before destructuring for potential poison message
+                                let item_serialized = serde_json::to_string(&item).unwrap_or_default();
+
                                 match item {
                                     WorkItem::ActivityExecute {
                                         instance,
@@ -64,6 +68,46 @@ impl Runtime {
                                         name,
                                         input,
                                     } => {
+                                        // Check for poison message - message has been fetched too many times
+                                        if attempt_count > rt.options.max_attempts {
+                                            warn!(
+                                                instance = %instance,
+                                                activity_name = %name,
+                                                activity_id = id,
+                                                attempt_count = attempt_count,
+                                                max_attempts = rt.options.max_attempts,
+                                                "Activity message exceeded max attempts, marking as poison"
+                                            );
+
+                                            let error = crate::ErrorDetails::Poison {
+                                                attempt_count,
+                                                max_attempts: rt.options.max_attempts,
+                                                message_type: crate::PoisonMessageType::Activity {
+                                                    instance: instance.clone(),
+                                                    execution_id,
+                                                    activity_name: name.clone(),
+                                                    activity_id: id,
+                                                },
+                                                message: item_serialized,
+                                            };
+
+                                            // Ack with failure
+                                            let _ = rt
+                                                .history_store
+                                                .ack_work_item(
+                                                    &token,
+                                                    WorkItem::ActivityFailed {
+                                                        instance,
+                                                        execution_id,
+                                                        id,
+                                                        details: error,
+                                                    },
+                                                )
+                                                .await;
+
+                                            rt.record_activity_poison();
+                                            continue;
+                                        }
                                         // Spawn lock renewal task for this activity
                                         let renewal_handle = spawn_lock_renewal_task(
                                             Arc::clone(&rt.history_store),

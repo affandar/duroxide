@@ -532,6 +532,39 @@ pub enum ErrorDetails {
         message: String,
         retryable: bool,
     },
+
+    /// Poison message error - message exceeded max fetch attempts.
+    ///
+    /// This indicates a message that repeatedly fails to process.
+    /// Could be caused by:
+    /// - Malformed message data causing deserialization failures
+    /// - Message triggering bugs that crash the worker
+    /// - Transient infrastructure issues that became permanent
+    /// - Application code bugs triggered by specific input patterns
+    Poison {
+        /// Number of times the message was fetched
+        attempt_count: u32,
+        /// Maximum allowed attempts
+        max_attempts: u32,
+        /// Message type and identity
+        message_type: PoisonMessageType,
+        /// The poisoned message content (serialized JSON for debugging)
+        message: String,
+    },
+}
+
+/// Poison message type identification.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum PoisonMessageType {
+    /// Orchestration work item batch
+    Orchestration { instance: String, execution_id: u64 },
+    /// Activity execution
+    Activity {
+        instance: String,
+        execution_id: u64,
+        activity_name: String,
+        activity_id: u64,
+    },
 }
 
 /// Configuration error kinds.
@@ -558,6 +591,7 @@ impl ErrorDetails {
             ErrorDetails::Infrastructure { .. } => "infrastructure",
             ErrorDetails::Configuration { .. } => "configuration",
             ErrorDetails::Application { .. } => "application",
+            ErrorDetails::Poison { .. } => "poison",
         }
     }
 
@@ -567,6 +601,7 @@ impl ErrorDetails {
             ErrorDetails::Infrastructure { retryable, .. } => *retryable,
             ErrorDetails::Application { retryable, .. } => *retryable,
             ErrorDetails::Configuration { .. } => false,
+            ErrorDetails::Poison { .. } => false, // Never retryable
         }
     }
 
@@ -594,6 +629,29 @@ impl ErrorDetails {
             ErrorDetails::Application { kind, message, .. } => match kind {
                 AppErrorKind::Cancelled { reason } => format!("canceled: {reason}"),
                 _ => message.clone(),
+            },
+            ErrorDetails::Poison {
+                attempt_count,
+                max_attempts,
+                message_type,
+                ..
+            } => match message_type {
+                PoisonMessageType::Orchestration { instance, .. } => {
+                    format!(
+                        "poison: orchestration {} exceeded {} attempts (max {})",
+                        instance, attempt_count, max_attempts
+                    )
+                }
+                PoisonMessageType::Activity {
+                    activity_name,
+                    activity_id,
+                    ..
+                } => {
+                    format!(
+                        "poison: activity {}#{} exceeded {} attempts (max {})",
+                        activity_name, activity_id, attempt_count, max_attempts
+                    )
+                }
             },
         }
     }

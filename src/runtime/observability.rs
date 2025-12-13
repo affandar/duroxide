@@ -111,10 +111,12 @@ pub struct MetricsSnapshot {
     pub orch_application_errors: u64,
     pub orch_infrastructure_errors: u64,
     pub orch_configuration_errors: u64,
+    pub orch_poison: u64,
     pub activity_success: u64,
     pub activity_app_errors: u64,
     pub activity_infra_errors: u64,
     pub activity_config_errors: u64,
+    pub activity_poison: u64,
 }
 
 #[cfg(feature = "observability")]
@@ -177,10 +179,12 @@ mod otel_impl {
         orch_application_errors_atomic: AtomicU64,
         orch_infrastructure_errors_atomic: AtomicU64,
         orch_configuration_errors_atomic: AtomicU64,
+        orch_poison_atomic: AtomicU64,
         activity_success_atomic: AtomicU64,
         activity_app_errors_atomic: AtomicU64,
         activity_infra_errors_atomic: AtomicU64,
         activity_config_errors_atomic: AtomicU64,
+        activity_poison_atomic: AtomicU64,
 
         // Queue depth tracking (updated by background task)
         orch_queue_depth_atomic: Arc<AtomicU64>,
@@ -442,10 +446,12 @@ mod otel_impl {
                 orch_application_errors_atomic: AtomicU64::new(0),
                 orch_infrastructure_errors_atomic: AtomicU64::new(0),
                 orch_configuration_errors_atomic: AtomicU64::new(0),
+                orch_poison_atomic: AtomicU64::new(0),
                 activity_success_atomic: AtomicU64::new(0),
                 activity_app_errors_atomic: AtomicU64::new(0),
                 activity_infra_errors_atomic: AtomicU64::new(0),
                 activity_config_errors_atomic: AtomicU64::new(0),
+                activity_poison_atomic: AtomicU64::new(0),
                 orch_queue_depth_atomic: orch_queue_atomic_clone,
                 worker_queue_depth_atomic: worker_queue_atomic_clone,
                 active_orchestrations_atomic: active_orch_atomic_clone,
@@ -677,6 +683,16 @@ mod otel_impl {
             self.activity_config_errors_atomic.fetch_add(1, Ordering::Relaxed);
         }
 
+        #[inline]
+        pub fn record_orchestration_poison(&self) {
+            self.orch_poison_atomic.fetch_add(1, Ordering::Relaxed);
+        }
+
+        #[inline]
+        pub fn record_activity_poison(&self) {
+            self.activity_poison_atomic.fetch_add(1, Ordering::Relaxed);
+        }
+
         // Sub-orchestration methods
         #[inline]
         pub fn record_suborchestration_call(
@@ -779,10 +795,12 @@ mod otel_impl {
                 orch_application_errors: self.orch_application_errors_atomic.load(Ordering::Relaxed),
                 orch_infrastructure_errors: self.orch_infrastructure_errors_atomic.load(Ordering::Relaxed),
                 orch_configuration_errors: self.orch_configuration_errors_atomic.load(Ordering::Relaxed),
+                orch_poison: self.orch_poison_atomic.load(Ordering::Relaxed),
                 activity_success: self.activity_success_atomic.load(Ordering::Relaxed),
                 activity_app_errors: self.activity_app_errors_atomic.load(Ordering::Relaxed),
                 activity_infra_errors: self.activity_infra_errors_atomic.load(Ordering::Relaxed),
                 activity_config_errors: self.activity_config_errors_atomic.load(Ordering::Relaxed),
+                activity_poison: self.activity_poison_atomic.load(Ordering::Relaxed),
             }
         }
     }
@@ -831,10 +849,12 @@ mod stub_impl {
         orch_application_errors_atomic: AtomicU64,
         orch_infrastructure_errors_atomic: AtomicU64,
         orch_configuration_errors_atomic: AtomicU64,
+        orch_poison_atomic: AtomicU64,
         activity_success_atomic: AtomicU64,
         activity_app_errors_atomic: AtomicU64,
         activity_infra_errors_atomic: AtomicU64,
         activity_config_errors_atomic: AtomicU64,
+        activity_poison_atomic: AtomicU64,
         orch_queue_depth_atomic: Arc<AtomicU64>,
         worker_queue_depth_atomic: Arc<AtomicU64>,
         active_orchestrations_atomic: Arc<std::sync::atomic::AtomicI64>,
@@ -848,10 +868,12 @@ mod stub_impl {
                 orch_application_errors_atomic: AtomicU64::new(0),
                 orch_infrastructure_errors_atomic: AtomicU64::new(0),
                 orch_configuration_errors_atomic: AtomicU64::new(0),
+                orch_poison_atomic: AtomicU64::new(0),
                 activity_success_atomic: AtomicU64::new(0),
                 activity_app_errors_atomic: AtomicU64::new(0),
                 activity_infra_errors_atomic: AtomicU64::new(0),
                 activity_config_errors_atomic: AtomicU64::new(0),
+                activity_poison_atomic: AtomicU64::new(0),
                 orch_queue_depth_atomic: Arc::new(AtomicU64::new(0)),
                 worker_queue_depth_atomic: Arc::new(AtomicU64::new(0)),
                 active_orchestrations_atomic: Arc::new(std::sync::atomic::AtomicI64::new(0)),
@@ -933,6 +955,16 @@ mod stub_impl {
         }
 
         #[inline]
+        pub fn record_orchestration_poison(&self) {
+            self.orch_poison_atomic.fetch_add(1, Ordering::Relaxed);
+        }
+
+        #[inline]
+        pub fn record_activity_poison(&self) {
+            self.activity_poison_atomic.fetch_add(1, Ordering::Relaxed);
+        }
+
+        #[inline]
         pub fn record_suborchestration_call(&self, _: &str, _: &str, _: &str) {}
 
         #[inline]
@@ -986,10 +1018,12 @@ mod stub_impl {
                 orch_application_errors: self.orch_application_errors_atomic.load(Ordering::Relaxed),
                 orch_infrastructure_errors: self.orch_infrastructure_errors_atomic.load(Ordering::Relaxed),
                 orch_configuration_errors: self.orch_configuration_errors_atomic.load(Ordering::Relaxed),
+                orch_poison: self.orch_poison_atomic.load(Ordering::Relaxed),
                 activity_success: self.activity_success_atomic.load(Ordering::Relaxed),
                 activity_app_errors: self.activity_app_errors_atomic.load(Ordering::Relaxed),
                 activity_infra_errors: self.activity_infra_errors_atomic.load(Ordering::Relaxed),
                 activity_config_errors: self.activity_config_errors_atomic.load(Ordering::Relaxed),
+                activity_poison: self.activity_poison_atomic.load(Ordering::Relaxed),
             }
         }
     }
@@ -1108,6 +1142,20 @@ impl ObservabilityHandle {
     pub fn record_activity_config_error(&self) {
         if let Some(provider) = &self.metrics_provider {
             provider.record_activity_config_error();
+        }
+    }
+
+    #[inline]
+    pub fn record_orchestration_poison(&self) {
+        if let Some(provider) = &self.metrics_provider {
+            provider.record_orchestration_poison();
+        }
+    }
+
+    #[inline]
+    pub fn record_activity_poison(&self) {
+        if let Some(provider) = &self.metrics_provider {
+            provider.record_activity_poison();
         }
     }
 

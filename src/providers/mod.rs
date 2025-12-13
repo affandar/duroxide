@@ -69,7 +69,6 @@ pub struct OrchestrationItem {
     pub version: String,
     pub history: Vec<Event>,
     pub messages: Vec<WorkItem>,
-    pub lock_token: String,
 }
 
 /// Execution metadata computed by the runtime to be persisted by the provider.
@@ -898,14 +897,23 @@ pub trait Provider: Any + Send + Sync {
     ///         ORDER BY event_id;
     ///     
     ///     commit_transaction();
-    ///     Some(OrchestrationItem { instance, orchestration_name, execution_id, version, history, messages, lock_token })
+    ///     Some((OrchestrationItem { instance, orchestration_name, execution_id, version, history, messages }, lock_token, attempt_count))
     /// }
     /// ```
+    ///
+    /// # Return Value
+    ///
+    /// * `Ok(Some((item, lock_token, attempt_count)))` - Orchestration item with lock token and attempt count
+    ///   - `item`: The orchestration item to process
+    ///   - `lock_token`: Unique token for ack/abandon operations
+    ///   - `attempt_count`: Number of times this item has been fetched (for poison detection)
+    /// * `Ok(None)` - No work available
+    /// * `Err(ProviderError)` - Database error
     async fn fetch_orchestration_item(
         &self,
         lock_timeout: Duration,
         poll_timeout: Duration,
-    ) -> Result<Option<OrchestrationItem>, ProviderError>;
+    ) -> Result<Option<(OrchestrationItem, String, u32)>, ProviderError>;
 
     /// Acknowledge successful orchestration processing atomically.
     ///
@@ -1356,7 +1364,10 @@ pub trait Provider: Any + Send + Sync {
     ///
     /// # Return Value
     ///
-    /// - `Ok(Some((WorkItem, String)))` - Item is locked and ready to process
+    /// - `Ok(Some((WorkItem, String, u32)))` - Item is locked and ready to process
+    ///   - WorkItem: The work item to process
+    ///   - String: Lock token for ack/abandon
+    ///   - u32: Attempt count (number of times this item has been fetched)
     /// - `Ok(None)` - No work available
     /// - `Err(ProviderError)` - Database error (allows runtime to distinguish empty queue from failures)
     ///
@@ -1367,7 +1378,7 @@ pub trait Provider: Any + Send + Sync {
         &self,
         lock_timeout: Duration,
         poll_timeout: Duration,
-    ) -> Result<Option<(WorkItem, String)>, ProviderError>;
+    ) -> Result<Option<(WorkItem, String, u32)>, ProviderError>;
 
     /// Acknowledge successful processing of a work item.
     ///

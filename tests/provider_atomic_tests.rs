@@ -55,7 +55,7 @@ async fn test_ignore_work_after_terminal_event() {
         .unwrap();
 
     // Fetch orchestration item - runtime would bail and just ack
-    let item = store
+    let (item, lock_token, _attempt_count) = store
         .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
         .await
         .unwrap()
@@ -66,7 +66,7 @@ async fn test_ignore_work_after_terminal_event() {
     // Simulate runtime acking empty because it's terminal
     Provider::ack_orchestration_item(
         store.as_ref(),
-        &item.lock_token,
+        &lock_token,
         1,
         vec![],
         vec![],
@@ -119,7 +119,7 @@ async fn test_fetch_orchestration_item_new_instance() {
         .unwrap();
 
     // Fetch orchestration item
-    let item = store
+    let (item, _lock_token, _attempt_count) = store
         .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
         .await
         .unwrap()
@@ -190,7 +190,7 @@ async fn test_fetch_orchestration_item_existing_instance() {
         .unwrap();
 
     // Fetch orchestration item
-    let item = store
+    let (item, _lock_token, _attempt_count) = store
         .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
         .await
         .unwrap()
@@ -250,12 +250,11 @@ async fn test_ack_orchestration_item_atomic() {
         .unwrap();
 
     // Fetch and get lock token
-    let item = store
+    let (_item, lock_token, _attempt_count) = store
         .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
         .await
         .unwrap()
         .unwrap();
-    let lock_token = item.lock_token.clone();
 
     // Prepare updates
     let history_delta = vec![
@@ -312,7 +311,7 @@ async fn test_ack_orchestration_item_atomic() {
     assert!(matches!(&history[1].kind, EventKind::ActivityScheduled { .. }));
 
     // Verify worker item was enqueued
-    let (worker_item, _) = store
+    let (worker_item, _, _) = store
         .fetch_work_item(Duration::from_secs(30), Duration::ZERO)
         .await
         .unwrap()
@@ -372,18 +371,17 @@ async fn test_abandon_orchestration_item() {
         .unwrap();
 
     // Fetch and get lock token
-    let item = store
+    let (_item, lock_token, _attempt_count) = store
         .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
         .await
         .unwrap()
         .unwrap();
-    let lock_token = item.lock_token.clone();
 
     // Abandon the item
     store.abandon_orchestration_item(&lock_token, None).await.unwrap();
 
     // Verify item is back in queue
-    let item2 = store
+    let (item2, _lock_token2, _attempt_count2) = store
         .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
         .await
         .unwrap()
@@ -422,12 +420,11 @@ async fn test_abandon_orchestration_item_with_delay() {
 
     // Fetch and get lock token
     let lock_timeout = Duration::from_secs(30);
-    let item = store
+    let (_item, lock_token, _attempt_count) = store
         .fetch_orchestration_item(lock_timeout, Duration::ZERO)
         .await
         .unwrap()
         .unwrap();
-    let lock_token = item.lock_token.clone();
 
     // Abandon with delay (sqlite supports delayed visibility)
     store
@@ -444,7 +441,7 @@ async fn test_abandon_orchestration_item_with_delay() {
     );
     // After delay, it should be visible
     tokio::time::sleep(std::time::Duration::from_millis(600)).await;
-    let item2 = store
+    let (item2, _lock_token2, _attempt_count2) = store
         .fetch_orchestration_item(lock_timeout, Duration::ZERO)
         .await
         .unwrap()
@@ -489,14 +486,13 @@ async fn test_in_memory_provider_atomic_operations() {
         .unwrap();
 
     // Test fetch
-    let item = store
+    let (item, lock_token, _attempt_count) = store
         .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
         .await
         .unwrap()
         .unwrap();
     assert_eq!(item.instance, "test-instance");
     assert_eq!(item.orchestration_name, "TestOrch");
-    let lock_token = item.lock_token.clone();
 
     // Test ack with updates
     let history_delta = vec![Event::with_event_id(
@@ -544,17 +540,16 @@ async fn test_in_memory_provider_atomic_operations() {
         .await
         .unwrap();
 
-    let item2 = store
+    let (_item2, lock_token2, _attempt_count2) = store
         .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
         .await
         .unwrap()
         .unwrap();
-    let lock_token2 = item2.lock_token.clone();
 
     store.abandon_orchestration_item(&lock_token2, None).await.unwrap();
 
     // Should be available again
-    let item3 = store
+    let (item3, _lock_token3, _attempt_count3) = store
         .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
         .await
         .unwrap()

@@ -213,6 +213,7 @@ impl Runtime {
                     crate::ErrorDetails::Application { .. } => self.record_orchestration_application_error(),
                     crate::ErrorDetails::Infrastructure { .. } => self.record_orchestration_infrastructure_error(),
                     crate::ErrorDetails::Configuration { .. } => self.record_orchestration_configuration_error(),
+                    crate::ErrorDetails::Poison { .. } => self.record_orchestration_poison(),
                 }
                 history_mgr.append_failed(details.clone());
 

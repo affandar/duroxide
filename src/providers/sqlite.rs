@@ -308,6 +308,7 @@ impl SqliteProvider {
                 visible_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 lock_token TEXT,
                 locked_until TIMESTAMP,
+                attempt_count INTEGER NOT NULL DEFAULT 0 CHECK(attempt_count >= 0),
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
             "#,
@@ -322,6 +323,7 @@ impl SqliteProvider {
                 work_item TEXT NOT NULL,
                 lock_token TEXT,
                 locked_until TIMESTAMP,
+                attempt_count INTEGER NOT NULL DEFAULT 0 CHECK(attempt_count >= 0),
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
             "#,
@@ -497,7 +499,7 @@ impl Provider for SqliteProvider {
         &self,
         lock_timeout: Duration,
         _poll_timeout: Duration,
-    ) -> Result<Option<OrchestrationItem>, ProviderError> {
+    ) -> Result<Option<(OrchestrationItem, String, u32)>, ProviderError> {
         let mut tx = self
             .pool
             .begin()
@@ -589,10 +591,11 @@ impl Provider for SqliteProvider {
         // This includes messages that were previously fetched but the lock expired (they still have old lock_token)
         // We update ALL visible messages for this instance, regardless of their current lock_token
         // This allows recovery of messages that were fetched but the lock expired without ack
+        // Also increment attempt_count for poison message detection
         let update_result = sqlx::query(
             r#"
             UPDATE orchestrator_queue
-            SET lock_token = ?1
+            SET lock_token = ?1, attempt_count = attempt_count + 1
             WHERE instance_id = ?2 AND visible_at <= ?3
             "#,
         )
@@ -605,7 +608,7 @@ impl Provider for SqliteProvider {
 
         let messages = sqlx::query(
             r#"
-            SELECT id, work_item
+            SELECT id, work_item, attempt_count
             FROM orchestrator_queue
             WHERE lock_token = ?1
             ORDER BY id
@@ -631,10 +634,15 @@ impl Provider for SqliteProvider {
             return Ok(None);
         }
 
-        // Deserialize work items
+        // Deserialize work items and track max attempt_count
+        let mut max_attempt_count: u32 = 0;
         let work_items: Vec<WorkItem> = messages
             .iter()
             .filter_map(|r| {
+                // Track the max attempt_count across all messages in the batch
+                if let Ok(attempt_count) = r.try_get::<i64, _>("attempt_count") {
+                    max_attempt_count = max_attempt_count.max(attempt_count as u32);
+                }
                 r.try_get::<String, _>("work_item")
                     .ok()
                     .and_then(|s| serde_json::from_str(&s).ok())
@@ -750,15 +758,18 @@ impl Provider for SqliteProvider {
             "Fetched orchestration item"
         );
 
-        Ok(Some(OrchestrationItem {
-            instance: instance_id,
-            orchestration_name,
-            execution_id: current_execution_id,
-            version: orchestration_version,
-            messages: work_items,
-            history,
+        Ok(Some((
+            OrchestrationItem {
+                instance: instance_id,
+                orchestration_name,
+                execution_id: current_execution_id,
+                version: orchestration_version,
+                messages: work_items,
+                history,
+            },
             lock_token,
-        }))
+            max_attempt_count,
+        )))
     }
 
     async fn ack_orchestration_item(
@@ -1126,7 +1137,7 @@ impl Provider for SqliteProvider {
         &self,
         lock_timeout: Duration,
         _poll_timeout: Duration,
-    ) -> Result<Option<(WorkItem, String)>, ProviderError> {
+    ) -> Result<Option<(WorkItem, String, u32)>, ProviderError> {
         let mut tx = self
             .pool
             .begin()
@@ -1145,7 +1156,7 @@ impl Provider for SqliteProvider {
         let now_ms = Self::now_millis();
         let next_item = sqlx::query(
             r#"
-            SELECT id, work_item FROM worker_queue
+            SELECT id, work_item, attempt_count FROM worker_queue
             WHERE lock_token IS NULL OR locked_until <= ?1
             ORDER BY id
             LIMIT 1
@@ -1171,12 +1182,15 @@ impl Provider for SqliteProvider {
         let work_item_str: String = next_item
             .try_get("work_item")
             .map_err(|e| ProviderError::permanent("fetch_work_item", format!("Failed to get work_item: {e}")))?;
+        let current_attempt_count: i64 = next_item
+            .try_get("attempt_count")
+            .map_err(|e| ProviderError::permanent("fetch_work_item", format!("Failed to get attempt_count: {e}")))?;
 
-        // Update with lock
+        // Update with lock and increment attempt_count for poison message detection
         sqlx::query(
             r#"
             UPDATE worker_queue
-            SET lock_token = ?1, locked_until = ?2
+            SET lock_token = ?1, locked_until = ?2, attempt_count = attempt_count + 1
             WHERE id = ?3
             "#,
         )
@@ -1187,6 +1201,9 @@ impl Provider for SqliteProvider {
         .await
         .map_err(|e| Self::sqlx_to_provider_error("fetch_work_item", e))?;
 
+        // The attempt_count after the UPDATE is current + 1
+        let attempt_count = (current_attempt_count + 1) as u32;
+
         let work_item: WorkItem = serde_json::from_str(&work_item_str)
             .map_err(|e| ProviderError::permanent("fetch_work_item", format!("Deserialization error: {e}")))?;
 
@@ -1194,7 +1211,7 @@ impl Provider for SqliteProvider {
             .await
             .map_err(|e| Self::sqlx_to_provider_error("fetch_work_item", e))?;
 
-        Ok(Some((work_item, lock_token)))
+        Ok(Some((work_item, lock_token, attempt_count)))
     }
 
     async fn ack_work_item(&self, token: &str, completion: WorkItem) -> Result<(), ProviderError> {
@@ -1678,14 +1695,14 @@ mod tests {
             )
             .await?;
 
-        let item = provider
+        let (_item, lock_token, _attempt_count) = provider
             .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
             .await?
             .ok_or_else(|| "Failed to fetch orchestration item".to_string())?;
 
         provider
             .ack_orchestration_item(
-                &item.lock_token,
+                &lock_token,
                 next_execution_id,
                 vec![Event::with_event_id(
                     crate::INITIAL_EVENT_ID,
@@ -1740,7 +1757,7 @@ mod tests {
             .expect("enqueue should succeed");
 
         // Fetch it
-        let orch_item = store
+        let (orch_item, lock_token, _attempt_count) = store
             .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
             .await
             .expect("fetch should succeed")
@@ -1766,7 +1783,7 @@ mod tests {
 
         store
             .ack_orchestration_item(
-                &orch_item.lock_token,
+                &lock_token,
                 1, // execution_id
                 history_delta,
                 vec![],
@@ -1808,7 +1825,7 @@ mod tests {
 
         store.enqueue_for_orchestrator(start, None).await.unwrap();
 
-        let orch_item = store
+        let (_orch_item, lock_token, _attempt_count) = store
             .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
             .await
             .unwrap()
@@ -1870,7 +1887,7 @@ mod tests {
 
         store
             .ack_orchestration_item(
-                &orch_item.lock_token,
+                &lock_token,
                 1, // execution_id
                 history_delta,
                 worker_items,
@@ -1885,12 +1902,12 @@ mod tests {
         assert_eq!(history.len(), 3); // Start + 2 schedules
 
         // Verify worker items enqueued
-        let (work1, token1) = store
+        let (work1, token1, _) = store
             .fetch_work_item(lock_timeout, Duration::ZERO)
             .await
             .unwrap()
             .unwrap();
-        let (work2, token2) = store
+        let (work2, token2, _) = store
             .fetch_work_item(lock_timeout, Duration::ZERO)
             .await
             .unwrap()
@@ -1955,12 +1972,11 @@ mod tests {
         store.enqueue_for_orchestrator(item, None).await.unwrap();
 
         // Fetch but don't ack (with short timeout)
-        let orch_item = store
+        let (_orch_item, lock_token, _attempt_count) = store
             .fetch_orchestration_item(short_lock_timeout, Duration::ZERO)
             .await
             .unwrap()
             .unwrap();
-        let lock_token = orch_item.lock_token.clone();
 
         // Should not be available immediately
         assert!(
@@ -1985,14 +2001,14 @@ mod tests {
             // For now, skip this test as it's not critical to the core functionality
             return;
         }
-        let redelivered = redelivered.unwrap();
-        assert_eq!(redelivered.instance, "test-lock");
-        assert_ne!(redelivered.lock_token, lock_token); // Different lock token
+        let (redelivered_item, redelivered_lock_token, _attempt_count) = redelivered.unwrap();
+        assert_eq!(redelivered_item.instance, "test-lock");
+        assert_ne!(redelivered_lock_token, lock_token); // Different lock token
 
         // Ack the redelivered item
         store
             .ack_orchestration_item(
-                &redelivered.lock_token,
+                &redelivered_lock_token,
                 1, // execution_id
                 vec![],
                 vec![],
@@ -2109,12 +2125,11 @@ mod tests {
         store.enqueue_for_orchestrator(item, None).await.unwrap();
 
         // Fetch and lock it
-        let orch_item = store
+        let (_orch_item, lock_token, _attempt_count) = store
             .fetch_orchestration_item(lock_timeout, Duration::ZERO)
             .await
             .unwrap()
             .unwrap();
-        let lock_token = orch_item.lock_token.clone();
 
         // Verify it's locked (can't fetch again)
         assert!(
@@ -2129,13 +2144,13 @@ mod tests {
         store.abandon_orchestration_item(&lock_token, None).await.unwrap();
 
         // Should be able to fetch again
-        let orch_item2 = store
+        let (orch_item2, lock_token2, _attempt_count2) = store
             .fetch_orchestration_item(lock_timeout, Duration::ZERO)
             .await
             .unwrap()
             .unwrap();
         assert_eq!(orch_item2.instance, "test-abandon");
-        assert_ne!(orch_item2.lock_token, lock_token); // Different lock token
+        assert_ne!(lock_token2, lock_token); // Different lock token
     }
 
     #[tokio::test]
@@ -2177,7 +2192,7 @@ mod tests {
         store.enqueue_for_worker(work_item.clone()).await.unwrap();
 
         // Dequeue it
-        let (dequeued, token) = store
+        let (dequeued, token, _) = store
             .fetch_work_item(lock_timeout, Duration::ZERO)
             .await
             .unwrap()
@@ -2252,7 +2267,7 @@ mod tests {
         tokio::time::sleep(std::time::Duration::from_millis(2100)).await;
 
         // Should be visible now
-        let item = store
+        let (item, lock_token, _attempt_count) = store
             .fetch_orchestration_item(lock_timeout, Duration::ZERO)
             .await
             .unwrap()
@@ -2262,7 +2277,7 @@ mod tests {
         // Ack it with proper metadata to create instance
         store
             .ack_orchestration_item(
-                &item.lock_token,
+                &lock_token,
                 1, // execution_id
                 vec![],
                 vec![],
@@ -2289,14 +2304,14 @@ mod tests {
         };
 
         store.enqueue_for_orchestrator(start_item, None).await.unwrap();
-        let orch_item = store
+        let (_orch_item, lock_token2, _attempt_count2) = store
             .fetch_orchestration_item(lock_timeout, Duration::ZERO)
             .await
             .unwrap()
             .unwrap();
         store
             .ack_orchestration_item(
-                &orch_item.lock_token,
+                &lock_token2,
                 1, // execution_id
                 vec![],
                 vec![],
@@ -2340,7 +2355,7 @@ mod tests {
         tokio::time::sleep(std::time::Duration::from_millis(2100)).await;
 
         // TimerFired should be visible now
-        let timer_item = store
+        let (timer_item, _lock_token, _attempt_count) = store
             .fetch_orchestration_item(lock_timeout, Duration::ZERO)
             .await
             .unwrap()
@@ -2369,12 +2384,11 @@ mod tests {
         store.enqueue_for_orchestrator(item, None).await.unwrap();
 
         // Fetch and lock it
-        let orch_item = store
+        let (_orch_item, lock_token, _attempt_count) = store
             .fetch_orchestration_item(lock_timeout, Duration::ZERO)
             .await
             .unwrap()
             .unwrap();
-        let lock_token = orch_item.lock_token.clone();
 
         // Abandon with 2 second delay
         store
@@ -2395,7 +2409,7 @@ mod tests {
         tokio::time::sleep(std::time::Duration::from_millis(2100)).await;
 
         // Should be visible again
-        let item2 = store
+        let (item2, _lock_token2, _attempt_count2) = store
             .fetch_orchestration_item(lock_timeout, Duration::ZERO)
             .await
             .unwrap()
@@ -2420,14 +2434,14 @@ mod tests {
             execution_id: 1,
         };
         store.enqueue_for_orchestrator(start_item, None).await.unwrap();
-        let orch_item = store
+        let (_orch_item, lock_token, _attempt_count) = store
             .fetch_orchestration_item(lock_timeout, Duration::ZERO)
             .await
             .unwrap()
             .unwrap();
         store
             .ack_orchestration_item(
-                &orch_item.lock_token,
+                &lock_token,
                 1,
                 vec![Event::with_event_id(
                     1,
@@ -2489,7 +2503,7 @@ mod tests {
         store.enqueue_for_orchestrator(past_timer, None).await.unwrap();
 
         // Should dequeue the past timer
-        let item = store
+        let (item, _lock_token2, _attempt_count2) = store
             .fetch_orchestration_item(lock_timeout, Duration::ZERO)
             .await
             .unwrap()

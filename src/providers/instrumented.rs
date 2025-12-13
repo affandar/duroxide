@@ -75,7 +75,7 @@ impl Provider for InstrumentedProvider {
         &self,
         lock_timeout: Duration,
         poll_timeout: Duration,
-    ) -> Result<Option<OrchestrationItem>, ProviderError> {
+    ) -> Result<Option<(OrchestrationItem, String, u32)>, ProviderError> {
         let start = std::time::Instant::now();
         let result = self.inner.fetch_orchestration_item(lock_timeout, poll_timeout).await;
         let duration = start.elapsed();
@@ -167,7 +167,7 @@ impl Provider for InstrumentedProvider {
         &self,
         lock_timeout: Duration,
         poll_timeout: Duration,
-    ) -> Result<Option<(WorkItem, String)>, ProviderError> {
+    ) -> Result<Option<(WorkItem, String, u32)>, ProviderError> {
         let start = std::time::Instant::now();
         let result = self.inner.fetch_work_item(lock_timeout, poll_timeout).await;
         let duration = start.elapsed();

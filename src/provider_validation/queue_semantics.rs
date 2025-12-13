@@ -25,7 +25,7 @@ pub async fn test_worker_queue_fifo_ordering<F: ProviderFactory>(factory: &F) {
 
     // Dequeue all 5 and verify order
     for i in 0..5 {
-        let (item, _token) = provider
+        let (item, _token, _) = provider
             .fetch_work_item(Duration::from_secs(30), Duration::ZERO)
             .await
             .unwrap()
@@ -69,7 +69,7 @@ pub async fn test_worker_peek_lock_semantics<F: ProviderFactory>(factory: &F) {
         .unwrap();
 
     // Dequeue (gets item + token)
-    let (item, token) = provider
+    let (item, token, _) = provider
         .fetch_work_item(Duration::from_secs(30), Duration::ZERO)
         .await
         .unwrap()
@@ -121,14 +121,14 @@ pub async fn test_worker_ack_atomicity<F: ProviderFactory>(factory: &F) {
         .enqueue_for_orchestrator(start_item("instance-A"), None)
         .await
         .unwrap();
-    let item = provider
+    let (_item, lock_token, _attempt_count) = provider
         .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
         .await
         .unwrap()
         .unwrap();
     provider
         .ack_orchestration_item(
-            &item.lock_token,
+            &lock_token,
             1,
             vec![Event::with_event_id(
                 1,
@@ -163,7 +163,7 @@ pub async fn test_worker_ack_atomicity<F: ProviderFactory>(factory: &F) {
         .unwrap();
 
     // Dequeue and get token
-    let (_item, token) = provider
+    let (_item, token, _) = provider
         .fetch_work_item(Duration::from_secs(30), Duration::ZERO)
         .await
         .unwrap()
@@ -194,7 +194,7 @@ pub async fn test_worker_ack_atomicity<F: ProviderFactory>(factory: &F) {
     );
 
     // 2. Orchestrator queue has completion item
-    let orchestration_item = provider
+    let (orchestration_item, _lock_token, _attempt_count) = provider
         .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
         .await
         .unwrap()
@@ -219,14 +219,14 @@ pub async fn test_timer_delayed_visibility<F: ProviderFactory>(factory: &F) {
         .enqueue_for_orchestrator(start_item("instance-A"), None)
         .await
         .unwrap();
-    let item = provider
+    let (_item, lock_token, _attempt_count) = provider
         .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
         .await
         .unwrap()
         .unwrap();
     provider
         .ack_orchestration_item(
-            &item.lock_token,
+            &lock_token,
             1,
             vec![Event::with_event_id(
                 1,
@@ -277,7 +277,7 @@ pub async fn test_timer_delayed_visibility<F: ProviderFactory>(factory: &F) {
     tokio::time::sleep(Duration::from_millis(5100)).await;
 
     // Fetch again → should return TimerFired when visible_at <= now
-    let item2 = provider
+    let (item2, _lock_token2, _attempt_count2) = provider
         .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
         .await
         .unwrap()
@@ -308,7 +308,7 @@ pub async fn test_lost_lock_token_handling<F: ProviderFactory>(factory: &F) {
         .unwrap();
 
     // Dequeue (gets token)
-    let (_item, _token) = provider
+    let (_item, _token, _) = provider
         .fetch_work_item(lock_timeout, Duration::ZERO)
         .await
         .unwrap()
@@ -330,7 +330,7 @@ pub async fn test_lost_lock_token_handling<F: ProviderFactory>(factory: &F) {
     tokio::time::sleep(lock_timeout + Duration::from_millis(100)).await;
 
     // Dequeue again → should succeed → item redelivered
-    let (item2, _token2) = provider
+    let (item2, _token2, _) = provider
         .fetch_work_item(lock_timeout, Duration::ZERO)
         .await
         .unwrap()

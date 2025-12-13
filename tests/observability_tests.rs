@@ -1,4 +1,6 @@
 //! Observability-focused tests covering tracing for activities and orchestrations.
+mod common;
+
 use duroxide::EventKind;
 
 use async_trait::async_trait;
@@ -129,7 +131,7 @@ impl Provider for FailingProvider {
         &self,
         _lock_timeout: Duration,
         poll_timeout: Duration,
-    ) -> Result<Option<OrchestrationItem>, ProviderError> {
+    ) -> Result<Option<(OrchestrationItem, String, u32)>, ProviderError> {
         if self.fail_next_fetch_orchestration_item.swap(false, Ordering::SeqCst) {
             // Simulate transient infrastructure failure (e.g., database connection issue)
             Err(ProviderError::retryable(
@@ -224,7 +226,7 @@ impl Provider for FailingProvider {
         &self,
         lock_timeout: Duration,
         poll_timeout: Duration,
-    ) -> Result<Option<(WorkItem, String)>, ProviderError> {
+    ) -> Result<Option<(WorkItem, String, u32)>, ProviderError> {
         self.inner.fetch_work_item(lock_timeout, poll_timeout).await
     }
 
@@ -612,7 +614,8 @@ async fn test_fetch_orchestration_item_fault_injection() {
     assert!(result.is_ok());
     let item = result.unwrap();
     assert!(item.is_some());
-    assert_eq!(item.unwrap().instance, "test-instance");
+    let (item, _lock_token, _attempt_count) = item.unwrap();
+    assert_eq!(item.instance, "test-instance");
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -1458,4 +1461,60 @@ async fn test_all_gauges_initialized_together() {
     // The gauges are exposed via OTel metrics and read through Prometheus scraping
 
     rt2.shutdown(None).await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn test_poison_message_metrics() {
+    use common::fault_injection::PoisonInjectingProvider;
+
+    let options = RuntimeOptions {
+        observability: metrics_observability_config("poison-metrics"),
+        max_attempts: 10,
+        ..Default::default()
+    };
+
+    let sqlite = Arc::new(SqliteProvider::new_in_memory().await.expect("Failed to create provider"));
+    let provider = Arc::new(PoisonInjectingProvider::new(sqlite));
+
+    let activities = ActivityRegistry::builder()
+        .register("TestActivity", |_ctx: ActivityContext, _input: String| async move {
+            Ok("done".to_string())
+        })
+        .build();
+
+    let orchestrations = OrchestrationRegistry::builder()
+        .register("OrchPoisonTest", |_ctx: OrchestrationContext, _input: String| async move {
+            panic!("Should not run - orchestration is poisoned");
+        })
+        .register(
+            "ActivityPoisonTest",
+            |ctx: OrchestrationContext, _input: String| async move {
+                ctx.schedule_activity("TestActivity", "{}").into_activity().await
+            },
+        )
+        .build();
+
+    // Inject poison for orchestration item (exceeds max_attempts of 10)
+    provider.inject_orchestration_poison(11);
+
+    let rt = runtime::Runtime::start_with_options(provider.clone(), Arc::new(activities), orchestrations, options).await;
+    let client = Client::new(provider.clone());
+
+    // Start orchestration that will be detected as poison
+    client.start_orchestration("orch-poison", "OrchPoisonTest", "").await.unwrap();
+    let result = client.wait_for_orchestration("orch-poison", Duration::from_secs(5)).await.unwrap();
+    assert!(matches!(result, OrchestrationStatus::Failed { .. }), "Should fail as poison");
+
+    // Start another orchestration where the activity will be poisoned
+    provider.inject_activity_poison_persistent(11);
+    client.start_orchestration("activity-poison", "ActivityPoisonTest", "").await.unwrap();
+    let result2 = client.wait_for_orchestration("activity-poison", Duration::from_secs(5)).await.unwrap();
+    assert!(matches!(result2, OrchestrationStatus::Failed { .. }), "Should fail from poisoned activity");
+
+    let snapshot = rt.metrics_snapshot().expect("metrics should be available");
+    rt.shutdown(None).await;
+
+    // Verify poison counters are incremented
+    assert!(snapshot.orch_poison >= 1, "should have orchestration poison: got {}", snapshot.orch_poison);
+    assert!(snapshot.activity_poison >= 1, "should have activity poison: got {}", snapshot.activity_poison);
 }

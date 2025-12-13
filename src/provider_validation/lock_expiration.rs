@@ -19,12 +19,11 @@ pub async fn test_lock_expires_after_timeout<F: ProviderFactory>(factory: &F) {
         .enqueue_for_orchestrator(start_item("instance-A"), None)
         .await
         .unwrap();
-    let item = provider
+    let (_item, lock_token, _attempt_count) = provider
         .fetch_orchestration_item(lock_timeout, Duration::ZERO)
         .await
         .unwrap()
         .unwrap();
-    let lock_token = item.lock_token.clone();
 
     // Verify lock is held
     assert!(
@@ -39,13 +38,13 @@ pub async fn test_lock_expires_after_timeout<F: ProviderFactory>(factory: &F) {
     tokio::time::sleep(lock_timeout + Duration::from_millis(100)).await;
 
     // Instance should be available again
-    let item2 = provider
+    let (item2, lock_token2, _attempt_count2) = provider
         .fetch_orchestration_item(lock_timeout, Duration::ZERO)
         .await
         .unwrap()
         .unwrap();
     assert_eq!(item2.instance, "instance-A");
-    assert_ne!(item2.lock_token, lock_token, "Should have new lock token");
+    assert_ne!(lock_token2, lock_token, "Should have new lock token");
 
     // Original lock token should no longer work
     let result = provider
@@ -67,12 +66,11 @@ pub async fn test_abandon_releases_lock_immediately<F: ProviderFactory>(factory:
         .enqueue_for_orchestrator(start_item("instance-A"), None)
         .await
         .unwrap();
-    let item = provider
+    let (_item, lock_token, _attempt_count) = provider
         .fetch_orchestration_item(lock_timeout, Duration::ZERO)
         .await
         .unwrap()
         .unwrap();
-    let lock_token = item.lock_token.clone();
 
     // Verify lock is held
     assert!(
@@ -87,7 +85,7 @@ pub async fn test_abandon_releases_lock_immediately<F: ProviderFactory>(factory:
     provider.abandon_orchestration_item(&lock_token, None).await.unwrap();
 
     // Lock should be released immediately (don't need to wait for expiration)
-    let item2 = provider
+    let (item2, _lock_token2, _attempt_count2) = provider
         .fetch_orchestration_item(lock_timeout, Duration::ZERO)
         .await
         .unwrap()
@@ -108,12 +106,11 @@ pub async fn test_lock_renewal_on_ack<F: ProviderFactory>(factory: &F) {
         .enqueue_for_orchestrator(start_item("instance-A"), None)
         .await
         .unwrap();
-    let item = provider
+    let (_item, _lock_token, _attempt_count) = provider
         .fetch_orchestration_item(lock_timeout, Duration::ZERO)
         .await
         .unwrap()
         .unwrap();
-    let _lock_token = item.lock_token.clone();
 
     // Verify lock is held
     assert!(
@@ -165,7 +162,7 @@ pub async fn test_lock_renewal_on_ack<F: ProviderFactory>(factory: &F) {
         .unwrap();
 
     // The new item should be available immediately after ack
-    let item2 = provider
+    let (item2, _lock_token2, _attempt_count2) = provider
         .fetch_orchestration_item(lock_timeout, Duration::ZERO)
         .await
         .unwrap()
@@ -186,12 +183,11 @@ pub async fn test_concurrent_lock_attempts_respect_expiration<F: ProviderFactory
         .enqueue_for_orchestrator(start_item("instance-A"), None)
         .await
         .unwrap();
-    let item = provider
+    let (_item, _lock_token, _attempt_count) = provider
         .fetch_orchestration_item(lock_timeout, Duration::ZERO)
         .await
         .unwrap()
         .unwrap();
-    let _lock_token = item.lock_token.clone();
 
     // Spawn multiple concurrent fetchers
     let handles: Vec<_> = (0..5)
@@ -222,7 +218,7 @@ pub async fn test_concurrent_lock_attempts_respect_expiration<F: ProviderFactory
     tokio::time::sleep(wait).await;
 
     // Now one should succeed
-    let item2 = provider
+    let (item2, _lock_token2, _attempt_count2) = provider
         .fetch_orchestration_item(lock_timeout, Duration::ZERO)
         .await
         .unwrap()
@@ -252,7 +248,7 @@ pub async fn test_worker_lock_renewal_success<F: ProviderFactory>(factory: &F) {
         .await
         .unwrap();
 
-    let (_item, token) = provider
+    let (_item, token, _) = provider
         .fetch_work_item(lock_timeout, Duration::ZERO)
         .await
         .unwrap()
@@ -322,7 +318,7 @@ pub async fn test_worker_lock_renewal_after_expiration<F: ProviderFactory>(facto
         .unwrap();
 
     let short_timeout = Duration::from_secs(1);
-    let (_item, token) = provider
+    let (_item, token, _) = provider
         .fetch_work_item(short_timeout, Duration::ZERO)
         .await
         .unwrap()
@@ -359,7 +355,7 @@ pub async fn test_worker_lock_renewal_extends_timeout<F: ProviderFactory>(factor
         .unwrap();
 
     let short_timeout = Duration::from_secs(1);
-    let (_item, token) = provider
+    let (_item, token, _) = provider
         .fetch_work_item(short_timeout, Duration::ZERO)
         .await
         .unwrap()
@@ -405,7 +401,7 @@ pub async fn test_worker_lock_renewal_after_ack<F: ProviderFactory>(factory: &F)
         .unwrap();
 
     let lock_timeout = factory.lock_timeout();
-    let (_item, token) = provider
+    let (_item, token, _) = provider
         .fetch_work_item(lock_timeout, Duration::ZERO)
         .await
         .unwrap()

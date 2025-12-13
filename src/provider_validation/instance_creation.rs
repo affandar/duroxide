@@ -16,7 +16,7 @@ pub async fn test_instance_creation_via_metadata<F: ProviderFactory>(factory: &F
         .unwrap();
 
     // Fetch work item - instance doesn't exist yet, should extract from work item
-    let item = provider
+    let (item, lock_token, _attempt_count) = provider
         .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
         .await
         .unwrap()
@@ -36,7 +36,7 @@ pub async fn test_instance_creation_via_metadata<F: ProviderFactory>(factory: &F
 
     provider
         .ack_orchestration_item(
-            &item.lock_token,
+            &lock_token,
             1,
             vec![Event::with_event_id(
                 1,
@@ -64,7 +64,7 @@ pub async fn test_instance_creation_via_metadata<F: ProviderFactory>(factory: &F
         .enqueue_for_orchestrator(start_item("instance-A"), None)
         .await
         .unwrap();
-    let item2 = provider
+    let (item2, lock_token2, _attempt_count2) = provider
         .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
         .await
         .unwrap()
@@ -77,14 +77,7 @@ pub async fn test_instance_creation_via_metadata<F: ProviderFactory>(factory: &F
 
     // Clean up
     provider
-        .ack_orchestration_item(
-            &item2.lock_token,
-            1,
-            vec![],
-            vec![],
-            vec![],
-            ExecutionMetadata::default(),
-        )
+        .ack_orchestration_item(&lock_token2, 1, vec![], vec![], vec![], ExecutionMetadata::default())
         .await
         .unwrap();
 
@@ -108,21 +101,21 @@ pub async fn test_no_instance_creation_on_enqueue<F: ProviderFactory>(factory: &
     // The key test is that fetch_orchestration_item works without instance existing
 
     // Fetch should work even though instance doesn't exist
-    let item = provider
+    let result = provider
         .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
         .await
         .unwrap();
     assert!(
-        item.is_some(),
+        result.is_some(),
         "Should be able to fetch work item even if instance doesn't exist"
     );
-    let item = item.unwrap();
+    let (item, lock_token, _attempt_count) = result.unwrap();
     assert_eq!(item.instance, "instance-B");
 
     // Clean up
     provider
         .ack_orchestration_item(
-            &item.lock_token,
+            &lock_token,
             1,
             vec![Event::with_event_id(
                 1,
@@ -171,7 +164,7 @@ pub async fn test_null_version_handling<F: ProviderFactory>(factory: &F) {
     provider.enqueue_for_orchestrator(start, None).await.unwrap();
 
     // Fetch work item - should handle None version
-    let item = provider
+    let (item, lock_token, _attempt_count) = provider
         .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
         .await
         .unwrap()
@@ -187,7 +180,7 @@ pub async fn test_null_version_handling<F: ProviderFactory>(factory: &F) {
 
     provider
         .ack_orchestration_item(
-            &item.lock_token,
+            &lock_token,
             1,
             vec![Event::with_event_id(
                 1,
@@ -214,7 +207,7 @@ pub async fn test_null_version_handling<F: ProviderFactory>(factory: &F) {
         .enqueue_for_orchestrator(start_item("instance-C"), None)
         .await
         .unwrap();
-    let item2 = provider
+    let (item2, lock_token2, _attempt_count2) = provider
         .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
         .await
         .unwrap()
@@ -223,14 +216,7 @@ pub async fn test_null_version_handling<F: ProviderFactory>(factory: &F) {
 
     // Clean up
     provider
-        .ack_orchestration_item(
-            &item2.lock_token,
-            1,
-            vec![],
-            vec![],
-            vec![],
-            ExecutionMetadata::default(),
-        )
+        .ack_orchestration_item(&lock_token2, 1, vec![], vec![], vec![], ExecutionMetadata::default())
         .await
         .unwrap();
 
@@ -248,14 +234,14 @@ pub async fn test_sub_orchestration_instance_creation<F: ProviderFactory>(factor
         .enqueue_for_orchestrator(start_item("parent-instance"), None)
         .await
         .unwrap();
-    let parent_item = provider
+    let (_parent_item, parent_lock_token, _attempt_count) = provider
         .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
         .await
         .unwrap()
         .unwrap();
     provider
         .ack_orchestration_item(
-            &parent_item.lock_token,
+            &parent_lock_token,
             1,
             vec![Event::with_event_id(
                 1,
@@ -291,7 +277,7 @@ pub async fn test_sub_orchestration_instance_creation<F: ProviderFactory>(factor
 
     // Child instance should NOT exist yet (not created on enqueue)
     // Fetch child work item - should work without instance existing
-    let child_item = provider
+    let (child_item, child_lock_token, _attempt_count) = provider
         .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
         .await
         .unwrap()
@@ -302,7 +288,7 @@ pub async fn test_sub_orchestration_instance_creation<F: ProviderFactory>(factor
     // Ack child with metadata - this should create child instance
     provider
         .ack_orchestration_item(
-            &child_item.lock_token,
+            &child_lock_token,
             1,
             vec![Event::with_event_id(
                 1,
@@ -344,7 +330,7 @@ pub async fn test_sub_orchestration_instance_creation<F: ProviderFactory>(factor
         )
         .await
         .unwrap();
-    let child_item2 = provider
+    let (child_item2, child_lock_token2, _attempt_count2) = provider
         .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
         .await
         .unwrap()
@@ -355,7 +341,7 @@ pub async fn test_sub_orchestration_instance_creation<F: ProviderFactory>(factor
     // Clean up
     provider
         .ack_orchestration_item(
-            &child_item2.lock_token,
+            &child_lock_token2,
             1,
             vec![],
             vec![],

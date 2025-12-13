@@ -15,12 +15,11 @@ pub async fn test_atomicity_failure_rollback<F: ProviderFactory>(factory: &F) {
         .enqueue_for_orchestrator(start_item("instance-A"), None)
         .await
         .unwrap();
-    let item = provider
+    let (_item, lock_token, _attempt_count) = provider
         .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
         .await
         .unwrap()
         .unwrap();
-    let lock_token = item.lock_token.clone();
 
     // Ack with valid data to establish baseline
     provider
@@ -56,12 +55,11 @@ pub async fn test_atomicity_failure_rollback<F: ProviderFactory>(factory: &F) {
         .enqueue_for_orchestrator(start_item("instance-A"), None)
         .await
         .unwrap();
-    let item2 = provider
+    let (_item2, lock_token2, _attempt_count2) = provider
         .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
         .await
         .unwrap()
         .unwrap();
-    let lock_token2 = item2.lock_token.clone();
 
     // Try to ack with duplicate event_id (should fail due to primary key constraint)
     let result = provider
@@ -119,12 +117,11 @@ pub async fn test_multi_operation_atomic_ack<F: ProviderFactory>(factory: &F) {
         .enqueue_for_orchestrator(start_item("instance-A"), None)
         .await
         .unwrap();
-    let item = provider
+    let (_item, lock_token, _attempt_count) = provider
         .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
         .await
         .unwrap()
         .unwrap();
-    let lock_token = item.lock_token.clone();
 
     // Prepare complex ack with multiple operations
     let history_delta = vec![
@@ -255,7 +252,7 @@ pub async fn test_multi_operation_atomic_ack<F: ProviderFactory>(factory: &F) {
     );
 
     // 3. Orchestrator queue should have 2 items
-    let item1 = provider
+    let (item1, _lock_token1, _attempt_count1) = provider
         .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
         .await
         .unwrap()
@@ -278,12 +275,11 @@ pub async fn test_lock_released_only_on_successful_ack<F: ProviderFactory>(facto
         .enqueue_for_orchestrator(start_item("instance-A"), None)
         .await
         .unwrap();
-    let item = provider
+    let (_item, _lock_token, _attempt_count) = provider
         .fetch_orchestration_item(lock_timeout, Duration::ZERO)
         .await
         .unwrap()
         .unwrap();
-    let _lock_token = item.lock_token.clone();
 
     // Verify lock is held (can't fetch again)
     assert!(
@@ -334,7 +330,7 @@ pub async fn test_lock_released_only_on_successful_ack<F: ProviderFactory>(facto
     tokio::time::sleep(lock_timeout + Duration::from_millis(100)).await;
 
     // Now should be able to fetch again
-    let item2 = provider
+    let (item2, _lock_token2, _attempt_count2) = provider
         .fetch_orchestration_item(lock_timeout, Duration::ZERO)
         .await
         .unwrap()
@@ -354,12 +350,11 @@ pub async fn test_concurrent_ack_prevention<F: ProviderFactory>(factory: &F) {
         .enqueue_for_orchestrator(start_item("instance-A"), None)
         .await
         .unwrap();
-    let item = provider
+    let (_item, lock_token, _attempt_count) = provider
         .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
         .await
         .unwrap()
         .unwrap();
-    let lock_token = item.lock_token.clone();
 
     // Spawn two concurrent tasks trying to ack with same lock token
     let provider1 = provider.clone();

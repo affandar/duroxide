@@ -50,10 +50,11 @@ impl Runtime {
                             .fetch_orchestration_item(rt.options.orchestrator_lock_timeout, poll_timeout)
                             .await
                         {
-                            Ok(Some(item)) => {
+                            Ok(Some((item, lock_token, attempt_count))) => {
                                 // Process orchestration item atomically
                                 // Provider ensures no other worker has this instance locked
-                                rt.process_orchestration_item(item, &worker_id).await;
+                                rt.process_orchestration_item(item, &lock_token, attempt_count, &worker_id)
+                                    .await;
                                 work_found = true;
                             }
                             Ok(None) => {
@@ -97,11 +98,26 @@ impl Runtime {
     pub(in crate::runtime) async fn process_orchestration_item(
         self: &Arc<Self>,
         item: crate::providers::OrchestrationItem,
+        lock_token: &str,
+        attempt_count: u32,
         worker_id: &str,
     ) {
         // EXECUTION: builds deltas and commits via ack_orchestration_item
         let instance = &item.instance;
-        let lock_token = &item.lock_token;
+
+        // Check for poison message - message has been fetched too many times
+        if attempt_count > self.options.max_attempts {
+            warn!(
+                instance = %instance,
+                attempt_count = attempt_count,
+                max_attempts = self.options.max_attempts,
+                "Orchestration message exceeded max attempts, marking as poison"
+            );
+
+            self.fail_orchestration_as_poison(&item, lock_token, attempt_count)
+                .await;
+            return;
+        }
 
         // Extract metadata from history and work items
         let temp_history_mgr = HistoryManager::from_history(&item.history);
@@ -574,5 +590,134 @@ impl Runtime {
                 }
             }
         }
+    }
+
+    /// Fail an orchestration as a poison message.
+    ///
+    /// This is called when the attempt_count exceeds max_attempts, indicating the message
+    /// repeatedly fails to process (crash/abandon cycle).
+    async fn fail_orchestration_as_poison(
+        self: &Arc<Self>,
+        item: &crate::providers::OrchestrationItem,
+        lock_token: &str,
+        attempt_count: u32,
+    ) {
+        let error = crate::ErrorDetails::Poison {
+            attempt_count,
+            max_attempts: self.options.max_attempts,
+            message_type: crate::PoisonMessageType::Orchestration {
+                instance: item.instance.clone(),
+                execution_id: item.execution_id,
+            },
+            message: serde_json::to_string(&item.messages).unwrap_or_default(),
+        };
+
+        // Create failure event and commit
+        let mut history_mgr = HistoryManager::from_history(&item.history);
+
+        // Track parent info for sub-orchestration failure notification
+        let mut parent_link: Option<(String, u64)> = None;
+
+        // If history is empty, we need to create an OrchestrationStarted event first
+        if history_mgr.is_empty() {
+            // Try to extract orchestration name from work items
+            let (orchestration_name, input, parent_instance, parent_id) = item
+                .messages
+                .iter()
+                .find_map(|msg| match msg {
+                    WorkItem::StartOrchestration {
+                        orchestration,
+                        input,
+                        parent_instance,
+                        parent_id,
+                        ..
+                    } => Some((
+                        orchestration.clone(),
+                        input.clone(),
+                        parent_instance.clone(),
+                        *parent_id,
+                    )),
+                    WorkItem::ContinueAsNew {
+                        orchestration, input, ..
+                    } => Some((orchestration.clone(), input.clone(), None, None)),
+                    _ => None,
+                })
+                .unwrap_or_else(|| (item.orchestration_name.clone(), String::new(), None, None));
+
+            // Save parent link for notification
+            if let (Some(pi), Some(pid)) = (&parent_instance, parent_id) {
+                parent_link = Some((pi.clone(), pid));
+            }
+
+            history_mgr.append(Event::with_event_id(
+                crate::INITIAL_EVENT_ID,
+                &item.instance,
+                item.execution_id,
+                None,
+                EventKind::OrchestrationStarted {
+                    name: orchestration_name,
+                    version: item.version.clone(),
+                    input,
+                    parent_instance,
+                    parent_id,
+                },
+            ));
+        } else {
+            // Check existing history for parent link
+            for event in &item.history {
+                if let EventKind::OrchestrationStarted {
+                    parent_instance: Some(pi),
+                    parent_id: Some(pid),
+                    ..
+                } = &event.kind
+                {
+                    parent_link = Some((pi.clone(), *pid));
+                    break;
+                }
+            }
+        }
+
+        history_mgr.append_failed(error.clone());
+
+        let metadata = ExecutionMetadata {
+            status: Some("Failed".to_string()),
+            output: Some(error.display_message()),
+            orchestration_name: Some(item.orchestration_name.clone()),
+            orchestration_version: Some(item.version.clone()),
+        };
+
+        // If this is a sub-orchestration, notify parent of failure
+        let orchestrator_items = if let Some((parent_instance, parent_id)) = parent_link {
+            tracing::debug!(
+                target = "duroxide::runtime::execution",
+                instance = %item.instance,
+                parent_instance = %parent_instance,
+                parent_id = %parent_id,
+                "Enqueue SubOrchFailed to parent (poison)"
+            );
+            let parent_execution_id = self.get_execution_id_for_instance(&parent_instance, None).await;
+            vec![WorkItem::SubOrchFailed {
+                parent_instance,
+                parent_execution_id,
+                parent_id,
+                details: error.clone(),
+            }]
+        } else {
+            vec![]
+        };
+
+        let _ = self
+            .ack_orchestration_with_changes(
+                lock_token,
+                item.execution_id,
+                history_mgr.delta().to_vec(),
+                vec![],
+                orchestrator_items,
+                metadata,
+            )
+            .await;
+
+        // Record metrics for poison detection
+        self.record_orchestration_poison();
     }
 }

@@ -20,6 +20,8 @@ pub mod management;
 #[cfg(feature = "provider-test")]
 pub mod multi_execution;
 #[cfg(feature = "provider-test")]
+pub mod poison_message;
+#[cfg(feature = "provider-test")]
 pub mod queue_semantics;
 
 #[cfg(feature = "provider-test")]
@@ -57,7 +59,7 @@ pub(crate) async fn create_instance(provider: &dyn crate::providers::Provider, i
         .await
         .map_err(|e| e.to_string())?;
 
-    let item = provider
+    let (_item, lock_token, _attempt_count) = provider
         .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
         .await
         .map_err(|e| e.to_string())?
@@ -65,7 +67,7 @@ pub(crate) async fn create_instance(provider: &dyn crate::providers::Provider, i
 
     provider
         .ack_orchestration_item(
-            &item.lock_token,
+            &lock_token,
             INITIAL_EXECUTION_ID,
             vec![Event::with_event_id(
                 crate::INITIAL_EVENT_ID,

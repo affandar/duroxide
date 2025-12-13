@@ -220,7 +220,9 @@ impl ReplayEngine {
 
                     // Check if system error (abort turn)
                     match &details {
-                        crate::ErrorDetails::Configuration { .. } | crate::ErrorDetails::Infrastructure { .. } => {
+                        crate::ErrorDetails::Configuration { .. }
+                        | crate::ErrorDetails::Infrastructure { .. }
+                        | crate::ErrorDetails::Poison { .. } => {
                             warn!(
                                 instance = %self.instance,
                                 activity_id = id,
@@ -280,7 +282,9 @@ impl ReplayEngine {
 
                     // Check if system error (abort parent turn)
                     match &details {
-                        crate::ErrorDetails::Configuration { .. } | crate::ErrorDetails::Infrastructure { .. } => {
+                        crate::ErrorDetails::Configuration { .. }
+                        | crate::ErrorDetails::Infrastructure { .. }
+                        | crate::ErrorDetails::Poison { .. } => {
                             warn!(instance = %self.instance, parent_id, ?details, "Child system error aborts parent");
                             if self.abort_error.is_none() {
                                 self.abort_error = Some(details);

@@ -41,7 +41,7 @@ pub async fn test_list_instances_by_status<F: ProviderFactory>(factory: &F) {
         .enqueue_for_orchestrator(start_item("mgmt-completed"), None)
         .await
         .unwrap();
-    let item = provider
+    let (_item, lock_token, _attempt_count) = provider
         .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
         .await
         .unwrap()
@@ -50,7 +50,7 @@ pub async fn test_list_instances_by_status<F: ProviderFactory>(factory: &F) {
     // Ack with Completed status
     provider
         .ack_orchestration_item(
-            &item.lock_token,
+            &lock_token,
             1,
             vec![Event::with_event_id(
                 1,
@@ -97,14 +97,14 @@ pub async fn test_list_executions<F: ProviderFactory>(factory: &F) {
         .enqueue_for_orchestrator(start_item("mgmt-multi-exec"), None)
         .await
         .unwrap();
-    let item = provider
+    let (_item, lock_token, _attempt_count) = provider
         .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
         .await
         .unwrap()
         .unwrap();
     provider
         .ack_orchestration_item(
-            &item.lock_token,
+            &lock_token,
             1,
             vec![Event::with_event_id(
                 1,
@@ -143,14 +143,14 @@ pub async fn test_get_instance_info<F: ProviderFactory>(factory: &F) {
         .enqueue_for_orchestrator(start_item("mgmt-info"), None)
         .await
         .unwrap();
-    let item = provider
+    let (_item, lock_token, _attempt_count) = provider
         .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
         .await
         .unwrap()
         .unwrap();
     provider
         .ack_orchestration_item(
-            &item.lock_token,
+            &lock_token,
             1,
             vec![Event::with_event_id(
                 1,
@@ -196,14 +196,14 @@ pub async fn test_get_execution_info<F: ProviderFactory>(factory: &F) {
         .enqueue_for_orchestrator(start_item("mgmt-exec-info"), None)
         .await
         .unwrap();
-    let item = provider
+    let (_item, lock_token, _attempt_count) = provider
         .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
         .await
         .unwrap()
         .unwrap();
     provider
         .ack_orchestration_item(
-            &item.lock_token,
+            &lock_token,
             1,
             vec![Event::with_event_id(
                 1,
@@ -252,14 +252,14 @@ pub async fn test_get_system_metrics<F: ProviderFactory>(factory: &F) {
         .enqueue_for_orchestrator(start_item("mgmt-metrics"), None)
         .await
         .unwrap();
-    let item = provider
+    let (_item, lock_token, _attempt_count) = provider
         .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
         .await
         .unwrap()
         .unwrap();
     provider
         .ack_orchestration_item(
-            &item.lock_token,
+            &lock_token,
             1,
             vec![Event::with_event_id(
                 1,

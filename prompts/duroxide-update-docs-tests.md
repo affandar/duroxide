@@ -26,6 +26,8 @@ Ensure all documentation is accurate, complete, and helpful after code changes. 
 
 If ANY changes touch observability/metrics code, perform a **complete metrics audit**:
 
+> ⚠️ **IMPORTANT:** Always update `docs/metrics-specification.md` when metrics are added, modified, or removed. This is the authoritative reference for all duroxide metrics.
+
 ### 2.1 Update `docs/metrics-specification.md`
 
 **Check if metrics were:**
@@ -171,6 +173,7 @@ Review if major changes were made:
 1. **Outdated function signatures** - Activity registrations missing `ActivityContext`
 2. **Old logging patterns** - Using `println!` instead of `ctx.trace_*()`
 3. **Incorrect imports** - Missing `use duroxide::ActivityContext;`
+4. **Metrics spec out of sync** - New metrics added but not documented in `docs/metrics-specification.md`
 4. **Broken examples** - Code that doesn't compile or uses deprecated APIs
 5. **Inconsistent terminology** - Mixing "orchestrator" vs "orchestration", "turn" vs "execution"
 6. **Missing feature flags** - Observability features without `#[cfg(feature = "observability")]` notes
