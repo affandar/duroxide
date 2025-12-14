@@ -761,6 +761,26 @@ pub enum WorkItem {
 ///
 #[async_trait::async_trait]
 pub trait Provider: Any + Send + Sync {
+    // ===== Provider Identity =====
+
+    /// Returns the name of this provider implementation.
+    ///
+    /// Used for logging and diagnostics. Override to provide a meaningful name.
+    ///
+    /// Default: "unknown"
+    fn name(&self) -> &str {
+        "unknown"
+    }
+
+    /// Returns the version of this provider implementation.
+    ///
+    /// Used for logging and diagnostics. Override to provide the version.
+    ///
+    /// Default: "0.0.0"
+    fn version(&self) -> &str {
+        "0.0.0"
+    }
+
     // ===== Core Atomic Orchestration Methods (REQUIRED) =====
     // These three methods form the heart of reliable orchestration execution.
     //

@@ -598,8 +598,10 @@ impl Runtime {
         // Print version on startup
         tracing::info!(
             target: "duroxide::runtime",
-            version = env!("CARGO_PKG_VERSION"),
-            "Duroxide runtime starting"
+            "duroxide runtime ({}) starting with provider {} ({})",
+            env!("CARGO_PKG_VERSION"),
+            history_store.name(),
+            history_store.version()
         );
 
         // Wrap provider with metrics instrumentation if metrics are enabled

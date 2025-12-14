@@ -511,6 +511,14 @@ impl SqliteProvider {
 
 #[async_trait::async_trait]
 impl Provider for SqliteProvider {
+    fn name(&self) -> &str {
+        "sqlite"
+    }
+
+    fn version(&self) -> &str {
+        env!("CARGO_PKG_VERSION")
+    }
+
     async fn fetch_orchestration_item(
         &self,
         lock_timeout: Duration,

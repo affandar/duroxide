@@ -71,6 +71,14 @@ impl InstrumentedProvider {
 
 #[async_trait]
 impl Provider for InstrumentedProvider {
+    fn name(&self) -> &str {
+        self.inner.name()
+    }
+
+    fn version(&self) -> &str {
+        self.inner.version()
+    }
+
     async fn fetch_orchestration_item(
         &self,
         lock_timeout: Duration,
