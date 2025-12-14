@@ -13,7 +13,8 @@ categories = ["asynchronous", "concurrency"]
 
 [features]
 default = []
-provider-test = []  # Enable all provider testing infrastructure (stress tests + correctness tests)
+sqlite = ["sqlx", "libsqlite3-sys"]  # SQLite provider (bundled, no system deps)
+provider-test = ["sqlite"]  # Enable all provider testing infrastructure (requires sqlite)
 test = ["provider-test", "test-hooks"]  # Auto-enable provider-test and test-hooks for tests
 test-hooks = []  # Enable test hooks for fault injection in integration tests
 observability = ["opentelemetry", "opentelemetry_sdk", "opentelemetry-otlp"]
@@ -33,20 +34,16 @@ opentelemetry = { version = "0.27", optional = true }
 opentelemetry_sdk = { version = "0.27", features = ["rt-tokio"], optional = true }
 opentelemetry-otlp = { version = "0.27", features = ["grpc-tonic"], optional = true }
 
-# SQLite support
-sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "sqlite", "macros", "migrate", "chrono"] }
-
-# Ensure SQLite is bundled
-[dependencies.libsqlite3-sys]
-version = "0.28"
-features = ["bundled"]
+# SQLite support (optional, bundled)
+sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "sqlite", "macros", "migrate", "chrono"], optional = true }
+libsqlite3-sys = { version = "0.28", features = ["bundled"], optional = true }
 
 [dev-dependencies]
 # Used in tests/examples
 tempfile = "3"
 proptest = "1.4"
-# Enable test-hooks feature for integration tests
-duroxide = { path = ".", features = ["test-hooks"] }
+# Enable sqlite and test-hooks features for integration tests
+duroxide = { path = ".", features = ["sqlite", "test-hooks"] }
 
 [workspace]
 members = [

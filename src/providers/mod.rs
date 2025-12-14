@@ -1649,7 +1649,14 @@ pub trait Provider: Any + Send + Sync {
 pub mod management;
 
 pub mod instrumented;
+
 /// SQLite-backed provider with full transactional support.
+///
+/// Enable with the `sqlite` feature:
+/// ```toml
+/// duroxide = { version = "0.1", features = ["sqlite"] }
+/// ```
+#[cfg(feature = "sqlite")]
 pub mod sqlite;
 
 // Re-export management types for convenience

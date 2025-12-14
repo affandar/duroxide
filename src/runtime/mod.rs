@@ -555,6 +555,9 @@ impl Runtime {
     }
 
     /// Start a new runtime using the in-memory SQLite provider.
+    ///
+    /// Requires the `sqlite` feature.
+    #[cfg(feature = "sqlite")]
     pub async fn start(
         activity_registry: Arc<registry::ActivityRegistry>,
         orchestration_registry: OrchestrationRegistry,
