@@ -44,6 +44,11 @@ let event = ctx.schedule_wait("Event").into_event().await;
 
 ## Minimal Example
 
+> **Note**: This example uses the bundled SQLite provider. Add to your `Cargo.toml`:
+> ```toml
+> duroxide = { version = "0.1", features = ["sqlite"] }
+> ```
+
 ```rust
 use duroxide::*;
 use duroxide::providers::sqlite::SqliteProvider;

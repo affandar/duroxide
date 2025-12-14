@@ -69,10 +69,14 @@ Project layout
 Install (when published)
 ```toml
 [dependencies]
-duroxide = "0.1"
+duroxide = { version = "0.1", features = ["sqlite"] }  # With bundled SQLite provider
+# OR
+duroxide = "0.1"  # Core only, bring your own Provider implementation
 ```
 
 Hello world (activities + runtime)
+
+> **Note**: This example uses the bundled SQLite provider. Enable the `sqlite` feature in your `Cargo.toml`.
 ```rust
 use std::sync::Arc;
 use duroxide::{ActivityContext, Client, ClientError, OrchestrationContext, OrchestrationRegistry, OrchestrationStatus};
