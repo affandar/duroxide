@@ -4,6 +4,7 @@
 //! - Spawns concurrent orchestration workers
 //! - Fetches and processes orchestration items from the queue
 //! - Handles orchestration execution and atomic commits
+//! - Renews locks during long-running orchestration turns
 
 use crate::providers::{ExecutionMetadata, ProviderError, WorkItem};
 use crate::{Event, EventKind};
@@ -14,6 +15,91 @@ use tokio::task::JoinHandle;
 use tracing::warn;
 
 use super::super::{HistoryManager, Runtime, WorkItemReader};
+
+/// Calculate the renewal interval based on lock timeout and buffer settings.
+///
+/// # Logic
+/// - If timeout ≥ 15s: renew at (timeout - buffer)
+/// - If timeout < 15s: renew at 0.5 × timeout (buffer ignored)
+fn calculate_renewal_interval(lock_timeout: Duration, buffer: Duration) -> Duration {
+    if lock_timeout >= Duration::from_secs(15) {
+        let buffer = buffer.min(lock_timeout);
+        let interval = lock_timeout
+            .checked_sub(buffer)
+            .unwrap_or_else(|| Duration::from_secs(1));
+        interval.max(Duration::from_secs(1))
+    } else {
+        let half = (lock_timeout.as_secs_f64() * 0.5).ceil().max(1.0);
+        Duration::from_secs_f64(half)
+    }
+}
+
+/// Spawn a background task to renew the lock for an in-flight orchestration.
+fn spawn_orchestration_lock_renewal_task(
+    store: Arc<dyn crate::providers::Provider>,
+    token: String,
+    lock_timeout: Duration,
+    buffer: Duration,
+    shutdown: Arc<std::sync::atomic::AtomicBool>,
+) -> JoinHandle<()> {
+    let renewal_interval = calculate_renewal_interval(lock_timeout, buffer);
+
+    tracing::debug!(
+        target: "duroxide::runtime::dispatchers::orchestration",
+        lock_token = %token,
+        lock_timeout_secs = %lock_timeout.as_secs(),
+        buffer_secs = %buffer.as_secs(),
+        renewal_interval_secs = %renewal_interval.as_secs(),
+        "Spawning orchestration lock renewal task"
+    );
+
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(renewal_interval);
+        interval.tick().await; // Skip first immediate tick
+
+        loop {
+            tokio::select! {
+                _ = interval.tick() => {
+                    if shutdown.load(Ordering::Relaxed) {
+                        tracing::debug!(
+                            target: "duroxide::runtime::dispatchers::orchestration",
+                            lock_token = %token,
+                            "Lock renewal task stopping due to shutdown"
+                        );
+                        break;
+                    }
+
+                    match store.renew_orchestration_item_lock(&token, lock_timeout).await {
+                        Ok(()) => {
+                            tracing::trace!(
+                                target: "duroxide::runtime::dispatchers::orchestration",
+                                lock_token = %token,
+                                extend_secs = %lock_timeout.as_secs(),
+                                "Orchestration lock renewed"
+                            );
+                        }
+                        Err(e) => {
+                            tracing::debug!(
+                                target: "duroxide::runtime::dispatchers::orchestration",
+                                lock_token = %token,
+                                error = %e,
+                                "Failed to renew orchestration lock (may have been acked/abandoned)"
+                            );
+                            // Stop renewal - lock is gone or expired
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        tracing::debug!(
+            target: "duroxide::runtime::dispatchers::orchestration",
+            lock_token = %token,
+            "Orchestration lock renewal task stopped"
+        );
+    })
+}
 
 impl Runtime {
     /// Start the orchestration dispatcher with N concurrent workers
@@ -51,10 +137,37 @@ impl Runtime {
                             .await
                         {
                             Ok(Some((item, lock_token, attempt_count))) => {
+                                // Spawn lock renewal task for this orchestration
+                                let renewal_handle = spawn_orchestration_lock_renewal_task(
+                                    Arc::clone(&rt.history_store),
+                                    lock_token.clone(),
+                                    rt.options.orchestrator_lock_timeout,
+                                    rt.options.orchestrator_lock_renewal_buffer,
+                                    Arc::clone(&shutdown),
+                                );
+
+                                // TEST HOOK: Inject delay after spawning renewal task
+                                // This simulates slow processing to test lock renewal
+                                #[cfg(feature = "test-hooks")]
+                                if let Some(delay) =
+                                    crate::runtime::test_hooks::get_orch_processing_delay(&item.instance)
+                                {
+                                    tracing::debug!(
+                                        instance = %item.instance,
+                                        delay_ms = delay.as_millis(),
+                                        "Test hook: injecting orchestration processing delay"
+                                    );
+                                    tokio::time::sleep(delay).await;
+                                }
+
                                 // Process orchestration item atomically
                                 // Provider ensures no other worker has this instance locked
                                 rt.process_orchestration_item(item, &lock_token, attempt_count, &worker_id)
                                     .await;
+
+                                // Stop lock renewal task now that orchestration turn is complete
+                                renewal_handle.abort();
+
                                 work_found = true;
                             }
                             Ok(None) => {
@@ -424,13 +537,8 @@ impl Runtime {
                     .await
                 {
                     Ok(()) => {
-                        // Successfully committed failure event
+                        // Successfully committed failure event (ack also releases the lock)
                         warn!(instance = %instance, "Successfully committed orchestration failure event");
-                        // Abandon the lock now that failure is committed
-                        drop(
-                            self.history_store
-                                .abandon_orchestration_item(lock_token, Some(std::time::Duration::from_millis(50))),
-                        );
                     }
                     Err(e2) => {
                         // Failed to commit failure event - abandon lock

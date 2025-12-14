@@ -221,6 +221,11 @@ impl<H: ?Sized> RegistryBuilder<H> {
         }
     }
 
+    /// Build the registry, returning an error if there were any registration errors.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error string containing all registration errors if any handlers failed to register.
     pub fn build_result(self) -> Result<Registry<H>, String> {
         if self.errors.is_empty() {
             Ok(self.build())

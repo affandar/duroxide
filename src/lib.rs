@@ -1515,6 +1515,10 @@ impl OrchestrationContext {
     /// Get the current UTC time.
     /// Returns a future that resolves to a SystemTime.
     ///
+    /// # Errors
+    ///
+    /// Returns an error if the system call fails or if the time value cannot be parsed.
+    ///
     /// # Example
     ///
     /// ```rust,no_run
@@ -1663,6 +1667,10 @@ impl DurableFuture {
     }
 
     /// Await an activity result decoded to a typed value.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the activity fails or if the result cannot be deserialized to the target type.
     pub fn into_activity_typed<Out: serde::de::DeserializeOwned>(self) -> impl Future<Output = Result<Out, String>> {
         struct Map(DurableFuture);
         impl Future for Map {
@@ -1752,6 +1760,10 @@ impl DurableFuture {
     }
 
     /// Await a sub-orchestration result decoded to a typed value.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the sub-orchestration fails or if the result cannot be deserialized to the target type.
     pub async fn into_sub_orchestration_typed<Out: serde::de::DeserializeOwned>(self) -> Result<Out, String> {
         match Self::into_sub_orchestration(self).await {
             Ok(s) => crate::_typed_codec::Json::decode::<Out>(&s),
@@ -1860,6 +1872,10 @@ impl OrchestrationContext {
     /// # Ok(())
     /// # }
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if all retry attempts fail or if a timeout occurs (timeouts are not retried).
     pub async fn schedule_activity_with_retry(
         &self,
         name: impl Into<String>,
@@ -1921,6 +1937,10 @@ impl OrchestrationContext {
     /// Typed variant of `schedule_activity_with_retry`.
     ///
     /// Serializes input once and deserializes the successful result.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if all retry attempts fail, if a timeout occurs, if input serialization fails, or if result deserialization fails.
     pub async fn schedule_activity_with_retry_typed<In: serde::Serialize, Out: serde::de::DeserializeOwned>(
         &self,
         name: impl Into<String>,

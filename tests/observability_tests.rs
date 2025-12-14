@@ -1,18 +1,15 @@
 //! Observability-focused tests covering tracing for activities and orchestrations.
 mod common;
 
-use duroxide::EventKind;
-
-use async_trait::async_trait;
+use common::fault_injection::FailingProvider;
 use duroxide::providers::sqlite::SqliteProvider;
-use duroxide::providers::{ExecutionMetadata, OrchestrationItem, Provider, ProviderAdmin, ProviderError, WorkItem};
+use duroxide::providers::{Provider, WorkItem};
 use duroxide::runtime;
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{LogFormat, ObservabilityConfig, RuntimeOptions};
-use duroxide::{ActivityContext, Client, Event, OrchestrationContext, OrchestrationRegistry, OrchestrationStatus};
+use duroxide::{ActivityContext, Client, OrchestrationContext, OrchestrationRegistry, OrchestrationStatus};
 use std::collections::BTreeMap;
 use std::fmt;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tracing::field::{Field, Visit};
@@ -92,166 +89,6 @@ fn metrics_observability_config(label: &str) -> ObservabilityConfig {
         log_level: "error".to_string(),
         service_name: format!("duroxide-observability-test-{label}"),
         service_version: Some("test".to_string()),
-    }
-}
-
-struct FailingProvider {
-    inner: Arc<SqliteProvider>,
-    fail_next_ack_work_item: AtomicBool,
-    fail_next_ack_orchestration_item: AtomicBool,
-    fail_next_fetch_orchestration_item: AtomicBool,
-}
-
-impl FailingProvider {
-    fn new(inner: Arc<SqliteProvider>) -> Self {
-        Self {
-            inner,
-            fail_next_ack_work_item: AtomicBool::new(false),
-            fail_next_ack_orchestration_item: AtomicBool::new(false),
-            fail_next_fetch_orchestration_item: AtomicBool::new(false),
-        }
-    }
-
-    fn fail_next_ack_work_item(&self) {
-        self.fail_next_ack_work_item.store(true, Ordering::SeqCst);
-    }
-
-    fn fail_next_ack_orchestration_item(&self) {
-        self.fail_next_ack_orchestration_item.store(true, Ordering::SeqCst);
-    }
-
-    fn fail_next_fetch_orchestration_item(&self) {
-        self.fail_next_fetch_orchestration_item.store(true, Ordering::SeqCst);
-    }
-}
-
-#[async_trait]
-impl Provider for FailingProvider {
-    async fn fetch_orchestration_item(
-        &self,
-        _lock_timeout: Duration,
-        poll_timeout: Duration,
-    ) -> Result<Option<(OrchestrationItem, String, u32)>, ProviderError> {
-        if self.fail_next_fetch_orchestration_item.swap(false, Ordering::SeqCst) {
-            // Simulate transient infrastructure failure (e.g., database connection issue)
-            Err(ProviderError::retryable(
-                "fetch_orchestration_item",
-                "simulated transient infrastructure failure",
-            ))
-        } else {
-            self.inner
-                .fetch_orchestration_item(Duration::from_secs(30), poll_timeout)
-                .await
-        }
-    }
-
-    async fn ack_orchestration_item(
-        &self,
-        lock_token: &str,
-        execution_id: u64,
-        history_delta: Vec<Event>,
-        worker_items: Vec<WorkItem>,
-        orchestrator_items: Vec<WorkItem>,
-        metadata: ExecutionMetadata,
-    ) -> Result<(), ProviderError> {
-        if self.fail_next_ack_orchestration_item.swap(false, Ordering::SeqCst) {
-            // Check if this is a failure event commit - if so, allow it to succeed
-            // This allows the runtime to commit the orchestration failure event
-            let is_failure_commit = history_delta
-                .iter()
-                .any(|e| matches!(&e.kind, EventKind::OrchestrationFailed { .. }));
-            if is_failure_commit {
-                // Allow failure event commit to succeed
-                return self
-                    .inner
-                    .ack_orchestration_item(
-                        lock_token,
-                        execution_id,
-                        history_delta,
-                        worker_items,
-                        orchestrator_items,
-                        metadata,
-                    )
-                    .await;
-            }
-
-            // Simulate permanent infrastructure failure for normal commits
-            // This will cause the orchestration to fail with infrastructure error
-            Err(ProviderError::permanent(
-                "ack_orchestration_item",
-                "simulated infrastructure failure",
-            ))
-        } else {
-            self.inner
-                .ack_orchestration_item(
-                    lock_token,
-                    execution_id,
-                    history_delta,
-                    worker_items,
-                    orchestrator_items,
-                    metadata,
-                )
-                .await
-        }
-    }
-
-    async fn abandon_orchestration_item(&self, lock_token: &str, delay: Option<Duration>) -> Result<(), ProviderError> {
-        self.inner.abandon_orchestration_item(lock_token, delay).await
-    }
-
-    async fn read(&self, instance: &str) -> Result<Vec<Event>, ProviderError> {
-        self.inner.read(instance).await
-    }
-
-    async fn read_with_execution(&self, instance: &str, execution_id: u64) -> Result<Vec<Event>, ProviderError> {
-        self.inner.read_with_execution(instance, execution_id).await
-    }
-
-    async fn append_with_execution(
-        &self,
-        instance: &str,
-        execution_id: u64,
-        new_events: Vec<Event>,
-    ) -> Result<(), ProviderError> {
-        self.inner
-            .append_with_execution(instance, execution_id, new_events)
-            .await
-    }
-
-    async fn enqueue_for_worker(&self, item: WorkItem) -> Result<(), ProviderError> {
-        self.inner.enqueue_for_worker(item).await
-    }
-
-    async fn fetch_work_item(
-        &self,
-        lock_timeout: Duration,
-        poll_timeout: Duration,
-    ) -> Result<Option<(WorkItem, String, u32)>, ProviderError> {
-        self.inner.fetch_work_item(lock_timeout, poll_timeout).await
-    }
-
-    async fn ack_work_item(&self, token: &str, completion: WorkItem) -> Result<(), ProviderError> {
-        if self.fail_next_ack_work_item.swap(false, Ordering::SeqCst) {
-            self.inner.ack_work_item(token, completion.clone()).await?;
-            Err(ProviderError::permanent(
-                "ack_work_item",
-                "simulated infrastructure failure",
-            ))
-        } else {
-            self.inner.ack_work_item(token, completion).await
-        }
-    }
-
-    async fn renew_work_item_lock(&self, token: &str, extend_for: Duration) -> Result<(), ProviderError> {
-        self.inner.renew_work_item_lock(token, extend_for).await
-    }
-
-    async fn enqueue_for_orchestrator(&self, item: WorkItem, delay: Option<Duration>) -> Result<(), ProviderError> {
-        self.inner.enqueue_for_orchestrator(item, delay).await
-    }
-
-    fn as_management_capability(&self) -> Option<&dyn ProviderAdmin> {
-        self.inner.as_management_capability()
     }
 }
 
@@ -454,6 +291,7 @@ async fn metrics_capture_activity_and_orchestration_outcomes() {
     let client = Client::new(provider_trait.clone());
 
     // Trigger infrastructure error (first ack fails but work has already been committed)
+    failing_provider.set_ack_then_fail(true);
     failing_provider.fail_next_ack_work_item();
     client
         .start_orchestration("metrics-success-infra", "SuccessOrch", "")
@@ -512,6 +350,8 @@ async fn metrics_capture_activity_and_orchestration_outcomes() {
 
     // Trigger infrastructure error for orchestration (ack_orchestration_item fails permanently)
     // This tests infrastructure failure handling - orchestration should fail
+    // Allow failure commits so the orchestration can record its failure
+    failing_provider.set_allow_failure_commits(true);
     failing_provider.fail_next_ack_orchestration_item();
     client
         .start_orchestration("metrics-orch-infra", "SuccessOrch", "")
@@ -1473,7 +1313,11 @@ async fn test_poison_message_metrics() {
         ..Default::default()
     };
 
-    let sqlite = Arc::new(SqliteProvider::new_in_memory().await.expect("Failed to create provider"));
+    let sqlite = Arc::new(
+        SqliteProvider::new_in_memory()
+            .await
+            .expect("Failed to create provider"),
+    );
     let provider = Arc::new(PoisonInjectingProvider::new(sqlite));
 
     let activities = ActivityRegistry::builder()
@@ -1483,9 +1327,12 @@ async fn test_poison_message_metrics() {
         .build();
 
     let orchestrations = OrchestrationRegistry::builder()
-        .register("OrchPoisonTest", |_ctx: OrchestrationContext, _input: String| async move {
-            panic!("Should not run - orchestration is poisoned");
-        })
+        .register(
+            "OrchPoisonTest",
+            |_ctx: OrchestrationContext, _input: String| async move {
+                panic!("Should not run - orchestration is poisoned");
+            },
+        )
         .register(
             "ActivityPoisonTest",
             |ctx: OrchestrationContext, _input: String| async move {
@@ -1497,24 +1344,51 @@ async fn test_poison_message_metrics() {
     // Inject poison for orchestration item (exceeds max_attempts of 10)
     provider.inject_orchestration_poison(11);
 
-    let rt = runtime::Runtime::start_with_options(provider.clone(), Arc::new(activities), orchestrations, options).await;
+    let rt =
+        runtime::Runtime::start_with_options(provider.clone(), Arc::new(activities), orchestrations, options).await;
     let client = Client::new(provider.clone());
 
     // Start orchestration that will be detected as poison
-    client.start_orchestration("orch-poison", "OrchPoisonTest", "").await.unwrap();
-    let result = client.wait_for_orchestration("orch-poison", Duration::from_secs(5)).await.unwrap();
-    assert!(matches!(result, OrchestrationStatus::Failed { .. }), "Should fail as poison");
+    client
+        .start_orchestration("orch-poison", "OrchPoisonTest", "")
+        .await
+        .unwrap();
+    let result = client
+        .wait_for_orchestration("orch-poison", Duration::from_secs(5))
+        .await
+        .unwrap();
+    assert!(
+        matches!(result, OrchestrationStatus::Failed { .. }),
+        "Should fail as poison"
+    );
 
     // Start another orchestration where the activity will be poisoned
     provider.inject_activity_poison_persistent(11);
-    client.start_orchestration("activity-poison", "ActivityPoisonTest", "").await.unwrap();
-    let result2 = client.wait_for_orchestration("activity-poison", Duration::from_secs(5)).await.unwrap();
-    assert!(matches!(result2, OrchestrationStatus::Failed { .. }), "Should fail from poisoned activity");
+    client
+        .start_orchestration("activity-poison", "ActivityPoisonTest", "")
+        .await
+        .unwrap();
+    let result2 = client
+        .wait_for_orchestration("activity-poison", Duration::from_secs(5))
+        .await
+        .unwrap();
+    assert!(
+        matches!(result2, OrchestrationStatus::Failed { .. }),
+        "Should fail from poisoned activity"
+    );
 
     let snapshot = rt.metrics_snapshot().expect("metrics should be available");
     rt.shutdown(None).await;
 
     // Verify poison counters are incremented
-    assert!(snapshot.orch_poison >= 1, "should have orchestration poison: got {}", snapshot.orch_poison);
-    assert!(snapshot.activity_poison >= 1, "should have activity poison: got {}", snapshot.activity_poison);
+    assert!(
+        snapshot.orch_poison >= 1,
+        "should have orchestration poison: got {}",
+        snapshot.orch_poison
+    );
+    assert!(
+        snapshot.activity_poison >= 1,
+        "should have activity poison: got {}",
+        snapshot.activity_poison
+    );
 }

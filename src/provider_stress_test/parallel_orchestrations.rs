@@ -54,6 +54,10 @@ pub trait ProviderStressFactory: Send + Sync {
 ///     assert!(result.success_rate() > 99.0, "Success rate too low: {:.2}%", result.success_rate());
 /// }
 /// ```
+///
+/// # Errors
+///
+/// Returns an error if the stress test execution fails.
 pub async fn run_parallel_orchestrations_test(
     factory: &dyn ProviderStressFactory,
 ) -> Result<StressTestResult, Box<dyn std::error::Error>> {
@@ -66,6 +70,10 @@ pub async fn run_parallel_orchestrations_test(
 }
 
 /// Run the parallel orchestrations stress test with a custom configuration.
+///
+/// # Errors
+///
+/// Returns an error if the stress test execution fails.
 pub async fn run_parallel_orchestrations_test_with_config(
     factory: &dyn ProviderStressFactory,
     config: StressTestConfig,

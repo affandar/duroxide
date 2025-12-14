@@ -1468,6 +1468,81 @@ pub trait Provider: Any + Send + Sync {
     /// - Stops automatically when activity completes or worker crashes
     async fn renew_work_item_lock(&self, token: &str, extend_for: Duration) -> Result<(), ProviderError>;
 
+    /// Abandon work item processing (release lock without completing).
+    ///
+    /// Called when activity processing fails with a retryable error (e.g., database busy)
+    /// and the work item should be made available for another worker to pick up.
+    ///
+    /// # What This Does
+    ///
+    /// 1. **Clear lock** - Remove lock_token and reset locked_until
+    /// 2. **Optionally delay** - Set visible_at to defer retry
+    /// 3. **Preserve message** - Don't delete or modify the work item content
+    ///
+    /// # Parameters
+    ///
+    /// * `token` - Lock token from fetch_work_item
+    /// * `delay` - Optional delay before message becomes visible again
+    ///   - `None`: Immediate visibility (visible_at = now)
+    ///   - `Some(duration)`: Delayed visibility (visible_at = now + duration)
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(())` - Work item abandoned, lock released
+    /// * `Err(ProviderError)` - Abandon failed (invalid token, already acked, etc.)
+    ///
+    /// # Implementation Pattern
+    ///
+    /// ```ignore
+    /// async fn abandon_work_item(&self, token: &str, delay: Option<Duration>) -> Result<(), ProviderError> {
+    ///     let visible_at = delay.map(|d| now() + d).unwrap_or(now());
+    ///     
+    ///     let result = UPDATE worker_queue
+    ///                  SET lock_token = NULL, locked_until = NULL, visible_at = ?visible_at
+    ///                  WHERE lock_token = ?token;
+    ///     
+    ///     if result.rows_affected == 0:
+    ///         return Err(ProviderError::permanent("Invalid lock token"))
+    ///     
+    ///     Ok(())
+    /// }
+    /// ```
+    async fn abandon_work_item(&self, token: &str, delay: Option<Duration>) -> Result<(), ProviderError>;
+
+    /// Renew the lock on an orchestration item.
+    ///
+    /// Extends the instance lock timeout, preventing lock expiration during
+    /// long-running orchestration turns.
+    ///
+    /// # Parameters
+    ///
+    /// * `token` - Lock token from fetch_orchestration_item
+    /// * `extend_for` - Duration to extend lock from now
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(())` - Lock renewed successfully
+    /// * `Err(ProviderError)` - Lock renewal failed (invalid token, expired, etc.)
+    ///
+    /// # Implementation Pattern
+    ///
+    /// ```ignore
+    /// async fn renew_orchestration_item_lock(&self, token: &str, extend_for: Duration) -> Result<(), ProviderError> {
+    ///     let locked_until = now() + extend_for;
+    ///     
+    ///     let result = UPDATE instance_locks
+    ///                  SET locked_until = ?locked_until
+    ///                  WHERE lock_token = ?token
+    ///                    AND locked_until > now();
+    ///     
+    ///     if result.rows_affected == 0:
+    ///         return Err(ProviderError::permanent("Lock token invalid or expired"))
+    ///     
+    ///     Ok(())
+    /// }
+    /// ```
+    async fn renew_orchestration_item_lock(&self, token: &str, extend_for: Duration) -> Result<(), ProviderError>;
+
     // ===== Optional Management APIs =====
     // These have default implementations and are primarily used for testing/debugging.
 

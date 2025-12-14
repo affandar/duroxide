@@ -84,16 +84,19 @@ impl Provider for MyProvider {
         &self,
         lock_timeout: Duration,
         poll_timeout: Duration,
-    ) -> Result<Option<OrchestrationItem>, ProviderError> {
+    ) -> Result<Option<(OrchestrationItem, String, u32)>, ProviderError> {
         // 1. Find next available message in orchestrator queue
         // 2. Lock ALL messages for that instance
         // 3. Load instance metadata (name, version, execution_id)
         // 4. Load history for current execution_id
-        // 5. Return OrchestrationItem with unique lock_token
+        // 5. Increment attempt_count on the locked messages
+        // 6. Return (OrchestrationItem, lock_token, attempt_count)
         //
         // poll_timeout: Maximum time to wait for work. Providers that support
         // long polling MAY block up to this duration. Short-polling providers
         // (like SQLite) should ignore this and return immediately.
+        //
+        // attempt_count: Number of times this item has been fetched (for poison detection)
         
         todo!("See detailed docs below")
     }
@@ -161,15 +164,18 @@ impl Provider for MyProvider {
         &self,
         lock_timeout: Duration,
         poll_timeout: Duration,
-    ) -> Result<Option<(WorkItem, String)>, ProviderError> {
+    ) -> Result<Option<(WorkItem, String, u32)>, ProviderError> {
         // Find next unlocked item
         // Lock it with unique token
-        // Return Ok(Some((item, token))) if found, Ok(None) if empty, Err(ProviderError) on storage failure
+        // Increment and return attempt_count
+        // Return Ok(Some((item, token, attempt_count))) if found, Ok(None) if empty
         // Item stays in queue until acked
         //
         // poll_timeout: Maximum time to wait for work. Providers that support
         // long polling MAY block up to this duration. Short-polling providers
         // should ignore this and return immediately.
+        //
+        // attempt_count: Number of times this item has been fetched (for poison detection)
         
         todo!()
     }
@@ -188,6 +194,32 @@ impl Provider for MyProvider {
         // Called automatically by worker dispatcher for long-running activities
         // 
         // UPDATE worker_queue
+        // SET locked_until = now() + extend_for
+        // WHERE lock_token = token AND locked_until > now()
+        //
+        // Return error if token invalid/expired
+        
+        todo!()
+    }
+    
+    async fn abandon_work_item(&self, token: &str, delay: Option<Duration>) -> Result<(), ProviderError> {
+        // Release work item lock without completing
+        // Called when activity execution fails and should be retried
+        //
+        // 1. Clear lock_token from the work item
+        // 2. Set visible_at = now() + delay (if delay provided) for backoff
+        // 3. Item becomes available for re-fetch
+        //
+        // Silently ignore if token not found (idempotent)
+        
+        todo!()
+    }
+    
+    async fn renew_orchestration_item_lock(&self, token: &str, extend_for: Duration) -> Result<(), ProviderError> {
+        // Extend lock timeout for in-flight orchestration turn
+        // Called automatically by orchestration dispatcher during long turns
+        //
+        // UPDATE instance_locks
         // SET locked_until = now() + extend_for
         // WHERE lock_token = token AND locked_until > now()
         //

@@ -14,7 +14,8 @@ categories = ["asynchronous", "concurrency"]
 [features]
 default = []
 provider-test = []  # Enable all provider testing infrastructure (stress tests + correctness tests)
-test = ["provider-test"]  # Auto-enable provider-test for tests (internal use only)
+test = ["provider-test", "test-hooks"]  # Auto-enable provider-test and test-hooks for tests
+test-hooks = []  # Enable test hooks for fault injection in integration tests
 observability = ["opentelemetry", "opentelemetry_sdk", "opentelemetry-otlp"]
 
 [dependencies]
@@ -44,6 +45,8 @@ features = ["bundled"]
 # Used in tests/examples
 tempfile = "3"
 proptest = "1.4"
+# Enable test-hooks feature for integration tests
+duroxide = { path = ".", features = ["test-hooks"] }
 
 [workspace]
 members = [

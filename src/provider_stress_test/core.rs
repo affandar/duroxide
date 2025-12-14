@@ -75,6 +75,10 @@ impl StressTestResult {
 }
 
 /// Run a stress test with a generic provider
+///
+/// # Errors
+///
+/// Returns an error if the stress test execution fails.
 pub async fn run_stress_test(
     config: StressTestConfig,
     provider: Arc<dyn Provider>,

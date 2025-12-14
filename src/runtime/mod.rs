@@ -70,6 +70,15 @@ pub struct RuntimeOptions {
     /// Default: 5 seconds
     pub orchestrator_lock_timeout: Duration,
 
+    /// Buffer time before orchestration lock expiration to trigger renewal.
+    ///
+    /// Lock renewal strategy:
+    /// - If `orchestrator_lock_timeout` ≥ 15s: renew at (`timeout - orchestrator_lock_renewal_buffer`)
+    /// - If `orchestrator_lock_timeout` < 15s: renew at 0.5 × timeout (buffer ignored)
+    ///
+    /// Default: 2 seconds
+    pub orchestrator_lock_renewal_buffer: Duration,
+
     /// Lock timeout for worker queue items (activities).
     /// When an activity is dequeued, it's locked for this duration.
     /// Activities can be long-running (minutes), so a longer timeout is appropriate.
@@ -120,6 +129,7 @@ impl Default for RuntimeOptions {
             orchestration_concurrency: 2,
             worker_concurrency: 2,
             orchestrator_lock_timeout: Duration::from_secs(5),
+            orchestrator_lock_renewal_buffer: Duration::from_secs(2),
             worker_lock_timeout: Duration::from_secs(30),
             worker_lock_renewal_buffer: Duration::from_secs(5),
             observability: ObservabilityConfig::default(),
@@ -132,6 +142,9 @@ mod dispatchers;
 pub mod observability;
 pub mod registry;
 mod state_helpers;
+
+#[cfg(feature = "test-hooks")]
+pub mod test_hooks;
 
 use async_trait::async_trait;
 pub use state_helpers::{HistoryManager, WorkItemReader};

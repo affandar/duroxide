@@ -196,6 +196,10 @@ mod otel_impl {
 
     impl MetricsProvider {
         /// Initialize OpenTelemetry metrics with OTLP export
+        ///
+        /// # Errors
+        ///
+        /// Returns an error if OpenTelemetry initialization fails.
         pub fn new(config: &ObservabilityConfig) -> Result<Self, String> {
             let resource = Resource::new(vec![
                 KeyValue::new("service.name", config.service_name.clone()),
@@ -464,6 +468,10 @@ mod otel_impl {
         }
 
         /// Shutdown the metrics provider gracefully
+        ///
+        /// # Errors
+        ///
+        /// Returns an error if shutdown fails.
         pub async fn shutdown(self) -> Result<(), String> {
             self.meter_provider
                 .shutdown()
@@ -805,6 +813,11 @@ mod otel_impl {
         }
     }
 
+    /// Initialize logging subsystem
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if logging initialization fails.
     pub fn init_logging(config: &ObservabilityConfig) -> Result<(), String> {
         let env_filter = EnvFilter::try_from_default_env()
             .unwrap_or_else(|_| EnvFilter::new(default_filter_expression(&config.log_level)));
@@ -1029,6 +1042,10 @@ mod stub_impl {
     }
 
     /// Stub logging initialization when observability feature is disabled
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if logging initialization fails.
     pub fn init_logging(config: &ObservabilityConfig) -> Result<(), String> {
         // Fall back to basic tracing subscriber
         let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
@@ -1057,6 +1074,10 @@ pub struct ObservabilityHandle {
 
 impl ObservabilityHandle {
     /// Initialize observability with the given configuration
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if metrics initialization fails.
     pub fn init(config: &ObservabilityConfig) -> Result<Self, String> {
         // Initialize logging first, but tolerate failures (e.g., global subscriber already set)
         if let Err(_err) = init_logging(config) {
@@ -1079,6 +1100,10 @@ impl ObservabilityHandle {
     }
 
     /// Shutdown observability gracefully
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if shutdown fails.
     pub async fn shutdown(self) -> Result<(), String> {
         if let Some(provider) = self.metrics_provider {
             // Take ownership out of Arc if we're the last reference

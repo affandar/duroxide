@@ -289,8 +289,13 @@ impl Runtime {
                                                     id,
                                                     worker_id = %worker_id,
                                                     error = %e,
-                                                    "worker: atomic ack failed"
+                                                    "worker: atomic ack failed, abandoning work item"
                                                 );
+                                                // Abandon work item so it can be retried
+                                                let _ = rt
+                                                    .history_store
+                                                    .abandon_work_item(&token, Some(Duration::from_millis(100)))
+                                                    .await;
                                                 rt.record_activity_infra_error();
                                             }
                                         }
@@ -412,19 +417,13 @@ fn spawn_lock_renewal_task(
                         break;
                     }
 
-                    tracing::trace!(
-                        target: "duroxide::runtime::worker",
-                        lock_token = %token,
-                        extend_secs = %lock_timeout.as_secs(),
-                        "Renewing work item lock"
-                    );
-
                     match store.renew_work_item_lock(&token, lock_timeout).await {
                         Ok(()) => {
                             tracing::trace!(
                                 target: "duroxide::runtime::worker",
                                 lock_token = %token,
-                                "Lock renewed successfully"
+                                extend_secs = %lock_timeout.as_secs(),
+                                "Work item lock renewed"
                             );
                         }
                         Err(e) => {

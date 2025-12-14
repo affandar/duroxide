@@ -105,6 +105,10 @@ impl SqliteProvider {
     /// # Arguments
     /// * `database_url` - SQLite connection string (e.g., "sqlite:data.db" or "sqlite::memory:")
     /// * `options` - Optional configuration (currently unused, kept for future options)
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if database connection or schema initialization fails.
     pub async fn new(database_url: &str, _options: Option<SqliteOptions>) -> Result<Self, sqlx::Error> {
         // Configure SQLite for better concurrency
         let is_memory = database_url.contains(":memory:") || database_url.contains("mode=memory");
@@ -168,11 +172,19 @@ impl SqliteProvider {
 
     /// Convenience: create a shared in-memory SQLite store for tests
     /// Uses a shared cache so multiple pooled connections see the same DB
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if database connection or schema initialization fails.
     pub async fn new_in_memory() -> Result<Self, sqlx::Error> {
         Self::new_in_memory_with_options(None).await
     }
 
     /// Create an in-memory SQLite store with custom options
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if database connection or schema initialization fails.
     pub async fn new_in_memory_with_options(options: Option<SqliteOptions>) -> Result<Self, sqlx::Error> {
         // use shared-cache memory to allow pool > 1
         // ref: https://www.sqlite.org/inmemorydb.html
@@ -182,6 +194,10 @@ impl SqliteProvider {
 
     /// Debug helper: dump current queue states and small samples
     /// Force a WAL checkpoint to ensure all changes are written to main database file
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the checkpoint operation fails.
     pub async fn checkpoint(&self) -> Result<(), sqlx::Error> {
         sqlx::query("PRAGMA wal_checkpoint(FULL)").execute(&self.pool).await?;
         Ok(())
@@ -1265,14 +1281,6 @@ impl Provider for SqliteProvider {
         let locked_until = Self::timestamp_after(extend_for);
         let now_ms = Self::now_millis();
 
-        tracing::trace!(
-            target: "duroxide::providers::sqlite",
-            lock_token = %token,
-            extend_secs = %extend_for.as_secs(),
-            locked_until = %locked_until,
-            "Renewing work item lock"
-        );
-
         let result = sqlx::query(
             r#"
             UPDATE worker_queue
@@ -1295,10 +1303,82 @@ impl Provider for SqliteProvider {
             ));
         }
 
-        tracing::trace!(
+        tracing::debug!(
             target: "duroxide::providers::sqlite",
             lock_token = %token,
-            "Work item lock renewed successfully"
+            extend_secs = %extend_for.as_secs(),
+            "Work item lock renewed"
+        );
+
+        Ok(())
+    }
+
+    async fn abandon_work_item(&self, token: &str, delay: Option<Duration>) -> Result<(), ProviderError> {
+        // Worker queue uses locked_until for visibility control, not visible_at
+        // When delay is specified, set locked_until to future time to defer retry
+        let locked_until = delay.map(|d| Self::timestamp_after(d));
+
+        let result = sqlx::query(
+            r#"
+            UPDATE worker_queue
+            SET lock_token = NULL, locked_until = ?1
+            WHERE lock_token = ?2
+            "#,
+        )
+        .bind(locked_until)
+        .bind(token)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| Self::sqlx_to_provider_error("abandon_work_item", e))?;
+
+        if result.rows_affected() == 0 {
+            return Err(ProviderError::permanent(
+                "abandon_work_item",
+                "Invalid lock token or already acked",
+            ));
+        }
+
+        tracing::debug!(
+            target: "duroxide::providers::sqlite",
+            lock_token = %token,
+            delay_ms = ?delay.map(|d| d.as_millis()),
+            "Work item abandoned"
+        );
+
+        Ok(())
+    }
+
+    async fn renew_orchestration_item_lock(&self, token: &str, extend_for: Duration) -> Result<(), ProviderError> {
+        let locked_until = Self::timestamp_after(extend_for);
+        let now_ms = Self::now_millis();
+
+        let result = sqlx::query(
+            r#"
+            UPDATE instance_locks
+            SET locked_until = ?1
+            WHERE lock_token = ?2
+              AND locked_until > ?3
+            "#,
+        )
+        .bind(locked_until)
+        .bind(token)
+        .bind(now_ms)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| Self::sqlx_to_provider_error("renew_orchestration_item_lock", e))?;
+
+        if result.rows_affected() == 0 {
+            return Err(ProviderError::permanent(
+                "renew_orchestration_item_lock",
+                "Lock token invalid, expired, or already acked",
+            ));
+        }
+
+        tracing::debug!(
+            target: "duroxide::providers::sqlite",
+            lock_token = %token,
+            extend_secs = %extend_for.as_secs(),
+            "Orchestration item lock renewed"
         );
 
         Ok(())
@@ -2516,5 +2596,115 @@ mod tests {
             .iter()
             .find(|m| matches!(m, WorkItem::TimerFired { id: 2, .. }));
         assert!(work_item.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_abandon_work_item() {
+        let store = create_test_store().await;
+        let lock_timeout = Duration::from_secs(30);
+
+        // Enqueue activity work
+        let work_item = WorkItem::ActivityExecute {
+            instance: "test-abandon-work".to_string(),
+            execution_id: 1,
+            id: 1,
+            name: "TestActivity".to_string(),
+            input: "test-input".to_string(),
+        };
+        store.enqueue_for_worker(work_item).await.unwrap();
+
+        // Fetch and lock it
+        let (_, lock_token, _) = store
+            .fetch_work_item(lock_timeout, Duration::ZERO)
+            .await
+            .unwrap()
+            .unwrap();
+
+        // Verify it's locked (can't fetch again)
+        assert!(
+            store
+                .fetch_work_item(lock_timeout, Duration::ZERO)
+                .await
+                .unwrap()
+                .is_none()
+        );
+
+        // Abandon it
+        store.abandon_work_item(&lock_token, None).await.unwrap();
+
+        // Should be able to fetch again
+        let (dequeued2, lock_token2, _) = store
+            .fetch_work_item(lock_timeout, Duration::ZERO)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(matches!(dequeued2, WorkItem::ActivityExecute { instance, .. } if instance == "test-abandon-work"));
+        assert_ne!(lock_token2, lock_token); // Different lock token
+    }
+
+    #[tokio::test]
+    async fn test_abandon_work_item_invalid_token() {
+        let store = create_test_store().await;
+
+        // Try to abandon with an invalid token
+        let result = store.abandon_work_item("invalid-token", None).await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(!err.is_retryable());
+    }
+
+    #[tokio::test]
+    async fn test_renew_orchestration_item_lock() {
+        let store = create_test_store().await;
+        let lock_timeout = Duration::from_secs(30);
+
+        // Enqueue an orchestration
+        let item = WorkItem::StartOrchestration {
+            instance: "test-renew-orch".to_string(),
+            orchestration: "RenewTest".to_string(),
+            version: Some("1.0.0".to_string()),
+            input: "{}".to_string(),
+            parent_instance: None,
+            parent_id: None,
+            execution_id: crate::INITIAL_EXECUTION_ID,
+        };
+        store.enqueue_for_orchestrator(item, None).await.unwrap();
+
+        // Fetch and lock it
+        let (_orch_item, lock_token, _attempt_count) = store
+            .fetch_orchestration_item(lock_timeout, Duration::ZERO)
+            .await
+            .unwrap()
+            .unwrap();
+
+        // Renew the lock
+        store
+            .renew_orchestration_item_lock(&lock_token, Duration::from_secs(60))
+            .await
+            .unwrap();
+
+        // Lock should still be valid (can't fetch again)
+        assert!(
+            store
+                .fetch_orchestration_item(lock_timeout, Duration::ZERO)
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_renew_orchestration_item_lock_invalid_token() {
+        let store = create_test_store().await;
+
+        // Try to renew with an invalid token
+        let result = store
+            .renew_orchestration_item_lock("invalid-token", Duration::from_secs(60))
+            .await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(!err.is_retryable());
     }
 }

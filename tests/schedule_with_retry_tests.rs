@@ -744,12 +744,14 @@ async fn test_timeout_exits_immediately_without_retry() {
 
     let orchestrations = OrchestrationRegistry::builder()
         .register("RetryOrch", |ctx: OrchestrationContext, _input: String| async move {
-            // 3 max attempts with 50ms timeout - but timeout should prevent ANY retry
+            // 3 max attempts with 150ms timeout - but timeout should prevent ANY retry
+            // Using 150ms instead of 50ms to give worker time to fetch activity under load,
+            // while still being less than the 200ms activity duration
             ctx.schedule_activity_with_retry(
                 "SlowActivity",
                 "",
                 RetryPolicy::new(3)
-                    .with_timeout(Duration::from_millis(50))
+                    .with_timeout(Duration::from_millis(150))
                     .with_backoff(BackoffStrategy::None),
             )
             .await

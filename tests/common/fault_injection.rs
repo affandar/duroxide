@@ -7,10 +7,10 @@
 #![allow(dead_code)]
 
 use async_trait::async_trait;
-use duroxide::Event;
 use duroxide::providers::error::ProviderError;
 use duroxide::providers::sqlite::SqliteProvider;
 use duroxide::providers::{ExecutionMetadata, OrchestrationItem, Provider, ProviderAdmin, WorkItem};
+use duroxide::{Event, EventKind};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::Duration;
@@ -197,6 +197,14 @@ impl Provider for PoisonInjectingProvider {
         self.inner.renew_work_item_lock(token, extension).await
     }
 
+    async fn abandon_work_item(&self, token: &str, delay: Option<Duration>) -> Result<(), ProviderError> {
+        self.inner.abandon_work_item(token, delay).await
+    }
+
+    async fn renew_orchestration_item_lock(&self, token: &str, extend_for: Duration) -> Result<(), ProviderError> {
+        self.inner.renew_orchestration_item_lock(token, extend_for).await
+    }
+
     async fn enqueue_for_orchestrator(&self, item: WorkItem, delay: Option<Duration>) -> Result<(), ProviderError> {
         self.inner.enqueue_for_orchestrator(item, delay).await
     }
@@ -238,6 +246,10 @@ pub struct FailingProvider {
     fail_next_ack_orchestration_item: AtomicBool,
     fail_next_fetch_orchestration_item: AtomicBool,
     fail_next_fetch_work_item: AtomicBool,
+    /// If true, allow failure event commits to succeed even when failing acks
+    allow_failure_commits: AtomicBool,
+    /// If true, do the actual ack before returning error (for testing post-ack failures)
+    ack_then_fail: AtomicBool,
 }
 
 impl FailingProvider {
@@ -248,27 +260,37 @@ impl FailingProvider {
             fail_next_ack_orchestration_item: AtomicBool::new(false),
             fail_next_fetch_orchestration_item: AtomicBool::new(false),
             fail_next_fetch_work_item: AtomicBool::new(false),
+            allow_failure_commits: AtomicBool::new(false),
+            ack_then_fail: AtomicBool::new(false),
         }
     }
 
-    #[allow(dead_code)]
     pub fn fail_next_ack_work_item(&self) {
         self.fail_next_ack_work_item.store(true, Ordering::SeqCst);
     }
 
-    #[allow(dead_code)]
     pub fn fail_next_ack_orchestration_item(&self) {
         self.fail_next_ack_orchestration_item.store(true, Ordering::SeqCst);
     }
 
-    #[allow(dead_code)]
     pub fn fail_next_fetch_orchestration_item(&self) {
         self.fail_next_fetch_orchestration_item.store(true, Ordering::SeqCst);
     }
 
-    #[allow(dead_code)]
     pub fn fail_next_fetch_work_item(&self) {
         self.fail_next_fetch_work_item.store(true, Ordering::SeqCst);
+    }
+
+    /// When set, failure event commits (OrchestrationFailed) will succeed
+    /// even when ack_orchestration_item is set to fail.
+    pub fn set_allow_failure_commits(&self, allow: bool) {
+        self.allow_failure_commits.store(allow, Ordering::SeqCst);
+    }
+
+    /// When set, ack operations will complete successfully before returning error.
+    /// Useful for testing scenarios where ack succeeds but caller thinks it failed.
+    pub fn set_ack_then_fail(&self, enabled: bool) {
+        self.ack_then_fail.store(enabled, Ordering::SeqCst);
     }
 }
 
@@ -314,9 +336,28 @@ impl Provider for FailingProvider {
         metadata: ExecutionMetadata,
     ) -> Result<(), ProviderError> {
         if self.fail_next_ack_orchestration_item.swap(false, Ordering::SeqCst) {
-            Err(ProviderError::retryable(
+            // Check if this is a failure event commit and we should allow it
+            if self.allow_failure_commits.load(Ordering::SeqCst) {
+                let is_failure_commit = history_delta
+                    .iter()
+                    .any(|e| matches!(&e.kind, EventKind::OrchestrationFailed { .. }));
+                if is_failure_commit {
+                    return self
+                        .inner
+                        .ack_orchestration_item(
+                            lock_token,
+                            execution_id,
+                            history_delta,
+                            worker_items,
+                            orchestrator_items,
+                            metadata,
+                        )
+                        .await;
+                }
+            }
+            Err(ProviderError::permanent(
                 "ack_orchestration_item",
-                "simulated transient infrastructure failure",
+                "simulated infrastructure failure",
             ))
         } else {
             self.inner
@@ -338,9 +379,13 @@ impl Provider for FailingProvider {
 
     async fn ack_work_item(&self, token: &str, completion: WorkItem) -> Result<(), ProviderError> {
         if self.fail_next_ack_work_item.swap(false, Ordering::SeqCst) {
-            Err(ProviderError::retryable(
+            // If ack_then_fail is set, do the actual ack first
+            if self.ack_then_fail.load(Ordering::SeqCst) {
+                self.inner.ack_work_item(token, completion).await?;
+            }
+            Err(ProviderError::permanent(
                 "ack_work_item",
-                "simulated transient infrastructure failure",
+                "simulated infrastructure failure",
             ))
         } else {
             self.inner.ack_work_item(token, completion).await
@@ -349,6 +394,14 @@ impl Provider for FailingProvider {
 
     async fn renew_work_item_lock(&self, token: &str, extension: Duration) -> Result<(), ProviderError> {
         self.inner.renew_work_item_lock(token, extension).await
+    }
+
+    async fn abandon_work_item(&self, token: &str, delay: Option<Duration>) -> Result<(), ProviderError> {
+        self.inner.abandon_work_item(token, delay).await
+    }
+
+    async fn renew_orchestration_item_lock(&self, token: &str, extend_for: Duration) -> Result<(), ProviderError> {
+        self.inner.renew_orchestration_item_lock(token, extend_for).await
     }
 
     async fn enqueue_for_orchestrator(&self, item: WorkItem, delay: Option<Duration>) -> Result<(), ProviderError> {

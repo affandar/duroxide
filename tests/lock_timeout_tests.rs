@@ -448,3 +448,106 @@ async fn concurrent_activities_with_renewal() {
 
     rt.shutdown(None).await;
 }
+
+/// Test that orchestrator_lock_renewal_buffer is configurable and defaults correctly
+#[tokio::test]
+async fn orchestrator_lock_renewal_buffer_defaults() {
+    let options = RuntimeOptions::default();
+    assert_eq!(
+        options.orchestrator_lock_renewal_buffer,
+        Duration::from_secs(2),
+        "Default orchestrator lock renewal buffer should be 2 seconds"
+    );
+
+    // Custom configuration
+    let custom = RuntimeOptions {
+        orchestrator_lock_renewal_buffer: Duration::from_secs(5),
+        ..Default::default()
+    };
+    assert_eq!(custom.orchestrator_lock_renewal_buffer, Duration::from_secs(5));
+}
+
+/// Test that orchestration lock renewal actually prevents lock expiration.
+///
+/// This test uses a test hook to inject a processing delay that exceeds the lock timeout.
+/// Without lock renewal, the lock would expire and the orchestration would fail.
+/// With lock renewal, the lock is extended and the orchestration completes successfully.
+///
+/// Note: This test uses a global static for the hook, so we use #[serial] behavior
+/// by having a unique instance name and clearing the hook before and after.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn orchestration_lock_renewal_prevents_expiration() {
+    use duroxide::providers::sqlite::SqliteProvider;
+    use duroxide::runtime::test_hooks;
+
+    // Clear any stale hook state from other tests
+    test_hooks::clear_orch_processing_delay();
+
+    let store = Arc::new(SqliteProvider::new_in_memory().await.unwrap());
+
+    // Configure short lock timeout (2s) with renewal 1s before expiry
+    // The test hook will inject a 4s delay, requiring multiple renewals
+    let options = RuntimeOptions {
+        orchestrator_lock_timeout: Duration::from_secs(2),
+        orchestrator_lock_renewal_buffer: Duration::from_secs(1), // Renew at 1s interval
+        orchestration_concurrency: 1,
+        ..Default::default()
+    };
+
+    let activities = ActivityRegistry::builder()
+        .register(
+            "QuickActivity",
+            |_ctx: duroxide::ActivityContext, _input: String| async move { Ok("done".to_string()) },
+        )
+        .build();
+
+    let orchestrations = OrchestrationRegistry::builder()
+        .register(
+            "RenewalTestOrch",
+            |ctx: OrchestrationContext, _input: String| async move {
+                // The processing delay is injected by test hook BEFORE this code runs
+                // Schedule a quick activity to prove orchestration works
+                let result = ctx.schedule_activity("QuickActivity", "{}").into_activity().await?;
+                Ok(format!("completed: {}", result))
+            },
+        )
+        .build();
+
+    let rt = runtime::Runtime::start_with_options(store.clone(), Arc::new(activities), orchestrations, options).await;
+    let client = Client::new(store.clone());
+
+    // Set a 4-second processing delay (longer than 2s lock timeout)
+    // This requires the renewal task to extend the lock multiple times
+    // Use instance prefix to only affect this specific test
+    test_hooks::set_orch_processing_delay(Duration::from_secs(4), Some("lock-renewal-e2e"));
+
+    client
+        .start_orchestration("lock-renewal-e2e", "RenewalTestOrch", "")
+        .await
+        .unwrap();
+
+    // Wait for completion - should succeed because lock renewal kept the lock alive
+    let status = client
+        .wait_for_orchestration("lock-renewal-e2e", Duration::from_secs(15))
+        .await
+        .unwrap();
+
+    // Clear the hook immediately after we get the result
+    test_hooks::clear_orch_processing_delay();
+
+    match status {
+        runtime::OrchestrationStatus::Completed { output } => {
+            assert!(output.contains("completed"));
+            assert!(output.contains("done"));
+        }
+        runtime::OrchestrationStatus::Failed { details } => {
+            panic!(
+                "Orchestration failed - lock renewal may not be working: {}",
+                details.display_message()
+            );
+        }
+        other => panic!("Unexpected status: {:?}", other),
+    }
+
+    rt.shutdown(None).await;
+}

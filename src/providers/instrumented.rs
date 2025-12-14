@@ -205,6 +205,14 @@ impl Provider for InstrumentedProvider {
         self.inner.renew_work_item_lock(token, extend_for).await
     }
 
+    async fn abandon_work_item(&self, token: &str, delay: Option<Duration>) -> Result<(), ProviderError> {
+        self.inner.abandon_work_item(token, delay).await
+    }
+
+    async fn renew_orchestration_item_lock(&self, token: &str, extend_for: Duration) -> Result<(), ProviderError> {
+        self.inner.renew_orchestration_item_lock(token, extend_for).await
+    }
+
     async fn enqueue_for_orchestrator(&self, item: WorkItem, delay: Option<Duration>) -> Result<(), ProviderError> {
         let start = std::time::Instant::now();
         let result = self.inner.enqueue_for_orchestrator(item, delay).await;
