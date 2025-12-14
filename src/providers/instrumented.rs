@@ -127,8 +127,15 @@ impl Provider for InstrumentedProvider {
         result
     }
 
-    async fn abandon_orchestration_item(&self, lock_token: &str, delay: Option<Duration>) -> Result<(), ProviderError> {
-        self.inner.abandon_orchestration_item(lock_token, delay).await
+    async fn abandon_orchestration_item(
+        &self,
+        lock_token: &str,
+        delay: Option<Duration>,
+        ignore_attempt: bool,
+    ) -> Result<(), ProviderError> {
+        self.inner
+            .abandon_orchestration_item(lock_token, delay, ignore_attempt)
+            .await
     }
 
     async fn read(&self, instance: &str) -> Result<Vec<Event>, ProviderError> {
@@ -205,8 +212,13 @@ impl Provider for InstrumentedProvider {
         self.inner.renew_work_item_lock(token, extend_for).await
     }
 
-    async fn abandon_work_item(&self, token: &str, delay: Option<Duration>) -> Result<(), ProviderError> {
-        self.inner.abandon_work_item(token, delay).await
+    async fn abandon_work_item(
+        &self,
+        token: &str,
+        delay: Option<Duration>,
+        ignore_attempt: bool,
+    ) -> Result<(), ProviderError> {
+        self.inner.abandon_work_item(token, delay, ignore_attempt).await
     }
 
     async fn renew_orchestration_item_lock(&self, token: &str, extend_for: Duration) -> Result<(), ProviderError> {

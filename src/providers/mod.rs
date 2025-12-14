@@ -1198,10 +1198,17 @@ pub trait Provider: Any + Send + Sync {
     /// state corruption and should be surfaced as errors.
     ///
     /// Return `Err("Invalid lock token")` if the lock token is not found in `instance_locks`.
+    ///
+    /// # Parameters
+    ///
+    /// * `lock_token` - The lock token from `fetch_orchestration_item`
+    /// * `delay` - Optional delay before message becomes visible again
+    /// * `ignore_attempt` - If true, decrement the attempt count (never below 0)
     async fn abandon_orchestration_item(
         &self,
         _lock_token: &str,
         _delay: Option<Duration>,
+        _ignore_attempt: bool,
     ) -> Result<(), ProviderError>;
 
     /// Read the full history for the latest execution of an instance.
@@ -1507,7 +1514,18 @@ pub trait Provider: Any + Send + Sync {
     ///     Ok(())
     /// }
     /// ```
-    async fn abandon_work_item(&self, token: &str, delay: Option<Duration>) -> Result<(), ProviderError>;
+    ///
+    /// # Parameters
+    ///
+    /// * `token` - Lock token from fetch_work_item
+    /// * `delay` - Optional delay before work item becomes visible again
+    /// * `ignore_attempt` - If true, decrement the attempt count (never below 0)
+    async fn abandon_work_item(
+        &self,
+        token: &str,
+        delay: Option<Duration>,
+        ignore_attempt: bool,
+    ) -> Result<(), ProviderError>;
 
     /// Renew the lock on an orchestration item.
     ///

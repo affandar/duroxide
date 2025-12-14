@@ -201,3 +201,13 @@ pub mod long_polling {
         test_short_poll_work_item_returns_immediately,
     };
 }
+
+#[cfg(feature = "provider-test")]
+pub mod poison_message {
+    pub use crate::provider_validation::poison_message::{
+        abandon_orchestration_item_ignore_attempt_decrements, abandon_work_item_ignore_attempt_decrements,
+        attempt_count_is_per_message, ignore_attempt_never_goes_negative,
+        orchestration_attempt_count_increments_on_refetch, orchestration_attempt_count_starts_at_one,
+        worker_attempt_count_increments_on_lock_expiry, worker_attempt_count_starts_at_one,
+    };
+}

@@ -294,7 +294,7 @@ impl Runtime {
                                                 // Abandon work item so it can be retried
                                                 let _ = rt
                                                     .history_store
-                                                    .abandon_work_item(&token, Some(Duration::from_millis(100)))
+                                                    .abandon_work_item(&token, Some(Duration::from_millis(100)), false)
                                                     .await;
                                                 rt.record_activity_infra_error();
                                             }

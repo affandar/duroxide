@@ -543,10 +543,11 @@ impl Runtime {
                     Err(e2) => {
                         // Failed to commit failure event - abandon lock
                         warn!(instance = %instance, error = %e2, "Failed to commit failure event, abandoning lock");
-                        drop(
-                            self.history_store
-                                .abandon_orchestration_item(lock_token, Some(std::time::Duration::from_millis(50))),
-                        );
+                        drop(self.history_store.abandon_orchestration_item(
+                            lock_token,
+                            Some(std::time::Duration::from_millis(50)),
+                            false,
+                        ));
                     }
                 }
             }
@@ -689,10 +690,11 @@ impl Runtime {
                     } else {
                         warn!(attempts, error = %e, "Failed to ack_orchestration_item after max retries");
                         // Abandon the item to release lock
-                        drop(
-                            self.history_store
-                                .abandon_orchestration_item(lock_token, Some(std::time::Duration::from_millis(50))),
-                        );
+                        drop(self.history_store.abandon_orchestration_item(
+                            lock_token,
+                            Some(std::time::Duration::from_millis(50)),
+                            false,
+                        ));
                         return Err(e);
                     }
                 }

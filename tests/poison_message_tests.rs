@@ -54,7 +54,7 @@ async fn orchestration_attempt_count_increments_on_abandon() {
 
     // Abandon and fetch again
     provider
-        .abandon_orchestration_item(&lock_token1, None)
+        .abandon_orchestration_item(&lock_token1, None, false)
         .await
         .expect("abandon should succeed");
 
@@ -67,7 +67,7 @@ async fn orchestration_attempt_count_increments_on_abandon() {
 
     // Abandon and fetch a third time
     provider
-        .abandon_orchestration_item(&lock_token2, None)
+        .abandon_orchestration_item(&lock_token2, None, false)
         .await
         .expect("abandon should succeed");
 

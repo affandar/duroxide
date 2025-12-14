@@ -15,6 +15,13 @@ mod tests {
             test_fetch_respects_timeout_upper_bound, test_short_poll_returns_immediately,
             test_short_poll_work_item_returns_immediately,
         },
+        // Poison message tests
+        poison_message::{
+            abandon_orchestration_item_ignore_attempt_decrements, abandon_work_item_ignore_attempt_decrements,
+            attempt_count_is_per_message, ignore_attempt_never_goes_negative,
+            orchestration_attempt_count_increments_on_refetch, orchestration_attempt_count_starts_at_one,
+            worker_attempt_count_increments_on_lock_expiry, worker_attempt_count_starts_at_one,
+        },
         test_abandon_releases_lock_immediately,
         test_ack_only_affects_locked_messages,
         // Atomicity tests
@@ -340,5 +347,46 @@ mod tests {
     async fn test_sqlite_fetch_respects_timeout_upper_bound() {
         let provider = SqliteTestFactory.create_provider().await;
         test_fetch_respects_timeout_upper_bound(&*provider).await;
+    }
+
+    // Poison message tests
+    #[tokio::test]
+    async fn test_sqlite_orchestration_attempt_count_starts_at_one() {
+        orchestration_attempt_count_starts_at_one(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_orchestration_attempt_count_increments_on_refetch() {
+        orchestration_attempt_count_increments_on_refetch(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_worker_attempt_count_starts_at_one() {
+        worker_attempt_count_starts_at_one(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_worker_attempt_count_increments_on_lock_expiry() {
+        worker_attempt_count_increments_on_lock_expiry(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_attempt_count_is_per_message() {
+        attempt_count_is_per_message(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_abandon_work_item_ignore_attempt_decrements() {
+        abandon_work_item_ignore_attempt_decrements(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_abandon_orchestration_item_ignore_attempt_decrements() {
+        abandon_orchestration_item_ignore_attempt_decrements(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_ignore_attempt_never_goes_negative() {
+        ignore_attempt_never_goes_negative(&SqliteTestFactory).await;
     }
 }

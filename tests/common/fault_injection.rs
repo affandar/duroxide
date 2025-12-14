@@ -185,8 +185,15 @@ impl Provider for PoisonInjectingProvider {
             .await
     }
 
-    async fn abandon_orchestration_item(&self, lock_token: &str, delay: Option<Duration>) -> Result<(), ProviderError> {
-        self.inner.abandon_orchestration_item(lock_token, delay).await
+    async fn abandon_orchestration_item(
+        &self,
+        lock_token: &str,
+        delay: Option<Duration>,
+        ignore_attempt: bool,
+    ) -> Result<(), ProviderError> {
+        self.inner
+            .abandon_orchestration_item(lock_token, delay, ignore_attempt)
+            .await
     }
 
     async fn ack_work_item(&self, token: &str, completion: WorkItem) -> Result<(), ProviderError> {
@@ -197,8 +204,13 @@ impl Provider for PoisonInjectingProvider {
         self.inner.renew_work_item_lock(token, extension).await
     }
 
-    async fn abandon_work_item(&self, token: &str, delay: Option<Duration>) -> Result<(), ProviderError> {
-        self.inner.abandon_work_item(token, delay).await
+    async fn abandon_work_item(
+        &self,
+        token: &str,
+        delay: Option<Duration>,
+        ignore_attempt: bool,
+    ) -> Result<(), ProviderError> {
+        self.inner.abandon_work_item(token, delay, ignore_attempt).await
     }
 
     async fn renew_orchestration_item_lock(&self, token: &str, extend_for: Duration) -> Result<(), ProviderError> {
@@ -373,8 +385,15 @@ impl Provider for FailingProvider {
         }
     }
 
-    async fn abandon_orchestration_item(&self, lock_token: &str, delay: Option<Duration>) -> Result<(), ProviderError> {
-        self.inner.abandon_orchestration_item(lock_token, delay).await
+    async fn abandon_orchestration_item(
+        &self,
+        lock_token: &str,
+        delay: Option<Duration>,
+        ignore_attempt: bool,
+    ) -> Result<(), ProviderError> {
+        self.inner
+            .abandon_orchestration_item(lock_token, delay, ignore_attempt)
+            .await
     }
 
     async fn ack_work_item(&self, token: &str, completion: WorkItem) -> Result<(), ProviderError> {
@@ -396,8 +415,13 @@ impl Provider for FailingProvider {
         self.inner.renew_work_item_lock(token, extension).await
     }
 
-    async fn abandon_work_item(&self, token: &str, delay: Option<Duration>) -> Result<(), ProviderError> {
-        self.inner.abandon_work_item(token, delay).await
+    async fn abandon_work_item(
+        &self,
+        token: &str,
+        delay: Option<Duration>,
+        ignore_attempt: bool,
+    ) -> Result<(), ProviderError> {
+        self.inner.abandon_work_item(token, delay, ignore_attempt).await
     }
 
     async fn renew_orchestration_item_lock(&self, token: &str, extend_for: Duration) -> Result<(), ProviderError> {

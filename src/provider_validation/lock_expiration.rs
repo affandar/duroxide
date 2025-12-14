@@ -82,7 +82,10 @@ pub async fn test_abandon_releases_lock_immediately<F: ProviderFactory>(factory:
     );
 
     // Abandon the lock
-    provider.abandon_orchestration_item(&lock_token, None).await.unwrap();
+    provider
+        .abandon_orchestration_item(&lock_token, None, false)
+        .await
+        .unwrap();
 
     // Lock should be released immediately (don't need to wait for expiration)
     let (item2, _lock_token2, _attempt_count2) = provider

@@ -5,6 +5,86 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.2] - 2025-12-14
+
+### Added
+
+- **Poison message handling** - Automatic detection and failure of messages that exceed `max_attempts` (default: 10)
+  - `RuntimeOptions::max_attempts` configuration option
+  - `ErrorDetails::Poison` variant with detailed context
+  - `PoisonMessageType` enum distinguishing orchestration vs activity poison
+  - Dedicated metrics: `duroxide_orchestration_poison_total`, `duroxide_activity_poison_total`
+
+- **Lock renewal for orchestrations** - Prevents lock expiration during long orchestration turns
+  - `Provider::renew_orchestration_item_lock()` method
+  - `RuntimeOptions::orchestrator_lock_renewal_buffer` configuration (default: 2s)
+  - Automatic background renewal task in orchestration dispatcher
+
+- **Work item abandon with retry** - Explicit lock release for failed activities
+  - `Provider::abandon_work_item()` method with optional delay
+  - Called automatically when `ack_work_item` fails
+
+- **Attempt count management** - `ignore_attempt` parameter for abandon methods
+  - `abandon_work_item(..., ignore_attempt: bool)` - decrement count on transient failures
+  - `abandon_orchestration_item(..., ignore_attempt: bool)` - same for orchestrations
+  - Prevents false poison detection from infrastructure errors
+
+- **Provider validation tests** - 8 new poison message tests
+  - `orchestration_attempt_count_starts_at_one`
+  - `orchestration_attempt_count_increments_on_refetch`
+  - `worker_attempt_count_starts_at_one`
+  - `worker_attempt_count_increments_on_lock_expiry`
+  - `attempt_count_is_per_message`
+  - `abandon_work_item_ignore_attempt_decrements`
+  - `abandon_orchestration_item_ignore_attempt_decrements`
+  - `ignore_attempt_never_goes_negative`
+
+### Changed
+
+- **BREAKING:** SQLite provider is now optional - enable with `features = ["sqlite"]`
+- **BREAKING:** `Provider::fetch_work_item` now returns `(WorkItem, String, u32)` tuple (added `attempt_count`)
+- **BREAKING:** `Provider::fetch_orchestration_item` now returns `(OrchestrationItem, String, u32)` tuple (added `attempt_count`)
+- **BREAKING:** `Provider::abandon_work_item` now requires `ignore_attempt: bool` parameter
+- **BREAKING:** `Provider::abandon_orchestration_item` now requires `ignore_attempt: bool` parameter
+- `OrchestrationItem` struct no longer contains `lock_token` (moved to return tuple)
+- Provider validation test count increased from 50 to 58
+
+### Migration Guide
+
+**Cargo.toml (if using SQLite provider):**
+```toml
+# Before
+duroxide = "0.1.1"
+
+# After - SQLite now requires explicit feature
+duroxide = { version = "0.1.2", features = ["sqlite"] }
+```
+
+**Provider implementers:**
+```rust
+// fetch_work_item now returns attempt_count
+async fn fetch_work_item(...) -> Result<Option<(WorkItem, String, u32)>, ProviderError>;
+
+// fetch_orchestration_item now returns attempt_count
+async fn fetch_orchestration_item(...) -> Result<Option<(OrchestrationItem, String, u32)>, ProviderError>;
+
+// abandon methods now have ignore_attempt parameter
+async fn abandon_work_item(&self, token: &str, delay: Option<Duration>, ignore_attempt: bool) -> Result<(), ProviderError>;
+async fn abandon_orchestration_item(&self, token: &str, delay: Option<Duration>, ignore_attempt: bool) -> Result<(), ProviderError>;
+
+// New method for orchestration lock renewal
+async fn renew_orchestration_item_lock(&self, token: &str, extend_for: Duration) -> Result<(), ProviderError>;
+```
+
+**Runtime users:**
+```rust
+RuntimeOptions {
+    max_attempts: 10,  // NEW - poison threshold
+    orchestrator_lock_renewal_buffer: Duration::from_secs(2),  // NEW
+    ..Default::default()
+}
+```
+
 ## [0.1.1] - 2025-12-10
 
 ### Added

@@ -122,9 +122,10 @@ impl Provider for MyProvider {
         todo!("See detailed docs below")
     }
     
-    async fn abandon_orchestration_item(&self, lock_token: &str, delay: Option<Duration>) -> Result<(), ProviderError> {
+    async fn abandon_orchestration_item(&self, lock_token: &str, delay: Option<Duration>, ignore_attempt: bool) -> Result<(), ProviderError> {
         // Clear lock_token from messages
         // Optionally delay visibility for backoff
+        // If ignore_attempt is true, decrement attempt_count (never below 0)
         
         todo!("See detailed docs below")
     }
@@ -202,13 +203,14 @@ impl Provider for MyProvider {
         todo!()
     }
     
-    async fn abandon_work_item(&self, token: &str, delay: Option<Duration>) -> Result<(), ProviderError> {
+    async fn abandon_work_item(&self, token: &str, delay: Option<Duration>, ignore_attempt: bool) -> Result<(), ProviderError> {
         // Release work item lock without completing
         // Called when activity execution fails and should be retried
         //
         // 1. Clear lock_token from the work item
         // 2. Set visible_at = now() + delay (if delay provided) for backoff
-        // 3. Item becomes available for re-fetch
+        // 3. If ignore_attempt is true, decrement attempt_count (never below 0)
+        // 4. Item becomes available for re-fetch
         //
         // Silently ignore if token not found (idempotent)
         
@@ -887,7 +889,12 @@ If multiple dispatchers attempt to ack with the same lock token simultaneously, 
 
 ### 3. abandon_orchestration_item() - Release Lock for Retry
 
-**Purpose:** Release instance lock and optionally delay visibility for backoff.
+**Purpose:** Release instance lock, optionally delay visibility for backoff, and optionally undo the attempt count.
+
+**Parameters:**
+- `lock_token` - The lock token from `fetch_orchestration_item`
+- `delay` - Optional delay before messages become visible again
+- `ignore_attempt` - If true, decrement the `attempt_count` (never below 0)
 
 **⚠️ CRITICAL: Invalid Lock Token Handling**
 
@@ -912,20 +919,22 @@ IF instance_id IS NULL:
     ROLLBACK
     RETURN Err(ProviderError::permanent("abandon_orchestration_item", "Invalid lock token"))
 
-// Step 2: Clear lock_token from messages (unlock them)
-visible_at = IF delay IS NOT NULL:
-                 current_timestamp() + delay
-             ELSE:
-                 current_timestamp()
-
-UPDATE orchestrator_queue
-SET lock_token = NULL,
-    locked_until = NULL,
-    visible_at = visible_at
-WHERE lock_token = lock_token
-
-// Step 3: Remove instance lock
+// Step 2: Remove instance lock
 DELETE FROM instance_locks WHERE lock_token = lock_token
+
+// Step 3: If ignore_attempt, decrement attempt count (never below 0)
+IF ignore_attempt:
+    UPDATE orchestrator_queue
+    SET attempt_count = MAX(0, attempt_count - 1)
+    WHERE instance_id = instance_id
+
+// Step 4: Optionally delay message visibility
+IF delay IS NOT NULL:
+    visible_at = current_timestamp() + delay
+    UPDATE orchestrator_queue
+    SET visible_at = visible_at
+    WHERE instance_id = instance_id
+      AND visible_at <= current_timestamp()
 
 COMMIT TRANSACTION
 RETURN Ok(())
@@ -936,6 +945,7 @@ RETURN Ok(())
 - This helps detect programming errors and state corruption
 - If lock token is valid, proceed with unlocking messages and removing the instance lock
 - Optional delay applies to messages for the instance (useful for backoff strategies)
+- `ignore_attempt` is useful when abandoning due to transient infrastructure errors (not actual processing failures)
 
 ---
 
@@ -1140,6 +1150,61 @@ async fn renew_work_item_lock(token: &str, extend_for: Duration) -> Result<(), P
 
 ---
 
+### Method 5: abandon_work_item (Release Work Item Lock)
+
+**Purpose:** Release a work item lock without completing it, optionally with a delay for backoff.
+
+**Parameters:**
+- `token` - Lock token from `fetch_work_item`
+- `delay` - Optional delay before work item becomes visible again
+- `ignore_attempt` - If true, decrement the `attempt_count` (never below 0)
+
+**Implementation:**
+```
+async fn abandon_work_item(
+    token: &str,
+    delay: Option<Duration>,
+    ignore_attempt: bool,
+) -> Result<(), ProviderError> {
+    locked_until = IF delay IS NOT NULL:
+                       current_timestamp() + delay
+                   ELSE:
+                       NULL
+
+    IF ignore_attempt:
+        result = UPDATE worker_queue
+                 SET lock_token = NULL,
+                     locked_until = locked_until,
+                     attempt_count = MAX(0, attempt_count - 1)
+                 WHERE lock_token = token
+    ELSE:
+        result = UPDATE worker_queue
+                 SET lock_token = NULL, locked_until = locked_until
+                 WHERE lock_token = token
+
+    IF result.rows_affected == 0:
+        RETURN Err(ProviderError::permanent("Invalid lock token or already acked"))
+
+    RETURN Ok(())
+}
+```
+
+**Called By:**
+- Worker dispatcher when activity execution fails with a retryable error
+- Worker dispatcher when `ack_work_item` fails (infrastructure error)
+
+**ignore_attempt Use Case:**
+- When abandoning due to transient infrastructure errors (e.g., database contention)
+- The work was not actually processed, so attempt count shouldn't be penalized
+- Prevents false poison message detection
+
+**Why this matters:**
+- Allows explicit release of work item lock for retry
+- Enables backoff strategies via delay parameter
+- `ignore_attempt` prevents false poison counts from infrastructure errors
+
+---
+
 ## Schema Recommendations
 
 ### Minimum Required Tables
@@ -1326,7 +1391,7 @@ async fn test_my_provider_exclusive_instance_lock() {
 
 ### Available Test Functions
 
-The validation suite provides **45 individual test functions** organized into 8 categories:
+The validation suite provides **58 individual test functions** organized into 9 categories:
 
 **Atomicity Tests (4 tests):**
 - `test_atomicity_failure_rollback` - Verify ack failure rolls back all operations
@@ -1394,6 +1459,16 @@ The validation suite provides **45 individual test functions** organized into 8 
 - `test_get_system_metrics` - Verify get_system_metrics returns accurate counts
 - `test_get_queue_depths` - Verify get_queue_depths returns current queue sizes
 
+**Poison Message Tests (8 tests):**
+- `orchestration_attempt_count_starts_at_one` - Verify first fetch has attempt_count = 1
+- `orchestration_attempt_count_increments_on_refetch` - Verify attempt count increments on abandon/refetch
+- `worker_attempt_count_starts_at_one` - Verify worker items start with attempt_count = 1
+- `worker_attempt_count_increments_on_lock_expiry` - Verify attempt count increments when lock expires
+- `attempt_count_is_per_message` - Verify each message has independent attempt count
+- `abandon_work_item_ignore_attempt_decrements` - Verify ignore_attempt=true decrements count
+- `abandon_orchestration_item_ignore_attempt_decrements` - Verify ignore_attempt=true decrements count
+- `ignore_attempt_never_goes_negative` - Verify attempt count never goes below 0
+
 ### Benefits of Granular Tests
 
 **Easier debugging:** When a test fails, you know exactly which behavior is broken. You can run a single test function to quickly isolate the issue.
@@ -1404,7 +1479,7 @@ The validation suite provides **45 individual test functions** organized into 8 
 
 ### Example: Complete Test File
 
-See `tests/sqlite_provider_validations.rs` for a complete example that runs all 45 validation tests individually.
+See `tests/sqlite_provider_validations.rs` for a complete example that runs all 58 validation tests individually.
 
 ---
 
@@ -1842,7 +1917,7 @@ Core orchestration execution still works normally.
 ## Testing Your Provider
 
 After implementing your provider, follow the **[Provider Testing Guide](provider-testing-guide.md)** to:
-- Run **validation tests** (45 correctness tests) to verify behavior
+- Run **validation tests** (58 correctness tests) to verify behavior
 - Run **stress tests** to measure performance under load
 - Compare metrics with built-in providers
 - Integrate tests into your CI/CD pipeline

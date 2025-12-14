@@ -6,9 +6,10 @@
 use std::time::Duration;
 
 use crate::INITIAL_EXECUTION_ID;
+use crate::provider_validations::ProviderFactory;
 use crate::providers::WorkItem;
 
-use super::{ExecutionMetadata, ProviderFactory};
+use super::ExecutionMetadata;
 
 /// Test that orchestration item attempt_count is 1 on first fetch
 pub async fn orchestration_attempt_count_starts_at_one(factory: &dyn ProviderFactory) {
@@ -90,7 +91,7 @@ pub async fn orchestration_attempt_count_increments_on_refetch(factory: &dyn Pro
 
     // Abandon the item
     provider
-        .abandon_orchestration_item(&lock_token1, None)
+        .abandon_orchestration_item(&lock_token1, None, false)
         .await
         .expect("abandon should succeed");
 
@@ -104,7 +105,7 @@ pub async fn orchestration_attempt_count_increments_on_refetch(factory: &dyn Pro
 
     // Abandon again
     provider
-        .abandon_orchestration_item(&lock_token2, None)
+        .abandon_orchestration_item(&lock_token2, None, false)
         .await
         .expect("abandon should succeed");
 
@@ -317,4 +318,227 @@ pub async fn attempt_count_is_per_message(factory: &dyn ProviderFactory) {
         .expect("ack should succeed");
 
     tracing::info!("✓ Test passed: attempt_count is tracked per message");
+}
+
+/// Test that abandon_work_item with ignore_attempt=true decrements attempt count
+pub async fn abandon_work_item_ignore_attempt_decrements(factory: &dyn ProviderFactory) {
+    let provider = factory.create_provider().await;
+    let lock_timeout = factory.lock_timeout();
+
+    // Enqueue a worker item
+    provider
+        .enqueue_for_worker(WorkItem::ActivityExecute {
+            instance: "poison-test-ignore-1".to_string(),
+            execution_id: INITIAL_EXECUTION_ID,
+            id: 1,
+            name: "TestActivity".to_string(),
+            input: "{}".to_string(),
+        })
+        .await
+        .expect("enqueue should succeed");
+
+    // First fetch - attempt_count = 1
+    let (_item1, token1, attempt1) = provider
+        .fetch_work_item(lock_timeout, Duration::ZERO)
+        .await
+        .expect("fetch should succeed")
+        .expect("item should be present");
+    assert_eq!(attempt1, 1, "First fetch should have attempt_count = 1");
+
+    // Abandon WITHOUT ignore_attempt
+    provider
+        .abandon_work_item(&token1, None, false)
+        .await
+        .expect("abandon should succeed");
+
+    // Second fetch - attempt_count = 2
+    let (_item2, token2, attempt2) = provider
+        .fetch_work_item(lock_timeout, Duration::ZERO)
+        .await
+        .expect("fetch should succeed")
+        .expect("item should be present");
+    assert_eq!(attempt2, 2, "Second fetch should have attempt_count = 2");
+
+    // Abandon WITH ignore_attempt=true - decrements to 1
+    provider
+        .abandon_work_item(&token2, None, true)
+        .await
+        .expect("abandon with ignore_attempt should succeed");
+
+    // Third fetch - attempt_count = 2 (1 stored + 1 from new fetch)
+    let (_item3, token3, attempt3) = provider
+        .fetch_work_item(lock_timeout, Duration::ZERO)
+        .await
+        .expect("fetch should succeed")
+        .expect("item should be present");
+    assert_eq!(
+        attempt3, 2,
+        "Third fetch should have attempt_count = 2 (decremented then re-incremented)"
+    );
+
+    // Clean up
+    provider
+        .ack_work_item(
+            &token3,
+            WorkItem::ActivityCompleted {
+                instance: "poison-test-ignore-1".to_string(),
+                execution_id: INITIAL_EXECUTION_ID,
+                id: 1,
+                result: "done".to_string(),
+            },
+        )
+        .await
+        .expect("ack should succeed");
+
+    tracing::info!("✓ Test passed: abandon_work_item ignore_attempt decrements attempt count");
+}
+
+/// Test that abandon_orchestration_item with ignore_attempt=true decrements attempt count
+pub async fn abandon_orchestration_item_ignore_attempt_decrements(factory: &dyn ProviderFactory) {
+    let provider = factory.create_provider().await;
+    let lock_timeout = factory.lock_timeout();
+
+    // Enqueue a start orchestration
+    provider
+        .enqueue_for_orchestrator(
+            WorkItem::StartOrchestration {
+                instance: "poison-test-ignore-2".to_string(),
+                orchestration: "TestOrch".to_string(),
+                input: "{}".to_string(),
+                version: Some("1.0.0".to_string()),
+                parent_instance: None,
+                parent_id: None,
+                execution_id: INITIAL_EXECUTION_ID,
+            },
+            None,
+        )
+        .await
+        .expect("enqueue should succeed");
+
+    // First fetch - attempt_count = 1
+    let (_item1, token1, attempt1) = provider
+        .fetch_orchestration_item(lock_timeout, Duration::ZERO)
+        .await
+        .expect("fetch should succeed")
+        .expect("item should be present");
+    assert_eq!(attempt1, 1, "First fetch should have attempt_count = 1");
+
+    // Abandon WITHOUT ignore_attempt
+    provider
+        .abandon_orchestration_item(&token1, None, false)
+        .await
+        .expect("abandon should succeed");
+
+    // Second fetch - attempt_count = 2
+    let (_item2, token2, attempt2) = provider
+        .fetch_orchestration_item(lock_timeout, Duration::ZERO)
+        .await
+        .expect("fetch should succeed")
+        .expect("item should be present");
+    assert_eq!(attempt2, 2, "Second fetch should have attempt_count = 2");
+
+    // Abandon WITH ignore_attempt=true - decrements to 1
+    provider
+        .abandon_orchestration_item(&token2, None, true)
+        .await
+        .expect("abandon with ignore_attempt should succeed");
+
+    // Third fetch - attempt_count = 2 (1 stored + 1 from new fetch)
+    let (_item3, token3, attempt3) = provider
+        .fetch_orchestration_item(lock_timeout, Duration::ZERO)
+        .await
+        .expect("fetch should succeed")
+        .expect("item should be present");
+    assert_eq!(
+        attempt3, 2,
+        "Third fetch should have attempt_count = 2 (decremented then re-incremented)"
+    );
+
+    // Clean up
+    provider
+        .ack_orchestration_item(
+            &token3,
+            INITIAL_EXECUTION_ID,
+            vec![],
+            vec![],
+            vec![],
+            ExecutionMetadata::default(),
+        )
+        .await
+        .expect("ack should succeed");
+
+    tracing::info!("✓ Test passed: abandon_orchestration_item ignore_attempt decrements attempt count");
+}
+
+/// Test that ignore_attempt never allows attempt count to go below 0
+pub async fn ignore_attempt_never_goes_negative(factory: &dyn ProviderFactory) {
+    let provider = factory.create_provider().await;
+    let lock_timeout = factory.lock_timeout();
+
+    // Enqueue a worker item
+    provider
+        .enqueue_for_worker(WorkItem::ActivityExecute {
+            instance: "poison-test-never-neg".to_string(),
+            execution_id: INITIAL_EXECUTION_ID,
+            id: 1,
+            name: "TestActivity".to_string(),
+            input: "{}".to_string(),
+        })
+        .await
+        .expect("enqueue should succeed");
+
+    // First fetch - attempt_count = 1
+    let (_item1, token1, attempt1) = provider
+        .fetch_work_item(lock_timeout, Duration::ZERO)
+        .await
+        .expect("fetch should succeed")
+        .expect("item should be present");
+    assert_eq!(attempt1, 1, "First fetch should have attempt_count = 1");
+
+    // Abandon with ignore_attempt=true - decrements to 0
+    provider
+        .abandon_work_item(&token1, None, true)
+        .await
+        .expect("abandon with ignore_attempt should succeed");
+
+    // Second fetch - attempt_count = 1 (0 + 1)
+    let (_item2, token2, attempt2) = provider
+        .fetch_work_item(lock_timeout, Duration::ZERO)
+        .await
+        .expect("fetch should succeed")
+        .expect("item should be present");
+    assert_eq!(attempt2, 1, "Second fetch should have attempt_count = 1");
+
+    // Abandon with ignore_attempt=true again - should stay at 0, not go negative
+    provider
+        .abandon_work_item(&token2, None, true)
+        .await
+        .expect("abandon with ignore_attempt should succeed");
+
+    // Third fetch - attempt_count = 1 (max(0, 0-1) + 1 = 0 + 1 = 1)
+    let (_item3, token3, attempt3) = provider
+        .fetch_work_item(lock_timeout, Duration::ZERO)
+        .await
+        .expect("fetch should succeed")
+        .expect("item should be present");
+    assert_eq!(
+        attempt3, 1,
+        "Attempt count should not go below 0 - third fetch should have attempt_count = 1"
+    );
+
+    // Clean up
+    provider
+        .ack_work_item(
+            &token3,
+            WorkItem::ActivityCompleted {
+                instance: "poison-test-never-neg".to_string(),
+                execution_id: INITIAL_EXECUTION_ID,
+                id: 1,
+                result: "done".to_string(),
+            },
+        )
+        .await
+        .expect("ack should succeed");
+
+    tracing::info!("✓ Test passed: ignore_attempt never allows attempt count to go negative");
 }

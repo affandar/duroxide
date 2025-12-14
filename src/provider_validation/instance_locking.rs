@@ -101,7 +101,7 @@ pub async fn test_invalid_lock_token_rejection<F: ProviderFactory>(factory: &F) 
     assert!(result.is_err(), "Should reject invalid lock token");
 
     // Try to abandon with invalid token
-    let result = provider.abandon_orchestration_item("invalid-token", None).await;
+    let result = provider.abandon_orchestration_item("invalid-token", None, false).await;
     assert!(result.is_err(), "Should reject invalid lock token for abandon");
 
     // Original item should still be locked

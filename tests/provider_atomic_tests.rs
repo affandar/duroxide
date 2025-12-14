@@ -378,7 +378,10 @@ async fn test_abandon_orchestration_item() {
         .unwrap();
 
     // Abandon the item
-    store.abandon_orchestration_item(&lock_token, None).await.unwrap();
+    store
+        .abandon_orchestration_item(&lock_token, None, false)
+        .await
+        .unwrap();
 
     // Verify item is back in queue
     let (item2, _lock_token2, _attempt_count2) = store
@@ -428,7 +431,7 @@ async fn test_abandon_orchestration_item_with_delay() {
 
     // Abandon with delay (sqlite supports delayed visibility)
     store
-        .abandon_orchestration_item(&lock_token, Some(Duration::from_millis(500)))
+        .abandon_orchestration_item(&lock_token, Some(Duration::from_millis(500)), false)
         .await
         .unwrap();
     // Should not be visible immediately
@@ -458,7 +461,7 @@ async fn test_abandon_orchestration_item_error_handling() {
     let store: Arc<SqliteProvider> = Arc::new(SqliteProvider::new(&db_url, None).await.unwrap());
 
     // Try to abandon with invalid token
-    let result = store.abandon_orchestration_item("invalid-token", None).await;
+    let result = store.abandon_orchestration_item("invalid-token", None, false).await;
 
     // sqlite provider returns error for invalid tokens
     assert!(result.is_err());
@@ -546,7 +549,10 @@ async fn test_in_memory_provider_atomic_operations() {
         .unwrap()
         .unwrap();
 
-    store.abandon_orchestration_item(&lock_token2, None).await.unwrap();
+    store
+        .abandon_orchestration_item(&lock_token2, None, false)
+        .await
+        .unwrap();
 
     // Should be available again
     let (item3, _lock_token3, _attempt_count3) = store

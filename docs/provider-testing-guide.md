@@ -399,7 +399,7 @@ async fn test_my_provider_worker_queue_fifo_ordering() {
 
 ### What the Tests Validate
 
-The validation test suite includes **50 individual test functions** organized into 8 categories:
+The validation test suite includes **58 individual test functions** organized into 9 categories:
 
 1. **Atomicity Tests (4 tests)**
    - `test_atomicity_failure_rollback` - All-or-nothing commit semantics, rollback on failure
@@ -467,6 +467,16 @@ The validation test suite includes **50 individual test functions** organized in
    - `test_get_system_metrics` - System metrics are accurate
    - `test_get_queue_depths` - Queue depth reporting is correct
 
+9. **Poison Message Tests (8 tests)**
+   - `orchestration_attempt_count_starts_at_one` - First fetch has attempt_count = 1
+   - `orchestration_attempt_count_increments_on_refetch` - Attempt count increments on abandon/refetch
+   - `worker_attempt_count_starts_at_one` - Worker items start with attempt_count = 1
+   - `worker_attempt_count_increments_on_lock_expiry` - Attempt count increments when lock expires
+   - `attempt_count_is_per_message` - Each message has independent attempt count
+   - `abandon_work_item_ignore_attempt_decrements` - ignore_attempt=true decrements count
+   - `abandon_orchestration_item_ignore_attempt_decrements` - ignore_attempt=true decrements count
+   - `ignore_attempt_never_goes_negative` - Attempt count never goes below 0
+
 ### Running Individual Test Functions
 
 Each validation test should be run individually. This provides:
@@ -504,7 +514,7 @@ async fn test_my_provider_worker_queue_fifo_ordering() {
 }
 ```
 
-**Available test functions:** See `duroxide::provider_validations` module documentation for the complete list of all 50 test functions, or refer to `tests/sqlite_provider_validations.rs` for a complete example using all tests.
+**Available test functions:** See `duroxide::provider_validations` module documentation for the complete list of all 58 test functions, or refer to `tests/sqlite_provider_validations.rs` for a complete example using all tests.
 
 ### Creating a Test Provider Factory
 
@@ -815,7 +825,7 @@ This generates `stress-test-results.md` with:
 
 - **Test Implementation**: `src/provider_validation/` (individual test modules)
 - **Test API**: `src/provider_validations.rs` (test function exports)
-- **Example Usage**: `tests/sqlite_provider_validations.rs` (complete example with all 50 tests)
+- **Example Usage**: `tests/sqlite_provider_validations.rs` (complete example with all 58 tests)
 - **Test Specification**: See individual test function documentation
 - **Provider Guide**: `docs/provider-implementation-guide.md`
 - **Built-in Providers**: `src/providers/sqlite.rs`

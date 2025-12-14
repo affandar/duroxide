@@ -1313,23 +1313,38 @@ impl Provider for SqliteProvider {
         Ok(())
     }
 
-    async fn abandon_work_item(&self, token: &str, delay: Option<Duration>) -> Result<(), ProviderError> {
+    async fn abandon_work_item(
+        &self,
+        token: &str,
+        delay: Option<Duration>,
+        ignore_attempt: bool,
+    ) -> Result<(), ProviderError> {
         // Worker queue uses locked_until for visibility control, not visible_at
         // When delay is specified, set locked_until to future time to defer retry
         let locked_until = delay.map(|d| Self::timestamp_after(d));
 
-        let result = sqlx::query(
+        // If ignore_attempt is true, decrement attempt_count (but never below 0)
+        let query = if ignore_attempt {
+            r#"
+            UPDATE worker_queue
+            SET lock_token = NULL, locked_until = ?1,
+                attempt_count = MAX(0, attempt_count - 1)
+            WHERE lock_token = ?2
+            "#
+        } else {
             r#"
             UPDATE worker_queue
             SET lock_token = NULL, locked_until = ?1
             WHERE lock_token = ?2
-            "#,
-        )
-        .bind(locked_until)
-        .bind(token)
-        .execute(&self.pool)
-        .await
-        .map_err(|e| Self::sqlx_to_provider_error("abandon_work_item", e))?;
+            "#
+        };
+
+        let result = sqlx::query(query)
+            .bind(locked_until)
+            .bind(token)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| Self::sqlx_to_provider_error("abandon_work_item", e))?;
 
         if result.rows_affected() == 0 {
             return Err(ProviderError::permanent(
@@ -1342,6 +1357,7 @@ impl Provider for SqliteProvider {
             target: "duroxide::providers::sqlite",
             lock_token = %token,
             delay_ms = ?delay.map(|d| d.as_millis()),
+            ignore_attempt = %ignore_attempt,
             "Work item abandoned"
         );
 
@@ -1384,43 +1400,67 @@ impl Provider for SqliteProvider {
         Ok(())
     }
 
-    async fn abandon_orchestration_item(&self, lock_token: &str, delay: Option<Duration>) -> Result<(), ProviderError> {
+    async fn abandon_orchestration_item(
+        &self,
+        lock_token: &str,
+        delay: Option<Duration>,
+        ignore_attempt: bool,
+    ) -> Result<(), ProviderError> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| Self::sqlx_to_provider_error("abandon_orchestration_item", e))?;
+
         // Get instance_id from lock before removing it
         let instance_id: Option<String> =
             sqlx::query_scalar("SELECT instance_id FROM instance_locks WHERE lock_token = ?")
                 .bind(lock_token)
-                .fetch_optional(&self.pool)
+                .fetch_optional(&mut *tx)
                 .await
                 .map_err(|e| Self::sqlx_to_provider_error("abandon_orchestration_item", e))?;
 
-        if instance_id.is_none() {
+        let Some(instance_id) = instance_id else {
             return Err(ProviderError::permanent(
                 "abandon_orchestration_item",
                 "Invalid lock token",
             ));
-        }
+        };
 
         // Remove instance lock
         sqlx::query("DELETE FROM instance_locks WHERE lock_token = ?")
             .bind(lock_token)
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await
             .map_err(|e| Self::sqlx_to_provider_error("abandon_orchestration_item", e))?;
 
+        // If ignore_attempt is true, decrement attempt_count on orchestrator_queue messages
+        if ignore_attempt {
+            sqlx::query(
+                "UPDATE orchestrator_queue SET attempt_count = MAX(0, attempt_count - 1) WHERE instance_id = ?",
+            )
+            .bind(&instance_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| Self::sqlx_to_provider_error("abandon_orchestration_item", e))?;
+        }
+
         // Optionally delay messages for this instance
-        if let Some(instance_id) = instance_id
-            && let Some(delay) = delay
-        {
+        if let Some(delay) = delay {
             let delay_ms = delay.as_millis().min(i64::MAX as u128) as i64;
             let visible_at = Self::now_millis().saturating_add(delay_ms);
-            let _ =
-                sqlx::query("UPDATE orchestrator_queue SET visible_at = ? WHERE instance_id = ? AND visible_at <= ?")
-                    .bind(visible_at)
-                    .bind(&instance_id)
-                    .bind(Self::now_millis())
-                    .execute(&self.pool)
-                    .await;
+            sqlx::query("UPDATE orchestrator_queue SET visible_at = ? WHERE instance_id = ? AND visible_at <= ?")
+                .bind(visible_at)
+                .bind(&instance_id)
+                .bind(Self::now_millis())
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| Self::sqlx_to_provider_error("abandon_orchestration_item", e))?;
         }
+
+        tx.commit()
+            .await
+            .map_err(|e| Self::sqlx_to_provider_error("abandon_orchestration_item", e))?;
 
         Ok(())
     }
@@ -2221,7 +2261,10 @@ mod tests {
         );
 
         // Abandon it
-        store.abandon_orchestration_item(&lock_token, None).await.unwrap();
+        store
+            .abandon_orchestration_item(&lock_token, None, false)
+            .await
+            .unwrap();
 
         // Should be able to fetch again
         let (orch_item2, lock_token2, _attempt_count2) = store
@@ -2472,7 +2515,7 @@ mod tests {
 
         // Abandon with 2 second delay
         store
-            .abandon_orchestration_item(&lock_token, Some(Duration::from_secs(2)))
+            .abandon_orchestration_item(&lock_token, Some(Duration::from_secs(2)), false)
             .await
             .unwrap();
 
@@ -2630,7 +2673,7 @@ mod tests {
         );
 
         // Abandon it
-        store.abandon_work_item(&lock_token, None).await.unwrap();
+        store.abandon_work_item(&lock_token, None, false).await.unwrap();
 
         // Should be able to fetch again
         let (dequeued2, lock_token2, _) = store
@@ -2647,11 +2690,157 @@ mod tests {
         let store = create_test_store().await;
 
         // Try to abandon with an invalid token
-        let result = store.abandon_work_item("invalid-token", None).await;
+        let result = store.abandon_work_item("invalid-token", None, false).await;
 
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(!err.is_retryable());
+    }
+
+    #[tokio::test]
+    async fn test_abandon_work_item_ignore_attempt() {
+        let store = create_test_store().await;
+        let lock_timeout = Duration::from_secs(30);
+
+        // Enqueue activity work
+        let work_item = WorkItem::ActivityExecute {
+            instance: "test-ignore-attempt".to_string(),
+            execution_id: 1,
+            id: 1,
+            name: "TestActivity".to_string(),
+            input: "test-input".to_string(),
+        };
+        store.enqueue_for_worker(work_item).await.unwrap();
+
+        // First fetch: attempt_count should be 1
+        let (_, lock_token1, attempt1) = store
+            .fetch_work_item(lock_timeout, Duration::ZERO)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(attempt1, 1);
+
+        // Abandon WITHOUT ignore_attempt - count stays at 1
+        store.abandon_work_item(&lock_token1, None, false).await.unwrap();
+
+        // Second fetch: attempt_count should be 2
+        let (_, lock_token2, attempt2) = store
+            .fetch_work_item(lock_timeout, Duration::ZERO)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(attempt2, 2);
+
+        // Abandon WITH ignore_attempt - count decrements back to 1
+        store.abandon_work_item(&lock_token2, None, true).await.unwrap();
+
+        // Third fetch: attempt_count should be 2 (1 + 1 from new fetch)
+        let (_, _lock_token3, attempt3) = store
+            .fetch_work_item(lock_timeout, Duration::ZERO)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(attempt3, 2);
+    }
+
+    #[tokio::test]
+    async fn test_abandon_orchestration_item_ignore_attempt() {
+        let store = create_test_store().await;
+        let lock_timeout = Duration::from_secs(30);
+
+        // Enqueue orchestration
+        let item = WorkItem::StartOrchestration {
+            instance: "test-ignore-attempt-orch".to_string(),
+            orchestration: "IgnoreTest".to_string(),
+            version: None,
+            input: "{}".to_string(),
+            parent_instance: None,
+            parent_id: None,
+            execution_id: crate::INITIAL_EXECUTION_ID,
+        };
+        store.enqueue_for_orchestrator(item, None).await.unwrap();
+
+        // First fetch: attempt_count should be 1
+        let (_item1, lock_token1, attempt1) = store
+            .fetch_orchestration_item(lock_timeout, Duration::ZERO)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(attempt1, 1);
+
+        // Abandon WITHOUT ignore_attempt
+        store
+            .abandon_orchestration_item(&lock_token1, None, false)
+            .await
+            .unwrap();
+
+        // Second fetch: attempt_count should be 2
+        let (_item2, lock_token2, attempt2) = store
+            .fetch_orchestration_item(lock_timeout, Duration::ZERO)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(attempt2, 2);
+
+        // Abandon WITH ignore_attempt - count decrements back to 1
+        store
+            .abandon_orchestration_item(&lock_token2, None, true)
+            .await
+            .unwrap();
+
+        // Third fetch: attempt_count should be 2 (1 + 1 from new fetch)
+        let (_item3, _lock_token3, attempt3) = store
+            .fetch_orchestration_item(lock_timeout, Duration::ZERO)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(attempt3, 2);
+    }
+
+    #[tokio::test]
+    async fn test_abandon_ignore_attempt_never_goes_below_zero() {
+        let store = create_test_store().await;
+        let lock_timeout = Duration::from_secs(30);
+
+        // Enqueue activity work
+        let work_item = WorkItem::ActivityExecute {
+            instance: "test-never-negative".to_string(),
+            execution_id: 1,
+            id: 1,
+            name: "TestActivity".to_string(),
+            input: "test-input".to_string(),
+        };
+        store.enqueue_for_worker(work_item).await.unwrap();
+
+        // First fetch: attempt_count = 1
+        let (_, lock_token1, attempt1) = store
+            .fetch_work_item(lock_timeout, Duration::ZERO)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(attempt1, 1);
+
+        // Abandon with ignore_attempt - decrements to 0
+        store.abandon_work_item(&lock_token1, None, true).await.unwrap();
+
+        // Second fetch: attempt_count = 1 (0 + 1)
+        let (_, lock_token2, attempt2) = store
+            .fetch_work_item(lock_timeout, Duration::ZERO)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(attempt2, 1);
+
+        // Abandon with ignore_attempt again - should stay at 0, not go negative
+        store.abandon_work_item(&lock_token2, None, true).await.unwrap();
+
+        // Third fetch: attempt_count = 1 (MAX(0, 0-1) + 1 = 0 + 1 = 1)
+        let (_, _lock_token3, attempt3) = store
+            .fetch_work_item(lock_timeout, Duration::ZERO)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(attempt3, 1);
     }
 
     #[tokio::test]
