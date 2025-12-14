@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.3] - 2025-12-14
+
+### Added
+
+- **Provider validation tests** - 4 new tests for abandon and poison handling
+  - `test_abandon_work_item_releases_lock` - Verify abandon_work_item releases lock immediately
+  - `test_abandon_work_item_with_delay` - Verify abandon_work_item with delay defers refetch
+  - `max_attempt_count_across_message_batch` - Verify MAX attempt_count returned for batched messages
+
+### Changed
+
+- Provider validation test count increased from 58 to 62
+
+### Fixed
+
+- `abandon_work_item` with delay now correctly keeps lock_token to prevent immediate refetch
+
 ## [0.1.2] - 2025-12-14
 
 ### Added

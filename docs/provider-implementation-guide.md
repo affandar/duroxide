@@ -1459,7 +1459,7 @@ The validation suite provides **58 individual test functions** organized into 9 
 - `test_get_system_metrics` - Verify get_system_metrics returns accurate counts
 - `test_get_queue_depths` - Verify get_queue_depths returns current queue sizes
 
-**Poison Message Tests (8 tests):**
+**Poison Message Tests (12 tests):**
 - `orchestration_attempt_count_starts_at_one` - Verify first fetch has attempt_count = 1
 - `orchestration_attempt_count_increments_on_refetch` - Verify attempt count increments on abandon/refetch
 - `worker_attempt_count_starts_at_one` - Verify worker items start with attempt_count = 1
@@ -1468,6 +1468,9 @@ The validation suite provides **58 individual test functions** organized into 9 
 - `abandon_work_item_ignore_attempt_decrements` - Verify ignore_attempt=true decrements count
 - `abandon_orchestration_item_ignore_attempt_decrements` - Verify ignore_attempt=true decrements count
 - `ignore_attempt_never_goes_negative` - Verify attempt count never goes below 0
+- `max_attempt_count_across_message_batch` - Verify MAX attempt_count returned for batched messages
+- `test_abandon_work_item_releases_lock` - Verify abandon_work_item releases lock immediately
+- `test_abandon_work_item_with_delay` - Verify abandon_work_item with delay defers refetch
 
 ### Benefits of Granular Tests
 
@@ -1479,7 +1482,7 @@ The validation suite provides **58 individual test functions** organized into 9 
 
 ### Example: Complete Test File
 
-See `tests/sqlite_provider_validations.rs` for a complete example that runs all 58 validation tests individually.
+See `tests/sqlite_provider_validations.rs` for a complete example that runs all 62 validation tests individually.
 
 ---
 

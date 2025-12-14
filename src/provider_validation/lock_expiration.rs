@@ -1,4 +1,4 @@
-use crate::provider_validation::{Event, EventKind, ExecutionMetadata, start_item};
+use crate::provider_validation::{Event, EventKind, ExecutionMetadata, start_item, WorkItem};
 use crate::provider_validations::ProviderFactory;
 use std::sync::Arc;
 use std::time::Duration;
@@ -430,4 +430,138 @@ pub async fn test_worker_lock_renewal_after_ack<F: ProviderFactory>(factory: &F)
     let result = provider.renew_work_item_lock(&token, lock_timeout).await;
     assert!(result.is_err(), "Should fail to renew after ack");
     tracing::info!("✓ Test passed: renewal after ack rejection verified");
+}
+
+/// Test: abandon_work_item releases lock immediately
+/// Goal: Verify abandoning a work item releases its lock without waiting for expiration.
+pub async fn test_abandon_work_item_releases_lock<F: ProviderFactory>(factory: &F) {
+    tracing::info!("→ Testing: abandon_work_item releases lock immediately");
+    let provider = factory.create_provider().await;
+    let lock_timeout = factory.lock_timeout();
+
+    // Enqueue a work item
+    provider
+        .enqueue_for_worker(WorkItem::ActivityExecute {
+            instance: "test-abandon-work".to_string(),
+            execution_id: 1,
+            id: 1,
+            name: "TestActivity".to_string(),
+            input: "test".to_string(),
+        })
+        .await
+        .unwrap();
+
+    // Fetch the work item
+    let (item, token, _) = provider
+        .fetch_work_item(lock_timeout, Duration::ZERO)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(matches!(item, WorkItem::ActivityExecute { .. }));
+
+    // Verify lock is held - no items available
+    assert!(
+        provider
+            .fetch_work_item(lock_timeout, Duration::ZERO)
+            .await
+            .unwrap()
+            .is_none(),
+        "Item should be locked"
+    );
+
+    // Abandon the work item
+    provider.abandon_work_item(&token, None, false).await.unwrap();
+
+    // Item should be immediately available again
+    let (item2, token2, _) = provider
+        .fetch_work_item(lock_timeout, Duration::ZERO)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(matches!(item2, WorkItem::ActivityExecute { .. }));
+    assert_ne!(token, token2, "Should have new lock token");
+
+    // Clean up
+    provider
+        .ack_work_item(
+            &token2,
+            WorkItem::ActivityCompleted {
+                instance: "test-abandon-work".to_string(),
+                execution_id: 1,
+                id: 1,
+                result: "done".to_string(),
+            },
+        )
+        .await
+        .unwrap();
+
+    tracing::info!("✓ Test passed: abandon_work_item releases lock immediately");
+}
+
+/// Test: abandon_work_item with delay prevents immediate refetch
+/// Goal: Verify delay parameter makes the item invisible until delay expires.
+pub async fn test_abandon_work_item_with_delay<F: ProviderFactory>(factory: &F) {
+    tracing::info!("→ Testing: abandon_work_item with delay prevents immediate refetch");
+    let provider = factory.create_provider().await;
+    let lock_timeout = factory.lock_timeout();
+
+    // Enqueue a work item
+    provider
+        .enqueue_for_worker(WorkItem::ActivityExecute {
+            instance: "test-abandon-delay".to_string(),
+            execution_id: 1,
+            id: 1,
+            name: "TestActivity".to_string(),
+            input: "test".to_string(),
+        })
+        .await
+        .unwrap();
+
+    // Fetch the work item
+    let (_item, token, _) = provider
+        .fetch_work_item(lock_timeout, Duration::ZERO)
+        .await
+        .unwrap()
+        .unwrap();
+
+    // Abandon with 500ms delay
+    let delay = Duration::from_millis(500);
+    provider.abandon_work_item(&token, Some(delay), false).await.unwrap();
+
+    // Item should NOT be immediately available (delayed)
+    assert!(
+        provider
+            .fetch_work_item(lock_timeout, Duration::ZERO)
+            .await
+            .unwrap()
+            .is_none(),
+        "Item should be delayed, not immediately available"
+    );
+
+    // Wait for delay to expire
+    tokio::time::sleep(delay + Duration::from_millis(100)).await;
+
+    // Now item should be available
+    let (item2, token2, _) = provider
+        .fetch_work_item(lock_timeout, Duration::ZERO)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(matches!(item2, WorkItem::ActivityExecute { .. }));
+
+    // Clean up
+    provider
+        .ack_work_item(
+            &token2,
+            WorkItem::ActivityCompleted {
+                instance: "test-abandon-delay".to_string(),
+                execution_id: 1,
+                id: 1,
+                result: "done".to_string(),
+            },
+        )
+        .await
+        .unwrap();
+
+    tracing::info!("✓ Test passed: abandon_work_item with delay verified");
 }

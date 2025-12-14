@@ -542,3 +542,110 @@ pub async fn ignore_attempt_never_goes_negative(factory: &dyn ProviderFactory) {
 
     tracing::info!("✓ Test passed: ignore_attempt never allows attempt count to go negative");
 }
+
+/// Test that max attempt_count is returned when batch contains messages with different counts
+///
+/// This validates the scenario where:
+/// 1. An orchestration item is fetched, incrementing attempt_count for its messages
+/// 2. New messages arrive for the same instance while lock is held
+/// 3. Lock expires (or is abandoned) and instance is re-fetched
+/// 4. The returned attempt_count should be the MAX across all messages in the batch
+pub async fn max_attempt_count_across_message_batch(factory: &dyn ProviderFactory) {
+    let provider = factory.create_provider().await;
+    let lock_timeout = factory.lock_timeout();
+
+    // Enqueue initial start message
+    provider
+        .enqueue_for_orchestrator(
+            WorkItem::StartOrchestration {
+                instance: "poison-batch-test".to_string(),
+                orchestration: "TestOrch".to_string(),
+                input: "{}".to_string(),
+                version: Some("1.0.0".to_string()),
+                parent_instance: None,
+                parent_id: None,
+                execution_id: INITIAL_EXECUTION_ID,
+            },
+            None,
+        )
+        .await
+        .expect("enqueue should succeed");
+
+    // First fetch - attempt_count = 1 for the start message
+    let (_item1, lock_token1, attempt1) = provider
+        .fetch_orchestration_item(lock_timeout, Duration::ZERO)
+        .await
+        .expect("fetch should succeed")
+        .expect("item should be present");
+    assert_eq!(attempt1, 1, "First fetch should have attempt_count = 1");
+    assert_eq!(_item1.messages.len(), 1, "Should have 1 message");
+
+    // Abandon without processing (simulating a crash/failure)
+    provider
+        .abandon_orchestration_item(&lock_token1, None, false)
+        .await
+        .expect("abandon should succeed");
+
+    // Second fetch - attempt_count = 2 for the start message
+    let (_item2, lock_token2, attempt2) = provider
+        .fetch_orchestration_item(lock_timeout, Duration::ZERO)
+        .await
+        .expect("fetch should succeed")
+        .expect("item should be present");
+    assert_eq!(attempt2, 2, "Second fetch should have attempt_count = 2");
+
+    // While lock is held, enqueue a new message (e.g., activity completion)
+    // This simulates a message arriving while an orchestration is being processed
+    provider
+        .enqueue_for_orchestrator(
+            WorkItem::ActivityCompleted {
+                instance: "poison-batch-test".to_string(),
+                execution_id: INITIAL_EXECUTION_ID,
+                id: 1,
+                result: "activity result".to_string(),
+            },
+            None,
+        )
+        .await
+        .expect("enqueue should succeed");
+
+    // Abandon again (simulating another failure)
+    provider
+        .abandon_orchestration_item(&lock_token2, None, false)
+        .await
+        .expect("abandon should succeed");
+
+    // Third fetch - now we have 2 messages:
+    // - Start message: attempt_count = 3
+    // - Activity completion: attempt_count = 1 (first time being fetched)
+    // The returned attempt_count should be MAX(3, 1) = 3
+    let (item3, lock_token3, attempt3) = provider
+        .fetch_orchestration_item(lock_timeout, Duration::ZERO)
+        .await
+        .expect("fetch should succeed")
+        .expect("item should be present");
+    assert_eq!(
+        item3.messages.len(),
+        2,
+        "Should have 2 messages in the batch"
+    );
+    assert_eq!(
+        attempt3, 3,
+        "Attempt count should be MAX across messages (3), not the newer message's count (1)"
+    );
+
+    // Clean up - ack the orchestration
+    provider
+        .ack_orchestration_item(
+            &lock_token3,
+            INITIAL_EXECUTION_ID,
+            vec![],
+            vec![],
+            vec![],
+            ExecutionMetadata::default(),
+        )
+        .await
+        .expect("ack should succeed");
+
+    tracing::info!("✓ Test passed: max attempt_count across message batch verified");
+}

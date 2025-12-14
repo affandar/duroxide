@@ -19,10 +19,13 @@ mod tests {
         poison_message::{
             abandon_orchestration_item_ignore_attempt_decrements, abandon_work_item_ignore_attempt_decrements,
             attempt_count_is_per_message, ignore_attempt_never_goes_negative,
-            orchestration_attempt_count_increments_on_refetch, orchestration_attempt_count_starts_at_one,
-            worker_attempt_count_increments_on_lock_expiry, worker_attempt_count_starts_at_one,
+            max_attempt_count_across_message_batch, orchestration_attempt_count_increments_on_refetch,
+            orchestration_attempt_count_starts_at_one, worker_attempt_count_increments_on_lock_expiry,
+            worker_attempt_count_starts_at_one,
         },
         test_abandon_releases_lock_immediately,
+        test_abandon_work_item_releases_lock,
+        test_abandon_work_item_with_delay,
         test_ack_only_affects_locked_messages,
         // Atomicity tests
         test_atomicity_failure_rollback,
@@ -388,5 +391,21 @@ mod tests {
     #[tokio::test]
     async fn test_sqlite_ignore_attempt_never_goes_negative() {
         ignore_attempt_never_goes_negative(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_max_attempt_count_across_message_batch() {
+        max_attempt_count_across_message_batch(&SqliteTestFactory).await;
+    }
+
+    // abandon_work_item tests
+    #[tokio::test]
+    async fn test_sqlite_abandon_work_item_releases_lock() {
+        test_abandon_work_item_releases_lock(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_abandon_work_item_with_delay() {
+        test_abandon_work_item_with_delay(&SqliteTestFactory).await;
     }
 }

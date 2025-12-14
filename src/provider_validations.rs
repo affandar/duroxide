@@ -110,6 +110,8 @@ pub trait ProviderFactory: Send + Sync {
 /// **Lock Expiration Tests:**
 /// - `test_lock_expires_after_timeout` - Verify locks expire after timeout
 /// - `test_abandon_releases_lock_immediately` - Verify abandon releases lock immediately
+/// - `test_abandon_work_item_releases_lock` - Verify abandon_work_item releases lock immediately
+/// - `test_abandon_work_item_with_delay` - Verify abandon_work_item with delay defers refetch
 /// - `test_lock_renewal_on_ack` - Verify successful ack releases lock immediately
 /// - `test_concurrent_lock_attempts_respect_expiration` - Verify concurrent attempts respect expiration
 /// - `test_worker_lock_renewal_success` - Verify worker lock can be renewed with valid token
@@ -140,6 +142,17 @@ pub trait ProviderFactory: Send + Sync {
 /// - `test_get_execution_info` - Verify get_execution_info returns execution metadata
 /// - `test_get_system_metrics` - Verify get_system_metrics returns accurate counts
 /// - `test_get_queue_depths` - Verify get_queue_depths returns current queue sizes
+///
+/// **Poison Message Tests:**
+/// - `orchestration_attempt_count_starts_at_one` - Verify first fetch has attempt_count = 1
+/// - `orchestration_attempt_count_increments_on_refetch` - Verify attempt_count increments on refetch
+/// - `worker_attempt_count_starts_at_one` - Verify worker first fetch has attempt_count = 1
+/// - `worker_attempt_count_increments_on_lock_expiry` - Verify worker attempt_count increments on expiry
+/// - `attempt_count_is_per_message` - Verify attempt_count is tracked per message
+/// - `abandon_work_item_ignore_attempt_decrements` - Verify ignore_attempt decrements count
+/// - `abandon_orchestration_item_ignore_attempt_decrements` - Verify ignore_attempt decrements count
+/// - `ignore_attempt_never_goes_negative` - Verify attempt_count never goes below 0
+/// - `max_attempt_count_across_message_batch` - Verify MAX attempt_count returned for batched messages
 #[cfg(feature = "provider-test")]
 pub use crate::provider_validation::instance_creation::{
     test_instance_creation_via_metadata, test_no_instance_creation_on_enqueue, test_null_version_handling,
@@ -169,7 +182,8 @@ pub use crate::provider_validation::instance_locking::{
 
 #[cfg(feature = "provider-test")]
 pub use crate::provider_validation::lock_expiration::{
-    test_abandon_releases_lock_immediately, test_concurrent_lock_attempts_respect_expiration,
+    test_abandon_releases_lock_immediately, test_abandon_work_item_releases_lock,
+    test_abandon_work_item_with_delay, test_concurrent_lock_attempts_respect_expiration,
     test_lock_expires_after_timeout, test_lock_renewal_on_ack, test_worker_lock_renewal_after_ack,
     test_worker_lock_renewal_after_expiration, test_worker_lock_renewal_extends_timeout,
     test_worker_lock_renewal_invalid_token, test_worker_lock_renewal_success,
@@ -207,7 +221,8 @@ pub mod poison_message {
     pub use crate::provider_validation::poison_message::{
         abandon_orchestration_item_ignore_attempt_decrements, abandon_work_item_ignore_attempt_decrements,
         attempt_count_is_per_message, ignore_attempt_never_goes_negative,
-        orchestration_attempt_count_increments_on_refetch, orchestration_attempt_count_starts_at_one,
-        worker_attempt_count_increments_on_lock_expiry, worker_attempt_count_starts_at_one,
+        max_attempt_count_across_message_batch, orchestration_attempt_count_increments_on_refetch,
+        orchestration_attempt_count_starts_at_one, worker_attempt_count_increments_on_lock_expiry,
+        worker_attempt_count_starts_at_one,
     };
 }
