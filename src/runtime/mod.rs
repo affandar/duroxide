@@ -595,6 +595,13 @@ impl Runtime {
         // Initialize observability (metrics + structured logging)
         let observability_handle = observability::ObservabilityHandle::init(&options.observability).ok(); // Gracefully degrade if observability fails to initialize
 
+        // Print version on startup
+        tracing::info!(
+            target: "duroxide::runtime",
+            version = env!("CARGO_PKG_VERSION"),
+            "Duroxide runtime starting"
+        );
+
         // Wrap provider with metrics instrumentation if metrics are enabled
         let history_store: Arc<dyn Provider> = if let Some(ref handle) = observability_handle {
             if let Some(metrics) = handle.metrics_provider() {
