@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.4] - 2025-12-14
+
+### Added
+
+- **Provider identity API** - Providers now expose `name()` and `version()` methods
+  - `Provider::name()` returns provider name (e.g., "sqlite")
+  - `Provider::version()` returns provider version
+  - Default implementations return "unknown" and "0.0.0"
+  - SQLite provider returns "sqlite" and the crate version
+
+- **Runtime startup banner** - Version information logged on startup
+  - Logs duroxide version and provider name/version
+  - Example: `duroxide runtime (0.1.4) starting with provider sqlite (0.1.4)`
+
 ## [0.1.3] - 2025-12-14
 
 ### Added
