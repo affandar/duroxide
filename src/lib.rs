@@ -789,6 +789,7 @@ pub enum EventKind {
 }
 
 // Event type name for SystemCall (used by providers for persistence)
+#[allow(dead_code)] // Used by sqlite provider when sqlite feature is enabled
 pub(crate) const EVENT_TYPE_SYSTEM_CALL: &str = "SystemCall";
 
 impl Event {
