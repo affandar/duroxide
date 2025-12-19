@@ -69,10 +69,12 @@ CREATE TABLE orchestrator_queue (
 CREATE TABLE worker_queue (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     work_item TEXT NOT NULL, -- JSON serialized WorkItem
+    visible_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     lock_token TEXT,
     locked_until TIMESTAMP,
+    attempt_count INTEGER NOT NULL DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    INDEX idx_available (lock_token, id)
+    INDEX idx_available (visible_at, lock_token, id)
 );
 ```
 

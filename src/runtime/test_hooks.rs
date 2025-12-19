@@ -32,7 +32,7 @@ static ORCH_DELAY_INSTANCES: Mutex<Option<HashSet<String>>> = Mutex::new(None);
 /// # Arguments
 /// * `delay` - Duration to sleep before processing. Use `Duration::ZERO` to disable.
 /// * `instance_prefix` - Optional instance name prefix to limit which instances are affected.
-///                       If `None`, affects all instances (not recommended for parallel tests).
+///   If `None`, affects all instances (not recommended for parallel tests).
 pub fn set_orch_processing_delay(delay: Duration, instance_prefix: Option<&str>) {
     ORCH_PROCESSING_DELAY_MS.store(delay.as_millis() as u64, Ordering::SeqCst);
     if let Some(prefix) = instance_prefix {

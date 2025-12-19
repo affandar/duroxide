@@ -32,7 +32,7 @@ trait Provider {
 
 The dispatcher uses two settings to control polling:
 
-1. **`dispatcher_long_poll_timeout`**: Maximum time passed to provider's `poll_timeout` (default: 5 minutes)
+1. **`dispatcher_long_poll_timeout`**: Maximum time passed to provider's `poll_timeout` (default: 30 seconds)
 2. **`dispatcher_min_poll_interval`**: Minimum cycle duration when no work found (default: 100ms)
 
 ```rust
@@ -95,7 +95,7 @@ pub struct RuntimeOptions {
     /// Passed to provider's fetch methods. Long-polling providers
     /// may block up to this duration. Short-polling providers ignore it.
     /// 
-    /// Default: 5 minutes
+    /// Default: 30 seconds
     pub dispatcher_long_poll_timeout: Duration,
 }
 ```

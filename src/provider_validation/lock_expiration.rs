@@ -1,4 +1,4 @@
-use crate::provider_validation::{Event, EventKind, ExecutionMetadata, start_item, WorkItem};
+use crate::provider_validation::{Event, EventKind, ExecutionMetadata, WorkItem, start_item};
 use crate::provider_validations::ProviderFactory;
 use std::sync::Arc;
 use std::time::Duration;

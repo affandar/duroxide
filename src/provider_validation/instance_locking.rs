@@ -683,7 +683,7 @@ pub async fn test_multi_threaded_lock_expiration_recovery<F: ProviderFactory>(fa
     let provider2 = provider.clone();
     let handle2 = tokio::spawn({
         async move {
-            tokio::time::sleep(Duration::from_millis(10)).await;
+            tokio::time::sleep(Duration::from_millis(200)).await;
             let result = provider2
                 .fetch_orchestration_item(lock_timeout, Duration::ZERO)
                 .await

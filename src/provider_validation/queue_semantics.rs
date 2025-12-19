@@ -338,3 +338,157 @@ pub async fn test_lost_lock_token_handling<F: ProviderFactory>(factory: &F) {
     assert!(matches!(item2, WorkItem::ActivityExecute { .. }));
     tracing::info!("✓ Test passed: lost lock token handling verified");
 }
+
+/// Test 5.6: Worker Item Immediate Visibility
+/// Goal: Verify newly enqueued worker items are immediately visible.
+pub async fn test_worker_item_immediate_visibility<F: ProviderFactory>(factory: &F) {
+    tracing::info!("→ Testing queue semantics: worker item immediate visibility");
+    let provider = factory.create_provider().await;
+    let lock_timeout = factory.lock_timeout();
+
+    // Enqueue a work item
+    provider
+        .enqueue_for_worker(WorkItem::ActivityExecute {
+            instance: "test-immediate-vis".to_string(),
+            execution_id: 1,
+            id: 1,
+            name: "TestActivity".to_string(),
+            input: "test".to_string(),
+        })
+        .await
+        .unwrap();
+
+    // Item should be immediately fetchable (visible_at set to now)
+    let result = provider.fetch_work_item(lock_timeout, Duration::ZERO).await.unwrap();
+
+    assert!(
+        result.is_some(),
+        "Newly enqueued worker item should be immediately visible"
+    );
+
+    let (item, token, _) = result.unwrap();
+    assert!(matches!(item, WorkItem::ActivityExecute { name, .. } if name == "TestActivity"));
+
+    // Clean up
+    provider
+        .ack_work_item(
+            &token,
+            WorkItem::ActivityCompleted {
+                instance: "test-immediate-vis".to_string(),
+                execution_id: 1,
+                id: 1,
+                result: "done".to_string(),
+            },
+        )
+        .await
+        .unwrap();
+
+    tracing::info!("✓ Test passed: worker item immediate visibility verified");
+}
+
+/// Test 5.7: Worker Delayed Visibility After Abandon
+/// Goal: Verify items with future visible_at are skipped even when lock_token is NULL.
+pub async fn test_worker_delayed_visibility_skips_future_items<F: ProviderFactory>(factory: &F) {
+    tracing::info!("→ Testing queue semantics: worker delayed visibility skips future items");
+    let provider = factory.create_provider().await;
+    let lock_timeout = factory.lock_timeout();
+
+    // Enqueue two work items
+    provider
+        .enqueue_for_worker(WorkItem::ActivityExecute {
+            instance: "test-delayed-vis".to_string(),
+            execution_id: 1,
+            id: 1,
+            name: "Activity1".to_string(),
+            input: "first".to_string(),
+        })
+        .await
+        .unwrap();
+
+    provider
+        .enqueue_for_worker(WorkItem::ActivityExecute {
+            instance: "test-delayed-vis".to_string(),
+            execution_id: 1,
+            id: 2,
+            name: "Activity2".to_string(),
+            input: "second".to_string(),
+        })
+        .await
+        .unwrap();
+
+    // Fetch first item
+    let (item1, token1, _) = provider
+        .fetch_work_item(lock_timeout, Duration::ZERO)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(matches!(&item1, WorkItem::ActivityExecute { id: 1, .. }));
+
+    // Abandon first item with delay (sets visible_at to future, clears lock_token)
+    let delay = Duration::from_millis(500);
+    provider.abandon_work_item(&token1, Some(delay), false).await.unwrap();
+
+    // Fetch again - should get second item (first is delayed even though unlocked)
+    let (item2, token2, _) = provider
+        .fetch_work_item(lock_timeout, Duration::ZERO)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        matches!(&item2, WorkItem::ActivityExecute { id: 2, .. }),
+        "Should skip delayed item and fetch second item"
+    );
+
+    // Trying to fetch again should return None (first is delayed, second is locked)
+    assert!(
+        provider
+            .fetch_work_item(lock_timeout, Duration::ZERO)
+            .await
+            .unwrap()
+            .is_none(),
+        "No items should be available"
+    );
+
+    // Wait for delay to expire
+    tokio::time::sleep(delay + Duration::from_millis(100)).await;
+
+    // Now first item should be visible again
+    let (item3, token3, _) = provider
+        .fetch_work_item(lock_timeout, Duration::ZERO)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        matches!(&item3, WorkItem::ActivityExecute { id: 1, .. }),
+        "First item should now be visible after delay"
+    );
+
+    // Clean up both items
+    provider
+        .ack_work_item(
+            &token2,
+            WorkItem::ActivityCompleted {
+                instance: "test-delayed-vis".to_string(),
+                execution_id: 1,
+                id: 2,
+                result: "done".to_string(),
+            },
+        )
+        .await
+        .unwrap();
+
+    provider
+        .ack_work_item(
+            &token3,
+            WorkItem::ActivityCompleted {
+                instance: "test-delayed-vis".to_string(),
+                execution_id: 1,
+                id: 1,
+                result: "done".to_string(),
+            },
+        )
+        .await
+        .unwrap();
+
+    tracing::info!("✓ Test passed: worker delayed visibility skips future items verified");
+}

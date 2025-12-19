@@ -8,8 +8,8 @@
 
 Deterministic task orchestration in Rust, inspired by Durable Task.
 
-> **[Latest Release: v0.1.4](https://crates.io/crates/duroxide/0.1.4)** — Provider identity API and runtime startup banner.
-> See [CHANGELOG.md](CHANGELOG.md#0.1.4---2025-12-14) for release notes.
+> **[Latest Release: v0.1.5](https://crates.io/crates/duroxide/0.1.5)** — Worker queue visibility control, reduced default long poll timeout.
+> See [CHANGELOG.md](CHANGELOG.md#0.1.5---2025-12-18) for release notes.
 
 What you can build with this (inspired by .NET Durable Task/Durable Functions patterns)
 - Function chaining: model a multi-step process as sequential awaits where each step depends on prior results.

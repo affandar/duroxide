@@ -133,6 +133,8 @@ pub trait ProviderFactory: Send + Sync {
 /// - `test_worker_ack_atomicity` - Verify ack_worker atomically removes item and enqueues completion
 /// - `test_timer_delayed_visibility` - Verify TimerFired items only dequeued when visible
 /// - `test_lost_lock_token_handling` - Verify locked items become available after expiration
+/// - `test_worker_item_immediate_visibility` - Verify newly enqueued items are immediately visible
+/// - `test_worker_delayed_visibility_skips_future_items` - Verify items with future visible_at are skipped
 ///
 /// **Management Tests:**
 /// - `test_list_instances` - Verify list_instances returns all instance IDs
@@ -182,11 +184,10 @@ pub use crate::provider_validation::instance_locking::{
 
 #[cfg(feature = "provider-test")]
 pub use crate::provider_validation::lock_expiration::{
-    test_abandon_releases_lock_immediately, test_abandon_work_item_releases_lock,
-    test_abandon_work_item_with_delay, test_concurrent_lock_attempts_respect_expiration,
-    test_lock_expires_after_timeout, test_lock_renewal_on_ack, test_worker_lock_renewal_after_ack,
-    test_worker_lock_renewal_after_expiration, test_worker_lock_renewal_extends_timeout,
-    test_worker_lock_renewal_invalid_token, test_worker_lock_renewal_success,
+    test_abandon_releases_lock_immediately, test_abandon_work_item_releases_lock, test_abandon_work_item_with_delay,
+    test_concurrent_lock_attempts_respect_expiration, test_lock_expires_after_timeout, test_lock_renewal_on_ack,
+    test_worker_lock_renewal_after_ack, test_worker_lock_renewal_after_expiration,
+    test_worker_lock_renewal_extends_timeout, test_worker_lock_renewal_invalid_token, test_worker_lock_renewal_success,
 };
 
 #[cfg(feature = "provider-test")]
@@ -198,6 +199,7 @@ pub use crate::provider_validation::multi_execution::{
 #[cfg(feature = "provider-test")]
 pub use crate::provider_validation::queue_semantics::{
     test_lost_lock_token_handling, test_timer_delayed_visibility, test_worker_ack_atomicity,
+    test_worker_delayed_visibility_skips_future_items, test_worker_item_immediate_visibility,
     test_worker_peek_lock_semantics, test_worker_queue_fifo_ordering,
 };
 
@@ -220,9 +222,8 @@ pub mod long_polling {
 pub mod poison_message {
     pub use crate::provider_validation::poison_message::{
         abandon_orchestration_item_ignore_attempt_decrements, abandon_work_item_ignore_attempt_decrements,
-        attempt_count_is_per_message, ignore_attempt_never_goes_negative,
-        max_attempt_count_across_message_batch, orchestration_attempt_count_increments_on_refetch,
-        orchestration_attempt_count_starts_at_one, worker_attempt_count_increments_on_lock_expiry,
-        worker_attempt_count_starts_at_one,
+        attempt_count_is_per_message, ignore_attempt_never_goes_negative, max_attempt_count_across_message_batch,
+        orchestration_attempt_count_increments_on_refetch, orchestration_attempt_count_starts_at_one,
+        worker_attempt_count_increments_on_lock_expiry, worker_attempt_count_starts_at_one,
     };
 }

@@ -1,6 +1,6 @@
 [package]
 name = "duroxide"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2024"
 description = "Deterministic task orchestration framework for Rust - inspired by Durable Task Framework"
 license = "MIT"

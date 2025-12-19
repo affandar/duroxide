@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.1.4] - 2025-12-14
+## [0.1.5] - 2025-12-18
 
 ### Added
 
@@ -18,6 +18,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Runtime startup banner** - Version information logged on startup
   - Logs duroxide version and provider name/version
   - Example: `duroxide runtime (0.1.4) starting with provider sqlite (0.1.4)`
+
+- **Worker queue visibility control** - Worker queue now uses `visible_at` for delayed visibility
+  - Added `visible_at` column to worker_queue (matches orchestrator queue pattern)
+  - `abandon_work_item` with delay now sets `visible_at` instead of keeping `locked_until`
+  - Cleaner semantics: `visible_at` controls when item becomes visible, `locked_until` only for lock expiry
+  - Migration file included for existing databases
+
+- **New provider validation tests** - 2 additional queue semantics tests
+  - `test_worker_item_immediate_visibility` - Verify newly enqueued items are immediately visible
+  - `test_worker_delayed_visibility_skips_future_items` - Verify items with future visible_at are skipped
+
+### Changed
+
+- **Reduced default `dispatcher_long_poll_timeout`** from 5 minutes to 30 seconds
+  - More responsive shutdown behavior
+  - Better suited for typical workloads
 
 ## [0.1.3] - 2025-12-14
 

@@ -337,6 +337,7 @@ impl SqliteProvider {
             CREATE TABLE IF NOT EXISTS worker_queue (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 work_item TEXT NOT NULL,
+                visible_at INTEGER NOT NULL DEFAULT 0,
                 lock_token TEXT,
                 locked_until TIMESTAMP,
                 attempt_count INTEGER NOT NULL DEFAULT 0 CHECK(attempt_count >= 0),
@@ -946,12 +947,14 @@ impl Provider for SqliteProvider {
             count = worker_items.len(),
             "Enqueuing worker items"
         );
+        let now_ms = Self::now_millis();
         for item in worker_items {
             let work_item = serde_json::to_string(&item).map_err(|e| {
                 ProviderError::permanent("enqueue_for_orchestrator", format!("Serialization error: {e}"))
             })?;
-            sqlx::query("INSERT INTO worker_queue (work_item) VALUES (?)")
+            sqlx::query("INSERT INTO worker_queue (work_item, visible_at) VALUES (?, ?)")
                 .bind(work_item)
+                .bind(now_ms)
                 .execute(&mut *tx)
                 .await
                 .map_err(|e| Self::sqlx_to_provider_error("list_instances", e))?;
@@ -1147,9 +1150,11 @@ impl Provider for SqliteProvider {
         tracing::debug!(target: "duroxide::providers::sqlite", ?item, "enqueue_for_worker");
         let work_item = serde_json::to_string(&item)
             .map_err(|e| ProviderError::permanent("enqueue_for_worker", format!("Serialization error: {e}")))?;
+        let now_ms = Self::now_millis();
 
-        sqlx::query("INSERT INTO worker_queue (work_item) VALUES (?)")
+        sqlx::query("INSERT INTO worker_queue (work_item, visible_at) VALUES (?, ?)")
             .bind(work_item)
+            .bind(now_ms)
             .execute(&self.pool)
             .await
             .map_err(|e| Self::sqlx_to_provider_error("enqueue_for_worker", e))?;
@@ -1177,11 +1182,13 @@ impl Provider for SqliteProvider {
         );
 
         // First find and lock the next item
+        // Item is available if: visible, and (unlocked OR lock expired)
         let now_ms = Self::now_millis();
         let next_item = sqlx::query(
             r#"
             SELECT id, work_item, attempt_count FROM worker_queue
-            WHERE lock_token IS NULL OR locked_until <= ?1
+            WHERE visible_at <= ?1
+              AND (lock_token IS NULL OR locked_until <= ?1)
             ORDER BY id
             LIMIT 1
             "#,
@@ -1327,55 +1334,37 @@ impl Provider for SqliteProvider {
         delay: Option<Duration>,
         ignore_attempt: bool,
     ) -> Result<(), ProviderError> {
-        // Worker queue uses locked_until for visibility control
-        // When delay is specified, keep lock_token and set locked_until to future time
-        // This prevents the item from being picked up until locked_until expires
-        // When no delay, clear lock_token to make item immediately available
+        // Worker queue uses visible_at for visibility control (like orchestrator queue)
+        // When delay is specified, set visible_at to future time to delay retry
+        // Always clear lock_token and locked_until since the lock is being released
 
-        let result = if let Some(d) = delay {
-            let locked_until = Self::timestamp_after(d);
-            // Keep lock_token, just update locked_until to delay the retry
-            let query = if ignore_attempt {
-                r#"
-                UPDATE worker_queue
-                SET locked_until = ?1, attempt_count = MAX(0, attempt_count - 1)
-                WHERE lock_token = ?2
-                "#
-            } else {
-                r#"
-                UPDATE worker_queue
-                SET locked_until = ?1
-                WHERE lock_token = ?2
-                "#
-            };
-            sqlx::query(query)
-                .bind(locked_until)
-                .bind(token)
-                .execute(&self.pool)
-                .await
-                .map_err(|e| Self::sqlx_to_provider_error("abandon_work_item", e))?
+        let now_ms = Self::now_millis();
+        let visible_at = if let Some(d) = delay {
+            Self::timestamp_after(d)
         } else {
-            // No delay - clear lock_token for immediate availability
-            let query = if ignore_attempt {
-                r#"
-                UPDATE worker_queue
-                SET lock_token = NULL, locked_until = NULL,
-                    attempt_count = MAX(0, attempt_count - 1)
-                WHERE lock_token = ?1
-                "#
-            } else {
-                r#"
-                UPDATE worker_queue
-                SET lock_token = NULL, locked_until = NULL
-                WHERE lock_token = ?1
-                "#
-            };
-            sqlx::query(query)
-                .bind(token)
-                .execute(&self.pool)
-                .await
-                .map_err(|e| Self::sqlx_to_provider_error("abandon_work_item", e))?
+            now_ms
         };
+
+        let query = if ignore_attempt {
+            r#"
+            UPDATE worker_queue
+            SET lock_token = NULL, locked_until = NULL, visible_at = ?1,
+                attempt_count = MAX(0, attempt_count - 1)
+            WHERE lock_token = ?2
+            "#
+        } else {
+            r#"
+            UPDATE worker_queue
+            SET lock_token = NULL, locked_until = NULL, visible_at = ?1
+            WHERE lock_token = ?2
+            "#
+        };
+        let result = sqlx::query(query)
+            .bind(visible_at)
+            .bind(token)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| Self::sqlx_to_provider_error("abandon_work_item", e))?;
 
         if result.rows_affected() == 0 {
             return Err(ProviderError::permanent(

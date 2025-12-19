@@ -813,8 +813,9 @@ IF metadata.status IS NOT NULL:
 // 8. Enqueue worker items
 FOR item IN worker_items:
     work_json = serialize(item)
-    INSERT INTO worker_queue (work_item, lock_token, locked_until, created_at)
-    VALUES (work_json, NULL, NULL, NOW())
+    now_ms = current_time_millis()
+    INSERT INTO worker_queue (work_item, visible_at, lock_token, locked_until, attempt_count, created_at)
+    VALUES (work_json, now_ms, NULL, NULL, 0, NOW())
 
 // 9. Enqueue orchestrator items (may include TimerFired with delayed visibility)
 FOR item IN orchestrator_items:
@@ -998,8 +999,9 @@ If deserialization fails for queue items or history events, the provider MUST ha
 **enqueue_for_worker():**
 ```
 work_json = serialize(item)
-INSERT INTO worker_queue (work_item, lock_token, locked_until)
-VALUES (work_json, NULL, NULL)
+now_ms = current_timestamp_ms()
+INSERT INTO worker_queue (work_item, visible_at, lock_token, locked_until, attempt_count)
+VALUES (work_json, now_ms, NULL, NULL, 0)
 ```
 
 **fetch_work_item(lock_timeout: Duration, poll_timeout: Duration):**
@@ -1010,8 +1012,9 @@ VALUES (work_json, NULL, NULL)
 
 BEGIN TRANSACTION
 
-row = SELECT id, work_item FROM worker_queue
-      WHERE lock_token IS NULL OR locked_until <= current_timestamp()
+row = SELECT id, work_item, attempt_count FROM worker_queue
+      WHERE visible_at <= current_timestamp()
+        AND (lock_token IS NULL OR locked_until <= current_timestamp())
       ORDER BY id ASC
       LIMIT 1
 
@@ -1166,20 +1169,25 @@ async fn abandon_work_item(
     delay: Option<Duration>,
     ignore_attempt: bool,
 ) -> Result<(), ProviderError> {
-    locked_until = IF delay IS NOT NULL:
-                       current_timestamp() + delay
-                   ELSE:
-                       NULL
+    // When delay is provided, set visible_at to future time (not locked_until)
+    // This makes the item invisible but unlocked
+    visible_at = IF delay IS NOT NULL:
+                     current_timestamp() + delay
+                 ELSE:
+                     current_timestamp()  // Immediately visible
 
     IF ignore_attempt:
         result = UPDATE worker_queue
                  SET lock_token = NULL,
-                     locked_until = locked_until,
+                     locked_until = NULL,
+                     visible_at = visible_at,
                      attempt_count = MAX(0, attempt_count - 1)
                  WHERE lock_token = token
     ELSE:
         result = UPDATE worker_queue
-                 SET lock_token = NULL, locked_until = locked_until
+                 SET lock_token = NULL,
+                     locked_until = NULL,
+                     visible_at = visible_at
                  WHERE lock_token = token
 
     IF result.rows_affected == 0:
@@ -1437,12 +1445,14 @@ The validation suite provides **58 individual test functions** organized into 9 
 - `test_continue_as_new_creates_new_execution` - Verify ContinueAsNew creates new execution
 - `test_execution_history_persistence` - Verify all executions' history persists independently
 
-**Queue Semantics Tests (5 tests):**
+**Queue Semantics Tests (7 tests):**
 - `test_worker_queue_fifo_ordering` - Verify worker items dequeued in FIFO order
 - `test_worker_peek_lock_semantics` - Verify dequeue doesn't remove item until ack
 - `test_worker_ack_atomicity` - Verify ack_worker atomically removes item and enqueues completion
 - `test_timer_delayed_visibility` - Verify TimerFired items only dequeued when visible
 - `test_lost_lock_token_handling` - Verify locked items become available after expiration
+- `test_worker_item_immediate_visibility` - Verify newly enqueued items are immediately visible
+- `test_worker_delayed_visibility_skips_future_items` - Verify items with future visible_at are skipped
 
 **Instance Creation Tests (4 tests):**
 - `test_instance_creation_via_metadata` - Verify instances created via ack metadata, not on enqueue

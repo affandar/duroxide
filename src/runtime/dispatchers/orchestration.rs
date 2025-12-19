@@ -630,7 +630,7 @@ impl Runtime {
         }
 
         // Run the atomic execution to get all changes, passing the resolved handler
-        let (_exec_history_delta, exec_worker_items, exec_orchestrator_items, _result) = Arc::clone(&self)
+        let (_exec_history_delta, exec_worker_items, exec_orchestrator_items, _result) = Arc::clone(self)
             .run_single_execution_atomic(instance, history_mgr, workitem_reader, execution_id, worker_id, handler)
             .await;
 

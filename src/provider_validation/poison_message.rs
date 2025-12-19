@@ -624,11 +624,7 @@ pub async fn max_attempt_count_across_message_batch(factory: &dyn ProviderFactor
         .await
         .expect("fetch should succeed")
         .expect("item should be present");
-    assert_eq!(
-        item3.messages.len(),
-        2,
-        "Should have 2 messages in the batch"
-    );
+    assert_eq!(item3.messages.len(), 2, "Should have 2 messages in the batch");
     assert_eq!(
         attempt3, 3,
         "Attempt count should be MAX across messages (3), not the newer message's count (1)"

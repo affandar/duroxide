@@ -462,12 +462,14 @@ pub enum WorkItem {
 ///     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 /// );
 ///
-/// -- Worker queue (peek-lock)
+/// -- Worker queue (peek-lock with visibility control)
 /// CREATE TABLE worker_queue (
 ///     id INTEGER PRIMARY KEY AUTOINCREMENT,
 ///     work_item TEXT NOT NULL,
+///     visible_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 ///     lock_token TEXT,
 ///     locked_until TIMESTAMP,
+///     attempt_count INTEGER NOT NULL DEFAULT 0,
 ///     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 /// );
 ///

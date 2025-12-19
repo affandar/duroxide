@@ -20,7 +20,7 @@ use tracing::warn;
 ///     orchestration_concurrency: 4,
 ///     worker_concurrency: 8,
 ///     dispatcher_min_poll_interval: Duration::from_millis(25), // Polling backoff when queues idle
-///     dispatcher_long_poll_timeout: Duration::from_secs(300),  // Long polling timeout (5 mins)
+///     dispatcher_long_poll_timeout: Duration::from_secs(30),   // Long polling timeout
 ///     orchestrator_lock_timeout: Duration::from_secs(10),      // Orchestration turns retry after 10s
 ///     worker_lock_timeout: Duration::from_secs(300),        // Activities retry after 5 minutes
 ///     worker_lock_renewal_buffer: Duration::from_secs(30),  // Renew worker locks 30s early
@@ -48,7 +48,7 @@ pub struct RuntimeOptions {
     ///
     /// Only used if the provider supports long polling.
     ///
-    /// Default: 5 minutes
+    /// Default: 30 seconds
     pub dispatcher_long_poll_timeout: Duration,
 
     /// Number of concurrent orchestration workers.
@@ -125,7 +125,7 @@ impl Default for RuntimeOptions {
     fn default() -> Self {
         Self {
             dispatcher_min_poll_interval: Duration::from_millis(100),
-            dispatcher_long_poll_timeout: Duration::from_secs(300), // 5 minutes
+            dispatcher_long_poll_timeout: Duration::from_secs(30), // 30 seconds
             orchestration_concurrency: 2,
             worker_concurrency: 2,
             orchestrator_lock_timeout: Duration::from_secs(5),

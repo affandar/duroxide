@@ -18,10 +18,9 @@ mod tests {
         // Poison message tests
         poison_message::{
             abandon_orchestration_item_ignore_attempt_decrements, abandon_work_item_ignore_attempt_decrements,
-            attempt_count_is_per_message, ignore_attempt_never_goes_negative,
-            max_attempt_count_across_message_batch, orchestration_attempt_count_increments_on_refetch,
-            orchestration_attempt_count_starts_at_one, worker_attempt_count_increments_on_lock_expiry,
-            worker_attempt_count_starts_at_one,
+            attempt_count_is_per_message, ignore_attempt_never_goes_negative, max_attempt_count_across_message_batch,
+            orchestration_attempt_count_increments_on_refetch, orchestration_attempt_count_starts_at_one,
+            worker_attempt_count_increments_on_lock_expiry, worker_attempt_count_starts_at_one,
         },
         test_abandon_releases_lock_immediately,
         test_abandon_work_item_releases_lock,
@@ -75,6 +74,8 @@ mod tests {
         test_sub_orchestration_instance_creation,
         test_timer_delayed_visibility,
         test_worker_ack_atomicity,
+        test_worker_delayed_visibility_skips_future_items,
+        test_worker_item_immediate_visibility,
         test_worker_peek_lock_semantics,
         // Queue semantics tests
         test_worker_queue_fifo_ordering,
@@ -276,6 +277,15 @@ mod tests {
         test_lost_lock_token_handling(&SqliteTestFactory).await;
     }
 
+    #[tokio::test]
+    async fn test_sqlite_worker_item_immediate_visibility() {
+        test_worker_item_immediate_visibility(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_worker_delayed_visibility_skips_future_items() {
+        test_worker_delayed_visibility_skips_future_items(&SqliteTestFactory).await;
+    }
     // Management tests
     #[tokio::test]
     async fn test_sqlite_list_instances() {
