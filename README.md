@@ -4,7 +4,7 @@
 [![Crates.io](https://img.shields.io/crates/v/duroxide.svg)](https://crates.io/crates/duroxide)
 [![Documentation](https://docs.rs/duroxide/badge.svg)](https://docs.rs/duroxide)
 
-> Notice: This is an experimental project exploring how AI can help build and iteratively improve a moderately complex framework. It's intended for learning and fun, not for production use (yet).
+> Notice: Experimental, not intended for production use yet
 
 Deterministic task orchestration in Rust, inspired by Durable Task.
 
