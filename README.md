@@ -200,4 +200,4 @@ Notes
 - Logging is replay-safe by treating it as a system activity via `ctx.trace_*` helpers; logs are emitted through tracing at completion time (not persisted as history events).
 
 Provenance
-- This codebase was generated entirely by AI with explicit guidance and reviews from a human
+- Built with AI assistance
