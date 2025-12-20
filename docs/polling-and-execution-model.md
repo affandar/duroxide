@@ -1,14 +1,14 @@
-# DTF Polling and Execution Model
+# Polling and Execution Model
 
 ## Overview
 
-The Durable Task Framework (DTF) implements a unique execution model that doesn't rely on a traditional async runtime continuously polling futures. Instead, it uses a **replay-based, message-driven architecture** where orchestrations progress through discrete turns triggered by completion messages.
+Duroxide implements a unique execution model that doesn't rely on a traditional async runtime continuously polling futures. Instead, it uses a **replay-based, message-driven architecture** where orchestrations progress through discrete turns triggered by completion messages.
 
 ## Key Concepts
 
 ### No Continuous Polling
 
-Unlike typical async Rust applications where a tokio runtime continuously polls futures until completion, DTF:
+Unlike typical async Rust applications where a tokio runtime continuously polls futures until completion, Duroxide:
 - Polls futures **once per turn** when encountered
 - Each completion message triggers a new turn
 - The orchestration is **replayed from the beginning** each turn
@@ -183,7 +183,7 @@ Orchestrations only progress when:
 
 ## System Architecture
 
-The DTF system is essentially a **state machine** where:
+Duroxide is essentially a **state machine** where:
 
 - **State** = History (persistent event log)
 - **Transitions** = Completion messages
@@ -208,7 +208,7 @@ History + Completion Message → Replay → New History + Actions
 
 ## Comparison with Traditional Async
 
-| Traditional Async | DTF Model |
+| Traditional Async | Duroxide Model |
 |------------------|-----------|
 | Continuous polling by runtime | Single poll per turn |
 | Futures stay in memory | Futures recreated each turn |
@@ -226,4 +226,4 @@ History + Completion Message → Replay → New History + Actions
 
 ## Conclusion
 
-The DTF polling model is fundamentally different from traditional async Rust. Instead of relying on continuous polling by a runtime, it uses a message-driven, replay-based approach where each completion message triggers a discrete turn of execution. This provides durability, determinism, and scalability at the cost of replay overhead - a worthwhile tradeoff for durable orchestrations.
+Duroxide's polling model is fundamentally different from traditional async Rust. Instead of relying on continuous polling by a runtime, it uses a message-driven, replay-based approach where each completion message triggers a discrete turn of execution. This provides durability, determinism, and scalability at the cost of replay overhead - a worthwhile tradeoff for durable orchestrations.
