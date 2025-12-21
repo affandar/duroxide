@@ -6,7 +6,7 @@
 
 > Notice: Experimental, not intended for production use yet
 
-Deterministic task orchestration in Rust.
+A lightweight and embeddable durable execution runtime for Rust. Inspired by the [Durable Task Framework](https://github.com/Azure/durabletask) and [Temporal](https://temporal.io/).
 
 > **[Latest Release: v0.1.5](https://crates.io/crates/duroxide/0.1.5)** — Worker queue visibility control, reduced default long poll timeout.
 > See [CHANGELOG.md](CHANGELOG.md#0.1.5---2025-12-18) for release notes.
