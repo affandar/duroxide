@@ -2,7 +2,7 @@
 name = "duroxide"
 version = "0.1.5"
 edition = "2024"
-description = "Deterministic task orchestration framework for Rust - inspired by Durable Task Framework"
+description = "Durable code execution framework for Rust"
 license = "MIT"
 repository = "https://github.com/affandar/duroxide"
 homepage = "https://github.com/affandar/duroxide"

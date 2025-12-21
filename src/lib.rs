@@ -1,8 +1,8 @@
-//! # Duroxide: Deterministic Task Orchestration in Rust
+//! # Duroxide: Durable execution framework in Rust
 //!
-//! Duroxide is a framework for building reliable, long-running workflows that can survive
-//! failures and restarts. It's inspired by Microsoft's Durable Task Framework and provides
-//! a replay-driven programming model for deterministic orchestration.
+//! Duroxide is a framework for building reliable, long-running code based workflows that can survive
+//! failures and restarts. For a deep dive into how durable execution works, see the
+//! [Durable Futures Internals](https://github.com/affandar/duroxide/blob/main/docs/durable-futures-internals.md) documentation.
 //!
 //! ## Quick Start
 //!

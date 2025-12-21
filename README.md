@@ -6,12 +6,12 @@
 
 > Notice: Experimental, not intended for production use yet
 
-Deterministic task orchestration in Rust, inspired by Durable Task.
+Deterministic task orchestration in Rust.
 
 > **[Latest Release: v0.1.5](https://crates.io/crates/duroxide/0.1.5)** — Worker queue visibility control, reduced default long poll timeout.
 > See [CHANGELOG.md](CHANGELOG.md#0.1.5---2025-12-18) for release notes.
 
-What you can build with this (inspired by .NET Durable Task/Durable Functions patterns)
+What you can build with this
 - Function chaining: model a multi-step process as sequential awaits where each step depends on prior results.
 - Fan-out/fan-in: schedule many activities in parallel and deterministically aggregate results.
 - Human interaction (external events): wait for out-of-band approvals, callbacks, or webhooks and then resume.
@@ -19,7 +19,7 @@ What you can build with this (inspired by .NET Durable Task/Durable Functions pa
 - Saga-style compensation: on failure, run compensating actions to roll back prior steps.
 - Built-in activity retry: `ctx.schedule_activity_with_retry()` with configurable backoff (exponential, linear, fixed) and per-attempt timeouts.
 
-These scenarios mirror the officially documented Durable Task/Durable Functions application patterns and are enabled here by deterministic replay, correlation IDs, durable timers, and external event handling.
+These patterns are enabled by deterministic replay, correlation IDs, durable timers, and external event handling.
 
 Getting started samples
 - **Start here**: See `docs/ORCHESTRATION-GUIDE.md` for complete guide to writing workflows
@@ -102,7 +102,7 @@ rt.shutdown(None).await;  // Graceful shutdown with 1s timeout
 # }
 ```
 
-Parallel fan-out (DTF-style greetings)
+Parallel fan-out
 ```rust
 async fn fanout(ctx: OrchestrationContext) -> Vec<String> {
     let f1 = ctx.schedule_activity("Greetings", "Gabbar");
@@ -198,6 +198,3 @@ Notes
 - Timers are real time (Tokio sleep). External events are via `Runtime::raise_event`.
 - Unknown-instance messages are logged and dropped. Providers persist history only (queues are in-memory runtime components).
 - Logging is replay-safe by treating it as a system activity via `ctx.trace_*` helpers; logs are emitted through tracing at completion time (not persisted as history events).
-
-Provenance
-- This codebase was generated entirely by AI with explicit guidance and reviews from a human

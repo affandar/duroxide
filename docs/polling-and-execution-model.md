@@ -1,14 +1,14 @@
-# DTF Polling and Execution Model
+# Polling and Execution Model
 
 ## Overview
 
-The Durable Task Framework (DTF) implements a unique execution model that doesn't rely on a traditional async runtime continuously polling futures. Instead, it uses a **replay-based, message-driven architecture** where orchestrations progress through discrete turns triggered by completion messages.
+Duroxide implements a replay-based, message-driven execution model where orchestrations progress through discrete turns triggered by completion messages. This differs from a traditional async runtime that continuously polls futures.
 
 ## Key Concepts
 
 ### No Continuous Polling
 
-Unlike typical async Rust applications where a tokio runtime continuously polls futures until completion, DTF:
+Unlike typical async Rust applications where a tokio runtime continuously polls futures until completion, Duroxide:
 - Polls futures **once per turn** when encountered
 - Each completion message triggers a new turn
 - The orchestration is **replayed from the beginning** each turn
