@@ -220,7 +220,7 @@ async fn custom_stress_test() {
 
 ## Test Scenarios
 
-The current stress test implements the **Parallel Orchestrations** scenario:
+Duroxide provides two built-in stress test scenarios:
 
 ### Parallel Orchestrations (Fan-Out/Fan-In)
 
@@ -234,6 +234,66 @@ This pattern tests:
 - Message queue throughput
 - Database write concurrency
 - Instance-level locking correctness
+
+Use the `ProviderStressFactory` trait:
+```rust
+use duroxide::provider_stress_tests::parallel_orchestrations::{
+    ProviderStressFactory, run_parallel_orchestrations_test
+};
+```
+
+### Large Payload (Memory Stress)
+
+Each orchestration:
+1. Schedules activities with large payloads (10KB, 50KB, 100KB)
+2. Creates moderate-length histories (~80-100 events)
+3. Spawns sub-orchestrations with large inputs/outputs
+
+This pattern tests:
+- Memory allocation efficiency
+- History storage and retrieval with large events
+- Event serialization/deserialization overhead
+- Provider memory footprint under load
+
+Use the same `ProviderStressFactory` trait as parallel orchestrations:
+```rust
+use duroxide::provider_stress_tests::parallel_orchestrations::ProviderStressFactory;
+use duroxide::provider_stress_tests::large_payload::{
+    LargePayloadConfig, run_large_payload_test, run_large_payload_test_with_config
+};
+
+// Same factory implementation works for both stress tests!
+struct MyProviderFactory;
+
+#[async_trait::async_trait]
+impl ProviderStressFactory for MyProviderFactory {
+    async fn create_provider(&self) -> Arc<dyn Provider> {
+        Arc::new(MyProvider::new().await.unwrap())
+    }
+}
+
+#[tokio::test]
+async fn large_payload_stress_test() {
+    let factory = MyProviderFactory;
+    // Run with default config
+    let result = run_large_payload_test(&factory).await.unwrap();
+    assert!(result.success_rate() > 99.0);
+}
+
+#[tokio::test]
+async fn large_payload_stress_test_custom_config() {
+    let factory = MyProviderFactory;
+    // Or run with custom config
+    let config = LargePayloadConfig {
+        small_payload_kb: 5,
+        medium_payload_kb: 25,
+        large_payload_kb: 50,
+        ..Default::default()
+    };
+    let result = run_large_payload_test_with_config(&factory, config).await.unwrap();
+    assert!(result.success_rate() > 99.0);
+}
+```
 
 ### Creating Custom Scenarios
 
@@ -711,6 +771,30 @@ MyProvider           2/2        81         0          0        0        0       
 
 ---
 
+## Running Stress Tests with the Script
+
+Duroxide provides a shell script to run stress tests with resource monitoring.
+
+**Script**: [`run-stress-tests.sh`](https://github.com/affandar/duroxide/blob/main/run-stress-tests.sh)
+
+### Usage
+
+```bash
+./run-stress-tests.sh                    # Run all tests for 10s (default)
+./run-stress-tests.sh 60                 # Run all tests for 60 seconds
+./run-stress-tests.sh --parallel-only    # Run only parallel orchestrations
+./run-stress-tests.sh --large-payload    # Run only large payload test
+./run-stress-tests.sh --help             # Show all options
+```
+
+### Implementing for Custom Providers
+
+1. Create a stress test binary similar to `sqlite-stress/src/bin/sqlite-stress.rs`
+2. Implement `ProviderStressFactory` for your provider (works for both parallel orchestrations and large payload tests)
+3. Run with the same configurations to compare performance
+
+---
+
 ## Integration with CI/CD
 
 Add stress tests to your CI pipeline:
@@ -730,16 +814,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
-      
+
       - name: Setup Rust
         uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
-      
+
       - name: Run stress tests
         run: |
-          cd sqlite-stress
-          cargo run --release --bin sqlite-stress
+          ./run-stress-tests.sh 10
 ```
 
 ---

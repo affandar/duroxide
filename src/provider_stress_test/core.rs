@@ -159,7 +159,7 @@ pub async fn run_stress_test(
         tokio::spawn(async move {
             // Start orchestration
             let start_result = client_clone
-                .start_orchestration(&instance, "FanoutWorkflow", input_clone)
+                .start_orchestration(&instance, "FanoutOrchestration", input_clone)
                 .await;
 
             if let Err(e) = start_result {
@@ -341,7 +341,7 @@ pub fn create_default_activities(delay_ms: u64) -> Arc<ActivityRegistry> {
 /// Create the default orchestration registry for stress tests
 pub fn create_default_orchestrations() -> OrchestrationRegistry {
     OrchestrationRegistry::builder()
-        .register("FanoutWorkflow", fanout_orchestration)
+        .register("FanoutOrchestration", fanout_orchestration)
         .build()
 }
 

@@ -71,6 +71,42 @@
 //! - 2 orchestration dispatchers
 //! - 2 worker dispatchers
 //!
+//! ## Large Payload (`large_payload` module)
+//!
+//! Tests memory consumption and history management with large event payloads:
+//! - `run_large_payload_test` - Run with default config
+//! - `run_large_payload_test_with_config` - Run with custom config
+//!
+//! Default configuration:
+//! - 5 max concurrent orchestrations
+//! - 10 second duration
+//! - Large event payloads (10KB, 50KB, 100KB)
+//! - Moderate-length histories (~80-100 events)
+//! - 20 activities + 5 sub-orchestrations per instance
+//! - 5ms simulated activity delay
+//!
+//! ```rust,ignore
+//! use duroxide::provider_stress_tests::parallel_orchestrations::ProviderStressFactory;
+//! use duroxide::provider_stress_tests::large_payload::run_large_payload_test;
+//!
+//! // Use the same ProviderStressFactory implementation as parallel_orchestrations
+//! struct MyProviderFactory;
+//!
+//! #[async_trait::async_trait]
+//! impl ProviderStressFactory for MyProviderFactory {
+//!     async fn create_provider(&self) -> Arc<dyn Provider> {
+//!         Arc::new(MyProvider::new().await.unwrap())
+//!     }
+//! }
+//!
+//! #[tokio::test]
+//! async fn large_payload_stress_test() {
+//!     let factory = MyProviderFactory;
+//!     let result = run_large_payload_test(&factory).await.unwrap();
+//!     assert!(result.success_rate() > 99.0);
+//! }
+//! ```
+//!
 //! # Understanding Results
 //!
 //! The `StressTestResult` provides metrics for evaluation:
@@ -143,5 +179,13 @@ pub use crate::provider_stress_test::core::{
 pub mod parallel_orchestrations {
     pub use crate::provider_stress_test::parallel_orchestrations::{
         ProviderStressFactory, run_parallel_orchestrations_test, run_parallel_orchestrations_test_with_config,
+    };
+}
+
+#[cfg(feature = "provider-test")]
+pub mod large_payload {
+    pub use crate::provider_stress_test::large_payload::{
+        LargePayloadConfig, run_large_payload_test,
+        run_large_payload_test_with_config,
     };
 }

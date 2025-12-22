@@ -8,8 +8,8 @@
 
 A lightweight and embeddable durable execution runtime for Rust. Inspired by the [Durable Task Framework](https://github.com/Azure/durabletask) and [Temporal](https://temporal.io/).
 
-> **[Latest Release: v0.1.5](https://crates.io/crates/duroxide/0.1.5)** — Worker queue visibility control, reduced default long poll timeout.
-> See [CHANGELOG.md](CHANGELOG.md#0.1.5---2025-12-18) for release notes.
+> **[Latest Release: v0.1.6](https://crates.io/crates/duroxide/0.1.6)** — Large payload stress test, memory optimizations, stress test monitoring.
+> See [CHANGELOG.md](CHANGELOG.md#016---2025-12-21) for release notes.
 
 What you can build with this
 - Function chaining: model a multi-step process as sequential awaits where each step depends on prior results.
@@ -171,10 +171,12 @@ Local development
 - Run a specific test: `cargo test --test e2e_samples sample_dtf_legacy_gabbar_greetings -- --nocapture`
 
 Stress testing
-- Run stress tests: `./run-stress-tests.sh`
-- Run with result tracking: `./run-stress-tests.sh --track` (saves to `stress-test-results.md`)
-- Tracked results include commit history, performance metrics, and rolling averages
-- See `sqlite-stress/README.md` for details
+- Run all stress tests: `./run-stress-tests.sh` (parallel orchestrations + large payload)
+- Run specific test: `./run-stress-tests.sh --parallel-only` or `./run-stress-tests.sh --large-payload`
+- Custom duration: `./run-stress-tests.sh 60` (runs for 60 seconds)
+- Resource monitoring: Peak RSS and CPU usage tracked automatically (see `STRESS_TEST_MONITORING.md`)
+- Result tracking: `./run-stress-tests.sh --track` (saves to `stress-test-results.md`)
+- See `docs/provider-testing-guide.md` for comprehensive stress testing guide
 
 Runtime Configuration
 - Configure lock timeouts, concurrency, and polling via `RuntimeOptions`

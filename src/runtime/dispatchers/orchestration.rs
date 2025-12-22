@@ -296,7 +296,7 @@ impl Runtime {
 
             // Increment active orchestrations gauge ONLY for brand new orchestrations
             // Do NOT increment for continue-as-new - the orchestration was already active!
-            if history_mgr.full_history().is_empty() && !workitem_reader.is_continue_as_new {
+            if history_mgr.is_full_history_empty() && !workitem_reader.is_continue_as_new {
                 self.increment_active_orchestrations();
             }
         } else if !workitem_reader.completion_messages.is_empty() {
@@ -340,7 +340,7 @@ impl Runtime {
                 "unknown"
             };
             let version = metadata.orchestration_version.as_deref().unwrap_or(&version);
-            let event_count = history_mgr.full_history().len();
+            let event_count = history_mgr.full_history_len();
 
             match status.as_str() {
                 "Completed" => {

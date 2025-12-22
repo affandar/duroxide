@@ -1979,6 +1979,21 @@ async fn stress_test_my_provider() {
 }
 ```
 
+**Large Payload Stress Tests (Memory):**
+```rust
+use duroxide::provider_stress_tests::large_payload::run_large_payload_test;
+
+// Uses the same ProviderStressFactory - no need for a separate trait!
+#[tokio::test]
+async fn large_payload_stress_test_my_provider() {
+    let factory = MyProviderStressFactory;
+    let result = run_large_payload_test(&factory)
+        .await
+        .expect("Large payload stress test failed");
+    assert!(result.success_rate() > 99.0);
+}
+```
+
 See the [Provider Testing Guide](provider-testing-guide.md) for comprehensive documentation.
 
 ---

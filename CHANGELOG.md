@@ -5,6 +5,41 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.6] - 2025-12-21
+
+**Release:** <https://crates.io/crates/duroxide/0.1.6>
+
+### Added
+
+- **Large payload stress test** - New memory-intensive stress test scenario
+  - Tests large event payloads (10KB, 50KB, 100KB) and longer histories (~80-100 events)
+  - New binary: `large-payload-stress` for running the test standalone
+  - Uses the same `ProviderStressFactory` trait as parallel orchestrations test
+  - Configurable payload sizes and activity/sub-orchestration counts
+  - See `docs/provider-testing-guide.md` for usage
+
+- **Stress test monitoring** - Resource usage tracking in `run-stress-tests.sh`
+  - Peak RSS (Resident Set Size) measurement
+  - Average CPU usage tracking
+  - Sampling every 500ms during test execution
+  - New documentation: `STRESS_TEST_MONITORING.md`
+  - Supports `--parallel-only` and `--large-payload` flags
+
+### Changed
+
+- **Memory optimization** - Reduced allocations in history processing
+  - Added `HistoryManager::full_history_len()` - get count without allocation
+  - Added `HistoryManager::is_full_history_empty()` - check emptiness without allocation
+  - Added `HistoryManager::full_history_iter()` - iterate without allocation
+  - Updated runtime to use efficient methods in hot paths
+  - Improved child cancellation to use iterator instead of collecting full history
+
+- **Orchestration naming** - Renamed "FanoutWorkflow" to "FanoutOrchestration" for consistency
+
+### Fixed
+
+- Child sub-orchestration cancellation now uses iterator-based approach for better memory efficiency
+
 ## [0.1.5] - 2025-12-18
 
 **Release:** <https://crates.io/crates/duroxide/0.1.5>

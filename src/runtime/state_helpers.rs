@@ -181,7 +181,29 @@ impl HistoryManager {
         self.delta
     }
 
-    /// Get the complete history (original + delta)
+    /// Get the total number of events in the complete history (original + delta)
+    /// This is more efficient than calling `full_history().len()` as it doesn't allocate.
+    pub fn full_history_len(&self) -> usize {
+        self.history.len() + self.delta.len()
+    }
+
+    /// Check if the complete history (original + delta) is empty
+    /// This is more efficient than calling `full_history().is_empty()` as it doesn't allocate.
+    pub fn is_full_history_empty(&self) -> bool {
+        self.history.is_empty() && self.delta.is_empty()
+    }
+
+    /// Get an iterator over the complete history (original + delta)
+    /// This is more efficient than calling `full_history()` when you only need to iterate,
+    /// as it doesn't allocate a new Vec.
+    pub fn full_history_iter(&self) -> impl Iterator<Item = &Event> {
+        self.history.iter().chain(self.delta.iter())
+    }
+
+    /// Get the complete history (original + delta) as an owned Vec.
+    ///
+    /// **Note:** This allocates a new Vec. Prefer `full_history_iter()`, `full_history_len()`,
+    /// or `is_full_history_empty()` when possible to avoid allocation.
     pub fn full_history(&self) -> Vec<Event> {
         [&self.history[..], &self.delta[..]].concat()
     }
@@ -688,5 +710,121 @@ mod tests {
         // Should only use the first one
         assert_eq!(reader.orchestration_name, "first-orch");
         assert_eq!(reader.input, "input1");
+    }
+
+    #[test]
+    fn test_full_history_len() {
+        // Empty history manager
+        let mgr = HistoryManager::from_history(&[]);
+        assert_eq!(mgr.full_history_len(), 0);
+
+        // History only
+        let history = vec![Event::with_event_id(
+            1,
+            "test-inst",
+            1,
+            None,
+            EventKind::OrchestrationStarted {
+                name: "test-orch".to_string(),
+                version: "1.0.0".to_string(),
+                input: "test-input".to_string(),
+                parent_instance: None,
+                parent_id: None,
+            },
+        )];
+        let mgr = HistoryManager::from_history(&history);
+        assert_eq!(mgr.full_history_len(), 1);
+
+        // History + delta
+        let mut mgr = HistoryManager::from_history(&history);
+        mgr.append(Event::with_event_id(
+            2,
+            "test-inst",
+            1,
+            None,
+            EventKind::OrchestrationCompleted {
+                output: "done".to_string(),
+            },
+        ));
+        assert_eq!(mgr.full_history_len(), 2);
+        assert_eq!(mgr.full_history_len(), mgr.full_history().len());
+    }
+
+    #[test]
+    fn test_is_full_history_empty() {
+        // Empty history manager
+        let mgr = HistoryManager::from_history(&[]);
+        assert!(mgr.is_full_history_empty());
+
+        // Non-empty history
+        let history = vec![Event::with_event_id(
+            1,
+            "test-inst",
+            1,
+            None,
+            EventKind::OrchestrationStarted {
+                name: "test-orch".to_string(),
+                version: "1.0.0".to_string(),
+                input: "test-input".to_string(),
+                parent_instance: None,
+                parent_id: None,
+            },
+        )];
+        let mgr = HistoryManager::from_history(&history);
+        assert!(!mgr.is_full_history_empty());
+
+        // Empty history but non-empty delta
+        let mut mgr = HistoryManager::from_history(&[]);
+        mgr.append(Event::with_event_id(
+            1,
+            "test-inst",
+            1,
+            None,
+            EventKind::OrchestrationStarted {
+                name: "test-orch".to_string(),
+                version: "1.0.0".to_string(),
+                input: "test-input".to_string(),
+                parent_instance: None,
+                parent_id: None,
+            },
+        ));
+        assert!(!mgr.is_full_history_empty());
+    }
+
+    #[test]
+    fn test_full_history_iter() {
+        let history = vec![Event::with_event_id(
+            1,
+            "test-inst",
+            1,
+            None,
+            EventKind::OrchestrationStarted {
+                name: "test-orch".to_string(),
+                version: "1.0.0".to_string(),
+                input: "test-input".to_string(),
+                parent_instance: None,
+                parent_id: None,
+            },
+        )];
+        let mut mgr = HistoryManager::from_history(&history);
+        mgr.append(Event::with_event_id(
+            2,
+            "test-inst",
+            1,
+            None,
+            EventKind::OrchestrationCompleted {
+                output: "done".to_string(),
+            },
+        ));
+
+        // Iterator should yield same events as full_history()
+        let iter_events: Vec<_> = mgr.full_history_iter().cloned().collect();
+        let full_history = mgr.full_history();
+        assert_eq!(iter_events, full_history);
+
+        // Check order: history first, then delta
+        assert_eq!(iter_events.len(), 2);
+        assert!(matches!(iter_events[0].kind, EventKind::OrchestrationStarted { .. }));
+        assert!(matches!(iter_events[1].kind, EventKind::OrchestrationCompleted { .. }));
     }
 }

@@ -449,3 +449,144 @@ async fn orchestration_fails_before_activity_finishes() {
 
     rt.shutdown(None).await;
 }
+
+#[tokio::test]
+async fn cancel_parent_with_multiple_children() {
+    // This test validates the iterator optimization in get_child_cancellation_work_items
+    // by ensuring that cancellation properly propagates to multiple sub-orchestrations
+    let (store, _td) = common::create_sqlite_store_disk().await;
+
+    // Child waits for an external event indefinitely (until canceled)
+    let child = |ctx: OrchestrationContext, _input: String| async move {
+        let _ = ctx.schedule_wait("Go").into_event().await;
+        Ok("done".to_string())
+    };
+
+    // Parent starts multiple children and awaits all (will block until canceled)
+    let parent = |ctx: OrchestrationContext, _input: String| async move {
+        let mut futures = Vec::new();
+        // Schedule 5 sub-orchestrations
+        for i in 0..5 {
+            futures.push(ctx.schedule_sub_orchestration("MultiChild", format!("input-{}", i)));
+        }
+        // Wait for all (will never complete unless canceled)
+        let results = ctx.join(futures).await;
+        // All should fail with cancellation
+        for result in results {
+            match result {
+                duroxide::DurableOutput::SubOrchestration(Err(e)) if e.contains("canceled") => {}
+                _ => return Err("expected cancellation".to_string()),
+            }
+        }
+        Ok("parent_done".to_string())
+    };
+
+    let orchestration_registry = OrchestrationRegistry::builder()
+        .register("MultiChild", child)
+        .register("MultiParent", parent)
+        .build();
+    let activity_registry = ActivityRegistry::builder().build();
+
+    // Use faster polling for cancellation timing test
+    let options = runtime::RuntimeOptions {
+        dispatcher_min_poll_interval: Duration::from_millis(10),
+        ..Default::default()
+    };
+    let rt = runtime::Runtime::start_with_options(
+        store.clone(),
+        std::sync::Arc::new(activity_registry),
+        orchestration_registry,
+        options,
+    )
+    .await;
+    let client = Client::new(store.clone());
+
+    // Start parent
+    client
+        .start_orchestration("inst-cancel-multi", "MultiParent", "")
+        .await
+        .unwrap();
+
+    // Give it time to schedule all children
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    // Cancel parent with reason
+    let _ = client.cancel_instance("inst-cancel-multi", "multi_test").await;
+
+    // Wait for parent terminal failure due to cancel
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(5000);
+    loop {
+        let hist = store.read("inst-cancel-multi").await.unwrap_or_default();
+        if hist.iter().any(|e| {
+            matches!(
+                &e.kind,
+                EventKind::OrchestrationFailed { details, .. } if matches!(
+                    details,
+                    duroxide::ErrorDetails::Application {
+                        kind: duroxide::AppErrorKind::Cancelled { reason },
+                        ..
+                    } if reason == "multi_test"
+                )
+            )
+        }) {
+            assert!(
+                hist.iter()
+                    .any(|e| matches!(&e.kind, EventKind::OrchestrationCancelRequested { .. })),
+                "missing cancel requested event for parent"
+            );
+            break;
+        }
+        if std::time::Instant::now() > deadline {
+            panic!("timeout waiting for parent canceled");
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+
+    // Find all child instances (prefix inst-cancel-multi::)
+    let mgmt = store.as_management_capability().expect("ProviderAdmin required");
+    let children: Vec<String> = mgmt
+        .list_instances()
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|i| i.starts_with("inst-cancel-multi::"))
+        .collect();
+
+    // Should have 5 children
+    assert_eq!(
+        children.len(),
+        5,
+        "expected 5 child instances, found {}",
+        children.len()
+    );
+
+    // Each child should show cancel requested and terminal canceled (wait up to 5s)
+    for child in children {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(5000);
+        loop {
+            let hist = store.read(&child).await.unwrap_or_default();
+            let has_cancel = hist
+                .iter()
+                .any(|e| matches!(&e.kind, EventKind::OrchestrationCancelRequested { .. }));
+            let has_failed = hist.iter().any(|e| {
+                matches!(&e.kind, EventKind::OrchestrationFailed { details, .. } if matches!(
+                        details,
+                        duroxide::ErrorDetails::Application {
+                            kind: duroxide::AppErrorKind::Cancelled { reason },
+                            ..
+                        } if reason == "parent canceled"
+                    )
+                )
+            });
+            if has_cancel && has_failed {
+                break;
+            }
+            if std::time::Instant::now() > deadline {
+                panic!("child {child} did not cancel in time");
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    }
+
+    rt.shutdown(None).await;
+}

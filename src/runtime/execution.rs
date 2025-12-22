@@ -260,8 +260,7 @@ impl Runtime {
                 history_mgr.append_failed(details.clone());
 
                 // Propagate cancellation to children
-                let full_history = history_mgr.full_history();
-                let cancel_work_items = self.get_child_cancellation_work_items(instance, &full_history).await;
+                let cancel_work_items = self.get_child_cancellation_work_items(instance, history_mgr.full_history_iter()).await;
                 orchestrator_items.extend(cancel_work_items);
 
                 // Notify parent if this is a sub-orchestration
@@ -289,26 +288,29 @@ impl Runtime {
     }
 
     /// Get work items to cancel child sub-orchestrations
-    async fn get_child_cancellation_work_items(&self, instance: &str, history: &[Event]) -> Vec<WorkItem> {
-        // Find all scheduled sub-orchestrations
-        let scheduled_children: Vec<(u64, String)> = history
-            .iter()
-            .filter_map(|e| match &e.kind {
-                EventKind::SubOrchestrationScheduled { instance: child, .. } => Some((e.event_id, child.clone())),
-                _ => None,
-            })
-            .collect();
-
-        // Find all completed sub-orchestrations (by source_event_id)
-        let completed_ids: std::collections::HashSet<u64> = history
-            .iter()
-            .filter_map(|e| match &e.kind {
-                EventKind::SubOrchestrationCompleted { .. } | EventKind::SubOrchestrationFailed { .. } => {
-                    e.source_event_id
+    async fn get_child_cancellation_work_items(
+        &self,
+        instance: &str,
+        history: impl Iterator<Item = &Event>,
+    ) -> Vec<WorkItem> {
+        // Single-pass collection of scheduled children and completed IDs
+        let (scheduled_children, completed_ids) = history.fold(
+            (Vec::new(), std::collections::HashSet::new()),
+            |(mut scheduled, mut completed), e| {
+                match &e.kind {
+                    EventKind::SubOrchestrationScheduled { instance: child, .. } => {
+                        scheduled.push((e.event_id, child.clone()));
+                    }
+                    EventKind::SubOrchestrationCompleted { .. } | EventKind::SubOrchestrationFailed { .. } => {
+                        if let Some(source_id) = e.source_event_id {
+                            completed.insert(source_id);
+                        }
+                    }
+                    _ => {}
                 }
-                _ => None,
-            })
-            .collect();
+                (scheduled, completed)
+            },
+        );
 
         // Create cancel work items for uncompleted children
         let mut cancel_items = Vec::new();

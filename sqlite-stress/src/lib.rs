@@ -5,10 +5,16 @@
 //!
 //! # Quick Start
 //!
-//! Run the stress test binary:
+//! Run the parallel orchestrations stress test:
 //!
 //! ```bash
 //! cargo run --release --package duroxide-sqlite-stress --bin sqlite-stress [DURATION]
+//! ```
+//!
+//! Run the large payload stress test:
+//!
+//! ```bash
+//! cargo run --release --package duroxide-sqlite-stress --bin large-payload-stress [DURATION]
 //! ```
 //!
 //! Or use from the workspace root:
