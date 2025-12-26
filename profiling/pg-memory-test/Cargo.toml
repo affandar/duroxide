@@ -1,0 +1,13 @@
+[package]
+name = "pg-memory-test"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+duroxide = { path = "../..", features = ["sqlite"] }
+duroxide-pg = { path = "../../../duroxide-pg" }
+duroxide-pg-opt = { path = "../../../duroxide-pg-opt" }
+tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+dotenvy = "0.15"

@@ -49,7 +49,12 @@ duroxide = { path = ".", features = ["sqlite", "test-hooks"] }
 members = [
     ".",
     "sqlite-stress",
+    "profiling/pg-memory-test",
 ]
+
+# Patch crates.io duroxide to use local version for workspace members
+[patch.crates-io]
+duroxide = { path = "." }
 
 # Clippy lints for better code quality
 [lints.clippy]
