@@ -311,7 +311,7 @@ async fn test_ack_orchestration_item_atomic() {
     assert!(matches!(&history[1].kind, EventKind::ActivityScheduled { .. }));
 
     // Verify worker item was enqueued
-    let (worker_item, _, _) = store
+    let (worker_item, _, _, _) = store
         .fetch_work_item(Duration::from_secs(30), Duration::ZERO)
         .await
         .unwrap()

@@ -4,8 +4,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tracing::debug;
 
 use super::{
-    ExecutionInfo, InstanceInfo, OrchestrationItem, Provider, ProviderAdmin, ProviderError, QueueDepths, SystemMetrics,
-    WorkItem,
+    ExecutionInfo, ExecutionState, InstanceInfo, OrchestrationItem, Provider, ProviderAdmin, ProviderError,
+    QueueDepths, SystemMetrics, WorkItem,
 };
 use crate::{Event, EventKind};
 
@@ -100,6 +100,80 @@ impl SqliteProvider {
 
         Ok(())
     }
+
+    /// Check the execution state of an orchestration instance
+    /// Returns ExecutionState::Running if the execution is still active,
+    /// ExecutionState::Terminal if it has completed/failed/cancelled,
+    /// or ExecutionState::Missing if not found
+    async fn check_execution_state(&self, instance: &str, execution_id: u64) -> Result<ExecutionState, ProviderError> {
+        // Check if the execution exists and its status
+        let row = sqlx::query(
+            r#"
+            SELECT status FROM executions
+            WHERE instance_id = ?1 AND execution_id = ?2
+            "#,
+        )
+        .bind(instance)
+        .bind(execution_id as i64)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| Self::sqlx_to_provider_error("check_execution_state", e))?;
+
+        match row {
+            Some(row) => {
+                let status: String = row
+                    .try_get("status")
+                    .map_err(|e| ProviderError::permanent("check_execution_state", format!("Failed to get status: {e}")))?;
+
+                if status == "Running" {
+                    Ok(ExecutionState::Running)
+                } else {
+                    Ok(ExecutionState::Terminal { status })
+                }
+            }
+            None => Ok(ExecutionState::Missing),
+        }
+    }
+
+    /// Check the execution state within an existing transaction
+    /// Returns ExecutionState::Running if the execution is still active,
+    /// ExecutionState::Terminal if it has completed/failed/cancelled,
+    /// or ExecutionState::Missing if not found
+    async fn check_execution_state_in_tx(
+        &self,
+        tx: &mut Transaction<'_, Sqlite>,
+        instance: &str,
+        execution_id: u64,
+    ) -> Result<ExecutionState, ProviderError> {
+        // Check if the execution exists and its status
+        let row = sqlx::query(
+            r#"
+            SELECT status FROM executions
+            WHERE instance_id = ?1 AND execution_id = ?2
+            "#,
+        )
+        .bind(instance)
+        .bind(execution_id as i64)
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(|e| Self::sqlx_to_provider_error("check_execution_state_in_tx", e))?;
+
+        match row {
+            Some(row) => {
+                let status: String = row
+                    .try_get("status")
+                    .map_err(|e| ProviderError::permanent("check_execution_state_in_tx", format!("Failed to get status: {e}")))?;
+
+                if status == "Running" {
+                    Ok(ExecutionState::Running)
+                } else {
+                    Ok(ExecutionState::Terminal { status })
+                }
+            }
+            None => Ok(ExecutionState::Missing),
+        }
+    }
+
     /// Create a new SQLite provider
     ///
     /// # Arguments
@@ -1166,7 +1240,7 @@ impl Provider for SqliteProvider {
         &self,
         lock_timeout: Duration,
         _poll_timeout: Duration,
-    ) -> Result<Option<(WorkItem, String, u32)>, ProviderError> {
+    ) -> Result<Option<(WorkItem, String, u32, ExecutionState)>, ProviderError> {
         let mut tx = self
             .pool
             .begin()
@@ -1238,31 +1312,27 @@ impl Provider for SqliteProvider {
         let work_item: WorkItem = serde_json::from_str(&work_item_str)
             .map_err(|e| ProviderError::permanent("fetch_work_item", format!("Deserialization error: {e}")))?;
 
+        // Check orchestration execution state for activity cancellation support
+        let execution_state = if let WorkItem::ActivityExecute { instance, execution_id, .. } = &work_item {
+            self.check_execution_state_in_tx(&mut tx, instance, *execution_id).await?
+        } else {
+            // Non-activity work items default to Running
+            ExecutionState::Running
+        };
+
         tx.commit()
             .await
             .map_err(|e| Self::sqlx_to_provider_error("fetch_work_item", e))?;
 
-        Ok(Some((work_item, lock_token, attempt_count)))
+        Ok(Some((work_item, lock_token, attempt_count, execution_state)))
     }
 
-    async fn ack_work_item(&self, token: &str, completion: WorkItem) -> Result<(), ProviderError> {
+    async fn ack_work_item(&self, token: &str, completion: Option<WorkItem>) -> Result<(), ProviderError> {
         let mut tx = self
             .pool
             .begin()
             .await
             .map_err(|e| Self::sqlx_to_provider_error("ack_work_item", e))?;
-
-        // Extract instance from completion
-        let instance = match &completion {
-            WorkItem::ActivityCompleted { instance, .. } => instance,
-            WorkItem::ActivityFailed { instance, .. } => instance,
-            _ => {
-                return Err(ProviderError::permanent(
-                    "ack_work_item",
-                    "Invalid completion type for worker ack",
-                ));
-            }
-        };
 
         // Delete worker item
         sqlx::query("DELETE FROM worker_queue WHERE lock_token = ?")
@@ -1271,61 +1341,129 @@ impl Provider for SqliteProvider {
             .await
             .map_err(|e| Self::sqlx_to_provider_error("ack_work_item", e))?;
 
-        // Enqueue completion to orchestrator queue
-        let work_item = serde_json::to_string(&completion)
-            .map_err(|e| ProviderError::permanent("ack_work_item", format!("Serialization error: {e}")))?;
-        let now_ms = Self::now_millis();
+        // Only enqueue completion if provided (None means drop without notifying orchestrator)
+        if let Some(completion) = completion {
+            // Extract instance from completion
+            let instance = match &completion {
+                WorkItem::ActivityCompleted { instance, .. } => instance,
+                WorkItem::ActivityFailed { instance, .. } => instance,
+                _ => {
+                    return Err(ProviderError::permanent(
+                        "ack_work_item",
+                        "Invalid completion type for worker ack",
+                    ));
+                }
+            };
 
-        sqlx::query("INSERT INTO orchestrator_queue (instance_id, work_item, visible_at) VALUES (?, ?, ?)")
-            .bind(instance)
-            .bind(work_item)
-            .bind(now_ms)
-            .execute(&mut *tx)
-            .await
-            .map_err(|e| Self::sqlx_to_provider_error("ack_work_item", e))?;
+            // Enqueue completion to orchestrator queue
+            let work_item = serde_json::to_string(&completion)
+                .map_err(|e| ProviderError::permanent("ack_work_item", format!("Serialization error: {e}")))?;
+            let now_ms = Self::now_millis();
 
-        tx.commit()
-            .await
-            .map_err(|e| Self::sqlx_to_provider_error("ack_work_item", e))?;
+            sqlx::query("INSERT INTO orchestrator_queue (instance_id, work_item, visible_at) VALUES (?, ?, ?)")
+                .bind(instance)
+                .bind(work_item)
+                .bind(now_ms)
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| Self::sqlx_to_provider_error("ack_work_item", e))?;
 
-        debug!(instance = %instance, "Atomically acked worker and enqueued completion");
+            tx.commit()
+                .await
+                .map_err(|e| Self::sqlx_to_provider_error("ack_work_item", e))?;
+
+            debug!(instance = %instance, "Atomically acked worker and enqueued completion");
+        } else {
+            tx.commit()
+                .await
+                .map_err(|e| Self::sqlx_to_provider_error("ack_work_item", e))?;
+
+            debug!("Acked worker item without enqueuing completion (orchestration terminal/missing)");
+        }
+
         Ok(())
     }
 
-    async fn renew_work_item_lock(&self, token: &str, extend_for: Duration) -> Result<(), ProviderError> {
-        let locked_until = Self::timestamp_after(extend_for);
+    async fn renew_work_item_lock(&self, token: &str, extend_for: Duration) -> Result<ExecutionState, ProviderError> {
         let now_ms = Self::now_millis();
 
-        let result = sqlx::query(
+        // First, find the work item by lock token and extract instance/execution info
+        let work_item_row = sqlx::query(
             r#"
-            UPDATE worker_queue
-            SET locked_until = ?1
-            WHERE lock_token = ?2
-              AND locked_until > ?3
+            SELECT work_item FROM worker_queue
+            WHERE lock_token = ?1
+              AND locked_until > ?2
             "#,
         )
-        .bind(locked_until)
         .bind(token)
         .bind(now_ms)
-        .execute(&self.pool)
+        .fetch_optional(&self.pool)
         .await
         .map_err(|e| Self::sqlx_to_provider_error("renew_work_item_lock", e))?;
 
-        if result.rows_affected() == 0 {
-            return Err(ProviderError::permanent(
+        let work_item_row = work_item_row.ok_or_else(|| {
+            ProviderError::permanent(
                 "renew_work_item_lock",
                 "Lock token invalid, expired, or already acked",
-            ));
+            )
+        })?;
+
+        let work_item_str: String = work_item_row
+            .try_get("work_item")
+            .map_err(|e| ProviderError::permanent("renew_work_item_lock", format!("Failed to get work_item: {e}")))?;
+
+        let work_item: WorkItem = serde_json::from_str(&work_item_str)
+            .map_err(|e| ProviderError::permanent("renew_work_item_lock", format!("Deserialization error: {e}")))?;
+
+        // Check orchestration execution state
+        let execution_state = if let WorkItem::ActivityExecute { instance, execution_id, .. } = &work_item {
+            self.check_execution_state(instance, *execution_id).await?
+        } else {
+            ExecutionState::Running
+        };
+
+        // Only extend lock if execution is still running
+        if matches!(execution_state, ExecutionState::Running) {
+            let locked_until = Self::timestamp_after(extend_for);
+
+            let result = sqlx::query(
+                r#"
+                UPDATE worker_queue
+                SET locked_until = ?1
+                WHERE lock_token = ?2
+                  AND locked_until > ?3
+                "#,
+            )
+            .bind(locked_until)
+            .bind(token)
+            .bind(now_ms)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| Self::sqlx_to_provider_error("renew_work_item_lock", e))?;
+
+            if result.rows_affected() == 0 {
+                return Err(ProviderError::permanent(
+                    "renew_work_item_lock",
+                    "Lock token invalid, expired, or already acked",
+                ));
+            }
+
+            tracing::debug!(
+                target: "duroxide::providers::sqlite",
+                lock_token = %token,
+                extend_secs = %extend_for.as_secs(),
+                "Work item lock renewed"
+            );
+        } else {
+            tracing::debug!(
+                target: "duroxide::providers::sqlite",
+                lock_token = %token,
+                ?execution_state,
+                "Work item lock NOT renewed (orchestration not running)"
+            );
         }
 
-        tracing::debug!(
-            target: "duroxide::providers::sqlite",
-            lock_token = %token,
-            extend_secs = %extend_for.as_secs(),
-            "Work item lock renewed"
-        );
-
-        Ok(())
+        Ok(execution_state)
     }
 
     async fn abandon_work_item(
@@ -2042,12 +2180,12 @@ mod tests {
         assert_eq!(history.len(), 3); // Start + 2 schedules
 
         // Verify worker items enqueued
-        let (work1, token1, _) = store
+        let (work1, token1, _, _) = store
             .fetch_work_item(lock_timeout, Duration::ZERO)
             .await
             .unwrap()
             .unwrap();
-        let (work2, token2, _) = store
+        let (work2, token2, _, _) = store
             .fetch_work_item(lock_timeout, Duration::ZERO)
             .await
             .unwrap()
@@ -2069,24 +2207,24 @@ mod tests {
         store
             .ack_work_item(
                 &token1,
-                WorkItem::ActivityCompleted {
+                Some(WorkItem::ActivityCompleted {
                     instance: "test-atomic".to_string(),
                     execution_id: 1,
                     id: 1,
                     result: "done".to_string(),
-                },
+                }),
             )
             .await
             .unwrap();
         store
             .ack_work_item(
                 &token2,
-                WorkItem::ActivityCompleted {
+                Some(WorkItem::ActivityCompleted {
                     instance: "test-atomic".to_string(),
                     execution_id: 1,
                     id: 2,
                     result: "done".to_string(),
-                },
+                }),
             )
             .await
             .unwrap();
@@ -2335,7 +2473,7 @@ mod tests {
         store.enqueue_for_worker(work_item.clone()).await.unwrap();
 
         // Dequeue it
-        let (dequeued, token, _) = store
+        let (dequeued, token, _, _) = store
             .fetch_work_item(lock_timeout, Duration::ZERO)
             .await
             .unwrap()
@@ -2355,12 +2493,12 @@ mod tests {
         store
             .ack_work_item(
                 &token,
-                WorkItem::ActivityCompleted {
+                Some(WorkItem::ActivityCompleted {
                     instance: "test-worker".to_string(),
                     execution_id: 1,
                     id: 1,
                     result: "done".to_string(),
-                },
+                }),
             )
             .await
             .unwrap();
@@ -2677,7 +2815,7 @@ mod tests {
         store.enqueue_for_worker(work_item).await.unwrap();
 
         // Fetch and lock it
-        let (_, lock_token, _) = store
+        let (_, lock_token, _, _) = store
             .fetch_work_item(lock_timeout, Duration::ZERO)
             .await
             .unwrap()
@@ -2696,7 +2834,7 @@ mod tests {
         store.abandon_work_item(&lock_token, None, false).await.unwrap();
 
         // Should be able to fetch again
-        let (dequeued2, lock_token2, _) = store
+        let (dequeued2, lock_token2, _, _) = store
             .fetch_work_item(lock_timeout, Duration::ZERO)
             .await
             .unwrap()
@@ -2733,7 +2871,7 @@ mod tests {
         store.enqueue_for_worker(work_item).await.unwrap();
 
         // First fetch: attempt_count should be 1
-        let (_, lock_token1, attempt1) = store
+        let (_, lock_token1, attempt1, _) = store
             .fetch_work_item(lock_timeout, Duration::ZERO)
             .await
             .unwrap()
@@ -2744,7 +2882,7 @@ mod tests {
         store.abandon_work_item(&lock_token1, None, false).await.unwrap();
 
         // Second fetch: attempt_count should be 2
-        let (_, lock_token2, attempt2) = store
+        let (_, lock_token2, attempt2, _) = store
             .fetch_work_item(lock_timeout, Duration::ZERO)
             .await
             .unwrap()
@@ -2755,7 +2893,7 @@ mod tests {
         store.abandon_work_item(&lock_token2, None, true).await.unwrap();
 
         // Third fetch: attempt_count should be 2 (1 + 1 from new fetch)
-        let (_, _lock_token3, attempt3) = store
+        let (_, _lock_token3, attempt3, _) = store
             .fetch_work_item(lock_timeout, Duration::ZERO)
             .await
             .unwrap()
@@ -2833,7 +2971,7 @@ mod tests {
         store.enqueue_for_worker(work_item).await.unwrap();
 
         // First fetch: attempt_count = 1
-        let (_, lock_token1, attempt1) = store
+        let (_, lock_token1, attempt1, _) = store
             .fetch_work_item(lock_timeout, Duration::ZERO)
             .await
             .unwrap()
@@ -2844,7 +2982,7 @@ mod tests {
         store.abandon_work_item(&lock_token1, None, true).await.unwrap();
 
         // Second fetch: attempt_count = 1 (0 + 1)
-        let (_, lock_token2, attempt2) = store
+        let (_, lock_token2, attempt2, _) = store
             .fetch_work_item(lock_timeout, Duration::ZERO)
             .await
             .unwrap()
@@ -2855,7 +2993,7 @@ mod tests {
         store.abandon_work_item(&lock_token2, None, true).await.unwrap();
 
         // Third fetch: attempt_count = 1 (MAX(0, 0-1) + 1 = 0 + 1 = 1)
-        let (_, _lock_token3, attempt3) = store
+        let (_, _lock_token3, attempt3, _) = store
             .fetch_work_item(lock_timeout, Duration::ZERO)
             .await
             .unwrap()

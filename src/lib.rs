@@ -1179,6 +1179,13 @@ impl CtxInner {
 /// - `orchestration_version()` - Parent orchestration version
 /// - `activity_name()` - Current activity name
 ///
+/// # Cancellation Support
+///
+/// Activities can respond to cancellation when their parent orchestration reaches a terminal state:
+/// - `is_cancellation_requested()` - Check if cancellation has been requested
+/// - `cancelled()` - Future that completes when cancellation is requested (for use with `tokio::select!`)
+/// - `cancellation_token()` - Get a clone of the token for spawned tasks
+///
 /// # Determinism
 ///
 /// Activity trace helpers (`trace_info`, `trace_warn`, etc.) do **not** participate in
@@ -1193,10 +1200,17 @@ pub struct ActivityContext {
     activity_name: String,
     activity_id: u64,
     worker_id: String,
+    /// Cancellation token for cooperative cancellation.
+    /// Triggered when the parent orchestration reaches a terminal state.
+    cancellation_token: tokio_util::sync::CancellationToken,
 }
 
 impl ActivityContext {
     /// Create a new activity context. This constructor is intended for internal runtime use.
+    ///
+    /// Creates context with a new (non-cancelled) cancellation token.
+    /// Note: The runtime now uses `new_with_cancellation` to provide a shared token.
+    #[allow(dead_code)]
     pub(crate) fn new(
         instance_id: String,
         execution_id: u64,
@@ -1214,6 +1228,34 @@ impl ActivityContext {
             activity_name,
             activity_id,
             worker_id,
+            cancellation_token: tokio_util::sync::CancellationToken::new(),
+        }
+    }
+
+    /// Create a new activity context with a specific cancellation token.
+    ///
+    /// This constructor is intended for internal runtime use when the worker
+    /// dispatcher needs to provide a cancellation token that can be triggered
+    /// during activity execution.
+    pub(crate) fn new_with_cancellation(
+        instance_id: String,
+        execution_id: u64,
+        orchestration_name: String,
+        orchestration_version: String,
+        activity_name: String,
+        activity_id: u64,
+        worker_id: String,
+        cancellation_token: tokio_util::sync::CancellationToken,
+    ) -> Self {
+        Self {
+            instance_id,
+            execution_id,
+            orchestration_name,
+            orchestration_version,
+            activity_name,
+            activity_id,
+            worker_id,
+            cancellation_token,
         }
     }
 
@@ -1309,6 +1351,71 @@ impl ActivityContext {
             "{}",
             message.into()
         );
+    }
+
+    // ===== Cancellation Support =====
+
+    /// Check if cancellation has been requested.
+    ///
+    /// Returns `true` if the parent orchestration has completed, failed,
+    /// or been cancelled. Activities can use this for cooperative cancellation.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// for item in items {
+    ///     if ctx.is_cancellation_requested() {
+    ///         return Err("Activity cancelled".into());
+    ///     }
+    ///     process(item).await;
+    /// }
+    /// ```
+    pub fn is_cancellation_requested(&self) -> bool {
+        self.cancellation_token.is_cancelled()
+    }
+
+    /// Returns a future that completes when cancellation is requested.
+    ///
+    /// Use with `tokio::select!` for interruptible activities. This allows
+    /// activities to respond promptly to cancellation without polling.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// tokio::select! {
+    ///     result = do_work() => return result,
+    ///     _ = ctx.cancelled() => return Err("Cancelled".into()),
+    /// }
+    /// ```
+    pub async fn cancelled(&self) {
+        self.cancellation_token.cancelled().await
+    }
+
+    /// Get a clone of the cancellation token for use in spawned tasks.
+    ///
+    /// If your activity spawns child tasks with `tokio::spawn()`, you should
+    /// pass them this token so they can also respond to cancellation.
+    ///
+    /// **Important:** If you spawn additional tasks/threads and do not pass them
+    /// the cancellation token, they may outlive the activity's cancellation/abort.
+    /// This is user error - the runtime provides the signal but cannot guarantee
+    /// termination of arbitrary spawned work.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let token = ctx.cancellation_token();
+    /// let handle = tokio::spawn(async move {
+    ///     loop {
+    ///         tokio::select! {
+    ///             _ = do_work() => {}
+    ///             _ = token.cancelled() => break,
+    ///         }
+    ///     }
+    /// });
+    /// ```
+    pub fn cancellation_token(&self) -> tokio_util::sync::CancellationToken {
+        self.cancellation_token.clone()
     }
 }
 

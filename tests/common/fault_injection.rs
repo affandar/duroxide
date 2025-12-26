@@ -9,7 +9,9 @@
 use async_trait::async_trait;
 use duroxide::providers::error::ProviderError;
 use duroxide::providers::sqlite::SqliteProvider;
-use duroxide::providers::{ExecutionMetadata, OrchestrationItem, Provider, ProviderAdmin, WorkItem};
+use duroxide::providers::{
+    ExecutionMetadata, ExecutionState, OrchestrationItem, Provider, ProviderAdmin, WorkItem,
+};
 use duroxide::{Event, EventKind};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -140,15 +142,15 @@ impl Provider for PoisonInjectingProvider {
         &self,
         lock_timeout: Duration,
         poll_timeout: Duration,
-    ) -> Result<Option<(WorkItem, String, u32)>, ProviderError> {
+    ) -> Result<Option<(WorkItem, String, u32, ExecutionState)>, ProviderError> {
         let result = self.inner.fetch_work_item(lock_timeout, poll_timeout).await?;
 
-        if let Some((item, lock_token, real_attempt_count)) = result {
+        if let Some((item, lock_token, real_attempt_count, exec_state)) = result {
             // Check if we need to skip this fetch
             let skip = self.activity_skip_count.load(Ordering::SeqCst);
             if skip > 0 {
                 self.activity_skip_count.fetch_sub(1, Ordering::SeqCst);
-                return Ok(Some((item, lock_token, real_attempt_count)));
+                return Ok(Some((item, lock_token, real_attempt_count, exec_state)));
             }
 
             let persistent = self.activity_injection_persistent.load(Ordering::SeqCst);
@@ -158,7 +160,7 @@ impl Provider for PoisonInjectingProvider {
                 self.inject_activity_attempt_count.swap(0, Ordering::SeqCst)
             };
             let attempt_count = if injected > 0 { injected } else { real_attempt_count };
-            Ok(Some((item, lock_token, attempt_count)))
+            Ok(Some((item, lock_token, attempt_count, exec_state)))
         } else {
             Ok(None)
         }
@@ -196,11 +198,11 @@ impl Provider for PoisonInjectingProvider {
             .await
     }
 
-    async fn ack_work_item(&self, token: &str, completion: WorkItem) -> Result<(), ProviderError> {
+    async fn ack_work_item(&self, token: &str, completion: Option<WorkItem>) -> Result<(), ProviderError> {
         self.inner.ack_work_item(token, completion).await
     }
 
-    async fn renew_work_item_lock(&self, token: &str, extension: Duration) -> Result<(), ProviderError> {
+    async fn renew_work_item_lock(&self, token: &str, extension: Duration) -> Result<ExecutionState, ProviderError> {
         self.inner.renew_work_item_lock(token, extension).await
     }
 
@@ -327,7 +329,7 @@ impl Provider for FailingProvider {
         &self,
         lock_timeout: Duration,
         poll_timeout: Duration,
-    ) -> Result<Option<(WorkItem, String, u32)>, ProviderError> {
+    ) -> Result<Option<(WorkItem, String, u32, ExecutionState)>, ProviderError> {
         if self.fail_next_fetch_work_item.swap(false, Ordering::SeqCst) {
             Err(ProviderError::retryable(
                 "fetch_work_item",
@@ -396,7 +398,7 @@ impl Provider for FailingProvider {
             .await
     }
 
-    async fn ack_work_item(&self, token: &str, completion: WorkItem) -> Result<(), ProviderError> {
+    async fn ack_work_item(&self, token: &str, completion: Option<WorkItem>) -> Result<(), ProviderError> {
         if self.fail_next_ack_work_item.swap(false, Ordering::SeqCst) {
             // If ack_then_fail is set, do the actual ack first
             if self.ack_then_fail.load(Ordering::SeqCst) {
@@ -411,7 +413,7 @@ impl Provider for FailingProvider {
         }
     }
 
-    async fn renew_work_item_lock(&self, token: &str, extension: Duration) -> Result<(), ProviderError> {
+    async fn renew_work_item_lock(&self, token: &str, extension: Duration) -> Result<ExecutionState, ProviderError> {
         self.inner.renew_work_item_lock(token, extension).await
     }
 

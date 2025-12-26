@@ -5,6 +5,41 @@ use std::time::Duration;
 pub mod error;
 pub use error::ProviderError;
 
+/// State of the orchestration execution for an activity's parent instance.
+///
+/// Returned by provider to inform worker dispatcher of execution status.
+/// This enables cooperative activity cancellation when the parent orchestration
+/// reaches a terminal state.
+///
+/// # Usage
+///
+/// The provider checks the orchestration state during:
+/// 1. `fetch_work_item()` - Before returning an activity for execution
+/// 2. `renew_work_item_lock()` - During periodic lock renewal
+///
+/// The worker dispatcher uses this information to:
+/// - Skip activities for terminal/missing orchestrations
+/// - Trigger cancellation tokens for in-flight activities
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExecutionState {
+    /// Execution is running, activity should proceed normally.
+    Running,
+
+    /// Execution has reached a terminal state.
+    /// Activity result will not be observed by the orchestration.
+    ///
+    /// Terminal states include: "Completed", "Failed", "ContinuedAsNew"
+    Terminal {
+        /// The terminal status (e.g., "Completed", "Failed", "ContinuedAsNew")
+        status: String,
+    },
+
+    /// Orchestration instance or execution record is missing.
+    /// This can happen after instance cleanup/deletion.
+    /// Activity result will not be observed.
+    Missing,
+}
+
 /// Orchestration item containing all data needed to process an instance atomically.
 ///
 /// This represents a locked batch of work for a single orchestration instance.
@@ -1383,7 +1418,8 @@ pub trait Provider: Any + Send + Sync {
     ///
     /// 1. Find an available task in the worker queue (visible_at <= now, not locked)
     /// 2. Lock it with a unique token
-    /// 3. Return item + token (item stays in queue until ack)
+    /// 3. Check the orchestration execution state (for activity cancellation support)
+    /// 4. Return item + token + execution state (item stays in queue until ack)
     ///
     /// # Parameters
     ///
@@ -1393,12 +1429,23 @@ pub trait Provider: Any + Send + Sync {
     ///
     /// # Return Value
     ///
-    /// - `Ok(Some((WorkItem, String, u32)))` - Item is locked and ready to process
+    /// - `Ok(Some((WorkItem, String, u32, ExecutionState)))` - Item is locked and ready to process
     ///   - WorkItem: The work item to process
     ///   - String: Lock token for ack/abandon
     ///   - u32: Attempt count (number of times this item has been fetched)
+    ///   - ExecutionState: State of the parent orchestration (Running, Terminal, or Missing)
     /// - `Ok(None)` - No work available
     /// - `Err(ProviderError)` - Database error (allows runtime to distinguish empty queue from failures)
+    ///
+    /// # Execution State Check
+    ///
+    /// For `ActivityExecute` items, the provider MUST check the orchestration state:
+    /// - Look up the instance and execution_id from the work item
+    /// - Return `ExecutionState::Running` if execution status is "Running"
+    /// - Return `ExecutionState::Terminal { status }` if status is anything else
+    /// - Return `ExecutionState::Missing` if instance or execution record doesn't exist
+    ///
+    /// This allows the worker dispatcher to skip activities for terminal orchestrations.
     ///
     /// # Concurrency
     ///
@@ -1407,13 +1454,13 @@ pub trait Provider: Any + Send + Sync {
         &self,
         lock_timeout: Duration,
         poll_timeout: Duration,
-    ) -> Result<Option<(WorkItem, String, u32)>, ProviderError>;
+    ) -> Result<Option<(WorkItem, String, u32, ExecutionState)>, ProviderError>;
 
     /// Acknowledge successful processing of a work item.
     ///
     /// # What This Does
     ///
-    /// Atomically acknowledge worker item and enqueue completion to orchestrator queue.
+    /// Atomically acknowledge worker item and optionally enqueue completion to orchestrator queue.
     ///
     /// # Purpose
     ///
@@ -1424,20 +1471,24 @@ pub trait Provider: Any + Send + Sync {
     /// # Parameters
     ///
     /// * `token` - Lock token from fetch_work_item
-    /// * `completion` - WorkItem::ActivityCompleted or WorkItem::ActivityFailed
+    /// * `completion` - Optional completion work item:
+    ///   - `Some(WorkItem)`: Delete worker item AND enqueue completion to orchestrator queue
+    ///   - `None`: Delete worker item WITHOUT enqueueing anything (used when orchestration is terminal/missing)
     ///
     /// # Implementation
     ///
     /// ```ignore
-    /// async fn ack_work_item(&self, token: &str, completion: WorkItem) -> Result<(), String> {
+    /// async fn ack_work_item(&self, token: &str, completion: Option<WorkItem>) -> Result<(), String> {
     ///     BEGIN TRANSACTION
     ///         DELETE FROM worker_queue WHERE lock_token = ?token
-    ///         INSERT INTO orchestrator_queue (instance_id, work_item, visible_at)
-    ///         VALUES (completion.instance, serialize(completion), now)
+    ///         if let Some(completion) = completion {
+    ///             INSERT INTO orchestrator_queue (instance_id, work_item, visible_at)
+    ///             VALUES (completion.instance, serialize(completion), now)
+    ///         }
     ///     COMMIT
     /// }
     /// ```
-    async fn ack_work_item(&self, token: &str, completion: WorkItem) -> Result<(), ProviderError>;
+    async fn ack_work_item(&self, token: &str, completion: Option<WorkItem>) -> Result<(), ProviderError>;
 
     /// Renew the lock on a worker queue item.
     ///
@@ -1445,6 +1496,7 @@ pub trait Provider: Any + Send + Sync {
     ///
     /// Extends the lock timeout for an in-progress activity execution, preventing
     /// the lock from expiring while the activity is still being processed.
+    /// Also checks the orchestration execution state for cancellation support.
     ///
     /// # Purpose
     ///
@@ -1454,6 +1506,10 @@ pub trait Provider: Any + Send + Sync {
     /// - If worker crashes, renewal stops and lock expires naturally
     /// - Another worker can then pick up the abandoned activity
     ///
+    /// Additionally, this method enables cooperative activity cancellation:
+    /// - Each renewal checks if the orchestration is still running
+    /// - If terminal/missing, the worker can trigger the activity's cancellation token
+    ///
     /// # Parameters
     ///
     /// * `token` - Lock token from fetch_work_item
@@ -1461,26 +1517,55 @@ pub trait Provider: Any + Send + Sync {
     ///
     /// # Returns
     ///
-    /// * `Ok(())` - Lock renewed successfully, timeout extended to now() + `extend_for`
+    /// * `Ok(ExecutionState::Running)` - Lock renewed, orchestration still running
+    /// * `Ok(ExecutionState::Terminal { status })` - Lock renewed, but orchestration is terminal
+    /// * `Ok(ExecutionState::Missing)` - Lock renewed, but orchestration instance/execution is missing
     /// * `Err(ProviderError)` - Lock renewal failed:
     ///   - Permanent error: Token invalid, expired, or already acked
     ///   - Retryable error: Database connection issues
     ///
+    /// # Execution State Check
+    ///
+    /// The provider MUST check the orchestration state during renewal:
+    /// - Extract instance_id and execution_id from the locked work item
+    /// - Return `ExecutionState::Running` if execution status is "Running"
+    /// - Return `ExecutionState::Terminal { status }` if status is anything else
+    /// - Return `ExecutionState::Missing` if instance or execution record doesn't exist
+    ///
+    /// The lock is ONLY extended if the state is `Running`. For Terminal/Missing,
+    /// the lock may or may not be extended (implementation choice), but the state
+    /// must be returned to allow the worker to trigger cancellation.
+    ///
     /// # Implementation Pattern
     ///
     /// ```ignore
-    /// async fn renew_work_item_lock(&self, token: &str, extend_for: Duration) -> Result<(), ProviderError> {
-    ///     let locked_until = now() + extend_for;
-    ///     
-    ///     let result = UPDATE worker_queue
-    ///                  SET locked_until = ?locked_until
-    ///                  WHERE lock_token = ?token
-    ///                    AND locked_until > now()  // Only renew if still valid
-    ///     
-    ///     if result.rows_affected == 0:
-    ///         return Err(ProviderError::permanent("Lock token invalid or expired"))
-    ///     
-    ///     Ok(())
+    /// async fn renew_work_item_lock(&self, token: &str, extend_for: Duration) -> Result<ExecutionState, ProviderError> {
+    ///     // 1. Find work item by lock token
+    ///     let work_item = SELECT * FROM worker_queue WHERE lock_token = ?token AND locked_until > now();
+    ///     if work_item.is_none() {
+    ///         return Err(ProviderError::permanent("Lock token invalid or expired"));
+    ///     }
+    ///
+    ///     // 2. Extract instance_id and execution_id from work item
+    ///     let (instance_id, execution_id) = extract_from_work_item(&work_item);
+    ///
+    ///     // 3. Check orchestration state
+    ///     let instance_exists = SELECT 1 FROM instances WHERE instance_id = ?;
+    ///     let execution = SELECT status FROM executions WHERE instance_id = ? AND execution_id = ?;
+    ///
+    ///     let state = match (instance_exists, execution) {
+    ///         (false, _) => ExecutionState::Missing,
+    ///         (true, None) => ExecutionState::Missing,
+    ///         (true, Some(exec)) if exec.status != "Running" => ExecutionState::Terminal { status: exec.status },
+    ///         (true, Some(_)) => ExecutionState::Running,
+    ///     };
+    ///
+    ///     // 4. Only extend lock if running
+    ///     if matches!(state, ExecutionState::Running) {
+    ///         UPDATE worker_queue SET locked_until = now() + extend_for WHERE lock_token = ?token;
+    ///     }
+    ///
+    ///     Ok(state)
     /// }
     /// ```
     ///
@@ -1492,10 +1577,11 @@ pub trait Provider: Any + Send + Sync {
     ///
     /// # Usage in Runtime
     ///
-    /// Called by worker dispatcher's background renewal task:
+    /// Called by worker dispatcher's activity manager task:
     /// - Renewal interval calculated based on lock timeout
+    /// - On Terminal/Missing: triggers cancellation token
     /// - Stops automatically when activity completes or worker crashes
-    async fn renew_work_item_lock(&self, token: &str, extend_for: Duration) -> Result<(), ProviderError>;
+    async fn renew_work_item_lock(&self, token: &str, extend_for: Duration) -> Result<ExecutionState, ProviderError>;
 
     /// Abandon work item processing (release lock without completing).
     ///

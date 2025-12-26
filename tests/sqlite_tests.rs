@@ -309,7 +309,7 @@ async fn test_sqlite_basic_persistence() {
         let store: Arc<dyn Provider> = Arc::new(store);
 
         // Dequeue and verify items
-        let (item1, token1, _) = store
+        let (item1, token1, _, _) = store
             .fetch_work_item(Duration::from_secs(30), Duration::ZERO)
             .await
             .expect("Fetch should succeed")
@@ -322,7 +322,7 @@ async fn test_sqlite_basic_persistence() {
             _ => panic!("Expected ActivityExecute"),
         }
 
-        let (item2, token2, _) = store
+        let (item2, token2, _, _) = store
             .fetch_work_item(Duration::from_secs(30), Duration::ZERO)
             .await
             .expect("Fetch should succeed")
@@ -339,24 +339,24 @@ async fn test_sqlite_basic_persistence() {
         store
             .ack_work_item(
                 &token1,
-                WorkItem::ActivityCompleted {
+                Some(WorkItem::ActivityCompleted {
                     instance: "test-instance".to_string(),
                     execution_id: 1,
                     id: 1,
                     result: "done".to_string(),
-                },
+                }),
             )
             .await
             .expect("Failed to ack worker 1");
         store
             .ack_work_item(
                 &token2,
-                WorkItem::ActivityCompleted {
+                Some(WorkItem::ActivityCompleted {
                     instance: "test-instance".to_string(),
                     execution_id: 1,
                     id: 2,
                     result: "done".to_string(),
-                },
+                }),
             )
             .await
             .expect("Failed to ack worker 2");
@@ -685,7 +685,7 @@ async fn test_sqlite_provider_transactional() {
 
     // Verify all worker items enqueued
     let mut worker_count = 0;
-    while let Some((work_item, token, _)) = store
+    while let Some((work_item, token, _, _)) = store
         .fetch_work_item(Duration::from_secs(30), Duration::ZERO)
         .await
         .unwrap()
@@ -699,12 +699,12 @@ async fn test_sqlite_provider_transactional() {
         store
             .ack_work_item(
                 &token,
-                WorkItem::ActivityCompleted {
+                Some(WorkItem::ActivityCompleted {
                     instance: "test-instance".to_string(),
                     execution_id: 1,
                     id,
                     result: "done".to_string(),
-                },
+                }),
             )
             .await
             .expect("Failed to ack");

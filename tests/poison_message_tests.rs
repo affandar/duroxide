@@ -102,7 +102,7 @@ async fn worker_attempt_count_increments_on_lock_expiry() {
         .expect("enqueue should succeed");
 
     // First fetch - attempt_count should be 1
-    let (_item1, _token1, count1) = provider
+    let (_item1, _token1, count1, _) = provider
         .fetch_work_item(short_timeout, Duration::ZERO)
         .await
         .expect("fetch should succeed")
@@ -113,7 +113,7 @@ async fn worker_attempt_count_increments_on_lock_expiry() {
     tokio::time::sleep(Duration::from_millis(1100)).await;
 
     // Second fetch after expiry - attempt_count should be 2
-    let (_item2, token2, count2) = provider
+    let (_item2, token2, count2, _) = provider
         .fetch_work_item(short_timeout, Duration::ZERO)
         .await
         .expect("fetch should succeed")
@@ -124,12 +124,12 @@ async fn worker_attempt_count_increments_on_lock_expiry() {
     provider
         .ack_work_item(
             &token2,
-            WorkItem::ActivityCompleted {
+            Some(WorkItem::ActivityCompleted {
                 instance: "attempt-test-2".to_string(),
                 execution_id: INITIAL_EXECUTION_ID,
                 id: 1,
                 result: "done".to_string(),
-            },
+            }),
         )
         .await
         .expect("ack should succeed");

@@ -227,3 +227,16 @@ pub mod poison_message {
         worker_attempt_count_increments_on_lock_expiry, worker_attempt_count_starts_at_one,
     };
 }
+
+#[cfg(feature = "provider-test")]
+pub use crate::provider_validation::cancellation::{
+    test_fetch_returns_running_state_for_active_orchestration,
+    test_fetch_returns_terminal_state_when_orchestration_completed,
+    test_fetch_returns_terminal_state_when_orchestration_failed,
+    test_fetch_returns_terminal_state_when_orchestration_continued_as_new,
+    test_fetch_returns_missing_state_when_instance_deleted,
+    test_renew_returns_running_when_orchestration_active,
+    test_renew_returns_terminal_when_orchestration_completed,
+    test_renew_returns_missing_when_instance_deleted,
+    test_ack_work_item_none_deletes_without_enqueue,
+};

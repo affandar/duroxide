@@ -23,6 +23,8 @@ pub mod multi_execution;
 pub mod poison_message;
 #[cfg(feature = "provider-test")]
 pub mod queue_semantics;
+#[cfg(feature = "provider-test")]
+pub mod cancellation;
 
 #[cfg(feature = "provider-test")]
 use crate::INITIAL_EXECUTION_ID;

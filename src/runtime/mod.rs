@@ -119,6 +119,24 @@ pub struct RuntimeOptions {
     ///
     /// Default: 10
     pub max_attempts: u32,
+
+    /// Grace period for activity cancellation.
+    ///
+    /// When an orchestration reaches a terminal state, in-flight activities
+    /// are notified via their cancellation token. This setting controls how
+    /// long to wait for activities to complete gracefully before aborting
+    /// the activity task to free worker capacity.
+    ///
+    /// After this grace period, if the activity has not completed:
+    /// - The activity task is aborted (`JoinHandle::abort()`)
+    /// - The worker queue message is dropped without notifying the orchestrator
+    /// - A warning is logged
+    ///
+    /// Note: Child tasks/threads spawned by the activity that do not observe
+    /// the cancellation token may outlive the abort (user responsibility).
+    ///
+    /// Default: 10 seconds
+    pub activity_cancellation_grace_period: Duration,
 }
 
 impl Default for RuntimeOptions {
@@ -134,6 +152,7 @@ impl Default for RuntimeOptions {
             worker_lock_renewal_buffer: Duration::from_secs(5),
             observability: ObservabilityConfig::default(),
             max_attempts: 10,
+            activity_cancellation_grace_period: Duration::from_secs(10),
         }
     }
 }
