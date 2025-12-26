@@ -29,7 +29,7 @@ This leads to:
 
 1. **Minimal provider changes** - Piggyback on existing lock renewal mechanism
 2. **Cooperative cancellation** - Activities can respond gracefully via cancellation token
-3. **No forced termination** - Avoid aborting user tasks (prevents orphaned spawned tasks)
+3. **Bounded shutdown** - If an activity ignores cancellation beyond a grace period, the runtime aborts the activity task to free worker capacity
 4. **Backward compatible** - Activities without cancellation awareness continue to work
 
 ### Non-Goals
@@ -62,7 +62,7 @@ This leads to:
 │                                                                             │
 │  On fetch_work_item result:                                                 │
 │    - If Running → execute activity normally                                 │
-│    - If Terminal/Missing → skip activity, ack with Cancelled, try next     │
+│    - If Terminal/Missing → skip activity, ack with None (drop), try next   │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
                                     ↓
@@ -74,7 +74,8 @@ This leads to:
 │    2. Provider returns:                                                     │
 │       - Ok(ExecutionState::Running) → continue                          │
 │       - Ok(ExecutionState::Terminal/Missing) → trigger cancellation     │
-│       - Err(LockNotFound) → stop (already acked/abandoned)                  │
+│       - Err(e) where e.retryable=true → log + keep trying                   │
+│       - Err(e) where e.retryable=false → trigger cancellation + stop        │
 │    3. On Terminal/Missing:                                                  │
 │       a. Trigger cancellation token                                         │
 │       b. Exit loop (stop renewing)                                          │
@@ -110,35 +111,36 @@ The provider should trigger cancellation (via error or skip) when:
 |-----------|-----------|--------|
 | Orchestration Completed | `execution.status = 'Completed'` | Activity result will not be observed |
 | Orchestration Failed | `execution.status = 'Failed'` | Activity result will not be observed |
+| Orchestration ContinuedAsNew | `execution.status = 'ContinuedAsNew'` | Execution is terminal; completions will be ignored |
 | Orchestration Cancelled | `execution.status = 'Failed'` with Cancelled error | Activity result will not be observed |
 | Instance Deleted | Instance row missing from `instances` table | Instance cleanup has occurred |
 | Execution Deleted | Execution row missing from `executions` table | Execution cleanup has occurred |
 
-**Note:** Both instance AND execution must exist and be non-terminal for an activity to proceed. If either is missing, the activity should be skipped/cancelled.
+**Note:** Both instance AND execution must exist and be `Running` for an activity to proceed.
+If either is missing, or the execution status is anything other than `Running` (including `ContinuedAsNew`), the activity should be skipped and the worker item should be dropped (`ack_work_item(token, None)`).
 
 ### Grace Period Behavior
 
 After cancellation is triggered:
 
-1. **Wait 10 seconds** for activity to complete gracefully
-2. **If activity completes within grace period:**
-   - Log successful graceful shutdown
-   - Optionally ack result (for accounting, though result is discarded)
-3. **If activity does NOT complete within grace period:**
-   - Log warning (activity is "leaked")
-   - **Do NOT abort** the task (prevents orphaned spawned tasks)
-   - Do not ack the work item (lock will eventually expire)
-   - Move on to process next work item
-   - Leaked task will be cleaned up on runtime shutdown
+1. **Wait for a grace period** (default: 10s) for the activity to observe cancellation and exit
+2. **Regardless of whether the activity exits cleanly or not, the worker queue message MUST be dropped** using `ack_work_item(token, None)`.
+    - This prevents retry loops and duplicate executions for already-terminal/missing orchestrations.
+3. **If the activity does not complete within the grace period:**
+    - Abort the spawned activity task (`JoinHandle::abort()`) to free worker capacity
+    - Log a warning that the activity did not shut down gracefully
 
-### Why No Force-Abort?
+### Aborting Activities and User-Spawned Work
 
-Tokio's `JoinHandle::abort()` only cancels the top-level task at its next `.await` point. It does NOT cancel:
-- Child tasks spawned with `tokio::spawn()`
-- OS threads spawned with `std::thread::spawn()`
-- Blocking operations in `spawn_blocking()`
+The runtime will abort the spawned activity task after the grace period.
 
-Force-aborting would give a false sense of cleanup while actually leaking resources.
+**Important limitation:** `JoinHandle::abort()` cancels only that specific Tokio task. If an activity spawns additional tasks/threads, those will only stop if the activity propagates and honors the provided cancellation token.
+
+**Contract for activity authors:**
+- If you spawn child tasks (e.g. via `tokio::spawn()`), you MUST pass them the cancellation token and have them stop when it is cancelled.
+- If you spawn OS threads (`std::thread::spawn`) or blocking work that does not observe cancellation, that work may outlive the activity task abort.
+
+In other words: child work that ignores cancellation is **user error**; the runtime provides the cancellation signal, but cannot guarantee termination of arbitrary spawned work.
 
 ---
 
@@ -157,7 +159,10 @@ pub enum ExecutionState {
     /// Execution has reached a terminal state.
     /// Activity result will not be observed.
     Terminal {
-        /// The terminal status: "Completed" or "Failed"
+        /// The terminal status for this execution.
+        ///
+        /// NOTE: For cancellation purposes, **terminal means any status that is NOT "Running"**.
+        /// This includes (at minimum): "Completed", "Failed", and "ContinuedAsNew".
         status: String,
     },
     
@@ -209,7 +214,9 @@ async fn fetch_work_item(&self, lock_timeout: Duration, poll_timeout: Duration)
         match (instance_exists, execution) {
             (false, _) => ExecutionState::Missing,
             (true, None) => ExecutionState::Missing,
-            (true, Some(exec)) if exec.status == "Completed" || exec.status == "Failed" => {
+            // Terminal for cancellation purposes means: any execution status that is NOT Running.
+            // This includes ContinuedAsNew.
+            (true, Some(exec)) if exec.status != "Running" => {
                 ExecutionState::Terminal { status: exec.status }
             }
             (true, Some(_)) => ExecutionState::Running,
@@ -273,7 +280,9 @@ async fn renew_work_item_lock(&self, token: &str, extend_by: Duration)
     let orch_state = match (instance_exists, execution) {
         (false, _) => ExecutionState::Missing,
         (true, None) => ExecutionState::Missing,
-        (true, Some(exec)) if exec.status == "Completed" || exec.status == "Failed" => {
+        // Terminal for cancellation purposes means: any execution status that is NOT Running.
+        // This includes ContinuedAsNew.
+        (true, Some(exec)) if exec.status != "Running" => {
             ExecutionState::Terminal { status: exec.status }
         }
         (true, Some(_)) => ExecutionState::Running,
@@ -287,6 +296,32 @@ async fn renew_work_item_lock(&self, token: &str, extend_by: Duration)
     Ok(orch_state)
 }
 ```
+
+### Modified Method: `ack_work_item`
+
+**Current Signature:**
+```rust
+async fn ack_work_item(
+    &self,
+    token: &str,
+    completion: WorkItem,
+) -> Result<(), ProviderError>;
+```
+
+**New Signature:**
+```rust
+async fn ack_work_item(
+    &self,
+    token: &str,
+    completion: Option<WorkItem>,
+) -> Result<(), ProviderError>;
+```
+
+**New Behavior:**
+
+The `completion` parameter is now optional.
+- `Some(item)`: Deletes the worker item and enqueues the completion item to the orchestrator queue (standard behavior).
+- `None`: Deletes the worker item but **does not enqueue anything** (used when orchestration is terminal or missing).
 
 **Key Design Principle:**
 
@@ -424,19 +459,25 @@ fn spawn_activity_manager(
                             cancel_token.cancel();
                             break;
                         }
-                        Err(ProviderError::LockNotFound) => {
-                            tracing::debug!(
-                                lock_token = %token,
-                                "Lock not found (already acked/abandoned), stopping manager"
-                            );
-                            break;
-                        }
-                        Err(e) => {
+                        Err(e) if e.is_retryable() => {
+                            // Transient provider error (DB busy/locked, etc.)
+                            // Keep trying so we don't self-induce lock loss under load.
                             tracing::warn!(
                                 lock_token = %token,
                                 error = %e,
-                                "Lock renewal failed, stopping manager"
+                                "Lock renewal failed (retryable), will retry"
                             );
+                            continue;
+                        }
+                        Err(e) => {
+                            // Non-retryable implies: token invalid/expired/acked or other permanent failure.
+                            // Treat as "lost lease" to avoid wasted/duplicate work.
+                            tracing::warn!(
+                                lock_token = %token,
+                                error = %e,
+                                "Lock renewal failed (non-retryable), triggering cancellation"
+                            );
+                            cancel_token.cancel();
                             break;
                         }
                     }
@@ -466,22 +507,8 @@ match fetch_result {
                             status = %status,
                             "Skipping activity: orchestration already terminal"
                         );
-                        // Ack with Cancelled - cleans up work item
-                        let _ = rt.history_store.ack_work_item(
-                            &token,
-                            WorkItem::ActivityFailed {
-                                instance,
-                                execution_id,
-                                id,
-                                details: ErrorDetails::Application {
-                                    kind: AppErrorKind::Cancelled {
-                                        reason: format!("orchestration {}", status.to_lowercase()),
-                                    },
-                                    message: String::new(),
-                                    retryable: false,
-                                },
-                            },
-                        ).await;
+                        // Ack with None - deletes work item without notifying orchestrator
+                        let _ = rt.history_store.ack_work_item(&token, None).await;
                         continue;
                     }
                     ExecutionState::Missing => {
@@ -490,8 +517,8 @@ match fetch_result {
                             activity_id = %id,
                             "Skipping activity: orchestration instance/execution missing"
                         );
-                        // Just delete the work item - no orchestration to notify
-                        let _ = rt.history_store.abandon_work_item(&token, None, true).await;
+                        // Ack with None - deletes work item without notifying orchestrator
+                        let _ = rt.history_store.ack_work_item(&token, None).await;
                         continue;
                     }
                     ExecutionState::Running => {
@@ -571,7 +598,8 @@ match fetch_result {
                                     activity_id = %id,
                                     "Activity completed gracefully after cancellation"
                                 );
-                                // Don't ack - orchestration is terminal, result discarded
+                                // Drop worker message without notifying orchestrator
+                                let _ = rt.history_store.ack_work_item(&token, None).await;
                             }
                             Ok(Ok(Err(error))) => {
                                 tracing::info!(
@@ -580,6 +608,8 @@ match fetch_result {
                                     error = %error,
                                     "Activity failed gracefully after cancellation"
                                 );
+                                // Drop worker message without notifying orchestrator
+                                let _ = rt.history_store.ack_work_item(&token, None).await;
                             }
                             Ok(Err(join_error)) => {
                                 tracing::warn!(
@@ -588,18 +618,23 @@ match fetch_result {
                                     error = %join_error,
                                     "Activity panicked during cancellation grace period"
                                 );
+                                // Drop worker message without notifying orchestrator
+                                let _ = rt.history_store.ack_work_item(&token, None).await;
                             }
                             Err(_timeout) => {
                                 tracing::warn!(
                                     instance = %instance,
                                     activity_id = %id,
                                     activity_name = %name,
-                                    "Activity did not complete within grace period. \
-                                     Task will continue until completion or runtime shutdown. \
-                                     Work item lock will expire."
+                                    "Activity did not complete within grace period; aborting activity task"
                                 );
-                                // DO NOT abort - prevents orphaned spawned tasks
-                                // DO NOT ack - let lock expire
+                                // Abort the activity task to free worker capacity
+                                // NOTE: child tasks/threads spawned by the activity may outlive this abort
+                                // if they do not observe the cancellation token (user error).
+                                // Drop worker message without notifying orchestrator
+                                // (prevents retries/duplicates for terminal/missing orchestrations).
+                                activity_handle.abort();
+                                let _ = rt.history_store.ack_work_item(&token, None).await;
                             }
                         }
                     }
@@ -662,6 +697,20 @@ When: fetch_work_item is called
 Then: Returns (work_item, token, count, ExecutionState::Terminal { status: "Failed" })
 ```
 
+**Test: `fetch_returns_terminal_state_when_orchestration_continued_as_new`**
+```
+Given: An activity work item in queue, orchestration status = "ContinuedAsNew"
+When: fetch_work_item is called
+Then: Returns (work_item, token, count, ExecutionState::Terminal { status: "ContinuedAsNew" })
+```
+
+**Test: `fetch_treats_any_non_running_status_as_terminal`**
+```
+Given: An activity work item in queue, orchestration status = "<anything other than Running>"
+When: fetch_work_item is called
+Then: Returns ExecutionState::Terminal { status: <that status> }
+```
+
 **Test: `fetch_returns_missing_state_when_instance_deleted`**
 ```
 Given: An activity work item in queue, instance row missing
@@ -700,6 +749,14 @@ Then: Returns Ok(ExecutionState::Terminal { status: "Failed" })
 And: Lock is NOT extended
 ```
 
+**Test: `renew_returns_terminal_when_orchestration_continued_as_new`**
+```
+Given: An activity work item is locked, orchestration status = "ContinuedAsNew"
+When: renew_work_item_lock is called
+Then: Returns Ok(ExecutionState::Terminal { status: "ContinuedAsNew" })
+And: Lock is NOT extended
+```
+
 **Test: `renew_returns_missing_when_instance_deleted`**
 ```
 Given: An activity work item is locked, instance row deleted from instances table
@@ -722,6 +779,22 @@ Given: An activity work item is locked, orchestration status = "Running"
 When: renew_work_item_lock is called
 Then: Returns Ok(ExecutionState::Running)
 And: Lock is extended
+```
+
+**Test: `ack_work_item_none_deletes_without_enqueue`**
+```
+Given: A locked worker_queue item with lock_token = token
+When: ack_work_item(token, None) is called
+Then: worker_queue row is deleted
+And: no message is enqueued into orchestrator_queue
+```
+
+**Test: `ack_work_item_some_deletes_and_enqueues`**
+```
+Given: A locked worker_queue item with lock_token = token
+When: ack_work_item(token, Some(ActivityCompleted|ActivityFailed)) is called
+Then: worker_queue row is deleted
+And: exactly one message is enqueued into orchestrator_queue for that instance
 ```
 
 ### Integration Tests
@@ -750,6 +823,13 @@ When: Orchestration completes (e.g., select2 where activity loses)
 Then: Activity's cancellation token is triggered within 2 renewal cycles
 ```
 
+**Test: `cancellation_token_triggered_on_continue_as_new`**
+```
+Given: An orchestration execution transitions to ContinuedAsNew while an activity is in-flight
+When: The next renewal observes execution.status = "ContinuedAsNew"
+Then: Activity cancellation token is triggered
+```
+
 #### 3. Grace Period Tests
 
 **Test: `activity_completes_within_grace_period`**
@@ -765,15 +845,17 @@ And: No warnings about grace period timeout
 Given: An activity that ignores cancellation (sleeps for 30s)
 When: Orchestration is cancelled
 Then: Warning is logged about grace period timeout
+And: Worker aborts the activity task
+And: worker_queue message is dropped via ack_work_item(token, None)
 And: Worker moves on to next work item
-And: Activity task continues running (not aborted)
 ```
 
-**Test: `leaked_activity_cleaned_up_on_shutdown`**
+**Test: `activity_completes_or_fails_after_cancellation_always_drops_message`**
 ```
-Given: An activity that exceeded grace period (leaked)
-When: Runtime.shutdown() is called
-Then: Leaked activity task is cancelled by Tokio runtime drop
+Given: An activity is cancelled mid-flight
+When: Activity completes successfully OR returns an error OR panics during the grace window
+Then: worker_queue message is dropped via ack_work_item(token, None)
+And: no completion is enqueued to orchestrator_queue
 ```
 
 #### 4. Edge Case Tests
@@ -784,6 +866,33 @@ Given: An activity that completes in 100ms
 When: Orchestration is cancelled at t=50ms
 Then: Activity completion is processed normally
 And: Cancellation is a no-op
+```
+
+**Test: `terminal_or_missing_activity_is_never_started`**
+```
+Given: A pending ActivityExecute message exists
+And: ExecutionState is Terminal or Missing at fetch time
+When: Worker dispatcher processes the message
+Then: Activity handler is NOT invoked
+And: worker_queue message is dropped via ack_work_item(token, None)
+And: no completion is enqueued
+```
+
+**Test: `renew_retryable_errors_do_not_cancel`**
+```
+Given: An in-flight activity with a renewal manager
+When: renew_work_item_lock intermittently returns ProviderError { retryable: true }
+Then: Manager keeps retrying renewals
+And: cancellation token is NOT triggered by the retryable error alone
+```
+
+**Test: `renew_non_retryable_error_cancels_and_aborts`**
+```
+Given: An in-flight activity with a renewal manager
+When: renew_work_item_lock returns ProviderError { retryable: false } (lost/invalid lease)
+Then: cancellation token is triggered
+And: after grace period the activity task is aborted
+And: worker_queue message is dropped via ack_work_item(token, None)
 ```
 
 **Test: `multiple_activities_cancelled_together`**
@@ -800,6 +909,14 @@ Given: An activity that spawns child tasks and passes cancellation token
 When: Orchestration is cancelled
 Then: Child tasks also observe cancellation
 And: All tasks exit gracefully
+```
+
+**Test: `activity_spawns_child_tasks_without_cancellation_is_user_error`**
+```
+Given: An activity spawns child tasks/threads without passing cancellation token
+When: Orchestration is cancelled
+Then: Activity task may be aborted after grace period
+And: child work may continue running (documented as user error)
 ```
 
 ### Stress Tests
@@ -829,8 +946,9 @@ And: Worker throughput recovers after cancellations complete
 ### For Provider Implementers
 
 1. **Update `renew_work_item_lock`** to check execution status
-2. **Add `OrchestrationTerminal` error handling** to error type
-3. **Optimize query** to do status check in same database round-trip as lock renewal
+2. **Update `ack_work_item`** to accept `Option<WorkItem>` (handle `None` by deleting without enqueue)
+3. **Add `OrchestrationTerminal` error handling** to error type
+4. **Optimize query** to do status check in same database round-trip as lock renewal
 
 ### For Activity Authors
 
@@ -863,6 +981,37 @@ Activities continue to work without changes. To benefit from cancellation:
        }
    });
    ```
+
+**Important:** If you spawn additional tasks/threads and do not pass them the cancellation token, they may outlive the activity's cancellation/abort. This is user error.
+
+---
+
+## Documentation Follow-ups (Post-Implementation)
+
+Once this proposal is implemented, we should update the docs to reflect the new provider/runtime behavior.
+
+### Provider Docs
+
+- Update [docs/provider-implementation-guide.md](docs/provider-implementation-guide.md) to cover:
+    - `ExecutionState` checks during worker dequeue/renewal
+    - `ack_work_item(token, None)` semantics (drop worker message without enqueuing)
+    - `ProviderError.retryable` expectations for renewal behavior
+    - `status != "Running"` treated as terminal (includes `ContinuedAsNew`)
+
+### Provider Testing Docs
+
+- Update [docs/provider-testing-guide.md](docs/provider-testing-guide.md) to include:
+    - New/updated validation cases for `ExecutionState` and `ack_work_item(None)`
+    - Renewal retry behavior: retryable errors must not induce cancellation
+    - Abort-after-grace semantics (and what can/can't be guaranteed)
+
+### User Guide
+
+- Add a dedicated section to the user guide (e.g. [docs/observability-guide.md](docs/observability-guide.md) or a new doc under `docs/`) on **how to write cancellable activities**:
+    - Using `tokio::select!` with `ctx.cancelled()` for interruptible waits
+    - Propagating the cancellation token to spawned tasks
+    - Avoiding non-cancellable blocking work, or structuring it with periodic cancellation checks
+    - Explicitly stating that spawned work that ignores cancellation may outlive abort (user responsibility)
 
 ---
 
@@ -956,7 +1105,7 @@ This would be worse because:
 ### Current Limitations
 
 1. **Cancellation latency:** Up to one renewal interval (~25s with defaults)
-2. **No forced termination:** Unresponsive activities continue until runtime shutdown
+2. **Best-effort termination:** The runtime aborts the activity task after the grace period, but user-spawned work that ignores the cancellation token may outlive the abort
 3. **Pending activities not cancelled:** Only in-flight activities are notified
 
 ### Future Enhancements
