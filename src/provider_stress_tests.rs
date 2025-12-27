@@ -185,7 +185,6 @@ pub mod parallel_orchestrations {
 #[cfg(feature = "provider-test")]
 pub mod large_payload {
     pub use crate::provider_stress_test::large_payload::{
-        LargePayloadConfig, run_large_payload_test,
-        run_large_payload_test_with_config,
+        LargePayloadConfig, run_large_payload_test, run_large_payload_test_with_config,
     };
 }

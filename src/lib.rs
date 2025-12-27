@@ -1182,7 +1182,7 @@ impl CtxInner {
 /// # Cancellation Support
 ///
 /// Activities can respond to cancellation when their parent orchestration reaches a terminal state:
-/// - `is_cancellation_requested()` - Check if cancellation has been requested
+/// - `is_cancelled()` - Check if cancellation has been requested
 /// - `cancelled()` - Future that completes when cancellation is requested (for use with `tokio::select!`)
 /// - `cancellation_token()` - Get a clone of the token for spawned tasks
 ///
@@ -1364,13 +1364,13 @@ impl ActivityContext {
     ///
     /// ```ignore
     /// for item in items {
-    ///     if ctx.is_cancellation_requested() {
+    ///     if ctx.is_cancelled() {
     ///         return Err("Activity cancelled".into());
     ///     }
     ///     process(item).await;
     /// }
     /// ```
-    pub fn is_cancellation_requested(&self) -> bool {
+    pub fn is_cancelled(&self) -> bool {
         self.cancellation_token.is_cancelled()
     }
 

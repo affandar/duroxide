@@ -594,8 +594,8 @@ async fn cancel_parent_with_multiple_children() {
 /// Test that activities receive cancellation signals when orchestration is cancelled
 #[tokio::test]
 async fn activity_receives_cancellation_signal() {
-    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     let (store, _td) = common::create_sqlite_store_disk().await;
 
@@ -622,10 +622,7 @@ async fn activity_receives_cancellation_signal() {
 
     // Orchestration that schedules the long activity
     let orchestration = |ctx: OrchestrationContext, _input: String| async move {
-        let _result = ctx
-            .schedule_activity("LongActivity", "input")
-            .into_activity()
-            .await;
+        let _result = ctx.schedule_activity("LongActivity", "input").into_activity().await;
         Ok("done".to_string())
     };
 
@@ -664,7 +661,9 @@ async fn activity_receives_cancellation_signal() {
     tokio::time::sleep(Duration::from_millis(200)).await;
 
     // Cancel the orchestration
-    let _ = client.cancel_instance("inst-activity-cancel", "test_cancellation").await;
+    let _ = client
+        .cancel_instance("inst-activity-cancel", "test_cancellation")
+        .await;
 
     // Wait for cancellation to propagate
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
@@ -718,8 +717,8 @@ async fn activity_receives_cancellation_signal() {
 /// Test that activity result is dropped when orchestration was cancelled during execution
 #[tokio::test]
 async fn activity_result_dropped_when_orchestration_cancelled() {
-    use std::sync::atomic::{AtomicU32, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicU32, Ordering};
 
     let (store, _td) = common::create_sqlite_store_disk().await;
 
@@ -740,10 +739,7 @@ async fn activity_result_dropped_when_orchestration_cancelled() {
 
     // Orchestration that schedules the slow activity
     let orchestration = |ctx: OrchestrationContext, _input: String| async move {
-        let _result = ctx
-            .schedule_activity("SlowActivity", "input")
-            .into_activity()
-            .await;
+        let _result = ctx.schedule_activity("SlowActivity", "input").into_activity().await;
         Ok("done".to_string())
     };
 
@@ -780,7 +776,9 @@ async fn activity_result_dropped_when_orchestration_cancelled() {
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     // Cancel orchestration while activity is running
-    let _ = client.cancel_instance("inst-drop-result", "cancel_during_activity").await;
+    let _ = client
+        .cancel_instance("inst-drop-result", "cancel_during_activity")
+        .await;
 
     // Wait for everything to settle
     tokio::time::sleep(Duration::from_secs(2)).await;
@@ -809,11 +807,16 @@ async fn activity_result_dropped_when_orchestration_cancelled() {
     rt.shutdown(None).await;
 }
 
-/// Test that activities are skipped when the orchestration is already terminal at fetch time
+/// Test that activities are skipped when the orchestration is already terminal at fetch time.
+///
+/// This test is deterministic by using separate runtime phases:
+/// 1. Phase 1: Start runtime with worker_concurrency=0 (orchestrator only)
+/// 2. Let orchestration run and schedule an activity, then cancel it
+/// 3. Phase 2: Start new runtime with workers - they will see terminal state at fetch
 #[tokio::test]
 async fn activity_skipped_when_orchestration_terminal_at_fetch() {
-    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     let (store, _td) = common::create_sqlite_store_disk().await;
 
@@ -828,44 +831,108 @@ async fn activity_skipped_when_orchestration_terminal_at_fetch() {
         }
     };
 
+    // Orchestration schedules an activity then waits for an event (will be cancelled)
     let orchestration = |ctx: OrchestrationContext, _input: String| async move {
-        let _ = ctx
-            .schedule_activity("A", "input")
-            .into_activity()
-            .await;
+        // Schedule activity (enqueues to worker queue)
+        let _handle = ctx.schedule_activity("A", "input");
+        // Wait for external event (will block until cancelled)
+        let _ = ctx.schedule_wait("Go").into_event().await;
         Ok("ok".to_string())
     };
 
-    let orch_registry = OrchestrationRegistry::builder()
-        .register("O", orchestration)
-        .build();
+    let orch_registry = OrchestrationRegistry::builder().register("O", orchestration).build();
     let act_registry = ActivityRegistry::builder().register("A", activity).build();
 
-    let options = runtime::RuntimeOptions {
+    // PHASE 1: Run with orchestrator only (no workers)
+    let options_no_workers = runtime::RuntimeOptions {
         dispatcher_min_poll_interval: Duration::from_millis(10),
+        worker_concurrency: 0, // No workers - activity won't be picked up
+        ..Default::default()
+    };
+
+    let rt1 = runtime::Runtime::start_with_options(
+        store.clone(),
+        std::sync::Arc::new(act_registry.clone()),
+        orch_registry.clone(),
+        options_no_workers,
+    )
+    .await;
+    let client = Client::new(store.clone());
+
+    // Start orchestration - it will schedule activity and wait for event
+    client.start_orchestration("inst-skip", "O", "").await.unwrap();
+
+    // Wait for activity to be scheduled (orchestration runs, schedules activity, then waits)
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // Cancel the orchestration - makes it terminal
+    client.cancel_instance("inst-skip", "cancel").await.unwrap();
+
+    // Wait for orchestration to reach terminal state
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let hist = store.read("inst-skip").await.unwrap_or_default();
+        if hist
+            .iter()
+            .any(|e| matches!(&e.kind, EventKind::OrchestrationFailed { .. }))
+        {
+            break;
+        }
+        if std::time::Instant::now() > deadline {
+            panic!("Timeout waiting for orchestration to be cancelled");
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+
+    // Shutdown phase 1 runtime
+    rt1.shutdown(None).await;
+
+    // Verify activity hasn't run yet (no workers were active)
+    assert!(
+        !ran.load(Ordering::SeqCst),
+        "Activity should not have run yet - no workers in phase 1"
+    );
+
+    // PHASE 2: Start new runtime WITH workers
+    // The activity work item is still in the queue, but orchestration is now terminal
+    let options_with_workers = runtime::RuntimeOptions {
+        dispatcher_min_poll_interval: Duration::from_millis(10),
+        worker_concurrency: 2,
         worker_lock_timeout: Duration::from_secs(2),
         worker_lock_renewal_buffer: Duration::from_millis(500),
         activity_cancellation_grace_period: Duration::from_secs(1),
         ..Default::default()
     };
 
-    let rt = runtime::Runtime::start_with_options(
+    // Need fresh registries for the new runtime
+    let ran2 = Arc::new(AtomicBool::new(false));
+    let ran2_clone = Arc::clone(&ran2);
+    let activity2 = move |_ctx: ActivityContext, _input: String| {
+        let ran = Arc::clone(&ran2_clone);
+        async move {
+            ran.store(true, Ordering::SeqCst);
+            Ok("done".to_string())
+        }
+    };
+    let act_registry2 = ActivityRegistry::builder().register("A", activity2).build();
+
+    let rt2 = runtime::Runtime::start_with_options(
         store.clone(),
-        std::sync::Arc::new(act_registry),
+        std::sync::Arc::new(act_registry2),
         orch_registry,
-        options,
+        options_with_workers,
     )
     .await;
-    let client = Client::new(store.clone());
 
-    client.start_orchestration("inst-skip", "O", "").await.unwrap();
-    client.cancel_instance("inst-skip", "cancel").await.unwrap();
-
+    // Give workers time to fetch and skip the activity
     tokio::time::sleep(Duration::from_secs(2)).await;
 
+    // The activity should NOT have run because:
+    // - fetch_work_item returns ExecutionState::Terminal for the orchestration
+    // - Worker sees terminal state and skips the activity
     assert!(
-        !ran.load(Ordering::SeqCst),
-        "Activity should have been skipped when orchestration was terminal"
+        !ran2.load(Ordering::SeqCst),
+        "Activity should have been skipped when orchestration was terminal at fetch"
     );
 
     let hist = store.read("inst-skip").await.unwrap_or_default();
@@ -877,14 +944,14 @@ async fn activity_skipped_when_orchestration_terminal_at_fetch() {
         "Activity completion should not be recorded for skipped activity"
     );
 
-    rt.shutdown(None).await;
+    rt2.shutdown(None).await;
 }
 
 /// Test that non-cooperative activities are aborted after grace period on cancellation
 #[tokio::test]
 async fn activity_aborted_after_cancellation_grace() {
-    use std::sync::atomic::{AtomicU32, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicU32, Ordering};
 
     let (store, _td) = common::create_sqlite_store_disk().await;
 
@@ -902,10 +969,7 @@ async fn activity_aborted_after_cancellation_grace() {
     };
 
     let orchestration = |ctx: OrchestrationContext, _input: String| async move {
-        let _ = ctx
-            .schedule_activity("Stubborn", "input")
-            .into_activity()
-            .await;
+        let _ = ctx.schedule_activity("Stubborn", "input").into_activity().await;
         Ok("ok".to_string())
     };
 
@@ -924,13 +988,9 @@ async fn activity_aborted_after_cancellation_grace() {
         ..Default::default()
     };
 
-    let rt = runtime::Runtime::start_with_options(
-        store.clone(),
-        std::sync::Arc::new(act_registry),
-        orch_registry,
-        options,
-    )
-    .await;
+    let rt =
+        runtime::Runtime::start_with_options(store.clone(), std::sync::Arc::new(act_registry), orch_registry, options)
+            .await;
     let client = Client::new(store.clone());
 
     let start = std::time::Instant::now();
@@ -940,10 +1000,7 @@ async fn activity_aborted_after_cancellation_grace() {
         .unwrap();
 
     tokio::time::sleep(Duration::from_millis(100)).await;
-    client
-        .cancel_instance("inst-grace", "cancel_now")
-        .await
-        .unwrap();
+    client.cancel_instance("inst-grace", "cancel_now").await.unwrap();
 
     tokio::time::sleep(Duration::from_secs(2)).await;
 
@@ -960,7 +1017,242 @@ async fn activity_aborted_after_cancellation_grace() {
     );
 
     // Ensure we did not wait the full 5s activity duration (abort happened)
-    assert!(start.elapsed() < Duration::from_secs(5), "Activity should have been aborted before full run");
+    assert!(
+        start.elapsed() < Duration::from_secs(5),
+        "Activity should have been aborted before full run"
+    );
+
+    rt.shutdown(None).await;
+}
+
+/// Test that cancelling a non-existent instance is a no-op (doesn't error)
+#[tokio::test]
+async fn cancel_nonexistent_instance_is_noop() {
+    let (store, _td) = common::create_sqlite_store_disk().await;
+
+    let orchestration_registry = OrchestrationRegistry::builder()
+        .register("Dummy", |_ctx: OrchestrationContext, _input: String| async move {
+            Ok("ok".to_string())
+        })
+        .build();
+    let activity_registry = ActivityRegistry::builder().build();
+    let rt = runtime::Runtime::start_with_store(
+        store.clone(),
+        std::sync::Arc::new(activity_registry),
+        orchestration_registry,
+    )
+    .await;
+    let client = Client::new(store.clone());
+
+    // Cancel an instance that was never created - should succeed without error
+    let result = client.cancel_instance("does-not-exist", "test").await;
+    assert!(result.is_ok(), "Cancelling non-existent instance should not error");
+
+    // The cancel work item gets enqueued but the orchestrator will find no matching instance
+    // and simply ack it without effect. Give it time to process.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    rt.shutdown(None).await;
+}
+
+/// Test that multiple cancel calls on the same instance are idempotent
+#[tokio::test]
+async fn multiple_cancel_calls_are_idempotent() {
+    let (store, _td) = common::create_sqlite_store_disk().await;
+
+    // Orchestration that waits for an event (will block until canceled)
+    let orch = |ctx: OrchestrationContext, _input: String| async move {
+        let _ = ctx.schedule_wait("Go").into_event().await;
+        Ok("done".to_string())
+    };
+
+    let orchestration_registry = OrchestrationRegistry::builder().register("Waiter", orch).build();
+    let activity_registry = ActivityRegistry::builder().build();
+    let options = runtime::RuntimeOptions {
+        dispatcher_min_poll_interval: Duration::from_millis(10),
+        ..Default::default()
+    };
+    let rt = runtime::Runtime::start_with_options(
+        store.clone(),
+        std::sync::Arc::new(activity_registry),
+        orchestration_registry,
+        options,
+    )
+    .await;
+    let client = Client::new(store.clone());
+
+    // Start orchestration
+    client
+        .start_orchestration("inst-multi-cancel", "Waiter", "")
+        .await
+        .unwrap();
+
+    // Give it time to start
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // Cancel multiple times rapidly
+    for i in 0..5 {
+        let result = client
+            .cancel_instance("inst-multi-cancel", format!("cancel-{}", i))
+            .await;
+        assert!(result.is_ok(), "Cancel call {} should succeed", i);
+    }
+
+    // Wait for orchestration to fail
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let hist = store.read("inst-multi-cancel").await.unwrap_or_default();
+        if hist
+            .iter()
+            .any(|e| matches!(&e.kind, EventKind::OrchestrationFailed { .. }))
+        {
+            break;
+        }
+        if std::time::Instant::now() > deadline {
+            panic!("Timeout waiting for orchestration to be cancelled");
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+
+    // Should only have ONE OrchestrationCancelRequested event (first cancel wins)
+    let hist = store.read("inst-multi-cancel").await.unwrap_or_default();
+    let cancel_requested_count = hist
+        .iter()
+        .filter(|e| matches!(&e.kind, EventKind::OrchestrationCancelRequested { .. }))
+        .count();
+    assert_eq!(
+        cancel_requested_count, 1,
+        "Should only have one CancelRequested event, got {}",
+        cancel_requested_count
+    );
+
+    // The reason should be from the first cancel (cancel-0)
+    let cancel_event = hist
+        .iter()
+        .find(|e| matches!(&e.kind, EventKind::OrchestrationCancelRequested { .. }))
+        .unwrap();
+    if let EventKind::OrchestrationCancelRequested { reason } = &cancel_event.kind {
+        assert_eq!(reason, "cancel-0", "First cancel reason should win");
+    }
+
+    rt.shutdown(None).await;
+}
+
+/// Test that cancel before orchestration starts is handled gracefully
+#[tokio::test]
+async fn cancel_before_orchestration_starts() {
+    let (store, _td) = common::create_sqlite_store_disk().await;
+
+    // First, just enqueue the start work item without running a runtime
+    store
+        .enqueue_for_orchestrator(
+            duroxide::providers::WorkItem::StartOrchestration {
+                instance: "inst-early-cancel".to_string(),
+                orchestration: "Early".to_string(),
+                version: Some("1.0.0".to_string()),
+                input: "input".to_string(),
+                parent_instance: None,
+                parent_id: None,
+                execution_id: 1,
+            },
+            None,
+        )
+        .await
+        .unwrap();
+
+    // Now cancel it before any runtime has processed it
+    store
+        .enqueue_for_orchestrator(
+            duroxide::providers::WorkItem::CancelInstance {
+                instance: "inst-early-cancel".to_string(),
+                reason: "early_cancel".to_string(),
+            },
+            None,
+        )
+        .await
+        .unwrap();
+
+    // Now start the runtime - it should process both work items
+    let orchestration_registry = OrchestrationRegistry::builder()
+        .register("Early", |_ctx: OrchestrationContext, _input: String| async move {
+            // This should never run because cancel came first (or runs but fails immediately)
+            Ok("done".to_string())
+        })
+        .build();
+    let activity_registry = ActivityRegistry::builder().build();
+    let options = runtime::RuntimeOptions {
+        dispatcher_min_poll_interval: Duration::from_millis(10),
+        ..Default::default()
+    };
+    let rt = runtime::Runtime::start_with_options(
+        store.clone(),
+        std::sync::Arc::new(activity_registry),
+        orchestration_registry,
+        options,
+    )
+    .await;
+
+    // Wait for orchestration to be cancelled
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let hist = store.read("inst-early-cancel").await.unwrap_or_default();
+        // The orchestration MUST end up in Failed (cancelled) state, not Completed.
+        // Since the cancel was enqueued after the start, it should be processed
+        // and the orchestration should fail with cancellation.
+        let is_cancelled = hist.iter().any(|e| {
+            matches!(
+                &e.kind,
+                EventKind::OrchestrationFailed { details, .. }
+                    if matches!(
+                        details,
+                        duroxide::ErrorDetails::Application {
+                            kind: duroxide::AppErrorKind::Cancelled { .. },
+                            ..
+                        }
+                    )
+            )
+        });
+        if is_cancelled {
+            break;
+        }
+        if std::time::Instant::now() > deadline {
+            let hist = store.read("inst-early-cancel").await.unwrap_or_default();
+            panic!(
+                "Timeout waiting for orchestration to be cancelled. History: {:?}",
+                hist.iter().map(|e| &e.kind).collect::<Vec<_>>()
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+
+    // Verify it was cancelled with the correct reason
+    let hist = store.read("inst-early-cancel").await.unwrap_or_default();
+    let cancel_event = hist.iter().find(|e| {
+        matches!(
+            &e.kind,
+            EventKind::OrchestrationFailed { details, .. }
+                if matches!(
+                    details,
+                    duroxide::ErrorDetails::Application {
+                        kind: duroxide::AppErrorKind::Cancelled { reason },
+                        ..
+                    } if reason == "early_cancel"
+                )
+        )
+    });
+    assert!(
+        cancel_event.is_some(),
+        "Orchestration should be cancelled with reason 'early_cancel'"
+    );
+
+    // Verify it did NOT complete successfully
+    let completed = hist
+        .iter()
+        .any(|e| matches!(&e.kind, EventKind::OrchestrationCompleted { .. }));
+    assert!(
+        !completed,
+        "Orchestration should NOT have completed - cancel was enqueued after start"
+    );
 
     rt.shutdown(None).await;
 }

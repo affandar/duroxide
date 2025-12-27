@@ -137,7 +137,113 @@ async fn deploy_app(ctx: OrchestrationContext, config: String) -> Result<String,
 }
 ```
 
+### Cooperative Activity Cancellation
+
+When an orchestration is cancelled or reaches a terminal state, in-flight activities receive a **cancellation signal** via `ActivityContext`. Activities can choose how to respond:
+
+**Cooperative Activities (Recommended)**
+
+Activities should check for cancellation during long-running work:
+
+```rust
+use duroxide::ActivityContext;
+
+activities.register("LongRunningTask", |ctx: ActivityContext, input: String| async move {
+    for i in 0..100 {
+        // ✅ BEST PRACTICE: Check cancellation before each unit of work
+        if ctx.is_cancelled() {
+            ctx.trace_info("Received cancellation, cleaning up...".to_string());
+            cleanup_partial_work().await;
+            return Err("Cancelled".to_string());
+        }
+        
+        do_work_chunk(i).await;
+    }
+    Ok("completed".to_string())
+});
+```
+
+**Using `select!` for Cancellation-Aware I/O**
+
+For activities that wait on external resources, use `select!` with `ctx.cancelled()`:
+
+```rust
+activities.register("WaitForResource", |ctx: ActivityContext, resource_id: String| async move {
+    tokio::select! {
+        // Wait for cancellation signal
+        _ = ctx.cancelled() => {
+            ctx.trace_info("Cancelled while waiting for resource".to_string());
+            Err("Cancelled".to_string())
+        }
+        // Or complete the actual work
+        result = fetch_resource(&resource_id) => {
+            result.map_err(|e| e.to_string())
+        }
+    }
+});
+```
+
+**Non-Cooperative Activities**
+
+If an activity ignores the cancellation signal:
+1. The runtime waits for a configurable **grace period** (default: 30 seconds)
+2. After the grace period, the activity is **forcibly aborted**
+3. The activity's result (success or failure) is **dropped** since the orchestration is already terminal
+
+**Best Practices for Long-Running Activities**
+
+```rust
+// ✅ GOOD: Polling activity with cancellation support
+activities.register("ProvisionVM", |ctx: ActivityContext, config: String| async move {
+    let vm = create_vm(&config).await?;
+    
+    // Poll for readiness with cancellation check
+    loop {
+        if ctx.is_cancelled() {
+            ctx.trace_info("Cancelling VM provisioning".to_string());
+            cleanup_vm(&vm.id).await;
+            return Err("Cancelled during provisioning".to_string());
+        }
+        
+        if vm_ready(&vm.id).await {
+            return Ok(vm.id);
+        }
+        
+        tokio::time::sleep(Duration::from_secs(5)).await;
+    }
+});
+
+// ✅ GOOD: HTTP client with cancellation-aware timeout
+activities.register("CallExternalAPI", |ctx: ActivityContext, request: String| async move {
+    let client = reqwest::Client::new();
+    
+    tokio::select! {
+        _ = ctx.cancelled() => {
+            Err("Request cancelled".to_string())
+        }
+        response = client.post("https://api.example.com")
+            .body(request)
+            .timeout(Duration::from_secs(30))
+            .send() => {
+            response
+                .map_err(|e| e.to_string())?
+                .text()
+                .await
+                .map_err(|e| e.to_string())
+        }
+    }
+});
+```
+
+**ActivityContext Cancellation API**
+
+| Method | Description |
+|--------|-------------|
+| `ctx.is_cancelled()` | Returns `true` if cancellation was requested |
+| `ctx.cancelled()` | Returns a `Future` that completes when cancelled (use in `select!`) |
+
 ### The Replay Model
+
 
 **Why replay?**
 Orchestrations can run for hours/days/months and must survive crashes.
@@ -565,7 +671,35 @@ client.cancel_instance("order-123", "Customer requested cancellation").await?;
 **Behavior:**
 - Enqueues a `CancelInstance` work item
 - Runtime processes it on next turn
-- Orchestration receives cancellation and can handle gracefully
+- Orchestration moves to `Failed` status with cancellation error
+- **Cascading cancellation**: Child sub-orchestrations are also cancelled
+- **Activity cancellation**: In-flight activities receive cancellation signal (see [Cooperative Activity Cancellation](#cooperative-activity-cancellation))
+
+**What happens to in-flight activities:**
+1. The activity's `ActivityContext` receives the cancellation signal
+2. Cooperative activities can check `ctx.is_cancelled()` and clean up gracefully
+3. The runtime waits up to `activity_cancellation_grace_period` (default 30s) for the activity to finish
+4. If the activity doesn't finish in time, it's forcibly aborted
+5. The activity result (success or failure) is **dropped** since the orchestration is already terminal
+
+**Example with graceful cleanup:**
+```rust
+// Activity that responds to cancellation
+activities.register("ProcessBatch", |ctx: ActivityContext, batch: String| async move {
+    let items: Vec<Item> = serde_json::from_str(&batch)?;
+    
+    for (i, item) in items.iter().enumerate() {
+        // Check cancellation between items
+        if ctx.is_cancelled() {
+            ctx.trace_info(format!("Cancelled after processing {} of {} items", i, items.len()));
+            return Err("Batch processing cancelled".to_string());
+        }
+        process_item(item).await?;
+    }
+    
+    Ok(format!("Processed {} items", items.len()))
+});
+```
 
 #### Check Status
 

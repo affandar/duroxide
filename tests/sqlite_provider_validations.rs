@@ -26,6 +26,8 @@ mod tests {
         test_abandon_work_item_releases_lock,
         test_abandon_work_item_with_delay,
         test_ack_only_affects_locked_messages,
+        // Cancellation tests
+        test_ack_work_item_none_deletes_without_enqueue,
         // Atomicity tests
         test_atomicity_failure_rollback,
         test_completions_arriving_during_lock_blocked,
@@ -42,6 +44,11 @@ mod tests {
         test_execution_id_sequencing,
         // Multi-execution tests
         test_execution_isolation,
+        test_fetch_returns_missing_state_when_instance_deleted,
+        test_fetch_returns_running_state_for_active_orchestration,
+        test_fetch_returns_terminal_state_when_orchestration_completed,
+        test_fetch_returns_terminal_state_when_orchestration_continued_as_new,
+        test_fetch_returns_terminal_state_when_orchestration_failed,
         test_get_execution_info,
         test_get_instance_info,
         test_get_queue_depths,
@@ -71,6 +78,9 @@ mod tests {
         test_multi_threaded_no_duplicate_processing,
         test_no_instance_creation_on_enqueue,
         test_null_version_handling,
+        test_renew_returns_missing_when_instance_deleted,
+        test_renew_returns_running_when_orchestration_active,
+        test_renew_returns_terminal_when_orchestration_completed,
         test_sub_orchestration_instance_creation,
         test_timer_delayed_visibility,
         test_worker_ack_atomicity,
@@ -417,5 +427,51 @@ mod tests {
     #[tokio::test]
     async fn test_sqlite_abandon_work_item_with_delay() {
         test_abandon_work_item_with_delay(&SqliteTestFactory).await;
+    }
+
+    // Cancellation tests (activity cancellation support)
+    #[tokio::test]
+    async fn test_sqlite_fetch_returns_running_state_for_active_orchestration() {
+        test_fetch_returns_running_state_for_active_orchestration(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_fetch_returns_terminal_state_when_orchestration_completed() {
+        test_fetch_returns_terminal_state_when_orchestration_completed(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_fetch_returns_terminal_state_when_orchestration_failed() {
+        test_fetch_returns_terminal_state_when_orchestration_failed(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_fetch_returns_terminal_state_when_orchestration_continued_as_new() {
+        test_fetch_returns_terminal_state_when_orchestration_continued_as_new(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_fetch_returns_missing_state_when_instance_deleted() {
+        test_fetch_returns_missing_state_when_instance_deleted(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_renew_returns_running_when_orchestration_active() {
+        test_renew_returns_running_when_orchestration_active(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_renew_returns_terminal_when_orchestration_completed() {
+        test_renew_returns_terminal_when_orchestration_completed(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_renew_returns_missing_when_instance_deleted() {
+        test_renew_returns_missing_when_instance_deleted(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_ack_work_item_none_deletes_without_enqueue() {
+        test_ack_work_item_none_deletes_without_enqueue(&SqliteTestFactory).await;
     }
 }

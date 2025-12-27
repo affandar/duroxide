@@ -71,8 +71,18 @@ async fn test_management_features_with_workflow() {
         .await
         .unwrap();
 
-    // Wait a bit for processing
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    // Wait for completion (with timeout)
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let completed = client.list_instances_by_status("Completed").await.unwrap();
+        if completed.contains(&"test-instance".to_string()) {
+            break;
+        }
+        if std::time::Instant::now() > deadline {
+            panic!("Timed out waiting for orchestration to complete");
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
 
     // Check management features
     assert!(client.has_management_capability());
@@ -145,8 +155,21 @@ async fn test_instance_discovery() {
         .await
         .unwrap();
 
-    // Wait for completion
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    // Wait for all orchestrations to complete (with timeout)
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let completed = client.list_instances_by_status("Completed").await.unwrap();
+        if completed.len() >= 3 {
+            break;
+        }
+        if std::time::Instant::now() > deadline {
+            panic!(
+                "Timed out waiting for orchestrations to complete. Completed: {}",
+                completed.len()
+            );
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
 
     // List instances
     let instances = client.list_all_instances().await.unwrap();
@@ -199,8 +222,18 @@ async fn test_instance_info() {
         .await
         .unwrap();
 
-    // Wait for completion
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    // Wait for completion (with timeout)
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let completed = client.list_instances_by_status("Completed").await.unwrap();
+        if completed.contains(&"test-instance".to_string()) {
+            break;
+        }
+        if std::time::Instant::now() > deadline {
+            panic!("Timed out waiting for orchestration to complete");
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
 
     // Get instance info
     let info = client.get_instance_info("test-instance").await.unwrap();
@@ -255,8 +288,18 @@ async fn test_execution_info() {
         .await
         .unwrap();
 
-    // Wait for completion
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    // Wait for completion (with timeout)
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let completed = client.list_instances_by_status("Completed").await.unwrap();
+        if completed.contains(&"test-exec".to_string()) {
+            break;
+        }
+        if std::time::Instant::now() > deadline {
+            panic!("Timed out waiting for orchestration to complete");
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
 
     // List executions
     let executions = client.list_executions("test-exec").await.unwrap();
@@ -605,8 +648,21 @@ async fn test_complex_workflow_management() {
             .unwrap();
     }
 
-    // Wait for completion
-    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    // Wait for all orchestrations to complete (with timeout)
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let completed = client.list_instances_by_status("Completed").await.unwrap();
+        if completed.len() >= 5 {
+            break;
+        }
+        if std::time::Instant::now() > deadline {
+            panic!(
+                "Timed out waiting for orchestrations to complete. Completed: {}",
+                completed.len()
+            );
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
 
     // Verify all orders completed
     let instances = client.list_all_instances().await.unwrap();

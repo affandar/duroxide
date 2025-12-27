@@ -1,6 +1,4 @@
-use duroxide::providers::{
-    ExecutionMetadata, ExecutionState, OrchestrationItem, Provider, ProviderError, WorkItem,
-};
+use duroxide::providers::{ExecutionMetadata, ExecutionState, OrchestrationItem, Provider, ProviderError, WorkItem};
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self, RuntimeOptions};
 use duroxide::{ActivityContext, Client, Event, OrchestrationContext, OrchestrationRegistry};

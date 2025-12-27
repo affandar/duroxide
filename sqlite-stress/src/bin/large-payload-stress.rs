@@ -11,11 +11,9 @@
 //!   cargo run --release --bin large-payload-stress 30    # Run for 30 seconds
 //!   cargo run --release --bin large-payload-stress 5     # Quick 5 second test
 
-use duroxide::provider_stress_tests::large_payload::{
-    LargePayloadConfig, run_large_payload_test_with_config,
-};
+use duroxide::provider_stress_tests::large_payload::{run_large_payload_test_with_config, LargePayloadConfig};
 use duroxide::provider_stress_tests::parallel_orchestrations::ProviderStressFactory;
-use duroxide::providers::{Provider, sqlite::SqliteProvider};
+use duroxide::providers::{sqlite::SqliteProvider, Provider};
 use std::sync::Arc;
 
 struct SqliteLargePayloadFactory;
@@ -36,10 +34,7 @@ impl ProviderStressFactory for SqliteLargePayloadFactory {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize tracing
     tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info".into()),
-        )
+        .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
         .init();
 
     // Parse duration from command line args
@@ -97,10 +92,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     tracing::info!("Success rate: {:.2}%", result.success_rate());
     tracing::info!("Throughput: {:.2} orchestrations/sec", result.orch_throughput);
-    tracing::info!(
-        "Activity throughput: {:.2} activities/sec",
-        result.activity_throughput
-    );
+    tracing::info!("Activity throughput: {:.2} activities/sec", result.activity_throughput);
     tracing::info!("Average latency: {:.2}ms", result.avg_latency_ms);
 
     Ok(())

@@ -400,17 +400,26 @@ duroxide = { path = "../duroxide", features = ["provider-test"] }
 Run validation tests by calling individual test functions:
 
 ```rust
-use duroxide::providers::Provider;
+use duroxide::providers::{Provider, ExecutionState};
 use duroxide::provider_validations::{
     ProviderFactory,
+    // Atomicity tests
     test_atomicity_failure_rollback,
     test_multi_operation_atomic_ack,
+    // Locking tests
     test_exclusive_instance_lock,
+    // Queue tests
     test_worker_queue_fifo_ordering,
+    // Instance creation tests
     test_instance_creation_via_metadata,
     test_no_instance_creation_on_enqueue,
     test_null_version_handling,
     test_sub_orchestration_instance_creation,
+    // Cancellation support tests (new)
+    fetch_work_item_returns_running_for_running_execution,
+    fetch_work_item_returns_terminal_for_completed_execution,
+    renew_work_item_lock_returns_running_for_running_execution,
+    ack_work_item_with_none_deletes_without_enqueueing,
     // ... import other tests as needed
 };
 use std::sync::Arc;
@@ -459,7 +468,7 @@ async fn test_my_provider_worker_queue_fifo_ordering() {
 
 ### What the Tests Validate
 
-The validation test suite includes **62 individual test functions** organized into 9 categories:
+The validation test suite includes **71 individual test functions** organized into 10 categories:
 
 1. **Atomicity Tests (4 tests)**
    - `test_atomicity_failure_rollback` - All-or-nothing commit semantics, rollback on failure
@@ -539,6 +548,17 @@ The validation test suite includes **62 individual test functions** organized in
    - `max_attempt_count_across_message_batch` - MAX attempt_count returned for batched messages
    - `test_abandon_work_item_releases_lock` - abandon_work_item releases lock immediately
    - `test_abandon_work_item_with_delay` - abandon_work_item with delay defers refetch
+
+10. **Cancellation Support Tests (9 tests)**
+    - `fetch_work_item_returns_running_for_running_execution` - Running orchestrations return ExecutionState::Running
+    - `fetch_work_item_returns_terminal_for_completed_execution` - Completed orchestrations return ExecutionState::Terminal
+    - `fetch_work_item_returns_terminal_for_failed_execution` - Failed orchestrations return ExecutionState::Terminal
+    - `fetch_work_item_returns_missing_for_nonexistent_execution` - Missing executions return ExecutionState::Missing
+    - `renew_work_item_lock_returns_running_for_running_execution` - Lock renewal returns Running state
+    - `renew_work_item_lock_returns_terminal_when_execution_completes` - Lock renewal detects terminal state
+    - `renew_work_item_lock_returns_missing_for_deleted_execution` - Lock renewal returns Missing when execution deleted
+    - `ack_work_item_with_none_deletes_without_enqueueing` - ack_work_item(None) deletes item without enqueueing completion
+    - `ack_work_item_with_some_enqueues_completion` - ack_work_item(Some) atomically deletes and enqueues
 
 ### Running Individual Test Functions
 

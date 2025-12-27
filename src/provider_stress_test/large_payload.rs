@@ -40,7 +40,7 @@ impl Default for LargePayloadConfig {
     fn default() -> Self {
         Self {
             base: StressTestConfig {
-                max_concurrent: 5,  // Lower concurrency due to large payloads
+                max_concurrent: 5, // Lower concurrency due to large payloads
                 duration_secs: 10,
                 tasks_per_instance: 1, // Not used, we have custom orchestration
                 activity_delay_ms: 5,
@@ -50,9 +50,9 @@ impl Default for LargePayloadConfig {
             small_payload_kb: 10,
             medium_payload_kb: 50,
             large_payload_kb: 100,
-            activity_count: 20,      // 20 activities × 3 events = ~60 events
-            sub_orch_count: 5,       // 5 sub-orch × 4 events = ~20 events
-                                     // Total: ~80-100 events per instance
+            activity_count: 20, // 20 activities × 3 events = ~60 events
+            sub_orch_count: 5,  // 5 sub-orch × 4 events = ~20 events
+                                // Total: ~80-100 events per instance
         }
     }
 }
@@ -131,59 +131,50 @@ fn create_large_payload_activities(
     Arc::new(
         ActivityRegistry::builder()
             // Small payload activity (~10KB output)
-            .register(
-                "SmallPayloadTask",
-                move |_ctx: ActivityContext, input: String| {
-                    let kb = small_kb;
-                    let delay = delay_ms;
-                    async move {
-                        tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
-                        let payload = generate_payload(kb);
-                        Ok(serde_json::to_string(&serde_json::json!({
-                            "input": input,
-                            "payload": payload,
-                            "size_kb": kb
-                        }))
-                        .unwrap())
-                    }
-                },
-            )
+            .register("SmallPayloadTask", move |_ctx: ActivityContext, input: String| {
+                let kb = small_kb;
+                let delay = delay_ms;
+                async move {
+                    tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+                    let payload = generate_payload(kb);
+                    Ok(serde_json::to_string(&serde_json::json!({
+                        "input": input,
+                        "payload": payload,
+                        "size_kb": kb
+                    }))
+                    .unwrap())
+                }
+            })
             // Medium payload activity (~50KB output)
-            .register(
-                "MediumPayloadTask",
-                move |_ctx: ActivityContext, input: String| {
-                    let kb = medium_kb;
-                    let delay = delay_ms;
-                    async move {
-                        tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
-                        let payload = generate_payload(kb);
-                        Ok(serde_json::to_string(&serde_json::json!({
-                            "input": input,
-                            "payload": payload,
-                            "size_kb": kb
-                        }))
-                        .unwrap())
-                    }
-                },
-            )
+            .register("MediumPayloadTask", move |_ctx: ActivityContext, input: String| {
+                let kb = medium_kb;
+                let delay = delay_ms;
+                async move {
+                    tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+                    let payload = generate_payload(kb);
+                    Ok(serde_json::to_string(&serde_json::json!({
+                        "input": input,
+                        "payload": payload,
+                        "size_kb": kb
+                    }))
+                    .unwrap())
+                }
+            })
             // Large payload activity (~100KB output)
-            .register(
-                "LargePayloadTask",
-                move |_ctx: ActivityContext, input: String| {
-                    let kb = large_kb;
-                    let delay = delay_ms;
-                    async move {
-                        tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
-                        let payload = generate_payload(kb);
-                        Ok(serde_json::to_string(&serde_json::json!({
-                            "input": input,
-                            "payload": payload,
-                            "size_kb": kb
-                        }))
-                        .unwrap())
-                    }
-                },
-            )
+            .register("LargePayloadTask", move |_ctx: ActivityContext, input: String| {
+                let kb = large_kb;
+                let delay = delay_ms;
+                async move {
+                    tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+                    let payload = generate_payload(kb);
+                    Ok(serde_json::to_string(&serde_json::json!({
+                        "input": input,
+                        "payload": payload,
+                        "size_kb": kb
+                    }))
+                    .unwrap())
+                }
+            })
             .build(),
     )
 }
@@ -246,8 +237,7 @@ async fn large_payload_orchestration(
     activity_count: usize,
     sub_orch_count: usize,
 ) -> Result<String, String> {
-    let _config: serde_json::Value =
-        serde_json::from_str(&input).map_err(|e| format!("Invalid input: {}", e))?;
+    let _config: serde_json::Value = serde_json::from_str(&input).map_err(|e| format!("Invalid input: {}", e))?;
 
     let mut results = Vec::new();
     let mut event_count = 0;
@@ -314,9 +304,7 @@ async fn large_payload_orchestration(
     // Phase 5: Do some additional small activities to pad the history
     for i in 0..10 {
         let input = format!("final-task-{}", i);
-        let result = ctx
-            .schedule_activity("SmallPayloadTask", input)
-            .await;
+        let result = ctx.schedule_activity("SmallPayloadTask", input).await;
         results.push(result);
         event_count += 2;
     }
@@ -350,22 +338,17 @@ async fn large_payload_sub_orchestration(
     small_kb: usize,
     medium_kb: usize,
 ) -> Result<String, String> {
-    let config: serde_json::Value =
-        serde_json::from_str(&input).map_err(|e| format!("Invalid input: {}", e))?;
+    let config: serde_json::Value = serde_json::from_str(&input).map_err(|e| format!("Invalid input: {}", e))?;
 
     // Extract payload from input
     let _input_payload = config["payload"].as_str().unwrap_or("");
 
     // Process with a couple activities
     let task1_input = generate_payload(small_kb);
-    let result1 = ctx
-        .schedule_activity("SmallPayloadTask", task1_input)
-        .await;
+    let result1 = ctx.schedule_activity("SmallPayloadTask", task1_input).await;
 
     let task2_input = generate_payload(medium_kb / 2);
-    let result2 = ctx
-        .schedule_activity("MediumPayloadTask", task2_input)
-        .await;
+    let result2 = ctx.schedule_activity("MediumPayloadTask", task2_input).await;
 
     let success = matches!(result1, crate::DurableOutput::Activity(Ok(_)))
         && matches!(result2, crate::DurableOutput::Activity(Ok(_)));

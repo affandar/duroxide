@@ -260,7 +260,9 @@ impl Runtime {
                 history_mgr.append_failed(details.clone());
 
                 // Propagate cancellation to children
-                let cancel_work_items = self.get_child_cancellation_work_items(instance, history_mgr.full_history_iter()).await;
+                let cancel_work_items = self
+                    .get_child_cancellation_work_items(instance, history_mgr.full_history_iter())
+                    .await;
                 orchestrator_items.extend(cancel_work_items);
 
                 // Notify parent if this is a sub-orchestration

@@ -19,6 +19,18 @@ Tests modeling the "instance actor" pattern where an orchestration manages the l
 - Continue-as-new with state preservation
 - Concurrent instance actors
 
+### Single-Thread Runtime Mode
+Tests validating duroxide behavior when running in tokio's `current_thread` runtime mode, which is the execution model used by embedded Rust async code in single-threaded hosts (e.g., database extensions, embedded systems, WASM):
+- Basic orchestration lifecycle
+- Sequential activity execution
+- Timer handling
+- Continue-as-new chains
+- Concurrent orchestrations on single thread
+- Single concurrency configuration (1x1)
+- **Activity cancellation (1x1 concurrency)**:
+  - Cooperative activity: Activity checks `ctx.cancelled()` and exits gracefully when orchestration is cancelled
+  - Runaway activity: Activity ignores cancellation token, gets forcibly aborted after grace period
+
 ## Purpose
 
 These tests ensure that patterns discovered and validated in production environments continue to work correctly as the codebase evolves. They are particularly important for validating:
@@ -26,4 +38,5 @@ These tests ensure that patterns discovered and validated in production environm
 - State preservation during orchestration restarts
 - Concurrent execution correctness
 - Complex activity workflows
+- Single-threaded execution model compatibility
 

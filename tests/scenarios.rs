@@ -9,6 +9,10 @@
 //! - Long continue-as-new chains
 //! - Concurrent orchestration execution
 //! - Complex activity workflows
+//! - Single-thread runtime mode (for embedded hosts)
 
 #[path = "scenarios/toygres.rs"]
 mod toygres;
+
+#[path = "scenarios/single_thread.rs"]
+mod single_thread;

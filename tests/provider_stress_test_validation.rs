@@ -61,9 +61,7 @@ async fn test_stress_infrastructure_minimal() {
 
 #[tokio::test]
 async fn test_large_payload_stress_infrastructure() {
-    use duroxide::provider_stress_tests::large_payload::{
-        LargePayloadConfig, run_large_payload_test_with_config,
-    };
+    use duroxide::provider_stress_tests::large_payload::{LargePayloadConfig, run_large_payload_test_with_config};
 
     // Initialize logging for the test
     let _ = tracing_subscriber::fmt()
@@ -83,11 +81,11 @@ async fn test_large_payload_stress_infrastructure() {
             orch_concurrency: 1,
             worker_concurrency: 1,
         },
-        small_payload_kb: 5,     // Reduced from 10
-        medium_payload_kb: 10,   // Reduced from 50
-        large_payload_kb: 20,    // Reduced from 100
-        activity_count: 10,      // Reduced from 20
-        sub_orch_count: 2,       // Reduced from 5
+        small_payload_kb: 5,   // Reduced from 10
+        medium_payload_kb: 10, // Reduced from 50
+        large_payload_kb: 20,  // Reduced from 100
+        activity_count: 10,    // Reduced from 20
+        sub_orch_count: 2,     // Reduced from 5
     };
 
     let result = run_large_payload_test_with_config(&factory, config)

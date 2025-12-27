@@ -121,9 +121,9 @@ impl SqliteProvider {
 
         match row {
             Some(row) => {
-                let status: String = row
-                    .try_get("status")
-                    .map_err(|e| ProviderError::permanent("check_execution_state", format!("Failed to get status: {e}")))?;
+                let status: String = row.try_get("status").map_err(|e| {
+                    ProviderError::permanent("check_execution_state", format!("Failed to get status: {e}"))
+                })?;
 
                 if status == "Running" {
                     Ok(ExecutionState::Running)
@@ -160,9 +160,9 @@ impl SqliteProvider {
 
         match row {
             Some(row) => {
-                let status: String = row
-                    .try_get("status")
-                    .map_err(|e| ProviderError::permanent("check_execution_state_in_tx", format!("Failed to get status: {e}")))?;
+                let status: String = row.try_get("status").map_err(|e| {
+                    ProviderError::permanent("check_execution_state_in_tx", format!("Failed to get status: {e}"))
+                })?;
 
                 if status == "Running" {
                     Ok(ExecutionState::Running)
@@ -1313,8 +1313,12 @@ impl Provider for SqliteProvider {
             .map_err(|e| ProviderError::permanent("fetch_work_item", format!("Deserialization error: {e}")))?;
 
         // Check orchestration execution state for activity cancellation support
-        let execution_state = if let WorkItem::ActivityExecute { instance, execution_id, .. } = &work_item {
-            self.check_execution_state_in_tx(&mut tx, instance, *execution_id).await?
+        let execution_state = if let WorkItem::ActivityExecute {
+            instance, execution_id, ..
+        } = &work_item
+        {
+            self.check_execution_state_in_tx(&mut tx, instance, *execution_id)
+                .await?
         } else {
             // Non-activity work items default to Running
             ExecutionState::Running
@@ -1402,10 +1406,7 @@ impl Provider for SqliteProvider {
         .map_err(|e| Self::sqlx_to_provider_error("renew_work_item_lock", e))?;
 
         let work_item_row = work_item_row.ok_or_else(|| {
-            ProviderError::permanent(
-                "renew_work_item_lock",
-                "Lock token invalid, expired, or already acked",
-            )
+            ProviderError::permanent("renew_work_item_lock", "Lock token invalid, expired, or already acked")
         })?;
 
         let work_item_str: String = work_item_row
@@ -1416,7 +1417,10 @@ impl Provider for SqliteProvider {
             .map_err(|e| ProviderError::permanent("renew_work_item_lock", format!("Deserialization error: {e}")))?;
 
         // Check orchestration execution state
-        let execution_state = if let WorkItem::ActivityExecute { instance, execution_id, .. } = &work_item {
+        let execution_state = if let WorkItem::ActivityExecute {
+            instance, execution_id, ..
+        } = &work_item
+        {
             self.check_execution_state(instance, *execution_id).await?
         } else {
             ExecutionState::Running

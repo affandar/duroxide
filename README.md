@@ -18,6 +18,7 @@ What you can build with this
 - Durable timers and deadlines: sleep for minutes/hours/days without holding threads; resume exactly-once after timeouts. **Use `ctx.schedule_timer()` for orchestration-level delays. Activities can sleep/poll internally as part of their work (e.g., provisioning resources).**
 - Saga-style compensation: on failure, run compensating actions to roll back prior steps.
 - Built-in activity retry: `ctx.schedule_activity_with_retry()` with configurable backoff (exponential, linear, fixed) and per-attempt timeouts.
+- Cooperative activity cancellation: in-flight activities receive cancellation signals via `ActivityContext` when orchestration is cancelled; activities can clean up gracefully or be forcibly aborted after a grace period.
 
 These patterns are enabled by deterministic replay, correlation IDs, durable timers, and external event handling.
 
