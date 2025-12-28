@@ -46,6 +46,7 @@ impl Default for LargePayloadConfig {
                 activity_delay_ms: 5,
                 orch_concurrency: 1,
                 worker_concurrency: 1,
+                wait_timeout_secs: 120, // Higher for large payload tests
             },
             small_payload_kb: 10,
             medium_payload_kb: 50,

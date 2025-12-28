@@ -1613,6 +1613,31 @@ CREATE INDEX idx_history_lookup ON history(instance_id, execution_id, event_id);
 - Too short: False retries under load
 - Too long: Slow recovery from crashes
 
+### Runtime Polling Configuration
+
+⚠️ **Important:** The default runtime polling interval (`dispatcher_min_poll_interval`) is quite aggressive (10ms). This is optimized for low-latency local providers like SQLite.
+
+When using a remote database provider (PostgreSQL over network, cloud-hosted databases), configure the runtime to use a longer polling interval that matches the provider's latency profile:
+
+```rust
+let runtime = DuroxideRuntime::builder()
+    .with_provider(my_remote_provider)
+    .with_options(RuntimeOptions {
+        dispatcher_min_poll_interval: Duration::from_millis(100), // Match your provider latency
+        ..Default::default()
+    })
+    .build()
+    .await?;
+```
+
+**Guidelines:**
+- **Local SQLite:** 10ms (default) works well
+- **Local PostgreSQL:** 10-50ms recommended  
+- **Remote PostgreSQL:** 50-200ms depending on network latency
+- **Cloud-hosted databases:** 100-500ms depending on service tier and region
+
+Setting an appropriate polling interval prevents unnecessary database load and reduces costs for cloud-hosted providers.
+
 ---
 
 ## Validation Checklist

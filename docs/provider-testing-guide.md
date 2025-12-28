@@ -108,6 +108,7 @@ impl ProviderStressFactory for MyProviderFactory {
             activity_delay_ms: 50,    // Simulated activity work time
             orch_concurrency: 1,      // Orchestration dispatcher threads
             worker_concurrency: 1,    // Activity worker threads
+            wait_timeout_secs: 60,    // Timeout for wait_for_orchestration
         }
     }
 }
@@ -125,6 +126,7 @@ let config = StressTestConfig {
     activity_delay_ms: 10,
     orch_concurrency: 2,
     worker_concurrency: 2,
+    wait_timeout_secs: 60,
 };
 
 let result = run_parallel_orchestrations_test_with_config(&factory, config).await?;
@@ -141,6 +143,7 @@ StressTestConfig {
     activity_delay_ms: 5,
     orch_concurrency: 1,
     worker_concurrency: 1,
+    wait_timeout_secs: 60,
 }
 ```
 
@@ -153,6 +156,7 @@ StressTestConfig {
     activity_delay_ms: 10,
     orch_concurrency: 1,
     worker_concurrency: 1,
+    wait_timeout_secs: 60,
 }
 ```
 
@@ -165,6 +169,7 @@ StressTestConfig {
     activity_delay_ms: 10,
     orch_concurrency: 2,
     worker_concurrency: 2,
+    wait_timeout_secs: 60,
 }
 ```
 
@@ -931,7 +936,7 @@ This generates `stress-test-results.md` with:
 
 - **Test Implementation**: `src/provider_validation/` (individual test modules)
 - **Test API**: `src/provider_validations.rs` (test function exports)
-- **Example Usage**: `tests/sqlite_provider_validations.rs` (complete example with all 62 tests)
+- **Example Usage**: `tests/sqlite_provider_validations.rs` (complete example with all 75 tests)
 - **Test Specification**: See individual test function documentation
 - **Provider Guide**: `docs/provider-implementation-guide.md`
 - **Built-in Providers**: `src/providers/sqlite.rs`

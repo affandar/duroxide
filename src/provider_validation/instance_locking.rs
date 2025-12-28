@@ -663,46 +663,52 @@ pub async fn test_multi_threaded_lock_expiration_recovery<F: ProviderFactory>(fa
     // Capture timeout value before spawning tasks
     let lock_timeout = factory.lock_timeout();
 
-    // Thread 1: Fetch and hold lock (don't ack)
+    // Barrier ensures all threads start at exactly the same time,
+    // eliminating race conditions from connection pool cold-start latency
+    let barrier = Arc::new(tokio::sync::Barrier::new(3));
+
+    // Thread 1: Fetch and hold lock (don't ack) - simulates crashed worker
     let provider1 = provider.clone();
-    let handle1 = tokio::spawn({
-        async move {
-            let (item, lock_token, _attempt_count) = provider1
-                .fetch_orchestration_item(lock_timeout, Duration::ZERO)
-                .await
-                .unwrap()
-                .unwrap();
-            assert_eq!(item.instance, "expiration-instance");
-            // Hold lock but don't ack - simulate crashed worker
-            tokio::time::sleep(lock_timeout + Duration::from_millis(200)).await;
-            lock_token
-        }
+    let barrier1 = barrier.clone();
+    let handle1 = tokio::spawn(async move {
+        barrier1.wait().await;
+        let (item, lock_token, _attempt_count) = provider1
+            .fetch_orchestration_item(lock_timeout, Duration::ZERO)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(item.instance, "expiration-instance");
+        // Hold lock but don't ack - simulate crashed worker
+        tokio::time::sleep(lock_timeout + Duration::from_millis(200)).await;
+        lock_token
     });
 
-    // Thread 2: Try to fetch immediately (should fail)
+    // Thread 2: Try to fetch while lock is held (should fail)
     let provider2 = provider.clone();
-    let handle2 = tokio::spawn({
-        async move {
-            tokio::time::sleep(Duration::from_millis(200)).await;
-            let result = provider2
-                .fetch_orchestration_item(lock_timeout, Duration::ZERO)
-                .await
-                .unwrap();
-            assert!(result.is_none(), "Instance should be locked");
-            result
-        }
+    let barrier2 = barrier.clone();
+    let handle2 = tokio::spawn(async move {
+        barrier2.wait().await;
+        // 200ms delay gives thread 1 time to acquire lock
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let result = provider2
+            .fetch_orchestration_item(lock_timeout, Duration::ZERO)
+            .await
+            .unwrap();
+        assert!(result.is_none(), "Instance should be locked");
+        result
     });
 
-    // Thread 3: Wait for expiration and then fetch (should succeed)
+    // Thread 3: Wait for expiration, then fetch (should succeed - lock recovery)
     let provider3 = provider.clone();
-    let handle3 = tokio::spawn({
-        async move {
-            tokio::time::sleep(lock_timeout + Duration::from_millis(100)).await;
-            provider3
-                .fetch_orchestration_item(lock_timeout, Duration::ZERO)
-                .await
-                .unwrap()
-        }
+    let barrier3 = barrier.clone();
+    let handle3 = tokio::spawn(async move {
+        barrier3.wait().await;
+        // Wait for lock to expire (lock_timeout + margin)
+        tokio::time::sleep(lock_timeout + Duration::from_millis(100)).await;
+        provider3
+            .fetch_orchestration_item(lock_timeout, Duration::ZERO)
+            .await
+            .unwrap()
     });
 
     // Wait for all threads

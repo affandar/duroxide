@@ -24,6 +24,14 @@ pub struct StressTestConfig {
     pub orch_concurrency: usize,
     /// Worker dispatcher concurrency
     pub worker_concurrency: usize,
+    /// Timeout for wait_for_orchestration (seconds)
+    /// Increase for high-latency remote databases
+    #[serde(default = "default_wait_timeout_secs")]
+    pub wait_timeout_secs: u64,
+}
+
+fn default_wait_timeout_secs() -> u64 {
+    60
 }
 
 impl Default for StressTestConfig {
@@ -35,6 +43,7 @@ impl Default for StressTestConfig {
             activity_delay_ms: 10,
             orch_concurrency: 2,
             worker_concurrency: 2,
+            wait_timeout_secs: default_wait_timeout_secs(),
         }
     }
 }
@@ -155,6 +164,7 @@ pub async fn run_stress_test(
         let failed_configuration_clone = Arc::clone(&failed_configuration);
         let failed_application_clone = Arc::clone(&failed_application);
         let active_clone = Arc::clone(&active);
+        let config_clone = config.clone();
 
         tokio::spawn(async move {
             // Start orchestration
@@ -171,7 +181,7 @@ pub async fn run_stress_test(
 
             // Wait for completion
             match client_clone
-                .wait_for_orchestration(&instance, std::time::Duration::from_secs(60))
+                .wait_for_orchestration(&instance, std::time::Duration::from_secs(config_clone.wait_timeout_secs))
                 .await
             {
                 Ok(crate::OrchestrationStatus::Completed { .. }) => {

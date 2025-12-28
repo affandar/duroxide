@@ -342,42 +342,88 @@ pub async fn test_worker_lock_renewal_after_expiration<F: ProviderFactory>(facto
 pub async fn test_worker_lock_renewal_extends_timeout<F: ProviderFactory>(factory: &F) {
     tracing::info!("→ Testing worker lock renewal: renewal extends timeout");
     let provider = Arc::new(factory.create_provider().await);
+    let lock_timeout = factory.lock_timeout();
 
-    use crate::providers::WorkItem;
+    use crate::providers::{ExecutionMetadata, WorkItem};
+    use crate::provider_validation::start_item;
+    use crate::{Event, EventKind, INITIAL_EXECUTION_ID, INITIAL_EVENT_ID};
 
-    // Enqueue and fetch work item with short timeout
+    let instance = "test-lock-renewal-extends";
+
+    // 1. Create a running orchestration (required for renewal to work)
     provider
-        .enqueue_for_worker(WorkItem::ActivityExecute {
-            instance: "test-instance".to_string(),
-            execution_id: 1,
-            id: 1,
-            name: "TestActivity".to_string(),
-            input: "test".to_string(),
-        })
+        .enqueue_for_orchestrator(start_item(instance), None)
         .await
         .unwrap();
-
-    let short_timeout = Duration::from_secs(1);
-    let (_item, token, _, _) = provider
-        .fetch_work_item(short_timeout, Duration::ZERO)
+    let (_item, orch_token, _) = provider
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
         .await
         .unwrap()
         .unwrap();
-    tracing::info!("Fetched work item with 1s timeout");
 
-    // Wait 800ms (before expiration)
-    tokio::time::sleep(Duration::from_millis(800)).await;
+    // Create the ActivityExecute work item to enqueue
+    let activity_item = WorkItem::ActivityExecute {
+        instance: instance.to_string(),
+        execution_id: INITIAL_EXECUTION_ID,
+        id: 1,
+        name: "TestActivity".to_string(),
+        input: "test".to_string(),
+    };
 
-    // Renew lock for another 1 second
-    provider.renew_work_item_lock(&token, short_timeout).await.unwrap();
-    tracing::info!("Renewed lock at 800ms mark");
+    // Ack with Running status and enqueue the activity
+    provider
+        .ack_orchestration_item(
+            &orch_token,
+            INITIAL_EXECUTION_ID,
+            vec![Event::with_event_id(
+                INITIAL_EVENT_ID,
+                instance.to_string(),
+                INITIAL_EXECUTION_ID,
+                None,
+                EventKind::OrchestrationStarted {
+                    name: "TestOrch".to_string(),
+                    version: "1.0.0".to_string(),
+                    input: "{}".to_string(),
+                    parent_instance: None,
+                    parent_id: None,
+                },
+            )],
+            vec![activity_item],
+            vec![],
+            ExecutionMetadata {
+                orchestration_name: Some("TestOrch".to_string()),
+                status: Some("Running".to_string()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
 
-    // Wait another 800ms (total 1.6s from original fetch)
-    // Without renewal, lock would have expired at 1s
-    tokio::time::sleep(Duration::from_millis(800)).await;
+    // 2. Fetch the activity work item
+    let (_item, token, _, _) = provider
+        .fetch_work_item(lock_timeout, Duration::ZERO)
+        .await
+        .unwrap()
+        .unwrap();
+    tracing::info!("Fetched work item with {:?} timeout", lock_timeout);
 
-    // Item should still be locked (because we renewed at 800ms for another 1s = expires at 1.8s)
-    let result = provider.fetch_work_item(short_timeout, Duration::ZERO).await.unwrap();
+    // Wait 60% of lock timeout before renewing
+    let pre_renewal_wait = lock_timeout.mul_f64(0.6);
+    tokio::time::sleep(pre_renewal_wait).await;
+
+    // Renew lock for full timeout duration
+    // At t=0.6x: renew extends lock to t=0.6x + 1.0x = expires at t=1.6x from start
+    provider.renew_work_item_lock(&token, lock_timeout).await.unwrap();
+    tracing::info!("Renewed lock at ~0.6x timeout mark, now expires at ~1.6x");
+
+    // Wait remaining time to reach exactly 1.0x from start
+    // Without renewal, lock would have expired here
+    // With renewal at 0.6x for 1.0x more, lock expires at 1.6x
+    let post_renewal_wait = lock_timeout - pre_renewal_wait;
+    tokio::time::sleep(post_renewal_wait).await;
+
+    // Item should still be locked (we're at 1.0x, renewal extended to 1.6x)
+    let result = provider.fetch_work_item(lock_timeout, Duration::ZERO).await.unwrap();
     assert!(result.is_none(), "Item should still be locked after renewal");
 
     tracing::info!("✓ Test passed: lock timeout extension verified");

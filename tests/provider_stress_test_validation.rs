@@ -45,6 +45,7 @@ async fn test_stress_infrastructure_minimal() {
         activity_delay_ms: 5,
         orch_concurrency: 1,
         worker_concurrency: 1,
+        wait_timeout_secs: 60,
     };
 
     let result = run_parallel_orchestrations_test_with_config(&factory, config)
@@ -80,6 +81,7 @@ async fn test_large_payload_stress_infrastructure() {
             activity_delay_ms: 5,
             orch_concurrency: 1,
             worker_concurrency: 1,
+            wait_timeout_secs: 60,
         },
         small_payload_kb: 5,   // Reduced from 10
         medium_payload_kb: 10, // Reduced from 50

@@ -102,6 +102,7 @@ pub async fn run_test_suite(duration_secs: u64) -> Result<(), Box<dyn std::error
             activity_delay_ms: 10,
             orch_concurrency: *orch_conc,
             worker_concurrency: *worker_conc,
+            wait_timeout_secs: 60,
         };
 
         match run_parallel_orchestrations_test_with_config(&in_memory_factory, config).await {
@@ -130,6 +131,7 @@ pub async fn run_test_suite(duration_secs: u64) -> Result<(), Box<dyn std::error
             activity_delay_ms: 10,
             orch_concurrency: *orch_conc,
             worker_concurrency: *worker_conc,
+            wait_timeout_secs: 60,
         };
 
         let file_factory = FileSqliteFactory::new();

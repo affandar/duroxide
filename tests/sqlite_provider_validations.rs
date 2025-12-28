@@ -86,6 +86,12 @@ mod tests {
         test_worker_ack_atomicity,
         test_worker_delayed_visibility_skips_future_items,
         test_worker_item_immediate_visibility,
+        // Worker lock renewal tests
+        test_worker_lock_renewal_after_ack,
+        test_worker_lock_renewal_after_expiration,
+        test_worker_lock_renewal_extends_timeout,
+        test_worker_lock_renewal_invalid_token,
+        test_worker_lock_renewal_success,
         test_worker_peek_lock_semantics,
         // Queue semantics tests
         test_worker_queue_fifo_ordering,
@@ -473,5 +479,31 @@ mod tests {
     #[tokio::test]
     async fn test_sqlite_ack_work_item_none_deletes_without_enqueue() {
         test_ack_work_item_none_deletes_without_enqueue(&SqliteTestFactory).await;
+    }
+
+    // Worker lock renewal tests
+    #[tokio::test]
+    async fn test_sqlite_worker_lock_renewal_success() {
+        test_worker_lock_renewal_success(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_worker_lock_renewal_invalid_token() {
+        test_worker_lock_renewal_invalid_token(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_worker_lock_renewal_after_expiration() {
+        test_worker_lock_renewal_after_expiration(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_worker_lock_renewal_extends_timeout() {
+        test_worker_lock_renewal_extends_timeout(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_worker_lock_renewal_after_ack() {
+        test_worker_lock_renewal_after_ack(&SqliteTestFactory).await;
     }
 }

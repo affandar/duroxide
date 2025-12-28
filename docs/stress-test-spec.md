@@ -139,6 +139,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         activity_delay_ms: 10,
         orch_concurrency: 2,
         worker_concurrency: 2,
+        wait_timeout_secs: 60,
     };
     
     // Create your custom provider

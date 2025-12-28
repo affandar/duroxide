@@ -5,6 +5,117 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.7] - 2025-12-28
+
+**Release:** <https://crates.io/crates/duroxide/0.1.7>
+
+### Added
+
+- **Cooperative activity cancellation** - Activities can detect when their parent orchestration has been cancelled or completed
+  - `ActivityContext` now provides cancellation awareness via `is_cancelled()` and `cancelled()` methods
+  - Activities can cooperatively respond to cancellation by checking the cancellation token
+  - Use `tokio::select!` with `ctx.cancelled()` for responsive cancellation in async activities
+  - Configurable grace period before forced activity termination
+
+- **ExecutionState enum** - Providers now report orchestration state with activity work items
+  - `ExecutionState::Running` - Orchestration is active, activity should proceed
+  - `ExecutionState::Terminal { status }` - Orchestration completed/failed/continued, activity result won't be observed
+  - `ExecutionState::Missing` - Orchestration instance deleted, activity should abort
+
+- **Provider validation tests for cancellation** - 13 new tests in `provider_validation::cancellation`
+  - Verifies `ExecutionState` is correctly returned by `fetch_work_item` and `renew_work_item_lock`
+  - Tests for Running, Terminal (Completed/Failed/ContinuedAsNew), and Missing states
+  - Tests for state transitions during activity execution
+
+- **Single-threaded runtime support** - Full compatibility with `tokio::runtime::Builder::new_current_thread()`
+  - Essential for embedding in single-threaded environments (e.g., pgrx PostgreSQL extensions)
+  - New scenario tests in `tests/scenarios/single_thread.rs`
+  - Use `RuntimeOptions { orchestration_concurrency: 1, worker_concurrency: 1, .. }` for 1x1 mode
+
+- **Configurable wait timeout for stress tests** - `StressTestConfig::wait_timeout_secs` field
+  - Default: 60 seconds
+  - Increase for high-latency remote database providers
+  - Uses `#[serde(default)]` for backward compatibility with existing configs
+
+### Changed
+
+- **BREAKING:** `Provider::fetch_work_item` now returns 4-tuple: `(WorkItem, String, u32, ExecutionState)`
+  - Added `ExecutionState` as fourth element to report parent orchestration state
+  - Required for activity cancellation support
+
+- **BREAKING:** `Provider::renew_work_item_lock` now returns `ExecutionState` instead of `()`
+  - Allows runtime to detect orchestration state changes during long-running activities
+  - Triggers cancellation token when orchestration becomes terminal
+
+- Provider validation test count increased from 62 to 75
+
+- Documentation updates:
+  - Added "Runtime Polling Configuration" section to provider-implementation-guide
+  - Default polling interval (10ms) is aggressive; configure for remote/cloud providers
+  - Updated provider-testing-guide with new test count and wait_timeout_secs examples
+
+### Fixed
+
+- **test_worker_lock_renewal_extends_timeout** - Fixed timing sensitivity (GitHub #34)
+  - Test now creates proper orchestration with Running status before testing renewal
+  - Uses 0.6x pre-renewal wait + 0.4x post-renewal wait for reliable timing
+
+- **test_multi_threaded_lock_expiration_recovery** - Fixed race condition (GitHub #32)
+  - Uses `tokio::sync::Barrier` to synchronize thread start times
+  - Eliminates false failures from connection pool cold-start latency
+
+### Migration Guide
+
+**Provider implementers:**
+```rust
+// fetch_work_item now returns ExecutionState
+async fn fetch_work_item(
+    &self,
+    lock_timeout: Duration,
+    poll_timeout: Duration,
+) -> Result<Option<(WorkItem, String, u32, ExecutionState)>, ProviderError>;
+
+// renew_work_item_lock now returns ExecutionState
+async fn renew_work_item_lock(
+    &self,
+    token: &str,
+    extend_for: Duration,
+) -> Result<ExecutionState, ProviderError>;
+```
+
+**Determining ExecutionState:**
+```rust
+// Query the execution status for the work item's instance/execution_id
+let state = match (instance_exists, execution_status) {
+    (false, _) => ExecutionState::Missing,
+    (true, None) => ExecutionState::Missing,
+    (true, Some(status)) if status == "Running" => ExecutionState::Running,
+    (true, Some(status)) => ExecutionState::Terminal { status },
+};
+```
+
+**Activity authors (using cancellation):**
+```rust
+activities.register("LongTask", |ctx: ActivityContext, input: String| async move {
+    for item in items {
+        // Check cancellation periodically
+        if ctx.is_cancelled() {
+            return Err("Cancelled".into());
+        }
+        process(item).await;
+    }
+    Ok("done".into())
+});
+
+// Or use select! for responsive cancellation
+activities.register("AsyncTask", |ctx: ActivityContext, input: String| async move {
+    tokio::select! {
+        result = do_work(input) => result,
+        _ = ctx.cancelled() => Err("Cancelled".into()),
+    }
+});
+```
+
 ## [0.1.6] - 2025-12-21
 
 **Release:** <https://crates.io/crates/duroxide/0.1.6>
