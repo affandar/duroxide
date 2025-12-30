@@ -334,6 +334,14 @@ Add/adjust runtime-level tests to validate behavior end-to-end:
    - Assert the orchestration completes deterministically and does not hang.
    - Assert the activity handler observes cancellation token (activity should exit early) OR at minimum that the worker drops the activity.
 
+2. **`schedule_activity_with_retry` timeout cancels the timed-out attempt**
+   - Orchestration calls `schedule_activity_with_retry(..., RetryPolicy::new(N).with_timeout(T))`.
+   - Ensure the timeout fires (choose an activity handler that blocks until cancelled).
+   - Assert:
+     - the orchestration returns a timeout error as expected, and
+     - the underlying activity attempt is cancelled via select-loser cancellation (e.g., handler observes cancellation token / does not run to completion).
+   - This is a regression test that `select2(activity, timer)`-based helper paths are covered by the same loser-cancellation mechanism.
+
 2. **CancelInstance cancels outstanding activities**
    - Orchestration schedules a long-running activity.
    - Client cancels instance.
