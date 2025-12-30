@@ -174,6 +174,7 @@ The runtime should request activity cancellation (by setting queue flags via the
    - If an activity future loses a select race, request cancellation for that activity id, with a reason like:
      - `"select_loser:timeout"` when a timer wins
      - `"select_loser:other"` otherwise
+   - **Note:** This automatically covers the per-attempt timeout path in `schedule_activity_with_retry`, since it is implemented as `select2(activity, timer)`. When the timer wins, the activity becomes the select loser and will be cancelled via this mechanism.
 
 ### How to compute “outstanding activities”
 
