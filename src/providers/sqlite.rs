@@ -4,7 +4,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tracing::debug;
 
 use super::{
-    ExecutionInfo, ExecutionState, InstanceInfo, OrchestrationItem, Provider, ProviderAdmin, ProviderError,
+    ExecutionInfo, CancelInfo, ActivityCancelRequest, InstanceInfo, OrchestrationItem, Provider, ProviderAdmin, ProviderError,
     QueueDepths, SystemMetrics, WorkItem,
 };
 use crate::{Event, EventKind};
@@ -411,6 +411,12 @@ impl SqliteProvider {
             CREATE TABLE IF NOT EXISTS worker_queue (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 work_item TEXT NOT NULL,
+                instance_id TEXT,
+                execution_id INTEGER,
+                activity_id INTEGER,
+                cancel_requested BOOLEAN NOT NULL DEFAULT 0,
+                cancel_reason TEXT,
+                cancel_requested_at_ms INTEGER,
                 visible_at INTEGER NOT NULL DEFAULT 0,
                 lock_token TEXT,
                 locked_until TIMESTAMP,
@@ -447,6 +453,9 @@ impl SqliteProvider {
             .execute(pool)
             .await?;
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_worker_available ON worker_queue(lock_token, id)")
+            .execute(pool)
+            .await?;
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_worker_identity ON worker_queue(instance_id, execution_id, activity_id)")
             .execute(pool)
             .await?;
 
@@ -1226,9 +1235,23 @@ impl Provider for SqliteProvider {
             .map_err(|e| ProviderError::permanent("enqueue_for_worker", format!("Serialization error: {e}")))?;
         let now_ms = Self::now_millis();
 
-        sqlx::query("INSERT INTO worker_queue (work_item, visible_at) VALUES (?, ?)")
+        // Extract identity columns
+        let (instance_id, execution_id, activity_id) = match &item {
+            WorkItem::ActivityExecute {
+                instance,
+                execution_id,
+                id,
+                ..
+            } => (Some(instance.clone()), Some(*execution_id), Some(*id)),
+            _ => (None, None, None),
+        };
+
+        sqlx::query("INSERT INTO worker_queue (work_item, visible_at, instance_id, execution_id, activity_id) VALUES (?, ?, ?, ?, ?)")
             .bind(work_item)
             .bind(now_ms)
+            .bind(instance_id)
+            .bind(execution_id)
+            .bind(activity_id)
             .execute(&self.pool)
             .await
             .map_err(|e| Self::sqlx_to_provider_error("enqueue_for_worker", e))?;
@@ -1240,7 +1263,7 @@ impl Provider for SqliteProvider {
         &self,
         lock_timeout: Duration,
         _poll_timeout: Duration,
-    ) -> Result<Option<(WorkItem, String, u32, ExecutionState)>, ProviderError> {
+    ) -> Result<Option<(WorkItem, String, u32, CancelInfo)>, ProviderError> {
         let mut tx = self
             .pool
             .begin()
@@ -1260,7 +1283,7 @@ impl Provider for SqliteProvider {
         let now_ms = Self::now_millis();
         let next_item = sqlx::query(
             r#"
-            SELECT id, work_item, attempt_count FROM worker_queue
+            SELECT id, work_item, attempt_count, cancel_requested, cancel_reason FROM worker_queue
             WHERE visible_at <= ?1
               AND (lock_token IS NULL OR locked_until <= ?1)
             ORDER BY id
@@ -1290,6 +1313,8 @@ impl Provider for SqliteProvider {
         let current_attempt_count: i64 = next_item
             .try_get("attempt_count")
             .map_err(|e| ProviderError::permanent("fetch_work_item", format!("Failed to get attempt_count: {e}")))?;
+        let cancel_requested: bool = next_item.try_get("cancel_requested").unwrap_or(false);
+        let cancel_reason: Option<String> = next_item.try_get("cancel_reason").ok();
 
         // Update with lock and increment attempt_count for poison message detection
         sqlx::query(
@@ -1312,23 +1337,16 @@ impl Provider for SqliteProvider {
         let work_item: WorkItem = serde_json::from_str(&work_item_str)
             .map_err(|e| ProviderError::permanent("fetch_work_item", format!("Deserialization error: {e}")))?;
 
-        // Check orchestration execution state for activity cancellation support
-        let execution_state = if let WorkItem::ActivityExecute {
-            instance, execution_id, ..
-        } = &work_item
-        {
-            self.check_execution_state_in_tx(&mut tx, instance, *execution_id)
-                .await?
-        } else {
-            // Non-activity work items default to Running
-            ExecutionState::Running
+        let cancel_info = CancelInfo {
+            cancel_requested,
+            cancel_reason,
         };
 
         tx.commit()
             .await
             .map_err(|e| Self::sqlx_to_provider_error("fetch_work_item", e))?;
 
-        Ok(Some((work_item, lock_token, attempt_count, execution_state)))
+        Ok(Some((work_item, lock_token, attempt_count, cancel_info)))
     }
 
     async fn ack_work_item(&self, token: &str, completion: Option<WorkItem>) -> Result<(), ProviderError> {
@@ -1388,86 +1406,70 @@ impl Provider for SqliteProvider {
         Ok(())
     }
 
-    async fn renew_work_item_lock(&self, token: &str, extend_for: Duration) -> Result<ExecutionState, ProviderError> {
+    async fn renew_work_item_lock(&self, token: &str, extend_for: Duration) -> Result<CancelInfo, ProviderError> {
         let now_ms = Self::now_millis();
+        let locked_until = Self::timestamp_after(extend_for);
 
-        // First, find the work item by lock token and extract instance/execution info
-        let work_item_row = sqlx::query(
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| Self::sqlx_to_provider_error("renew_work_item_lock", e))?;
+
+        // 1. Fetch current row to check validity and get cancel info
+        let row = sqlx::query(
             r#"
-            SELECT work_item FROM worker_queue
+            SELECT id, cancel_requested, cancel_reason FROM worker_queue
             WHERE lock_token = ?1
               AND locked_until > ?2
             "#,
         )
         .bind(token)
         .bind(now_ms)
-        .fetch_optional(&self.pool)
+        .fetch_optional(&mut *tx)
         .await
         .map_err(|e| Self::sqlx_to_provider_error("renew_work_item_lock", e))?;
 
-        let work_item_row = work_item_row.ok_or_else(|| {
-            ProviderError::permanent("renew_work_item_lock", "Lock token invalid, expired, or already acked")
-        })?;
+        if row.is_none() {
+            return Err(ProviderError::permanent(
+                "renew_work_item_lock",
+                "Lock token invalid, expired, or already acked",
+            ));
+        }
+        let row = row.unwrap();
+        let cancel_requested: bool = row.try_get("cancel_requested").unwrap_or(false);
+        let cancel_reason: Option<String> = row.try_get("cancel_reason").ok();
 
-        let work_item_str: String = work_item_row
-            .try_get("work_item")
-            .map_err(|e| ProviderError::permanent("renew_work_item_lock", format!("Failed to get work_item: {e}")))?;
+        // 2. Extend lock (ALWAYS extend, even if cancelled, to allow grace period)
+        sqlx::query(
+            r#"
+            UPDATE worker_queue
+            SET locked_until = ?1
+            WHERE lock_token = ?2
+            "#,
+        )
+        .bind(locked_until)
+        .bind(token)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| Self::sqlx_to_provider_error("renew_work_item_lock", e))?;
 
-        let work_item: WorkItem = serde_json::from_str(&work_item_str)
-            .map_err(|e| ProviderError::permanent("renew_work_item_lock", format!("Deserialization error: {e}")))?;
-
-        // Check orchestration execution state
-        let execution_state = if let WorkItem::ActivityExecute {
-            instance, execution_id, ..
-        } = &work_item
-        {
-            self.check_execution_state(instance, *execution_id).await?
-        } else {
-            ExecutionState::Running
-        };
-
-        // Only extend lock if execution is still running
-        if matches!(execution_state, ExecutionState::Running) {
-            let locked_until = Self::timestamp_after(extend_for);
-
-            let result = sqlx::query(
-                r#"
-                UPDATE worker_queue
-                SET locked_until = ?1
-                WHERE lock_token = ?2
-                  AND locked_until > ?3
-                "#,
-            )
-            .bind(locked_until)
-            .bind(token)
-            .bind(now_ms)
-            .execute(&self.pool)
+        tx.commit()
             .await
             .map_err(|e| Self::sqlx_to_provider_error("renew_work_item_lock", e))?;
 
-            if result.rows_affected() == 0 {
-                return Err(ProviderError::permanent(
-                    "renew_work_item_lock",
-                    "Lock token invalid, expired, or already acked",
-                ));
-            }
+        tracing::debug!(
+            target: "duroxide::providers::sqlite",
+            lock_token = %token,
+            extend_secs = %extend_for.as_secs(),
+            cancel_requested = %cancel_requested,
+            "Work item lock renewed"
+        );
 
-            tracing::debug!(
-                target: "duroxide::providers::sqlite",
-                lock_token = %token,
-                extend_secs = %extend_for.as_secs(),
-                "Work item lock renewed"
-            );
-        } else {
-            tracing::debug!(
-                target: "duroxide::providers::sqlite",
-                lock_token = %token,
-                ?execution_state,
-                "Work item lock NOT renewed (orchestration not running)"
-            );
-        }
-
-        Ok(execution_state)
+        Ok(CancelInfo {
+            cancel_requested,
+            cancel_reason,
+        })
     }
 
     async fn abandon_work_item(

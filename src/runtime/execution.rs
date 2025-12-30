@@ -22,13 +22,20 @@ impl Runtime {
         execution_id: u64,
         worker_id: &str,
         handler: Arc<dyn OrchestrationHandler>,
-    ) -> (Vec<Event>, Vec<WorkItem>, Vec<WorkItem>, Result<String, String>) {
+    ) -> (
+        Vec<Event>,
+        Vec<WorkItem>,
+        Vec<WorkItem>,
+        Vec<crate::providers::ActivityCancelRequest>,
+        Result<String, String>,
+    ) {
         let orchestration_name = &workitem_reader.orchestration_name;
         debug!(instance, orchestration_name, "🚀 Starting atomic single execution");
 
         // Track all changes
         let mut worker_items = Vec::new();
         let mut orchestrator_items = Vec::new();
+        let mut activity_cancels = Vec::new();
 
         // Helper: only honor detached starts at terminal; ignore all other pending actions
         let mut enqueue_detached_from_pending = |pending: &[_]| {
@@ -191,6 +198,14 @@ impl Runtime {
                 ));
                 self.record_orchestration_completion();
 
+                // Cancel outstanding activities (orchestration completed, results ignored)
+                activity_cancels.extend(self.compute_outstanding_activity_cancels(
+                    instance,
+                    execution_id,
+                    history_mgr,
+                    "orchestration completed",
+                ));
+
                 // Notify parent if this is a sub-orchestration
                 if let Some((parent_instance, parent_id)) = parent_link {
                     tracing::debug!(target = "duroxide::runtime::execution", instance=%instance, parent_instance=%parent_instance, parent_id=%parent_id, "Enqueue SubOrchCompleted to parent");
@@ -216,6 +231,14 @@ impl Runtime {
                     crate::ErrorDetails::Poison { .. } => self.record_orchestration_poison(),
                 }
                 history_mgr.append_failed(details.clone());
+
+                // Cancel outstanding activities (orchestration failed)
+                activity_cancels.extend(self.compute_outstanding_activity_cancels(
+                    instance,
+                    execution_id,
+                    history_mgr,
+                    "orchestration failed",
+                ));
 
                 // Notify parent if this is a sub-orchestration
                 if let Some((parent_instance, parent_id)) = parent_link {
@@ -249,6 +272,15 @@ impl Runtime {
                     version: version.clone(),
                 });
 
+                // Cancel outstanding activities from the OLD execution
+                // (new execution starts fresh, old activities should stop)
+                activity_cancels.extend(self.compute_outstanding_activity_cancels(
+                    instance,
+                    execution_id,
+                    history_mgr,
+                    "continued as new",
+                ));
+
                 Ok("continued as new".to_string())
             }
             TurnResult::Cancelled(reason) => {
@@ -258,6 +290,14 @@ impl Runtime {
                     retryable: false,
                 };
                 history_mgr.append_failed(details.clone());
+
+                // Cancel outstanding activities
+                activity_cancels.extend(self.compute_outstanding_activity_cancels(
+                    instance,
+                    execution_id,
+                    history_mgr,
+                    &format!("orchestration cancelled: {}", reason),
+                ));
 
                 // Propagate cancellation to children
                 let cancel_work_items = self
@@ -281,12 +321,66 @@ impl Runtime {
 
         debug!(
             instance,
-            "run_single_execution_atomic complete: history_delta={}, worker={}, orch={}",
+            "run_single_execution_atomic complete: history_delta={}, worker={}, orch={}, cancels={}",
             history_mgr.delta().len(),
             worker_items.len(),
-            orchestrator_items.len()
+            orchestrator_items.len(),
+            activity_cancels.len()
         );
-        (history_mgr.delta().to_vec(), worker_items, orchestrator_items, result)
+        (
+            history_mgr.delta().to_vec(),
+            worker_items,
+            orchestrator_items,
+            activity_cancels,
+            result,
+        )
+    }
+
+    /// Calculate outstanding activity cancellations for a terminal execution.
+    fn compute_outstanding_activity_cancels(
+        &self,
+        instance: &str,
+        execution_id: u64,
+        history_mgr: &crate::runtime::state_helpers::HistoryManager,
+        reason: &str,
+    ) -> Vec<crate::providers::ActivityCancelRequest> {
+        let full_history = history_mgr.full_history();
+
+        // Find all scheduled activities and completed ones
+        // Single pass isn't enough because completion events might appear before schedule events
+        // in our iteration order (although logically impossible if sorted by event_id)
+        // History is always sorted by event_id.
+        let (scheduled, completed) = full_history.iter().fold(
+            (
+                std::collections::HashMap::new(),
+                std::collections::HashSet::new(),
+            ),
+            |(mut scheduled, mut completed), e| {
+                match &e.kind {
+                    EventKind::ActivityScheduled { .. } => {
+                        scheduled.insert(e.event_id, e.event_id);
+                    }
+                    EventKind::ActivityCompleted { .. } | EventKind::ActivityFailed { .. } => {
+                        if let Some(source_id) = e.source_event_id {
+                            completed.insert(source_id);
+                        }
+                    }
+                    _ => {}
+                }
+                (scheduled, completed)
+            },
+        );
+
+        scheduled
+            .into_iter()
+            .filter(|(id, _)| !completed.contains(id))
+            .map(|(activity_id, _)| crate::providers::ActivityCancelRequest {
+                instance: instance.to_string(),
+                execution_id,
+                activity_id,
+                reason: reason.to_string(),
+            })
+            .collect()
     }
 
     /// Get work items to cancel child sub-orchestrations
