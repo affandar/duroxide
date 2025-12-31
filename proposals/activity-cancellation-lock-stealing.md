@@ -174,57 +174,31 @@ async fn ack_orchestration_item(
 
 ### Schema Changes
 
-**None required for SQLite.** We use JSON extraction to find activities to cancel:
+**Required for efficiency.** We add denormalized columns to `worker_queue` to support efficient cancellation lookups without parsing JSON.
 
 ```sql
-DELETE FROM worker_queue 
-WHERE json_extract(work_item, '$.instance') = ?
-  AND json_extract(work_item, '$.execution_id') = ?
-  AND json_extract(work_item, '$.id') = ?
-```
-
-This is simple and avoids schema migrations. For SQLite's typical workloads, this is acceptable.
-
-**📝 Implementation task:** Update `docs/provider-implementation-guide.md` to add guidance that providers MAY choose to denormalize activity identity columns for efficiency:
-
-```sql
+-- SQLite Migration
 ALTER TABLE worker_queue ADD COLUMN instance_id TEXT;
 ALTER TABLE worker_queue ADD COLUMN execution_id INTEGER;
 ALTER TABLE worker_queue ADD COLUMN activity_id INTEGER;
 CREATE INDEX idx_worker_queue_activity ON worker_queue(instance_id, execution_id, activity_id);
 ```
 
-This is a provider-specific optimization decision. High-throughput providers (e.g., Postgres with thousands of concurrent activities) should consider denormalization to avoid JSON parsing overhead during mass cancellation. The SQLite reference implementation prioritizes simplicity.
+**📝 Implementation task:** Update `docs/provider-implementation-guide.md` to recommend this schema pattern for all providers.
 
 ### `ack_orchestration_item` Changes
 
 Add deletion of cancelled activities within the transaction.
 
-**For SQLite (JSON extraction):**
 ```sql
 -- Inside ack_orchestration_item transaction, after other operations:
--- Delete each cancelled activity using JSON extraction
-DELETE FROM worker_queue 
-WHERE (json_extract(work_item, '$.instance') = ?1 
-   AND json_extract(work_item, '$.execution_id') = ?2 
-   AND json_extract(work_item, '$.id') = ?3)
-   OR (json_extract(work_item, '$.instance') = ?4 
-   AND json_extract(work_item, '$.execution_id') = ?5 
-   AND json_extract(work_item, '$.id') = ?6)
-   ...
-```
 
-**For providers with denormalized columns (e.g., Postgres):**
-```sql
--- Uses set-based deletion for efficiency
+-- Delete cancelled activities from worker queue
+-- Uses set-based deletion (or OR-chaining for SQLite) on indexed columns
 DELETE FROM worker_queue 
-WHERE (instance_id, execution_id, activity_id) IN (
-    SELECT * FROM (VALUES 
-        ('instance1', 1, 100),
-        ('instance1', 1, 101),
-        ...
-    )
-);
+WHERE (instance_id = ?1 AND execution_id = ?2 AND activity_id = ?3)
+   OR (instance_id = ?4 AND execution_id = ?5 AND activity_id = ?6)
+   ...
 ```
 
 ### `ack_work_item` Changes
@@ -505,24 +479,31 @@ If lock expires and another worker fetches:
 
 ### SQLite Provider
 
-1. Update `ack_orchestration_item`:
-   - Accept `cancelled_activities: Vec<ActivityIdentity>`
-   - Delete matching rows using JSON extraction in transaction
+1. **Schema Migration**:
+   - Add `instance_id`, `execution_id`, `activity_id` columns to `worker_queue`
+   - Add index `idx_worker_queue_activity`
 
-2. Update `renew_work_item_lock`:
+2. Update `enqueue_for_worker` / activity enqueue in `ack_orchestration_item`:
+   - Populate `instance_id`, `execution_id`, `activity_id` from `WorkItem::ActivityExecute`
+
+3. Update `ack_orchestration_item`:
+   - Accept `cancelled_activities: Vec<ActivityIdentity>`
+   - Delete matching rows using the new indexed columns
+
+4. Update `renew_work_item_lock`:
    - Remove `ExecutionState` lookup and return
    - Return `Ok(())` on success, `Err` on failure
 
-3. Update `fetch_work_item`:
+5. Update `fetch_work_item`:
    - Remove `ExecutionState` from return value
    - Remove execution state lookup logic
 
-4. Update `ack_work_item`:
+6. Update `ack_work_item`:
    - Check `rows_affected()` and return error if row doesn't exist
 
 ### Postgres Provider (`duroxide-pg`)
 
-Similar changes to stored procedures. Consider denormalizing activity identity columns for efficient mass cancellation (see Schema Changes section).
+Similar changes to stored procedures. Ensure denormalized activity identity columns are added for efficient mass cancellation.
 
 ---
 
@@ -611,13 +592,28 @@ Keep:
    - Verify workers detect cancellation via renewal failure
    - Verify no completions are enqueued to orchestrator queue after cancellation
 
+## Documentation Updates
+
+**📝 Implementation task:** Update the following guides to reflect these changes:
+
+1. **`docs/provider-implementation-guide.md`**:
+   - Update `fetch_work_item` signature (remove `ExecutionState`).
+   - Update `renew_work_item_lock` signature (remove `ExecutionState`).
+   - Update `ack_orchestration_item` signature (add `cancelled_activities`).
+   - Add recommendation for denormalized columns on `worker_queue`.
+   - Explain the "lock stealing" cancellation mechanism.
+
+2. **`docs/provider-testing-guide.md`**:
+   - Remove references to `ExecutionState` tests.
+   - Add the new cancellation test cases (mass cancellation, renewal failure, etc.).
+
 ---
 
 ## Comparison with Cancel Flag Approach
 
 | Aspect | Cancel Flag | Lock Stealing (Row Deletion) |
 |--------|-------------|------------------------------|
-| New columns | `cancel_requested`, `cancel_reason` | None required (JSON extraction), optional denormalization for perf |
+| New columns | `cancel_requested`, `cancel_reason` | `instance_id`, `execution_id`, `activity_id` (denormalized) |
 | Detection mechanism | Worker polls flag via renew | Renew fails (row gone) |
 | Unfetched activities | Set flag, worker skips on fetch | Delete row, worker never sees it |
 | Complexity | Moderate (new state machine) | Simple (just delete) |
