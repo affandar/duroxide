@@ -1911,6 +1911,196 @@ impl ProviderAdmin for SqliteProvider {
         }
     }
 
+    async fn delete_instance(&self, instance: &str) -> Result<(), ProviderError> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| Self::sqlx_to_provider_error("delete_instance", e))?;
+
+        // 1. Delete from instances
+        sqlx::query("DELETE FROM instances WHERE instance_id = ?")
+            .bind(instance)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| Self::sqlx_to_provider_error("delete_instance", e))?;
+
+        // 2. Delete from executions
+        sqlx::query("DELETE FROM executions WHERE instance_id = ?")
+            .bind(instance)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| Self::sqlx_to_provider_error("delete_instance", e))?;
+
+        // 3. Delete from history
+        sqlx::query("DELETE FROM history WHERE instance_id = ?")
+            .bind(instance)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| Self::sqlx_to_provider_error("delete_instance", e))?;
+
+        // 4. Delete from orchestrator_queue
+        sqlx::query("DELETE FROM orchestrator_queue WHERE instance_id = ?")
+            .bind(instance)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| Self::sqlx_to_provider_error("delete_instance", e))?;
+
+        // 5. Delete from instance_locks
+        sqlx::query("DELETE FROM instance_locks WHERE instance_id = ?")
+            .bind(instance)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| Self::sqlx_to_provider_error("delete_instance", e))?;
+
+        tx.commit()
+            .await
+            .map_err(|e| Self::sqlx_to_provider_error("delete_instance", e))?;
+
+        Ok(())
+    }
+
+    async fn delete_execution(&self, instance: &str, execution_id: u64) -> Result<(), ProviderError> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| Self::sqlx_to_provider_error("delete_execution", e))?;
+
+        // 1. Delete from executions
+        sqlx::query("DELETE FROM executions WHERE instance_id = ? AND execution_id = ?")
+            .bind(instance)
+            .bind(execution_id as i64)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| Self::sqlx_to_provider_error("delete_execution", e))?;
+
+        // 2. Delete from history
+        sqlx::query("DELETE FROM history WHERE instance_id = ? AND execution_id = ?")
+            .bind(instance)
+            .bind(execution_id as i64)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| Self::sqlx_to_provider_error("delete_execution", e))?;
+
+        tx.commit()
+            .await
+            .map_err(|e| Self::sqlx_to_provider_error("delete_execution", e))?;
+
+        Ok(())
+    }
+
+    async fn list_instances_detailed(
+        &self,
+        limit: usize,
+        offset: usize,
+        status_filter: Option<&str>,
+    ) -> Result<Vec<InstanceInfo>, ProviderError> {
+        let query = r#"
+            SELECT 
+                i.instance_id,
+                i.orchestration_name,
+                i.orchestration_version,
+                i.current_execution_id,
+                i.created_at,
+                i.updated_at,
+                e.status,
+                e.output
+            FROM instances i
+            LEFT JOIN executions e ON i.instance_id = e.instance_id AND i.current_execution_id = e.execution_id
+            WHERE (?1 IS NULL OR e.status = ?1)
+            ORDER BY i.created_at DESC, i.instance_id DESC
+            LIMIT ?2 OFFSET ?3
+        "#;
+
+        let rows = sqlx::query(query)
+            .bind(status_filter)
+            .bind(limit as i64)
+            .bind(offset as i64)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| Self::sqlx_to_provider_error("list_instances_detailed", e))?;
+
+        let mut infos = Vec::new();
+        for row in rows {
+            let instance_id: String = row
+                .try_get("instance_id")
+                .map_err(|e| Self::sqlx_to_provider_error("list_instances_detailed", e))?;
+            let orchestration_name: String = row
+                .try_get("orchestration_name")
+                .map_err(|e| Self::sqlx_to_provider_error("list_instances_detailed", e))?;
+            let orchestration_version: Option<String> = row.try_get("orchestration_version").ok();
+            let orchestration_version = orchestration_version.unwrap_or_else(|| "unknown".to_string());
+            let current_execution_id: i64 = row.try_get("current_execution_id").unwrap_or(1);
+            let created_at: i64 = row.try_get("created_at").unwrap_or(0);
+            let updated_at: i64 = row.try_get("updated_at").unwrap_or(0);
+            let status: String = row.try_get("status").unwrap_or_else(|_| "Unknown".to_string());
+            let output: Option<String> = row.try_get("output").ok();
+
+            infos.push(InstanceInfo {
+                instance_id,
+                orchestration_name,
+                orchestration_version,
+                current_execution_id: current_execution_id as u64,
+                status,
+                output,
+                created_at: created_at as u64,
+                updated_at: updated_at as u64,
+            });
+        }
+        Ok(infos)
+    }
+
+    async fn list_executions_detailed(
+        &self,
+        instance: &str,
+    ) -> Result<Vec<ExecutionInfo>, ProviderError> {
+        let query = r#"
+            SELECT 
+                e.execution_id,
+                e.status,
+                e.output,
+                e.started_at,
+                e.completed_at,
+                COUNT(h.event_id) as event_count
+            FROM executions e
+            LEFT JOIN history h ON e.instance_id = h.instance_id AND e.execution_id = h.execution_id
+            WHERE e.instance_id = ?
+            GROUP BY e.execution_id
+            ORDER BY e.execution_id DESC
+        "#;
+
+        let rows = sqlx::query(query)
+            .bind(instance)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| Self::sqlx_to_provider_error("list_executions_detailed", e))?;
+
+        let mut infos = Vec::new();
+        for row in rows {
+            let execution_id: i64 = row
+                .try_get("execution_id")
+                .map_err(|e| Self::sqlx_to_provider_error("list_executions_detailed", e))?;
+            let status: String = row
+                .try_get("status")
+                .map_err(|e| Self::sqlx_to_provider_error("list_executions_detailed", e))?;
+            let output: Option<String> = row.try_get("output").ok();
+            let started_at: i64 = row.try_get("started_at").unwrap_or(0);
+            let completed_at: Option<i64> = row.try_get("completed_at").ok();
+            let event_count: i64 = row.try_get("event_count").unwrap_or(0);
+
+            infos.push(ExecutionInfo {
+                execution_id: execution_id as u64,
+                status,
+                output,
+                started_at: started_at as u64,
+                completed_at: completed_at.map(|t| t as u64),
+                event_count: event_count as usize,
+            });
+        }
+        Ok(infos)
+    }
+
     async fn get_queue_depths(&self) -> Result<QueueDepths, ProviderError> {
         // Get orchestrator queue depth
         let orchestrator_row = sqlx::query("SELECT COUNT(*) as count FROM orchestrator_queue WHERE lock_token IS NULL")
@@ -3057,5 +3247,60 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(!err.is_retryable());
+    }
+
+    #[tokio::test]
+    async fn test_delete_operations() {
+        let store = create_test_store().await;
+        let instance = "test-delete";
+
+        // Create instance with execution
+        test_create_execution(&store, instance, "DeleteTest", "1.0.0", "{}", None, None)
+            .await
+            .unwrap();
+
+        // Verify exists
+        assert!(!ProviderAdmin::list_instances(&store).await.unwrap().is_empty());
+        assert!(!ProviderAdmin::list_executions(&store, instance).await.unwrap().is_empty());
+
+        // Delete execution 1
+        ProviderAdmin::delete_execution(&store, instance, 1).await.unwrap();
+        
+        // Verify execution gone
+        assert!(ProviderAdmin::list_executions(&store, instance).await.unwrap().is_empty());
+        // Instance still exists in instances table
+        assert!(!ProviderAdmin::list_instances(&store).await.unwrap().is_empty());
+
+        // Delete instance
+        ProviderAdmin::delete_instance(&store, instance).await.unwrap();
+
+        // Verify all gone
+        assert!(ProviderAdmin::list_instances(&store).await.unwrap().is_empty());
+        assert!(ProviderAdmin::list_executions(&store, instance).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_list_detailed() {
+        let store = create_test_store().await;
+        
+        // Create sequentially
+        for i in 1..=3 {
+            test_create_execution(&store, &format!("inst-{i}"), "DetailedTest", "1.0.0", "{}", None, None)
+                .await
+                .unwrap();
+        }
+
+        let detailed = ProviderAdmin::list_instances_detailed(&store, 10, 0, None).await.unwrap();
+        assert_eq!(detailed.len(), 3);
+        // With secondary sort on instance_id DESC: inst-3, inst-2, inst-1
+        assert_eq!(detailed[0].instance_id, "inst-3");
+        assert_eq!(detailed[0].status, "Running");
+        assert_eq!(detailed[1].instance_id, "inst-2");
+        assert_eq!(detailed[2].instance_id, "inst-1");
+
+        let execs = ProviderAdmin::list_executions_detailed(&store, "inst-1").await.unwrap();
+        assert_eq!(execs.len(), 1);
+        assert_eq!(execs[0].execution_id, 1);
+        assert_eq!(execs[0].status, "Running");
     }
 }

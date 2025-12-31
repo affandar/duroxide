@@ -2098,4 +2098,89 @@ pub trait ProviderAdmin: Any + Send + Sync {
     /// }
     /// ```
     async fn get_queue_depths(&self) -> Result<QueueDepths, ProviderError>;
+
+    // ===== Deletion (P0) =====
+
+    /// Delete an instance and all associated data.
+    ///
+    /// # What This Does
+    ///
+    /// Permanently removes:
+    /// - Instance record
+    /// - All execution records
+    /// - All event history
+    /// - Any active locks
+    /// - Any pending messages in orchestrator queue
+    ///
+    /// # Parameters
+    ///
+    /// * `instance` - Instance ID to delete
+    async fn delete_instance(&self, instance: &str) -> Result<(), ProviderError> {
+        Err(ProviderError::permanent(
+            "delete_instance",
+            format!("not supported for instance: {instance}"),
+        ))
+    }
+
+    /// Delete a specific execution and its history.
+    ///
+    /// # What This Does
+    ///
+    /// Permanently removes:
+    /// - Execution record
+    /// - Event history for this execution
+    ///
+    /// # Parameters
+    ///
+    /// * `instance` - Instance ID
+    /// * `execution_id` - Execution ID to delete
+    async fn delete_execution(&self, instance: &str, execution_id: u64) -> Result<(), ProviderError> {
+        Err(ProviderError::permanent(
+            "delete_execution",
+            format!("not supported for instance: {instance}, execution: {execution_id}"),
+        ))
+    }
+
+    // ===== Bulk Retrieval (P1) =====
+
+    /// List instances with comprehensive metadata.
+    ///
+    /// Optimized for dashboards to avoid N+1 queries.
+    async fn list_instances_detailed(
+        &self,
+        limit: usize,
+        offset: usize,
+        status_filter: Option<&str>
+    ) -> Result<Vec<InstanceInfo>, ProviderError> {
+        // Default implementation (inefficient)
+        let all_ids = if let Some(status) = status_filter {
+            self.list_instances_by_status(status).await?
+        } else {
+            self.list_instances().await?
+        };
+
+        let ids = all_ids.into_iter().skip(offset).take(limit);
+        let mut infos = Vec::new();
+        for id in ids {
+            if let Ok(info) = self.get_instance_info(&id).await {
+                infos.push(info);
+            }
+        }
+        Ok(infos)
+    }
+
+    /// List all executions for an instance with metadata.
+    ///
+    /// Optimized for dashboards to avoid N+1 queries.
+    async fn list_executions_detailed(&self, instance: &str) -> Result<Vec<ExecutionInfo>, ProviderError> {
+        // Default implementation (inefficient)
+        let ids = self.list_executions(instance).await?;
+        let mut infos = Vec::new();
+        for id in ids {
+            if let Ok(info) = self.get_execution_info(instance, id).await {
+                infos.push(info);
+            }
+        }
+        Ok(infos)
+    }
 }
