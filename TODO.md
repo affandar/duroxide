@@ -5,6 +5,10 @@
 - Fetch item batch in dispatchers!!
 - Size limits 
 - RaiseEvent pub/sub
+- **Provider validation test for orphan activities** (issue #37)
+  - Test scenario: instance deleted while activities in worker queue (without `CancelInstance`)
+  - Blocked: Provider trait needs `delete_instance` or `archive_instance` method first
+  - Related: `proposals/activity-cancellation-queue-flag.md`
 - **Nested Select2 Support** - Enable `select2(select2(a, b), c)` composition
   - Currently `select2` only accepts `DurableFuture`, not `SelectFuture`
   - Options: (1) Add trait for select2 args that both types implement, (2) Add `SelectFuture::into_selectable()` wrapper
