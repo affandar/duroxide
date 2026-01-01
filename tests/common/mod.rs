@@ -153,6 +153,7 @@ pub async fn test_create_execution(
                 orchestration_version: Some(version.to_string()),
                 ..Default::default()
             },
+            vec![], // no cancelled activities
         )
         .await
         .map_err(|e| e.to_string())?;

@@ -106,7 +106,7 @@ async fn test_sqlite_provider_basic() {
     };
 
     store
-        .ack_orchestration_item(&lock_token, 1, history_delta, vec![], vec![], metadata)
+        .ack_orchestration_item(&lock_token, 1, history_delta, vec![], vec![], metadata, vec![])
         .await
         .expect("Failed to ack orchestration item");
 
@@ -170,6 +170,7 @@ async fn test_execution_status_completed() {
             vec![],
             vec![],
             metadata,
+            vec![],
         )
         .await
         .unwrap();
@@ -243,6 +244,7 @@ async fn test_execution_status_failed() {
             vec![],
             vec![],
             metadata,
+            vec![],
         )
         .await
         .unwrap();
@@ -309,7 +311,7 @@ async fn test_sqlite_basic_persistence() {
         let store: Arc<dyn Provider> = Arc::new(store);
 
         // Dequeue and verify items
-        let (item1, token1, _, _) = store
+        let (item1, token1, _) = store
             .fetch_work_item(Duration::from_secs(30), Duration::ZERO)
             .await
             .expect("Fetch should succeed")
@@ -322,7 +324,7 @@ async fn test_sqlite_basic_persistence() {
             _ => panic!("Expected ActivityExecute"),
         }
 
-        let (item2, token2, _, _) = store
+        let (item2, token2, _) = store
             .fetch_work_item(Duration::from_secs(30), Duration::ZERO)
             .await
             .expect("Fetch should succeed")
@@ -456,6 +458,7 @@ async fn test_sqlite_file_concurrent_access() {
                     orchestration_version: Some("1.0.0".to_string()),
                     ..Default::default()
                 },
+                vec![],
             )
             .await
             .expect("Failed to ack orchestration item");
@@ -675,6 +678,7 @@ async fn test_sqlite_provider_transactional() {
             worker_items,
             vec![],
             ExecutionMetadata::default(),
+            vec![],
         )
         .await
         .expect("Failed to ack");
@@ -685,7 +689,7 @@ async fn test_sqlite_provider_transactional() {
 
     // Verify all worker items enqueued
     let mut worker_count = 0;
-    while let Some((work_item, token, _, _)) = store
+    while let Some((work_item, token, _)) = store
         .fetch_work_item(Duration::from_secs(30), Duration::ZERO)
         .await
         .unwrap()
@@ -761,6 +765,7 @@ async fn test_sqlite_provider_timer_queue() {
             vec![],
             vec![],
             ExecutionMetadata::default(),
+            vec![],
         )
         .await
         .expect("Failed to ack");
@@ -830,6 +835,7 @@ async fn test_execution_status_running() {
             vec![],
             vec![],
             ExecutionMetadata::default(),
+            vec![],
         )
         .await
         .unwrap();
@@ -901,6 +907,7 @@ async fn test_execution_output_captured_on_continue_as_new() {
             vec![],
             vec![],
             ExecutionMetadata::default(),
+            vec![],
         )
         .await
         .unwrap();

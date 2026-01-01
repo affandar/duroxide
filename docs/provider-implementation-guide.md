@@ -63,36 +63,74 @@ for mut event in history_delta {
 
 ---
 
-## ExecutionState for Activity Cancellation
+## Activity Cancellation via Lock Stealing
 
-The `ExecutionState` enum enables activity cancellation support. Providers return this from
-`fetch_work_item()` and `renew_work_item_lock()` to indicate the orchestration's current state.
+Activity cancellation is implemented via **lock stealing**: when the runtime decides an in-flight
+activity should be cancelled, it removes/invalidates the activity's entry from the worker queue.
+The worker detects this when its lock renewal or ack fails, triggering cooperative cancellation.
+
+### How It Works
+
+1. **Runtime decides to cancel**: When an orchestration terminates (Completed, Failed, ContinuedAsNew)
+   or a `select/select2` determines a loser, the runtime collects `ScheduledActivityIdentifier`s
+   for in-flight activities that should be cancelled.
+
+2. **Lock stealing via ack**: The runtime passes these identifiers to `ack_orchestration_item(..., cancelled_activities)`.
+   The provider deletes matching entries from the worker queue in the same transaction.
+
+3. **Worker detects cancellation**: The worker's periodic lock renewal (`renew_work_item_lock`) fails
+   because the entry no longer exists. This signals the worker to trigger the activity's cancellation token.
+
+4. **Cooperative shutdown**: The activity checks `ctx.cancelled()` and exits gracefully.
+
+### ScheduledActivityIdentifier
 
 ```rust
-use duroxide::providers::ExecutionState;
+use duroxide::providers::ScheduledActivityIdentifier;
 
-// Orchestration is running - execute activity normally
-ExecutionState::Running
-
-// Orchestration reached terminal state - activity result won't be observed
-ExecutionState::Terminal { status: "Completed".to_string() }
-ExecutionState::Terminal { status: "Failed".to_string() }
-ExecutionState::Terminal { status: "ContinuedAsNew".to_string() }
-
-// Orchestration instance or execution record not found
-ExecutionState::Missing
+// Uniquely identifies an activity for cancellation
+ScheduledActivityIdentifier {
+    instance: String,      // Instance ID of the orchestration
+    execution_id: u64,     // Execution ID within the instance
+    activity_id: u64,      // Activity ID (event_id of ActivityScheduled event)
+}
 ```
 
-### How the Worker Dispatcher Uses ExecutionState
+### Provider Requirements
 
-1. **On `fetch_work_item()`:** If state is `Terminal` or `Missing`, the dispatcher skips
-   activity execution and acks with `completion: None` to clean up the work item.
+1. **Store activity identity on enqueue**: When enqueueing `ActivityExecute` work items,
+   store `(instance_id, execution_id, activity_id)` alongside the work item.
 
-2. **On `renew_work_item_lock()`:** If state becomes `Terminal` or `Missing` during execution,
-   the dispatcher triggers the activity's cancellation token, allowing cooperative shutdown.
+2. **Batch delete on ack**: In `ack_orchestration_item`, delete all entries matching
+   the `cancelled_activities` list atomically within the same transaction.
 
-3. **After grace period:** If the activity doesn't respond to cancellation within the grace
-   period (default 30s), the dispatcher aborts the activity task.
+3. **Fail ack when entry missing**: `ack_work_item` must return a **permanent error**
+   if the entry was already deleted (lock stolen).
+
+4. **Fail renewal when entry missing**: `renew_work_item_lock` must return an error
+   if the entry no longer exists.
+
+### Example Schema (SQL)
+
+```sql
+-- Worker queue with activity identity columns
+CREATE TABLE worker_queue (
+    id INTEGER PRIMARY KEY,
+    work_item TEXT NOT NULL,
+    visible_at INTEGER NOT NULL,
+    lock_token TEXT,
+    locked_until INTEGER,
+    attempt_count INTEGER DEFAULT 0,
+    -- Activity identity for lock-stealing cancellation
+    instance_id TEXT,
+    execution_id INTEGER,
+    activity_id INTEGER
+);
+
+-- Index for efficient cancellation lookups
+CREATE INDEX idx_worker_queue_activity_identity 
+ON worker_queue (instance_id, execution_id, activity_id);
+```
 
 ---
 
@@ -142,15 +180,17 @@ impl Provider for MyProvider {
         worker_items: Vec<WorkItem>,
         orchestrator_items: Vec<WorkItem>,
         metadata: ExecutionMetadata,
+        cancelled_activities: Vec<ScheduledActivityIdentifier>,
     ) -> Result<(), ProviderError> {
         // ALL operations must be atomic (single transaction):
         // 1. Idempotently create execution row for the explicit execution_id (INSERT OR IGNORE)
         // 2. Update instances.current_execution_id = MAX(current_execution_id, execution_id)
         // 3. Append history_delta to the event log for that execution_id
         // 4. Update execution status/output from metadata (DON'T inspect events!)
-        // 5. Enqueue worker_items to worker queue
+        // 5. Enqueue worker_items to worker queue (storing activity identity columns for cancellation)
         // 6. Enqueue orchestrator_items to orchestrator queue (may include TimerFired with visible_at delay)
-        // 7. Delete locked messages (release lock)
+        // 7. Delete matching entries from worker_queue for cancelled_activities (lock stealing)
+        // 8. Delete locked messages (release lock)
         
         todo!("See detailed docs below")
     }
@@ -198,25 +238,17 @@ impl Provider for MyProvider {
         &self,
         lock_timeout: Duration,
         poll_timeout: Duration,
-    ) -> Result<Option<(WorkItem, String, u32, ExecutionState)>, ProviderError> {
+    ) -> Result<Option<(WorkItem, String, u32)>, ProviderError> {
         // Find next unlocked item
         // Lock it with unique token
         // Increment and return attempt_count
-        // Check orchestration execution state for cancellation support
-        // Return Ok(Some((item, token, attempt_count, state))) if found, Ok(None) if empty
+        // Return Ok(Some((item, token, attempt_count))) if found, Ok(None) if empty
         // Item stays in queue until acked
         //
         // poll_timeout: Maximum time to wait for work. Providers that support
         // long polling MAY block up to this duration. Short-polling providers
         // should ignore this and return immediately.
         //
-        // attempt_count: Number of times this item has been fetched (for poison detection)
-        //
-        // ExecutionState: Orchestration state for the activity's parent execution:
-        //   - Running: Orchestration is running, activity should proceed normally
-        //   - Terminal { status }: Orchestration is terminal, activity result won't be observed
-        //   - Missing: Orchestration/execution record not found
-        
         todo!()
     }
     
@@ -224,13 +256,15 @@ impl Provider for MyProvider {
         // Atomically:
         // 1. Delete item from worker queue (WHERE lock_token = token)
         // 2. If completion is Some, enqueue to orchestrator queue
-        //    If completion is None, just delete (used when orchestration is terminal/missing)
         // MUST be atomic - prevents lost completions or duplicate work
+        //
+        // IMPORTANT: Returns a **permanent error** if the entry is missing (lock stolen).
+        // This signals to the worker that the activity was cancelled via lock stealing.
         
         todo!()
     }
     
-    async fn renew_work_item_lock(&self, token: &str, extend_for: Duration) -> Result<ExecutionState, ProviderError> {
+    async fn renew_work_item_lock(&self, token: &str, extend_for: Duration) -> Result<(), ProviderError> {
         // Extend lock timeout for in-flight activity
         // Called automatically by worker dispatcher for long-running activities
         // 
@@ -238,12 +272,12 @@ impl Provider for MyProvider {
         //    SET locked_until = now() + extend_for
         //    WHERE lock_token = token AND locked_until > now()
         //
-        // 2. Check orchestration execution state:
-        //    - Return ExecutionState::Running if still running
-        //    - Return ExecutionState::Terminal { status } if terminal
-        //    - Return ExecutionState::Missing if instance/execution not found
+        // 2. Return Ok(()) if renewal succeeded
         //
-        // Return error if token invalid/expired
+        // 3. Return an error if entry is missing (indicates lock was stolen for cancellation)
+        //    or if token is invalid/expired
+        //
+        // The worker dispatcher uses renewal failure to trigger activity cancellation.
         
         todo!()
     }
@@ -323,20 +357,14 @@ impl Provider for MyProvider {
 
 Providers must return `ProviderError` instead of `String` to enable smart retry logic in the runtime. The runtime uses `ProviderError::is_retryable()` to decide whether to retry operations automatically.
 
-**Special case: `fetch_work_item()` returns `Result<Option<(WorkItem, String, u32, ExecutionState)>, ProviderError>`**
+**Special case: `fetch_work_item()` returns `Result<Option<(WorkItem, String, u32)>, ProviderError>`**
 
 The `fetch_work_item()` method has a special return type that distinguishes between:
 - Empty queue: `Ok(None)` - No items available (normal, not an error)
-- Success: `Ok(Some((item, token, attempt_count, state)))` - Successfully fetched and locked an item
+- Success: `Ok(Some((item, token, attempt_count)))` - Successfully fetched and locked an item
 - Storage failure: `Err(ProviderError)` - Database error, connection failure, etc.
 
-The `ExecutionState` parameter enables activity cancellation support:
-- `ExecutionState::Running` - Orchestration is running, execute activity normally
-- `ExecutionState::Terminal { status }` - Orchestration is terminal, skip activity (ack with None)
-- `ExecutionState::Missing` - Instance/execution not found, skip activity (ack with None)
-
-This allows the runtime to properly handle backoff (empty queue) vs retry (storage errors),
-and skip activities for terminal orchestrations without wasting resources.
+This allows the runtime to properly handle backoff (empty queue) vs retry (storage errors).
 
 ### ProviderError Structure
 
@@ -861,12 +889,23 @@ IF metadata.status IS NOT NULL:
 
 // (No implicit next-execution creation here; runtime controls execution_id explicitly)
 
-// 8. Enqueue worker items
+// 8. Enqueue worker items (with activity identity for lock-stealing cancellation)
 FOR item IN worker_items:
     work_json = serialize(item)
     now_ms = current_time_millis()
-    INSERT INTO worker_queue (work_item, visible_at, lock_token, locked_until, attempt_count, created_at)
-    VALUES (work_json, now_ms, NULL, NULL, 0, NOW())
+    
+    // Extract activity identity for cancellation support
+    // Only ActivityExecute items have activity identity
+    (activity_instance_id, activity_execution_id, activity_id) = 
+        IF item IS ActivityExecute:
+            (item.instance_id, item.execution_id, item.activity_id)
+        ELSE:
+            (NULL, NULL, NULL)
+    
+    INSERT INTO worker_queue (work_item, visible_at, lock_token, locked_until, attempt_count, 
+                              instance_id, execution_id, activity_id, created_at)
+    VALUES (work_json, now_ms, NULL, NULL, 0, 
+            activity_instance_id, activity_execution_id, activity_id, NOW())
 
 // 9. Enqueue orchestrator items (may include TimerFired with delayed visibility)
 FOR item IN orchestrator_items:
@@ -890,7 +929,17 @@ FOR item IN orchestrator_items:
     INSERT INTO orchestrator_queue (instance_id, work_item, visible_at, lock_token, locked_until, created_at)
     VALUES (target_instance, work_json, visible_at, NULL, NULL, NOW())
 
-// 10. Release lock (delete acknowledged messages)
+// 10. Delete cancelled activities from worker queue (lock stealing)
+FOR cancelled IN cancelled_activities:
+    DELETE FROM worker_queue 
+    WHERE instance_id = cancelled.instance
+      AND execution_id = cancelled.execution_id 
+      AND activity_id = cancelled.activity_id
+// Note: Missing entries are silently ignored (idempotent operation)
+// This enables cooperative activity cancellation - workers detect the deletion
+// when their lock renewal fails.
+
+// 11. Release lock (delete acknowledged messages)
 // Delete messages that were tagged with our lock_token
 DELETE FROM orchestrator_queue WHERE lock_token = lock_token
 
@@ -899,10 +948,11 @@ RETURN Ok(())
 ```
 
 **Critical:**
-- All 10 steps must be in ONE transaction
+- All 11 steps must be in ONE transaction
 - Lock validation MUST occur before any other operations
 - If lock expired or invalid, ROLLBACK immediately
 - Instance lock MUST be deleted before committing (prevents stale locks)
+- Cancelled activity deletion (Step 10) enables lock-stealing cancellation
 - If ANY step fails, ROLLBACK everything
 - Never partially commit
 
@@ -1051,8 +1101,19 @@ If deserialization fails for queue items or history events, the provider MUST ha
 ```
 work_json = serialize(item)
 now_ms = current_timestamp_ms()
-INSERT INTO worker_queue (work_item, visible_at, lock_token, locked_until, attempt_count)
-VALUES (work_json, now_ms, NULL, NULL, 0)
+
+// Extract activity identity for cancellation support (lock-stealing)
+// Only ActivityExecute items have activity identity
+(activity_instance_id, activity_execution_id, activity_id) = 
+    IF item IS ActivityExecute:
+        (item.instance_id, item.execution_id, item.activity_id)
+    ELSE:
+        (NULL, NULL, NULL)
+
+INSERT INTO worker_queue (work_item, visible_at, lock_token, locked_until, attempt_count,
+                          instance_id, execution_id, activity_id)
+VALUES (work_json, now_ms, NULL, NULL, 0,
+        activity_instance_id, activity_execution_id, activity_id)
 ```
 
 **fetch_work_item(lock_timeout: Duration, poll_timeout: Duration):**
@@ -1085,36 +1146,20 @@ WHERE id = row.id
 COMMIT
 item = deserialize_workitem(row.work_item)
 
-// Check orchestration execution state for cancellation support
-exec_state = IF item is ActivityExecute:
-    instance_id = item.instance
-    execution_id = item.execution_id
-    exec_row = SELECT status FROM executions 
-               WHERE instance_id = instance_id AND execution_id = execution_id
-    IF exec_row IS NULL:
-        ExecutionState::Missing
-    ELSE IF exec_row.status == 'Running':
-        ExecutionState::Running
-    ELSE:
-        ExecutionState::Terminal { status: exec_row.status }
-ELSE:
-    ExecutionState::Running  // Non-activity items always report Running
-
-RETURN Ok(Some((item, lock_token, attempt_count, exec_state)))
+RETURN Ok(Some((item, lock_token, attempt_count)))
 ```
 
 **⚠️ CRITICAL: Error Handling for fetch_work_item**
 
-`fetch_work_item()` MUST return `Result<Option<(WorkItem, String, u32, ExecutionState)>, ProviderError>`:
+`fetch_work_item()` MUST return `Result<Option<(WorkItem, String, u32)>, ProviderError>`:
 - `Ok(None)` - Queue is empty (normal case, not an error)
-- `Ok(Some((item, token, attempt_count, state)))` - Successfully fetched and locked an item
+- `Ok(Some((item, token, attempt_count)))` - Successfully fetched and locked an item
 - `Err(ProviderError)` - Storage operation failed (database error, connection lost, etc.)
 
 **Why this matters:**
 - Allows runtime to distinguish between empty queue (back off) and storage failures (retry)
 - Enables proper error propagation and retry logic
 - Prevents silent failures that could cause worker dispatcher to hang
-- ExecutionState enables skipping activities for terminal orchestrations
 
 **Error classification:**
 - Database busy/locked → `ProviderError::retryable("fetch_work_item", ...)`
@@ -1132,10 +1177,10 @@ Worker items MUST be dequeued in FIFO (first-in-first-out) order based on insert
 
 **⚠️ CRITICAL: Worker Peek-Lock Semantics**
 
-When `fetch_work_item()` returns `Ok(Some((item, token, attempt_count, state)))`, it MUST:
+When `fetch_work_item()` returns `Ok(Some((item, token, attempt_count)))`, it MUST:
 - Lock the item (set lock_token and locked_until)
 - Keep the item in the queue (don't delete it)
-- Return item + lock_token + attempt_count + execution_state
+- Return item + lock_token + attempt_count
 - Only delete the item when `ack_work_item()` is called with the lock_token
 
 **Why this matters:**
@@ -1148,10 +1193,14 @@ When `fetch_work_item()` returns `Ok(Some((item, token, attempt_count, state)))`
 BEGIN TRANSACTION
 
 // Step 1: Delete item from worker queue
-DELETE FROM worker_queue WHERE lock_token = token
+// Returns error if entry missing (lock stolen for cancellation)
+deleted_count = DELETE FROM worker_queue WHERE lock_token = token
+
+IF deleted_count == 0:
+    ROLLBACK
+    RETURN Err(ProviderError::permanent("ack_work_item", "Work item not found (lock stolen)"))
 
 // Step 2: If completion is Some, enqueue to orchestrator queue
-// If completion is None, just delete (orchestration was terminal/missing)
 IF completion IS NOT NULL:
     work_json = serialize(completion)
     target_instance = extract_instance(completion)
@@ -1160,8 +1209,17 @@ IF completion IS NOT NULL:
     VALUES (target_instance, work_json, NOW(), NULL, NULL)
 
 COMMIT TRANSACTION
-RETURN Ok(())  // Idempotent
+RETURN Ok(())
 ```
+
+**⚠️ CRITICAL: Worker Ack Must Fail When Entry Missing**
+
+`ack_work_item()` MUST return a **permanent error** if the work item entry is not found. This indicates the lock was stolen for activity cancellation.
+
+**Why this matters:**
+- Signals to the worker that the activity was cancelled via lock stealing
+- Prevents the worker from proceeding with completion that won't be observed
+- Enables cooperative activity cancellation
 
 **⚠️ CRITICAL: Worker Ack Atomicity**
 
@@ -1188,44 +1246,33 @@ If a worker dequeues an item but crashes before acking (loses the lock token), t
 - Prevents permanent loss of work items
 - Enables at-least-once processing semantics
 
-### Method 4: renew_work_item_lock (Lock Renewal with Cancellation Support)
+### Method 4: renew_work_item_lock (Lock Renewal for Long-Running Activities)
 
-**Purpose:** Extend lock timeout for in-progress activities and check orchestration state for cancellation.
+**Purpose:** Extend lock timeout for in-progress activities. Failure indicates the activity was cancelled.
 
 **Implementation:**
 ```
-async fn renew_work_item_lock(token: &str, extend_for: Duration) -> Result<ExecutionState, ProviderError> {
+async fn renew_work_item_lock(token: &str, extend_for: Duration) -> Result<(), ProviderError> {
     // extend_for is a Duration - convert to milliseconds for storage
     now_ms = current_timestamp_ms()
     locked_until = now_ms + extend_for.as_millis()
     
-    // Get work item to find instance/execution
-    work_row = SELECT work_item FROM worker_queue WHERE lock_token = token AND locked_until > now_ms
+    // Renew the lock - returns error if entry missing (cancelled via lock stealing)
+    result = UPDATE worker_queue
+             SET locked_until = locked_until
+             WHERE lock_token = token AND locked_until > now_ms
     
-    IF work_row IS NULL:
-        RETURN Err(ProviderError::permanent("Lock token invalid or expired"))
+    IF result.rows_affected == 0:
+        // Entry missing (lock stolen) or lock expired
+        RETURN Err(ProviderError::permanent("Lock token invalid, expired, or cancelled"))
     
-    item = deserialize_workitem(work_row.work_item)
-    
-    // Renew the lock
-    UPDATE worker_queue
-    SET locked_until = locked_until
-    WHERE lock_token = token
-    
-    // Check orchestration execution state
-    IF item is ActivityExecute:
-        exec_row = SELECT status FROM executions 
-                   WHERE instance_id = item.instance AND execution_id = item.execution_id
-        IF exec_row IS NULL:
-            RETURN Ok(ExecutionState::Missing)
-        ELSE IF exec_row.status == 'Running':
-            RETURN Ok(ExecutionState::Running)
-        ELSE:
-            RETURN Ok(ExecutionState::Terminal { status: exec_row.status })
-    
-    RETURN Ok(ExecutionState::Running)
+    RETURN Ok(())
 }
 ```
+
+**⚠️ CRITICAL: Renewal Failure Indicates Cancellation**
+
+When `renew_work_item_lock()` returns an error because the entry is missing (deleted via lock stealing in `ack_orchestration_item`), the worker dispatcher interprets this as activity cancellation and triggers the activity's cancellation token.
 
 **Called By:**
 - Worker dispatcher automatically for all in-flight activities
@@ -1238,6 +1285,7 @@ async fn renew_work_item_lock(token: &str, extend_for: Duration) -> Result<Execu
 - Enables activities that run longer than initial lock timeout
 - Prevents lock expiration for legitimate long-running work
 - Stops automatically when activity completes or worker crashes
+- **Detects activity cancellation via lock stealing** - worker triggers cancellation token on failure
 - Graceful recovery: if worker dies, renewal stops and lock expires naturally
 
 ---

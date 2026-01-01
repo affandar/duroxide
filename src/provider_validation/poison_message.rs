@@ -52,6 +52,7 @@ pub async fn orchestration_attempt_count_starts_at_one(factory: &dyn ProviderFac
             vec![],
             vec![],
             ExecutionMetadata::default(),
+            vec![],
         )
         .await
         .expect("ack should succeed");
@@ -126,6 +127,7 @@ pub async fn orchestration_attempt_count_increments_on_refetch(factory: &dyn Pro
             vec![],
             vec![],
             ExecutionMetadata::default(),
+            vec![],
         )
         .await
         .expect("ack should succeed");
@@ -151,7 +153,7 @@ pub async fn worker_attempt_count_starts_at_one(factory: &dyn ProviderFactory) {
         .expect("enqueue should succeed");
 
     // Fetch the item
-    let (item, token, attempt_count, _) = provider
+    let (item, token, attempt_count) = provider
         .fetch_work_item(lock_timeout, Duration::ZERO)
         .await
         .expect("fetch should succeed")
@@ -197,7 +199,7 @@ pub async fn worker_attempt_count_increments_on_lock_expiry(factory: &dyn Provid
         .expect("enqueue should succeed");
 
     // First fetch with short lock timeout - attempt_count = 1
-    let (_item1, _token1, attempt_count1, _) = provider
+    let (_item1, _token1, attempt_count1) = provider
         .fetch_work_item(short_timeout, Duration::ZERO)
         .await
         .expect("fetch should succeed")
@@ -208,7 +210,7 @@ pub async fn worker_attempt_count_increments_on_lock_expiry(factory: &dyn Provid
     tokio::time::sleep(Duration::from_millis(1100)).await;
 
     // Second fetch after lock expiry - attempt_count = 2
-    let (_item2, token2, attempt_count2, _) = provider
+    let (_item2, token2, attempt_count2) = provider
         .fetch_work_item(short_timeout, Duration::ZERO)
         .await
         .expect("fetch should succeed")
@@ -264,7 +266,7 @@ pub async fn attempt_count_is_per_message(factory: &dyn ProviderFactory) {
         .expect("enqueue should succeed");
 
     // Fetch first item
-    let (item1, token1, attempt1, _) = provider
+    let (item1, token1, attempt1) = provider
         .fetch_work_item(lock_timeout, Duration::ZERO)
         .await
         .expect("fetch should succeed")
@@ -272,7 +274,7 @@ pub async fn attempt_count_is_per_message(factory: &dyn ProviderFactory) {
     assert_eq!(attempt1, 1, "First item first fetch should have attempt_count = 1");
 
     // Fetch second item
-    let (item2, token2, attempt2, _) = provider
+    let (item2, token2, attempt2) = provider
         .fetch_work_item(lock_timeout, Duration::ZERO)
         .await
         .expect("fetch should succeed")
@@ -338,7 +340,7 @@ pub async fn abandon_work_item_ignore_attempt_decrements(factory: &dyn ProviderF
         .expect("enqueue should succeed");
 
     // First fetch - attempt_count = 1
-    let (_item1, token1, attempt1, _) = provider
+    let (_item1, token1, attempt1) = provider
         .fetch_work_item(lock_timeout, Duration::ZERO)
         .await
         .expect("fetch should succeed")
@@ -352,7 +354,7 @@ pub async fn abandon_work_item_ignore_attempt_decrements(factory: &dyn ProviderF
         .expect("abandon should succeed");
 
     // Second fetch - attempt_count = 2
-    let (_item2, token2, attempt2, _) = provider
+    let (_item2, token2, attempt2) = provider
         .fetch_work_item(lock_timeout, Duration::ZERO)
         .await
         .expect("fetch should succeed")
@@ -366,7 +368,7 @@ pub async fn abandon_work_item_ignore_attempt_decrements(factory: &dyn ProviderF
         .expect("abandon with ignore_attempt should succeed");
 
     // Third fetch - attempt_count = 2 (1 stored + 1 from new fetch)
-    let (_item3, token3, attempt3, _) = provider
+    let (_item3, token3, attempt3) = provider
         .fetch_work_item(lock_timeout, Duration::ZERO)
         .await
         .expect("fetch should succeed")
@@ -463,6 +465,7 @@ pub async fn abandon_orchestration_item_ignore_attempt_decrements(factory: &dyn 
             vec![],
             vec![],
             ExecutionMetadata::default(),
+            vec![],
         )
         .await
         .expect("ack should succeed");
@@ -488,7 +491,7 @@ pub async fn ignore_attempt_never_goes_negative(factory: &dyn ProviderFactory) {
         .expect("enqueue should succeed");
 
     // First fetch - attempt_count = 1
-    let (_item1, token1, attempt1, _) = provider
+    let (_item1, token1, attempt1) = provider
         .fetch_work_item(lock_timeout, Duration::ZERO)
         .await
         .expect("fetch should succeed")
@@ -502,7 +505,7 @@ pub async fn ignore_attempt_never_goes_negative(factory: &dyn ProviderFactory) {
         .expect("abandon with ignore_attempt should succeed");
 
     // Second fetch - attempt_count = 1 (0 + 1)
-    let (_item2, token2, attempt2, _) = provider
+    let (_item2, token2, attempt2) = provider
         .fetch_work_item(lock_timeout, Duration::ZERO)
         .await
         .expect("fetch should succeed")
@@ -516,7 +519,7 @@ pub async fn ignore_attempt_never_goes_negative(factory: &dyn ProviderFactory) {
         .expect("abandon with ignore_attempt should succeed");
 
     // Third fetch - attempt_count = 1 (max(0, 0-1) + 1 = 0 + 1 = 1)
-    let (_item3, token3, attempt3, _) = provider
+    let (_item3, token3, attempt3) = provider
         .fetch_work_item(lock_timeout, Duration::ZERO)
         .await
         .expect("fetch should succeed")
@@ -639,6 +642,7 @@ pub async fn max_attempt_count_across_message_batch(factory: &dyn ProviderFactor
             vec![],
             vec![],
             ExecutionMetadata::default(),
+            vec![],
         )
         .await
         .expect("ack should succeed");

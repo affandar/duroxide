@@ -42,6 +42,7 @@ pub async fn test_atomicity_failure_rollback<F: ProviderFactory>(factory: &F) {
             vec![],
             vec![],
             ExecutionMetadata::default(),
+            vec![],
         )
         .await
         .unwrap();
@@ -82,6 +83,7 @@ pub async fn test_atomicity_failure_rollback<F: ProviderFactory>(factory: &F) {
             vec![],
             vec![],
             ExecutionMetadata::default(),
+            vec![],
         )
         .await;
 
@@ -224,6 +226,7 @@ pub async fn test_multi_operation_atomic_ack<F: ProviderFactory>(factory: &F) {
             worker_items,
             orchestrator_items,
             ExecutionMetadata::default(),
+            vec![],
         )
         .await
         .unwrap();
@@ -311,6 +314,7 @@ pub async fn test_lock_released_only_on_successful_ack<F: ProviderFactory>(facto
             vec![],
             vec![],
             ExecutionMetadata::default(),
+            vec![],
         )
         .await;
 
@@ -383,6 +387,7 @@ pub async fn test_concurrent_ack_prevention<F: ProviderFactory>(factory: &F) {
                 vec![],
                 vec![],
                 ExecutionMetadata::default(),
+                vec![],
             )
             .await
     });
@@ -408,6 +413,7 @@ pub async fn test_concurrent_ack_prevention<F: ProviderFactory>(factory: &F) {
                 vec![],
                 vec![],
                 ExecutionMetadata::default(),
+                vec![],
             )
             .await
     });

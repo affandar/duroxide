@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use std::sync::Arc;
 use std::time::Duration;
 
-use super::{ExecutionMetadata, ExecutionState, OrchestrationItem, Provider, ProviderAdmin, ProviderError, WorkItem};
+use super::{ScheduledActivityIdentifier, ExecutionMetadata, OrchestrationItem, Provider, ProviderAdmin, ProviderError, WorkItem};
 use crate::Event;
 use crate::runtime::observability::MetricsProvider;
 
@@ -108,6 +108,7 @@ impl Provider for InstrumentedProvider {
         worker_items: Vec<WorkItem>,
         orchestrator_items: Vec<WorkItem>,
         metadata: ExecutionMetadata,
+        cancelled_activities: Vec<ScheduledActivityIdentifier>,
     ) -> Result<(), ProviderError> {
         let start = std::time::Instant::now();
         let result = self
@@ -119,6 +120,7 @@ impl Provider for InstrumentedProvider {
                 worker_items,
                 orchestrator_items,
                 metadata,
+                cancelled_activities,
             )
             .await;
         let duration = start.elapsed();
@@ -182,7 +184,7 @@ impl Provider for InstrumentedProvider {
         &self,
         lock_timeout: Duration,
         poll_timeout: Duration,
-    ) -> Result<Option<(WorkItem, String, u32, ExecutionState)>, ProviderError> {
+    ) -> Result<Option<(WorkItem, String, u32)>, ProviderError> {
         let start = std::time::Instant::now();
         let result = self.inner.fetch_work_item(lock_timeout, poll_timeout).await;
         let duration = start.elapsed();
@@ -216,7 +218,7 @@ impl Provider for InstrumentedProvider {
         result
     }
 
-    async fn renew_work_item_lock(&self, token: &str, extend_for: Duration) -> Result<ExecutionState, ProviderError> {
+    async fn renew_work_item_lock(&self, token: &str, extend_for: Duration) -> Result<(), ProviderError> {
         self.inner.renew_work_item_lock(token, extend_for).await
     }
 

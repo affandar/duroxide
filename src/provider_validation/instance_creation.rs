@@ -54,6 +54,7 @@ pub async fn test_instance_creation_via_metadata<F: ProviderFactory>(factory: &F
             vec![],
             vec![],
             metadata,
+            vec![],
         )
         .await
         .unwrap();
@@ -77,7 +78,7 @@ pub async fn test_instance_creation_via_metadata<F: ProviderFactory>(factory: &F
 
     // Clean up
     provider
-        .ack_orchestration_item(&lock_token2, 1, vec![], vec![], vec![], ExecutionMetadata::default())
+        .ack_orchestration_item(&lock_token2, 1, vec![], vec![], vec![], ExecutionMetadata::default(), vec![])
         .await
         .unwrap();
 
@@ -137,6 +138,7 @@ pub async fn test_no_instance_creation_on_enqueue<F: ProviderFactory>(factory: &
                 orchestration_version: Some("1.0.0".to_string()),
                 ..Default::default()
             },
+            vec![],
         )
         .await
         .unwrap();
@@ -198,6 +200,7 @@ pub async fn test_null_version_handling<F: ProviderFactory>(factory: &F) {
             vec![],
             vec![],
             metadata,
+            vec![],
         )
         .await
         .unwrap();
@@ -216,7 +219,7 @@ pub async fn test_null_version_handling<F: ProviderFactory>(factory: &F) {
 
     // Clean up
     provider
-        .ack_orchestration_item(&lock_token2, 1, vec![], vec![], vec![], ExecutionMetadata::default())
+        .ack_orchestration_item(&lock_token2, 1, vec![], vec![], vec![], ExecutionMetadata::default(), vec![])
         .await
         .unwrap();
 
@@ -271,6 +274,7 @@ pub async fn test_sub_orchestration_instance_creation<F: ProviderFactory>(factor
                 orchestration_version: Some("1.0.0".to_string()),
                 ..Default::default()
             },
+            vec![],
         )
         .await
         .unwrap();
@@ -310,6 +314,7 @@ pub async fn test_sub_orchestration_instance_creation<F: ProviderFactory>(factor
                 orchestration_version: Some("1.5.0".to_string()),
                 ..Default::default()
             },
+            vec![],
         )
         .await
         .unwrap();
@@ -347,6 +352,7 @@ pub async fn test_sub_orchestration_instance_creation<F: ProviderFactory>(factor
             vec![],
             vec![],
             ExecutionMetadata::default(),
+            vec![],
         )
         .await
         .unwrap();

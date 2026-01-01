@@ -1,4 +1,4 @@
-use duroxide::providers::{ExecutionMetadata, ExecutionState, OrchestrationItem, Provider, ProviderError, WorkItem};
+use duroxide::providers::{ScheduledActivityIdentifier, ExecutionMetadata, OrchestrationItem, Provider, ProviderError, WorkItem};
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self, RuntimeOptions};
 use duroxide::{ActivityContext, Client, Event, OrchestrationContext, OrchestrationRegistry};
@@ -62,7 +62,7 @@ impl Provider for LongPollingSqliteProvider {
         &self,
         lock_timeout: Duration,
         poll_timeout: Duration,
-    ) -> Result<Option<(WorkItem, String, u32, ExecutionState)>, ProviderError> {
+    ) -> Result<Option<(WorkItem, String, u32)>, ProviderError> {
         self.poll_until(poll_timeout, || {
             self.inner.fetch_work_item(lock_timeout, Duration::ZERO)
         })
@@ -78,6 +78,7 @@ impl Provider for LongPollingSqliteProvider {
         worker_items: Vec<WorkItem>,
         orchestrator_items: Vec<WorkItem>,
         metadata: ExecutionMetadata,
+        cancelled_activities: Vec<ScheduledActivityIdentifier>,
     ) -> Result<(), ProviderError> {
         self.inner
             .ack_orchestration_item(
@@ -87,6 +88,7 @@ impl Provider for LongPollingSqliteProvider {
                 worker_items,
                 orchestrator_items,
                 metadata,
+                cancelled_activities,
             )
             .await
     }
@@ -125,7 +127,7 @@ impl Provider for LongPollingSqliteProvider {
         self.inner.ack_work_item(token, completion).await
     }
 
-    async fn renew_work_item_lock(&self, token: &str, extend_for: Duration) -> Result<ExecutionState, ProviderError> {
+    async fn renew_work_item_lock(&self, token: &str, extend_for: Duration) -> Result<(), ProviderError> {
         self.inner.renew_work_item_lock(token, extend_for).await
     }
 

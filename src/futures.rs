@@ -823,6 +823,12 @@ impl Future for AggregateDurableFuture {
                                 // Now accessed directly from the DurableFuture struct
                                 if let Some(source_id) = child.claimed_event_id.get() {
                                     inner.cancelled_source_ids.insert(source_id);
+
+                                    // If the loser is an activity, request provider-side cancellation.
+                                    // Timers/external/sub-orchestrations don't have worker-queue entries.
+                                    if matches!(&child.kind, Kind::Activity { .. }) {
+                                        inner.cancelled_activity_ids.insert(source_id);
+                                    }
                                 }
                             }
                         }

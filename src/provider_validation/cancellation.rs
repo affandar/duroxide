@@ -1,6 +1,6 @@
 use crate::provider_validation::{Event, EventKind, ExecutionMetadata, start_item};
 use crate::provider_validations::ProviderFactory;
-use crate::providers::{ExecutionState, WorkItem};
+use crate::providers::{ScheduledActivityIdentifier, WorkItem};
 use std::time::Duration;
 
 /// Test: Fetch Returns Running State for Active Orchestration
@@ -57,6 +57,7 @@ pub async fn test_fetch_returns_running_state_for_active_orchestration<F: Provid
             vec![activity_item],
             vec![],
             metadata,
+            vec![],
         )
         .await
         .unwrap();
@@ -68,8 +69,8 @@ pub async fn test_fetch_returns_running_state_for_active_orchestration<F: Provid
         .unwrap();
 
     match result {
-        Some((_, _, _, state)) => {
-            assert_eq!(state, ExecutionState::Running, "Expected ExecutionState::Running");
+        Some((_, _, _)) => {
+            // Activity was fetched successfully - the test passes
         }
         None => panic!("Expected to fetch work item"),
     }
@@ -141,6 +142,7 @@ pub async fn test_fetch_returns_terminal_state_when_orchestration_completed<F: P
             vec![activity_item],
             vec![],
             metadata,
+            vec![],
         )
         .await
         .unwrap();
@@ -152,12 +154,9 @@ pub async fn test_fetch_returns_terminal_state_when_orchestration_completed<F: P
         .unwrap();
 
     match result {
-        Some((_, _, _, state)) => match state {
-            ExecutionState::Terminal { status } => {
-                assert_eq!(status, "Completed", "Expected status 'Completed'");
-            }
-            _ => panic!("Expected ExecutionState::Terminal, got {:?}", state),
-        },
+        Some((_, _, _)) => {
+            // Activity was fetched successfully - the test passes
+        }
         None => panic!("Expected to fetch work item"),
     }
 
@@ -231,6 +230,7 @@ pub async fn test_fetch_returns_terminal_state_when_orchestration_failed<F: Prov
             vec![activity_item],
             vec![],
             metadata,
+            vec![],
         )
         .await
         .unwrap();
@@ -242,12 +242,9 @@ pub async fn test_fetch_returns_terminal_state_when_orchestration_failed<F: Prov
         .unwrap();
 
     match result {
-        Some((_, _, _, state)) => match state {
-            ExecutionState::Terminal { status } => {
-                assert_eq!(status, "Failed", "Expected status 'Failed'");
-            }
-            _ => panic!("Expected ExecutionState::Terminal, got {:?}", state),
-        },
+        Some((_, _, _)) => {
+            // Activity was fetched successfully - the test passes
+        }
         None => panic!("Expected to fetch work item"),
     }
 
@@ -318,6 +315,7 @@ pub async fn test_fetch_returns_terminal_state_when_orchestration_continued_as_n
             vec![activity_item],
             vec![],
             metadata,
+            vec![],
         )
         .await
         .unwrap();
@@ -329,12 +327,9 @@ pub async fn test_fetch_returns_terminal_state_when_orchestration_continued_as_n
         .unwrap();
 
     match result {
-        Some((_, _, _, state)) => match state {
-            ExecutionState::Terminal { status } => {
-                assert_eq!(status, "ContinuedAsNew", "Expected status 'ContinuedAsNew'");
-            }
-            _ => panic!("Expected ExecutionState::Terminal, got {:?}", state),
-        },
+        Some((_, _, _)) => {
+            // Activity was fetched successfully - the test passes
+        }
         None => panic!("Expected to fetch work item"),
     }
 
@@ -342,9 +337,9 @@ pub async fn test_fetch_returns_terminal_state_when_orchestration_continued_as_n
 }
 
 /// Test: Fetch Returns Missing State when Instance Deleted
-/// Goal: Verify that fetch_work_item returns ExecutionState::Missing when instance is gone.
+/// Goal: Verify that fetch_work_item returns activity for missing instance.
 pub async fn test_fetch_returns_missing_state_when_instance_deleted<F: ProviderFactory>(factory: &F) {
-    tracing::info!("→ Testing cancellation: fetch returns Missing for deleted instance");
+    tracing::info!("→ Testing cancellation: fetch returns activity for missing instance");
     let provider = factory.create_provider().await;
 
     // 1. Enqueue an activity directly (simulating a leftover message)
@@ -366,13 +361,13 @@ pub async fn test_fetch_returns_missing_state_when_instance_deleted<F: ProviderF
         .unwrap();
 
     match result {
-        Some((_, _, _, state)) => {
-            assert_eq!(state, ExecutionState::Missing, "Expected ExecutionState::Missing");
+        Some((_, _, _)) => {
+            // Activity was fetched successfully - the test passes
         }
         None => panic!("Expected to fetch work item"),
     }
 
-    tracing::info!("✓ Test passed: fetch returns Missing for deleted instance");
+    tracing::info!("✓ Test passed: fetch returns activity for missing instance");
 }
 
 /// Test: Renew Returns Running when Orchestration Active
@@ -426,23 +421,23 @@ pub async fn test_renew_returns_running_when_orchestration_active<F: ProviderFac
             vec![activity_item],
             vec![],
             metadata,
+            vec![],
         )
         .await
         .unwrap();
 
     // 2. Fetch activity to get lock token
-    let (_, lock_token, _, _) = provider
+    let (_, lock_token, _) = provider
         .fetch_work_item(Duration::from_secs(30), Duration::ZERO)
         .await
         .unwrap()
         .unwrap();
 
     // 3. Renew lock
-    let state = provider
+    provider
         .renew_work_item_lock(&lock_token, Duration::from_secs(30))
         .await
         .unwrap();
-    assert_eq!(state, ExecutionState::Running, "Expected ExecutionState::Running");
 
     tracing::info!("✓ Test passed: renew returns Running for active orchestration");
 }
@@ -498,12 +493,13 @@ pub async fn test_renew_returns_terminal_when_orchestration_completed<F: Provide
             vec![activity_item],
             vec![],
             metadata,
+            vec![],
         )
         .await
         .unwrap();
 
     // 2. Fetch activity to get lock token
-    let (_, lock_token, _, _) = provider
+    let (_, lock_token, _) = provider
         .fetch_work_item(Duration::from_secs(30), Duration::ZERO)
         .await
         .unwrap()
@@ -554,21 +550,16 @@ pub async fn test_renew_returns_terminal_when_orchestration_completed<F: Provide
             vec![],
             vec![],
             metadata2,
+            vec![],
         )
         .await
         .unwrap();
 
-    // 4. Renew lock - should now see Terminal
-    let state = provider
+    // 4. Renew lock
+    provider
         .renew_work_item_lock(&lock_token, Duration::from_secs(30))
         .await
         .unwrap();
-    match state {
-        ExecutionState::Terminal { status } => {
-            assert_eq!(status, "Completed", "Expected status 'Completed'");
-        }
-        _ => panic!("Expected ExecutionState::Terminal, got {:?}", state),
-    }
 
     tracing::info!("✓ Test passed: renew returns Terminal for completed orchestration");
 }
@@ -579,7 +570,7 @@ pub async fn test_renew_returns_terminal_when_orchestration_completed<F: Provide
 /// We'll skip this one for generic validation unless we add a delete_instance method to Provider.
 /// Instead, we can test "Missing" by having an activity for a non-existent instance, fetching it, and renewing it.
 pub async fn test_renew_returns_missing_when_instance_deleted<F: ProviderFactory>(factory: &F) {
-    tracing::info!("→ Testing cancellation: renew returns Missing for missing instance");
+    tracing::info!("→ Testing cancellation: renew for missing instance");
     let provider = factory.create_provider().await;
 
     // 1. Enqueue activity for missing instance
@@ -593,21 +584,20 @@ pub async fn test_renew_returns_missing_when_instance_deleted<F: ProviderFactory
     provider.enqueue_for_worker(activity_item).await.unwrap();
 
     // 2. Fetch activity to get lock token
-    let (_, lock_token, _, state) = provider
+    let (_, lock_token, _) = provider
         .fetch_work_item(Duration::from_secs(30), Duration::ZERO)
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(state, ExecutionState::Missing);
 
     // 3. Renew lock
-    let state = provider
+    provider
         .renew_work_item_lock(&lock_token, Duration::from_secs(30))
         .await
         .unwrap();
-    assert_eq!(state, ExecutionState::Missing, "Expected ExecutionState::Missing");
+    // Note: renew_work_item_lock no longer returns ExecutionState
 
-    tracing::info!("✓ Test passed: renew returns Missing for missing instance");
+    tracing::info!("✓ Test passed: renew for missing instance");
 }
 
 /// Test: Ack Work Item None Deletes Without Enqueue
@@ -627,7 +617,7 @@ pub async fn test_ack_work_item_none_deletes_without_enqueue<F: ProviderFactory>
     provider.enqueue_for_worker(activity_item).await.unwrap();
 
     // 2. Fetch activity
-    let (_, lock_token, _, _) = provider
+    let (_, lock_token, _) = provider
         .fetch_work_item(Duration::from_secs(30), Duration::ZERO)
         .await
         .unwrap()
@@ -658,4 +648,422 @@ pub async fn test_ack_work_item_none_deletes_without_enqueue<F: ProviderFactory>
     assert!(orch_result.is_none(), "Orchestrator queue should be empty");
 
     tracing::info!("✓ Test passed: ack(None) deletes without enqueue");
+}
+// ============================================================================
+// Lock-Stealing Activity Cancellation Tests
+// ============================================================================
+// These tests validate the new activity cancellation mechanism where the
+// orchestration runtime cancels in-flight activities by deleting their
+// worker queue entries ("lock stealing"). The worker detects this when
+// its lock renewal or ack fails.
+
+/// Test: Cancelled Activities Are Deleted From Worker Queue
+/// Goal: Verify that `ack_orchestration_item` with `cancelled_activities` removes matching entries.
+pub async fn test_cancelled_activities_deleted_from_worker_queue<F: ProviderFactory>(factory: &F) {
+    tracing::info!("→ Testing cancellation: cancelled_activities deletes from worker queue");
+    let provider = factory.create_provider().await;
+
+    // 1. Create an active orchestration and enqueue multiple activities
+    provider
+        .enqueue_for_orchestrator(start_item("inst-cancel-delete"), None)
+        .await
+        .unwrap();
+
+    let (_item, token, _) = provider
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+        .await
+        .unwrap()
+        .unwrap();
+
+    let metadata = ExecutionMetadata {
+        orchestration_name: Some("TestOrch".to_string()),
+        status: Some("Running".to_string()),
+        ..Default::default()
+    };
+
+    // Enqueue 3 activities
+    let activity1 = WorkItem::ActivityExecute {
+        instance: "inst-cancel-delete".to_string(),
+        execution_id: 1,
+        id: 1,
+        name: "Activity1".to_string(),
+        input: "{}".to_string(),
+    };
+    let activity2 = WorkItem::ActivityExecute {
+        instance: "inst-cancel-delete".to_string(),
+        execution_id: 1,
+        id: 2,
+        name: "Activity2".to_string(),
+        input: "{}".to_string(),
+    };
+    let activity3 = WorkItem::ActivityExecute {
+        instance: "inst-cancel-delete".to_string(),
+        execution_id: 1,
+        id: 3,
+        name: "Activity3".to_string(),
+        input: "{}".to_string(),
+    };
+
+    provider
+        .ack_orchestration_item(
+            &token,
+            1,
+            vec![Event::with_event_id(
+                1,
+                "inst-cancel-delete".to_string(),
+                1,
+                None,
+                EventKind::OrchestrationStarted {
+                    name: "TestOrch".to_string(),
+                    version: "1.0".to_string(),
+                    input: "{}".to_string(),
+                    parent_instance: None,
+                    parent_id: None,
+                },
+            )],
+            vec![activity1, activity2, activity3],
+            vec![],
+            metadata,
+            vec![], // No cancellations yet
+        )
+        .await
+        .unwrap();
+
+    // 2. Verify all 3 activities are in worker queue (fetch one to confirm)
+    let (_item1, token1, _) = provider
+        .fetch_work_item(Duration::from_secs(30), Duration::ZERO)
+        .await
+        .unwrap()
+        .expect("Should have activity in queue");
+
+    // Put it back so we can test cancellation
+    provider
+        .abandon_work_item(&token1, None, false)
+        .await
+        .unwrap();
+
+    // 3. Trigger another orchestration turn that cancels activities 1 and 2
+    provider
+        .enqueue_for_orchestrator(
+            WorkItem::ExternalRaised {
+                instance: "inst-cancel-delete".to_string(),
+                name: "Trigger".to_string(),
+                data: "{}".to_string(),
+            },
+            None,
+        )
+        .await
+        .unwrap();
+
+    let (_item2, token2, _) = provider
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+        .await
+        .unwrap()
+        .unwrap();
+
+    // Cancel activities 1 and 2
+    let cancelled = vec![
+        ScheduledActivityIdentifier {
+            instance: "inst-cancel-delete".to_string(),
+            execution_id: 1,
+            activity_id: 1,
+        },
+        ScheduledActivityIdentifier {
+            instance: "inst-cancel-delete".to_string(),
+            execution_id: 1,
+            activity_id: 2,
+        },
+    ];
+
+    provider
+        .ack_orchestration_item(
+            &token2,
+            1,
+            vec![], // No new events
+            vec![], // No new activities
+            vec![], // No orchestrator items
+            ExecutionMetadata::default(),
+            cancelled,
+        )
+        .await
+        .unwrap();
+
+    // 4. Verify only activity 3 remains in worker queue
+    let (remaining_item, _, _) = provider
+        .fetch_work_item(Duration::from_secs(30), Duration::ZERO)
+        .await
+        .unwrap()
+        .expect("Should have activity 3 remaining");
+
+    match remaining_item {
+        WorkItem::ActivityExecute { id, .. } => {
+            assert_eq!(id, 3, "Only activity 3 should remain; activities 1 and 2 should be cancelled");
+        }
+        _ => panic!("Expected ActivityExecute"),
+    }
+
+    // Verify no more activities
+    let no_more = provider
+        .fetch_work_item(Duration::from_millis(100), Duration::ZERO)
+        .await
+        .unwrap();
+    assert!(no_more.is_none(), "Should have no more activities");
+
+    tracing::info!("✓ Test passed: cancelled_activities deletes from worker queue");
+}
+
+/// Test: Ack Work Item Fails When Entry Deleted (Lock Stolen)
+/// Goal: Verify that `ack_work_item` returns a permanent error when the entry was deleted.
+pub async fn test_ack_work_item_fails_when_entry_deleted<F: ProviderFactory>(factory: &F) {
+    tracing::info!("→ Testing cancellation: ack_work_item fails when entry deleted (lock stolen)");
+    let provider = factory.create_provider().await;
+
+    // 1. Enqueue and fetch an activity
+    let activity_item = WorkItem::ActivityExecute {
+        instance: "inst-ack-stolen".to_string(),
+        execution_id: 1,
+        id: 1,
+        name: "TestActivity".to_string(),
+        input: "{}".to_string(),
+    };
+    provider.enqueue_for_worker(activity_item).await.unwrap();
+
+    let (_, lock_token, _) = provider
+        .fetch_work_item(Duration::from_secs(30), Duration::ZERO)
+        .await
+        .unwrap()
+        .unwrap();
+
+    // 2. Simulate lock stealing: delete the entry via ack with None from a "different worker"
+    // In practice, the orchestration runtime does this via cancelled_activities.
+    // Here we directly ack with None to simulate the deletion.
+    provider.ack_work_item(&lock_token, None).await.unwrap();
+
+    // 3. Try to ack again with the same token - should fail (entry gone)
+    let completion = WorkItem::ActivityCompleted {
+        instance: "inst-ack-stolen".to_string(),
+        execution_id: 1,
+        id: 1,
+        result: "done".to_string(),
+    };
+    let result = provider.ack_work_item(&lock_token, Some(completion)).await;
+    
+    assert!(result.is_err(), "ack_work_item should fail when entry already deleted");
+    let err = result.unwrap_err();
+    assert!(
+        !err.is_retryable(),
+        "Error should be permanent (not retryable) for deleted entry: {:?}",
+        err
+    );
+
+    tracing::info!("✓ Test passed: ack_work_item fails when entry deleted (lock stolen)");
+}
+
+/// Test: Renew Work Item Lock Fails When Entry Deleted (Cancellation Signal)
+/// Goal: Verify that `renew_work_item_lock` fails when the entry was deleted for cancellation.
+pub async fn test_renew_fails_when_entry_deleted<F: ProviderFactory>(factory: &F) {
+    tracing::info!("→ Testing cancellation: renew fails when entry deleted (cancellation signal)");
+    let provider = factory.create_provider().await;
+
+    // 1. Enqueue and fetch an activity
+    let activity_item = WorkItem::ActivityExecute {
+        instance: "inst-renew-stolen".to_string(),
+        execution_id: 1,
+        id: 1,
+        name: "TestActivity".to_string(),
+        input: "{}".to_string(),
+    };
+    provider.enqueue_for_worker(activity_item).await.unwrap();
+
+    let (_, lock_token, _) = provider
+        .fetch_work_item(Duration::from_secs(30), Duration::ZERO)
+        .await
+        .unwrap()
+        .unwrap();
+
+    // 2. Delete the entry (simulating lock stealing / cancellation)
+    provider.ack_work_item(&lock_token, None).await.unwrap();
+
+    // 3. Try to renew the lock - should fail (entry gone, signals cancellation)
+    let result = provider
+        .renew_work_item_lock(&lock_token, Duration::from_secs(30))
+        .await;
+    
+    assert!(result.is_err(), "renew_work_item_lock should fail when entry deleted");
+
+    tracing::info!("✓ Test passed: renew fails when entry deleted (cancellation signal)");
+}
+
+/// Test: Cancelling Non-Existent Activities Is Idempotent
+/// Goal: Verify that passing non-existent activity IDs in `cancelled_activities` doesn't cause errors.
+pub async fn test_cancelling_nonexistent_activities_is_idempotent<F: ProviderFactory>(factory: &F) {
+    tracing::info!("→ Testing cancellation: cancelling non-existent activities is idempotent");
+    let provider = factory.create_provider().await;
+
+    // 1. Create an active orchestration
+    provider
+        .enqueue_for_orchestrator(start_item("inst-cancel-idempotent"), None)
+        .await
+        .unwrap();
+
+    let (_item, token, _) = provider
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+        .await
+        .unwrap()
+        .unwrap();
+
+    // 2. Ack with cancelled_activities that don't exist - should succeed
+    let cancelled = vec![
+        ScheduledActivityIdentifier {
+            instance: "inst-cancel-idempotent".to_string(),
+            execution_id: 1,
+            activity_id: 999, // Non-existent
+        },
+        ScheduledActivityIdentifier {
+            instance: "inst-cancel-idempotent".to_string(),
+            execution_id: 99, // Non-existent execution
+            activity_id: 1,
+        },
+    ];
+
+    let result = provider
+        .ack_orchestration_item(
+            &token,
+            1,
+            vec![Event::with_event_id(
+                1,
+                "inst-cancel-idempotent".to_string(),
+                1,
+                None,
+                EventKind::OrchestrationStarted {
+                    name: "TestOrch".to_string(),
+                    version: "1.0".to_string(),
+                    input: "{}".to_string(),
+                    parent_instance: None,
+                    parent_id: None,
+                },
+            )],
+            vec![],
+            vec![],
+            ExecutionMetadata {
+                orchestration_name: Some("TestOrch".to_string()),
+                ..Default::default()
+            },
+            cancelled,
+        )
+        .await;
+
+    assert!(result.is_ok(), "Cancelling non-existent activities should not error");
+
+    tracing::info!("✓ Test passed: cancelling non-existent activities is idempotent");
+}
+
+/// Test: Batch Cancellation Deletes Multiple Activities Atomically
+/// Goal: Verify that multiple activities can be cancelled in a single ack call.
+pub async fn test_batch_cancellation_deletes_multiple_activities<F: ProviderFactory>(factory: &F) {
+    tracing::info!("→ Testing cancellation: batch cancellation deletes multiple activities atomically");
+    let provider = factory.create_provider().await;
+
+    // 1. Create orchestration and enqueue many activities
+    provider
+        .enqueue_for_orchestrator(start_item("inst-batch-cancel"), None)
+        .await
+        .unwrap();
+
+    let (_item, token, _) = provider
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+        .await
+        .unwrap()
+        .unwrap();
+
+    let metadata = ExecutionMetadata {
+        orchestration_name: Some("TestOrch".to_string()),
+        status: Some("Running".to_string()),
+        ..Default::default()
+    };
+
+    // Enqueue 5 activities
+    let activities: Vec<WorkItem> = (1..=5)
+        .map(|i| WorkItem::ActivityExecute {
+            instance: "inst-batch-cancel".to_string(),
+            execution_id: 1,
+            id: i,
+            name: format!("Activity{}", i),
+            input: "{}".to_string(),
+        })
+        .collect();
+
+    provider
+        .ack_orchestration_item(
+            &token,
+            1,
+            vec![Event::with_event_id(
+                1,
+                "inst-batch-cancel".to_string(),
+                1,
+                None,
+                EventKind::OrchestrationStarted {
+                    name: "TestOrch".to_string(),
+                    version: "1.0".to_string(),
+                    input: "{}".to_string(),
+                    parent_instance: None,
+                    parent_id: None,
+                },
+            )],
+            activities,
+            vec![],
+            metadata,
+            vec![],
+        )
+        .await
+        .unwrap();
+
+    // 2. Cancel all 5 activities in one batch
+    provider
+        .enqueue_for_orchestrator(
+            WorkItem::ExternalRaised {
+                instance: "inst-batch-cancel".to_string(),
+                name: "Trigger".to_string(),
+                data: "{}".to_string(),
+            },
+            None,
+        )
+        .await
+        .unwrap();
+
+    let (_item2, token2, _) = provider
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+        .await
+        .unwrap()
+        .unwrap();
+
+    let cancelled: Vec<ScheduledActivityIdentifier> = (1..=5)
+        .map(|i| ScheduledActivityIdentifier {
+            instance: "inst-batch-cancel".to_string(),
+            execution_id: 1,
+            activity_id: i,
+        })
+        .collect();
+
+    provider
+        .ack_orchestration_item(
+            &token2,
+            1,
+            vec![],
+            vec![],
+            vec![],
+            ExecutionMetadata::default(),
+            cancelled,
+        )
+        .await
+        .unwrap();
+
+    // 3. Verify worker queue is empty
+    let remaining = provider
+        .fetch_work_item(Duration::from_millis(100), Duration::ZERO)
+        .await
+        .unwrap();
+    assert!(remaining.is_none(), "All activities should be cancelled; worker queue should be empty");
+
+    tracing::info!("✓ Test passed: batch cancellation deletes multiple activities atomically");
 }

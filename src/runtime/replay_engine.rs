@@ -29,6 +29,10 @@ pub struct ReplayEngine {
     pub(crate) history_delta: Vec<Event>,
     /// Actions to dispatch after persistence
     pub(crate) pending_actions: Vec<crate::Action>,
+
+    /// ActivityScheduled event_ids for activity losers of select/select2.
+    /// These should be cancelled via provider lock stealing.
+    pub(crate) cancelled_activity_ids: Vec<u64>,
     /// Current history at start of run
     pub(crate) baseline_history: Vec<Event>,
     /// Next event_id for new events added this run
@@ -47,6 +51,7 @@ impl ReplayEngine {
             execution_id,
             history_delta: Vec::new(),
             pending_actions: Vec::new(),
+            cancelled_activity_ids: Vec::new(),
             baseline_history,
             next_event_id,
             abort_error: None,
@@ -424,7 +429,7 @@ impl ReplayEngine {
         let instance_id = self.instance.clone();
         let worker_id_owned = worker_id.to_string();
         let run_result = catch_unwind(AssertUnwindSafe(|| {
-            crate::run_turn_with_status(
+            crate::run_turn_with_status_and_cancellations(
                 working_history,
                 execution_id,
                 instance_id,
@@ -439,7 +444,7 @@ impl ReplayEngine {
             )
         }));
 
-        let (updated_history, decisions, output_opt, nondet_flag) = match run_result {
+        let (updated_history, decisions, output_opt, nondet_flag, cancelled_activity_ids) = match run_result {
             Ok(tuple) => tuple,
             Err(panic_payload) => {
                 let msg = if let Some(s) = panic_payload.downcast_ref::<&str>() {
@@ -456,6 +461,8 @@ impl ReplayEngine {
                 });
             }
         };
+
+        self.cancelled_activity_ids = cancelled_activity_ids;
 
         // If futures flagged nondeterminism (scheduling-order mismatch), fail gracefully
         if let Some(err) = nondet_flag.clone() {
@@ -529,6 +536,10 @@ impl ReplayEngine {
 
     pub fn pending_actions(&self) -> &[crate::Action] {
         &self.pending_actions
+    }
+
+    pub fn cancelled_activity_ids(&self) -> &[u64] {
+        &self.cancelled_activity_ids
     }
 
     /// Check if this run made any progress (added history)

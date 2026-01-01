@@ -91,6 +91,7 @@ pub(crate) async fn create_instance(provider: &dyn crate::providers::Provider, i
                 orchestration_version: Some("1.0.0".to_string()),
                 ..Default::default()
             },
+            vec![],
         )
         .await
         .map_err(|e| e.to_string())?;

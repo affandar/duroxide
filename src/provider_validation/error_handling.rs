@@ -10,7 +10,7 @@ pub async fn test_invalid_lock_token_on_ack<F: ProviderFactory>(factory: &F) {
 
     // Attempt to ack with non-existent lock token
     let result = provider
-        .ack_orchestration_item("invalid-token", 1, vec![], vec![], vec![], ExecutionMetadata::default())
+        .ack_orchestration_item("invalid-token", 1, vec![], vec![], vec![], ExecutionMetadata::default(), vec![])
         .await;
 
     assert!(result.is_err());
@@ -57,6 +57,7 @@ pub async fn test_duplicate_event_id_rejection<F: ProviderFactory>(factory: &F) 
             vec![],
             vec![],
             ExecutionMetadata::default(),
+            vec![],
         )
         .await
         .unwrap();
@@ -89,6 +90,7 @@ pub async fn test_duplicate_event_id_rejection<F: ProviderFactory>(factory: &F) 
             vec![],
             vec![],
             ExecutionMetadata::default(),
+            vec![],
         )
         .await;
 
@@ -173,6 +175,7 @@ pub async fn test_lock_expiration_during_ack<F: ProviderFactory>(factory: &F) {
             vec![],
             vec![],
             ExecutionMetadata::default(),
+            vec![],
         )
         .await;
 

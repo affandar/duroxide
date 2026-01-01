@@ -27,9 +27,13 @@ mod tests {
         test_abandon_work_item_with_delay,
         test_ack_only_affects_locked_messages,
         // Cancellation tests
+        test_ack_work_item_fails_when_entry_deleted,
         test_ack_work_item_none_deletes_without_enqueue,
         // Atomicity tests
         test_atomicity_failure_rollback,
+        test_batch_cancellation_deletes_multiple_activities,
+        test_cancelled_activities_deleted_from_worker_queue,
+        test_cancelling_nonexistent_activities_is_idempotent,
         test_completions_arriving_during_lock_blocked,
         test_concurrent_ack_prevention,
         test_concurrent_instance_fetching,
@@ -78,6 +82,7 @@ mod tests {
         test_multi_threaded_no_duplicate_processing,
         test_no_instance_creation_on_enqueue,
         test_null_version_handling,
+        test_renew_fails_when_entry_deleted,
         test_renew_returns_missing_when_instance_deleted,
         test_renew_returns_running_when_orchestration_active,
         test_renew_returns_terminal_when_orchestration_completed,
@@ -479,6 +484,32 @@ mod tests {
     #[tokio::test]
     async fn test_sqlite_ack_work_item_none_deletes_without_enqueue() {
         test_ack_work_item_none_deletes_without_enqueue(&SqliteTestFactory).await;
+    }
+
+    // Lock-stealing activity cancellation tests
+    #[tokio::test]
+    async fn test_sqlite_cancelled_activities_deleted_from_worker_queue() {
+        test_cancelled_activities_deleted_from_worker_queue(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_ack_work_item_fails_when_entry_deleted() {
+        test_ack_work_item_fails_when_entry_deleted(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_renew_fails_when_entry_deleted() {
+        test_renew_fails_when_entry_deleted(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_cancelling_nonexistent_activities_is_idempotent() {
+        test_cancelling_nonexistent_activities_is_idempotent(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_batch_cancellation_deletes_multiple_activities() {
+        test_batch_cancellation_deletes_multiple_activities(&SqliteTestFactory).await;
     }
 
     // Worker lock renewal tests

@@ -405,7 +405,7 @@ duroxide = { path = "../duroxide", features = ["provider-test"] }
 Run validation tests by calling individual test functions:
 
 ```rust
-use duroxide::providers::{Provider, ExecutionState};
+use duroxide::providers::Provider;
 use duroxide::provider_validations::{
     ProviderFactory,
     // Atomicity tests
@@ -420,11 +420,17 @@ use duroxide::provider_validations::{
     test_no_instance_creation_on_enqueue,
     test_null_version_handling,
     test_sub_orchestration_instance_creation,
-    // Cancellation support tests (new)
-    fetch_work_item_returns_running_for_running_execution,
-    fetch_work_item_returns_terminal_for_completed_execution,
-    renew_work_item_lock_returns_running_for_running_execution,
-    ack_work_item_with_none_deletes_without_enqueueing,
+    // Cancellation support tests (execution state)
+    test_fetch_returns_running_state_for_active_orchestration,
+    test_fetch_returns_terminal_state_when_orchestration_completed,
+    test_renew_returns_running_when_orchestration_active,
+    test_ack_work_item_none_deletes_without_enqueue,
+    // Lock-stealing activity cancellation tests
+    test_cancelled_activities_deleted_from_worker_queue,
+    test_ack_work_item_fails_when_entry_deleted,
+    test_renew_fails_when_entry_deleted,
+    test_cancelling_nonexistent_activities_is_idempotent,
+    test_batch_cancellation_deletes_multiple_activities,
     // ... import other tests as needed
 };
 use std::sync::Arc;
@@ -473,7 +479,7 @@ async fn test_my_provider_worker_queue_fifo_ordering() {
 
 ### What the Tests Validate
 
-The validation test suite includes **71 individual test functions** organized into 10 categories:
+The validation test suite includes **80 individual test functions** organized into 11 categories:
 
 1. **Atomicity Tests (4 tests)**
    - `test_atomicity_failure_rollback` - All-or-nothing commit semantics, rollback on failure
@@ -501,7 +507,7 @@ The validation test suite includes **71 individual test functions** organized in
    - `test_multi_threaded_no_duplicate_processing` - No duplicate processing (multi-threaded)
    - `test_multi_threaded_lock_expiration_recovery` - Lock expiration recovery (multi-threaded)
 
-4. **Lock Expiration Tests (9 tests)**
+4. **Lock Expiration Tests (11 tests)**
    - `test_lock_expires_after_timeout` - Automatic lock release after timeout
    - `test_abandon_releases_lock_immediately` - Abandon releases lock immediately
    - `test_lock_renewal_on_ack` - Successful ack releases lock immediately
@@ -511,6 +517,8 @@ The validation test suite includes **71 individual test functions** organized in
    - `test_worker_lock_renewal_after_expiration` - Renewal fails after lock expires
    - `test_worker_lock_renewal_extends_timeout` - Renewal properly extends lock timeout
    - `test_worker_lock_renewal_after_ack` - Renewal fails after item has been acked
+   - `test_abandon_work_item_releases_lock` - abandon_work_item releases lock immediately
+   - `test_abandon_work_item_with_delay` - abandon_work_item with delay defers visibility
 
 5. **Multi-Execution Tests (5 tests)**
    - `test_execution_isolation` - Each execution has separate history
@@ -519,12 +527,14 @@ The validation test suite includes **71 individual test functions** organized in
    - `test_continue_as_new_creates_new_execution` - ContinueAsNew creates new execution
    - `test_execution_history_persistence` - All executions' history persists independently
 
-6. **Queue Semantics Tests (5 tests)**
+6. **Queue Semantics Tests (7 tests)**
    - `test_worker_queue_fifo_ordering` - Worker items dequeued in FIFO order
    - `test_worker_peek_lock_semantics` - Dequeue doesn't remove item until ack
    - `test_worker_ack_atomicity` - Ack_worker atomically removes item and enqueues completion
    - `test_timer_delayed_visibility` - TimerFired items only dequeued when visible
    - `test_lost_lock_token_handling` - Locked items become available after expiration
+   - `test_worker_delayed_visibility_skips_future_items` - Future-visible worker items skipped
+   - `test_worker_item_immediate_visibility` - Worker items immediately visible by default
 
 7. **Instance Creation Tests (4 tests)**
    - `test_instance_creation_via_metadata` - Instances created via ack metadata, not on enqueue
@@ -541,7 +551,12 @@ The validation test suite includes **71 individual test functions** organized in
    - `test_get_system_metrics` - System metrics are accurate
    - `test_get_queue_depths` - Queue depth reporting is correct
 
-9. **Poison Message Tests (12 tests)**
+9. **Long Polling Tests (3 tests)**
+   - `test_short_poll_returns_immediately` - Short-poll providers return immediately when queue is empty
+   - `test_short_poll_work_item_returns_immediately` - Worker queue short-poll returns immediately
+   - `test_fetch_respects_timeout_upper_bound` - Fetch returns within poll_timeout even if blocking
+
+10. **Poison Message Tests (9 tests)**
    - `orchestration_attempt_count_starts_at_one` - First fetch has attempt_count = 1
    - `orchestration_attempt_count_increments_on_refetch` - Attempt count increments on abandon/refetch
    - `worker_attempt_count_starts_at_one` - Worker items start with attempt_count = 1
@@ -551,19 +566,23 @@ The validation test suite includes **71 individual test functions** organized in
    - `abandon_orchestration_item_ignore_attempt_decrements` - ignore_attempt=true decrements count
    - `ignore_attempt_never_goes_negative` - Attempt count never goes below 0
    - `max_attempt_count_across_message_batch` - MAX attempt_count returned for batched messages
-   - `test_abandon_work_item_releases_lock` - abandon_work_item releases lock immediately
-   - `test_abandon_work_item_with_delay` - abandon_work_item with delay defers refetch
 
-10. **Cancellation Support Tests (9 tests)**
-    - `fetch_work_item_returns_running_for_running_execution` - Running orchestrations return ExecutionState::Running
-    - `fetch_work_item_returns_terminal_for_completed_execution` - Completed orchestrations return ExecutionState::Terminal
-    - `fetch_work_item_returns_terminal_for_failed_execution` - Failed orchestrations return ExecutionState::Terminal
-    - `fetch_work_item_returns_missing_for_nonexistent_execution` - Missing executions return ExecutionState::Missing
-    - `renew_work_item_lock_returns_running_for_running_execution` - Lock renewal returns Running state
-    - `renew_work_item_lock_returns_terminal_when_execution_completes` - Lock renewal detects terminal state
-    - `renew_work_item_lock_returns_missing_for_deleted_execution` - Lock renewal returns Missing when execution deleted
-    - `ack_work_item_with_none_deletes_without_enqueueing` - ack_work_item(None) deletes item without enqueueing completion
-    - `ack_work_item_with_some_enqueues_completion` - ack_work_item(Some) atomically deletes and enqueues
+11. **Cancellation Support Tests (14 tests)**
+    - `test_fetch_returns_running_state_for_active_orchestration` - Fetching activity for running orchestration proceeds normally
+    - `test_fetch_returns_terminal_state_when_orchestration_completed` - Fetching activity for completed orchestration
+    - `test_fetch_returns_terminal_state_when_orchestration_failed` - Fetching activity for failed orchestration
+    - `test_fetch_returns_terminal_state_when_orchestration_continued_as_new` - Fetching activity for continued-as-new orchestration
+    - `test_fetch_returns_missing_state_when_instance_deleted` - Fetching activity when instance deleted
+    - `test_renew_returns_running_when_orchestration_active` - Lock renewal succeeds for active orchestration
+    - `test_renew_returns_terminal_when_orchestration_completed` - Lock renewal for completed orchestration
+    - `test_renew_returns_missing_when_instance_deleted` - Lock renewal when instance deleted
+    - `test_ack_work_item_none_deletes_without_enqueue` - ack_work_item(None) deletes item without enqueueing completion
+    - **Lock-Stealing Tests (5 tests):**
+    - `test_cancelled_activities_deleted_from_worker_queue` - `cancelled_activities` in `ack_orchestration_item` deletes matching worker entries
+    - `test_ack_work_item_fails_when_entry_deleted` - `ack_work_item` returns permanent error when entry was deleted (lock stolen)
+    - `test_renew_fails_when_entry_deleted` - `renew_work_item_lock` fails when entry was deleted (lock stolen)
+    - `test_cancelling_nonexistent_activities_is_idempotent` - Cancelling activities that don't exist is silently ignored
+    - `test_batch_cancellation_deletes_multiple_activities` - Multiple activities can be cancelled in a single `ack_orchestration_item`
 
 ### Running Individual Test Functions
 
@@ -936,7 +955,7 @@ This generates `stress-test-results.md` with:
 
 - **Test Implementation**: `src/provider_validation/` (individual test modules)
 - **Test API**: `src/provider_validations.rs` (test function exports)
-- **Example Usage**: `tests/sqlite_provider_validations.rs` (complete example with all 75 tests)
+- **Example Usage**: `tests/sqlite_provider_validations.rs` (complete example with all 80 tests)
 - **Test Specification**: See individual test function documentation
 - **Provider Guide**: `docs/provider-implementation-guide.md`
 - **Built-in Providers**: `src/providers/sqlite.rs`

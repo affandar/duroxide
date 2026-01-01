@@ -6,7 +6,7 @@
 //! - Handles orchestration execution and atomic commits
 //! - Renews locks during long-running orchestration turns
 
-use crate::providers::{ExecutionMetadata, ProviderError, WorkItem};
+use crate::providers::{ScheduledActivityIdentifier, ExecutionMetadata, ProviderError, WorkItem};
 use crate::{Event, EventKind};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -250,6 +250,7 @@ impl Runtime {
                     vec![],
                     vec![],
                     ExecutionMetadata::default(),
+                    vec![], // cancelled_activities - none for terminal instances
                 )
                 .await;
             return;
@@ -305,21 +306,22 @@ impl Runtime {
         }
 
         // Process the execution (unified path)
-        let (worker_items, orchestrator_items, execution_id_for_ack) = if workitem_reader.has_orchestration_name() {
-            let (wi, oi) = self
-                .handle_orchestration_atomic(
-                    instance,
-                    &mut history_mgr,
-                    &workitem_reader,
-                    execution_id_to_use,
-                    worker_id,
-                )
-                .await;
-            (wi, oi, execution_id_to_use)
-        } else {
-            // Empty effective batch
-            (vec![], vec![], execution_id_to_use)
-        };
+        let (worker_items, orchestrator_items, select_cancelled_activities, execution_id_for_ack) =
+            if workitem_reader.has_orchestration_name() {
+                let (wi, oi, cancels) = self
+                    .handle_orchestration_atomic(
+                        instance,
+                        &mut history_mgr,
+                        &workitem_reader,
+                        execution_id_to_use,
+                        worker_id,
+                    )
+                    .await;
+                (wi, oi, cancels, execution_id_to_use)
+            } else {
+                // Empty effective batch
+                (vec![], vec![], vec![], execution_id_to_use)
+            };
 
         // Atomically commit all changes
         let history_delta = history_mgr.delta();
@@ -485,6 +487,37 @@ impl Runtime {
             }
         }
 
+        // Compute cancelled activities for terminal orchestrations
+        // When an orchestration terminates (Failed, Completed, or ContinuedAsNew), any in-flight
+        // activities should be cancelled via lock stealing. This handles:
+        // - Failed: Orchestration errored, pending work is no longer needed
+        // - Completed: "Select losers" - activities that lost a select race
+        // - ContinuedAsNew: Old execution's activities won't be awaited by new execution
+        let mut cancelled_activities = select_cancelled_activities;
+        match metadata.status.as_deref() {
+            Some("Failed") | Some("Completed") | Some("ContinuedAsNew") => {
+                let inflight = history_mgr.compute_inflight_activities(instance, execution_id_for_ack);
+                if !inflight.is_empty() {
+                    tracing::debug!(
+                        target: "duroxide::runtime",
+                        instance_id = %instance,
+                        status = ?metadata.status,
+                        count = %inflight.len(),
+                        "Cancelling in-flight activities"
+                    );
+                }
+                cancelled_activities.extend(inflight);
+            }
+            _ => {}
+        }
+
+        // De-dupe in case a select-loser is also in-flight at termination.
+        if cancelled_activities.len() > 1 {
+            use std::collections::HashSet;
+            let mut seen: HashSet<(String, u64, u64)> = HashSet::with_capacity(cancelled_activities.len());
+            cancelled_activities.retain(|a| seen.insert((a.instance.clone(), a.execution_id, a.activity_id)));
+        }
+
         // Robust ack with basic retry on any provider error
         match self
             .ack_orchestration_with_changes(
@@ -494,6 +527,7 @@ impl Runtime {
                 worker_items,
                 orchestrator_items,
                 metadata,
+                cancelled_activities,
             )
             .await
         {
@@ -533,6 +567,7 @@ impl Runtime {
                         vec![],
                         vec![],
                         failure_metadata,
+                        vec![], // cancelled_activities - none for failure commits
                     )
                     .await
                 {
@@ -562,9 +597,10 @@ impl Runtime {
         workitem_reader: &WorkItemReader,
         execution_id: u64,
         worker_id: &str,
-    ) -> (Vec<WorkItem>, Vec<WorkItem>) {
+    ) -> (Vec<WorkItem>, Vec<WorkItem>, Vec<ScheduledActivityIdentifier>) {
         let mut worker_items = Vec::new();
         let mut orchestrator_items = Vec::new();
+        let mut cancelled_activities = Vec::new();
 
         // Resolve handler once - use provided version or resolve from registry policy
         let resolved_handler = if let Some(v_str) = &workitem_reader.version {
@@ -608,7 +644,7 @@ impl Runtime {
                     });
                     self.record_orchestration_configuration_error();
                 }
-                return (worker_items, orchestrator_items);
+                return (worker_items, orchestrator_items, cancelled_activities);
             }
         };
 
@@ -630,15 +666,22 @@ impl Runtime {
         }
 
         // Run the atomic execution to get all changes, passing the resolved handler
-        let (_exec_history_delta, exec_worker_items, exec_orchestrator_items, _result) = Arc::clone(self)
+        let (
+            _exec_history_delta,
+            exec_worker_items,
+            exec_orchestrator_items,
+            exec_cancelled_activities,
+            _result,
+        ) = Arc::clone(self)
             .run_single_execution_atomic(instance, history_mgr, workitem_reader, execution_id, worker_id, handler)
             .await;
 
         // Combine all changes (history already in history_mgr via mutation)
         worker_items.extend(exec_worker_items);
         orchestrator_items.extend(exec_orchestrator_items);
+        cancelled_activities.extend(exec_cancelled_activities);
 
-        (worker_items, orchestrator_items)
+        (worker_items, orchestrator_items, cancelled_activities)
     }
 
     /// Acknowledge an orchestration item with changes, using smart retry logic based on ProviderError
@@ -651,6 +694,7 @@ impl Runtime {
         worker_items: Vec<WorkItem>,
         orchestrator_items: Vec<WorkItem>,
         metadata: ExecutionMetadata,
+        cancelled_activities: Vec<ScheduledActivityIdentifier>,
     ) -> Result<(), ProviderError> {
         let mut attempts: u32 = 0;
         let max_attempts: u32 = 5;
@@ -665,6 +709,7 @@ impl Runtime {
                     worker_items.clone(),
                     orchestrator_items.clone(),
                     metadata.clone(),
+                    cancelled_activities.clone(),
                 )
                 .await
             {
@@ -824,6 +869,7 @@ impl Runtime {
                 vec![],
                 orchestrator_items,
                 metadata,
+                vec![], // cancelled_activities - none for poison message handling
             )
             .await;
 

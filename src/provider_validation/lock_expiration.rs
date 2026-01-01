@@ -48,7 +48,7 @@ pub async fn test_lock_expires_after_timeout<F: ProviderFactory>(factory: &F) {
 
     // Original lock token should no longer work
     let result = provider
-        .ack_orchestration_item(&lock_token, 1, vec![], vec![], vec![], ExecutionMetadata::default())
+        .ack_orchestration_item(&lock_token, 1, vec![], vec![], vec![], ExecutionMetadata::default(), vec![])
         .await;
     assert!(result.is_err());
     tracing::info!("✓ Test passed: lock expiration verified");
@@ -160,6 +160,7 @@ pub async fn test_lock_renewal_on_ack<F: ProviderFactory>(factory: &F) {
             vec![],
             vec![],
             ExecutionMetadata::default(),
+            vec![],
         )
         .await
         .unwrap();
@@ -251,7 +252,7 @@ pub async fn test_worker_lock_renewal_success<F: ProviderFactory>(factory: &F) {
         .await
         .unwrap();
 
-    let (_item, token, _, _) = provider
+    let (_item, token, _) = provider
         .fetch_work_item(lock_timeout, Duration::ZERO)
         .await
         .unwrap()
@@ -321,7 +322,7 @@ pub async fn test_worker_lock_renewal_after_expiration<F: ProviderFactory>(facto
         .unwrap();
 
     let short_timeout = Duration::from_secs(1);
-    let (_item, token, _, _) = provider
+    let (_item, token, _) = provider
         .fetch_work_item(short_timeout, Duration::ZERO)
         .await
         .unwrap()
@@ -395,12 +396,13 @@ pub async fn test_worker_lock_renewal_extends_timeout<F: ProviderFactory>(factor
                 status: Some("Running".to_string()),
                 ..Default::default()
             },
+            vec![],
         )
         .await
         .unwrap();
 
     // 2. Fetch the activity work item
-    let (_item, token, _, _) = provider
+    let (_item, token, _) = provider
         .fetch_work_item(lock_timeout, Duration::ZERO)
         .await
         .unwrap()
@@ -450,7 +452,7 @@ pub async fn test_worker_lock_renewal_after_ack<F: ProviderFactory>(factory: &F)
         .unwrap();
 
     let lock_timeout = factory.lock_timeout();
-    let (_item, token, _, _) = provider
+    let (_item, token, _) = provider
         .fetch_work_item(lock_timeout, Duration::ZERO)
         .await
         .unwrap()
@@ -498,7 +500,7 @@ pub async fn test_abandon_work_item_releases_lock<F: ProviderFactory>(factory: &
         .unwrap();
 
     // Fetch the work item
-    let (item, token, _, _) = provider
+    let (item, token, _) = provider
         .fetch_work_item(lock_timeout, Duration::ZERO)
         .await
         .unwrap()
@@ -519,7 +521,7 @@ pub async fn test_abandon_work_item_releases_lock<F: ProviderFactory>(factory: &
     provider.abandon_work_item(&token, None, false).await.unwrap();
 
     // Item should be immediately available again
-    let (item2, token2, _, _) = provider
+    let (item2, token2, _) = provider
         .fetch_work_item(lock_timeout, Duration::ZERO)
         .await
         .unwrap()
@@ -564,7 +566,7 @@ pub async fn test_abandon_work_item_with_delay<F: ProviderFactory>(factory: &F) 
         .unwrap();
 
     // Fetch the work item
-    let (_item, token, _, _) = provider
+    let (_item, token, _) = provider
         .fetch_work_item(lock_timeout, Duration::ZERO)
         .await
         .unwrap()
@@ -588,7 +590,7 @@ pub async fn test_abandon_work_item_with_delay<F: ProviderFactory>(factory: &F) 
     tokio::time::sleep(delay + Duration::from_millis(100)).await;
 
     // Now item should be available
-    let (item2, token2, _, _) = provider
+    let (item2, token2, _) = provider
         .fetch_work_item(lock_timeout, Duration::ZERO)
         .await
         .unwrap()

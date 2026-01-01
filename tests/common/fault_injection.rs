@@ -9,7 +9,7 @@
 use async_trait::async_trait;
 use duroxide::providers::error::ProviderError;
 use duroxide::providers::sqlite::SqliteProvider;
-use duroxide::providers::{ExecutionMetadata, ExecutionState, OrchestrationItem, Provider, ProviderAdmin, WorkItem};
+use duroxide::providers::{ScheduledActivityIdentifier, ExecutionMetadata, OrchestrationItem, Provider, ProviderAdmin, WorkItem};
 use duroxide::{Event, EventKind};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -140,15 +140,15 @@ impl Provider for PoisonInjectingProvider {
         &self,
         lock_timeout: Duration,
         poll_timeout: Duration,
-    ) -> Result<Option<(WorkItem, String, u32, ExecutionState)>, ProviderError> {
+    ) -> Result<Option<(WorkItem, String, u32)>, ProviderError> {
         let result = self.inner.fetch_work_item(lock_timeout, poll_timeout).await?;
 
-        if let Some((item, lock_token, real_attempt_count, exec_state)) = result {
+        if let Some((item, lock_token, real_attempt_count)) = result {
             // Check if we need to skip this fetch
             let skip = self.activity_skip_count.load(Ordering::SeqCst);
             if skip > 0 {
                 self.activity_skip_count.fetch_sub(1, Ordering::SeqCst);
-                return Ok(Some((item, lock_token, real_attempt_count, exec_state)));
+                return Ok(Some((item, lock_token, real_attempt_count)));
             }
 
             let persistent = self.activity_injection_persistent.load(Ordering::SeqCst);
@@ -158,7 +158,7 @@ impl Provider for PoisonInjectingProvider {
                 self.inject_activity_attempt_count.swap(0, Ordering::SeqCst)
             };
             let attempt_count = if injected > 0 { injected } else { real_attempt_count };
-            Ok(Some((item, lock_token, attempt_count, exec_state)))
+            Ok(Some((item, lock_token, attempt_count)))
         } else {
             Ok(None)
         }
@@ -172,6 +172,7 @@ impl Provider for PoisonInjectingProvider {
         worker_items: Vec<WorkItem>,
         orchestrator_items: Vec<WorkItem>,
         metadata: ExecutionMetadata,
+        cancelled_activities: Vec<ScheduledActivityIdentifier>,
     ) -> Result<(), ProviderError> {
         self.inner
             .ack_orchestration_item(
@@ -181,6 +182,7 @@ impl Provider for PoisonInjectingProvider {
                 worker_items,
                 orchestrator_items,
                 metadata,
+                cancelled_activities,
             )
             .await
     }
@@ -200,7 +202,7 @@ impl Provider for PoisonInjectingProvider {
         self.inner.ack_work_item(token, completion).await
     }
 
-    async fn renew_work_item_lock(&self, token: &str, extension: Duration) -> Result<ExecutionState, ProviderError> {
+    async fn renew_work_item_lock(&self, token: &str, extension: Duration) -> Result<(), ProviderError> {
         self.inner.renew_work_item_lock(token, extension).await
     }
 
@@ -327,7 +329,7 @@ impl Provider for FailingProvider {
         &self,
         lock_timeout: Duration,
         poll_timeout: Duration,
-    ) -> Result<Option<(WorkItem, String, u32, ExecutionState)>, ProviderError> {
+    ) -> Result<Option<(WorkItem, String, u32)>, ProviderError> {
         if self.fail_next_fetch_work_item.swap(false, Ordering::SeqCst) {
             Err(ProviderError::retryable(
                 "fetch_work_item",
@@ -346,6 +348,7 @@ impl Provider for FailingProvider {
         worker_items: Vec<WorkItem>,
         orchestrator_items: Vec<WorkItem>,
         metadata: ExecutionMetadata,
+        cancelled_activities: Vec<ScheduledActivityIdentifier>,
     ) -> Result<(), ProviderError> {
         if self.fail_next_ack_orchestration_item.swap(false, Ordering::SeqCst) {
             // Check if this is a failure event commit and we should allow it
@@ -363,6 +366,7 @@ impl Provider for FailingProvider {
                             worker_items,
                             orchestrator_items,
                             metadata,
+                            cancelled_activities,
                         )
                         .await;
                 }
@@ -380,6 +384,7 @@ impl Provider for FailingProvider {
                     worker_items,
                     orchestrator_items,
                     metadata,
+                    cancelled_activities,
                 )
                 .await
         }
@@ -411,7 +416,7 @@ impl Provider for FailingProvider {
         }
     }
 
-    async fn renew_work_item_lock(&self, token: &str, extension: Duration) -> Result<ExecutionState, ProviderError> {
+    async fn renew_work_item_lock(&self, token: &str, extension: Duration) -> Result<(), ProviderError> {
         self.inner.renew_work_item_lock(token, extension).await
     }
 

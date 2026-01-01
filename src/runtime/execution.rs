@@ -4,7 +4,7 @@ use tracing::debug;
 use super::replay_engine::{ReplayEngine, TurnResult};
 use crate::{
     Event, EventKind,
-    providers::WorkItem,
+    providers::{ScheduledActivityIdentifier, WorkItem},
     runtime::{OrchestrationHandler, Runtime},
 };
 
@@ -22,13 +22,20 @@ impl Runtime {
         execution_id: u64,
         worker_id: &str,
         handler: Arc<dyn OrchestrationHandler>,
-    ) -> (Vec<Event>, Vec<WorkItem>, Vec<WorkItem>, Result<String, String>) {
+    ) -> (
+        Vec<Event>,
+        Vec<WorkItem>,
+        Vec<WorkItem>,
+        Vec<ScheduledActivityIdentifier>,
+        Result<String, String>,
+    ) {
         let orchestration_name = &workitem_reader.orchestration_name;
         debug!(instance, orchestration_name, "🚀 Starting atomic single execution");
 
         // Track all changes
         let mut worker_items = Vec::new();
         let mut orchestrator_items = Vec::new();
+        let mut cancelled_activities: Vec<ScheduledActivityIdentifier> = Vec::new();
 
         // Helper: only honor detached starts at terminal; ignore all other pending actions
         let mut enqueue_detached_from_pending = |pending: &[_]| {
@@ -91,6 +98,15 @@ impl Runtime {
         // Execute the orchestration logic
         let turn_result =
             turn.execute_orchestration(handler.clone(), input.clone(), orch_name, orch_version, worker_id);
+
+        // Select/select2 losers: request cancellation for those activities now.
+        for activity_id in turn.cancelled_activity_ids() {
+            cancelled_activities.push(ScheduledActivityIdentifier {
+                instance: instance.to_string(),
+                execution_id,
+                activity_id: *activity_id,
+            });
+        }
 
         // Collect history delta from turn
         history_mgr.extend(turn.history_delta().to_vec());
@@ -286,7 +302,13 @@ impl Runtime {
             worker_items.len(),
             orchestrator_items.len()
         );
-        (history_mgr.delta().to_vec(), worker_items, orchestrator_items, result)
+        (
+            history_mgr.delta().to_vec(),
+            worker_items,
+            orchestrator_items,
+            cancelled_activities,
+            result,
+        )
     }
 
     /// Get work items to cancel child sub-orchestrations

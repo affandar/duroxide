@@ -23,7 +23,7 @@
 //! 3. The worker dispatcher waits up to the grace period for the activity to complete
 //! 4. If the activity doesn't complete, it's aborted and the work item is dropped
 
-use crate::providers::{ExecutionState, WorkItem};
+use crate::providers::WorkItem;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -141,7 +141,7 @@ async fn process_next_work_item(
         .await;
 
     match fetch_result {
-        Ok(Some((item, token, attempt_count, execution_state))) => {
+        Ok(Some((item, token, attempt_count))) => {
             let item_serialized = serde_json::to_string(&item).unwrap_or_default();
 
             match item {
@@ -164,10 +164,9 @@ async fn process_next_work_item(
                         worker_id: worker_id.to_string(),
                     };
 
-                    // Skip activities for terminal/missing orchestrations
-                    if should_skip_activity(&execution_state) {
-                        skip_terminal_activity(rt, &ctx, &execution_state).await;
-                    } else if ctx.attempt_count > rt.options.max_attempts {
+                    // Note: We no longer check execution state at fetch time.
+                    // Cancellation is detected during lock renewal (lock stealing).
+                    if ctx.attempt_count > rt.options.max_attempts {
                         // Handle poison messages
                         handle_poison_message(rt, &ctx).await;
                     } else {
@@ -210,43 +209,6 @@ async fn enforce_min_poll_interval(
 // ============================================================================
 // Activity Processing
 // ============================================================================
-
-/// Check if an activity should be skipped based on orchestration state.
-fn should_skip_activity(execution_state: &ExecutionState) -> bool {
-    matches!(
-        execution_state,
-        ExecutionState::Terminal { .. } | ExecutionState::Missing
-    )
-}
-
-/// Skip an activity because its orchestration is terminal or missing.
-async fn skip_terminal_activity(rt: &Arc<Runtime>, ctx: &ActivityWorkContext, execution_state: &ExecutionState) {
-    let (reason, status) = match execution_state {
-        ExecutionState::Terminal { status } => ("terminal", Some(status.as_str())),
-        ExecutionState::Missing => ("missing", None),
-        ExecutionState::Running => unreachable!(),
-    };
-
-    tracing::debug!(
-        target: "duroxide::runtime",
-        instance = %ctx.instance,
-        execution_id = %ctx.execution_id,
-        activity_name = %ctx.activity_name,
-        activity_id = %ctx.activity_id,
-        status = ?status,
-        "Skipping activity because orchestration is {}", reason
-    );
-
-    if let Err(e) = rt.history_store.ack_work_item(&ctx.lock_token, None).await {
-        tracing::warn!(
-            target: "duroxide::runtime",
-            instance = %ctx.instance,
-            activity_id = %ctx.activity_id,
-            error = %e,
-            "Failed to ack skipped activity work item ({})", reason
-        );
-    }
-}
 
 /// Handle a poison message (activity fetched too many times).
 async fn handle_poison_message(rt: &Arc<Runtime>, ctx: &ActivityWorkContext) {
@@ -677,7 +639,8 @@ fn spawn_activity_manager(
             }
 
             match store.renew_work_item_lock(&token, lock_timeout).await {
-                Ok(ExecutionState::Running) => {
+                Ok(()) => {
+                    // Lock renewed successfully - orchestration is still running
                     tracing::trace!(
                         target: "duroxide::runtime::worker",
                         lock_token = %token,
@@ -685,34 +648,15 @@ fn spawn_activity_manager(
                         "Work item lock renewed"
                     );
                 }
-                Ok(ExecutionState::Terminal { ref status }) => {
-                    tracing::info!(
-                        target: "duroxide::runtime::worker",
-                        lock_token = %token,
-                        status = %status,
-                        "Orchestration terminated, signaling activity cancellation"
-                    );
-                    cancellation_token.cancel();
-                    // Our job is done - the select! in run_activity_with_cancellation
-                    // will wake up and handle the grace period waiting
-                    break;
-                }
-                Ok(ExecutionState::Missing) => {
-                    tracing::info!(
-                        target: "duroxide::runtime::worker",
-                        lock_token = %token,
-                        "Orchestration missing, signaling activity cancellation"
-                    );
-                    cancellation_token.cancel();
-                    break;
-                }
                 Err(e) => {
-                    tracing::debug!(
+                    // Lock renewal failed - activity was cancelled (lock stolen) or lock expired
+                    tracing::info!(
                         target: "duroxide::runtime::worker",
                         lock_token = %token,
                         error = %e,
-                        "Failed to renew lock (may have been acked/abandoned)"
+                        "Lock renewal failed, signaling activity cancellation (lock was stolen or expired)"
                     );
+                    cancellation_token.cancel();
                     break;
                 }
             }

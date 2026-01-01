@@ -714,6 +714,134 @@ async fn activity_receives_cancellation_signal() {
     rt.shutdown(None).await;
 }
 
+/// Test that select/select2 losing activities receive cancellation signals (lock stealing)
+/// even when the orchestration continues normally.
+#[tokio::test]
+async fn select2_loser_activity_receives_cancellation_signal() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let (store, _td) = common::create_sqlite_store_disk().await;
+
+    let activity_started = Arc::new(AtomicBool::new(false));
+    let saw_cancellation = Arc::new(AtomicBool::new(false));
+    let activity_started_clone = Arc::clone(&activity_started);
+    let saw_cancellation_clone = Arc::clone(&saw_cancellation);
+
+    // Activity that blocks until cancelled.
+    let long_activity = move |ctx: ActivityContext, _input: String| {
+        let activity_started = Arc::clone(&activity_started_clone);
+        let saw_cancellation = Arc::clone(&saw_cancellation_clone);
+        async move {
+            activity_started.store(true, Ordering::SeqCst);
+
+            tokio::select! {
+                _ = ctx.cancelled() => {
+                    saw_cancellation.store(true, Ordering::SeqCst);
+                    Ok("cancelled".to_string())
+                }
+                _ = tokio::time::sleep(Duration::from_secs(30)) => {
+                    Ok("timeout".to_string())
+                }
+            }
+        }
+    };
+
+    // Orchestration that races a long activity against a short timer.
+    // Timer should win, and the losing activity should be cancelled proactively.
+    let orchestration = |ctx: OrchestrationContext, _input: String| async move {
+        let activity = ctx.schedule_activity("LongActivity", "input");
+        let timeout = ctx.schedule_timer(Duration::from_secs(1));
+        let (winner, _) = ctx.select2(activity, timeout).await;
+        assert_eq!(winner, 1, "timer should win");
+
+        // Keep going to prove the orchestration isn't terminal.
+        ctx.schedule_timer(Duration::from_millis(50)).into_timer().await;
+        Ok("done".to_string())
+    };
+
+    let orchestration_registry = OrchestrationRegistry::builder()
+        .register("SelectLoserCancelOrch", orchestration)
+        .build();
+    let activity_registry = ActivityRegistry::builder()
+        .register("LongActivity", long_activity)
+        .build();
+
+    let options = runtime::RuntimeOptions {
+        dispatcher_min_poll_interval: Duration::from_millis(10),
+        orchestration_concurrency: 1,
+        worker_concurrency: 1,
+        worker_lock_timeout: Duration::from_secs(2),
+        worker_lock_renewal_buffer: Duration::from_millis(500),
+        activity_cancellation_grace_period: Duration::from_secs(2),
+        ..Default::default()
+    };
+
+    let rt = runtime::Runtime::start_with_options(
+        store.clone(),
+        std::sync::Arc::new(activity_registry),
+        orchestration_registry,
+        options,
+    )
+    .await;
+    let client = Client::new(store.clone());
+
+    client
+        .start_orchestration("inst-select2-loser-cancel", "SelectLoserCancelOrch", "")
+        .await
+        .unwrap();
+
+    // Ensure the activity actually started before we assert cancellation behavior.
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        if activity_started.load(Ordering::SeqCst) {
+            break;
+        }
+        if std::time::Instant::now() > deadline {
+            panic!("Activity did not start in time");
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+
+    // Wait for cancellation to propagate via lock stealing and renewal failure.
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        if saw_cancellation.load(Ordering::SeqCst) {
+            break;
+        }
+        if std::time::Instant::now() > deadline {
+            panic!("select2 loser activity did not receive cancellation signal in time");
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    assert!(
+        saw_cancellation.load(Ordering::SeqCst),
+        "Activity should have received cancellation signal as select2 loser"
+    );
+
+    // Orchestration should still complete normally.
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let hist = store
+            .read("inst-select2-loser-cancel")
+            .await
+            .unwrap_or_default();
+        if hist
+            .iter()
+            .any(|e| matches!(&e.kind, EventKind::OrchestrationCompleted { .. }))
+        {
+            break;
+        }
+        if std::time::Instant::now() > deadline {
+            panic!("timeout waiting for orchestration to complete");
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+
+    rt.shutdown(None).await;
+}
+
 /// Test that activity result is dropped when orchestration was cancelled during execution
 #[tokio::test]
 async fn activity_result_dropped_when_orchestration_cancelled() {

@@ -230,10 +230,13 @@ pub mod poison_message {
 
 #[cfg(feature = "provider-test")]
 pub use crate::provider_validation::cancellation::{
-    test_ack_work_item_none_deletes_without_enqueue, test_fetch_returns_missing_state_when_instance_deleted,
+    test_ack_work_item_fails_when_entry_deleted, test_ack_work_item_none_deletes_without_enqueue,
+    test_batch_cancellation_deletes_multiple_activities, test_cancelled_activities_deleted_from_worker_queue,
+    test_cancelling_nonexistent_activities_is_idempotent, test_fetch_returns_missing_state_when_instance_deleted,
     test_fetch_returns_running_state_for_active_orchestration,
     test_fetch_returns_terminal_state_when_orchestration_completed,
     test_fetch_returns_terminal_state_when_orchestration_continued_as_new,
-    test_fetch_returns_terminal_state_when_orchestration_failed, test_renew_returns_missing_when_instance_deleted,
-    test_renew_returns_running_when_orchestration_active, test_renew_returns_terminal_when_orchestration_completed,
+    test_fetch_returns_terminal_state_when_orchestration_failed, test_renew_fails_when_entry_deleted,
+    test_renew_returns_missing_when_instance_deleted, test_renew_returns_running_when_orchestration_active,
+    test_renew_returns_terminal_when_orchestration_completed,
 };

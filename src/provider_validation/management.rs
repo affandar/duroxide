@@ -73,6 +73,7 @@ pub async fn test_list_instances_by_status<F: ProviderFactory>(factory: &F) {
                 orchestration_name: Some("TestOrch".to_string()),
                 orchestration_version: Some("1.0.0".to_string()),
             },
+            vec![],
         )
         .await
         .unwrap();
@@ -122,6 +123,7 @@ pub async fn test_list_executions<F: ProviderFactory>(factory: &F) {
             vec![],
             vec![],
             ExecutionMetadata::default(),
+            vec![],
         )
         .await
         .unwrap();
@@ -172,6 +174,7 @@ pub async fn test_get_instance_info<F: ProviderFactory>(factory: &F) {
                 orchestration_version: Some("2.0.0".to_string()),
                 ..Default::default()
             },
+            vec![],
         )
         .await
         .unwrap();
@@ -225,6 +228,7 @@ pub async fn test_get_execution_info<F: ProviderFactory>(factory: &F) {
                 output: Some("result".to_string()),
                 ..Default::default()
             },
+            vec![],
         )
         .await
         .unwrap();
@@ -281,6 +285,7 @@ pub async fn test_get_system_metrics<F: ProviderFactory>(factory: &F) {
                 orchestration_version: Some("1.0.0".to_string()),
                 ..Default::default()
             },
+            vec![],
         )
         .await
         .unwrap();

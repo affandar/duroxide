@@ -73,6 +73,7 @@ pub async fn test_execution_isolation<F: ProviderFactory>(factory: &F) {
             vec![],
             vec![],
             ExecutionMetadata::default(),
+            vec![],
         )
         .await
         .unwrap();
@@ -118,6 +119,7 @@ pub async fn test_execution_isolation<F: ProviderFactory>(factory: &F) {
             vec![],
             vec![],
             ExecutionMetadata::default(),
+            vec![],
         )
         .await
         .unwrap();
@@ -176,6 +178,7 @@ pub async fn test_latest_execution_detection<F: ProviderFactory>(factory: &F) {
             vec![],
             vec![],
             ExecutionMetadata::default(),
+            vec![],
         )
         .await
         .unwrap();
@@ -207,6 +210,7 @@ pub async fn test_latest_execution_detection<F: ProviderFactory>(factory: &F) {
             vec![],
             vec![],
             ExecutionMetadata::default(),
+            vec![],
         )
         .await
         .unwrap();
@@ -274,6 +278,7 @@ pub async fn test_execution_id_sequencing<F: ProviderFactory>(factory: &F) {
                 orchestration_version: Some("1.0.0".to_string()),
                 ..Default::default()
             },
+            vec![],
         )
         .await
         .unwrap();
@@ -314,6 +319,7 @@ pub async fn test_execution_id_sequencing<F: ProviderFactory>(factory: &F) {
                 orchestration_version: Some("1.0.0".to_string()),
                 ..Default::default()
             },
+            vec![],
         )
         .await
         .unwrap();
@@ -368,6 +374,7 @@ pub async fn test_continue_as_new_creates_new_execution<F: ProviderFactory>(fact
             vec![],
             vec![],
             ExecutionMetadata::default(),
+            vec![],
         )
         .await
         .unwrap();
@@ -413,6 +420,7 @@ pub async fn test_continue_as_new_creates_new_execution<F: ProviderFactory>(fact
             vec![],
             vec![],
             ExecutionMetadata::default(),
+            vec![],
         )
         .await
         .unwrap();
@@ -462,6 +470,7 @@ pub async fn test_execution_history_persistence<F: ProviderFactory>(factory: &F)
                 vec![],
                 vec![],
                 ExecutionMetadata::default(),
+                vec![],
             )
             .await
             .unwrap();

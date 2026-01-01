@@ -72,6 +72,7 @@ async fn test_ignore_work_after_terminal_event() {
         vec![],
         vec![],
         ExecutionMetadata::default(),
+        vec![],
     )
     .await
     .unwrap();
@@ -300,6 +301,7 @@ async fn test_ack_orchestration_item_atomic() {
             worker_items,
             vec![],
             ExecutionMetadata::default(),
+            vec![],
         )
         .await
         .unwrap();
@@ -311,7 +313,7 @@ async fn test_ack_orchestration_item_atomic() {
     assert!(matches!(&history[1].kind, EventKind::ActivityScheduled { .. }));
 
     // Verify worker item was enqueued
-    let (worker_item, _, _, _) = store
+    let (worker_item, _, _) = store
         .fetch_work_item(Duration::from_secs(30), Duration::ZERO)
         .await
         .unwrap()
@@ -338,7 +340,7 @@ async fn test_ack_orchestration_item_error_handling() {
 
     // Try to ack with invalid token
     let result = store
-        .ack_orchestration_item("invalid-token", 1, vec![], vec![], vec![], ExecutionMetadata::default())
+        .ack_orchestration_item("invalid-token", 1, vec![], vec![], vec![], ExecutionMetadata::default(), vec![])
         .await;
 
     assert!(result.is_err());
@@ -520,6 +522,7 @@ async fn test_in_memory_provider_atomic_operations() {
             vec![],
             vec![],
             ExecutionMetadata::default(),
+            vec![],
         )
         .await
         .unwrap();

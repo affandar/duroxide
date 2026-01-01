@@ -442,7 +442,7 @@ pub use runtime::{
 };
 
 // Re-export management types for convenience
-pub use providers::{ExecutionInfo, InstanceInfo, ProviderAdmin, QueueDepths, SystemMetrics};
+pub use providers::{ScheduledActivityIdentifier, ExecutionInfo, InstanceInfo, ProviderAdmin, QueueDepths, SystemMetrics};
 
 // Type aliases for improved readability and maintainability
 /// Shared reference to a Provider implementation
@@ -1076,6 +1076,10 @@ struct CtxInner {
     // Track cancelled source_event_ids (select2 losers) - their completions are auto-skipped in FIFO
     cancelled_source_ids: std::collections::HashSet<u64>,
 
+    // Track cancelled activity scheduling ids (select/select2 losers).
+    // These are ActivityScheduled event_ids for losers that should be cancelled via the provider.
+    cancelled_activity_ids: std::collections::HashSet<u64>,
+
     // Track consumed external events (by name) since they're searched, not cursor-based
     consumed_external_events: std::collections::HashSet<String>,
 
@@ -1116,6 +1120,7 @@ impl CtxInner {
             claimed_scheduling_events: Default::default(),
             consumed_completions: Default::default(),
             cancelled_source_ids: Default::default(),
+            cancelled_activity_ids: Default::default(),
             consumed_external_events: Default::default(),
             execution_id,
             instance_id,
@@ -1473,6 +1478,11 @@ impl OrchestrationContext {
     /// `TimerFired` event in history.
     fn take_actions(&self) -> Vec<Action> {
         std::mem::take(&mut self.inner.lock().unwrap().actions)
+    }
+
+    pub(crate) fn take_cancelled_activity_ids(&self) -> Vec<u64> {
+        let mut inner = self.inner.lock().expect("Mutex should not be poisoned");
+        inner.cancelled_activity_ids.drain().collect()
     }
 
     // Replay-safe logging control
@@ -2372,6 +2382,38 @@ pub fn run_turn_with_status<O, F>(
 where
     F: Future<Output = O>,
 {
+    let (history, actions, output, nondet, _cancelled_activity_ids) =
+        run_turn_with_status_and_cancellations(
+            history,
+            execution_id,
+            instance_id,
+            orchestration_name,
+            orchestration_version,
+            worker_id,
+            orchestrator,
+        );
+
+    (history, actions, output, nondet)
+}
+
+/// Execute one orchestration turn and also return:
+/// - any nondeterminism flagged by futures, and
+/// - any activity scheduling IDs that were cancelled during this turn (e.g., select/select2 losers).
+///
+/// This is used by the runtime to cancel "select losers" promptly via provider lock stealing,
+/// while keeping orchestration code deterministic.
+pub fn run_turn_with_status_and_cancellations<O, F>(
+    history: Vec<Event>,
+    execution_id: u64,
+    instance_id: String,
+    orchestration_name: Option<String>,
+    orchestration_version: Option<String>,
+    worker_id: String,
+    orchestrator: impl Fn(OrchestrationContext) -> F,
+) -> (Vec<Event>, Vec<Action>, Option<O>, Option<String>, Vec<u64>)
+where
+    F: Future<Output = O>,
+{
     let ctx = OrchestrationContext::new(
         history,
         execution_id,
@@ -2386,15 +2428,17 @@ where
         Poll::Ready(out) => {
             ctx.inner.lock().unwrap().logging_enabled_this_poll = true;
             let actions = ctx.take_actions();
+            let cancelled_activity_ids = ctx.take_cancelled_activity_ids();
             let hist_after = ctx.inner.lock().unwrap().history.clone();
             let nondet = ctx.inner.lock().unwrap().nondeterminism_error.clone();
-            (hist_after, actions, Some(out), nondet)
+            (hist_after, actions, Some(out), nondet, cancelled_activity_ids)
         }
         Poll::Pending => {
             let actions = ctx.take_actions();
+            let cancelled_activity_ids = ctx.take_cancelled_activity_ids();
             let hist_after = ctx.inner.lock().unwrap().history.clone();
             let nondet = ctx.inner.lock().unwrap().nondeterminism_error.clone();
-            (hist_after, actions, None, nondet)
+            (hist_after, actions, None, nondet, cancelled_activity_ids)
         }
     }
 }

@@ -1373,7 +1373,6 @@ fn sequential_select2s_accumulate_cancelled_sources() {
 #[test]
 fn schedule_order_mismatch_triggers_nondeterminism() {
     use duroxide::run_turn_with_status;
-
     // Orchestration schedules ACTIVITY first, then TIMER
     let orchestrator = |ctx: OrchestrationContext| async move {
         let activity = ctx.schedule_activity("Task", "input");

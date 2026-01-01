@@ -1,4 +1,4 @@
-use crate::{Event, EventKind, providers::WorkItem};
+use crate::{Event, EventKind, providers::{ScheduledActivityIdentifier, WorkItem}};
 use tracing::warn;
 
 /// Reader for extracting metadata from orchestration history
@@ -271,6 +271,51 @@ impl HistoryManager {
 
         // Fallback - no OrchestrationStarted found
         (String::new(), None)
+    }
+
+    /// Compute the set of in-flight activities for this orchestration
+    ///
+    /// In-flight activities are those that have been scheduled (have an ActivityScheduled event)
+    /// but have not yet completed (no corresponding ActivityCompleted or ActivityFailed event
+    /// with matching source_event_id).
+    ///
+    /// This is used for activity cancellation via lock stealing - when an orchestration is
+    /// terminated, we delete the worker queue entries for any in-flight activities to signal
+    /// to the worker that the activity has been cancelled.
+    pub fn compute_inflight_activities(&self, instance: &str, execution_id: u64) -> Vec<ScheduledActivityIdentifier> {
+        // Collect all scheduled activity event IDs
+        let scheduled: std::collections::HashSet<u64> = self
+            .full_history_iter()
+            .filter_map(|e| {
+                if matches!(&e.kind, EventKind::ActivityScheduled { .. }) {
+                    Some(e.event_id)
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        // Collect all completed/failed activity source_event_ids (the ActivityScheduled event_id they reference)
+        let completed: std::collections::HashSet<u64> = self
+            .full_history_iter()
+            .filter_map(|e| {
+                if matches!(&e.kind, EventKind::ActivityCompleted { .. } | EventKind::ActivityFailed { .. }) {
+                    e.source_event_id
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        // In-flight = scheduled - completed
+        scheduled
+            .difference(&completed)
+            .map(|&activity_id| ScheduledActivityIdentifier {
+                instance: instance.to_string(),
+                execution_id,
+                activity_id,
+            })
+            .collect()
     }
 }
 

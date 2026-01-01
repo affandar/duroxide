@@ -25,7 +25,7 @@ pub async fn test_worker_queue_fifo_ordering<F: ProviderFactory>(factory: &F) {
 
     // Dequeue all 5 and verify order
     for i in 0..5 {
-        let (item, _token, _, _) = provider
+        let (item, _token, _) = provider
             .fetch_work_item(Duration::from_secs(30), Duration::ZERO)
             .await
             .unwrap()
@@ -69,7 +69,7 @@ pub async fn test_worker_peek_lock_semantics<F: ProviderFactory>(factory: &F) {
         .unwrap();
 
     // Dequeue (gets item + token)
-    let (item, token, _, _) = provider
+    let (item, token, _) = provider
         .fetch_work_item(Duration::from_secs(30), Duration::ZERO)
         .await
         .unwrap()
@@ -146,6 +146,7 @@ pub async fn test_worker_ack_atomicity<F: ProviderFactory>(factory: &F) {
             vec![],
             vec![],
             ExecutionMetadata::default(),
+            vec![],
         )
         .await
         .unwrap();
@@ -163,7 +164,7 @@ pub async fn test_worker_ack_atomicity<F: ProviderFactory>(factory: &F) {
         .unwrap();
 
     // Dequeue and get token
-    let (_item, token, _, _) = provider
+    let (_item, token, _) = provider
         .fetch_work_item(Duration::from_secs(30), Duration::ZERO)
         .await
         .unwrap()
@@ -244,6 +245,7 @@ pub async fn test_timer_delayed_visibility<F: ProviderFactory>(factory: &F) {
             vec![],
             vec![],
             ExecutionMetadata::default(),
+            vec![],
         )
         .await
         .unwrap();
@@ -308,7 +310,7 @@ pub async fn test_lost_lock_token_handling<F: ProviderFactory>(factory: &F) {
         .unwrap();
 
     // Dequeue (gets token)
-    let (_item, _token, _, _) = provider
+    let (_item, _token, _) = provider
         .fetch_work_item(lock_timeout, Duration::ZERO)
         .await
         .unwrap()
@@ -330,7 +332,7 @@ pub async fn test_lost_lock_token_handling<F: ProviderFactory>(factory: &F) {
     tokio::time::sleep(lock_timeout + Duration::from_millis(100)).await;
 
     // Dequeue again → should succeed → item redelivered
-    let (item2, _token2, _, _) = provider
+    let (item2, _token2, _) = provider
         .fetch_work_item(lock_timeout, Duration::ZERO)
         .await
         .unwrap()
@@ -366,7 +368,7 @@ pub async fn test_worker_item_immediate_visibility<F: ProviderFactory>(factory: 
         "Newly enqueued worker item should be immediately visible"
     );
 
-    let (item, token, _, _) = result.unwrap();
+    let (item, token, _) = result.unwrap();
     assert!(matches!(item, WorkItem::ActivityExecute { name, .. } if name == "TestActivity"));
 
     // Clean up
@@ -417,7 +419,7 @@ pub async fn test_worker_delayed_visibility_skips_future_items<F: ProviderFactor
         .unwrap();
 
     // Fetch first item
-    let (item1, token1, _, _) = provider
+    let (item1, token1, _) = provider
         .fetch_work_item(lock_timeout, Duration::ZERO)
         .await
         .unwrap()
@@ -429,7 +431,7 @@ pub async fn test_worker_delayed_visibility_skips_future_items<F: ProviderFactor
     provider.abandon_work_item(&token1, Some(delay), false).await.unwrap();
 
     // Fetch again - should get second item (first is delayed even though unlocked)
-    let (item2, token2, _, _) = provider
+    let (item2, token2, _) = provider
         .fetch_work_item(lock_timeout, Duration::ZERO)
         .await
         .unwrap()
@@ -453,7 +455,7 @@ pub async fn test_worker_delayed_visibility_skips_future_items<F: ProviderFactor
     tokio::time::sleep(delay + Duration::from_millis(100)).await;
 
     // Now first item should be visible again
-    let (item3, token3, _, _) = provider
+    let (item3, token3, _) = provider
         .fetch_work_item(lock_timeout, Duration::ZERO)
         .await
         .unwrap()
