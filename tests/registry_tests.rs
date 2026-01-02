@@ -8,28 +8,28 @@ use std::sync::{Arc, Mutex};
 
 // Helper orchestrations
 async fn orch1(_ctx: OrchestrationContext, input: String) -> Result<String, String> {
-    Ok(format!("orch1: {}", input))
+    Ok(format!("orch1: {input}"))
 }
 
 async fn orch2(_ctx: OrchestrationContext, input: String) -> Result<String, String> {
-    Ok(format!("orch2: {}", input))
+    Ok(format!("orch2: {input}"))
 }
 
 async fn orch3(_ctx: OrchestrationContext, input: String) -> Result<String, String> {
-    Ok(format!("orch3: {}", input))
+    Ok(format!("orch3: {input}"))
 }
 
 // Helper activities
 async fn activity1(_ctx: ActivityContext, input: String) -> Result<String, String> {
-    Ok(format!("activity1: {}", input))
+    Ok(format!("activity1: {input}"))
 }
 
 async fn activity2(_ctx: ActivityContext, input: String) -> Result<String, String> {
-    Ok(format!("activity2: {}", input))
+    Ok(format!("activity2: {input}"))
 }
 
 async fn activity3(_ctx: ActivityContext, input: String) -> Result<String, String> {
-    Ok(format!("activity3: {}", input))
+    Ok(format!("activity3: {input}"))
 }
 
 #[test]
@@ -593,7 +593,7 @@ fn test_activity_register_typed() {
 
 #[test]
 fn test_register_all() {
-    let handler = |_ctx: OrchestrationContext, input: String| async move { Ok(format!("processed: {}", input)) };
+    let handler = |_ctx: OrchestrationContext, input: String| async move { Ok(format!("processed: {input}")) };
 
     let reg = OrchestrationRegistry::builder()
         .register_all(vec![("orch1", handler), ("orch2", handler), ("orch3", handler)])

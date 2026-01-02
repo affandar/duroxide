@@ -442,7 +442,9 @@ pub use runtime::{
 };
 
 // Re-export management types for convenience
-pub use providers::{ScheduledActivityIdentifier, ExecutionInfo, InstanceInfo, ProviderAdmin, QueueDepths, SystemMetrics};
+pub use providers::{
+    ExecutionInfo, InstanceInfo, ProviderAdmin, QueueDepths, ScheduledActivityIdentifier, SystemMetrics,
+};
 
 // Type aliases for improved readability and maintainability
 /// Shared reference to a Provider implementation
@@ -637,10 +639,7 @@ impl ErrorDetails {
                 ..
             } => match message_type {
                 PoisonMessageType::Orchestration { instance, .. } => {
-                    format!(
-                        "poison: orchestration {} exceeded {} attempts (max {})",
-                        instance, attempt_count, max_attempts
-                    )
+                    format!("poison: orchestration {instance} exceeded {attempt_count} attempts (max {max_attempts})")
                 }
                 PoisonMessageType::Activity {
                     activity_name,
@@ -648,8 +647,7 @@ impl ErrorDetails {
                     ..
                 } => {
                     format!(
-                        "poison: activity {}#{} exceeded {} attempts (max {})",
-                        activity_name, activity_id, attempt_count, max_attempts
+                        "poison: activity {activity_name}#{activity_id} exceeded {attempt_count} attempts (max {max_attempts})"
                     )
                 }
             },
@@ -2382,16 +2380,15 @@ pub fn run_turn_with_status<O, F>(
 where
     F: Future<Output = O>,
 {
-    let (history, actions, output, nondet, _cancelled_activity_ids) =
-        run_turn_with_status_and_cancellations(
-            history,
-            execution_id,
-            instance_id,
-            orchestration_name,
-            orchestration_version,
-            worker_id,
-            orchestrator,
-        );
+    let (history, actions, output, nondet, _cancelled_activity_ids) = run_turn_with_status_and_cancellations(
+        history,
+        execution_id,
+        instance_id,
+        orchestration_name,
+        orchestration_version,
+        worker_id,
+        orchestrator,
+    );
 
     (history, actions, output, nondet)
 }

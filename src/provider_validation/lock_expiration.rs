@@ -48,7 +48,15 @@ pub async fn test_lock_expires_after_timeout<F: ProviderFactory>(factory: &F) {
 
     // Original lock token should no longer work
     let result = provider
-        .ack_orchestration_item(&lock_token, 1, vec![], vec![], vec![], ExecutionMetadata::default(), vec![])
+        .ack_orchestration_item(
+            &lock_token,
+            1,
+            vec![],
+            vec![],
+            vec![],
+            ExecutionMetadata::default(),
+            vec![],
+        )
         .await;
     assert!(result.is_err());
     tracing::info!("✓ Test passed: lock expiration verified");
@@ -345,9 +353,9 @@ pub async fn test_worker_lock_renewal_extends_timeout<F: ProviderFactory>(factor
     let provider = Arc::new(factory.create_provider().await);
     let lock_timeout = factory.lock_timeout();
 
-    use crate::providers::{ExecutionMetadata, WorkItem};
     use crate::provider_validation::start_item;
-    use crate::{Event, EventKind, INITIAL_EXECUTION_ID, INITIAL_EVENT_ID};
+    use crate::providers::{ExecutionMetadata, WorkItem};
+    use crate::{Event, EventKind, INITIAL_EVENT_ID, INITIAL_EXECUTION_ID};
 
     let instance = "test-lock-renewal-extends";
 

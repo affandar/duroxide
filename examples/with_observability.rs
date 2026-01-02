@@ -43,13 +43,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             // Simulate some work
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
             ctx.trace_info("Greeting activity complete");
-            Ok(format!("Hello, {}!", name))
+            Ok(format!("Hello, {name}!"))
         })
         .register("Farewell", |ctx: ActivityContext, name: String| async move {
             ctx.trace_info("Farewell activity started");
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
             ctx.trace_info("Farewell activity complete");
-            Ok(format!("Goodbye, {}!", name))
+            Ok(format!("Goodbye, {name}!"))
         })
         .build();
 
@@ -59,12 +59,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let greeting = ctx.schedule_activity("Greet", name.clone()).into_activity().await?;
 
-        ctx.trace_info(format!("Got greeting: {}", greeting));
+        ctx.trace_info(format!("Got greeting: {greeting}"));
 
         let farewell = ctx.schedule_activity("Farewell", name).into_activity().await?;
 
         ctx.trace_info("Orchestration completing");
-        Ok::<_, String>(format!("{} | {}", greeting, farewell))
+        Ok::<_, String>(format!("{greeting} | {farewell}"))
     };
 
     let orchestrations = OrchestrationRegistry::builder()
@@ -91,7 +91,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         Ok(OrchestrationStatus::Completed { output }) => {
             println!("\n✅ Orchestration completed successfully!");
-            println!("Output: {}", output);
+            println!("Output: {output}");
         }
         Ok(OrchestrationStatus::Failed { details }) => {
             println!("\n❌ Orchestration failed: {}", details.display_message());
@@ -100,7 +100,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("\n⏳ Orchestration still running");
         }
         Err(e) => {
-            println!("\n⚠️ Wait error: {:?}", e);
+            println!("\n⚠️ Wait error: {e:?}");
         }
     }
 

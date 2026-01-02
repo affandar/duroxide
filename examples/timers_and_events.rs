@@ -75,7 +75,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             // Simulate sending a reminder
             tokio::time::sleep(Duration::from_millis(25)).await;
             println!("📧 Reminder sent for request: {request_id}");
-            ctx.trace_warn(format!("Reminder sent for request {}", request_id));
+            ctx.trace_warn(format!("Reminder sent for request {request_id}"));
             Ok(format!("Reminder sent for {request_id}"))
         })
         .build();

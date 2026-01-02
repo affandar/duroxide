@@ -6,7 +6,7 @@
 //! - Handles orchestration execution and atomic commits
 //! - Renews locks during long-running orchestration turns
 
-use crate::providers::{ScheduledActivityIdentifier, ExecutionMetadata, ProviderError, WorkItem};
+use crate::providers::{ExecutionMetadata, ProviderError, ScheduledActivityIdentifier, WorkItem};
 use crate::{Event, EventKind};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -666,15 +666,10 @@ impl Runtime {
         }
 
         // Run the atomic execution to get all changes, passing the resolved handler
-        let (
-            _exec_history_delta,
-            exec_worker_items,
-            exec_orchestrator_items,
-            exec_cancelled_activities,
-            _result,
-        ) = Arc::clone(self)
-            .run_single_execution_atomic(instance, history_mgr, workitem_reader, execution_id, worker_id, handler)
-            .await;
+        let (_exec_history_delta, exec_worker_items, exec_orchestrator_items, exec_cancelled_activities, _result) =
+            Arc::clone(self)
+                .run_single_execution_atomic(instance, history_mgr, workitem_reader, execution_id, worker_id, handler)
+                .await;
 
         // Combine all changes (history already in history_mgr via mutation)
         worker_items.extend(exec_worker_items);

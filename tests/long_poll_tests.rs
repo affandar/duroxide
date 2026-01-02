@@ -1,4 +1,6 @@
-use duroxide::providers::{ScheduledActivityIdentifier, ExecutionMetadata, OrchestrationItem, Provider, ProviderError, WorkItem};
+use duroxide::providers::{
+    ExecutionMetadata, OrchestrationItem, Provider, ProviderError, ScheduledActivityIdentifier, WorkItem,
+};
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self, RuntimeOptions};
 use duroxide::{ActivityContext, Client, Event, OrchestrationContext, OrchestrationRegistry};
@@ -176,9 +178,7 @@ async fn test_long_poll_waits_for_timeout() {
     assert!(result.is_none(), "Should return None");
     assert!(
         elapsed >= timeout,
-        "Should wait at least timeout duration (elapsed: {:?}, expected: {:?})",
-        elapsed,
-        timeout
+        "Should wait at least timeout duration (elapsed: {elapsed:?}, expected: {timeout:?})"
     );
 }
 
@@ -211,14 +211,11 @@ async fn test_long_poll_returns_early_on_work() {
     assert!(result.is_some(), "Should return Some item");
     assert!(
         elapsed < timeout,
-        "Should return before timeout (elapsed: {:?}, timeout: {:?})",
-        elapsed,
-        timeout
+        "Should return before timeout (elapsed: {elapsed:?}, timeout: {timeout:?})"
     );
     assert!(
         elapsed >= Duration::from_millis(150),
-        "Should wait for work to arrive (elapsed: {:?})",
-        elapsed
+        "Should wait for work to arrive (elapsed: {elapsed:?})"
     );
 }
 

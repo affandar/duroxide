@@ -181,7 +181,10 @@ pub async fn run_stress_test(
 
             // Wait for completion
             match client_clone
-                .wait_for_orchestration(&instance, std::time::Duration::from_secs(config_clone.wait_timeout_secs))
+                .wait_for_orchestration(
+                    &instance,
+                    std::time::Duration::from_secs(config_clone.wait_timeout_secs),
+                )
                 .await
             {
                 Ok(crate::OrchestrationStatus::Completed { .. }) => {

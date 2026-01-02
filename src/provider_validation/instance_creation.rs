@@ -78,7 +78,15 @@ pub async fn test_instance_creation_via_metadata<F: ProviderFactory>(factory: &F
 
     // Clean up
     provider
-        .ack_orchestration_item(&lock_token2, 1, vec![], vec![], vec![], ExecutionMetadata::default(), vec![])
+        .ack_orchestration_item(
+            &lock_token2,
+            1,
+            vec![],
+            vec![],
+            vec![],
+            ExecutionMetadata::default(),
+            vec![],
+        )
         .await
         .unwrap();
 
@@ -219,7 +227,15 @@ pub async fn test_null_version_handling<F: ProviderFactory>(factory: &F) {
 
     // Clean up
     provider
-        .ack_orchestration_item(&lock_token2, 1, vec![], vec![], vec![], ExecutionMetadata::default(), vec![])
+        .ack_orchestration_item(
+            &lock_token2,
+            1,
+            vec![],
+            vec![],
+            vec![],
+            ExecutionMetadata::default(),
+            vec![],
+        )
         .await
         .unwrap();
 

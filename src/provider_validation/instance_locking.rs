@@ -96,7 +96,15 @@ pub async fn test_invalid_lock_token_rejection<F: ProviderFactory>(factory: &F) 
 
     // Try to ack with invalid token
     let result = provider
-        .ack_orchestration_item("invalid-token", 1, vec![], vec![], vec![], ExecutionMetadata::default(), vec![])
+        .ack_orchestration_item(
+            "invalid-token",
+            1,
+            vec![],
+            vec![],
+            vec![],
+            ExecutionMetadata::default(),
+            vec![],
+        )
         .await;
     assert!(result.is_err(), "Should reject invalid lock token");
 
@@ -388,7 +396,15 @@ pub async fn test_message_tagging_during_lock<F: ProviderFactory>(factory: &F) {
 
     // Ack (deletes only messages with lock_token)
     provider
-        .ack_orchestration_item(&lock_token, 1, vec![], vec![], vec![], ExecutionMetadata::default(), vec![])
+        .ack_orchestration_item(
+            &lock_token,
+            1,
+            vec![],
+            vec![],
+            vec![],
+            ExecutionMetadata::default(),
+            vec![],
+        )
         .await
         .unwrap();
 
@@ -475,7 +491,15 @@ pub async fn test_ack_only_affects_locked_messages<F: ProviderFactory>(factory: 
 
     // Ack with lock_token - should only delete message 1 (locked messages)
     provider
-        .ack_orchestration_item(&lock_token, 1, vec![], vec![], vec![], ExecutionMetadata::default(), vec![])
+        .ack_orchestration_item(
+            &lock_token,
+            1,
+            vec![],
+            vec![],
+            vec![],
+            ExecutionMetadata::default(),
+            vec![],
+        )
         .await
         .unwrap();
 

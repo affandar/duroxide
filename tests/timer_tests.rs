@@ -557,9 +557,7 @@ async fn timer_fires_at_correct_time_after_previous_timer() {
         } else {
             // Activity won - correct behavior
             match output {
-                duroxide::DurableOutput::Activity(result) => {
-                    result.unwrap_or_else(|e| format!("activity_failed: {}", e))
-                }
+                duroxide::DurableOutput::Activity(result) => result.unwrap_or_else(|e| format!("activity_failed: {e}")),
                 _ => "unexpected_output".to_string(),
             }
         };
@@ -602,6 +600,6 @@ async fn timer_fires_at_correct_time_after_previous_timer() {
         duroxide::runtime::OrchestrationStatus::Failed { details } => {
             panic!("Orchestration failed: {}", details.display_message());
         }
-        _ => panic!("Unexpected status: {:?}", status),
+        _ => panic!("Unexpected status: {status:?}"),
     }
 }

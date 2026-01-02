@@ -61,7 +61,7 @@ async fn single_thread_basic_orchestration() {
         OrchestrationStatus::Failed { details } => {
             panic!("Orchestration failed: {}", details.display_message());
         }
-        _ => panic!("Unexpected status: {:?}", status),
+        _ => panic!("Unexpected status: {status:?}"),
     }
 
     rt.shutdown(None).await;
@@ -112,7 +112,7 @@ async fn single_thread_sequential_activities() {
         OrchestrationStatus::Failed { details } => {
             panic!("Orchestration failed: {}", details.display_message());
         }
-        _ => panic!("Unexpected status: {:?}", status),
+        _ => panic!("Unexpected status: {status:?}"),
     }
 
     rt.shutdown(None).await;
@@ -153,7 +153,7 @@ async fn single_thread_timer_handling() {
         OrchestrationStatus::Failed { details } => {
             panic!("Orchestration failed: {}", details.display_message());
         }
-        _ => panic!("Unexpected status: {:?}", status),
+        _ => panic!("Unexpected status: {status:?}"),
     }
 
     rt.shutdown(None).await;
@@ -199,7 +199,7 @@ async fn single_thread_continue_as_new() {
         OrchestrationStatus::Failed { details } => {
             panic!("Orchestration failed: {}", details.display_message());
         }
-        _ => panic!("Unexpected status: {:?}", status),
+        _ => panic!("Unexpected status: {status:?}"),
     }
 
     rt.shutdown(None).await;
@@ -251,7 +251,7 @@ async fn single_thread_concurrent_orchestrations() {
             OrchestrationStatus::Failed { details } => {
                 panic!("Orchestration {} failed: {}", i, details.display_message());
             }
-            _ => panic!("Unexpected status for {}: {:?}", i, status),
+            _ => panic!("Unexpected status for {i}: {status:?}"),
         }
     }
 
@@ -309,7 +309,7 @@ async fn single_thread_single_concurrency() {
         OrchestrationStatus::Failed { details } => {
             panic!("Orchestration failed: {}", details.display_message());
         }
-        _ => panic!("Unexpected status: {:?}", status),
+        _ => panic!("Unexpected status: {status:?}"),
     }
 
     rt.shutdown(None).await;
@@ -554,8 +554,7 @@ async fn single_thread_1x1_runaway_activity_aborted() {
     let elapsed = start.elapsed();
     assert!(
         elapsed < Duration::from_secs(10),
-        "Activity should have been aborted before full 30s run; elapsed: {:?}",
-        elapsed
+        "Activity should have been aborted before full 30s run; elapsed: {elapsed:?}"
     );
 
     tracing::info!("✓ Single-thread 1x1 runaway activity aborted after grace period");

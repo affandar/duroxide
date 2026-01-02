@@ -147,7 +147,7 @@ fn select2_loser_timer_does_not_block_later_timer() {
     eprintln!("\n=== select2_loser_timer_does_not_block_later_timer ===");
     eprintln!("Final History: {} events", final_history.len());
     eprintln!("Actions: {}", actions.len());
-    eprintln!("Output: {:?}", output);
+    eprintln!("Output: {output:?}");
 
     assert!(
         output.is_some(),
@@ -293,10 +293,10 @@ fn multiple_retry_pattern_then_timer_completes() {
     let orchestrator = |ctx: OrchestrationContext| async move {
         // Simulate 3x schedule_activity_with_retry (each uses select2 internally)
         for i in 0..3 {
-            let activity = ctx.schedule_activity("Task", &format!("input{}", i));
+            let activity = ctx.schedule_activity("Task", format!("input{i}"));
             let timeout = ctx.schedule_timer(Duration::from_secs(30));
             let (winner, _) = ctx.select2(activity, timeout).await;
-            assert_eq!(winner, 0, "activity should win retry {}", i);
+            assert_eq!(winner, 0, "activity should win retry {i}");
         }
 
         // Final await - should not be blocked by 3 stale timeout timers
@@ -1183,10 +1183,10 @@ fn sequential_select2s_accumulate_cancelled_sources() {
     let orchestrator = |ctx: OrchestrationContext| async move {
         // 5 sequential select2s, each activity wins
         for i in 0..5 {
-            let activity = ctx.schedule_activity("Task", &format!("input{}", i));
+            let activity = ctx.schedule_activity("Task", format!("input{i}"));
             let timeout = ctx.schedule_timer(Duration::from_secs(30));
             let (winner, _) = ctx.select2(activity, timeout).await;
-            assert_eq!(winner, 0, "activity {} should win", i);
+            assert_eq!(winner, 0, "activity {i} should win");
         }
 
         // Final timer - should complete despite 5 stale timers
@@ -1431,9 +1431,8 @@ fn schedule_order_mismatch_triggers_nondeterminism() {
     let err = nondeterminism_error.unwrap();
     assert!(
         err.contains("TimerCreated") && err.contains("ActivityScheduled"),
-        "Error should mention the mismatch: got '{}'",
-        err
+        "Error should mention the mismatch: got '{err}'"
     );
 
-    eprintln!("\n✅ Nondeterminism detected: {}", err);
+    eprintln!("\n✅ Nondeterminism detected: {err}");
 }

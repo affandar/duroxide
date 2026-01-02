@@ -737,10 +737,7 @@ pub async fn test_cancelled_activities_deleted_from_worker_queue<F: ProviderFact
         .expect("Should have activity in queue");
 
     // Put it back so we can test cancellation
-    provider
-        .abandon_work_item(&token1, None, false)
-        .await
-        .unwrap();
+    provider.abandon_work_item(&token1, None, false).await.unwrap();
 
     // 3. Trigger another orchestration turn that cancels activities 1 and 2
     provider
@@ -797,7 +794,10 @@ pub async fn test_cancelled_activities_deleted_from_worker_queue<F: ProviderFact
 
     match remaining_item {
         WorkItem::ActivityExecute { id, .. } => {
-            assert_eq!(id, 3, "Only activity 3 should remain; activities 1 and 2 should be cancelled");
+            assert_eq!(
+                id, 3,
+                "Only activity 3 should remain; activities 1 and 2 should be cancelled"
+            );
         }
         _ => panic!("Expected ActivityExecute"),
     }
@@ -847,7 +847,7 @@ pub async fn test_ack_work_item_fails_when_entry_deleted<F: ProviderFactory>(fac
         result: "done".to_string(),
     };
     let result = provider.ack_work_item(&lock_token, Some(completion)).await;
-    
+
     assert!(result.is_err(), "ack_work_item should fail when entry already deleted");
     let err = result.unwrap_err();
     assert!(
@@ -888,7 +888,7 @@ pub async fn test_renew_fails_when_entry_deleted<F: ProviderFactory>(factory: &F
     let result = provider
         .renew_work_item_lock(&lock_token, Duration::from_secs(30))
         .await;
-    
+
     assert!(result.is_err(), "renew_work_item_lock should fail when entry deleted");
 
     tracing::info!("✓ Test passed: renew fails when entry deleted (cancellation signal)");
@@ -1063,7 +1063,10 @@ pub async fn test_batch_cancellation_deletes_multiple_activities<F: ProviderFact
         .fetch_work_item(Duration::from_millis(100), Duration::ZERO)
         .await
         .unwrap();
-    assert!(remaining.is_none(), "All activities should be cancelled; worker queue should be empty");
+    assert!(
+        remaining.is_none(),
+        "All activities should be cancelled; worker queue should be empty"
+    );
 
     tracing::info!("✓ Test passed: batch cancellation deletes multiple activities atomically");
 }

@@ -521,7 +521,7 @@ async fn test_select2_loser_event_consumed_during_replay() {
                 let activity2 = ctx.schedule_activity("FastFailActivity", "");
                 let second_result = activity2.into_activity().await;
 
-                Ok(format!("first: {}, second: {:?}", first_error, second_result))
+                Ok(format!("first: {first_error}, second: {second_result:?}"))
             },
         )
         .build();

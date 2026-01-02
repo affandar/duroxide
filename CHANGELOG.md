@@ -5,6 +5,121 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.8] - 2026-01-02
+
+**Release:** <https://crates.io/crates/duroxide/0.1.8>
+
+### Added
+
+- **Lock-stealing activity cancellation** - New mechanism for cancelling in-flight activities
+  - Activities are cancelled by deleting their worker queue entries ("lock stealing")
+  - Workers detect cancellation when lock renewal fails (entry missing)
+  - More efficient than polling execution state on every renewal
+  - Enables batch cancellation of multiple activities atomically
+
+- **`ScheduledActivityIdentifier`** - New struct for identifying activities in worker queue
+  - Fields: `instance` (String), `execution_id` (u64), `activity_id` (u64)
+  - Used by `ack_orchestration_item` to specify activities to cancel
+  - Exported from `duroxide::providers`
+
+- **Provider validation tests for lock-stealing** - 5 new tests
+  - `test_cancelled_activities_deleted_from_worker_queue` - Verify deletion during ack
+  - `test_ack_work_item_fails_when_entry_deleted` - Verify permanent error on stolen lock
+  - `test_renew_fails_when_entry_deleted` - Verify renewal fails on stolen lock
+  - `test_cancelling_nonexistent_activities_is_idempotent` - Verify no error for missing entries
+  - `test_batch_cancellation_deletes_multiple_activities` - Verify batch deletion
+
+- **Worker queue activity identity columns** - Store activity identity for cancellation
+  - New migration: `20240104000000_add_worker_activity_identity.sql`
+  - SQLite provider stores `instance_id`, `execution_id`, `activity_id` on ActivityExecute items
+
+### Changed
+
+- **BREAKING:** `Provider::ack_orchestration_item` signature changed
+  - Added 7th parameter: `cancelled_activities: Vec<ScheduledActivityIdentifier>`
+  - Provider must delete matching worker queue entries atomically in same transaction
+
+- **BREAKING:** `Provider::fetch_work_item` return type simplified
+  - Changed from `(WorkItem, String, u32, ExecutionState)` to `(WorkItem, String, u32)`
+  - Removed `ExecutionState` - cancellation detected via lock renewal failure instead
+
+- **BREAKING:** `Provider::renew_work_item_lock` return type changed
+  - Changed from `Result<ExecutionState, ProviderError>` to `Result<(), ProviderError>`
+  - Failure indicates lock was stolen (activity cancelled) or expired
+
+- **BREAKING:** `Provider::ack_work_item` must fail when entry missing
+  - Returns permanent error if work item entry was deleted (lock stolen)
+  - Signals to worker that activity was cancelled
+
+- Provider validation test count: 80 tests (up from 75)
+
+### Removed
+
+- **`ExecutionState` enum removed from Provider API** - No longer needed
+  - Was used for state-polling cancellation approach
+  - Lock-stealing provides more efficient cancellation mechanism
+  - Provider validation tests for ExecutionState still exist (legacy support during migration)
+
+### Migration Guide
+
+**Provider implementers - Required changes:**
+
+1. Update `ack_orchestration_item` signature:
+```rust
+async fn ack_orchestration_item(
+    &self,
+    lock_token: &str,
+    execution_id: u64,
+    history_delta: Vec<Event>,
+    worker_items: Vec<WorkItem>,
+    orchestrator_items: Vec<WorkItem>,
+    metadata: ExecutionMetadata,
+    cancelled_activities: Vec<ScheduledActivityIdentifier>,  // NEW
+) -> Result<(), ProviderError>;
+```
+
+2. Update `fetch_work_item` return type:
+```rust
+async fn fetch_work_item(...) -> Result<Option<(WorkItem, String, u32)>, ProviderError>;
+// Removed ExecutionState from tuple
+```
+
+3. Update `renew_work_item_lock` return type:
+```rust
+async fn renew_work_item_lock(...) -> Result<(), ProviderError>;
+// Returns () instead of ExecutionState
+```
+
+4. Update `ack_work_item` to fail on missing entry:
+```rust
+// Return error if entry not found (lock was stolen)
+if rows_affected == 0 {
+    return Err(ProviderError::permanent("ack_work_item", "Entry not found (lock stolen)"));
+}
+```
+
+5. Store activity identity on worker queue entries:
+```sql
+-- Add columns to worker_queue table
+ALTER TABLE worker_queue ADD COLUMN instance_id TEXT;
+ALTER TABLE worker_queue ADD COLUMN execution_id INTEGER;
+ALTER TABLE worker_queue ADD COLUMN activity_id INTEGER;
+
+-- Add index for efficient cancellation
+CREATE INDEX idx_worker_queue_activity ON worker_queue(instance_id, execution_id, activity_id);
+```
+
+6. Implement batch deletion in `ack_orchestration_item`:
+```rust
+// Delete cancelled activities atomically within the ack transaction
+for activity in cancelled_activities {
+    DELETE FROM worker_queue 
+    WHERE instance_id = activity.instance 
+      AND execution_id = activity.execution_id 
+      AND activity_id = activity.activity_id;
+}
+```
+
 ## [0.1.7] - 2025-12-28
 
 **Release:** <https://crates.io/crates/duroxide/0.1.7>

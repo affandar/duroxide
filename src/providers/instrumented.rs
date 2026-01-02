@@ -4,7 +4,9 @@ use async_trait::async_trait;
 use std::sync::Arc;
 use std::time::Duration;
 
-use super::{ScheduledActivityIdentifier, ExecutionMetadata, OrchestrationItem, Provider, ProviderAdmin, ProviderError, WorkItem};
+use super::{
+    ExecutionMetadata, OrchestrationItem, Provider, ProviderAdmin, ProviderError, ScheduledActivityIdentifier, WorkItem,
+};
 use crate::Event;
 use crate::runtime::observability::MetricsProvider;
 

@@ -340,7 +340,15 @@ async fn test_ack_orchestration_item_error_handling() {
 
     // Try to ack with invalid token
     let result = store
-        .ack_orchestration_item("invalid-token", 1, vec![], vec![], vec![], ExecutionMetadata::default(), vec![])
+        .ack_orchestration_item(
+            "invalid-token",
+            1,
+            vec![],
+            vec![],
+            vec![],
+            ExecutionMetadata::default(),
+            vec![],
+        )
         .await;
 
     assert!(result.is_err());

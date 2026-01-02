@@ -4,8 +4,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tracing::debug;
 
 use super::{
-    ScheduledActivityIdentifier, ExecutionInfo, InstanceInfo, OrchestrationItem, Provider, ProviderAdmin, ProviderError,
-    QueueDepths, SystemMetrics, WorkItem,
+    ExecutionInfo, InstanceInfo, OrchestrationItem, Provider, ProviderAdmin, ProviderError, QueueDepths,
+    ScheduledActivityIdentifier, SystemMetrics, WorkItem,
 };
 use crate::{Event, EventKind};
 
@@ -379,9 +379,11 @@ impl SqliteProvider {
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_worker_available ON worker_queue(lock_token, id)")
             .execute(pool)
             .await?;
-        sqlx::query("CREATE INDEX IF NOT EXISTS idx_worker_identity ON worker_queue(instance_id, execution_id, activity_id)")
-            .execute(pool)
-            .await?;
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_worker_identity ON worker_queue(instance_id, execution_id, activity_id)",
+        )
+        .execute(pool)
+        .await?;
 
         Ok(())
     }
@@ -994,7 +996,7 @@ impl Provider for SqliteProvider {
                 count = cancelled_activities.len(),
                 "Cancelling activities via lock stealing"
             );
-            
+
             // Build batch DELETE with VALUES clause
             let placeholders: Vec<String> = cancelled_activities
                 .iter()
@@ -1005,7 +1007,7 @@ impl Provider for SqliteProvider {
                 "DELETE FROM worker_queue WHERE (instance_id, execution_id, activity_id) IN (VALUES {})",
                 placeholders.join(", ")
             );
-            
+
             let mut query = sqlx::query(&sql);
             for activity in &cancelled_activities {
                 query = query

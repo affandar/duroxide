@@ -446,7 +446,7 @@ async fn test_sqlite_file_concurrent_access() {
                     EventKind::OrchestrationStarted {
                         name: "TestOrch".to_string(),
                         version: "1.0.0".to_string(),
-                        input: format!("{{\"id\": {}}}", acked_count),
+                        input: format!("{{\"id\": {acked_count}}}"),
                         parent_instance: None,
                         parent_id: None,
                     },

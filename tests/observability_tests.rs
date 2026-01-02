@@ -617,17 +617,13 @@ async fn test_error_classification_metrics() {
             |ctx: OrchestrationContext, error_type: String| async move {
                 match error_type.as_str() {
                     "app" => {
-                        ctx.schedule_activity("FailActivity", "")
-                            .into_activity()
-                            .await
-                            .map_err(|e| e)?;
+                        ctx.schedule_activity("FailActivity", "").into_activity().await?;
                         Ok("unexpected".to_string())
                     }
                     "config" => {
                         ctx.schedule_activity("UnregisteredActivity", "")
                             .into_activity()
-                            .await
-                            .map_err(|e| e)?;
+                            .await?;
                         Ok("unexpected".to_string())
                     }
                     _ => Ok("ok".to_string()),
@@ -844,17 +840,13 @@ async fn test_separate_error_counters_exported() {
                 // Trigger config error by calling unregistered activity
                 ctx.schedule_activity("UnregisteredActivity", "")
                     .into_activity()
-                    .await
-                    .map_err(|e| e)?;
+                    .await?;
                 Ok("done".to_string())
             },
         )
         .register("AppErrorOrch", |ctx: OrchestrationContext, _input: String| async move {
             // Trigger app error
-            ctx.schedule_activity("FailActivity", "")
-                .into_activity()
-                .await
-                .map_err(|e| e)?;
+            ctx.schedule_activity("FailActivity", "").into_activity().await?;
             Ok("done".to_string())
         })
         .build();
@@ -907,7 +899,7 @@ async fn test_sub_orchestration_metrics() {
     let orchestrations = OrchestrationRegistry::builder()
         .register("ChildOrch", |ctx: OrchestrationContext, input: String| async move {
             let result = ctx.schedule_activity("ChildActivity", input).into_activity().await?;
-            Ok(format!("child: {}", result))
+            Ok(format!("child: {result}"))
         })
         .register("ParentOrch", |ctx: OrchestrationContext, _input: String| async move {
             // Call first sub-orchestration
@@ -922,7 +914,7 @@ async fn test_sub_orchestration_metrics() {
                 .into_sub_orchestration()
                 .await?;
 
-            Ok(format!("{} | {}", result1, result2))
+            Ok(format!("{result1} | {result2}"))
         })
         .build();
 
@@ -1211,7 +1203,7 @@ async fn test_queue_depth_gauges_tracking() {
     // Start multiple orchestrations quickly to exercise queue depth tracking
     for i in 0..5 {
         client
-            .start_orchestration(format!("queue-test-{}", i), "SlowOrch", "")
+            .start_orchestration(format!("queue-test-{i}"), "SlowOrch", "")
             .await
             .unwrap();
     }
@@ -1220,7 +1212,7 @@ async fn test_queue_depth_gauges_tracking() {
     // The gauges are automatically updated as items move through queues
     for i in 0..5 {
         let _ = client
-            .wait_for_orchestration(&format!("queue-test-{}", i), Duration::from_secs(10))
+            .wait_for_orchestration(&format!("queue-test-{i}"), Duration::from_secs(10))
             .await;
     }
 

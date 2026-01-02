@@ -9,7 +9,9 @@
 use async_trait::async_trait;
 use duroxide::providers::error::ProviderError;
 use duroxide::providers::sqlite::SqliteProvider;
-use duroxide::providers::{ScheduledActivityIdentifier, ExecutionMetadata, OrchestrationItem, Provider, ProviderAdmin, WorkItem};
+use duroxide::providers::{
+    ExecutionMetadata, OrchestrationItem, Provider, ProviderAdmin, ScheduledActivityIdentifier, WorkItem,
+};
 use duroxide::{Event, EventKind};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};

@@ -284,10 +284,10 @@ async fn e2e_orchestration_item_poison_fails_orchestration() {
                 // Message should be serialized work items
                 assert!(!message.is_empty(), "Message should contain serialized data");
             } else {
-                panic!("Expected Poison error, got: {:?}", details);
+                panic!("Expected Poison error, got: {details:?}");
             }
         }
-        other => panic!("Expected Failed status, got: {:?}", other),
+        other => panic!("Expected Failed status, got: {other:?}"),
     }
 
     rt.shutdown(None).await;
@@ -372,13 +372,13 @@ async fn e2e_activity_item_poison_fails_orchestration() {
                     assert_eq!(activity_name, "TestActivity");
                     assert!(activity_id > 0, "Activity ID should be positive");
                 } else {
-                    panic!("Expected Activity message type, got: {:?}", message_type);
+                    panic!("Expected Activity message type, got: {message_type:?}");
                 }
             } else {
-                panic!("Expected Poison error, got: {:?}", details);
+                panic!("Expected Poison error, got: {details:?}");
             }
         }
-        other => panic!("Expected Failed status, got: {:?}", other),
+        other => panic!("Expected Failed status, got: {other:?}"),
     }
 
     rt.shutdown(None).await;
@@ -459,15 +459,15 @@ async fn e2e_sub_orchestration_poison_fails_parent() {
                     );
                     assert_eq!(execution_id, INITIAL_EXECUTION_ID);
                 } else {
-                    panic!("Expected Orchestration message type, got: {:?}", message_type);
+                    panic!("Expected Orchestration message type, got: {message_type:?}");
                 }
 
                 assert!(!message.is_empty(), "Message should contain serialized data");
             } else {
-                panic!("Expected Poison error, got: {:?}", details);
+                panic!("Expected Poison error, got: {details:?}");
             }
         }
-        other => panic!("Expected Failed status, got: {:?}", other),
+        other => panic!("Expected Failed status, got: {other:?}"),
     }
 
     rt.shutdown(None).await;
@@ -539,8 +539,7 @@ async fn e2e_one_poisoned_activity_among_many() {
 
     assert!(
         matches!(status, OrchestrationStatus::Failed { .. }),
-        "Orchestration should fail due to one poisoned activity, got: {:?}",
-        status
+        "Orchestration should fail due to one poisoned activity, got: {status:?}"
     );
 
     rt.shutdown(None).await;
@@ -603,7 +602,7 @@ async fn e2e_custom_max_attempts_respected() {
                 panic!("Expected Poison error with custom max_attempts");
             }
         }
-        other => panic!("Expected Failed status, got: {:?}", other),
+        other => panic!("Expected Failed status, got: {other:?}"),
     }
 
     rt.shutdown(None).await;
@@ -689,13 +688,13 @@ async fn e2e_activity_poisons_suborchestration_poisons_parent() {
                 if let PoisonMessageType::Activity { activity_name, .. } = message_type {
                     assert_eq!(activity_name, "ChildActivity");
                 } else {
-                    panic!("Expected Activity message type, got: {:?}", message_type);
+                    panic!("Expected Activity message type, got: {message_type:?}");
                 }
             } else {
-                panic!("Expected Poison error, got: {:?}", details);
+                panic!("Expected Poison error, got: {details:?}");
             }
         }
-        other => panic!("Expected Failed status, got: {:?}", other),
+        other => panic!("Expected Failed status, got: {other:?}"),
     }
 
     rt.shutdown(None).await;

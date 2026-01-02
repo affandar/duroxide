@@ -60,7 +60,7 @@ async fn orchestration_with_custom_timeout_completes() {
     let acts = ActivityRegistry::builder()
         .register(
             "TestActivity",
-            |_ctx: duroxide::ActivityContext, input: String| async move { Ok(format!("processed: {}", input)) },
+            |_ctx: duroxide::ActivityContext, input: String| async move { Ok(format!("processed: {input}")) },
         )
         .build();
 
@@ -113,7 +113,7 @@ async fn very_short_lock_timeout_works() {
             "FastActivity",
             |_ctx: duroxide::ActivityContext, input: String| async move {
                 // Fast activity - completes well within 1 second
-                Ok(format!("processed: {}", input))
+                Ok(format!("processed: {input}"))
             },
         )
         .build();
@@ -170,7 +170,7 @@ async fn long_running_activity_with_lock_renewal() {
             "LongActivity",
             |_ctx: duroxide::ActivityContext, input: String| async move {
                 tokio::time::sleep(Duration::from_secs(6)).await;
-                Ok(format!("completed: {}", input))
+                Ok(format!("completed: {input}"))
             },
         )
         .build();
@@ -227,7 +227,7 @@ async fn short_activity_no_renewal_needed() {
             "QuickActivity",
             |_ctx: duroxide::ActivityContext, input: String| async move {
                 tokio::time::sleep(Duration::from_millis(500)).await;
-                Ok(format!("quick: {}", input))
+                Ok(format!("quick: {input}"))
             },
         )
         .build();
@@ -282,7 +282,7 @@ async fn lock_renewal_short_timeout() {
             "MediumActivity",
             |_ctx: duroxide::ActivityContext, input: String| async move {
                 tokio::time::sleep(Duration::from_secs(3)).await;
-                Ok(format!("medium: {}", input))
+                Ok(format!("medium: {input}"))
             },
         )
         .build();
@@ -340,7 +340,7 @@ async fn custom_renewal_buffer() {
             "LongActivity",
             |_ctx: duroxide::ActivityContext, input: String| async move {
                 tokio::time::sleep(Duration::from_secs(6)).await;
-                Ok(format!("done: {}", input))
+                Ok(format!("done: {input}"))
             },
         )
         .build();
@@ -396,7 +396,7 @@ async fn concurrent_activities_with_renewal() {
         let r2 = a2.into_activity().await?;
         let r3 = a3.into_activity().await?;
 
-        Ok(format!("{}, {}, {}", r1, r2, r3))
+        Ok(format!("{r1}, {r2}, {r3}"))
     };
 
     // Each activity takes 6 seconds
@@ -405,7 +405,7 @@ async fn concurrent_activities_with_renewal() {
             "LongActivity",
             |_ctx: duroxide::ActivityContext, input: String| async move {
                 tokio::time::sleep(Duration::from_secs(6)).await;
-                Ok(format!("completed-{}", input))
+                Ok(format!("completed-{input}"))
             },
         )
         .build();
@@ -508,7 +508,7 @@ async fn orchestration_lock_renewal_prevents_expiration() {
                 // The processing delay is injected by test hook BEFORE this code runs
                 // Schedule a quick activity to prove orchestration works
                 let result = ctx.schedule_activity("QuickActivity", "{}").into_activity().await?;
-                Ok(format!("completed: {}", result))
+                Ok(format!("completed: {result}"))
             },
         )
         .build();
@@ -546,7 +546,7 @@ async fn orchestration_lock_renewal_prevents_expiration() {
                 details.display_message()
             );
         }
-        other => panic!("Unexpected status: {:?}", other),
+        other => panic!("Unexpected status: {other:?}"),
     }
 
     rt.shutdown(None).await;

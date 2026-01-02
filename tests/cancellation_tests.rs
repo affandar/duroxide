@@ -467,7 +467,7 @@ async fn cancel_parent_with_multiple_children() {
         let mut futures = Vec::new();
         // Schedule 5 sub-orchestrations
         for i in 0..5 {
-            futures.push(ctx.schedule_sub_orchestration("MultiChild", format!("input-{}", i)));
+            futures.push(ctx.schedule_sub_orchestration("MultiChild", format!("input-{i}")));
         }
         // Wait for all (will never complete unless canceled)
         let results = ctx.join(futures).await;
@@ -823,10 +823,7 @@ async fn select2_loser_activity_receives_cancellation_signal() {
     // Orchestration should still complete normally.
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
     loop {
-        let hist = store
-            .read("inst-select2-loser-cancel")
-            .await
-            .unwrap_or_default();
+        let hist = store.read("inst-select2-loser-cancel").await.unwrap_or_default();
         if hist
             .iter()
             .any(|e| matches!(&e.kind, EventKind::OrchestrationCompleted { .. }))
@@ -1220,10 +1217,8 @@ async fn multiple_cancel_calls_are_idempotent() {
 
     // Cancel multiple times rapidly
     for i in 0..5 {
-        let result = client
-            .cancel_instance("inst-multi-cancel", format!("cancel-{}", i))
-            .await;
-        assert!(result.is_ok(), "Cancel call {} should succeed", i);
+        let result = client.cancel_instance("inst-multi-cancel", format!("cancel-{i}")).await;
+        assert!(result.is_ok(), "Cancel call {i} should succeed");
     }
 
     // Wait for orchestration to fail
@@ -1250,8 +1245,7 @@ async fn multiple_cancel_calls_are_idempotent() {
         .count();
     assert_eq!(
         cancel_requested_count, 1,
-        "Should only have one CancelRequested event, got {}",
-        cancel_requested_count
+        "Should only have one CancelRequested event, got {cancel_requested_count}"
     );
 
     // The reason should be from the first cancel (cancel-0)

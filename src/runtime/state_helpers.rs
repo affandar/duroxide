@@ -1,4 +1,7 @@
-use crate::{Event, EventKind, providers::{ScheduledActivityIdentifier, WorkItem}};
+use crate::{
+    Event, EventKind,
+    providers::{ScheduledActivityIdentifier, WorkItem},
+};
 use tracing::warn;
 
 /// Reader for extracting metadata from orchestration history
@@ -299,7 +302,10 @@ impl HistoryManager {
         let completed: std::collections::HashSet<u64> = self
             .full_history_iter()
             .filter_map(|e| {
-                if matches!(&e.kind, EventKind::ActivityCompleted { .. } | EventKind::ActivityFailed { .. }) {
+                if matches!(
+                    &e.kind,
+                    EventKind::ActivityCompleted { .. } | EventKind::ActivityFailed { .. }
+                ) {
                     e.source_event_id
                 } else {
                     None

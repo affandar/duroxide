@@ -396,7 +396,7 @@ async fn worker_abandon_on_ack_failure_enables_retry() {
         runtime::OrchestrationStatus::Completed { output } => {
             assert_eq!(output, "done");
         }
-        other => panic!("Unexpected status: {:?}", other),
+        other => panic!("Unexpected status: {other:?}"),
     }
 
     // Activity should have executed at least once

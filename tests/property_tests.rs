@@ -38,7 +38,7 @@ proptest! {
             // Simple orchestration that does one activity
             let activities = ActivityRegistry::builder()
                 .register("TestActivity", |_ctx, input: String| async move {
-                    Ok(format!("done-{}", input))
+                    Ok(format!("done-{input}"))
                 })
                 .build();
 
@@ -66,7 +66,7 @@ proptest! {
             .await;
 
             let client = Client::new(provider.clone());
-            let instance = format!("test-{}", orch_name);
+            let instance = format!("test-{orch_name}");
 
             client
                 .start_orchestration(&instance, &orch_name, input)
@@ -92,7 +92,7 @@ proptest! {
             for event in &history {
                 let event_id = event.event_id();
                 if event_id <= prev_id {
-                    return Err(format!("Event IDs not monotonic: {} <= {}", event_id, prev_id));
+                    return Err(format!("Event IDs not monotonic: {event_id} <= {prev_id}"));
                 }
                 prev_id = event_id;
             }
@@ -101,7 +101,7 @@ proptest! {
             let expected_ids: Vec<u64> = (1..=history.len() as u64).collect();
             let actual_ids: Vec<u64> = history.iter().map(|e| e.event_id()).collect();
             if actual_ids != expected_ids {
-                return Err(format!("Event IDs not contiguous: {:?} != {:?}", actual_ids, expected_ids));
+                return Err(format!("Event IDs not contiguous: {actual_ids:?} != {expected_ids:?}"));
             }
 
             Ok(())
@@ -153,7 +153,7 @@ proptest! {
             .await;
 
             let client = Client::new(provider.clone());
-            let instance = format!("test-{}", orch_name);
+            let instance = format!("test-{orch_name}");
 
             client
                 .start_orchestration(&instance, &orch_name, input)
@@ -183,7 +183,7 @@ proptest! {
 
             // Property: Should have exactly one terminal event
             if terminal_count != 1 {
-                return Err(format!("Expected exactly 1 terminal event, got {}", terminal_count));
+                return Err(format!("Expected exactly 1 terminal event, got {terminal_count}"));
             }
 
             // Property: Terminal event should be the last event
@@ -224,9 +224,9 @@ proptest! {
             // Register multiple activities using method chaining
             let mut activities_builder = ActivityRegistry::builder();
             for i in 0..activity_count {
-                let name = format!("Activity{}", i);
+                let name = format!("Activity{i}");
                 activities_builder = activities_builder.register(name.clone(), move |_ctx, input: String| async move {
-                    Ok(format!("done-{}", input))
+                    Ok(format!("done-{input}"))
                 });
             }
             let activities = activities_builder.build();
@@ -238,7 +238,7 @@ proptest! {
                     orch_name.clone(),
                     move |ctx: OrchestrationContext, input: String| async move {
                         for i in 0..activity_count_clone {
-                            let name = format!("Activity{}", i);
+                            let name = format!("Activity{i}");
                             let _ = ctx.schedule_activity(&name, input.clone()).into_activity().await;
                         }
                         Ok(input)
@@ -260,7 +260,7 @@ proptest! {
             .await;
 
             let client = Client::new(provider.clone());
-            let instance = format!("test-{}", orch_name);
+            let instance = format!("test-{orch_name}");
 
             client
                 .start_orchestration(&instance, &orch_name, input)
@@ -301,7 +301,7 @@ proptest! {
 
             // Property: Every scheduled activity should have a completion
             if scheduled_ids != completed_source_ids {
-                return Err(format!("All scheduled activities should have completions: scheduled={:?}, completed={:?}", scheduled_ids, completed_source_ids));
+                return Err(format!("All scheduled activities should have completions: scheduled={scheduled_ids:?}, completed={completed_source_ids:?}"));
             }
 
             // Property: Counts should match
@@ -336,9 +336,9 @@ proptest! {
         let result = tokio::runtime::Runtime::new().unwrap().block_on(async {
             let mut activities_builder = ActivityRegistry::builder();
             for i in 0..activity_count {
-                let name = format!("Activity{}", i);
+                let name = format!("Activity{i}");
                 activities_builder = activities_builder.register(name.clone(), move |_ctx, input: String| async move {
-                    Ok(format!("done-{}", input))
+                    Ok(format!("done-{input}"))
                 });
             }
             let activities = activities_builder.build();
@@ -349,7 +349,7 @@ proptest! {
                     orch_name.clone(),
                     move |ctx: OrchestrationContext, input: String| async move {
                         for i in 0..activity_count_clone {
-                            let name = format!("Activity{}", i);
+                            let name = format!("Activity{i}");
                             let _ = ctx.schedule_activity(&name, input.clone()).into_activity().await;
                         }
                         Ok(input)
@@ -371,7 +371,7 @@ proptest! {
             .await;
 
             let client = Client::new(provider.clone());
-            let instance = format!("test-{}", orch_name);
+            let instance = format!("test-{orch_name}");
 
             client
                 .start_orchestration(&instance, &orch_name, input)

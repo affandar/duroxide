@@ -100,7 +100,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         {
             Ok(r) => Ok::<_, String>(r),
             Err(e) => {
-                ctx.trace_error(format!("Activity failed: {}", e));
+                ctx.trace_error(format!("Activity failed: {e}"));
                 Err(e)
             }
         }
@@ -123,13 +123,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Run a mix of orchestrations
     for i in 1..=3 {
         client
-            .start_orchestration(&format!("fast-{}", i), "FastWorkflow", "data")
+            .start_orchestration(&format!("fast-{i}"), "FastWorkflow", "data")
             .await?;
     }
 
     for i in 1..=2 {
         client
-            .start_orchestration(&format!("slow-{}", i), "SlowWorkflow", "data")
+            .start_orchestration(&format!("slow-{i}"), "SlowWorkflow", "data")
             .await?;
     }
 

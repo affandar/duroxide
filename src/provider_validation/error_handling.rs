@@ -10,7 +10,15 @@ pub async fn test_invalid_lock_token_on_ack<F: ProviderFactory>(factory: &F) {
 
     // Attempt to ack with non-existent lock token
     let result = provider
-        .ack_orchestration_item("invalid-token", 1, vec![], vec![], vec![], ExecutionMetadata::default(), vec![])
+        .ack_orchestration_item(
+            "invalid-token",
+            1,
+            vec![],
+            vec![],
+            vec![],
+            ExecutionMetadata::default(),
+            vec![],
+        )
         .await;
 
     assert!(result.is_err());
