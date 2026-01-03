@@ -5,49 +5,6 @@ use std::task::{Context, Poll};
 
 use crate::{Action, Event, EventKind, OrchestrationContext};
 
-/// Helper function to check if a completion event can be consumed according to FIFO ordering.
-///
-/// Returns `true` if all completion events in history that occurred before the given
-/// `completion_event_id` have already been consumed (or are cancelled select2 losers).
-///
-/// # Arguments
-/// * `history` - The full event history
-/// * `consumed_completions` - Set of already consumed completion event IDs
-/// * `cancelled_source_ids` - Set of source_event_ids whose completions should be auto-skipped (select2 losers)
-/// * `completion_event_id` - The event ID we want to consume
-fn can_consume_completion(
-    history: &[Event],
-    consumed_completions: &std::collections::HashSet<u64>,
-    cancelled_source_ids: &std::collections::HashSet<u64>,
-    completion_event_id: u64,
-) -> bool {
-    history.iter().all(|e| {
-        match &e.kind {
-            // Completions with source_event_id - check if cancelled
-            EventKind::ActivityCompleted { .. }
-            | EventKind::ActivityFailed { .. }
-            | EventKind::TimerFired { .. }
-            | EventKind::SubOrchestrationCompleted { .. }
-            | EventKind::SubOrchestrationFailed { .. } => {
-                // source_event_id is now on the Event struct
-                if let Some(source_event_id) = e.source_event_id {
-                    // Cancelled completions (select2 losers) don't block - skip them
-                    if cancelled_source_ids.contains(&source_event_id) {
-                        return true;
-                    }
-                }
-                // Otherwise: if before ours, must be consumed
-                e.event_id >= completion_event_id || consumed_completions.contains(&e.event_id)
-            }
-            // External events don't have source_event_id - can't be cancelled via select2
-            EventKind::ExternalEvent { .. } => {
-                e.event_id >= completion_event_id || consumed_completions.contains(&e.event_id)
-            }
-            _ => true, // Non-completions don't affect ordering
-        }
-    })
-}
-
 #[derive(Debug, Clone)]
 pub enum DurableOutput {
     Activity(Result<String, String>),
@@ -93,8 +50,6 @@ pub(crate) enum Kind {
     },
 }
 
-// KindTag removed - no longer needed with cursor model
-
 impl Future for DurableFuture {
     type Output = DurableOutput;
     fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
@@ -104,29 +59,28 @@ impl Future for DurableFuture {
         // Common fields: this.claimed_event_id, this.ctx
         match &mut this.kind {
             Kind::Activity { name, input } => {
-                // Mutex lock should never fail in normal operation - if poisoned, it indicates a serious bug
                 let mut inner = this.ctx.inner.lock().expect("Mutex should not be poisoned");
 
                 // Step 1: Claim scheduling event_id if not already claimed
                 if this.claimed_event_id.get().is_none() {
-                    // Find next unclaimed SCHEDULING event in history (global order enforcement)
                     let mut found_event_id = None;
-                    for event in &inner.history {
+                    let start_idx = inner.scheduling_scan_cursor;
+                    
+                    for (idx, event) in inner.history.iter().enumerate().skip(start_idx) {
                         let eid = event.event_id;
                         if inner.claimed_scheduling_events.contains(&eid) {
                             continue;
                         }
                         match &event.kind {
                             EventKind::ActivityScheduled { name: n, input: inp } => {
-                                // MUST be our schedule next
                                 if n != name || inp != input {
-                                    // Record nondeterminism gracefully
                                     inner.nondeterminism_error = Some(format!(
                                         "nondeterministic: schedule order mismatch: next is ActivityScheduled('{n}','{inp}') but expected ActivityScheduled('{name}','{input}')"
                                     ));
                                     return Poll::Pending;
                                 }
                                 found_event_id = Some(eid);
+                                inner.scheduling_scan_cursor = idx + 1;
                                 break;
                             }
                             EventKind::TimerCreated { .. } => {
@@ -141,9 +95,7 @@ impl Future for DurableFuture {
                                 ));
                                 return Poll::Pending;
                             }
-                            EventKind::SubOrchestrationScheduled {
-                                name: sn, input: sin, ..
-                            } => {
+                            EventKind::SubOrchestrationScheduled { name: sn, input: sin, .. } => {
                                 inner.nondeterminism_error = Some(format!(
                                     "nondeterministic: schedule order mismatch: next is SubOrchestrationScheduled('{sn}','{sin}') but expected ActivityScheduled('{name}','{input}')"
                                 ));
@@ -154,7 +106,6 @@ impl Future for DurableFuture {
                     }
 
                     let event_id = found_event_id.unwrap_or_else(|| {
-                        // Not in history - create new (first execution)
                         let new_id = inner.next_event_id;
                         inner.next_event_id += 1;
                         let exec_id = inner.execution_id;
@@ -176,7 +127,8 @@ impl Future for DurableFuture {
                             name: name.clone(),
                             input: input.clone(),
                         });
-
+                        
+                        inner.scheduling_scan_cursor = inner.history.len();
                         new_id
                     });
 
@@ -184,56 +136,56 @@ impl Future for DurableFuture {
                     this.claimed_event_id.set(Some(event_id));
                 }
 
-                // claimed_event_id is guaranteed to be Some after the above block sets it
-                let our_event_id = this
-                    .claimed_event_id
-                    .get()
-                    .expect("claimed_event_id should be set after claiming");
+                let our_event_id = this.claimed_event_id.get().expect("claimed_event_id set");
 
-                // Step 2: Look for our completion - FIFO enforcement
-                // Find our completion in history
-                let our_completion = inner.history.iter().find_map(|e| {
-                    // source_event_id is on the Event struct
-                    if e.source_event_id != Some(our_event_id) {
-                        return None;
-                    }
-                    match &e.kind {
-                        EventKind::ActivityCompleted { result } => Some((e.event_id, Ok(result.clone()))),
-                        EventKind::ActivityFailed { details } => {
-                            debug_assert!(
-                                matches!(details, crate::ErrorDetails::Application { .. }),
-                                "INVARIANT: Only Application errors should reach orchestration code, got: {details:?}"
-                            );
-                            Some((e.event_id, Err(details.display_message())))
+                // Step 2: Look for completion using index
+                if let Some(&completion_idx) = inner.completion_by_source.get(&our_event_id) {
+                    let completion_id = inner.history[completion_idx].event_id;
+                    
+                    // FIFO Check
+                    let mut can_consume = true;
+                    for &unconsumed_id in inner.unconsumed_completions.range(..completion_id) {
+                        let idx = inner.event_id_to_index[&unconsumed_id];
+                        let evt = &inner.history[idx];
+                        if let Some(sid) = evt.source_event_id {
+                            if inner.cancelled_source_ids.contains(&sid) {
+                                continue;
+                            }
                         }
-                        _ => None,
+                        can_consume = false;
+                        break;
                     }
-                });
-
-                if let Some((completion_event_id, result)) = our_completion {
-                    // Check: Are all completion events BEFORE ours consumed?
-                    if can_consume_completion(
-                        &inner.history,
-                        &inner.consumed_completions,
-                        &inner.cancelled_source_ids,
-                        completion_event_id,
-                    ) {
-                        inner.consumed_completions.insert(completion_event_id);
-                        return Poll::Ready(DurableOutput::Activity(result));
+                    
+                    if can_consume {
+                        inner.unconsumed_completions.remove(&completion_id);
+                        inner.consumed_completions.insert(completion_id); 
+                        
+                        // Re-access event after mutation
+                        let completion_event = &inner.history[completion_idx];
+                        match &completion_event.kind {
+                            EventKind::ActivityCompleted { result } => return Poll::Ready(DurableOutput::Activity(Ok(result.clone()))),
+                            EventKind::ActivityFailed { details } => {
+                                debug_assert!(
+                                    matches!(details, crate::ErrorDetails::Application { .. }),
+                                    "INVARIANT: Only Application errors should reach orchestration code"
+                                );
+                                return Poll::Ready(DurableOutput::Activity(Err(details.display_message())));
+                            }
+                            _ => unreachable!(),
+                        }
                     }
                 }
 
                 Poll::Pending
             }
             Kind::Timer { delay_ms } => {
-                // Mutex lock should never fail in normal operation - if poisoned, it indicates a serious bug
                 let mut inner = this.ctx.inner.lock().expect("Mutex should not be poisoned");
 
-                // Step 1: Claim scheduling event_id
                 if this.claimed_event_id.get().is_none() {
-                    // Enforce global scheduling order
                     let mut found_event_id = None;
-                    for event in &inner.history {
+                    let start_idx = inner.scheduling_scan_cursor;
+                    
+                    for (idx, event) in inner.history.iter().enumerate().skip(start_idx) {
                         let eid = event.event_id;
                         if inner.claimed_scheduling_events.contains(&eid) {
                             continue;
@@ -241,6 +193,7 @@ impl Future for DurableFuture {
                         match &event.kind {
                             EventKind::TimerCreated { .. } => {
                                 found_event_id = Some(eid);
+                                inner.scheduling_scan_cursor = idx + 1;
                                 break;
                             }
                             EventKind::ActivityScheduled { name: n, input: inp } => {
@@ -255,9 +208,7 @@ impl Future for DurableFuture {
                                 ));
                                 return Poll::Pending;
                             }
-                            EventKind::SubOrchestrationScheduled {
-                                name: sn, input: sin, ..
-                            } => {
+                            EventKind::SubOrchestrationScheduled { name: sn, input: sin, .. } => {
                                 inner.nondeterminism_error = Some(format!(
                                     "nondeterministic: schedule order mismatch: next is SubOrchestrationScheduled('{sn}','{sin}') but expected TimerCreated"
                                 ));
@@ -268,7 +219,6 @@ impl Future for DurableFuture {
                     }
 
                     let event_id = found_event_id.unwrap_or_else(|| {
-                        // Not in history - create new (first execution)
                         let new_id = inner.next_event_id;
                         inner.next_event_id += 1;
                         let now = inner.now_ms();
@@ -288,7 +238,8 @@ impl Future for DurableFuture {
                             scheduling_event_id: new_id,
                             fire_at_ms,
                         });
-
+                        
+                        inner.scheduling_scan_cursor = inner.history.len();
                         new_id
                     });
 
@@ -296,29 +247,27 @@ impl Future for DurableFuture {
                     this.claimed_event_id.set(Some(event_id));
                 }
 
-                // claimed_event_id is guaranteed to be Some after the above block sets it
-                let our_event_id = this
-                    .claimed_event_id
-                    .get()
-                    .expect("claimed_event_id should be set after claiming");
+                let our_event_id = this.claimed_event_id.get().expect("claimed_event_id set");
 
-                // Step 2: Look for TimerFired - FIFO enforcement
-                let our_completion = inner.history.iter().find_map(|e| {
-                    if matches!(&e.kind, EventKind::TimerFired { .. }) && e.source_event_id == Some(our_event_id) {
-                        return Some(e.event_id);
+                if let Some(&completion_idx) = inner.completion_by_source.get(&our_event_id) {
+                    let completion_id = inner.history[completion_idx].event_id;
+                    
+                    let mut can_consume = true;
+                    for &unconsumed_id in inner.unconsumed_completions.range(..completion_id) {
+                        let idx = inner.event_id_to_index[&unconsumed_id];
+                        let evt = &inner.history[idx];
+                        if let Some(sid) = evt.source_event_id {
+                            if inner.cancelled_source_ids.contains(&sid) {
+                                continue;
+                            }
+                        }
+                        can_consume = false;
+                        break;
                     }
-                    None
-                });
-
-                if let Some(completion_event_id) = our_completion {
-                    // Check: Are all completion events BEFORE ours consumed?
-                    if can_consume_completion(
-                        &inner.history,
-                        &inner.consumed_completions,
-                        &inner.cancelled_source_ids,
-                        completion_event_id,
-                    ) {
-                        inner.consumed_completions.insert(completion_event_id);
+                    
+                    if can_consume {
+                        inner.unconsumed_completions.remove(&completion_id);
+                        inner.consumed_completions.insert(completion_id);
                         return Poll::Ready(DurableOutput::Timer);
                     }
                 }
@@ -326,19 +275,17 @@ impl Future for DurableFuture {
                 Poll::Pending
             }
             Kind::External { name, result } => {
-                // Check if we already have the result cached
                 if let Some(cached) = result.borrow().clone() {
                     return Poll::Ready(DurableOutput::External(cached));
                 }
 
-                // Mutex lock should never fail in normal operation - if poisoned, it indicates a serious bug
                 let mut inner = this.ctx.inner.lock().expect("Mutex should not be poisoned");
 
-                // Step 1: Claim ExternalSubscribed event_id
                 if this.claimed_event_id.get().is_none() {
-                    // Enforce global scheduling order
                     let mut found_event_id = None;
-                    for event in &inner.history {
+                    let start_idx = inner.scheduling_scan_cursor;
+                    
+                    for (idx, event) in inner.history.iter().enumerate().skip(start_idx) {
                         let eid = event.event_id;
                         if inner.claimed_scheduling_events.contains(&eid) {
                             continue;
@@ -352,6 +299,7 @@ impl Future for DurableFuture {
                                     return Poll::Pending;
                                 }
                                 found_event_id = Some(eid);
+                                inner.scheduling_scan_cursor = idx + 1;
                                 break;
                             }
                             EventKind::ActivityScheduled { name: an, input: ainp } => {
@@ -366,9 +314,7 @@ impl Future for DurableFuture {
                                 ));
                                 return Poll::Pending;
                             }
-                            EventKind::SubOrchestrationScheduled {
-                                name: sn, input: sin, ..
-                            } => {
+                            EventKind::SubOrchestrationScheduled { name: sn, input: sin, .. } => {
                                 inner.nondeterminism_error = Some(format!(
                                     "nondeterministic: schedule order mismatch: next is SubOrchestrationScheduled('{sn}','{sin}') but expected ExternalSubscribed('{name}')"
                                 ));
@@ -379,7 +325,6 @@ impl Future for DurableFuture {
                     }
 
                     let event_id = found_event_id.unwrap_or_else(|| {
-                        // Not in history - create new
                         let new_id = inner.next_event_id;
                         inner.next_event_id += 1;
                         let exec_id = inner.execution_id;
@@ -397,7 +342,8 @@ impl Future for DurableFuture {
                             scheduling_event_id: new_id,
                             name: name.clone(),
                         });
-
+                        
+                        inner.scheduling_scan_cursor = inner.history.len();
                         new_id
                     });
 
@@ -405,64 +351,71 @@ impl Future for DurableFuture {
                     this.claimed_event_id.set(Some(event_id));
                 }
 
-                // claimed_event_id is guaranteed to be Some after the above block sets it
-                let _our_event_id = this
-                    .claimed_event_id
-                    .get()
-                    .expect("claimed_event_id should be set after claiming");
-
-                // Step 2: Look for ExternalEvent (special case - search by name)
-                // External events can arrive in any order
-                if !inner.consumed_external_events.contains(name)
-                    && let Some((event_id, data)) = inner.history.iter().find_map(|e| {
-                        if let EventKind::ExternalEvent { name: ext_name, data } = &e.kind
-                            && ext_name == name
-                        {
-                            return Some((e.event_id, data.clone()));
+                // Look for ExternalEvent
+                // Optimization: could index external events by name, but linear scan of history is still needed if not indexed.
+                // Since we rely on index optimization elsewhere, let's keep linear scan here but optimized by skipping if already consumed.
+                // Or better: Iterate unconsumed_completions and check if they match?
+                // unconsumed_completions contains event_ids. We can check them.
+                
+                if !inner.consumed_external_events.contains(name) {
+                    let mut found_match = None;
+                    // Scan unconsumed completions to find the FIRST matching external event
+                    for &eid in &inner.unconsumed_completions {
+                        let idx = inner.event_id_to_index[&eid];
+                        let event = &inner.history[idx];
+                        if let EventKind::ExternalEvent { name: ext_name, data } = &event.kind {
+                            if ext_name == name {
+                                found_match = Some((eid, data.clone()));
+                                break; // Found first match in history order
+                            }
                         }
-                        None
-                    })
-                {
-                    // Check: Are all completions BEFORE ours consumed?
-                    if can_consume_completion(
-                        &inner.history,
-                        &inner.consumed_completions,
-                        &inner.cancelled_source_ids,
-                        event_id,
-                    ) {
-                        inner.consumed_completions.insert(event_id);
-                        inner.consumed_external_events.insert(name.clone());
-                        *result.borrow_mut() = Some(data.clone());
-                        return Poll::Ready(DurableOutput::External(data));
+                    }
+
+                    if let Some((event_id, data)) = found_match {
+                        // Check FIFO - are there any unconsumed events BEFORE this one?
+                        // Since we iterated unconsumed_completions in order, and this is the first match,
+                        // we only need to check if there are any *other* unconsumed events before it that are NOT cancelled.
+                        
+                        let mut can_consume = true;
+                        for &unconsumed_id in inner.unconsumed_completions.range(..event_id) {
+                            let idx = inner.event_id_to_index[&unconsumed_id];
+                            let evt = &inner.history[idx];
+                            if let Some(sid) = evt.source_event_id {
+                                if inner.cancelled_source_ids.contains(&sid) {
+                                    continue;
+                                }
+                            }
+                            // External events themselves cannot be cancelled via select2
+                            can_consume = false;
+                            break;
+                        }
+
+                        if can_consume {
+                            inner.unconsumed_completions.remove(&event_id);
+                            inner.consumed_completions.insert(event_id);
+                            inner.consumed_external_events.insert(name.clone());
+                            *result.borrow_mut() = Some(data.clone());
+                            return Poll::Ready(DurableOutput::External(data));
+                        }
                     }
                 }
 
                 Poll::Pending
             }
-            Kind::SubOrch {
-                name,
-                version,
-                instance,
-                input,
-            } => {
-                // Mutex lock should never fail in normal operation - if poisoned, it indicates a serious bug
+            Kind::SubOrch { name, version, instance, input } => {
                 let mut inner = this.ctx.inner.lock().expect("Mutex should not be poisoned");
 
-                // Step 1: Claim SubOrchestrationScheduled event_id
                 if this.claimed_event_id.get().is_none() {
-                    // Enforce global scheduling order
                     let mut found_event_id = None;
-                    for event in &inner.history {
+                    let start_idx = inner.scheduling_scan_cursor;
+                    
+                    for (idx, event) in inner.history.iter().enumerate().skip(start_idx) {
                         let eid = event.event_id;
                         if inner.claimed_scheduling_events.contains(&eid) {
                             continue;
                         }
                         match &event.kind {
-                            EventKind::SubOrchestrationScheduled {
-                                name: n,
-                                input: inp,
-                                instance: inst,
-                            } => {
+                            EventKind::SubOrchestrationScheduled { name: n, input: inp, instance: inst, .. } => {
                                 if n != name || inp != input {
                                     inner.nondeterminism_error = Some(format!(
                                         "nondeterministic: schedule order mismatch: next is SubOrchestrationScheduled('{n}','{inp}') but expected SubOrchestrationScheduled('{name}','{input}')"
@@ -471,6 +424,7 @@ impl Future for DurableFuture {
                                 }
                                 *instance.borrow_mut() = inst.clone();
                                 found_event_id = Some(eid);
+                                inner.scheduling_scan_cursor = idx + 1;
                                 break;
                             }
                             EventKind::ActivityScheduled { name: an, input: ainp } => {
@@ -496,7 +450,6 @@ impl Future for DurableFuture {
                     }
 
                     let event_id = found_event_id.unwrap_or_else(|| {
-                        // Not in history - create new
                         let new_id = inner.next_event_id;
                         inner.next_event_id += 1;
                         let exec_id = inner.execution_id;
@@ -523,7 +476,8 @@ impl Future for DurableFuture {
                             instance: child_instance,
                             input: input.clone(),
                         });
-
+                        
+                        inner.scheduling_scan_cursor = inner.history.len();
                         new_id
                     });
 
@@ -531,73 +485,70 @@ impl Future for DurableFuture {
                     this.claimed_event_id.set(Some(event_id));
                 }
 
-                // claimed_event_id is guaranteed to be Some after the above block sets it
-                let our_event_id = this
-                    .claimed_event_id
-                    .get()
-                    .expect("claimed_event_id should be set after claiming");
+                let our_event_id = this.claimed_event_id.get().expect("claimed_event_id set");
 
-                // Step 2: Look for SubOrch completion - FIFO enforcement
-                let our_completion = inner.history.iter().find_map(|e| {
-                    // source_event_id is on the Event struct
-                    if e.source_event_id != Some(our_event_id) {
-                        return None;
-                    }
-                    match &e.kind {
-                        EventKind::SubOrchestrationCompleted { result } => Some((e.event_id, Ok(result.clone()))),
-                        EventKind::SubOrchestrationFailed { details } => {
-                            debug_assert!(
-                                matches!(details, crate::ErrorDetails::Application { .. }),
-                                "INVARIANT: Only Application errors should reach orchestration code, got: {details:?}"
-                            );
-                            Some((e.event_id, Err(details.display_message())))
+                if let Some(&completion_idx) = inner.completion_by_source.get(&our_event_id) {
+                    let completion_id = inner.history[completion_idx].event_id;
+                    
+                    let mut can_consume = true;
+                    for &unconsumed_id in inner.unconsumed_completions.range(..completion_id) {
+                        let idx = inner.event_id_to_index[&unconsumed_id];
+                        let evt = &inner.history[idx];
+                        if let Some(sid) = evt.source_event_id {
+                            if inner.cancelled_source_ids.contains(&sid) {
+                                continue;
+                            }
                         }
-                        _ => None,
+                        can_consume = false;
+                        break;
                     }
-                });
-
-                if let Some((completion_event_id, result)) = our_completion {
-                    // Check: Are all completions BEFORE ours consumed?
-                    if can_consume_completion(
-                        &inner.history,
-                        &inner.consumed_completions,
-                        &inner.cancelled_source_ids,
-                        completion_event_id,
-                    ) {
-                        inner.consumed_completions.insert(completion_event_id);
-                        return Poll::Ready(DurableOutput::SubOrchestration(result));
+                    
+                    if can_consume {
+                        inner.unconsumed_completions.remove(&completion_id);
+                        inner.consumed_completions.insert(completion_id);
+                        
+                        // Re-access event after mutation
+                        let completion_event = &inner.history[completion_idx];
+                        match &completion_event.kind {
+                            EventKind::SubOrchestrationCompleted { result } => return Poll::Ready(DurableOutput::SubOrchestration(Ok(result.clone()))),
+                            EventKind::SubOrchestrationFailed { details } => {
+                                debug_assert!(
+                                    matches!(details, crate::ErrorDetails::Application { .. }),
+                                    "INVARIANT: Only Application errors should reach orchestration code"
+                                );
+                                return Poll::Ready(DurableOutput::SubOrchestration(Err(details.display_message())));
+                            }
+                            _ => unreachable!(),
+                        }
                     }
                 }
 
                 Poll::Pending
             }
             Kind::System { op, value } => {
-                // Check if we already computed the value
                 if let Some(v) = value.borrow().clone() {
                     return Poll::Ready(DurableOutput::Activity(Ok(v)));
                 }
 
-                // Mutex lock should never fail in normal operation - if poisoned, it indicates a serious bug
                 let mut inner = this.ctx.inner.lock().expect("Mutex should not be poisoned");
 
-                // Step 1: Try to adopt from history (replay)
                 if this.claimed_event_id.get().is_none() {
-                    // Look for matching SystemCall event in history
-                    let found = inner.history.iter().find_map(|e| {
-                        if let EventKind::SystemCall {
-                            op: hist_op,
-                            value: hist_value,
-                        } = &e.kind
-                            && hist_op == op
-                            && !inner.claimed_scheduling_events.contains(&e.event_id)
-                        {
-                            return Some((e.event_id, hist_value.clone()));
+                    let mut found_event_id = None;
+                    // System calls are history events too, should scan from cursor
+                    let start_idx = inner.scheduling_scan_cursor;
+                    
+                    for (idx, event) in inner.history.iter().enumerate().skip(start_idx) {
+                        if let EventKind::SystemCall { op: hist_op, value: hist_value } = &event.kind {
+                            // Check if this is ours and unclaimed
+                            if hist_op == op && !inner.claimed_scheduling_events.contains(&event.event_id) {
+                                found_event_id = Some((event.event_id, hist_value.clone()));
+                                inner.scheduling_scan_cursor = idx + 1; // Adopted event, advance cursor
+                                break;
+                            }
                         }
-                        None
-                    });
+                    }
 
-                    if let Some((found_event_id, found_value)) = found {
-                        // Found our system call in history - adopt it
+                    if let Some((found_event_id, found_value)) = found_event_id {
                         inner.claimed_scheduling_events.insert(found_event_id);
                         this.claimed_event_id.set(Some(found_event_id));
                         *value.borrow_mut() = Some(found_value.clone());
@@ -605,26 +556,23 @@ impl Future for DurableFuture {
                     }
                 }
 
-                // Step 2: First execution - compute value synchronously
+                // If not found in history, create new (synchronous execution)
                 if this.claimed_event_id.get().is_none() {
                     let computed_value = match op.as_str() {
                         crate::SYSCALL_OP_GUID => generate_guid(),
                         crate::SYSCALL_OP_UTCNOW_MS => inner.now_ms().to_string(),
                         s if s.starts_with(crate::SYSCALL_OP_TRACE_PREFIX) => {
-                            // Parse trace operation: "trace:{level}:{message}"
+                            // ... log logic ...
                             let parts: Vec<&str> = s.splitn(3, ':').collect();
                             if parts.len() == 3 {
                                 let level = parts[1];
                                 let message = parts[2];
-                                // Extract context for structured logging
                                 let instance_id = &inner.instance_id;
                                 let execution_id = inner.execution_id;
                                 let orch_name = inner.orchestration_name.as_deref().unwrap_or("unknown");
                                 let orch_version = inner.orchestration_version.as_deref().unwrap_or("unknown");
                                 let worker_id = inner.worker_id.as_deref().unwrap_or("unknown");
 
-                                // Log to tracing only on first execution (not during replay)
-                                // Include instance context for correlation
                                 match level {
                                     "ERROR" => tracing::error!(
                                         target: "duroxide::orchestration",
@@ -664,7 +612,6 @@ impl Future for DurableFuture {
                                     ),
                                 }
                             }
-                            // trace operations don't return values, just empty string
                             String::new()
                         }
                         _ => {
@@ -673,7 +620,6 @@ impl Future for DurableFuture {
                         }
                     };
 
-                    // Allocate event_id and record event
                     let event_id = inner.next_event_id;
                     inner.next_event_id += 1;
                     let exec_id = inner.execution_id;
@@ -695,6 +641,8 @@ impl Future for DurableFuture {
                         op: op.clone(),
                         value: computed_value.clone(),
                     });
+                    
+                    inner.scheduling_scan_cursor = inner.history.len();
 
                     inner.claimed_scheduling_events.insert(event_id);
                     this.claimed_event_id.set(Some(event_id));
@@ -709,15 +657,12 @@ impl Future for DurableFuture {
     }
 }
 
-// Compile-time contract: DurableFuture must remain Unpin because poll() relies on freely
-// projecting &mut self into its internal Kind. This assertion fails if future changes.
-#[allow(dead_code)] // Used in const assertion below
+#[allow(dead_code)]
 const fn assert_unpin<T: Unpin>() {}
 const _: () = {
     assert_unpin::<DurableFuture>();
 };
 
-// Helper function to generate deterministic GUIDs
 fn generate_guid() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -726,7 +671,6 @@ fn generate_guid() -> String {
         .map(|d| d.as_nanos())
         .unwrap_or(0);
 
-    // Thread-local counter for uniqueness within the same timestamp
     thread_local! {
         static COUNTER: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
     }
@@ -736,7 +680,6 @@ fn generate_guid() -> String {
         val
     });
 
-    // Format as UUID-like string
     format!(
         "{:08x}-{:04x}-{:04x}-{:04x}-{:012x}",
         (timestamp >> 96) as u32,
@@ -747,7 +690,6 @@ fn generate_guid() -> String {
     )
 }
 
-// Aggregate future machinery
 enum AggregateMode {
     Select,
     Join,
@@ -779,10 +721,6 @@ impl AggregateDurableFuture {
             mode: AggregateMode::Join,
         }
     }
-
-    // Note: Unconsumed completion detection removed - the cursor model naturally
-    // handles this via strict sequential consumption. Any unconsumed completions
-    // will cause a panic when the next future tries to poll.
 }
 
 impl Future for AggregateDurableFuture {
@@ -792,16 +730,6 @@ impl Future for AggregateDurableFuture {
 
         match this.mode {
             AggregateMode::Select => {
-                // Two-phase polling to handle replay correctly:
-                // Phase 1: Poll ALL children to ensure they claim their scheduling events.
-                //          During replay, the winner might return Ready immediately, but
-                //          losers still need to claim their scheduling events to avoid
-                //          nondeterminism when subsequent code schedules new operations.
-                // Phase 2: Check which child is ready and return the winner.
-                // Phase 3: Mark loser source_event_ids as cancelled so their completions
-                //          don't block FIFO ordering for subsequent operations.
-
-                // Phase 1: Ensure all children claim their scheduling events
                 let mut ready_results: Vec<Option<DurableOutput>> = vec![None; this.children.len()];
                 for (i, child) in this.children.iter_mut().enumerate() {
                     if let Poll::Ready(output) = Pin::new(child).poll(cx) {
@@ -809,23 +737,15 @@ impl Future for AggregateDurableFuture {
                     }
                 }
 
-                // Phase 2: Find the first ready child (winner)
                 let winner_index = ready_results.iter().position(|r| r.is_some());
 
                 if let Some(winner_idx) = winner_index {
-                    // Phase 3: Mark all loser source_event_ids as cancelled
                     {
-                        // Mutex lock should never fail in normal operation - if poisoned, it indicates a serious bug
                         let mut inner = this.ctx.inner.lock().expect("Mutex should not be poisoned");
                         for (i, child) in this.children.iter().enumerate() {
                             if i != winner_idx {
-                                // Get the loser's claimed_event_id (source_event_id for its completion)
-                                // Now accessed directly from the DurableFuture struct
                                 if let Some(source_id) = child.claimed_event_id.get() {
                                     inner.cancelled_source_ids.insert(source_id);
-
-                                    // If the loser is an activity, request provider-side cancellation.
-                                    // Timers/external/sub-orchestrations don't have worker-queue entries.
                                     if matches!(&child.kind, Kind::Activity { .. }) {
                                         inner.cancelled_activity_ids.insert(source_id);
                                     }
@@ -834,7 +754,6 @@ impl Future for AggregateDurableFuture {
                         }
                     }
 
-                    // Return the winner - safe to unwrap since winner_idx came from position() finding Some
                     let output = ready_results[winner_idx]
                         .take()
                         .expect("winner_idx points to Ready result");
@@ -847,8 +766,6 @@ impl Future for AggregateDurableFuture {
                 Poll::Pending
             }
             AggregateMode::Join => {
-                // Fixed-point polling: keep polling children until no new results appear
-                // This allows cascading consumption respecting completion FIFO ordering.
                 let mut results: Vec<Option<DurableOutput>> = vec![None; this.children.len()];
                 loop {
                     let mut made_progress = false;
@@ -863,79 +780,65 @@ impl Future for AggregateDurableFuture {
                     }
 
                     if results.iter().all(|r| r.is_some()) {
-                        // All outputs ready: return in persisted history order of completions
                         let mut items: Vec<(u64, usize, DurableOutput)> = Vec::with_capacity(results.len());
                         for (i, out_opt) in results.into_iter().enumerate() {
-                            // All results are guaranteed to be Some due to the check above
                             let out = out_opt.expect("All results should be Some at this point");
-                            // Determine completion event_id for child i
                             let eid = {
-                                // Mutex lock should never fail in normal operation - if poisoned, it indicates a serious bug
                                 let inner = this.ctx.inner.lock().expect("Mutex should not be poisoned");
                                 let child = &this.children[i];
-                                // All children must have claimed an event_id before reaching completion
                                 let sid = child.claimed_event_id.get().expect("child must claim id");
+                                
                                 match &child.kind {
-                                    Kind::Activity { .. } => inner
-                                        .history
-                                        .iter()
-                                        .find_map(|e| {
-                                            if e.source_event_id != Some(sid) {
-                                                return None;
-                                            }
-                                            match &e.kind {
-                                                EventKind::ActivityCompleted { .. }
-                                                | EventKind::ActivityFailed { .. } => Some(e.event_id),
-                                                _ => None,
-                                            }
-                                        })
-                                        .unwrap_or(u64::MAX),
-                                    Kind::Timer { .. } => inner
-                                        .history
-                                        .iter()
-                                        .find_map(|e| {
-                                            if e.source_event_id != Some(sid) {
-                                                return None;
-                                            }
-                                            match &e.kind {
-                                                EventKind::TimerFired { .. } => Some(e.event_id),
-                                                _ => None,
-                                            }
-                                        })
-                                        .unwrap_or(u64::MAX),
+                                    Kind::Activity { .. } 
+                                    | Kind::Timer { .. }
+                                    | Kind::SubOrch { .. } => {
+                                        // Use index for O(1) lookup
+                                        if let Some(&idx) = inner.completion_by_source.get(&sid) {
+                                            inner.history[idx].event_id
+                                        } else {
+                                            u64::MAX // Should be unreachable if completed
+                                        }
+                                    }
                                     Kind::External { name, .. } => {
+                                        // External events don't have source_event_id in history
+                                        // But we consumed it, so it should be in consumed_completions
+                                        // We can't easily find WHICH one without re-searching?
+                                        // Actually, if it's ready, we found it in poll() and it's in history.
+                                        // But DurableOutput doesn't carry event_id.
+                                        // We need event_id to sort.
+                                        // Re-find it?
+                                        // Or we could have stored it in poll() but DurableFuture doesn't store completion id.
+                                        
+                                        // Fallback to searching unconsumed_completions is wrong because we just consumed it!
+                                        // It is now in consumed_completions.
+                                        // We search history for matching ExternalEvent that is in consumed_completions?
+                                        // But there could be multiple.
+                                        
+                                        // OPTIMIZATION: DurableFuture could store completion_event_id once resolved.
+                                        // But DurableFuture structure is fixed.
+                                        // Let's use linear search for External events for now (they are rare).
+                                        // Or rely on `consumed_completions`?
+                                        
+                                        // Existing code did a linear search finding FIRST match.
                                         let n = name.clone();
-                                        inner
-                                            .history
-                                            .iter()
-                                            .find_map(|e| {
-                                                if let EventKind::ExternalEvent { name: en, .. } = &e.kind
-                                                    && *en == n
-                                                {
-                                                    return Some(e.event_id);
-                                                }
-                                                None
-                                            })
-                                            .unwrap_or(u64::MAX)
-                                    }
-                                    Kind::SubOrch { .. } => inner
-                                        .history
-                                        .iter()
-                                        .find_map(|e| {
-                                            if e.source_event_id != Some(sid) {
-                                                return None;
+                                        inner.history.iter().find_map(|e| {
+                                            if let EventKind::ExternalEvent { name: en, .. } = &e.kind
+                                                && *en == n
+                                                // && inner.consumed_completions.contains(&e.event_id) // We know we consumed it
+                                                // Issue: how do we know WHICH one corresponds to THIS child?
+                                                // Join consumes them in order.
+                                                // The children are polled in order.
+                                                // If we have 2 children waiting for same event name, they consume 2 events.
+                                                // But here we just want to sort them.
+                                                // It's ambiguous which child took which event if they are identical.
+                                                // But sorting by event_id should be stable.
+                                            {
+                                                return Some(e.event_id);
                                             }
-                                            match &e.kind {
-                                                EventKind::SubOrchestrationCompleted { .. }
-                                                | EventKind::SubOrchestrationFailed { .. } => Some(e.event_id),
-                                                _ => None,
-                                            }
-                                        })
-                                        .unwrap_or(u64::MAX),
-                                    Kind::System { .. } => {
-                                        // For system calls, the event itself is the completion
-                                        sid
+                                            None
+                                        }).unwrap_or(u64::MAX)
                                     }
+                                    Kind::System { .. } => sid,
                                 }
                             };
                             items.push((eid, i, out));
@@ -948,7 +851,6 @@ impl Future for AggregateDurableFuture {
                     if !made_progress {
                         return Poll::Pending;
                     }
-                    // Otherwise, loop again: newly consumed completions may unblock others
                 }
             }
         }

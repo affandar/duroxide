@@ -1058,38 +1058,48 @@ pub enum Action {
 }
 
 #[derive(Debug)]
-struct CtxInner {
-    history: Vec<Event>,
-    actions: Vec<Action>,
+pub(crate) struct CtxInner {
+    pub(crate) history: Vec<Event>,
+    pub(crate) actions: Vec<Action>,
 
     // Event ID generation
-    next_event_id: u64,
+    pub(crate) next_event_id: u64,
 
     // Track claimed scheduling events (to prevent collision)
-    claimed_scheduling_events: std::collections::HashSet<u64>,
+    pub(crate) claimed_scheduling_events: std::collections::HashSet<u64>,
 
     // Track consumed completions by event_id (FIFO enforcement)
-    consumed_completions: std::collections::HashSet<u64>,
+    pub(crate) consumed_completions: std::collections::HashSet<u64>,
 
     // Track cancelled source_event_ids (select2 losers) - their completions are auto-skipped in FIFO
-    cancelled_source_ids: std::collections::HashSet<u64>,
+    pub(crate) cancelled_source_ids: std::collections::HashSet<u64>,
 
     // Track cancelled activity scheduling ids (select/select2 losers).
     // These are ActivityScheduled event_ids for losers that should be cancelled via the provider.
-    cancelled_activity_ids: std::collections::HashSet<u64>,
+    pub(crate) cancelled_activity_ids: std::collections::HashSet<u64>,
 
     // Track consumed external events (by name) since they're searched, not cursor-based
-    consumed_external_events: std::collections::HashSet<String>,
+    pub(crate) consumed_external_events: std::collections::HashSet<String>,
 
     // Execution metadata
-    execution_id: u64,
-    instance_id: String,
-    orchestration_name: Option<String>,
-    orchestration_version: Option<String>,
-    worker_id: Option<String>,
-    logging_enabled_this_poll: bool,
+    pub(crate) execution_id: u64,
+    pub(crate) instance_id: String,
+    pub(crate) orchestration_name: Option<String>,
+    pub(crate) orchestration_version: Option<String>,
+    pub(crate) worker_id: Option<String>,
+    pub(crate) logging_enabled_this_poll: bool,
     // When set, indicates a nondeterminism condition detected by futures during polling
-    nondeterminism_error: Option<String>,
+    pub(crate) nondeterminism_error: Option<String>,
+
+    // --- Performance Indices ---
+    // Map source_event_id -> index in history for completion events
+    pub(crate) completion_by_source: std::collections::HashMap<u64, usize>,
+    // Map event_id -> index in history
+    pub(crate) event_id_to_index: std::collections::HashMap<u64, usize>,
+    // Ordered set of unconsumed completion event IDs
+    pub(crate) unconsumed_completions: std::collections::BTreeSet<u64>,
+    // Cursor for scheduling event scan
+    pub(crate) scheduling_scan_cursor: usize,
 }
 
 impl CtxInner {
@@ -1111,6 +1121,34 @@ impl CtxInner {
             .map(|max_id| max_id + 1)
             .unwrap_or(1);
 
+        // Build indices
+        let mut completion_by_source = std::collections::HashMap::new();
+        let mut event_id_to_index = std::collections::HashMap::new();
+        let mut unconsumed_completions = std::collections::BTreeSet::new();
+
+        for (idx, event) in history.iter().enumerate() {
+            if event.event_id > 0 {
+                event_id_to_index.insert(event.event_id, idx);
+            }
+
+            match &event.kind {
+                EventKind::ActivityCompleted { .. }
+                | EventKind::ActivityFailed { .. }
+                | EventKind::TimerFired { .. }
+                | EventKind::SubOrchestrationCompleted { .. }
+                | EventKind::SubOrchestrationFailed { .. } => {
+                    if let Some(sid) = event.source_event_id {
+                        completion_by_source.insert(sid, idx);
+                    }
+                    unconsumed_completions.insert(event.event_id);
+                }
+                EventKind::ExternalEvent { .. } => {
+                    unconsumed_completions.insert(event.event_id);
+                }
+                _ => {}
+            }
+        }
+
         Self {
             history,
             actions: Vec::new(),
@@ -1127,6 +1165,10 @@ impl CtxInner {
             worker_id,
             logging_enabled_this_poll: false,
             nondeterminism_error: None,
+            completion_by_source,
+            event_id_to_index,
+            unconsumed_completions,
+            scheduling_scan_cursor: 0,
         }
     }
 
