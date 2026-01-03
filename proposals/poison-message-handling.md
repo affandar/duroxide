@@ -1,5 +1,7 @@
 # Poison Message Handling
 
+**Status:** Implemented
+
 ## Overview
 
 Implement poison message detection for work items that repeatedly fail to process. After N fetch attempts, messages are classified as "poison" and the orchestration/activity is failed immediately to prevent blocking the queue.

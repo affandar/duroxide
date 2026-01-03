@@ -2,7 +2,7 @@
 
 ## Status
 
-Draft.
+Implemented in v0.1.8 (2026-01-02).
 
 ## Motivation
 

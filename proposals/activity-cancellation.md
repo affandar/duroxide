@@ -1,9 +1,9 @@
 # Activity Cancellation Design
 
-**Status:** Proposed  
+**Status:** Implemented (via Lock Stealing) in v0.1.8  
 **Author:** Duroxide Team  
 **Created:** 2024-12-22  
-**Last Updated:** 2024-12-22
+**Last Updated:** 2026-01-03
 
 ## Overview
 

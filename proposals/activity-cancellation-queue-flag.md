@@ -2,7 +2,7 @@
 
 ## Status
 
-Draft.
+Rejected (Superseded by Lock Stealing implementation in v0.1.8).
 
 ## Motivation
 
