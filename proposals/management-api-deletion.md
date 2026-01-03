@@ -102,7 +102,7 @@ Options for pruning executions. When multiple criteria are provided, they are AN
 /// Options for pruning old executions.
 /// 
 /// When multiple criteria are provided, they are ANDed together.
-/// The current execution is ALWAYS preserved regardless of these options.
+/// The current (active) execution is NEVER pruned regardless of these options.
 #[derive(Debug, Clone, Default)]
 pub struct PruneOptions {
     /// Keep the last N executions (by execution_id).
@@ -116,7 +116,8 @@ pub struct PruneOptions {
 
 **Filter Semantics (AND):**
 - If both `keep_last: Some(5)` and `completed_before: Some(ts)` are set, an execution is deleted only if it's outside the last 5 AND completed before the cutoff.
-- The current execution (`current_execution_id`) is never deleted regardless of options.
+- The current execution (`current_execution_id`) is **NEVER** deleted regardless of options.
+- An execution with `status = 'Running'` is **NEVER** pruned.
 
 ### 4.3 Result Types
 
@@ -134,7 +135,6 @@ pub struct DeleteResult {
 #[derive(Debug, Clone, Default)]
 pub struct PurgeResult {
     pub instances_deleted: u64,
-    pub instances_skipped: u64,  // Running instances that were skipped
     pub executions_deleted: u64,
     pub events_deleted: u64,
     pub queue_messages_deleted: u64,
@@ -143,7 +143,7 @@ pub struct PurgeResult {
 /// Result of an execution prune operation.
 #[derive(Debug, Clone, Default)]
 pub struct PruneResult {
-    pub instances_processed: u64,  // For bulk prune
+    pub instances_processed: u64,  // For bulk prune (1 for single instance prune)
     pub executions_deleted: u64,
     pub events_deleted: u64,
 }
@@ -166,7 +166,26 @@ impl Client {
     ///
     /// # Parameters
     /// * `instance_id` - The ID of the instance to delete
-    /// * `force` - If true, delete even if instance is still running
+    /// * `force` - If true, delete even if instance has status='Running'
+    ///
+    /// # The `force` Parameter
+    /// 
+    /// When `force=false` (default):
+    /// - Only deletes instances in terminal states (Completed, Failed)
+    /// - Returns `Err(ClientError::InstanceStillRunning)` if status is Running
+    ///
+    /// When `force=true`:
+    /// - Deletes the instance regardless of status
+    /// - **Only affects database state** — does NOT kill in-flight tokio tasks
+    /// - Use for instances that are "waiting" (between turns) but need removal
+    /// - If an orchestration turn is actively executing, it will fail when
+    ///   trying to persist state (instance gone)
+    /// - If activities are running, they will detect deletion via lock renewal
+    ///   failure and can terminate gracefully
+    ///
+    /// **Recommended pattern:** Use `cancel_instance()` first for graceful
+    /// shutdown. Only use `force=true` for cleanup of instances stuck in
+    /// Running state that won't respond to cancellation.
     ///
     /// # Returns
     /// * `Ok(DeleteResult)` - Details of what was deleted
@@ -179,7 +198,13 @@ impl Client {
     /// let result = client.delete_instance("order-123", false).await?;
     /// println!("Deleted {} events", result.events_deleted);
     ///
-    /// // Force delete a stuck instance
+    /// // Graceful pattern: cancel first, then delete
+    /// client.cancel_instance("workflow-456").await?;
+    /// // Wait for cancellation to complete...
+    /// client.delete_instance("workflow-456", false).await?;
+    ///
+    /// // Force delete an instance stuck in Running state
+    /// // (e.g., waiting on event that will never arrive, cancel didn't help)
     /// client.delete_instance("stuck-workflow", true).await?;
     /// ```
     pub async fn delete_instance(
@@ -297,7 +322,7 @@ impl Client {
     /// # Examples
     /// ```ignore
     /// // Prune all terminal instances: keep last 10 executions each
-    /// let result = client.bulk_prune_executions(
+    /// let result = client.prune_executions_bulk(
     ///     InstanceFilter {
     ///         completed_before: None,  // All terminal instances
     ///         limit: Some(100),
@@ -310,7 +335,7 @@ impl Client {
     /// ).await?;
     ///
     /// // Prune specific instances: delete executions older than 30 days
-    /// let result = client.bulk_prune_executions(
+    /// let result = client.prune_executions_bulk(
     ///     InstanceFilter {
     ///         instance_ids: Some(vec!["workflow-a".into(), "workflow-b".into()]),
     ///         ..Default::default()
@@ -325,10 +350,11 @@ impl Client {
     /// ```
     ///
     /// # Notes
-    /// - Only processes instances in terminal states (Completed, Failed, ContinuedAsNew)
+    /// - Only processes instances in terminal states (Completed, Failed)
     /// - Running instances are skipped
     /// - The current execution of each instance is never pruned
-    pub async fn bulk_prune_executions(
+    /// - Active (Running) executions are never pruned
+    pub async fn prune_executions_bulk(
         &self,
         filter: InstanceFilter,
         options: PruneOptions,
@@ -370,7 +396,7 @@ pub trait ProviderAdmin: Any + Send + Sync {
     ///
     /// # Implementation Requirements
     /// - AND all filter criteria together
-    /// - Skip any instance with status='Running' (don't error, count in skipped)
+    /// - Skip any instance with status='Running' (don't error)
     /// - Should be efficient (batch SQL operations)
     /// - Apply limit after other filters
     async fn purge_instances(
@@ -382,6 +408,7 @@ pub trait ProviderAdmin: Any + Send + Sync {
     ///
     /// # Implementation Requirements  
     /// - NEVER delete the current_execution_id
+    /// - NEVER delete executions with status='Running'
     /// - AND the options together (both must match for deletion)
     /// - When keep_last is set: executions outside top N are eligible
     /// - When completed_before is set: executions older than cutoff are eligible
@@ -398,7 +425,8 @@ pub trait ProviderAdmin: Any + Send + Sync {
     /// - Apply PruneOptions to each selected instance (AND semantics)
     /// - Skip running instances
     /// - Never delete current_execution_id of any instance
-    async fn bulk_prune_executions(
+    /// - Never delete executions with status='Running'
+    async fn prune_executions_bulk(
         &self,
         filter: &InstanceFilter,
         options: &PruneOptions,
@@ -413,7 +441,7 @@ pub trait ProviderAdmin: Any + Send + Sync {
 | `delete_instance(id, force)` | `delete_instance(id, force)` |
 | `purge_instances(filter)` | `purge_instances(&filter)` |
 | `prune_executions(id, options)` | `prune_executions(id, &options)` |
-| `bulk_prune_executions(filter, options)` | `bulk_prune_executions(&filter, &options)` |
+| `prune_executions_bulk(filter, options)` | `prune_executions_bulk(&filter, &options)` |
 
 ---
 
@@ -423,15 +451,25 @@ pub trait ProviderAdmin: Any + Send + Sync {
 
 The following columns are required for time-based operations:
 
-| Table | Column | Purpose |
-|-------|--------|---------|
-| `executions` | `completed_at` | Anchor for retention queries |
-| `executions` | `status` | Filter terminal vs running |
-| `instances` | `current_execution_id` | Identify the active execution |
+| Table | Column | Type | Purpose |
+|-------|--------|------|---------|
+| `executions` | `completed_at` | INTEGER (epoch ms) | Anchor for retention queries |
+| `executions` | `status` | TEXT | Filter terminal vs running |
+| `instances` | `current_execution_id` | INTEGER | Identify the active execution |
 
-**SQLite Implementation Note:** `completed_at` is set via `CURRENT_TIMESTAMP` when status is updated. For time comparisons, providers should convert to epoch milliseconds consistently.
+### 7.2 Timestamp Storage
 
-### 7.2 SQL Implementation Sketches
+All timestamps MUST be stored as **INTEGER milliseconds since Unix epoch** (Rust time via `SystemTime::now()`), NOT SQLite's `CURRENT_TIMESTAMP` (which produces TEXT).
+
+**Rationale:**
+- Consistent with existing `visible_at`, `locked_until` columns
+- Enables simple numeric comparisons: `completed_at < ?`
+- Avoids SQLite datetime parsing complexity
+- Matches the `u64` epoch milliseconds used in the management API
+
+**Implementation:** Use `Self::now_millis()` helper (already exists in SqliteProvider).
+
+### 7.3 SQL Implementation Sketches
 
 **Delete Single Instance:**
 ```sql
@@ -492,10 +530,12 @@ SELECT current_execution_id FROM instances WHERE instance_id = ?;
 
 -- Find executions to prune
 -- Must satisfy ALL provided conditions
+-- Never prune Running executions or current_execution_id
 CREATE TEMP TABLE prune_candidates AS
 SELECT execution_id FROM executions
 WHERE instance_id = ?
   AND execution_id != ?  -- current_execution_id
+  AND status != 'Running'  -- never prune active executions
   -- AND execution_id NOT IN (top N by execution_id) if keep_last provided
   -- AND completed_at < ? if completed_before provided
 ;
@@ -512,14 +552,6 @@ DROP TABLE prune_candidates;
 COMMIT;
 ```
 
-**Bulk Prune Executions:**
-```sql
--- For each instance matching InstanceFilter:
---   Apply prune_executions logic with PruneOptions
--- Can be done in a single transaction with careful SQL,
--- or iterate over matching instances
-```
-
 ---
 
 ## 8. Edge Cases & Implications
@@ -532,59 +564,219 @@ When an instance is deleted, queued messages (e.g., `ExternalRaised`) may still 
 
 **Resolution:** The orchestration dispatcher already handles missing instances gracefully. When loading instance metadata fails with "not found", the message should be acked without processing and a warning logged. This prevents poison message loops.
 
-### 8.2 Orphaned Activities
+### 8.2 Force Delete: What It Does (and Doesn't Do)
+
+`force=true` deletes **database state only**. It does NOT:
+- Kill in-flight tokio tasks executing orchestration turns
+- Abort activity code mid-execution
+- Provide any runtime signal to running code
+
+**What happens with `force=true` in various scenarios:**
+
+| Scenario | What Happens | Result |
+|----------|--------------|--------|
+| Instance waiting (between turns) | DB records deleted, pending queue messages removed | Clean deletion |
+| Orchestration turn actively executing | Turn completes, tries to persist → fails (no instance) | Turn result lost, error logged |
+| Activity executing (worker has lock) | Worker's next lock renewal fails → detects "cancellation" | Activity can terminate gracefully |
+| Activity completes during delete | `ack_work_item` fails (no queue entry) | Activity result lost, error logged |
+| Timer pending in queue | Queue message deleted | Timer never fires |
+| Waiting on external event | Instance deleted | Future events have no target |
+
+### 8.3 Orphaned Activities
 
 If an instance is deleted while activities are running:
 
-1. Worker finishes and calls `ack_work_item`
-2. The call fails (worker_queue row was deleted)
-3. Worker logs error and stops—activity result is lost
+1. Worker's periodic lock renewal fails (queue entry gone)
+2. Worker detects this as cancellation signal via `ctx.is_cancelled()`
+3. Well-behaved activities check cancellation and terminate gracefully
+4. If activity ignores cancellation and completes, `ack_work_item` fails
+5. Activity result is lost, worker logs error
 
-This is expected "hard delete" behavior. Users wanting graceful cleanup should cancel the instance first and wait for activities to complete.
+**Recommended pattern for graceful cleanup:**
+```rust
+// 1. Request cancellation
+client.cancel_instance("my-workflow").await?;
 
-### 8.3 Parent-Child Consistency
+// 2. Wait for completion (with timeout)
+match tokio::time::timeout(
+    Duration::from_secs(30),
+    client.wait_for_completion("my-workflow")
+).await {
+    Ok(_) => {
+        // 3a. Gracefully completed, safe to delete
+        client.delete_instance("my-workflow", false).await?;
+    }
+    Err(_) => {
+        // 3b. Timeout - force delete as last resort
+        client.delete_instance("my-workflow", true).await?;
+    }
+}
+```
 
-Deleting a child sub-orchestration causes the parent to hang indefinitely (waiting for a completion event that never arrives).
+### 8.4 Parent-Child Consistency (Sub-Orchestrations)
 
-**Recommendation:** 
-- Parents should have timeouts configured
-- Future: "Cascading Delete" option (out of scope)
+**Rule:** A sub-orchestration can only be deleted if its entire parent chain has completed.
 
-### 8.4 Identity Reuse
+**Problem:** If a child sub-orchestration is deleted while the parent is still running:
+- Parent hangs indefinitely waiting for `SubOrchCompleted` event that never arrives
+- No timeout → permanent stuck state
+
+**Resolution Options:**
+1. **Validation (Recommended):** Before deleting an instance, check if it has a parent that is still running. If so, reject the deletion with an error.
+2. **Force flag:** Allow deletion with `force=true`, but document the risk.
+3. **Future work:** Cascading delete or parent notification (out of scope).
+
+**Implementation:** Query for parent relationship in `OrchestrationStarted` event or add a `parent_instance_id` column to the schema.
+
+### 8.5 Identity Reuse
 
 After deletion, a new instance with the same ID can be created immediately. This is intentional (useful for testing/resetting).
 
-### 8.5 Timestamp Storage Consistency
+### 8.6 Active Execution Protection
 
-For time-based filtering to work correctly, `executions.completed_at` must be stored consistently:
-- SQLite: Use `CURRENT_TIMESTAMP` (stored as TEXT) and compare with `datetime()` functions
-- Future providers: Store as INTEGER (epoch milliseconds) for simpler comparisons
+The following are **NEVER** deleted/pruned:
+- The `current_execution_id` of any instance
+- Any execution with `status = 'Running'`
+
+This ensures that:
+- In-progress orchestrations are not corrupted
+- `ContinueAsNew` chains don't lose their active head
 
 ---
 
 ## 9. Implementation Plan
 
-### Phase 1: Core Types & Provider
+### Phase 1: Schema Fix
+1. **Fix `completed_at` storage** — Use Rust epoch milliseconds instead of `CURRENT_TIMESTAMP`
+2. Add migration if needed for existing data
+
+### Phase 2: Core Types & Provider
 1. Add `InstanceFilter`, `PruneOptions` types to `src/providers/management.rs`
 2. Add `DeleteResult`, `PurgeResult`, `PruneResult` types
 3. Extend `ProviderAdmin` trait with new methods
 4. Implement in `SqliteProvider`
-5. Add validation tests
+5. Add provider validation tests
 
-### Phase 2: Client Integration  
+### Phase 3: Client Integration  
 1. Expose methods on `Client` struct
-2. Add error types (`ClientError::InstanceStillRunning`, etc.)
+2. Add error types (`ClientError::InstanceStillRunning`, `ClientError::ParentStillRunning`, etc.)
 3. Add integration tests
-
-### Phase 3: CLI Support
-1. `duroxide delete <instance_id> [--force]`
-2. `duroxide purge [--ids id1,id2] [--completed-before <timestamp>] [--limit N]`
-3. `duroxide prune <instance_id> [--keep-last N] [--completed-before <timestamp>]`
-4. `duroxide bulk-prune [--ids id1,id2] [--completed-before <ts>] --keep-last N`
 
 ---
 
-## 10. Alternatives Considered
+## 10. Test Plan
+
+### 10.1 Provider Validation Tests (`src/provider_validations.rs`)
+
+These tests validate the `ProviderAdmin` trait implementation.
+
+#### Delete Instance Tests
+| Test | Description |
+|------|-------------|
+| `test_delete_completed_instance` | Delete a completed instance, verify all tables cleaned |
+| `test_delete_failed_instance` | Delete a failed instance |
+| `test_delete_running_instance_rejected` | Attempt to delete running instance without force, expect error |
+| `test_delete_running_instance_force` | Delete running instance with force=true |
+| `test_delete_nonexistent_instance` | Delete non-existent instance returns `instance_deleted: false` |
+| `test_delete_instance_cleans_queues` | Verify orchestrator_queue and worker_queue entries are deleted |
+| `test_delete_instance_cleans_locks` | Verify instance_locks are deleted |
+
+#### Purge Instance Tests
+| Test | Description |
+|------|-------------|
+| `test_purge_by_instance_ids` | Purge specific instances by ID |
+| `test_purge_by_completed_before` | Purge instances completed before cutoff |
+| `test_purge_with_and_filter` | Purge with both instance_ids AND completed_before (intersection) |
+| `test_purge_skips_running_instances` | Running instances in filter are silently skipped |
+| `test_purge_respects_limit` | Only deletes up to limit count |
+| `test_purge_empty_filter` | Empty filter purges all terminal instances (up to limit) |
+
+#### Prune Execution Tests
+| Test | Description |
+|------|-------------|
+| `test_prune_keep_last` | Keep last N executions, delete older ones |
+| `test_prune_completed_before` | Delete executions completed before cutoff |
+| `test_prune_and_filter` | Both keep_last AND completed_before (intersection) |
+| `test_prune_never_deletes_current_execution` | Current execution is never pruned |
+| `test_prune_never_deletes_running_execution` | Running executions are never pruned |
+| `test_prune_empty_options` | Empty options = no deletions |
+| `test_prune_nonexistent_instance` | Prune non-existent instance returns 0 |
+
+#### Bulk Prune Tests
+| Test | Description |
+|------|-------------|
+| `test_prune_executions_bulk_by_ids` | Bulk prune specific instances |
+| `test_prune_executions_bulk_by_time` | Bulk prune instances completed before cutoff |
+| `test_prune_executions_bulk_skips_running` | Running instances are skipped |
+| `test_prune_executions_bulk_respects_limit` | Processes up to limit instances |
+
+### 10.2 Force Delete Behavior Tests
+
+These tests verify correct behavior when force-deleting instances with in-flight work.
+
+#### Activity Interaction Tests
+| Test | Description |
+|------|-------------|
+| `test_force_delete_activity_lock_renewal_fails` | Force delete instance while activity running; verify worker's next lock renewal fails |
+| `test_force_delete_activity_detects_cancellation` | After lock renewal fails, verify `ctx.is_cancelled()` returns true |
+| `test_force_delete_activity_ack_fails_gracefully` | Activity completes after delete; verify ack fails with appropriate error (not panic) |
+| `test_force_delete_clears_worker_queue` | Verify all worker_queue entries for instance are deleted |
+| `test_force_delete_clears_orchestrator_queue` | Verify all orchestrator_queue entries for instance are deleted |
+
+#### Orchestration Turn Interaction Tests
+| Test | Description |
+|------|-------------|
+| `test_force_delete_during_orchestration_turn` | Delete while turn is executing; turn completion fails to persist |
+| `test_force_delete_between_turns` | Delete while instance is waiting (idle); clean deletion |
+| `test_force_delete_pending_timer` | Delete instance with pending timer message; timer never fires |
+| `test_force_delete_pending_external_event` | Delete instance waiting on event; event delivery fails gracefully |
+
+#### Concurrent Operation Tests
+| Test | Description |
+|------|-------------|
+| `test_concurrent_force_delete_and_activity_ack` | Race between delete and activity ack; one succeeds, other fails gracefully |
+| `test_concurrent_force_delete_and_turn_completion` | Race between delete and turn persist; one succeeds, other fails gracefully |
+| `test_concurrent_force_delete_and_lock_renewal` | Race between delete and lock renewal; renewal fails after delete |
+
+#### Purge Behavior Tests
+| Test | Description |
+|------|-------------|
+| `test_purge_skips_running_instances` | Bulk purge with Running instances in filter; they are silently skipped |
+| `test_purge_only_deletes_terminal` | Purge only affects Completed/Failed instances |
+
+### 10.3 Parent-Child Hierarchy Tests
+
+| Test | Description |
+|------|-------------|
+| `test_delete_child_with_running_parent_rejected` | Cannot delete sub-orchestration if parent is running |
+| `test_delete_child_with_completed_parent_allowed` | Can delete sub-orchestration if parent completed |
+| `test_delete_parent_before_child` | Delete parent first, then child (should work) |
+| `test_force_delete_child_with_running_parent` | Force delete bypasses parent check |
+
+### 10.4 Time-Based Retention Tests
+
+| Test | Description |
+|------|-------------|
+| `test_purge_5_day_retention` | Purge instances completed more than 5 days ago |
+| `test_prune_30_day_execution_retention` | Prune executions older than 30 days |
+| `test_timestamp_comparison_accuracy` | Verify millisecond precision in time comparisons |
+| `test_completed_at_stored_as_integer` | Verify completed_at is stored as epoch ms, not TEXT |
+
+### 10.5 Edge Case Tests
+
+| Test | Description |
+|------|-------------|
+| `test_zombie_orchestrator_message_after_delete` | Delete instance, then dispatcher picks up orphaned message; verify graceful ack without processing |
+| `test_zombie_worker_message_after_delete` | Delete instance, then worker picks up orphaned activity; verify graceful handling |
+| `test_identity_reuse_after_delete` | Delete instance, immediately create new instance with same ID; verify clean slate |
+| `test_prune_continue_as_new_chain` | Prune old executions from long ContinueAsNew chain |
+| `test_delete_instance_multiple_pending_activities` | Delete instance with 3+ pending activities; all queue entries cleaned |
+| `test_force_delete_sub_orchestration_orphans_parent` | Force delete child while parent waiting; parent hangs (documents expected behavior) |
+| `test_external_event_arrives_after_delete` | Send event to deleted instance; verify graceful "not found" handling |
+
+---
+
+## 11. Alternatives Considered
 
 ### Automatic TTL
 Automatically deleting old records via background sweeper.
@@ -608,17 +800,20 @@ Using OR between filter criteria (match any).
 
 ---
 
-## 11. Summary
+## 12. Summary
 
 | Operation | User API | Provider API | Scope |
 |-----------|----------|--------------|-------|
 | Delete one instance | `client.delete_instance(id, force)` | `delete_instance(id, force)` | Single instance |
 | Bulk delete instances | `client.purge_instances(filter)` | `purge_instances(&filter)` | Multi-instance |
 | Prune one instance | `client.prune_executions(id, options)` | `prune_executions(id, &options)` | Single instance |
-| Bulk prune executions | `client.bulk_prune_executions(filter, options)` | `bulk_prune_executions(&filter, &options)` | Multi-instance |
+| Bulk prune executions | `client.prune_executions_bulk(filter, options)` | `prune_executions_bulk(&filter, &options)` | Multi-instance |
 
 **Key Design Decisions:**
 - `InstanceFilter` is reusable across management APIs
 - All filter criteria use AND semantics
 - Running instances are always protected (skipped, not errored)
 - Current execution is always protected during pruning
+- Active (Running) executions are never pruned
+- Sub-orchestrations can only be deleted if parent chain is completed
+- Timestamps stored as Rust epoch milliseconds (not SQLite CURRENT_TIMESTAMP)

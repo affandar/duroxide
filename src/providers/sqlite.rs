@@ -927,15 +927,17 @@ impl Provider for SqliteProvider {
 
             // Update execution status and output from pre-computed metadata (no event inspection!)
             if let Some(status) = &metadata.status {
+                let now_ms = Self::now_millis();
                 sqlx::query(
                     r#"
                     UPDATE executions 
-                    SET status = ?, output = ?, completed_at = CURRENT_TIMESTAMP 
+                    SET status = ?, output = ?, completed_at = ?
                     WHERE instance_id = ? AND execution_id = ?
                     "#,
                 )
                 .bind(status)
                 .bind(&metadata.output)
+                .bind(now_ms)
                 .bind(&instance_id)
                 .bind(execution_id as i64)
                 .execute(&mut *tx)
