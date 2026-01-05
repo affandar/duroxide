@@ -8,7 +8,7 @@
 
 A lightweight and embeddable durable execution runtime for Rust. Inspired by the [Durable Task Framework](https://github.com/Azure/durabletask) and [Temporal](https://temporal.io/).
 
-> **[Latest Release: v0.1.8](https://crates.io/crates/duroxide/0.1.8)** — Lock-stealing activity cancellation, simplified Provider API.
+> **[Latest Release: v0.1.9](https://crates.io/crates/duroxide/0.1.9)** — Maintenance release (docs/prompt updates).
 > See [CHANGELOG.md](CHANGELOG.md#018---2026-01-02) for release notes.
 
 What you can build with this

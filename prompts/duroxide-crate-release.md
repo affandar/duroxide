@@ -35,6 +35,9 @@ Use this prompt when preparing a crates.io release. Run it end-to-end and paste 
    - `cargo package --locked` (verifies package can be built)
    - Inspect `cargo package --list` for unwanted files.
 
+   5a) **Update README latest release badge/link**
+       - Bump the "Latest Release" link/version in `README.md` to the new tag.
+
 6) **Tag & publish**
    - Tag: `git tag vX.Y.Z && git push origin vX.Y.Z`
    - Publish: `cargo publish --locked`
