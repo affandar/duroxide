@@ -1,8 +1,11 @@
 use std::sync::Arc;
 
+use tracing::info;
+
 use crate::_typed_codec::{Codec, Json};
 use crate::providers::{
-    ExecutionInfo, InstanceInfo, Provider, ProviderAdmin, ProviderError, QueueDepths, SystemMetrics, WorkItem,
+    DeleteInstanceResult, ExecutionInfo, InstanceFilter, InstanceInfo, InstanceTree, Provider, ProviderAdmin,
+    ProviderError, PruneOptions, PruneResult, QueueDepths, SystemMetrics, WorkItem,
 };
 use crate::{EventKind, OrchestrationStatus};
 use serde::Serialize;
@@ -25,6 +28,15 @@ pub enum ClientError {
 
     /// Operation timed out
     Timeout,
+
+    /// Instance is still running (for delete without force)
+    InstanceStillRunning { instance_id: String },
+
+    /// Cannot delete a sub-orchestration directly (must delete root)
+    CannotDeleteSubOrchestration { instance_id: String },
+
+    /// Instance not found
+    InstanceNotFound { instance_id: String },
 }
 
 impl ClientError {
@@ -35,6 +47,9 @@ impl ClientError {
             ClientError::ManagementNotAvailable => false,
             ClientError::InvalidInput { .. } => false,
             ClientError::Timeout => true,
+            ClientError::InstanceStillRunning { .. } => false,
+            ClientError::CannotDeleteSubOrchestration { .. } => false,
+            ClientError::InstanceNotFound { .. } => false,
         }
     }
 }
@@ -49,6 +64,17 @@ impl std::fmt::Display for ClientError {
             ),
             ClientError::InvalidInput { message } => write!(f, "Invalid input: {message}"),
             ClientError::Timeout => write!(f, "Operation timed out"),
+            ClientError::InstanceStillRunning { instance_id } => write!(
+                f,
+                "Instance {instance_id} is still running. Use force=true or cancel first."
+            ),
+            ClientError::CannotDeleteSubOrchestration { instance_id } => write!(
+                f,
+                "Cannot delete sub-orchestration {instance_id} directly. Delete the root orchestration instead."
+            ),
+            ClientError::InstanceNotFound { instance_id } => {
+                write!(f, "Instance {instance_id} not found")
+            }
         }
     }
 }
@@ -931,5 +957,296 @@ impl Client {
             .get_queue_depths()
             .await
             .map_err(ClientError::from)
+    }
+
+    // ===== Hierarchy Operations =====
+
+    /// Get the full instance tree rooted at the given instance.
+    ///
+    /// Returns all instances in the tree: the root, all children, grandchildren, etc.
+    /// Useful for inspecting hierarchy before deletion, or for understanding
+    /// sub-orchestration relationships.
+    ///
+    /// # Parameters
+    ///
+    /// * `instance_id` - The root instance ID to start from.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ClientError::InstanceNotFound`] if the instance doesn't exist.
+    /// Returns [`ClientError::ProviderError`] for database/connection issues.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use duroxide::{Client, ClientError};
+    /// # async fn example(client: Client) -> Result<(), ClientError> {
+    /// let tree = client.get_instance_tree("order-123").await?;
+    /// println!("Will delete {} instances", tree.size());
+    /// for id in &tree.all_ids {
+    ///     println!("  - {}", id);
+    /// }
+    /// client.delete_instance("order-123", false).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn get_instance_tree(&self, instance_id: &str) -> Result<InstanceTree, ClientError> {
+        let mgmt = self.discover_management()?;
+        mgmt.get_instance_tree(instance_id).await.map_err(ClientError::from)
+    }
+
+    // ===== Deletion and Pruning Operations =====
+
+    /// Delete an orchestration instance and all its associated data.
+    ///
+    /// This removes the instance, all executions, all history events, and any
+    /// pending queue messages (orchestrator, worker, timer).
+    ///
+    /// # Parameters
+    ///
+    /// * `instance_id` - The ID of the instance to delete.
+    /// * `force` - If true, delete even if the instance is in Running state.
+    ///   WARNING: Force delete only removes database state; it does NOT cancel
+    ///   in-flight tokio tasks. Use `cancel_instance` first for graceful termination.
+    ///
+    /// # Errors
+    ///
+    /// - [`ClientError::InstanceStillRunning`] - Instance is running and force=false.
+    /// - [`ClientError::CannotDeleteSubOrchestration`] - Instance is a sub-orchestration.
+    /// - [`ClientError::InstanceNotFound`] - Instance doesn't exist.
+    /// - [`ClientError::ProviderError`] - Database/connection issues.
+    ///
+    /// # Cascading Delete
+    ///
+    /// If the instance is a root orchestration with sub-orchestrations, all descendants
+    /// are included in the deletion (performed atomically in a single transaction).
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use duroxide::{Client, ClientError};
+    /// # async fn example(client: Client) -> Result<(), ClientError> {
+    /// // Delete a completed instance
+    /// let result = client.delete_instance("order-123", false).await?;
+    /// println!("Deleted {} events", result.events_deleted);
+    ///
+    /// // Graceful pattern: cancel first, then delete
+    /// client.cancel_instance("workflow-456", "cleanup").await?;
+    /// // Wait for cancellation to complete...
+    /// client.delete_instance("workflow-456", false).await?;
+    ///
+    /// // Force delete an instance stuck in Running state
+    /// client.delete_instance("stuck-workflow", true).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn delete_instance(&self, instance_id: &str, force: bool) -> Result<DeleteInstanceResult, ClientError> {
+        let mgmt = self.discover_management()?;
+        let result = mgmt
+            .delete_instance(instance_id, force)
+            .await
+            .map_err(|e| Self::translate_delete_error(e, instance_id))?;
+
+        info!(
+            instance_id = %instance_id,
+            force = %force,
+            instances_deleted = %result.instances_deleted,
+            executions_deleted = %result.executions_deleted,
+            events_deleted = %result.events_deleted,
+            queue_messages_deleted = %result.queue_messages_deleted,
+            "Deleted instance"
+        );
+
+        Ok(result)
+    }
+
+    /// Delete multiple orchestration instances matching the filter criteria.
+    ///
+    /// Only instances in terminal states (Completed, Failed) are eligible.
+    /// Running instances are silently skipped (not an error).
+    ///
+    /// # Parameters
+    ///
+    /// * `filter` - Criteria for selecting instances to delete. All criteria are ANDed.
+    ///
+    /// # Filter Behavior
+    ///
+    /// - `instance_ids`: Allowlist of specific IDs to consider
+    /// - `completed_before`: Only delete instances completed before this timestamp (ms since epoch)
+    /// - `limit`: Maximum number of instances to delete (default: 1000)
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ClientError::ProviderError`] for database/connection issues.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use duroxide::{Client, ClientError, InstanceFilter};
+    /// # async fn example(client: Client, now_ms: u64) -> Result<(), ClientError> {
+    /// // Delete specific instances
+    /// let result = client.delete_instance_bulk(InstanceFilter {
+    ///     instance_ids: Some(vec!["order-1".into(), "order-2".into()]),
+    ///     ..Default::default()
+    /// }).await?;
+    ///
+    /// // Delete by age (retention policy)
+    /// let five_days_ago = now_ms - (5 * 24 * 60 * 60 * 1000);
+    /// let result = client.delete_instance_bulk(InstanceFilter {
+    ///     completed_before: Some(five_days_ago),
+    ///     limit: Some(500),
+    ///     ..Default::default()
+    /// }).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn delete_instance_bulk(&self, filter: InstanceFilter) -> Result<DeleteInstanceResult, ClientError> {
+        let result = self
+            .discover_management()?
+            .delete_instance_bulk(filter.clone())
+            .await
+            .map_err(ClientError::from)?;
+
+        info!(
+            filter = ?filter,
+            instances_deleted = %result.instances_deleted,
+            executions_deleted = %result.executions_deleted,
+            events_deleted = %result.events_deleted,
+            queue_messages_deleted = %result.queue_messages_deleted,
+            "Bulk deleted instances"
+        );
+
+        Ok(result)
+    }
+
+    /// Prune old executions from a single long-running instance.
+    ///
+    /// Use this for `ContinueAsNew` workflows that accumulate many executions
+    /// over time. The current (active) execution is never pruned.
+    ///
+    /// # Parameters
+    ///
+    /// * `instance_id` - The instance to prune executions from.
+    /// * `options` - Criteria for selecting executions to delete. All criteria are ANDed.
+    ///
+    /// # Options Behavior
+    ///
+    /// - `keep_last`: Keep the last N executions by execution_id
+    /// - `completed_before`: Only delete executions completed before this timestamp (ms)
+    /// - Running executions are NEVER pruned
+    /// - The current execution is NEVER pruned
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ClientError::ProviderError`] for database/connection issues.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use duroxide::{Client, ClientError, PruneOptions};
+    /// # async fn example(client: Client, now_ms: u64) -> Result<(), ClientError> {
+    /// // Keep only the last 10 executions
+    /// let result = client.prune_executions("eternal-workflow", PruneOptions {
+    ///     keep_last: Some(10),
+    ///     ..Default::default()
+    /// }).await?;
+    ///
+    /// // Delete executions older than 30 days
+    /// let thirty_days_ago = now_ms - (30 * 24 * 60 * 60 * 1000);
+    /// let result = client.prune_executions("eternal-workflow", PruneOptions {
+    ///     completed_before: Some(thirty_days_ago),
+    ///     ..Default::default()
+    /// }).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn prune_executions(&self, instance_id: &str, options: PruneOptions) -> Result<PruneResult, ClientError> {
+        let result = self
+            .discover_management()?
+            .prune_executions(instance_id, options.clone())
+            .await
+            .map_err(ClientError::from)?;
+
+        info!(
+            instance_id = %instance_id,
+            options = ?options,
+            executions_deleted = %result.executions_deleted,
+            events_deleted = %result.events_deleted,
+            instances_processed = %result.instances_processed,
+            "Pruned executions"
+        );
+
+        Ok(result)
+    }
+
+    /// Prune old executions from multiple instances matching the filter.
+    ///
+    /// Applies the same prune options to all matching instances.
+    ///
+    /// # Parameters
+    ///
+    /// * `filter` - Criteria for selecting instances to process.
+    /// * `options` - Criteria for selecting executions to delete within each instance.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ClientError::ProviderError`] for database/connection issues.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use duroxide::{Client, ClientError, InstanceFilter, PruneOptions};
+    /// # async fn example(client: Client) -> Result<(), ClientError> {
+    /// // Prune all terminal instances: keep last 10 executions each
+    /// let result = client.prune_executions_bulk(
+    ///     InstanceFilter { limit: Some(100), ..Default::default() },
+    ///     PruneOptions { keep_last: Some(10), ..Default::default() },
+    /// ).await?;
+    /// println!("Pruned {} executions across {} instances",
+    ///     result.executions_deleted, result.instances_processed);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn prune_executions_bulk(
+        &self,
+        filter: InstanceFilter,
+        options: PruneOptions,
+    ) -> Result<PruneResult, ClientError> {
+        let result = self
+            .discover_management()?
+            .prune_executions_bulk(filter.clone(), options.clone())
+            .await
+            .map_err(ClientError::from)?;
+
+        info!(
+            filter = ?filter,
+            options = ?options,
+            executions_deleted = %result.executions_deleted,
+            events_deleted = %result.events_deleted,
+            instances_processed = %result.instances_processed,
+            "Bulk pruned executions"
+        );
+
+        Ok(result)
+    }
+
+    /// Translate provider errors into more specific client errors for delete operations.
+    fn translate_delete_error(e: ProviderError, instance_id: &str) -> ClientError {
+        let msg = e.to_string().to_lowercase();
+        if msg.contains("not found") {
+            ClientError::InstanceNotFound {
+                instance_id: instance_id.to_string(),
+            }
+        } else if msg.contains("still running") {
+            ClientError::InstanceStillRunning {
+                instance_id: instance_id.to_string(),
+            }
+        } else if msg.contains("sub-orchestration") || msg.contains("delete the root") {
+            ClientError::CannotDeleteSubOrchestration {
+                instance_id: instance_id.to_string(),
+            }
+        } else {
+            ClientError::Provider(e)
+        }
     }
 }

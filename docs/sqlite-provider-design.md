@@ -25,9 +25,13 @@ CREATE TABLE instances (
     orchestration_version TEXT NOT NULL,
     current_execution_id INTEGER NOT NULL DEFAULT 1,
     status TEXT NOT NULL DEFAULT 'Running', -- Running, Completed, Failed, ContinuedAsNew
+    parent_instance_id TEXT,  -- For sub-orchestrations: tracks parent for cascade deletion
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (parent_instance_id) REFERENCES instances(instance_id) ON DELETE CASCADE
 );
+
+CREATE INDEX idx_instances_parent ON instances(parent_instance_id);
 
 -- Multi-execution support for ContinueAsNew
 CREATE TABLE executions (

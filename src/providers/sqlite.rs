@@ -4,10 +4,13 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tracing::debug;
 
 use super::{
-    ExecutionInfo, InstanceInfo, OrchestrationItem, Provider, ProviderAdmin, ProviderError, QueueDepths,
-    ScheduledActivityIdentifier, SystemMetrics, WorkItem,
+    DeleteInstanceResult, ExecutionInfo, InstanceFilter, InstanceInfo, OrchestrationItem, Provider, ProviderAdmin,
+    ProviderError, PruneOptions, PruneResult, QueueDepths, ScheduledActivityIdentifier, SystemMetrics, WorkItem,
 };
 use crate::{Event, EventKind};
+
+/// Default limit for bulk operations when not specified by caller
+const DEFAULT_BULK_OPERATION_LIMIT: u32 = 1000;
 
 /// Configuration options for SQLiteProvider
 #[derive(Debug, Clone, Default)]
@@ -261,12 +264,18 @@ impl SqliteProvider {
                 orchestration_version TEXT,
                 current_execution_id INTEGER NOT NULL DEFAULT 1,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                parent_instance_id TEXT REFERENCES instances(instance_id)
             )
             "#,
         )
         .execute(pool)
         .await?;
+
+        // Index for efficient parent-child lookups during cascading delete
+        sqlx::query(r#"CREATE INDEX IF NOT EXISTS idx_instances_parent ON instances(parent_instance_id)"#)
+            .execute(pool)
+            .await?;
 
         sqlx::query(
             r#"
@@ -853,25 +862,28 @@ impl Provider for SqliteProvider {
         // Runtime resolves version from registry and provides it via metadata
         if let (Some(name), Some(version)) = (&metadata.orchestration_name, &metadata.orchestration_version) {
             // First, ensure instance exists (INSERT OR IGNORE if new)
+            // Include parent_instance_id for sub-orchestration tracking (used for cascading delete)
             sqlx::query(
                 r#"
-                INSERT OR IGNORE INTO instances 
-                (instance_id, orchestration_name, orchestration_version, current_execution_id)
-                VALUES (?, ?, ?, ?)
+                INSERT OR IGNORE INTO instances
+                (instance_id, orchestration_name, orchestration_version, current_execution_id, parent_instance_id)
+                VALUES (?, ?, ?, ?, ?)
                 "#,
             )
             .bind(&instance_id)
             .bind(name)
             .bind(version.as_str()) // version is &String, so use as_str()
             .bind(execution_id as i64)
+            .bind(&metadata.parent_instance_id)
             .execute(&mut *tx)
             .await
             .map_err(|e| Self::sqlx_to_provider_error("list_instances", e))?;
 
             // Then update with resolved version (will update if instance exists, no-op if just created)
+            // Note: parent_instance_id is immutable after creation, so we don't update it here
             sqlx::query(
                 r#"
-                UPDATE instances 
+                UPDATE instances
                 SET orchestration_name = ?, orchestration_version = ?
                 WHERE instance_id = ?
                 "#,
@@ -1708,13 +1720,14 @@ impl ProviderAdmin for SqliteProvider {
     async fn get_instance_info(&self, instance: &str) -> Result<InstanceInfo, ProviderError> {
         let row = sqlx::query(
             r#"
-            SELECT 
+            SELECT
                 i.instance_id,
                 i.orchestration_name,
                 i.orchestration_version,
                 i.current_execution_id,
                 i.created_at,
                 i.updated_at,
+                i.parent_instance_id,
                 e.status,
                 e.output
             FROM instances i
@@ -1745,6 +1758,7 @@ impl ProviderAdmin for SqliteProvider {
                 let updated_at: i64 = row.try_get("updated_at").unwrap_or(0);
                 let status: String = row.try_get("status").unwrap_or_else(|_| "Unknown".to_string());
                 let output: Option<String> = row.try_get("output").ok();
+                let parent_instance_id: Option<String> = row.try_get("parent_instance_id").ok().flatten();
 
                 Ok(InstanceInfo {
                     instance_id,
@@ -1755,6 +1769,7 @@ impl ProviderAdmin for SqliteProvider {
                     output,
                     created_at: created_at as u64,
                     updated_at: updated_at as u64,
+                    parent_instance_id,
                 })
             }
             None => Err(ProviderError::permanent(
@@ -1892,6 +1907,532 @@ impl ProviderAdmin for SqliteProvider {
             worker_queue,
             timer_queue: 0, // Timer queue no longer exists - timers handled by orchestrator queue
         })
+    }
+
+    // ===== Hierarchy Primitive Operations =====
+
+    async fn list_children(&self, instance_id: &str) -> Result<Vec<String>, ProviderError> {
+        let rows = sqlx::query("SELECT instance_id FROM instances WHERE parent_instance_id = ?")
+            .bind(instance_id)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| Self::sqlx_to_provider_error("list_children", e))?;
+
+        let children: Vec<String> = rows
+            .into_iter()
+            .filter_map(|row| row.try_get("instance_id").ok())
+            .collect();
+
+        Ok(children)
+    }
+
+    async fn get_parent_id(&self, instance_id: &str) -> Result<Option<String>, ProviderError> {
+        let row = sqlx::query("SELECT parent_instance_id FROM instances WHERE instance_id = ?")
+            .bind(instance_id)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| Self::sqlx_to_provider_error("get_parent_id", e))?;
+
+        match row {
+            Some(r) => Ok(r.try_get("parent_instance_id").ok().flatten()),
+            None => Err(ProviderError::permanent(
+                "get_parent_id",
+                format!("Instance {} not found", instance_id),
+            )),
+        }
+    }
+
+    async fn delete_instances_atomic(
+        &self,
+        ids: &[String],
+        force: bool,
+    ) -> Result<DeleteInstanceResult, ProviderError> {
+        if ids.is_empty() {
+            return Ok(DeleteInstanceResult::default());
+        }
+
+        // Build placeholders for IN clause: ?, ?, ?, ...
+        let placeholders: String = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+
+        // Step 1: If not force, check that all instances are in terminal state
+        if !force {
+            // NOTE: Dynamic SQL with placeholders - see TODO.md "Security: SQL Injection Audit"
+            let check_sql = format!(
+                r#"
+                SELECT i.instance_id, e.status
+                FROM instances i
+                LEFT JOIN executions e ON i.instance_id = e.instance_id AND i.current_execution_id = e.execution_id
+                WHERE i.instance_id IN ({})
+                "#,
+                placeholders
+            );
+
+            let mut query = sqlx::query(&check_sql);
+            for id in ids {
+                query = query.bind(id);
+            }
+
+            let rows = query
+                .fetch_all(&self.pool)
+                .await
+                .map_err(|e| Self::sqlx_to_provider_error("delete_instances_atomic", e))?;
+
+            for row in rows {
+                let status: Option<String> = row.try_get("status").ok();
+                if status.as_deref() == Some("Running") {
+                    let instance_id: String = row.try_get("instance_id").unwrap_or_default();
+                    return Err(ProviderError::permanent(
+                        "delete_instances_atomic",
+                        format!(
+                            "Instance {} is still running. Use force=true to delete anyway, or cancel first.",
+                            instance_id
+                        ),
+                    ));
+                }
+            }
+        }
+
+        // Step 2: Delete all instances in a single transaction using bulk operations
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| Self::sqlx_to_provider_error("delete_instances_atomic", e))?;
+
+        // Step 2a: Check for orphan race condition
+        // If any instance has parent_instance_id pointing to an instance we're deleting,
+        // but that child is NOT in our delete list, we'd create an orphan.
+        // This can happen if a new sub-orchestration was spawned between get_instance_tree() and now.
+        let orphan_check_sql = format!(
+            r#"
+            SELECT instance_id, parent_instance_id FROM instances
+            WHERE parent_instance_id IN ({placeholders})
+              AND instance_id NOT IN ({placeholders})
+            LIMIT 1
+            "#
+        );
+        let mut orphan_query = sqlx::query(&orphan_check_sql);
+        // Bind ids twice: once for parent_instance_id IN, once for instance_id NOT IN
+        for id in ids {
+            orphan_query = orphan_query.bind(id);
+        }
+        for id in ids {
+            orphan_query = orphan_query.bind(id);
+        }
+        if let Some(orphan_row) = orphan_query
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(|e| Self::sqlx_to_provider_error("delete_instances_atomic", e))?
+        {
+            let orphan_id: String = orphan_row.try_get("instance_id").unwrap_or_default();
+            let parent_id: String = orphan_row.try_get("parent_instance_id").unwrap_or_default();
+            return Err(ProviderError::permanent(
+                "delete_instances_atomic",
+                format!(
+                    "Cannot delete: instance {} has child {} that was created after tree traversal. \
+                     Re-fetch the tree and retry.",
+                    parent_id, orphan_id
+                ),
+            ));
+        }
+
+        let mut result = DeleteInstanceResult::default();
+
+        // Count history events before deletion
+        let count_history_sql = format!(
+            "SELECT COUNT(*) as count FROM history WHERE instance_id IN ({})",
+            placeholders
+        );
+        let mut count_query = sqlx::query(&count_history_sql);
+        for id in ids {
+            count_query = count_query.bind(id);
+        }
+        let history_count: i64 = count_query
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(|e| Self::sqlx_to_provider_error("delete_instances_atomic", e))?
+            .try_get("count")
+            .unwrap_or(0);
+        result.events_deleted = history_count as u64;
+
+        // Count executions before deletion
+        let count_exec_sql = format!(
+            "SELECT COUNT(*) as count FROM executions WHERE instance_id IN ({})",
+            placeholders
+        );
+        let mut count_query = sqlx::query(&count_exec_sql);
+        for id in ids {
+            count_query = count_query.bind(id);
+        }
+        let exec_count: i64 = count_query
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(|e| Self::sqlx_to_provider_error("delete_instances_atomic", e))?
+            .try_get("count")
+            .unwrap_or(0);
+        result.executions_deleted = exec_count as u64;
+
+        // Count queue messages before deletion
+        let count_orch_q_sql = format!(
+            "SELECT COUNT(*) as count FROM orchestrator_queue WHERE instance_id IN ({})",
+            placeholders
+        );
+        let mut count_query = sqlx::query(&count_orch_q_sql);
+        for id in ids {
+            count_query = count_query.bind(id);
+        }
+        let orch_q_count: i64 = count_query
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(|e| Self::sqlx_to_provider_error("delete_instances_atomic", e))?
+            .try_get("count")
+            .unwrap_or(0);
+
+        let count_worker_q_sql = format!(
+            "SELECT COUNT(*) as count FROM worker_queue WHERE instance_id IN ({})",
+            placeholders
+        );
+        let mut count_query = sqlx::query(&count_worker_q_sql);
+        for id in ids {
+            count_query = count_query.bind(id);
+        }
+        let worker_q_count: i64 = count_query
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(|e| Self::sqlx_to_provider_error("delete_instances_atomic", e))?
+            .try_get("count")
+            .unwrap_or(0);
+
+        result.queue_messages_deleted = (orch_q_count + worker_q_count) as u64;
+
+        // Bulk delete from all tables (order matters for FK constraints if any)
+        // Delete history
+        let del_history_sql = format!("DELETE FROM history WHERE instance_id IN ({})", placeholders);
+        let mut del_query = sqlx::query(&del_history_sql);
+        for id in ids {
+            del_query = del_query.bind(id);
+        }
+        del_query
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| Self::sqlx_to_provider_error("delete_instances_atomic", e))?;
+
+        // Delete executions
+        let del_exec_sql = format!("DELETE FROM executions WHERE instance_id IN ({})", placeholders);
+        let mut del_query = sqlx::query(&del_exec_sql);
+        for id in ids {
+            del_query = del_query.bind(id);
+        }
+        del_query
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| Self::sqlx_to_provider_error("delete_instances_atomic", e))?;
+
+        // Delete orchestrator queue
+        let del_orch_q_sql = format!("DELETE FROM orchestrator_queue WHERE instance_id IN ({})", placeholders);
+        let mut del_query = sqlx::query(&del_orch_q_sql);
+        for id in ids {
+            del_query = del_query.bind(id);
+        }
+        del_query
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| Self::sqlx_to_provider_error("delete_instances_atomic", e))?;
+
+        // Delete worker queue
+        let del_worker_q_sql = format!("DELETE FROM worker_queue WHERE instance_id IN ({})", placeholders);
+        let mut del_query = sqlx::query(&del_worker_q_sql);
+        for id in ids {
+            del_query = del_query.bind(id);
+        }
+        del_query
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| Self::sqlx_to_provider_error("delete_instances_atomic", e))?;
+
+        // Delete instance locks (important: before instances to prevent zombie recreation)
+        let del_locks_sql = format!("DELETE FROM instance_locks WHERE instance_id IN ({})", placeholders);
+        let mut del_query = sqlx::query(&del_locks_sql);
+        for id in ids {
+            del_query = del_query.bind(id);
+        }
+        del_query
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| Self::sqlx_to_provider_error("delete_instances_atomic", e))?;
+
+        // Delete instances
+        let del_instances_sql = format!("DELETE FROM instances WHERE instance_id IN ({})", placeholders);
+        let mut del_query = sqlx::query(&del_instances_sql);
+        for id in ids {
+            del_query = del_query.bind(id);
+        }
+        del_query
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| Self::sqlx_to_provider_error("delete_instances_atomic", e))?;
+
+        tx.commit()
+            .await
+            .map_err(|e| Self::sqlx_to_provider_error("delete_instances_atomic", e))?;
+
+        result.instances_deleted = ids.len() as u64;
+        Ok(result)
+    }
+
+    // delete_instance: uses default implementation from ProviderAdmin trait
+    // get_instance_tree: uses default implementation from ProviderAdmin trait
+
+    // ===== Deletion/Pruning Operations =====
+
+    // Note: delete_instance_bulk is overridden for efficient batch querying
+
+    async fn delete_instance_bulk(&self, filter: InstanceFilter) -> Result<DeleteInstanceResult, ProviderError> {
+        // Build query to find matching instances
+        // Only select root instances (parent_instance_id IS NULL) in terminal states
+        let mut sql = String::from(
+            r#"
+            SELECT i.instance_id
+            FROM instances i
+            LEFT JOIN executions e ON i.instance_id = e.instance_id AND i.current_execution_id = e.execution_id
+            WHERE i.parent_instance_id IS NULL
+              AND e.status IN ('Completed', 'Failed', 'ContinuedAsNew')
+            "#,
+        );
+
+        // Add instance_ids filter if provided
+        if let Some(ref ids) = filter.instance_ids {
+            if ids.is_empty() {
+                return Ok(DeleteInstanceResult::default());
+            }
+            let placeholders: Vec<&str> = ids.iter().map(|_| "?").collect();
+            sql.push_str(&format!(" AND i.instance_id IN ({})", placeholders.join(",")));
+        }
+
+        // Add completed_before filter if provided
+        if filter.completed_before.is_some() {
+            sql.push_str(" AND e.completed_at < ?");
+        }
+
+        // Add limit
+        let limit = filter.limit.unwrap_or(DEFAULT_BULK_OPERATION_LIMIT);
+        sql.push_str(&format!(" LIMIT {}", limit));
+
+        // Build and execute query
+        let mut query = sqlx::query(&sql);
+        if let Some(ref ids) = filter.instance_ids {
+            for id in ids {
+                query = query.bind(id);
+            }
+        }
+        if let Some(completed_before) = filter.completed_before {
+            query = query.bind(completed_before as i64);
+        }
+
+        let rows = query
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| Self::sqlx_to_provider_error("delete_instance_bulk", e))?;
+
+        let instance_ids: Vec<String> = rows.iter().filter_map(|row| row.try_get("instance_id").ok()).collect();
+
+        if instance_ids.is_empty() {
+            return Ok(DeleteInstanceResult::default());
+        }
+
+        // Delete each instance (with cascade) using primitives
+        let mut result = DeleteInstanceResult::default();
+
+        for instance_id in &instance_ids {
+            // Get full tree for this root
+            let tree = self.get_instance_tree(instance_id).await?;
+
+            // Count includes root + all children
+            let tree_size = tree.all_ids.len() as u64;
+
+            // Atomic delete (tree.all_ids is already in deletion order: children first)
+            let delete_result = self.delete_instances_atomic(&tree.all_ids, true).await?;
+            result.executions_deleted += delete_result.executions_deleted;
+            result.events_deleted += delete_result.events_deleted;
+            result.queue_messages_deleted += delete_result.queue_messages_deleted;
+            result.instances_deleted += tree_size;
+        }
+
+        Ok(result)
+    }
+
+    async fn prune_executions(&self, instance_id: &str, options: PruneOptions) -> Result<PruneResult, ProviderError> {
+        // Get current execution ID (never prune this)
+        let current_exec_row = sqlx::query("SELECT current_execution_id FROM instances WHERE instance_id = ?")
+            .bind(instance_id)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| Self::sqlx_to_provider_error("prune_executions", e))?;
+
+        let current_execution_id: i64 = match current_exec_row {
+            Some(row) => row.try_get("current_execution_id").unwrap_or(1),
+            None => {
+                return Err(ProviderError::permanent(
+                    "prune_executions",
+                    format!("Instance {} not found", instance_id),
+                ));
+            }
+        };
+
+        // Build query to find executions to prune
+        // Never prune: current execution, running executions
+        let mut conditions = vec![
+            "instance_id = ?".to_string(),
+            "execution_id != ?".to_string(),   // Never prune current
+            "status != 'Running'".to_string(), // Never prune running
+        ];
+
+        if let Some(keep_last) = options.keep_last {
+            // Only prune executions outside the top N
+            conditions.push(format!(
+                "execution_id NOT IN (SELECT execution_id FROM executions WHERE instance_id = ? ORDER BY execution_id DESC LIMIT {})",
+                keep_last
+            ));
+        }
+
+        if options.completed_before.is_some() {
+            conditions.push("completed_at < ?".to_string());
+        }
+
+        let sql = format!("SELECT execution_id FROM executions WHERE {}", conditions.join(" AND "));
+
+        let mut query = sqlx::query(&sql);
+        query = query.bind(instance_id);
+        query = query.bind(current_execution_id);
+        if options.keep_last.is_some() {
+            query = query.bind(instance_id);
+        }
+        if let Some(completed_before) = options.completed_before {
+            query = query.bind(completed_before as i64);
+        }
+
+        let rows = query
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| Self::sqlx_to_provider_error("prune_executions", e))?;
+
+        let execution_ids: Vec<i64> = rows.iter().filter_map(|row| row.try_get("execution_id").ok()).collect();
+
+        if execution_ids.is_empty() {
+            return Ok(PruneResult {
+                instances_processed: 1,
+                ..Default::default()
+            });
+        }
+
+        // Delete executions and their history in a transaction
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| Self::sqlx_to_provider_error("prune_executions", e))?;
+
+        let mut result = PruneResult {
+            instances_processed: 1,
+            ..Default::default()
+        };
+
+        for exec_id in &execution_ids {
+            // Count and delete history events
+            let history_count: i64 =
+                sqlx::query("SELECT COUNT(*) as count FROM history WHERE instance_id = ? AND execution_id = ?")
+                    .bind(instance_id)
+                    .bind(exec_id)
+                    .fetch_one(&mut *tx)
+                    .await
+                    .map_err(|e| Self::sqlx_to_provider_error("prune_executions", e))?
+                    .try_get("count")
+                    .unwrap_or(0);
+
+            sqlx::query("DELETE FROM history WHERE instance_id = ? AND execution_id = ?")
+                .bind(instance_id)
+                .bind(exec_id)
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| Self::sqlx_to_provider_error("prune_executions", e))?;
+
+            // Delete execution
+            sqlx::query("DELETE FROM executions WHERE instance_id = ? AND execution_id = ?")
+                .bind(instance_id)
+                .bind(exec_id)
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| Self::sqlx_to_provider_error("prune_executions", e))?;
+
+            result.executions_deleted += 1;
+            result.events_deleted += history_count as u64;
+        }
+
+        tx.commit()
+            .await
+            .map_err(|e| Self::sqlx_to_provider_error("prune_executions", e))?;
+
+        Ok(result)
+    }
+
+    async fn prune_executions_bulk(
+        &self,
+        filter: InstanceFilter,
+        options: PruneOptions,
+    ) -> Result<PruneResult, ProviderError> {
+        // Find matching instances (terminal states only)
+        let mut sql = String::from(
+            r#"
+            SELECT i.instance_id
+            FROM instances i
+            LEFT JOIN executions e ON i.instance_id = e.instance_id AND i.current_execution_id = e.execution_id
+            WHERE e.status IN ('Completed', 'Failed', 'ContinuedAsNew')
+            "#,
+        );
+
+        if let Some(ref ids) = filter.instance_ids {
+            if ids.is_empty() {
+                return Ok(PruneResult::default());
+            }
+            let placeholders: Vec<&str> = ids.iter().map(|_| "?").collect();
+            sql.push_str(&format!(" AND i.instance_id IN ({})", placeholders.join(",")));
+        }
+
+        if filter.completed_before.is_some() {
+            sql.push_str(" AND e.completed_at < ?");
+        }
+
+        let limit = filter.limit.unwrap_or(1000);
+        sql.push_str(&format!(" LIMIT {}", limit));
+
+        let mut query = sqlx::query(&sql);
+        if let Some(ref ids) = filter.instance_ids {
+            for id in ids {
+                query = query.bind(id);
+            }
+        }
+        if let Some(completed_before) = filter.completed_before {
+            query = query.bind(completed_before as i64);
+        }
+
+        let rows = query
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| Self::sqlx_to_provider_error("prune_executions_bulk", e))?;
+
+        let instance_ids: Vec<String> = rows.iter().filter_map(|row| row.try_get("instance_id").ok()).collect();
+
+        // Prune each instance
+        let mut result = PruneResult::default();
+
+        for instance_id in &instance_ids {
+            let single_result = self.prune_executions(instance_id, options.clone()).await?;
+            result.instances_processed += single_result.instances_processed;
+            result.executions_deleted += single_result.executions_deleted;
+            result.events_deleted += single_result.events_deleted;
+        }
+
+        Ok(result)
     }
 }
 

@@ -10,6 +10,19 @@
 mod tests {
     use duroxide::provider_validations::{
         ProviderFactory,
+        // Bulk deletion tests
+        bulk_deletion::{
+            test_delete_instance_bulk_cascades_to_children, test_delete_instance_bulk_completed_before_filter,
+            test_delete_instance_bulk_filter_combinations, test_delete_instance_bulk_safety_and_limits,
+        },
+        // Deletion tests
+        deletion::{
+            test_cascade_delete_hierarchy, test_delete_cleans_queues_and_locks, test_delete_get_instance_tree,
+            test_delete_get_parent_id, test_delete_instances_atomic, test_delete_instances_atomic_force,
+            test_delete_instances_atomic_orphan_detection, test_delete_nonexistent_instance,
+            test_delete_running_rejected_force_succeeds, test_delete_terminal_instances,
+            test_force_delete_prevents_ack_recreation, test_list_children,
+        },
         // Long polling tests
         long_polling::{
             test_fetch_respects_timeout_upper_bound, test_short_poll_returns_immediately,
@@ -22,6 +35,8 @@ mod tests {
             orchestration_attempt_count_increments_on_refetch, orchestration_attempt_count_starts_at_one,
             worker_attempt_count_increments_on_lock_expiry, worker_attempt_count_starts_at_one,
         },
+        // Prune tests
+        prune::{test_prune_bulk, test_prune_options_combinations, test_prune_safety},
         test_abandon_releases_lock_immediately,
         test_abandon_work_item_releases_lock,
         test_abandon_work_item_with_delay,
@@ -512,6 +527,67 @@ mod tests {
         test_batch_cancellation_deletes_multiple_activities(&SqliteTestFactory).await;
     }
 
+    // Deletion tests
+    #[tokio::test]
+    async fn test_sqlite_delete_terminal_instances() {
+        test_delete_terminal_instances(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_delete_running_rejected_force_succeeds() {
+        test_delete_running_rejected_force_succeeds(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_delete_nonexistent_instance() {
+        test_delete_nonexistent_instance(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_delete_cleans_queues_and_locks() {
+        test_delete_cleans_queues_and_locks(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_cascade_delete_hierarchy() {
+        test_cascade_delete_hierarchy(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_force_delete_prevents_ack_recreation() {
+        test_force_delete_prevents_ack_recreation(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_list_children() {
+        test_list_children(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_delete_get_parent_id() {
+        test_delete_get_parent_id(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_delete_get_instance_tree() {
+        test_delete_get_instance_tree(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_delete_instances_atomic() {
+        test_delete_instances_atomic(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_delete_instances_atomic_force() {
+        test_delete_instances_atomic_force(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_delete_instances_atomic_orphan_detection() {
+        test_delete_instances_atomic_orphan_detection(&SqliteTestFactory).await;
+    }
+
     // Worker lock renewal tests
     #[tokio::test]
     async fn test_sqlite_worker_lock_renewal_success() {
@@ -536,5 +612,42 @@ mod tests {
     #[tokio::test]
     async fn test_sqlite_worker_lock_renewal_after_ack() {
         test_worker_lock_renewal_after_ack(&SqliteTestFactory).await;
+    }
+
+    // Prune tests
+    #[tokio::test]
+    async fn test_sqlite_prune_options_combinations() {
+        test_prune_options_combinations(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_prune_safety() {
+        test_prune_safety(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_prune_bulk() {
+        test_prune_bulk(&SqliteTestFactory).await;
+    }
+
+    // Bulk deletion tests
+    #[tokio::test]
+    async fn test_sqlite_delete_instance_bulk_filter_combinations() {
+        test_delete_instance_bulk_filter_combinations(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_delete_instance_bulk_safety_and_limits() {
+        test_delete_instance_bulk_safety_and_limits(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_delete_instance_bulk_completed_before_filter() {
+        test_delete_instance_bulk_completed_before_filter(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_delete_instance_bulk_cascades_to_children() {
+        test_delete_instance_bulk_cascades_to_children(&SqliteTestFactory).await;
     }
 }

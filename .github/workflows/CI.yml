@@ -16,7 +16,11 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
+    - name: Install nextest
+      uses: taiki-e/install-action@nextest
     - name: Build
-      run: cargo build --verbose
+      run: cargo build --all-features --verbose
     - name: Run tests
-      run: cargo t --verbose
+      run: cargo nextest run --all-features
+    - name: Run doc tests
+      run: cargo test --doc --all-features

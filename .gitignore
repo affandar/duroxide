@@ -34,3 +34,5 @@ profiling/results/*.folded
 flamegraph.svg
 perf.data
 perf.data.old
+*.local.*
+.claude/

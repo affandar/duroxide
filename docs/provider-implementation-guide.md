@@ -1748,19 +1748,33 @@ pub trait ProviderAdmin: Send + Sync {
     async fn list_instances(&self) -> Result<Vec<String>, ProviderError>;
     async fn list_instances_by_status(&self, status: &str) -> Result<Vec<String>, ProviderError>;
     async fn list_executions(&self, instance: &str) -> Result<Vec<u64>, ProviderError>;
-    
+
     // History access
     async fn read_history_with_execution_id(&self, instance: &str, execution_id: u64) -> Result<Vec<Event>, ProviderError>;
     async fn read_history(&self, instance: &str) -> Result<Vec<Event>, ProviderError>;
     async fn latest_execution_id(&self, instance: &str) -> Result<u64, ProviderError>;
-    
+
     // Metadata
     async fn get_instance_info(&self, instance: &str) -> Result<InstanceInfo, ProviderError>;
     async fn get_execution_info(&self, instance: &str, execution_id: u64) -> Result<ExecutionInfo, ProviderError>;
-    
+
     // System metrics
     async fn get_system_metrics(&self) -> Result<SystemMetrics, ProviderError>;
     async fn get_queue_depths(&self) -> Result<QueueDepths, ProviderError>;
+
+    // Instance hierarchy (for cascade deletion)
+    async fn get_parent_id(&self, instance: &str) -> Result<Option<String>, ProviderError>;
+    async fn list_children(&self, instance: &str) -> Result<Vec<String>, ProviderError>;
+    async fn get_instance_tree(&self, instance: &str) -> Result<InstanceTree, ProviderError>;
+
+    // Deletion
+    async fn delete_instance(&self, instance: &str, force: bool) -> Result<DeleteInstanceResult, ProviderError>;
+    async fn delete_instances_atomic(&self, instance_ids: &[&str], force: bool) -> Result<DeleteInstanceResult, ProviderError>;
+    async fn delete_instance_bulk(&self, filter: InstanceFilter) -> Result<DeleteInstanceResult, ProviderError>;
+
+    // Pruning (execution history cleanup)
+    async fn prune_executions(&self, instance: &str, options: PruneOptions) -> Result<PruneResult, ProviderError>;
+    async fn prune_executions_bulk(&self, filter: InstanceFilter, options: PruneOptions) -> Result<PruneResult, ProviderError>;
 }
 ```
 
@@ -2041,7 +2055,185 @@ pub struct QueueDepths {
     pub worker_queue: usize,
     pub timer_queue: usize,  // Usually 0 (timers in orch queue)
 }
+
+// Instance hierarchy for cascade deletion
+pub struct InstanceTree {
+    pub root_id: String,
+    pub all_ids: Vec<String>,  // All instance IDs in deletion order (children before parents)
+}
+
+impl InstanceTree {
+    pub fn size(&self) -> usize { self.all_ids.len() }
+    pub fn is_root_only(&self) -> bool { self.all_ids.len() == 1 }
+}
+
+// Deletion result (unified for single and bulk operations)
+pub struct DeleteInstanceResult {
+    pub instances_deleted: u64,
+    pub executions_deleted: u64,
+    pub events_deleted: u64,
+    pub queue_messages_deleted: u64,
+}
+
+// Pruning result
+pub struct PruneResult {
+    pub instances_processed: u64,
+    pub executions_deleted: u64,
+    pub events_deleted: u64,
+}
+
+// Filtering options for bulk operations
+pub struct InstanceFilter {
+    pub instance_ids: Option<Vec<String>>,   // Specific IDs to target
+    pub completed_before: Option<u64>,        // Only terminal instances completed before timestamp
+    pub limit: Option<u32>,                   // Max instances to select (default: 1000)
+}
+
+// Pruning options (see PruneOptions docs for keep_last semantics)
+pub struct PruneOptions {
+    pub keep_last: Option<u32>,      // Keep last N executions (None = prune all historical)
+    pub completed_before: Option<u64>, // Only prune executions completed before timestamp
+}
 ```
+
+### Deletion and Pruning Implementation
+
+**Key Concepts:**
+
+1. **Cascade Deletion**: Deleting an instance with sub-orchestrations must delete all descendants
+2. **Force Delete**: `force=true` allows deleting Running instances; `force=false` rejects them
+3. **Pruning Safety**: The current execution is NEVER pruned, regardless of options
+
+**Implementation Example:**
+
+```rust
+async fn get_instance_tree(&self, instance: &str) -> Result<InstanceTree, ProviderError> {
+    // Build complete tree of instance + all descendants
+    let mut all_ids = Vec::new();
+    let mut stack = vec![instance.to_string()];
+
+    while let Some(id) = stack.pop() {
+        let children = self.list_children(&id).await?;
+        stack.extend(children.clone());
+        all_ids.push(id);
+    }
+
+    // Reverse so children come before parents (deletion order)
+    all_ids.reverse();
+
+    Ok(InstanceTree {
+        root_id: instance.to_string(),
+        all_ids,
+    })
+}
+
+async fn delete_instance(&self, instance: &str, force: bool) -> Result<DeleteInstanceResult, ProviderError> {
+    // Get full tree for cascade deletion
+    let tree = self.get_instance_tree(instance).await?;
+    self.delete_instances_atomic(&tree.all_ids.iter().map(|s| s.as_str()).collect::<Vec<_>>(), force).await
+}
+
+async fn delete_instances_atomic(&self, instance_ids: &[&str], force: bool) -> Result<DeleteInstanceResult, ProviderError> {
+    let mut tx = self.pool.begin().await?;
+
+    // Check for running instances if not force
+    if !force {
+        for id in instance_ids {
+            let info = self.get_instance_info(id).await?;
+            if info.status == "Running" {
+                return Err(ProviderError::permanent(
+                    "delete_instances_atomic",
+                    format!("Instance {} is Running. Use force=true to delete.", id)
+                ));
+            }
+        }
+    }
+
+    let mut result = DeleteInstanceResult::default();
+
+    for id in instance_ids {
+        // Delete in order: queues → history → executions → instances
+        result.queue_messages_deleted += delete_queue_messages(&mut tx, id).await?;
+        result.events_deleted += delete_history(&mut tx, id).await?;
+        result.executions_deleted += delete_executions(&mut tx, id).await?;
+        result.instances_deleted += delete_instance_row(&mut tx, id).await?;
+    }
+
+    tx.commit().await?;
+    Ok(result)
+}
+
+async fn prune_executions(&self, instance: &str, options: PruneOptions) -> Result<PruneResult, ProviderError> {
+    // Get current execution ID (NEVER prune this)
+    let info = self.get_instance_info(instance).await?;
+    let current_exec = info.current_execution_id;
+
+    // Build query with safety conditions
+    let mut conditions = vec![
+        "instance_id = ?",
+        "execution_id != ?",           // Never prune current
+        "status != 'Running'",          // Never prune running
+    ];
+
+    if let Some(keep_last) = options.keep_last {
+        // Only prune executions outside top N
+        conditions.push(&format!(
+            "execution_id NOT IN (SELECT execution_id FROM executions WHERE instance_id = ? ORDER BY execution_id DESC LIMIT {})",
+            keep_last
+        ));
+    }
+
+    if options.completed_before.is_some() {
+        conditions.push("completed_at < ?");
+    }
+
+    // Find and delete eligible executions atomically
+    // ... (see sqlite.rs for full implementation)
+}
+```
+
+### Provider Contracts (Critical Requirements)
+
+These contracts MUST be followed by all provider implementations. Violations will cause data corruption or unexpected behavior.
+
+#### Pruning Contracts
+
+| Contract | Requirement | Enforcement |
+|----------|-------------|-------------|
+| **Current execution protected** | The execution with `execution_id = current_execution_id` MUST NEVER be pruned | `WHERE execution_id != current_execution_id` |
+| **Running protected** | Executions with `status = 'Running'` MUST NEVER be pruned | `WHERE status != 'Running'` |
+| **Atomic** | All deletions in a prune call MUST be atomic (single transaction) | Use database transactions |
+
+**`keep_last` Semantics:**
+
+Since `current_execution_id` is always the highest execution_id (maintained by `MAX()` on updates):
+
+| Value | Behavior | Result |
+|-------|----------|--------|
+| `None` | Prune all historical | 1 execution remains (current) |
+| `Some(0)` | Same as None | 1 execution remains (current) |
+| `Some(1)` | Keep top 1 = current | 1 execution remains (current) |
+| `Some(N)` | Keep top N | min(N, total) executions remain |
+
+**All three (`None`, `Some(0)`, `Some(1)`) are equivalent** because the current execution is always protected.
+
+#### Deletion Contracts
+
+| Contract | Requirement | Enforcement |
+|----------|-------------|-------------|
+| **Atomic batch** | All instances in a batch MUST be deleted atomically | Single transaction |
+| **Force semantics** | `force=false` MUST reject Running instances; `force=true` deletes regardless | Check status before delete |
+| **Orphan detection** | MUST check for children not in batch within transaction | Query children, reject if orphans exist |
+| **Complete cleanup** | MUST delete from ALL tables: history, executions, queues, locks, instances | Delete from all 6 tables |
+| **Prevent recreation** | MUST delete `instance_locks` to prevent ack from recreating | Include in delete cascade |
+
+#### Sub-orchestration Contracts
+
+| Contract | Requirement | Enforcement |
+|----------|-------------|-------------|
+| **Parent tracking** | Sub-orchestrations MUST have `parent_instance_id` set | Set during `ack_orchestration_item` for sub-orch |
+| **Cascade delete** | Deleting a parent MUST delete all descendants | Use `get_instance_tree` + `delete_instances_atomic` |
+| **No direct delete** | Sub-orchestrations MUST NOT be deletable directly | Check `parent_instance_id`, reject if set |
 
 ### Performance Tips
 

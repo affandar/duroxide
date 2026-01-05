@@ -160,6 +160,14 @@ Status and control-plane
 - `Client::wait_for_orchestration(instance, timeout)` -> Wait for completion with timeout, returns `Result<OrchestrationStatus, ClientError>`
 - SQLite provider exposes execution-aware methods (`list_executions`, `read_with_execution`, etc.) for diagnostics.
 
+Instance management (deletion and pruning)
+- `Client::delete_instance(instance, force)` -> Delete instance and all sub-orchestrations (cascade). Use `force=true` for running instances.
+- `Client::delete_instance_bulk(filter)` -> Bulk delete with filtering by IDs, age, and limits.
+- `Client::prune_executions(instance, options)` -> Delete old executions while preserving current. Safe for running workflows.
+- `Client::prune_executions_bulk(filter, options)` -> Bulk prune across multiple instances.
+- `Client::get_instance_tree(instance)` -> Preview cascade deletion impact before deleting.
+- **Safety**: Current execution is NEVER pruned. Running instances require `force=true` to delete.
+
 Error classification
 - **Infrastructure** errors: Provider failures, data corruption (retryable by runtime, abort turn)
 - **Configuration** errors: Unregistered orchestrations/activities, nondeterminism (require deployment fix, abort turn)

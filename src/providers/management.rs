@@ -353,6 +353,7 @@ pub struct InstanceInfo {
     pub output: Option<String>, // Terminal output or error
     pub created_at: u64,        // Milliseconds since epoch
     pub updated_at: u64,
+    pub parent_instance_id: Option<String>, // None for root orchestrations
 }
 
 /// Execution-specific metadata.
@@ -383,4 +384,114 @@ pub struct QueueDepths {
     pub orchestrator_queue: usize, // Unlocked orchestrator messages
     pub worker_queue: usize,       // Unlocked worker messages
     pub timer_queue: usize,        // Unlocked timer messages
+}
+
+// ===== Deletion/Pruning Types =====
+
+/// Filter for selecting instances in bulk operations.
+///
+/// All criteria are ANDed together. Use `Default::default()` for individual fields
+/// that should not filter.
+#[derive(Debug, Clone, Default)]
+pub struct InstanceFilter {
+    /// Explicit list of instance IDs to consider.
+    /// When provided with other filters, acts as an allowlist that is
+    /// further filtered by the other criteria.
+    pub instance_ids: Option<Vec<String>>,
+
+    /// Only select instances whose current execution completed before this time.
+    /// Value is milliseconds since Unix epoch.
+    pub completed_before: Option<u64>,
+
+    /// Maximum number of instances to select.
+    /// Use for batching large operations.
+    /// Default: 1000
+    pub limit: Option<u32>,
+}
+
+/// Options for pruning old executions.
+///
+/// When multiple criteria are provided, they are ANDed together.
+///
+/// # Safety Guarantee
+///
+/// The **current execution** (highest execution_id) is **NEVER** pruned regardless of
+/// these options. This protection applies to both running and terminal instances.
+///
+/// # `keep_last` Semantics
+///
+/// Since the current execution is always protected, and it's always the highest
+/// execution_id, `None`, `Some(0)`, and `Some(1)` are all equivalent in practice:
+/// all prune down to exactly the current execution.
+///
+/// | Value | Meaning | Executions Remaining |
+/// |-------|---------|---------------------|
+/// | `None` | Prune all historical | 1 (current) |
+/// | `Some(0)` | Same as None | 1 (current) |
+/// | `Some(1)` | Keep top 1 (which is current) | 1 (current) |
+/// | `Some(2)` | Keep top 2 | 2 (current + 1) |
+/// | `Some(N)` | Keep top N | min(N, total) |
+///
+/// **Recommendation:** Use `keep_last: None` to prune to only the current execution,
+/// as it clearly expresses intent ("no count-based retention").
+#[derive(Debug, Clone, Default)]
+pub struct PruneOptions {
+    /// Keep the last N executions (by execution_id).
+    /// Executions outside the top N are eligible for deletion.
+    ///
+    /// Note: The current execution is always preserved regardless of this value.
+    /// Use `None` to prune all historical executions (recommended for clarity).
+    pub keep_last: Option<u32>,
+
+    /// Only delete executions completed before this time (milliseconds since epoch).
+    pub completed_before: Option<u64>,
+}
+
+/// Result of instance deletion (single or bulk).
+#[derive(Debug, Clone, Default)]
+pub struct DeleteInstanceResult {
+    /// Number of instances deleted (1 for single instance, N for bulk).
+    pub instances_deleted: u64,
+    /// Number of executions deleted.
+    pub executions_deleted: u64,
+    /// Number of history events deleted.
+    pub events_deleted: u64,
+    /// Number of queue messages deleted (orchestrator + worker + timer queues).
+    pub queue_messages_deleted: u64,
+}
+
+/// Result of an execution prune operation.
+#[derive(Debug, Clone, Default)]
+pub struct PruneResult {
+    /// Number of instances processed (1 for single instance prune, N for bulk).
+    pub instances_processed: u64,
+    /// Number of executions deleted.
+    pub executions_deleted: u64,
+    /// Number of history events deleted.
+    pub events_deleted: u64,
+}
+
+/// Represents an instance and all its descendants.
+///
+/// Used for inspecting hierarchies before deletion, or for understanding
+/// sub-orchestration relationships.
+#[derive(Debug, Clone)]
+pub struct InstanceTree {
+    /// The root instance ID.
+    pub root_id: String,
+
+    /// All instance IDs in the tree (including root).
+    pub all_ids: Vec<String>,
+}
+
+impl InstanceTree {
+    /// Returns true if this tree contains only the root (no children/descendants).
+    pub fn is_root_only(&self) -> bool {
+        self.all_ids.len() == 1
+    }
+
+    /// Returns the number of instances in the tree.
+    pub fn size(&self) -> usize {
+        self.all_ids.len()
+    }
 }

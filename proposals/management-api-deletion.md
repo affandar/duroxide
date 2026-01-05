@@ -1,16 +1,16 @@
 # Management API: Deletion and Pruning
 
-> **Status**: Proposed  
+> **Status**: Implemented
 > **Related**: `docs/management-api-improvements-proposal.md`
 
 ## 1. Summary
 
 This proposal adds explicit deletion and retention capabilities to duroxide:
 
-1. **Instance Deletion**: Remove terminated orchestrations and all associated data
-2. **Bulk Instance Deletion**: Delete multiple instances by ID and/or time-based filter
-3. **Execution Pruning**: Remove old executions from long-running `ContinueAsNew` chains
-4. **Bulk Execution Pruning**: Prune executions across multiple instances matching a filter
+1. **Instance Deletion**: Remove terminated orchestrations and all associated data (`delete_instance`)
+2. **Bulk Instance Deletion**: Delete multiple instances by ID and/or time-based filter (`delete_instance_bulk`)
+3. **Execution Pruning**: Remove old executions from long-running `ContinueAsNew` chains (`prune_executions`)
+4. **Bulk Execution Pruning**: Prune executions across multiple instances matching a filter (`prune_executions_bulk`)
 
 ## 2. Motivation
 
@@ -27,14 +27,16 @@ We use consistent terminology across the API:
 
 | Term | Meaning | Scope |
 |------|---------|-------|
-| **`delete`** | Permanently remove an orchestration instance and ALL its data | Single instance |
-| **`purge`** | Bulk delete multiple instances matching criteria | Multi-instance |
-| **`prune`** | Remove old executions while keeping the instance alive | Execution-level |
+| **`delete_instance`** | Permanently remove an orchestration instance and ALL its data | Single instance |
+| **`delete_instance_bulk`** | Bulk delete multiple instances matching criteria | Multi-instance |
+| **`prune_executions`** | Remove old executions while keeping the instance alive | Single instance |
+| **`prune_executions_bulk`** | Prune executions across multiple instances | Multi-instance |
 
 **Rationale:**
-- `delete` is the standard term for removing a single identified resource
-- `purge` implies bulk/batch cleanup with filtering—common in retention systems
+- `delete_instance` is the standard term for removing a single identified resource
+- `delete_instance_bulk` uses the same verb with `_bulk` suffix for batch operations (consistent pattern)
 - `prune` implies trimming while preserving the living entity (the instance continues to exist)
+- Both single and bulk deletion return the same `DeleteInstanceResult` type for API consistency
 
 ---
 
@@ -122,32 +124,34 @@ pub struct PruneOptions {
 ### 4.3 Result Types
 
 ```rust
-/// Result of a single instance deletion.
+/// Result of instance deletion (single or bulk).
+///
+/// Used by both `delete_instance` and `delete_instance_bulk` for API consistency.
 #[derive(Debug, Clone, Default)]
-pub struct DeleteResult {
-    pub instance_deleted: bool,
-    pub executions_deleted: u64,
-    pub events_deleted: u64,
-    pub queue_messages_deleted: u64,
-}
-
-/// Result of a bulk purge operation.
-#[derive(Debug, Clone, Default)]
-pub struct PurgeResult {
+pub struct DeleteInstanceResult {
+    /// Number of instances deleted (1 for single instance, N for bulk).
     pub instances_deleted: u64,
+    /// Number of executions deleted.
     pub executions_deleted: u64,
+    /// Number of history events deleted.
     pub events_deleted: u64,
+    /// Number of queue messages deleted (orchestrator + worker + timer queues).
     pub queue_messages_deleted: u64,
 }
 
 /// Result of an execution prune operation.
 #[derive(Debug, Clone, Default)]
 pub struct PruneResult {
-    pub instances_processed: u64,  // For bulk prune (1 for single instance prune)
+    /// Number of instances processed (1 for single instance prune, N for bulk).
+    pub instances_processed: u64,
+    /// Number of executions deleted.
     pub executions_deleted: u64,
+    /// Number of history events deleted.
     pub events_deleted: u64,
 }
 ```
+
+**Design Decision:** We use a single `DeleteInstanceResult` type for both single and bulk deletion operations. The `instances_deleted` field is `u64` rather than `bool` to support both cases uniformly. For single instance deletion, this will be `1` on success or `0` if the instance wasn't found.
 
 ---
 
@@ -188,7 +192,7 @@ impl Client {
     /// Running state that won't respond to cancellation.
     ///
     /// # Returns
-    /// * `Ok(DeleteResult)` - Details of what was deleted
+    /// * `Ok(DeleteInstanceResult)` - Details of what was deleted (`instances_deleted` will be 1)
     /// * `Err(ClientError::InstanceStillRunning)` - Instance is running and force=false
     /// * `Err(ClientError::InstanceNotFound)` - Instance doesn't exist
     ///
@@ -211,44 +215,44 @@ impl Client {
         &self,
         instance_id: &str,
         force: bool,
-    ) -> Result<DeleteResult, ClientError>;
+    ) -> Result<DeleteInstanceResult, ClientError>;
 }
 ```
 
-### 5.2 Purge Instances (Bulk Deletion)
+### 5.2 Bulk Delete Instances
 
 ```rust
 impl Client {
-    /// Purge multiple orchestration instances matching the filter criteria.
+    /// Delete multiple orchestration instances matching the filter criteria.
     ///
     /// This is the primary API for retention-based cleanup. Only instances
-    /// in terminal states (Completed, Failed) are eligible for purging.
+    /// in terminal states (Completed, Failed) are eligible for deletion.
     /// Running instances are always skipped (not an error).
     ///
     /// # Filter Behavior
-    /// 
+    ///
     /// All filter criteria are ANDed together:
-    /// - `instance_ids` + `completed_before`: Only purge IDs that are also old
+    /// - `instance_ids` + `completed_before`: Only delete IDs that are also old
     /// - `limit` is applied after other filters
     ///
     /// # Examples
     /// ```ignore
-    /// // Purge specific instances
-    /// let result = client.purge_instances(InstanceFilter {
+    /// // Delete specific instances
+    /// let result = client.delete_instance_bulk(InstanceFilter {
     ///     instance_ids: Some(vec!["order-1".into(), "order-2".into()]),
     ///     ..Default::default()
     /// }).await?;
     ///
-    /// // Purge by age (retention policy)
+    /// // Delete by age (retention policy)
     /// let five_days_ago = now_ms - (5 * 24 * 60 * 60 * 1000);
-    /// let result = client.purge_instances(InstanceFilter {
+    /// let result = client.delete_instance_bulk(InstanceFilter {
     ///     completed_before: Some(five_days_ago),
     ///     limit: Some(500),
     ///     ..Default::default()
     /// }).await?;
     ///
-    /// // Purge specific instances only if they're old
-    /// let result = client.purge_instances(InstanceFilter {
+    /// // Delete specific instances only if they're old
+    /// let result = client.delete_instance_bulk(InstanceFilter {
     ///     instance_ids: Some(vec!["order-1".into(), "order-2".into()]),
     ///     completed_before: Some(five_days_ago),
     ///     ..Default::default()
@@ -258,10 +262,10 @@ impl Client {
     /// # Safety
     /// - Running instances are NEVER deleted (silently skipped)
     /// - Use `limit` to avoid long-running transactions
-    pub async fn purge_instances(
+    pub async fn delete_instance_bulk(
         &self,
         filter: InstanceFilter,
-    ) -> Result<PurgeResult, ClientError>;
+    ) -> Result<DeleteInstanceResult, ClientError>;
 }
 ```
 
@@ -390,19 +394,19 @@ pub trait ProviderAdmin: Any + Send + Sync {
         &self,
         instance_id: &str,
         force: bool,
-    ) -> Result<DeleteResult, ProviderError>;
+    ) -> Result<DeleteInstanceResult, ProviderError>;
 
-    /// Purge multiple instances matching the filter.
+    /// Delete multiple instances matching the filter.
     ///
     /// # Implementation Requirements
     /// - AND all filter criteria together
     /// - Skip any instance with status='Running' (don't error)
     /// - Should be efficient (batch SQL operations)
     /// - Apply limit after other filters
-    async fn purge_instances(
+    async fn delete_instance_bulk(
         &self,
-        filter: &InstanceFilter,
-    ) -> Result<PurgeResult, ProviderError>;
+        filter: InstanceFilter,
+    ) -> Result<DeleteInstanceResult, ProviderError>;
 
     /// Prune old executions from a single instance.
     ///
@@ -439,9 +443,254 @@ pub trait ProviderAdmin: Any + Send + Sync {
 | Client Method | Provider Method |
 |---------------|-----------------|
 | `delete_instance(id, force)` | `delete_instance(id, force)` |
-| `purge_instances(filter)` | `purge_instances(&filter)` |
+| `delete_instance_bulk(filter)` | `delete_instance_bulk(filter)` |
 | `prune_executions(id, options)` | `prune_executions(id, &options)` |
 | `prune_executions_bulk(filter, options)` | `prune_executions_bulk(&filter, &options)` |
+
+### 6.3 Provider Simplification: Primitives vs Composites
+
+To reduce the implementation burden on provider developers, we separate the `ProviderAdmin` trait into:
+
+1. **Primitives** - Simple database operations providers MUST implement
+2. **Composites** - Complex operations with DEFAULT implementations using primitives
+
+This means provider developers only implement 3-4 simple methods, and get all cascade/tree logic for free.
+
+#### Primitive Methods (Provider Implements)
+
+```rust
+#[async_trait::async_trait]
+pub trait ProviderAdmin: Any + Send + Sync {
+    // ... existing read-only methods ...
+
+    // ===== Primitive Hierarchy Operations =====
+
+    /// List direct children of an instance.
+    ///
+    /// Returns instance IDs that have `parent_instance_id = instance_id`.
+    /// Returns empty vec if instance has no children or doesn't exist.
+    async fn list_children(&self, instance_id: &str) -> Result<Vec<String>, ProviderError>;
+
+    /// Get the parent instance ID.
+    ///
+    /// Returns `Some(parent_id)` for sub-orchestrations, `None` for root orchestrations.
+    /// Returns `Err` if instance doesn't exist.
+    async fn get_parent_id(&self, instance_id: &str) -> Result<Option<String>, ProviderError>;
+
+    /// Atomically delete a batch of instances.
+    ///
+    /// # Orphan Validation
+    /// This method MUST validate that no orphans would be created:
+    /// - If any instance in `ids` has children that are NOT in `ids`, return error
+    /// - If any instance in `ids` has a parent that IS in `ids`, the parent must appear
+    ///   AFTER the child (children deleted before parents)
+    ///
+    /// # Transaction Semantics
+    /// All instances must be deleted atomically (all-or-nothing).
+    ///
+    /// # Status Check
+    /// If `force=false`, all instances must be in terminal state.
+    /// If `force=true`, delete regardless of status.
+    async fn delete_instances_atomic(
+        &self,
+        ids: &[String],
+        force: bool,
+    ) -> Result<DeleteInstanceResult, ProviderError>;
+}
+```
+
+#### Composite Methods (Default Implementations)
+
+```rust
+#[async_trait::async_trait]
+pub trait ProviderAdmin: Any + Send + Sync {
+    // ... primitives above ...
+
+    // ===== Composite Operations (default implementations) =====
+
+    /// Get the full instance tree rooted at the given instance.
+    ///
+    /// Returns all instances in the tree: the root, all children, grandchildren, etc.
+    /// Ordered for safe deletion: children before parents (depth-first, leaves first).
+    ///
+    /// Default implementation uses `list_children` recursively.
+    async fn get_instance_tree(&self, instance_id: &str) -> Result<InstanceTree, ProviderError> {
+        // Default implementation using list_children
+        let mut tree = InstanceTree {
+            root_id: instance_id.to_string(),
+            all_ids: vec![],
+        };
+
+        // BFS to collect all descendants
+        let mut to_process = vec![instance_id.to_string()];
+        while let Some(parent_id) = to_process.pop() {
+            tree.all_ids.push(parent_id.clone());
+            let children = self.list_children(&parent_id).await?;
+            to_process.extend(children);
+        }
+
+        // Reverse for depth-first deletion order (children before parents)
+        tree.all_ids.reverse();
+        Ok(tree)
+    }
+
+    /// Delete a single instance (and all descendants if root).
+    ///
+    /// Default implementation:
+    /// 1. Check if instance has a parent (is sub-orchestration)
+    /// 2. If sub-orchestration: return error (must delete root)
+    /// 3. Get full tree via `get_instance_tree`
+    /// 4. Call `delete_instances_atomic` with all IDs
+    async fn delete_instance(
+        &self,
+        instance_id: &str,
+        force: bool,
+    ) -> Result<DeleteInstanceResult, ProviderError> {
+        // Step 1: Check if this is a sub-orchestration
+        let parent = self.get_parent_id(instance_id).await?;
+        if parent.is_some() {
+            return Err(ProviderError::permanent(
+                "delete_instance",
+                format!(
+                    "Cannot delete sub-orchestration {} directly. Delete root instance instead.",
+                    instance_id
+                ),
+            ));
+        }
+
+        // Step 2: Get full tree
+        let tree = self.get_instance_tree(instance_id).await?;
+
+        // Step 3: Atomic delete (tree.all_ids is already in deletion order)
+        self.delete_instances_atomic(&tree.all_ids, force).await
+    }
+
+    /// Delete multiple instances matching filter.
+    ///
+    /// Default implementation iterates through matches and calls delete_instance.
+    /// Provider can override for better performance (batch operations).
+    async fn delete_instance_bulk(&self, filter: InstanceFilter) -> Result<DeleteInstanceResult, ProviderError>;
+}
+```
+
+#### New Type: InstanceTree
+
+```rust
+/// Represents an instance and all its descendants.
+///
+/// Used for inspecting hierarchies before deletion, or for understanding
+/// sub-orchestration relationships.
+#[derive(Debug, Clone)]
+pub struct InstanceTree {
+    /// The root instance ID.
+    pub root_id: String,
+
+    /// All instance IDs in the tree (including root).
+    /// Ordered for safe deletion: children before parents.
+    pub all_ids: Vec<String>,
+}
+
+impl InstanceTree {
+    /// Returns true if this tree contains only the root (no children/descendants).
+    pub fn is_root_only(&self) -> bool {
+        self.all_ids.len() == 1
+    }
+
+    /// Returns the number of instances in the tree.
+    pub fn size(&self) -> usize {
+        self.all_ids.len()
+    }
+}
+```
+
+#### Provider Implementation Burden
+
+| Before | After |
+|--------|-------|
+| Implement `delete_instance` with full cascade logic | Implement `list_children` (1 query) |
+| Implement `purge_instances` with tree traversal | Implement `get_parent_id` (1 query) |
+| Handle orphan validation | Implement `delete_instances_atomic` (batch delete) |
+| ~200 lines per provider | ~50 lines per provider |
+
+#### Example SQLite Primitive Implementation
+
+```rust
+impl ProviderAdmin for SqliteProvider {
+    async fn list_children(&self, instance_id: &str) -> Result<Vec<String>, ProviderError> {
+        let rows = sqlx::query("SELECT instance_id FROM instances WHERE parent_instance_id = ?")
+            .bind(instance_id)
+            .fetch_all(&self.pool)
+            .await?;
+        Ok(rows.iter().map(|r| r.get("instance_id")).collect())
+    }
+
+    async fn get_parent_id(&self, instance_id: &str) -> Result<Option<String>, ProviderError> {
+        let row = sqlx::query("SELECT parent_instance_id FROM instances WHERE instance_id = ?")
+            .bind(instance_id)
+            .fetch_optional(&self.pool)
+            .await?;
+        match row {
+            Some(r) => Ok(r.get("parent_instance_id")),
+            None => Err(ProviderError::permanent("get_parent_id", "Instance not found")),
+        }
+    }
+
+    async fn delete_instances_atomic(
+        &self,
+        ids: &[String],
+        force: bool,
+    ) -> Result<DeleteResult, ProviderError> {
+        let mut tx = self.pool.begin().await?;
+
+        // Status check (if not force)
+        if !force {
+            // Check all instances are terminal
+            // ...
+        }
+
+        // Delete all instances
+        let mut result = DeleteResult::default();
+        for id in ids {
+            // Delete from all tables
+            // Aggregate counts into result
+        }
+
+        tx.commit().await?;
+        Ok(result)
+    }
+
+    // delete_instance: uses default implementation!
+    // get_instance_tree: uses default implementation!
+}
+```
+
+#### Public API: get_instance_tree
+
+The `get_instance_tree` method is also exposed via the `Client` API for users who want to inspect the hierarchy before deletion:
+
+```rust
+impl Client {
+    /// Get the full instance tree rooted at the given instance.
+    ///
+    /// Useful for inspecting hierarchy before deletion, or for
+    /// understanding sub-orchestration relationships.
+    ///
+    /// # Returns
+    /// * `Ok(InstanceTree)` - The tree with all descendant IDs
+    /// * `Err(ClientError::InstanceNotFound)` - Instance doesn't exist
+    ///
+    /// # Example
+    /// ```ignore
+    /// let tree = client.get_instance_tree("order-123").await?;
+    /// println!("Will delete {} instances", tree.size());
+    /// for id in &tree.all_ids {
+    ///     println!("  - {}", id);
+    /// }
+    /// client.delete_instance("order-123", false).await?;
+    /// ```
+    pub async fn get_instance_tree(&self, instance_id: &str) -> Result<InstanceTree, ClientError>;
+}
+```
 
 ---
 
@@ -615,24 +864,100 @@ match tokio::time::timeout(
 
 ### 8.4 Parent-Child Consistency (Sub-Orchestrations)
 
-**Rule:** A sub-orchestration can only be deleted if its entire parent chain has completed.
+**Rule:** Sub-orchestrations cannot be deleted directly. Only root orchestrations can be deleted, and deletion cascades to all descendants.
 
 **Problem:** If a child sub-orchestration is deleted while the parent is still running:
 - Parent hangs indefinitely waiting for `SubOrchCompleted` event that never arrives
 - No timeout → permanent stuck state
+- Even if parent is completed, allowing direct child deletion creates inconsistent state
 
-**Resolution Options:**
-1. **Validation (Recommended):** Before deleting an instance, check if it has a parent that is still running. If so, reject the deletion with an error.
-2. **Force flag:** Allow deletion with `force=true`, but document the risk.
-3. **Future work:** Cascading delete or parent notification (out of scope).
+**Resolution: Cascading Delete from Root Only**
 
-**Implementation:** Query for parent relationship in `OrchestrationStarted` event or add a `parent_instance_id` column to the schema.
+1. **Block direct sub-orchestration deletion:** Any attempt to delete an instance that has a parent returns `Err(ClientError::CannotDeleteSubOrchestration)`. This applies to both `force=true` and `force=false`.
 
-### 8.5 Identity Reuse
+2. **Cascade from root:** When deleting a root orchestration:
+   - Recursively discover all descendant sub-orchestrations
+   - Delete all descendants first (depth-first, children before parents)
+   - Then delete the root instance
+   - All deletions happen in a single transaction
+
+3. **Force applies to entire tree:** When `force=true` is used on a root:
+   - The force flag applies to the root AND all descendants
+   - If any instance in the tree is running, all are force-deleted together
+
+**Implementation Requirements:**
+- Add `parent_instance_id` column to `instances` table (nullable, NULL for root orchestrations)
+- Populate `parent_instance_id` when sub-orchestration is created
+- On delete: query for parent, reject if parent exists
+- On delete of root: recursively find and delete all children
+
+**Schema Addition:**
+```sql
+ALTER TABLE instances ADD COLUMN parent_instance_id TEXT REFERENCES instances(instance_id);
+CREATE INDEX idx_instances_parent ON instances(parent_instance_id);
+```
+
+**Cascade Delete Algorithm:**
+```
+delete_instance(instance_id, force):
+    1. Check if instance has a parent_instance_id
+       - If yes: return Err(CannotDeleteSubOrchestration)
+    2. Collect all descendants (recursive CTE or iterative query)
+    3. Check status of root (and all descendants if force=false)
+       - If any is Running and force=false: return Err(InstanceStillRunning)
+    4. In single transaction:
+       - Delete all descendants (ordered by depth, deepest first)
+       - Delete root instance
+    5. Return aggregated DeleteResult
+```
+
+### 8.5 Critical: Instance Lock Deletion Prevents Zombie Recreation
+
+**This is a critical implementation requirement for all providers.**
+
+When force-deleting an instance, the `instance_locks` table entry MUST be deleted. This prevents a race condition where an in-flight orchestration turn could recreate a deleted instance.
+
+**The Race (if locks are NOT deleted):**
+```
+T0: Dispatcher fetches item, acquires lock in instance_locks
+T1: Orchestration turn executes in memory...
+T2: Force delete runs but does NOT delete from instance_locks
+    - Deletes from: instances, executions, history, queues
+T3: Turn completes, calls ack_orchestration_item()
+T4: Lock lookup SUCCEEDS (lock still exists!)
+T5: INSERT OR IGNORE INTO instances → RECREATES deleted instance!
+T6: History written to "zombie" instance
+
+❌ Result: Instance exists after being "deleted"
+```
+
+**The Fix (locks ARE deleted):**
+```
+T0: Dispatcher fetches item, acquires lock in instance_locks
+T1: Orchestration turn executes in memory...
+T2: Force delete runs:
+    - DELETE FROM instance_locks WHERE instance_id = ?  ← Critical!
+    - Deletes from: instances, executions, history, queues
+T3: Turn completes, calls ack_orchestration_item()
+T4: Lock lookup FAILS → "Invalid lock token" error
+T5: Turn result discarded, no recreation
+
+✅ Result: Instance stays deleted
+```
+
+**Provider Validation Test:** `test_force_delete_prevents_ack_recreation` verifies this behavior:
+1. Create and start an orchestration
+2. Fetch orchestration item (acquires lock)
+3. Force delete the instance
+4. Attempt to ack the item
+5. Assert: ack returns error (not success)
+6. Assert: instance does NOT exist in database
+
+### 8.6 Identity Reuse
 
 After deletion, a new instance with the same ID can be created immediately. This is intentional (useful for testing/resetting).
 
-### 8.6 Active Execution Protection
+### 8.7 Active Execution Protection
 
 The following are **NEVER** deleted/pruned:
 - The `current_execution_id` of any instance
@@ -646,9 +971,11 @@ This ensures that:
 
 ## 9. Implementation Plan
 
-### Phase 1: Schema Fix
+### Phase 1: Schema Updates
 1. **Fix `completed_at` storage** — Use Rust epoch milliseconds instead of `CURRENT_TIMESTAMP`
-2. Add migration if needed for existing data
+2. **Add `parent_instance_id` column** — Track parent-child relationships for cascading delete
+3. Add migration if needed for existing data
+4. **Populate `parent_instance_id`** — Update sub-orchestration creation to set parent reference
 
 ### Phase 2: Core Types & Provider
 1. Add `InstanceFilter`, `PruneOptions` types to `src/providers/management.rs`
@@ -657,9 +984,12 @@ This ensures that:
 4. Implement in `SqliteProvider`
 5. Add provider validation tests
 
-### Phase 3: Client Integration  
+### Phase 3: Client Integration
 1. Expose methods on `Client` struct
-2. Add error types (`ClientError::InstanceStillRunning`, `ClientError::ParentStillRunning`, etc.)
+2. Add error types:
+   - `ClientError::InstanceStillRunning` — Instance is running and force=false
+   - `ClientError::CannotDeleteSubOrchestration` — Cannot delete sub-orchestration directly; delete root instead
+   - `ClientError::InstanceNotFound` — Instance doesn't exist
 3. Add integration tests
 
 ---
@@ -673,42 +1003,31 @@ These tests validate the `ProviderAdmin` trait implementation.
 #### Delete Instance Tests
 | Test | Description |
 |------|-------------|
-| `test_delete_completed_instance` | Delete a completed instance, verify all tables cleaned |
-| `test_delete_failed_instance` | Delete a failed instance |
-| `test_delete_running_instance_rejected` | Attempt to delete running instance without force, expect error |
-| `test_delete_running_instance_force` | Delete running instance with force=true |
-| `test_delete_nonexistent_instance` | Delete non-existent instance returns `instance_deleted: false` |
-| `test_delete_instance_cleans_queues` | Verify orchestrator_queue and worker_queue entries are deleted |
-| `test_delete_instance_cleans_locks` | Verify instance_locks are deleted |
+| `test_delete_terminal_instances` | Delete completed, failed, and cancelled instances, verify all tables cleaned |
+| `test_delete_running_rejected_force_succeeds` | Attempt to delete running instance without force (expect error), then with force (succeeds) |
+| `test_delete_nonexistent_instance` | Delete non-existent instance returns `instances_deleted: 0` |
+| `test_delete_cleans_queues_and_locks` | Verify orchestrator_queue, worker_queue, and instance_locks entries are deleted |
+| `test_force_delete_prevents_ack_recreation` | **CRITICAL**: Fetch orchestration item (acquires lock), force delete instance, then try to ack - ack must fail, instance must NOT be recreated |
+| `test_cascade_delete_hierarchy` | Delete root with children, verify all descendants deleted |
 
-#### Purge Instance Tests
+#### Bulk Delete Instance Tests
 | Test | Description |
 |------|-------------|
-| `test_purge_by_instance_ids` | Purge specific instances by ID |
-| `test_purge_by_completed_before` | Purge instances completed before cutoff |
-| `test_purge_with_and_filter` | Purge with both instance_ids AND completed_before (intersection) |
-| `test_purge_skips_running_instances` | Running instances in filter are silently skipped |
-| `test_purge_respects_limit` | Only deletes up to limit count |
-| `test_purge_empty_filter` | Empty filter purges all terminal instances (up to limit) |
+| `test_delete_instance_bulk_filter_combinations` | Delete by instance_ids, non-existent IDs, and empty filter |
+| `test_delete_instance_bulk_safety_and_limits` | Skips running instances, respects limit parameter |
+| `test_delete_instance_bulk_completed_before_filter` | Delete instances completed before/after cutoff |
+| `test_delete_instance_bulk_cascades_to_children` | Bulk delete cascades to sub-orchestrations |
 
 #### Prune Execution Tests
 | Test | Description |
 |------|-------------|
-| `test_prune_keep_last` | Keep last N executions, delete older ones |
-| `test_prune_completed_before` | Delete executions completed before cutoff |
-| `test_prune_and_filter` | Both keep_last AND completed_before (intersection) |
-| `test_prune_never_deletes_current_execution` | Current execution is never pruned |
-| `test_prune_never_deletes_running_execution` | Running executions are never pruned |
-| `test_prune_empty_options` | Empty options = no deletions |
-| `test_prune_nonexistent_instance` | Prune non-existent instance returns 0 |
+| `test_prune_options_combinations` | Keep last N, completed_before, and combined filters |
+| `test_prune_safety` | Current execution and running executions are never pruned |
 
 #### Bulk Prune Tests
 | Test | Description |
 |------|-------------|
-| `test_prune_executions_bulk_by_ids` | Bulk prune specific instances |
-| `test_prune_executions_bulk_by_time` | Bulk prune instances completed before cutoff |
-| `test_prune_executions_bulk_skips_running` | Running instances are skipped |
-| `test_prune_executions_bulk_respects_limit` | Processes up to limit instances |
+| `test_prune_bulk` | Bulk prune with instance filter and prune options |
 
 ### 10.2 Force Delete Behavior Tests
 
@@ -722,6 +1041,7 @@ These tests verify correct behavior when force-deleting instances with in-flight
 | `test_force_delete_activity_ack_fails_gracefully` | Activity completes after delete; verify ack fails with appropriate error (not panic) |
 | `test_force_delete_clears_worker_queue` | Verify all worker_queue entries for instance are deleted |
 | `test_force_delete_clears_orchestrator_queue` | Verify all orchestrator_queue entries for instance are deleted |
+| `test_force_delete_prevents_activity_completion_delivery` | **CRITICAL**: Fetch activity (acquires lock), force delete instance, ack activity - verify ack fails and no ActivityCompleted message is enqueued to orchestrator_queue |
 
 #### Orchestration Turn Interaction Tests
 | Test | Description |
@@ -744,14 +1064,17 @@ These tests verify correct behavior when force-deleting instances with in-flight
 | `test_purge_skips_running_instances` | Bulk purge with Running instances in filter; they are silently skipped |
 | `test_purge_only_deletes_terminal` | Purge only affects Completed/Failed instances |
 
-### 10.3 Parent-Child Hierarchy Tests
+### 10.3 Parent-Child Hierarchy Tests (Cascading Delete)
 
 | Test | Description |
 |------|-------------|
-| `test_delete_child_with_running_parent_rejected` | Cannot delete sub-orchestration if parent is running |
-| `test_delete_child_with_completed_parent_allowed` | Can delete sub-orchestration if parent completed |
-| `test_delete_parent_before_child` | Delete parent first, then child (should work) |
-| `test_force_delete_child_with_running_parent` | Force delete bypasses parent check |
+| `test_cascade_delete_hierarchy` | Sub-orchestrations cannot be deleted directly; cascade delete from root |
+| `test_delete_get_instance_tree` | Get full tree with multiple levels of children |
+| `test_delete_get_parent_id` | Get parent for sub-orchestrations, None for roots |
+| `test_list_children` | List direct children of an instance |
+| `test_delete_instances_atomic` | Atomic batch delete with orphan validation |
+| `test_delete_instances_atomic_force` | Atomic batch delete with force flag |
+| `test_delete_instances_atomic_orphan_detection` | Reject deletion if it would create orphans |
 
 ### 10.4 Time-Based Retention Tests
 
@@ -771,7 +1094,7 @@ These tests verify correct behavior when force-deleting instances with in-flight
 | `test_identity_reuse_after_delete` | Delete instance, immediately create new instance with same ID; verify clean slate |
 | `test_prune_continue_as_new_chain` | Prune old executions from long ContinueAsNew chain |
 | `test_delete_instance_multiple_pending_activities` | Delete instance with 3+ pending activities; all queue entries cleaned |
-| `test_force_delete_sub_orchestration_orphans_parent` | Force delete child while parent waiting; parent hangs (documents expected behavior) |
+| `test_delete_sub_orchestration_always_rejected` | Direct deletion of sub-orchestration blocked regardless of force flag |
 | `test_external_event_arrives_after_delete` | Send event to deleted instance; verify graceful "not found" handling |
 
 ---
@@ -802,12 +1125,12 @@ Using OR between filter criteria (match any).
 
 ## 12. Summary
 
-| Operation | User API | Provider API | Scope |
-|-----------|----------|--------------|-------|
-| Delete one instance | `client.delete_instance(id, force)` | `delete_instance(id, force)` | Single instance |
-| Bulk delete instances | `client.purge_instances(filter)` | `purge_instances(&filter)` | Multi-instance |
-| Prune one instance | `client.prune_executions(id, options)` | `prune_executions(id, &options)` | Single instance |
-| Bulk prune executions | `client.prune_executions_bulk(filter, options)` | `prune_executions_bulk(&filter, &options)` | Multi-instance |
+| Operation | User API | Provider API | Scope | Return Type |
+|-----------|----------|--------------|-------|-------------|
+| Delete one instance | `client.delete_instance(id, force)` | `delete_instance(id, force)` | Single instance | `DeleteInstanceResult` |
+| Bulk delete instances | `client.delete_instance_bulk(filter)` | `delete_instance_bulk(filter)` | Multi-instance | `DeleteInstanceResult` |
+| Prune one instance | `client.prune_executions(id, options)` | `prune_executions(id, &options)` | Single instance | `PruneResult` |
+| Bulk prune executions | `client.prune_executions_bulk(filter, options)` | `prune_executions_bulk(&filter, &options)` | Multi-instance | `PruneResult` |
 
 **Key Design Decisions:**
 - `InstanceFilter` is reusable across management APIs
@@ -815,5 +1138,6 @@ Using OR between filter criteria (match any).
 - Running instances are always protected (skipped, not errored)
 - Current execution is always protected during pruning
 - Active (Running) executions are never pruned
-- Sub-orchestrations can only be deleted if parent chain is completed
+- Sub-orchestrations can only be deleted via their root (cascade delete)
 - Timestamps stored as Rust epoch milliseconds (not SQLite CURRENT_TIMESTAMP)
+- Unified `DeleteInstanceResult` type for both single and bulk deletion (uses `instances_deleted: u64` instead of bool)

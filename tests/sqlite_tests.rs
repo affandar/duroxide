@@ -100,9 +100,7 @@ async fn test_sqlite_provider_basic() {
 
     let metadata = ExecutionMetadata {
         status: Some("Running".to_string()),
-        output: None,
-        orchestration_name: None,
-        orchestration_version: None,
+        ..Default::default()
     };
 
     store
@@ -150,8 +148,7 @@ async fn test_execution_status_completed() {
     let metadata = ExecutionMetadata {
         status: Some("Completed".to_string()),
         output: Some("Success".to_string()),
-        orchestration_name: None,
-        orchestration_version: None,
+        ..Default::default()
     };
 
     store
@@ -220,8 +217,7 @@ async fn test_execution_status_failed() {
     let metadata = ExecutionMetadata {
         status: Some("Failed".to_string()),
         output: Some("Error occurred".to_string()),
-        orchestration_name: None,
-        orchestration_version: None,
+        ..Default::default()
     };
 
     store

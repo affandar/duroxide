@@ -328,6 +328,7 @@ async fn build_activity_context(
         ctx.activity_id,
         ctx.worker_id.clone(),
         cancellation_token,
+        Arc::clone(&rt.history_store),
     )
 }
 

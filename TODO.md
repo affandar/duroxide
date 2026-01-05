@@ -15,6 +15,22 @@
   - Would enable more expressive race patterns like `select2(select2(fast_path, timeout), fallback)`
   - Complexity: Medium - API change, need to handle nested loser tracking
 
+- **Move shared types to dedicated `types` module**
+  - Types like `InstanceFilter`, `PruneOptions`, `DeleteInstanceResult`, `DeleteInstancesResult`, `PruneResult` are currently in `providers/mod.rs`
+  - These are user-facing API types, not provider implementation details
+  - Should move to `src/types.rs` or similar, re-export from crate root
+  - Also consider: `InstanceInfo`, `ExecutionInfo`, `QueueDepths`, `SystemMetrics`
+  - Benefit: Cleaner separation, users don't conceptually depend on "providers" module
+  - Complexity: Low - just move definitions and update imports
+
+- **Cancel unobserved sub-orchestrations** (orphan cleanup)
+  - Cancel sub-orchestrations when we have a confirmed unobserved DurableFuture
+  - Same triggers as activity cancellations: select2 loser, unawaited future, parent continues/completes
+  - Currently: orphaned sub-orchestrations keep running or sit completed in DB forever
+  - Desired: runtime cancels them automatically once confirmed unobserved
+  - Related: `proposals/auto-pruning.md` (section: Unobserved Sub-Orchestration Completions)
+  - Complexity: Medium - need to track sub-orch DurableFutures same as activities
+
 - **History Validation**
   - Need to validate histories are well-formed before replay
   - Checks: event_id ordering, source_event_id references valid scheduling events, no duplicate event_ids
@@ -92,6 +108,10 @@
 
 ## DONE
 
+- **Security: SQL Injection Audit** - Review sqlite.rs for SQL injection vulnerabilities
+  - Dynamic SQL with string formatting (e.g., `format!("... IN ({})...")`) needs parameterization
+  - Affected areas: `delete_instances_atomic`, `purge_instances`, anywhere using dynamic placeholders
+  - Priority: High - security issue
 - Review DurableFuture and into_*() fns for soundness
 - Longpoll support
 - Write big rocks docs.

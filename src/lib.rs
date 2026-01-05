@@ -446,6 +446,9 @@ pub use providers::{
     ExecutionInfo, InstanceInfo, ProviderAdmin, QueueDepths, ScheduledActivityIdentifier, SystemMetrics,
 };
 
+// Re-export deletion/pruning types for Client API users
+pub use providers::{DeleteInstanceResult, InstanceFilter, InstanceTree, PruneOptions, PruneResult};
+
 // Type aliases for improved readability and maintainability
 /// Shared reference to a Provider implementation
 pub type ProviderRef = Arc<dyn providers::Provider>;
@@ -1194,7 +1197,7 @@ impl CtxInner {
 /// Activity trace helpers (`trace_info`, `trace_warn`, etc.) do **not** participate in
 /// deterministic replay. They emit logs directly using [`tracing`] and should only be used for
 /// diagnostic purposes.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct ActivityContext {
     instance_id: String,
     execution_id: u64,
@@ -1206,6 +1209,8 @@ pub struct ActivityContext {
     /// Cancellation token for cooperative cancellation.
     /// Triggered when the parent orchestration reaches a terminal state.
     cancellation_token: tokio_util::sync::CancellationToken,
+    /// Provider store for accessing the Client API.
+    store: std::sync::Arc<dyn crate::providers::Provider>,
 }
 
 impl ActivityContext {
@@ -1222,6 +1227,7 @@ impl ActivityContext {
         activity_name: String,
         activity_id: u64,
         worker_id: String,
+        store: std::sync::Arc<dyn crate::providers::Provider>,
     ) -> Self {
         Self {
             instance_id,
@@ -1232,6 +1238,7 @@ impl ActivityContext {
             activity_id,
             worker_id,
             cancellation_token: tokio_util::sync::CancellationToken::new(),
+            store,
         }
     }
 
@@ -1249,6 +1256,7 @@ impl ActivityContext {
         activity_id: u64,
         worker_id: String,
         cancellation_token: tokio_util::sync::CancellationToken,
+        store: std::sync::Arc<dyn crate::providers::Provider>,
     ) -> Self {
         Self {
             instance_id,
@@ -1259,6 +1267,7 @@ impl ActivityContext {
             activity_id,
             worker_id,
             cancellation_token,
+            store,
         }
     }
 
@@ -1419,6 +1428,47 @@ impl ActivityContext {
     /// ```
     pub fn cancellation_token(&self) -> tokio_util::sync::CancellationToken {
         self.cancellation_token.clone()
+    }
+
+    /// Get a Client for management operations.
+    ///
+    /// This allows activities to perform management operations such as
+    /// pruning old executions, deleting instances, or querying instance status.
+    ///
+    /// # Example: Self-Pruning Eternal Orchestration
+    ///
+    /// ```ignore
+    /// // Activity that prunes old executions
+    /// async fn prune_self(ctx: ActivityContext, _input: String) -> Result<String, String> {
+    ///     let client = ctx.get_client();
+    ///     let instance_id = ctx.instance_id();
+    ///
+    ///     let result = client.prune_executions(instance_id, PruneOptions {
+    ///         keep_last: Some(1), // Keep only current execution
+    ///         ..Default::default()
+    ///     }).await.map_err(|e| e.to_string())?;
+    ///
+    ///     Ok(format!("Pruned {} executions", result.executions_deleted))
+    /// }
+    /// ```
+    pub fn get_client(&self) -> crate::Client {
+        crate::Client::new(self.store.clone())
+    }
+}
+
+impl std::fmt::Debug for ActivityContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ActivityContext")
+            .field("instance_id", &self.instance_id)
+            .field("execution_id", &self.execution_id)
+            .field("orchestration_name", &self.orchestration_name)
+            .field("orchestration_version", &self.orchestration_version)
+            .field("activity_name", &self.activity_name)
+            .field("activity_id", &self.activity_id)
+            .field("worker_id", &self.worker_id)
+            .field("cancellation_token", &self.cancellation_token)
+            .field("store", &"<Provider>")
+            .finish()
     }
 }
 

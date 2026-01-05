@@ -834,6 +834,7 @@ impl Runtime {
             output: Some(error.display_message()),
             orchestration_name: Some(item.orchestration_name.clone()),
             orchestration_version: Some(item.version.clone()),
+            parent_instance_id: parent_link.as_ref().map(|(pi, _)| pi.clone()),
         };
 
         // If this is a sub-orchestration, notify parent of failure

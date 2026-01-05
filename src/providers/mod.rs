@@ -146,6 +146,8 @@ pub struct ExecutionMetadata {
     pub orchestration_name: Option<String>,
     /// Orchestration version (for new instances or updates)
     pub orchestration_version: Option<String>,
+    /// Parent instance ID (for sub-orchestrations, used for cascading delete)
+    pub parent_instance_id: Option<String>,
 }
 
 /// Provider-backed work queue items the runtime consumes continually.
@@ -1751,7 +1753,10 @@ pub mod instrumented;
 pub mod sqlite;
 
 // Re-export management types for convenience
-pub use management::{ExecutionInfo, InstanceInfo, ManagementProvider, QueueDepths, SystemMetrics};
+pub use management::{
+    DeleteInstanceResult, ExecutionInfo, InstanceFilter, InstanceInfo, InstanceTree, ManagementProvider, PruneOptions,
+    PruneResult, QueueDepths, SystemMetrics,
+};
 
 /// Administrative capability trait for observability and management operations.
 ///
@@ -2063,4 +2068,263 @@ pub trait ProviderAdmin: Any + Send + Sync {
     /// }
     /// ```
     async fn get_queue_depths(&self) -> Result<QueueDepths, ProviderError>;
+
+    // ===== Hierarchy Primitive Operations =====
+    // These are simple database operations that providers MUST implement.
+    // Composite operations like get_instance_tree and delete_instance have
+    // default implementations that use these primitives.
+
+    /// List direct children of an instance.
+    ///
+    /// Returns instance IDs that have `parent_instance_id = instance_id`.
+    /// Returns empty vec if instance has no children or doesn't exist.
+    ///
+    /// # Implementation Example
+    ///
+    /// ```ignore
+    /// async fn list_children(&self, instance_id: &str) -> Result<Vec<String>, ProviderError> {
+    ///     SELECT instance_id FROM instances WHERE parent_instance_id = ?
+    /// }
+    /// ```
+    async fn list_children(&self, instance_id: &str) -> Result<Vec<String>, ProviderError>;
+
+    /// Get the parent instance ID.
+    ///
+    /// Returns `Some(parent_id)` for sub-orchestrations, `None` for root orchestrations.
+    /// Returns `Err` if instance doesn't exist.
+    ///
+    /// # Implementation Example
+    ///
+    /// ```ignore
+    /// async fn get_parent_id(&self, instance_id: &str) -> Result<Option<String>, ProviderError> {
+    ///     SELECT parent_instance_id FROM instances WHERE instance_id = ?
+    /// }
+    /// ```
+    async fn get_parent_id(&self, instance_id: &str) -> Result<Option<String>, ProviderError>;
+
+    /// Atomically delete a batch of instances.
+    ///
+    /// # Parameters
+    ///
+    /// * `ids` - Instance IDs to delete.
+    /// * `force` - If true, delete regardless of status. If false, all instances must be terminal.
+    ///
+    /// # Provider Contract (MUST implement)
+    ///
+    /// 1. **Atomicity**: All deletions MUST be atomic (all-or-nothing in a single transaction).
+    ///    If any instance fails validation, the entire batch MUST be rolled back.
+    ///
+    /// 2. **Force semantics**:
+    ///    - `force=false`: Return error if ANY instance has `status = 'Running'`
+    ///    - `force=true`: Delete regardless of status (for stuck/abandoned instances)
+    ///
+    /// 3. **Orphan detection**: Within the transaction, check for children not in `ids`:
+    ///    ```sql
+    ///    SELECT instance_id FROM instances
+    ///    WHERE parent_instance_id IN (?) AND instance_id NOT IN (?)
+    ///    ```
+    ///    If any exist, return error (race condition: new child spawned after get_instance_tree).
+    ///
+    /// 4. **Complete cleanup**: Delete from ALL related tables in single transaction:
+    ///    - `history` (events)
+    ///    - `executions`
+    ///    - `orchestrator_queue`
+    ///    - `worker_queue`
+    ///    - `instance_locks`
+    ///    - `instances`
+    ///
+    /// 5. **Prevent ack recreation**: When force-deleting Running instances, the deletion
+    ///    of `instance_locks` prevents in-flight `ack_orchestration_item` from recreating state.
+    ///
+    /// # Race Condition Protection
+    ///
+    /// This method MUST validate within the transaction that no orphans would be created:
+    /// - If any instance has `parent_instance_id` pointing to an instance in `ids`,
+    ///   but that child is NOT also in `ids`, return an error.
+    /// - This prevents orphans from children spawned between `get_instance_tree()` and
+    ///   this call.
+    ///
+    /// # Transaction Semantics
+    ///
+    /// All instances must be deleted atomically (all-or-nothing).
+    /// The orphan check must be done within the transaction to prevent TOCTOU races.
+    ///
+    /// # Implementation Notes
+    ///
+    /// - Delete from: history, executions, orchestrator_queue, worker_queue, instance_locks, instances
+    /// - Order within transaction doesn't matter for correctness (single atomic transaction)
+    /// - Count deletions and aggregate into result
+    async fn delete_instances_atomic(&self, ids: &[String], force: bool)
+    -> Result<DeleteInstanceResult, ProviderError>;
+
+    // ===== Hierarchy Composite Operations =====
+    // These have default implementations using the primitives above.
+    // Providers can override for better performance if needed.
+
+    /// Get the full instance tree rooted at the given instance.
+    ///
+    /// Returns all instances in the tree: the root, all children, grandchildren, etc.
+    ///
+    /// Default implementation uses `list_children` recursively.
+    async fn get_instance_tree(&self, instance_id: &str) -> Result<InstanceTree, ProviderError> {
+        let mut all_ids = vec![];
+
+        // BFS to collect all descendants
+        let mut to_process = vec![instance_id.to_string()];
+        while let Some(parent_id) = to_process.pop() {
+            all_ids.push(parent_id.clone());
+            let children = self.list_children(&parent_id).await?;
+            to_process.extend(children);
+        }
+
+        Ok(InstanceTree {
+            root_id: instance_id.to_string(),
+            all_ids,
+        })
+    }
+
+    // ===== Deletion/Pruning Operations =====
+
+    /// Delete a single orchestration instance and all its associated data.
+    ///
+    /// This removes the instance, all executions, all history events, and any
+    /// pending queue messages (orchestrator, worker, timer).
+    ///
+    /// # Default Implementation
+    ///
+    /// Uses primitives: `get_parent_id`, `get_instance_tree`, `delete_instances_atomic`.
+    /// Providers can override for better performance if needed.
+    ///
+    /// # Parameters
+    ///
+    /// * `instance_id` - The ID of the instance to delete.
+    /// * `force` - If true, delete even if the instance is in Running state.
+    ///   WARNING: Force delete only removes database state; it does NOT cancel
+    ///   in-flight tokio tasks. Use `cancel_instance` first for graceful termination.
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(DeleteResult)` - Details of what was deleted.
+    /// * `Err(ProviderError)` with `is_retryable() = false` for:
+    ///   - Instance is running and force=false
+    ///   - Instance is a sub-orchestration (must delete root instead)
+    ///   - Instance not found
+    ///
+    /// # Safety
+    ///
+    /// - Deleting a running instance with force=true may cause in-flight operations
+    ///   to fail when they try to persist state.
+    /// - Sub-orchestrations cannot be deleted directly; delete the root to cascade.
+    /// - The instance_locks table entry is deleted to prevent zombie recreation.
+    async fn delete_instance(&self, instance_id: &str, force: bool) -> Result<DeleteInstanceResult, ProviderError> {
+        // Step 1: Check if this is a sub-orchestration
+        let parent = self.get_parent_id(instance_id).await?;
+        if parent.is_some() {
+            return Err(ProviderError::permanent(
+                "delete_instance",
+                format!(
+                    "Cannot delete sub-orchestration {} directly. Delete root instance instead.",
+                    instance_id
+                ),
+            ));
+        }
+
+        // Step 2: Get full tree (includes all descendants)
+        let tree = self.get_instance_tree(instance_id).await?;
+
+        // Step 3: Atomic delete of entire tree
+        self.delete_instances_atomic(&tree.all_ids, force).await
+    }
+
+    /// Delete multiple orchestration instances matching the filter criteria.
+    ///
+    /// Only instances in terminal states (Completed, Failed) are eligible.
+    /// Running instances are silently skipped (not an error).
+    ///
+    /// # Parameters
+    ///
+    /// * `filter` - Criteria for selecting instances to delete. All criteria are ANDed.
+    ///
+    /// # Filter Behavior
+    ///
+    /// - `instance_ids`: Allowlist of specific IDs to consider
+    /// - `completed_before`: Only delete instances completed before this timestamp (ms)
+    /// - `limit`: Maximum number of instances to delete (applied last)
+    ///
+    /// # Returns
+    ///
+    /// Aggregated counts of all deleted data across all deleted instances.
+    ///
+    /// # Safety
+    ///
+    /// - Running instances are NEVER deleted (silently skipped)
+    /// - Use `limit` to avoid long-running transactions
+    /// - Sub-orchestrations are skipped (only roots are deleted with cascade)
+    async fn delete_instance_bulk(&self, filter: InstanceFilter) -> Result<DeleteInstanceResult, ProviderError>;
+
+    /// Prune old executions from a single instance.
+    ///
+    /// Use this for `ContinueAsNew` workflows that accumulate many executions.
+    ///
+    /// # Parameters
+    ///
+    /// * `instance_id` - The instance to prune executions from.
+    /// * `options` - Criteria for selecting executions to delete. All criteria are ANDed.
+    ///
+    /// # Provider Contract (MUST implement)
+    ///
+    /// 1. **Current execution protection**: The execution matching `current_execution_id`
+    ///    from the `instances` table MUST NEVER be pruned, regardless of options.
+    ///    This is enforced by: `WHERE execution_id != current_execution_id`
+    ///
+    /// 2. **Running execution protection**: Executions with `status = 'Running'`
+    ///    MUST NEVER be pruned: `WHERE status != 'Running'`
+    ///
+    /// 3. **Atomicity**: All deletions for a single prune call MUST be atomic
+    ///    (all-or-nothing within a transaction).
+    ///
+    /// # `keep_last` Semantics
+    ///
+    /// Since current_execution_id is always the highest execution_id:
+    /// - `keep_last: None` → prune all except current
+    /// - `keep_last: Some(0)` → same as None (current is protected)
+    /// - `keep_last: Some(1)` → same as above (top 1 = current)
+    /// - `keep_last: Some(N)` → keep current + (N-1) most recent
+    ///
+    /// **All three (`None`, `Some(0)`, `Some(1)`) are equivalent** because the
+    /// current execution is always protected regardless of this setting.
+    ///
+    /// # Implementation Example
+    ///
+    /// ```sql
+    /// DELETE FROM executions
+    /// WHERE instance_id = ?
+    ///   AND execution_id != ?  -- current_execution_id (CRITICAL)
+    ///   AND status != 'Running'
+    ///   AND execution_id NOT IN (
+    ///     SELECT execution_id FROM executions
+    ///     WHERE instance_id = ?
+    ///     ORDER BY execution_id DESC
+    ///     LIMIT ?  -- keep_last
+    ///   )
+    /// ```
+    async fn prune_executions(&self, instance_id: &str, options: PruneOptions) -> Result<PruneResult, ProviderError>;
+
+    /// Prune old executions from multiple instances matching the filter.
+    ///
+    /// Applies the same prune options to all matching instances.
+    ///
+    /// # Parameters
+    ///
+    /// * `filter` - Criteria for selecting instances to process.
+    /// * `options` - Criteria for selecting executions to delete within each instance.
+    ///
+    /// # Returns
+    ///
+    /// Aggregated counts including how many instances were processed.
+    async fn prune_executions_bulk(
+        &self,
+        filter: InstanceFilter,
+        options: PruneOptions,
+    ) -> Result<PruneResult, ProviderError>;
 }

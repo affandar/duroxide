@@ -6,7 +6,11 @@
 #[cfg(feature = "provider-test")]
 pub mod atomicity;
 #[cfg(feature = "provider-test")]
+pub mod bulk_deletion;
+#[cfg(feature = "provider-test")]
 pub mod cancellation;
+#[cfg(feature = "provider-test")]
+pub mod deletion;
 #[cfg(feature = "provider-test")]
 pub mod error_handling;
 #[cfg(feature = "provider-test")]
@@ -23,6 +27,8 @@ pub mod management;
 pub mod multi_execution;
 #[cfg(feature = "provider-test")]
 pub mod poison_message;
+#[cfg(feature = "provider-test")]
+pub mod prune;
 #[cfg(feature = "provider-test")]
 pub mod queue_semantics;
 
@@ -93,6 +99,36 @@ pub(crate) async fn create_instance(provider: &dyn crate::providers::Provider, i
             },
             vec![],
         )
+        .await
+        .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+/// Helper function to create an instance with a parent relationship.
+/// Used for creating sub-orchestration hierarchies in tests.
+///
+/// Note: This is a low-level helper that only enqueues the instance (doesn't complete it).
+/// The `create_child_instance` helper in deletion.rs wraps this and also completes the instance.
+#[cfg(feature = "provider-test")]
+pub(crate) async fn create_instance_with_parent(
+    provider: &dyn crate::providers::Provider,
+    instance: &str,
+    parent_instance_id: Option<String>,
+) -> Result<(), String> {
+    // Create start item with parent info
+    let start_item = WorkItem::StartOrchestration {
+        instance: instance.to_string(),
+        orchestration: "TestOrch".to_string(),
+        version: Some("1.0.0".to_string()),
+        input: "{}".to_string(),
+        parent_instance: parent_instance_id,
+        parent_id: None,
+        execution_id: crate::INITIAL_EXECUTION_ID,
+    };
+
+    provider
+        .enqueue_for_orchestrator(start_item, None)
         .await
         .map_err(|e| e.to_string())?;
 

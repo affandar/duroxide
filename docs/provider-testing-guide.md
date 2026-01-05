@@ -479,7 +479,7 @@ async fn test_my_provider_worker_queue_fifo_ordering() {
 
 ### What the Tests Validate
 
-The validation test suite includes **80 individual test functions** organized into 11 categories:
+The validation test suite includes **92+ individual test functions** organized into 13 categories:
 
 1. **Atomicity Tests (4 tests)**
    - `test_atomicity_failure_rollback` - All-or-nothing commit semantics, rollback on failure
@@ -583,6 +583,31 @@ The validation test suite includes **80 individual test functions** organized in
     - `test_renew_fails_when_entry_deleted` - `renew_work_item_lock` fails when entry was deleted (lock stolen)
     - `test_cancelling_nonexistent_activities_is_idempotent` - Cancelling activities that don't exist is silently ignored
     - `test_batch_cancellation_deletes_multiple_activities` - Multiple activities can be cancelled in a single `ack_orchestration_item`
+
+12. **Deletion Tests (12 tests)** - `duroxide::provider_validations::deletion`
+    - `test_delete_terminal_instances` - Delete completed/failed instances
+    - `test_delete_running_rejected_force_succeeds` - Running instances rejected without force
+    - `test_delete_nonexistent_instance` - Deleting non-existent instance is idempotent
+    - `test_cascade_delete_hierarchy` - Deleting parent cascades to all descendants
+    - `test_delete_cleans_queues_and_locks` - Deletion removes all queue entries and locks
+    - `test_delete_instances_atomic` - Atomic batch deletion of multiple instances
+    - `test_delete_instances_atomic_force` - Force delete multiple running instances
+    - `test_delete_instances_atomic_orphan_detection` - Detect orphan children after deletion
+    - `test_delete_get_instance_tree` - Build instance tree for cascade deletion
+    - `test_delete_get_parent_id` - Get parent instance ID for sub-orchestrations
+    - `test_list_children` - List direct children of an instance
+    - `test_force_delete_prevents_ack_recreation` - Force delete prevents ack from recreating
+
+13. **Pruning Tests (3 tests)** - `duroxide::provider_validations::prune`
+    - `test_prune_options_combinations` - Verify keep_last and completed_before work together
+    - `test_prune_safety` - Current execution never pruned, including terminal instances
+    - `test_prune_bulk` - Bulk prune across multiple instances
+
+14. **Bulk Deletion Tests (4 tests)** - `duroxide::provider_validations::bulk_deletion`
+    - `test_delete_instance_bulk_completed_before_filter` - Filter by completion timestamp
+    - `test_delete_instance_bulk_filter_combinations` - Combined filter options
+    - `test_delete_instance_bulk_safety_and_limits` - Respect limit and safety constraints
+    - `test_delete_instance_bulk_cascades_to_children` - Bulk delete cascades to sub-orchestrations
 
 ### Running Individual Test Functions
 

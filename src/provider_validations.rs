@@ -26,38 +26,9 @@
 //! }
 //! ```
 
+// Re-export ProviderFactory from the internal module
 #[cfg(feature = "provider-test")]
-use crate::providers::Provider;
-use std::sync::Arc;
-use std::time::Duration;
-
-/// Trait for creating providers in tests.
-///
-/// Implement this trait to provide a way to create your custom provider instance
-/// for validation testing.
-#[cfg(feature = "provider-test")]
-#[async_trait::async_trait]
-pub trait ProviderFactory: Send + Sync {
-    /// Create a new provider instance for testing.
-    ///
-    /// Each call should return a fresh, isolated provider instance.
-    /// Typically this means creating a new in-memory provider or a
-    /// file-based provider with a unique temporary path.
-    async fn create_provider(&self) -> Arc<dyn Provider>;
-
-    /// Get the lock timeout configured for this provider.
-    ///
-    /// This is used by validation tests to determine sleep durations
-    /// when waiting for lock expiration. The timeout should match
-    /// the lock timeout configured in `create_provider()`.
-    ///
-    /// # Default Implementation
-    ///
-    /// Returns 1 second if not overridden.
-    fn lock_timeout(&self) -> Duration {
-        Duration::from_millis(1000)
-    }
-}
+pub use crate::provider_validation::ProviderFactory;
 
 /// ## Individual Test Functions
 ///
@@ -240,3 +211,27 @@ pub use crate::provider_validation::cancellation::{
     test_renew_returns_missing_when_instance_deleted, test_renew_returns_running_when_orchestration_active,
     test_renew_returns_terminal_when_orchestration_completed,
 };
+
+#[cfg(feature = "provider-test")]
+pub mod deletion {
+    pub use crate::provider_validation::deletion::{
+        test_cascade_delete_hierarchy, test_delete_cleans_queues_and_locks, test_delete_get_instance_tree,
+        test_delete_get_parent_id, test_delete_instances_atomic, test_delete_instances_atomic_force,
+        test_delete_instances_atomic_orphan_detection, test_delete_nonexistent_instance,
+        test_delete_running_rejected_force_succeeds, test_delete_terminal_instances,
+        test_force_delete_prevents_ack_recreation, test_list_children,
+    };
+}
+
+#[cfg(feature = "provider-test")]
+pub mod prune {
+    pub use crate::provider_validation::prune::{test_prune_bulk, test_prune_options_combinations, test_prune_safety};
+}
+
+#[cfg(feature = "provider-test")]
+pub mod bulk_deletion {
+    pub use crate::provider_validation::bulk_deletion::{
+        test_delete_instance_bulk_cascades_to_children, test_delete_instance_bulk_completed_before_filter,
+        test_delete_instance_bulk_filter_combinations, test_delete_instance_bulk_safety_and_limits,
+    };
+}

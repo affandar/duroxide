@@ -1,6 +1,8 @@
 [alias]
 t = "test --all-features"
 tw = "test --all-features -- --nocapture"
+nt = "nextest run --all-features"
+ntw = "nextest run --all-features --no-capture"
 r = "run"
 c = "clippy -- -D warnings"
 f = "fmt"

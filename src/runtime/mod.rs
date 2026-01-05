@@ -492,10 +492,17 @@ impl Runtime {
         // Scan history_delta for OrchestrationStarted (first event) and terminal events
         for event in history_delta {
             match &event.kind {
-                EventKind::OrchestrationStarted { name, version, .. } => {
+                EventKind::OrchestrationStarted {
+                    name,
+                    version,
+                    parent_instance,
+                    ..
+                } => {
                     // Capture orchestration metadata from start event
                     metadata.orchestration_name = Some(name.clone());
                     metadata.orchestration_version = Some(version.clone());
+                    // Capture parent instance for sub-orchestration tracking (cascading delete)
+                    metadata.parent_instance_id = parent_instance.clone();
                 }
                 EventKind::OrchestrationCompleted { output } => {
                     metadata.status = Some("Completed".to_string());

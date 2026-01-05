@@ -72,6 +72,7 @@ pub async fn test_list_instances_by_status<F: ProviderFactory>(factory: &F) {
                 output: Some("done".to_string()),
                 orchestration_name: Some("TestOrch".to_string()),
                 orchestration_version: Some("1.0.0".to_string()),
+                ..Default::default()
             },
             vec![],
         )
@@ -210,7 +211,7 @@ pub async fn test_get_execution_info<F: ProviderFactory>(factory: &F) {
             1,
             vec![Event::with_event_id(
                 1,
-                "mgmt-purge".to_string(),
+                "mgmt-bulk-del".to_string(),
                 1,
                 None,
                 EventKind::OrchestrationStarted {
