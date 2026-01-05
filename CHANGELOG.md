@@ -9,9 +9,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 **Release:** <https://crates.io/crates/duroxide/0.1.9>
 
+### Added
+
+- **Management API for Instance Deletion and Pruning** - Comprehensive instance lifecycle management
+
+  **Client API:**
+  - `delete_instance(id, force)` - Delete single instance with cascading
+  - `delete_instance_bulk(filter)` - Bulk delete with filters (IDs, timestamp, limit)
+  - `prune_executions(id, options)` - Prune old executions from long-running instances
+  - `prune_executions_bulk(filter, options)` - Bulk prune across multiple instances
+  - `get_instance_tree(id)` - Inspect instance hierarchy before deletion
+
+  **Provider API (ProviderAdmin trait):**
+  - `delete_instance(id, force)` - Provider-level single deletion
+  - `delete_instance_bulk(filter)` - Provider-level bulk deletion
+  - `delete_instances_atomic(ids)` - Atomic batch deletion for cascading
+  - `prune_executions(id, options)` - Provider-level pruning
+  - `prune_executions_bulk(filter, options)` - Provider-level bulk pruning
+  - `get_instance_tree(id)` - Provider-level tree traversal
+  - `list_children(id)` - List direct child sub-orchestrations
+  - `get_parent_id(id)` - Get parent instance ID
+
+  **Safety Guarantees:**
+  - Running instances protected (skip or error based on API)
+  - Current execution never pruned
+  - Sub-orchestrations cannot be deleted directly (must delete root)
+  - Atomic cascading deletes (all-or-nothing)
+  - Force delete available for stuck instances
+
+- **102 new provider validation tests** - Deletion, bulk deletion, pruning, cascading deletes, filter combinations, safety tests
+
 ### Changed
 
-- Maintenance: documentation/prompt additions for release workflow; no runtime or provider changes.
+- Provider implementation guide with deletion/pruning contracts
+- Provider testing guide updates
+- Continue-as-new docs with pruning section
+- README instance management section
+- Enhanced management-api-deletion proposal with force delete semantics
 
 ## [0.1.8] - 2026-01-02
 
