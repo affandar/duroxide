@@ -15,7 +15,8 @@
 6. [Common Patterns](#common-patterns)
 7. [Anti-Patterns (What to Avoid)](#anti-patterns)
 8. [Complete Examples](#complete-examples)
-9. [Testing Your Orchestrations](#testing)
+9. [Orchestration Versioning](#orchestration-versioning)
+10. [Testing Your Orchestrations](#testing)
 
 ---
 
@@ -2045,6 +2046,46 @@ async fn typed_workflow(
 ```
 
 ---
+
+## Orchestration Versioning
+
+When running long-lived orchestrations in production, you'll need to evolve their logic over time while instances are still running. Duroxide supports orchestration versioning to handle this safely.
+
+### Key Concepts
+
+**Version Registration:**
+```rust
+// Default version (1.0.0)
+OrchestrationRegistry::builder()
+    .register_typed(MY_ORCHESTRATION, my_orchestration)
+    
+// Explicit versions  
+    .register_versioned_typed(MY_ORCHESTRATION, "1.0.1", my_orchestration_v1_0_1)
+    .register_versioned_typed(MY_ORCHESTRATION, "1.0.2", my_orchestration_v1_0_2)
+    .build();
+```
+
+**Version Upgrade Timing (Critical):**  
+Version upgrades happen at `continue_as_new` time, **not** when the server restarts. If an old version has a timer running, it must complete before the upgrade occurs.
+
+```
+T+0:00  Server restarts with v1.0.2 registered
+        But v1.0.1 was mid-cycle with ~1 min left on its timer
+T+1:00  v1.0.1's timer expires, completes its work
+T+1:01  v1.0.1 calls continue_as_new() → resolves to v1.0.2
+        Database updated: orchestration_version = "1.0.2"
+```
+
+**Best Practices:**
+- Keep the orchestration NAME constant stable across all versions
+- Create separate functions per version: `my_orch()`, `my_orch_v1_0_1()`, `my_orch_v1_0_2()`
+- Add version prefix to trace logs: `ctx.trace_info("[v1.0.2] Starting cycle...")`
+- Never remove old version registrations while instances might still be running them
+
+📚 **See [versioning-best-practices.md](versioning-best-practices.md) for comprehensive patterns including code organization, common scenarios, and a complete best practices checklist.**
+
+---
+
 
 ## Debugging Tips
 
