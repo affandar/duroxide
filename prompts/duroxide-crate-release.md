@@ -35,8 +35,11 @@ Use this prompt when preparing a crates.io release. Run it end-to-end and paste 
    - `cargo package --locked` (verifies package can be built)
    - Inspect `cargo package --list` for unwanted files.
 
-   5a) **Update README latest release badge/link**
-       - Bump the "Latest Release" link/version in `README.md` to the new tag.
+   5a) **Update README.md latest release badge/link**
+       - Update the "Latest Release" link/version to the new tag (e.g., `v0.1.11`)
+       - Update the brief description to match the changelog highlights
+       - Update the CHANGELOG anchor link (e.g., `#0111---2026-01-07`)
+       - **This is critical** — README.md is published to crates.io main page
 
 6) **Tag & publish**
    - Tag: `git tag vX.Y.Z && git push origin vX.Y.Z`
