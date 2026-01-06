@@ -28,6 +28,14 @@
 //! let orchestration = |ctx: OrchestrationContext, name: String| async move {
 //!     let greeting = ctx.schedule_activity("Greet", name)
 //!         .into_activity().await?;
+
+// Mutex poisoning indicates a panic in another thread - a critical error.
+// All expect()/unwrap() calls on mutex locks in this module are intentional:
+// poisoned mutexes should panic as they indicate corrupted state.
+#![allow(clippy::expect_used)]
+#![allow(clippy::unwrap_used)]
+// Arc::clone() vs .clone() is a style preference - we use .clone() for brevity
+#![allow(clippy::clone_on_ref_ptr)]
 //!     Ok(greeting)
 //! };
 //!
@@ -1219,6 +1227,7 @@ impl ActivityContext {
     /// Creates context with a new (non-cancelled) cancellation token.
     /// Note: The runtime now uses `new_with_cancellation` to provide a shared token.
     #[allow(dead_code)]
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         instance_id: String,
         execution_id: u64,
@@ -1247,6 +1256,7 @@ impl ActivityContext {
     /// This constructor is intended for internal runtime use when the worker
     /// dispatcher needs to provide a cancellation token that can be triggered
     /// during activity execution.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new_with_cancellation(
         instance_id: String,
         execution_id: u64,
@@ -2521,6 +2531,7 @@ where
 ///
 /// This is used by the runtime to cancel "select losers" promptly via provider lock stealing,
 /// while keeping orchestration code deterministic.
+#[allow(clippy::type_complexity)]
 pub fn run_turn_with_status_and_cancellations<O, F>(
     history: Vec<Event>,
     execution_id: u64,

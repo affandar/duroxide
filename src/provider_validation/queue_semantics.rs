@@ -16,8 +16,8 @@ pub async fn test_worker_queue_fifo_ordering<F: ProviderFactory>(factory: &F) {
                 instance: "instance-A".to_string(),
                 execution_id: 1,
                 id: i,
-                name: format!("Activity{}", i),
-                input: format!("input{}", i),
+                name: format!("Activity{i}"),
+                input: format!("input{i}"),
             })
             .await
             .unwrap();
@@ -33,7 +33,7 @@ pub async fn test_worker_queue_fifo_ordering<F: ProviderFactory>(factory: &F) {
         match item {
             WorkItem::ActivityExecute { id, name, .. } => {
                 assert_eq!(id, i);
-                assert_eq!(name, format!("Activity{}", i));
+                assert_eq!(name, format!("Activity{i}"));
             }
             _ => panic!("Expected ActivityExecute"),
         }

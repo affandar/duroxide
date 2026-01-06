@@ -463,8 +463,8 @@ pub async fn test_execution_history_persistence<F: ProviderFactory>(factory: &F)
                     exec_id,
                     None,
                     EventKind::ActivityScheduled {
-                        name: format!("Activity-{}", exec_id),
-                        input: format!("input-{}", exec_id),
+                        name: format!("Activity-{exec_id}"),
+                        input: format!("input-{exec_id}"),
                     },
                 )],
                 vec![],
@@ -484,7 +484,7 @@ pub async fn test_execution_history_persistence<F: ProviderFactory>(factory: &F)
             .unwrap_or_default();
         assert_eq!(history.len(), 1);
         if let EventKind::ActivityScheduled { name, .. } = &history[0].kind {
-            assert_eq!(name, &format!("Activity-{}", exec_id));
+            assert_eq!(name, &format!("Activity-{exec_id}"));
         } else {
             panic!("Expected ActivityScheduled");
         }

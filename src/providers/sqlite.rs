@@ -1,3 +1,7 @@
+// SQLite provider: Mutex/lock operations should panic on poison
+#![allow(clippy::expect_used)]
+#![allow(clippy::unwrap_used)]
+
 use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
 use sqlx::{Row, Sqlite, Transaction};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -1937,7 +1941,7 @@ impl ProviderAdmin for SqliteProvider {
             Some(r) => Ok(r.try_get("parent_instance_id").ok().flatten()),
             None => Err(ProviderError::permanent(
                 "get_parent_id",
-                format!("Instance {} not found", instance_id),
+                format!("Instance {instance_id} not found"),
             )),
         }
     }
@@ -1962,9 +1966,8 @@ impl ProviderAdmin for SqliteProvider {
                 SELECT i.instance_id, e.status
                 FROM instances i
                 LEFT JOIN executions e ON i.instance_id = e.instance_id AND i.current_execution_id = e.execution_id
-                WHERE i.instance_id IN ({})
-                "#,
-                placeholders
+                WHERE i.instance_id IN ({placeholders})
+                "#
             );
 
             let mut query = sqlx::query(&check_sql);
@@ -1984,8 +1987,7 @@ impl ProviderAdmin for SqliteProvider {
                     return Err(ProviderError::permanent(
                         "delete_instances_atomic",
                         format!(
-                            "Instance {} is still running. Use force=true to delete anyway, or cancel first.",
-                            instance_id
+                            "Instance {instance_id} is still running. Use force=true to delete anyway, or cancel first."
                         ),
                     ));
                 }
@@ -2029,9 +2031,8 @@ impl ProviderAdmin for SqliteProvider {
             return Err(ProviderError::permanent(
                 "delete_instances_atomic",
                 format!(
-                    "Cannot delete: instance {} has child {} that was created after tree traversal. \
-                     Re-fetch the tree and retry.",
-                    parent_id, orphan_id
+                    "Cannot delete: instance {parent_id} has child {orphan_id} that was created after tree traversal. \
+                     Re-fetch the tree and retry."
                 ),
             ));
         }
@@ -2039,10 +2040,7 @@ impl ProviderAdmin for SqliteProvider {
         let mut result = DeleteInstanceResult::default();
 
         // Count history events before deletion
-        let count_history_sql = format!(
-            "SELECT COUNT(*) as count FROM history WHERE instance_id IN ({})",
-            placeholders
-        );
+        let count_history_sql = format!("SELECT COUNT(*) as count FROM history WHERE instance_id IN ({placeholders})");
         let mut count_query = sqlx::query(&count_history_sql);
         for id in ids {
             count_query = count_query.bind(id);
@@ -2056,10 +2054,7 @@ impl ProviderAdmin for SqliteProvider {
         result.events_deleted = history_count as u64;
 
         // Count executions before deletion
-        let count_exec_sql = format!(
-            "SELECT COUNT(*) as count FROM executions WHERE instance_id IN ({})",
-            placeholders
-        );
+        let count_exec_sql = format!("SELECT COUNT(*) as count FROM executions WHERE instance_id IN ({placeholders})");
         let mut count_query = sqlx::query(&count_exec_sql);
         for id in ids {
             count_query = count_query.bind(id);
@@ -2073,10 +2068,8 @@ impl ProviderAdmin for SqliteProvider {
         result.executions_deleted = exec_count as u64;
 
         // Count queue messages before deletion
-        let count_orch_q_sql = format!(
-            "SELECT COUNT(*) as count FROM orchestrator_queue WHERE instance_id IN ({})",
-            placeholders
-        );
+        let count_orch_q_sql =
+            format!("SELECT COUNT(*) as count FROM orchestrator_queue WHERE instance_id IN ({placeholders})");
         let mut count_query = sqlx::query(&count_orch_q_sql);
         for id in ids {
             count_query = count_query.bind(id);
@@ -2088,10 +2081,8 @@ impl ProviderAdmin for SqliteProvider {
             .try_get("count")
             .unwrap_or(0);
 
-        let count_worker_q_sql = format!(
-            "SELECT COUNT(*) as count FROM worker_queue WHERE instance_id IN ({})",
-            placeholders
-        );
+        let count_worker_q_sql =
+            format!("SELECT COUNT(*) as count FROM worker_queue WHERE instance_id IN ({placeholders})");
         let mut count_query = sqlx::query(&count_worker_q_sql);
         for id in ids {
             count_query = count_query.bind(id);
@@ -2107,7 +2098,7 @@ impl ProviderAdmin for SqliteProvider {
 
         // Bulk delete from all tables (order matters for FK constraints if any)
         // Delete history
-        let del_history_sql = format!("DELETE FROM history WHERE instance_id IN ({})", placeholders);
+        let del_history_sql = format!("DELETE FROM history WHERE instance_id IN ({placeholders})");
         let mut del_query = sqlx::query(&del_history_sql);
         for id in ids {
             del_query = del_query.bind(id);
@@ -2118,7 +2109,7 @@ impl ProviderAdmin for SqliteProvider {
             .map_err(|e| Self::sqlx_to_provider_error("delete_instances_atomic", e))?;
 
         // Delete executions
-        let del_exec_sql = format!("DELETE FROM executions WHERE instance_id IN ({})", placeholders);
+        let del_exec_sql = format!("DELETE FROM executions WHERE instance_id IN ({placeholders})");
         let mut del_query = sqlx::query(&del_exec_sql);
         for id in ids {
             del_query = del_query.bind(id);
@@ -2129,7 +2120,7 @@ impl ProviderAdmin for SqliteProvider {
             .map_err(|e| Self::sqlx_to_provider_error("delete_instances_atomic", e))?;
 
         // Delete orchestrator queue
-        let del_orch_q_sql = format!("DELETE FROM orchestrator_queue WHERE instance_id IN ({})", placeholders);
+        let del_orch_q_sql = format!("DELETE FROM orchestrator_queue WHERE instance_id IN ({placeholders})");
         let mut del_query = sqlx::query(&del_orch_q_sql);
         for id in ids {
             del_query = del_query.bind(id);
@@ -2140,7 +2131,7 @@ impl ProviderAdmin for SqliteProvider {
             .map_err(|e| Self::sqlx_to_provider_error("delete_instances_atomic", e))?;
 
         // Delete worker queue
-        let del_worker_q_sql = format!("DELETE FROM worker_queue WHERE instance_id IN ({})", placeholders);
+        let del_worker_q_sql = format!("DELETE FROM worker_queue WHERE instance_id IN ({placeholders})");
         let mut del_query = sqlx::query(&del_worker_q_sql);
         for id in ids {
             del_query = del_query.bind(id);
@@ -2151,7 +2142,7 @@ impl ProviderAdmin for SqliteProvider {
             .map_err(|e| Self::sqlx_to_provider_error("delete_instances_atomic", e))?;
 
         // Delete instance locks (important: before instances to prevent zombie recreation)
-        let del_locks_sql = format!("DELETE FROM instance_locks WHERE instance_id IN ({})", placeholders);
+        let del_locks_sql = format!("DELETE FROM instance_locks WHERE instance_id IN ({placeholders})");
         let mut del_query = sqlx::query(&del_locks_sql);
         for id in ids {
             del_query = del_query.bind(id);
@@ -2162,7 +2153,7 @@ impl ProviderAdmin for SqliteProvider {
             .map_err(|e| Self::sqlx_to_provider_error("delete_instances_atomic", e))?;
 
         // Delete instances
-        let del_instances_sql = format!("DELETE FROM instances WHERE instance_id IN ({})", placeholders);
+        let del_instances_sql = format!("DELETE FROM instances WHERE instance_id IN ({placeholders})");
         let mut del_query = sqlx::query(&del_instances_sql);
         for id in ids {
             del_query = del_query.bind(id);
@@ -2216,7 +2207,7 @@ impl ProviderAdmin for SqliteProvider {
 
         // Add limit
         let limit = filter.limit.unwrap_or(DEFAULT_BULK_OPERATION_LIMIT);
-        sql.push_str(&format!(" LIMIT {}", limit));
+        sql.push_str(&format!(" LIMIT {limit}"));
 
         // Build and execute query
         let mut query = sqlx::query(&sql);
@@ -2274,7 +2265,7 @@ impl ProviderAdmin for SqliteProvider {
             None => {
                 return Err(ProviderError::permanent(
                     "prune_executions",
-                    format!("Instance {} not found", instance_id),
+                    format!("Instance {instance_id} not found"),
                 ));
             }
         };
@@ -2290,8 +2281,7 @@ impl ProviderAdmin for SqliteProvider {
         if let Some(keep_last) = options.keep_last {
             // Only prune executions outside the top N
             conditions.push(format!(
-                "execution_id NOT IN (SELECT execution_id FROM executions WHERE instance_id = ? ORDER BY execution_id DESC LIMIT {})",
-                keep_last
+                "execution_id NOT IN (SELECT execution_id FROM executions WHERE instance_id = ? ORDER BY execution_id DESC LIMIT {keep_last})"
             ));
         }
 
@@ -2406,7 +2396,7 @@ impl ProviderAdmin for SqliteProvider {
         }
 
         let limit = filter.limit.unwrap_or(1000);
-        sql.push_str(&format!(" LIMIT {}", limit));
+        sql.push_str(&format!(" LIMIT {limit}"));
 
         let mut query = sqlx::query(&sql);
         if let Some(ref ids) = filter.instance_ids {

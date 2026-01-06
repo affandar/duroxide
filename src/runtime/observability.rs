@@ -3,6 +3,11 @@
 //! This module provides OpenTelemetry-based metrics and structured logging
 //! for production observability. It can be enabled via the `observability` feature flag.
 
+// Observability uses Mutex locks - poison indicates a panic and should propagate
+#![allow(clippy::expect_used)]
+#![allow(clippy::unwrap_used)]
+#![allow(clippy::clone_on_ref_ptr)]
+
 use std::sync::{
     Arc,
     atomic::{AtomicU64, Ordering},

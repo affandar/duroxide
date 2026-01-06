@@ -1,3 +1,8 @@
+// Execution module uses Mutex locks - poison indicates a panic and should propagate
+#![allow(clippy::expect_used)]
+#![allow(clippy::unwrap_used)]
+#![allow(clippy::clone_on_ref_ptr)]
+
 use std::sync::Arc;
 use tracing::debug;
 
@@ -14,6 +19,7 @@ impl Runtime {
     /// This method processes completion messages and executes one orchestration turn,
     /// collecting all resulting work items and history changes atomically.
     /// The handler must already be resolved and provided as a parameter.
+    #[allow(clippy::too_many_arguments)]
     pub async fn run_single_execution_atomic(
         self: Arc<Self>,
         instance: &str,
@@ -93,8 +99,13 @@ impl Runtime {
         }
 
         // Execute the orchestration logic
-        let turn_result =
-            turn.execute_orchestration(handler.clone(), input.clone(), orchestration_name.to_string(), orchestration_version.clone(), worker_id);
+        let turn_result = turn.execute_orchestration(
+            handler.clone(),
+            input.clone(),
+            orchestration_name.to_string(),
+            orchestration_version.clone(),
+            worker_id,
+        );
 
         // Select/select2 losers: request cancellation for those activities now.
         for activity_id in turn.cancelled_activity_ids() {

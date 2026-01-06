@@ -852,8 +852,7 @@ pub async fn test_ack_work_item_fails_when_entry_deleted<F: ProviderFactory>(fac
     let err = result.unwrap_err();
     assert!(
         !err.is_retryable(),
-        "Error should be permanent (not retryable) for deleted entry: {:?}",
-        err
+        "Error should be permanent (not retryable) for deleted entry: {err:?}"
     );
 
     tracing::info!("✓ Test passed: ack_work_item fails when entry deleted (lock stolen)");
@@ -988,7 +987,7 @@ pub async fn test_batch_cancellation_deletes_multiple_activities<F: ProviderFact
             instance: "inst-batch-cancel".to_string(),
             execution_id: 1,
             id: i,
-            name: format!("Activity{}", i),
+            name: format!("Activity{i}"),
             input: "{}".to_string(),
         })
         .collect();

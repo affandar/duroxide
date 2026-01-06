@@ -151,7 +151,7 @@ pub async fn run_stress_test(
 
         // Launch new orchestration
         instance_id += 1;
-        let instance = format!("stress-test-{}", instance_id);
+        let instance = format!("stress-test-{instance_id}");
 
         *active.lock().await += 1;
         *launched.lock().await += 1;
@@ -344,7 +344,7 @@ pub fn create_default_activities(delay_ms: u64) -> Arc<ActivityRegistry> {
                 let delay = delay_ms;
                 async move {
                     tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
-                    Ok(format!("processed: {}", input))
+                    Ok(format!("processed: {input}"))
                 }
             })
             .build(),
@@ -360,13 +360,13 @@ pub fn create_default_orchestrations() -> OrchestrationRegistry {
 
 /// Simple orchestration that fans out to N activities and waits for all
 async fn fanout_orchestration(ctx: OrchestrationContext, input: String) -> Result<String, String> {
-    let config: serde_json::Value = serde_json::from_str(&input).map_err(|e| format!("Invalid input: {}", e))?;
+    let config: serde_json::Value = serde_json::from_str(&input).map_err(|e| format!("Invalid input: {e}"))?;
     let task_count = config["task_count"].as_u64().unwrap_or(5) as usize;
 
     // Fan-out: schedule all activities in parallel
     let mut futures = Vec::new();
     for i in 0..task_count {
-        let task_input = format!("task-{}", i);
+        let task_input = format!("task-{i}");
         futures.push(ctx.schedule_activity("ProcessTask", task_input));
     }
 
@@ -378,5 +378,5 @@ async fn fanout_orchestration(ctx: OrchestrationContext, input: String) -> Resul
         .filter(|r| matches!(r, crate::DurableOutput::Activity(Ok(_))))
         .count();
 
-    Ok(format!("Completed {} tasks ({} succeeded)", task_count, success_count))
+    Ok(format!("Completed {task_count} tasks ({success_count} succeeded)"))
 }

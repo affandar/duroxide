@@ -12,7 +12,7 @@ pub async fn test_list_instances<F: ProviderFactory>(factory: &F) {
 
     // Create a few instances
     for i in 0..3 {
-        crate::provider_validation::create_instance(&*provider, &format!("mgmt-inst-{}", i))
+        crate::provider_validation::create_instance(&*provider, &format!("mgmt-inst-{i}"))
             .await
             .unwrap();
     }
@@ -22,9 +22,8 @@ pub async fn test_list_instances<F: ProviderFactory>(factory: &F) {
     assert!(instances.len() >= 3, "Should list all created instances");
     for i in 0..3 {
         assert!(
-            instances.contains(&format!("mgmt-inst-{}", i)),
-            "Should include instance mgmt-inst-{}",
-            i
+            instances.contains(&format!("mgmt-inst-{i}")),
+            "Should include instance mgmt-inst-{i}"
         );
     }
     tracing::info!("✓ Test passed: list_instances verified");

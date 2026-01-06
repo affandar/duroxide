@@ -55,7 +55,7 @@ pub async fn test_lock_token_uniqueness<F: ProviderFactory>(factory: &F) {
     // Enqueue work for multiple instances
     for i in 0..5 {
         provider
-            .enqueue_for_orchestrator(start_item(&format!("inst-{}", i)), None)
+            .enqueue_for_orchestrator(start_item(&format!("inst-{i}")), None)
             .await
             .unwrap();
     }
@@ -132,7 +132,7 @@ pub async fn test_concurrent_instance_fetching<F: ProviderFactory>(factory: &F) 
     // Seed 10 instances
     for i in 0..10 {
         provider
-            .enqueue_for_orchestrator(start_item(&format!("inst-{}", i)), None)
+            .enqueue_for_orchestrator(start_item(&format!("inst-{i}")), None)
             .await
             .unwrap();
     }
@@ -197,7 +197,7 @@ pub async fn test_completions_arriving_during_lock_blocked<F: ProviderFactory>(f
                     instance: "instance-A".to_string(),
                     execution_id: 1,
                     id: i,
-                    result: format!("result-{}", i),
+                    result: format!("result-{i}"),
                 },
                 None,
             )
@@ -605,7 +605,7 @@ pub async fn test_multi_threaded_no_duplicate_processing<F: ProviderFactory>(fac
     let num_instances: usize = 20;
     for i in 0..num_instances {
         provider
-            .enqueue_for_orchestrator(start_item(&format!("dup-test-{}", i)), None)
+            .enqueue_for_orchestrator(start_item(&format!("dup-test-{i}")), None)
             .await
             .unwrap();
     }

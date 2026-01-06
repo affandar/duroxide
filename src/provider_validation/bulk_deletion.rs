@@ -28,7 +28,7 @@ pub async fn test_delete_instance_bulk_filter_combinations<F: ProviderFactory>(f
 
     // Create several completed instances
     for i in 0..5 {
-        create_completed_instance(&*provider, &format!("bulk-del-filter-{}", i)).await;
+        create_completed_instance(&*provider, &format!("bulk-del-filter-{i}")).await;
     }
 
     // Test 1: Delete by specific IDs
@@ -114,7 +114,7 @@ pub async fn test_delete_instance_bulk_safety_and_limits<F: ProviderFactory>(fac
 
     // Test 2: Create 4 instances and delete with limit (iterative batching)
     for i in 0..4 {
-        create_completed_instance(&*provider, &format!("bulk-del-batch-{}", i)).await;
+        create_completed_instance(&*provider, &format!("bulk-del-batch-{i}")).await;
     }
 
     // First batch: limit 2

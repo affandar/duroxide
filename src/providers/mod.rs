@@ -778,6 +778,7 @@ pub enum WorkItem {
 /// See `docs/provider-implementation-guide.md` for detailed implementation guidance including instance locks.
 ///
 #[async_trait::async_trait]
+#[allow(clippy::too_many_arguments)]
 pub trait Provider: Any + Send + Sync {
     // ===== Provider Identity =====
 
@@ -2222,10 +2223,7 @@ pub trait ProviderAdmin: Any + Send + Sync {
         if parent.is_some() {
             return Err(ProviderError::permanent(
                 "delete_instance",
-                format!(
-                    "Cannot delete sub-orchestration {} directly. Delete root instance instead.",
-                    instance_id
-                ),
+                format!("Cannot delete sub-orchestration {instance_id} directly. Delete root instance instead."),
             ));
         }
 

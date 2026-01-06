@@ -255,7 +255,7 @@ async fn test_cascade_delete_real_sub_orchestrations() {
             Ok("parent done".to_string())
         })
         .register("ChildOrch", |_ctx: OrchestrationContext, input: String| async move {
-            Ok(format!("child {} done", input))
+            Ok(format!("child {input} done"))
         })
         .build();
 
@@ -415,8 +415,7 @@ async fn test_delete_error_cases() {
     let err = result.unwrap_err();
     assert!(
         err.to_string().contains("not found") || err.to_string().contains("NotFound"),
-        "Error should mention not found: {}",
-        err
+        "Error should mention not found: {err}"
     );
 
     // Test 2: Running instance without force
@@ -431,8 +430,7 @@ async fn test_delete_error_cases() {
     let err = result.unwrap_err();
     assert!(
         err.to_string().to_lowercase().contains("running"),
-        "Error should mention running: {}",
-        err
+        "Error should mention running: {err}"
     );
 
     // Test 3: Sub-orchestration (child ID is error-parent::sub::2)
@@ -449,8 +447,7 @@ async fn test_delete_error_cases() {
         err.to_string().to_lowercase().contains("sub-orchestration")
             || err.to_string().to_lowercase().contains("parent")
             || err.to_string().to_lowercase().contains("root"),
-        "Error should mention sub-orchestration/parent/root: {}",
-        err
+        "Error should mention sub-orchestration/parent/root: {err}"
     );
 
     // Test: Cannot force delete sub-orchestration either
@@ -525,7 +522,7 @@ async fn test_dispatcher_resilience_after_delete() {
     // Now start new orchestrations - dispatchers should still work
     for i in 0..3 {
         client
-            .start_orchestration(&format!("resilience-new-{}", i), "CountOrch", "{}")
+            .start_orchestration(&format!("resilience-new-{i}"), "CountOrch", "{}")
             .await
             .unwrap();
     }
@@ -533,9 +530,8 @@ async fn test_dispatcher_resilience_after_delete() {
     // Wait for all to complete
     for i in 0..3 {
         assert!(
-            wait_for_terminal(&client, &format!("resilience-new-{}", i), Duration::from_secs(10)).await,
-            "Orchestration {} should complete",
-            i
+            wait_for_terminal(&client, &format!("resilience-new-{i}"), Duration::from_secs(10)).await,
+            "Orchestration {i} should complete"
         );
     }
 
@@ -865,8 +861,7 @@ async fn test_delete_orphan_race_condition_detection() {
     let err_msg = err.to_string();
     assert!(
         err_msg.contains("child") || err_msg.contains("orphan") || err_msg.contains("tree traversal"),
-        "Error should mention orphan/child issue: {}",
-        err_msg
+        "Error should mention orphan/child issue: {err_msg}"
     );
 
     // Verify nothing was deleted (transaction rolled back)

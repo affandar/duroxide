@@ -1,3 +1,7 @@
+// Mutex poisoning is a critical error indicating a panic in another thread.
+// In this module, all expect() calls are for mutex locks, which should panic on poison.
+#![allow(clippy::expect_used)]
+
 use std::cell::{Cell, RefCell};
 use std::future::Future;
 use std::pin::Pin;

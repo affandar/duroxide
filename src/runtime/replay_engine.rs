@@ -1,3 +1,8 @@
+// Replay engine uses Mutex locks - poison indicates a panic and should propagate
+#![allow(clippy::expect_used)]
+#![allow(clippy::unwrap_used)]
+#![allow(clippy::clone_on_ref_ptr)]
+
 use crate::{Event, EventKind, providers::WorkItem, runtime::OrchestrationHandler};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;

@@ -29,9 +29,7 @@ pub async fn test_short_poll_returns_immediately(provider: &dyn Provider) {
     // Short polling provider should return much faster than poll_timeout
     assert!(
         elapsed < Duration::from_millis(100),
-        "Short polling provider should return immediately (elapsed: {:?}, timeout: {:?})",
-        elapsed,
-        poll_timeout
+        "Short polling provider should return immediately (elapsed: {elapsed:?}, timeout: {poll_timeout:?})"
     );
 
     tracing::info!("✓ Short poll returned in {:?}", elapsed);
@@ -59,9 +57,7 @@ pub async fn test_long_poll_waits_for_timeout(provider: &dyn Provider) {
     // Long polling provider should wait for at least the timeout
     assert!(
         elapsed >= poll_timeout,
-        "Long polling provider should wait for timeout (elapsed: {:?}, expected: {:?})",
-        elapsed,
-        poll_timeout
+        "Long polling provider should wait for timeout (elapsed: {elapsed:?}, expected: {poll_timeout:?})"
     );
 
     tracing::info!("✓ Long poll waited {:?} (timeout was {:?})", elapsed, poll_timeout);
@@ -116,8 +112,7 @@ pub async fn test_short_poll_work_item_returns_immediately(provider: &dyn Provid
 
     assert!(
         elapsed < Duration::from_millis(100),
-        "Short polling provider should return immediately (elapsed: {:?})",
-        elapsed
+        "Short polling provider should return immediately (elapsed: {elapsed:?})"
     );
 
     tracing::info!("✓ Short poll work item returned in {:?}", elapsed);
@@ -141,9 +136,7 @@ pub async fn test_long_poll_work_item_waits_for_timeout(provider: &dyn Provider)
 
     assert!(
         elapsed >= poll_timeout,
-        "Long polling provider should wait for timeout (elapsed: {:?}, expected: {:?})",
-        elapsed,
-        poll_timeout
+        "Long polling provider should wait for timeout (elapsed: {elapsed:?}, expected: {poll_timeout:?})"
     );
 
     tracing::info!("✓ Long poll work item waited {:?}", elapsed);

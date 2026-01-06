@@ -13,6 +13,11 @@
 //! 2. Checks if the orchestration is still running (cancellation support)
 //! 3. Spawns an activity manager task for lock renewal and cancellation detection
 //! 4. Executes the activity handler
+
+// Worker dispatcher uses Mutex locks - poison indicates a panic and should propagate
+#![allow(clippy::expect_used)]
+#![allow(clippy::unwrap_used)]
+#![allow(clippy::clone_on_ref_ptr)]
 //! 5. Handles completion, failure, or cancellation outcomes
 //!
 //! # Cancellation Flow

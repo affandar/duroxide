@@ -9,6 +9,10 @@
 //! duroxide = { path = ".", features = ["test-hooks"] }
 //! ```
 
+// Test hooks use Mutex locks - test code intentionally uses unwrap
+#![allow(clippy::expect_used)]
+#![allow(clippy::unwrap_used)]
+
 use std::collections::HashSet;
 use std::sync::{
     Mutex,

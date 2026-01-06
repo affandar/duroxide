@@ -52,7 +52,7 @@ async fn test_prune_continue_as_new_chain() {
                     // ContinueAsNew 5 times (6 total executions)
                     ctx.continue_as_new((count + 1).to_string()).await
                 } else {
-                    Ok(format!("Final: {}", count))
+                    Ok(format!("Final: {count}"))
                 }
             },
         )
@@ -122,7 +122,7 @@ async fn test_prune_bulk_operations() {
                 if count < 3 {
                     ctx.continue_as_new((count + 1).to_string()).await
                 } else {
-                    Ok(format!("Final: {}", count))
+                    Ok(format!("Final: {count}"))
                 }
             },
         )
@@ -139,7 +139,7 @@ async fn test_prune_bulk_operations() {
     // Create 3 instances each with 4 executions
     for i in 0..3 {
         client
-            .start_orchestration(&format!("prune-bulk-{}", i), "ContinueOrch", "0")
+            .start_orchestration(&format!("prune-bulk-{i}"), "ContinueOrch", "0")
             .await
             .unwrap();
     }
@@ -147,16 +147,15 @@ async fn test_prune_bulk_operations() {
     // Wait for all to complete
     for i in 0..3 {
         assert!(
-            wait_for_terminal(&client, &format!("prune-bulk-{}", i), Duration::from_secs(10)).await,
-            "Instance {} should complete",
-            i
+            wait_for_terminal(&client, &format!("prune-bulk-{i}"), Duration::from_secs(10)).await,
+            "Instance {i} should complete"
         );
     }
 
     // Verify each has 4 executions
     for i in 0..3 {
-        let executions = client.list_executions(&format!("prune-bulk-{}", i)).await.unwrap();
-        assert_eq!(executions.len(), 4, "Instance {} should have 4 executions", i);
+        let executions = client.list_executions(&format!("prune-bulk-{i}")).await.unwrap();
+        assert_eq!(executions.len(), 4, "Instance {i} should have 4 executions");
     }
 
     // Bulk prune keeping last 1 for specific instances
@@ -204,7 +203,7 @@ async fn test_prune_safety() {
                 if count < 2 {
                     ctx.continue_as_new((count + 1).to_string()).await
                 } else {
-                    Ok(format!("Final: {}", count))
+                    Ok(format!("Final: {count}"))
                 }
             },
         )
@@ -300,7 +299,7 @@ async fn test_prune_during_active_continue_as_new() {
                 counter.store(exec_num, Ordering::SeqCst);
                 // Delay to allow time for pruning during mid-execution
                 tokio::time::sleep(Duration::from_millis(100)).await;
-                Ok(format!("exec-{}", exec_num))
+                Ok(format!("exec-{exec_num}"))
             }
         })
         .build();
@@ -318,7 +317,7 @@ async fn test_prune_during_active_continue_as_new() {
                 if count < 5 {
                     ctx.continue_as_new((count + 1).to_string()).await
                 } else {
-                    Ok(format!("Final: {}", count))
+                    Ok(format!("Final: {count}"))
                 }
             },
         )
@@ -412,7 +411,7 @@ async fn test_prune_bulk_includes_running_instances() {
             async move {
                 let exec_num: u32 = input.parse().unwrap_or(0);
                 counter.store(exec_num, Ordering::SeqCst);
-                Ok(format!("exec-{}", exec_num))
+                Ok(format!("exec-{exec_num}"))
             }
         })
         .build();
@@ -438,7 +437,7 @@ async fn test_prune_bulk_includes_running_instances() {
                 if count < 10 {
                     ctx.continue_as_new((count + 1).to_string()).await
                 } else {
-                    Ok(format!("Final: {}", count))
+                    Ok(format!("Final: {count}"))
                 }
             },
         )

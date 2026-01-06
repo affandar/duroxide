@@ -153,18 +153,15 @@ pub async fn test_prune_safety<F: ProviderFactory>(factory: &F) {
         assert_eq!(
             executions.len(),
             1,
-            "keep_last={}: should have exactly 1 execution remaining",
-            label
+            "keep_last={label}: should have exactly 1 execution remaining"
         );
         assert_eq!(
             executions[0], current_exec,
-            "keep_last={}: remaining execution should be the current one",
-            label
+            "keep_last={label}: remaining execution should be the current one"
         );
         assert!(
             result.executions_deleted >= 3,
-            "keep_last={}: should have deleted 3 historical executions",
-            label
+            "keep_last={label}: should have deleted 3 historical executions"
         );
     }
 
@@ -184,7 +181,7 @@ pub async fn test_prune_bulk<F: ProviderFactory>(factory: &F) {
 
     // Create multiple instances each with multiple executions
     for i in 0..3 {
-        create_multi_execution_instance(&*provider, &format!("prune-bulk-{}", i), 4).await;
+        create_multi_execution_instance(&*provider, &format!("prune-bulk-{i}"), 4).await;
     }
 
     // Bulk prune keeping last 1 for specific instances

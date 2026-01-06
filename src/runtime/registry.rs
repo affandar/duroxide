@@ -5,6 +5,11 @@
 //! version 1.0.0 with Latest policy (hardcoded), while orchestrations support
 //! explicit versioning and policies.
 
+// Registry uses Mutex locks that should panic on poison (indicates serious corruption)
+#![allow(clippy::expect_used)]
+#![allow(clippy::unwrap_used)]
+#![allow(clippy::clone_on_ref_ptr)]
+
 use super::{ActivityHandler, FnActivity, FnOrchestration, OrchestrationHandler};
 use crate::_typed_codec::Codec;
 use crate::OrchestrationContext;

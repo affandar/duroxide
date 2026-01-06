@@ -1,3 +1,8 @@
+// Runtime module: Mutex poisoning indicates a panic - all lock().unwrap()/expect() are intentional.
+#![allow(clippy::expect_used)]
+#![allow(clippy::unwrap_used)]
+#![allow(clippy::clone_on_ref_ptr)]
+
 //
 use crate::providers::{ExecutionMetadata, Provider, WorkItem};
 use crate::{Event, EventKind, OrchestrationContext};

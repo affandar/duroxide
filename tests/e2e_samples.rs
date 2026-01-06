@@ -1663,7 +1663,7 @@ async fn sample_self_pruning_eternal_orchestration() {
     let activity_registry = ActivityRegistry::builder()
         .register("ProcessBatch", |_ctx: ActivityContext, batch_num: String| async move {
             // Simulate batch processing
-            Ok(format!("Processed batch {}", batch_num))
+            Ok(format!("Processed batch {batch_num}"))
         })
         .register("PruneSelf", move |ctx: ActivityContext, _input: String| {
             let prune_count = prune_count_clone.clone();

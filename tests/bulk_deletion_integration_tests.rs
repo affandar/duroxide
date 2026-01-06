@@ -52,7 +52,7 @@ async fn test_delete_instance_bulk_retention_policies() {
     // Create 6 completed instances
     for i in 0..6 {
         client
-            .start_orchestration(&format!("bulk-del-test-{}", i), "SimpleOrch", &format!("{}", i))
+            .start_orchestration(&format!("bulk-del-test-{i}"), "SimpleOrch", &format!("{i}"))
             .await
             .unwrap();
     }
@@ -60,9 +60,8 @@ async fn test_delete_instance_bulk_retention_policies() {
     // Wait for all to complete
     for i in 0..6 {
         assert!(
-            wait_for_terminal(&client, &format!("bulk-del-test-{}", i), Duration::from_secs(5)).await,
-            "Instance {} should complete",
-            i
+            wait_for_terminal(&client, &format!("bulk-del-test-{i}"), Duration::from_secs(5)).await,
+            "Instance {i} should complete"
         );
     }
 
@@ -82,9 +81,8 @@ async fn test_delete_instance_bulk_retention_policies() {
     // All remaining instances (2-5) should still exist
     for i in 2..6 {
         assert!(
-            client.get_instance_info(&format!("bulk-del-test-{}", i)).await.is_ok(),
-            "Instance {} should still exist",
-            i
+            client.get_instance_info(&format!("bulk-del-test-{i}")).await.is_ok(),
+            "Instance {i} should still exist"
         );
     }
 
@@ -119,9 +117,8 @@ async fn test_delete_instance_bulk_retention_policies() {
     // Verify all are gone
     for i in 0..6 {
         assert!(
-            client.get_instance_info(&format!("bulk-del-test-{}", i)).await.is_err(),
-            "Instance {} should be deleted",
-            i
+            client.get_instance_info(&format!("bulk-del-test-{i}")).await.is_err(),
+            "Instance {i} should be deleted"
         );
     }
 }

@@ -659,9 +659,9 @@ pub async fn test_list_children<F: ProviderFactory>(factory: &F) {
 
     // Create a hierarchy: root -> child1, child2 -> grandchild
     let root_id = "list-children-root";
-    let child1_id = format!("{}::sub::2", root_id);
-    let child2_id = format!("{}::sub::3", root_id);
-    let grandchild_id = format!("{}::sub::4", child2_id);
+    let child1_id = format!("{root_id}::sub::2");
+    let child2_id = format!("{root_id}::sub::3");
+    let grandchild_id = format!("{child2_id}::sub::4");
 
     // Create root
     create_completed_instance(&*provider, root_id).await;
@@ -712,7 +712,7 @@ pub async fn test_delete_get_parent_id<F: ProviderFactory>(factory: &F) {
 
     // Create a root and a child
     let root_id = "parent-id-root";
-    let child_id = format!("{}::sub::2", root_id);
+    let child_id = format!("{root_id}::sub::2");
 
     create_completed_instance(&*provider, root_id).await;
     create_child_instance(&*provider, &child_id, root_id).await;
@@ -748,9 +748,9 @@ pub async fn test_delete_get_instance_tree<F: ProviderFactory>(factory: &F) {
 
     // Create a hierarchy: root -> child1, child2 -> grandchild
     let root_id = "tree-root";
-    let child1_id = format!("{}::sub::2", root_id);
-    let child2_id = format!("{}::sub::3", root_id);
-    let grandchild_id = format!("{}::sub::4", child2_id);
+    let child1_id = format!("{root_id}::sub::2");
+    let child2_id = format!("{root_id}::sub::3");
+    let grandchild_id = format!("{child2_id}::sub::4");
 
     create_completed_instance(&*provider, root_id).await;
     create_child_instance(&*provider, &child1_id, root_id).await;
@@ -824,8 +824,7 @@ pub async fn test_delete_instances_atomic<F: ProviderFactory>(factory: &F) {
     for id in &ids {
         assert!(
             mgmt.get_instance_info(id).await.is_err(),
-            "Instance {} should be gone",
-            id
+            "Instance {id} should be gone"
         );
     }
 
@@ -890,7 +889,7 @@ pub async fn test_delete_instances_atomic_orphan_detection<F: ProviderFactory>(f
 
     // Create a hierarchy: root -> child
     let root_id = "orphan-detect-root";
-    let child_id = format!("{}::sub::2", root_id);
+    let child_id = format!("{root_id}::sub::2");
 
     create_completed_instance(&*provider, root_id).await;
     create_child_instance(&*provider, &child_id, root_id).await;
@@ -912,8 +911,7 @@ pub async fn test_delete_instances_atomic_orphan_detection<F: ProviderFactory>(f
     let err_msg = err.to_string().to_lowercase();
     assert!(
         err_msg.contains("child") || err_msg.contains("orphan") || err_msg.contains("tree"),
-        "Error should mention child/orphan/tree issue: {}",
-        err
+        "Error should mention child/orphan/tree issue: {err}"
     );
 
     // Verify nothing was deleted (transaction rolled back)
@@ -930,7 +928,7 @@ pub async fn test_delete_instances_atomic_orphan_detection<F: ProviderFactory>(f
     let result = mgmt
         .delete_instances_atomic(&[root_id.to_string(), child_id.clone()], false)
         .await;
-    assert!(result.is_ok(), "Delete with complete tree should succeed: {:?}", result);
+    assert!(result.is_ok(), "Delete with complete tree should succeed: {result:?}");
 
     // Verify both are gone
     assert!(mgmt.get_instance_info(root_id).await.is_err(), "Root should be deleted");

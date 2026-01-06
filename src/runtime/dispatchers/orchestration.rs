@@ -6,6 +6,11 @@
 //! - Handles orchestration execution and atomic commits
 //! - Renews locks during long-running orchestration turns
 
+// Dispatcher uses Mutex locks - poison indicates a panic and should propagate
+#![allow(clippy::expect_used)]
+#![allow(clippy::unwrap_used)]
+#![allow(clippy::clone_on_ref_ptr)]
+
 use crate::providers::{ExecutionMetadata, ProviderError, ScheduledActivityIdentifier, WorkItem};
 use crate::{Event, EventKind};
 use std::sync::Arc;
@@ -668,7 +673,15 @@ impl Runtime {
         // Run the atomic execution to get all changes, passing the resolved handler and version
         let (_exec_history_delta, exec_worker_items, exec_orchestrator_items, exec_cancelled_activities, _result) =
             Arc::clone(self)
-                .run_single_execution_atomic(instance, history_mgr, workitem_reader, execution_id, worker_id, handler, resolved_version.to_string())
+                .run_single_execution_atomic(
+                    instance,
+                    history_mgr,
+                    workitem_reader,
+                    execution_id,
+                    worker_id,
+                    handler,
+                    resolved_version.to_string(),
+                )
                 .await;
 
         // Combine all changes (history already in history_mgr via mutation)
@@ -681,6 +694,7 @@ impl Runtime {
 
     /// Acknowledge an orchestration item with changes, using smart retry logic based on ProviderError
     /// Returns Ok(()) on success, or the ProviderError if all retries failed
+    #[allow(clippy::too_many_arguments)]
     pub(in crate::runtime) async fn ack_orchestration_with_changes(
         &self,
         lock_token: &str,
