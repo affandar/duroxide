@@ -2082,7 +2082,7 @@ T+1:01  v1.0.1 calls continue_as_new() → resolves to v1.0.2
 - Add version prefix to trace logs: `ctx.trace_info("[v1.0.2] Starting cycle...")`
 - Never remove old version registrations while instances might still be running them
 
-📚 **See [versioning-best-practices.md](versioning-best-practices.md) for comprehensive patterns including code organization, common scenarios, and a complete best practices checklist.**
+📚 **See [production-patterns.md](production-patterns.md) for comprehensive patterns including code organization, common scenarios, and a complete best practices checklist.**
 
 ---
 
