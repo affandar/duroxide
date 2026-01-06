@@ -20,3 +20,6 @@ mod single_thread;
 
 #[path = "scenarios/rolling_deployment.rs"]
 mod rolling_deployment;
+
+#[path = "scenarios/version_replay_bug.rs"]
+mod version_replay_bug;

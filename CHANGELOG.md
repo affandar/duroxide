@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.11] - 2026-01-07
+
+**Release:** <https://crates.io/crates/duroxide/0.1.11>
+
+### Fixed
+
+- **Issue #49: WorkItemReader version extraction during completion-only replay**
+  
+  Fixed a bug where `WorkItemReader` did not extract all fields from history during
+  completion-only replay (when no `Start` or `ContinueAsNew` item is present in the
+  work item batch). This caused nondeterminism errors when:
+  
+  - A versioned orchestration was started
+  - The runtime restarted (or lock expired) mid-execution
+  - Activity completion arrived without a start item
+  - The runtime incorrectly used the `Latest` version policy instead of the
+    version recorded in history
+  
+  The fix extracts all tuple fields (`orchestration_name`, `input`, `version`,
+  `parent_instance`, `parent_id`) from `HistoryManager` during completion-only replay,
+  ensuring deterministic handler resolution.
+
+### Added
+
+- **New scenario tests** for issue #49 regression prevention:
+  - `e2e_replay_completion_only_must_use_version_from_history` - First execution replay
+  - `e2e_replay_completion_only_after_can_must_use_version_from_history` - Nth execution (after CAN) replay
+  - Unit tests verifying all `WorkItemReader` tuple fields are correctly extracted
+
 ## [0.1.10] - 2026-01-06
 
 **Release:** <https://crates.io/crates/duroxide/0.1.10>

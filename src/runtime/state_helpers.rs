@@ -418,14 +418,20 @@ impl WorkItemReader {
                     _ => unreachable!(),
                 }
             } else {
-                // No start item - extract from history manager
+                // No start item - extract ALL fields from history manager
+                // This is the completion-only replay path where OrchestrationStarted already exists in history.
+                // All fields must come from history to ensure correct replay behavior.
                 let orchestration_name = history_mgr.orchestration_name.clone().unwrap_or_else(|| {
                     if !completion_messages.is_empty() {
                         warn!(instance, "completion messages for unstarted instance");
                     }
                     String::new()
                 });
-                (orchestration_name, String::new(), None, None, None, false)
+                let input = history_mgr.orchestration_input.clone().unwrap_or_default();
+                let version = history_mgr.version();
+                let parent_instance = history_mgr.parent_instance.clone();
+                let parent_id = history_mgr.parent_id;
+                (orchestration_name, input, version, parent_instance, parent_id, false)
             };
 
         Self {
@@ -705,17 +711,21 @@ mod tests {
                 name: "test-orch".to_string(),
                 version: "1.0.0".to_string(),
                 input: "test-input".to_string(),
-                parent_instance: None,
-                parent_id: None,
+                parent_instance: Some("parent-inst".to_string()),
+                parent_id: Some(42),
             },
         )];
 
         let history_mgr = HistoryManager::from_history(&history);
         let reader = WorkItemReader::from_messages(&messages, &history_mgr, "test-inst");
 
+        // Completion-only: all fields extracted from history
         assert!(!reader.has_start_item());
-        assert_eq!(reader.orchestration_name, "test-orch"); // From history
-        assert_eq!(reader.input, ""); // No input for completion-only
+        assert_eq!(reader.orchestration_name, "test-orch");
+        assert_eq!(reader.input, "test-input"); // From history
+        assert_eq!(reader.version, Some("1.0.0".to_string())); // From history (issue #49 fix)
+        assert_eq!(reader.parent_instance, Some("parent-inst".to_string())); // From history
+        assert_eq!(reader.parent_id, Some(42)); // From history
         assert!(!reader.is_continue_as_new);
         assert_eq!(reader.completion_messages.len(), 2);
     }
