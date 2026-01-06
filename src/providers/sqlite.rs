@@ -2380,13 +2380,16 @@ impl ProviderAdmin for SqliteProvider {
         filter: InstanceFilter,
         options: PruneOptions,
     ) -> Result<PruneResult, ProviderError> {
-        // Find matching instances (terminal states only)
+        // Find matching instances (all statuses - prune_executions protects current execution)
+        // Note: We include Running instances because long-running orchestrations (e.g., with
+        // ContinueAsNew) may have old executions that need pruning. The underlying prune_executions
+        // call safely skips the current execution regardless of its status.
         let mut sql = String::from(
             r#"
             SELECT i.instance_id
             FROM instances i
             LEFT JOIN executions e ON i.instance_id = e.instance_id AND i.current_execution_id = e.execution_id
-            WHERE e.status IN ('Completed', 'Failed', 'ContinuedAsNew')
+            WHERE 1=1
             "#,
         );
 

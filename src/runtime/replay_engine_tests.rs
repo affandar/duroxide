@@ -219,8 +219,8 @@ mod tests {
         let result = engine.execute_orchestration(
             handler,
             "test-input".to_string(),
-            Some("test-orch".to_string()),
-            Some("1.0.0".to_string()),
+            "test-orch".to_string(),
+            "1.0.0".to_string(),
             "test-worker-id",
         );
 
@@ -261,8 +261,8 @@ mod tests {
         let result = engine.execute_orchestration(
             handler,
             "test-input".to_string(),
-            Some("test-orch".to_string()),
-            Some("1.0.0".to_string()),
+            "test-orch".to_string(),
+            "1.0.0".to_string(),
             "test-worker-id",
         );
 
@@ -330,8 +330,8 @@ mod tests {
         let result = engine.execute_orchestration(
             handler,
             "test-input".to_string(),
-            Some("test-orch".to_string()),
-            Some("1.0.0".to_string()),
+            "test-orch".to_string(),
+            "1.0.0".to_string(),
             "test-worker-id",
         );
 

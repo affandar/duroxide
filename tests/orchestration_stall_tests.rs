@@ -669,8 +669,8 @@ fn new_execution_starts_clean() {
         history,
         2, // execution_id = 2
         "test-instance".to_string(),
-        Some("Test".to_string()),
-        Some("1.0.0".to_string()),
+        "Test".to_string(),
+        "1.0.0".to_string(),
         orchestrator,
     );
 
@@ -1416,8 +1416,8 @@ fn schedule_order_mismatch_triggers_nondeterminism() {
         mismatched_history,
         1,
         "test-instance".to_string(),
-        Some("Test".to_string()),
-        Some("1.0.0".to_string()),
+        "Test".to_string(),
+        "1.0.0".to_string(),
         "worker-1".to_string(),
         orchestrator,
     );

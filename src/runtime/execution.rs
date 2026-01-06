@@ -22,6 +22,7 @@ impl Runtime {
         execution_id: u64,
         worker_id: &str,
         handler: Arc<dyn OrchestrationHandler>,
+        orchestration_version: String,
     ) -> (
         Vec<Event>,
         Vec<WorkItem>,
@@ -91,13 +92,9 @@ impl Runtime {
             turn.prep_completions(messages.to_vec());
         }
 
-        // Extract orchestration metadata to pass to engine (avoids duplicate history lookup)
-        let orch_name = Some(orchestration_name.to_string());
-        let orch_version = history_mgr.version();
-
         // Execute the orchestration logic
         let turn_result =
-            turn.execute_orchestration(handler.clone(), input.clone(), orch_name, orch_version, worker_id);
+            turn.execute_orchestration(handler.clone(), input.clone(), orchestration_name.to_string(), orchestration_version.clone(), worker_id);
 
         // Select/select2 losers: request cancellation for those activities now.
         for activity_id in turn.cancelled_activity_ids() {

@@ -397,3 +397,69 @@ async fn providers_inmem_multi_execution_persistence_and_latest_read() {
     let current_hist = mem.read("pmem").await.unwrap_or_default();
     assert_eq!(current_hist, latest_hist);
 }
+
+// OrchestrationContext metadata accessors
+#[test]
+fn orchestration_context_metadata_accessors() {
+    use duroxide::run_turn_with;
+
+    let instance_id = "test-instance-123".to_string();
+    let orch_name = "MyOrchestration".to_string();
+    let orch_version = "2.1.0".to_string();
+    let execution_id = 42u64;
+
+    let orchestrator = |ctx: OrchestrationContext| async move {
+        // Verify all accessors return the expected values
+        assert_eq!(ctx.instance_id(), "test-instance-123");
+        assert_eq!(ctx.execution_id(), 42);
+        assert_eq!(ctx.orchestration_name(), "MyOrchestration");
+        assert_eq!(ctx.orchestration_version(), "2.1.0");
+
+        "done".to_string()
+    };
+
+    let history: Vec<Event> = Vec::new();
+    let (_hist_after, _actions, output) = run_turn_with(
+        history,
+        execution_id,
+        instance_id,
+        orch_name,
+        orch_version,
+        orchestrator,
+    );
+
+    assert_eq!(output, Some("done".to_string()));
+}
+
+#[test]
+fn orchestration_context_metadata_accessors_with_empty_values() {
+    use duroxide::run_turn_with;
+
+    let instance_id = "instance-empty-meta".to_string();
+    // Empty strings are valid - the type system ensures values are always present
+    let orch_name = "".to_string();
+    let orch_version = "".to_string();
+    let execution_id = 1u64;
+
+    let orchestrator = |ctx: OrchestrationContext| async move {
+        // Verify accessors handle empty string values correctly
+        assert_eq!(ctx.instance_id(), "instance-empty-meta");
+        assert_eq!(ctx.execution_id(), 1);
+        assert_eq!(ctx.orchestration_name(), "");
+        assert_eq!(ctx.orchestration_version(), "");
+
+        "done".to_string()
+    };
+
+    let history: Vec<Event> = Vec::new();
+    let (_hist_after, _actions, output) = run_turn_with(
+        history,
+        execution_id,
+        instance_id,
+        orch_name,
+        orch_version,
+        orchestrator,
+    );
+
+    assert_eq!(output, Some("done".to_string()));
+}

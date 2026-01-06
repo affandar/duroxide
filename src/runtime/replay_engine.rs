@@ -406,8 +406,8 @@ impl ReplayEngine {
         &mut self,
         handler: Arc<dyn OrchestrationHandler>,
         input: String,
-        orchestration_name: Option<String>,
-        orchestration_version: Option<String>,
+        orchestration_name: String,
+        orchestration_version: String,
         worker_id: &str,
     ) -> TurnResult {
         debug!(

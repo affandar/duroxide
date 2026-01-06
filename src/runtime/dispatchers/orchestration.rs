@@ -665,10 +665,10 @@ impl Runtime {
             ));
         }
 
-        // Run the atomic execution to get all changes, passing the resolved handler
+        // Run the atomic execution to get all changes, passing the resolved handler and version
         let (_exec_history_delta, exec_worker_items, exec_orchestrator_items, exec_cancelled_activities, _result) =
             Arc::clone(self)
-                .run_single_execution_atomic(instance, history_mgr, workitem_reader, execution_id, worker_id, handler)
+                .run_single_execution_atomic(instance, history_mgr, workitem_reader, execution_id, worker_id, handler, resolved_version.to_string())
                 .await;
 
         // Combine all changes (history already in history_mgr via mutation)

@@ -1087,8 +1087,8 @@ struct CtxInner {
     // Execution metadata
     execution_id: u64,
     instance_id: String,
-    orchestration_name: Option<String>,
-    orchestration_version: Option<String>,
+    orchestration_name: String,
+    orchestration_version: String,
     worker_id: Option<String>,
     logging_enabled_this_poll: bool,
     // When set, indicates a nondeterminism condition detected by futures during polling
@@ -1100,8 +1100,8 @@ impl CtxInner {
         history: Vec<Event>,
         execution_id: u64,
         instance_id: String,
-        orchestration_name: Option<String>,
-        orchestration_version: Option<String>,
+        orchestration_name: String,
+        orchestration_version: String,
         worker_id: Option<String>,
     ) -> Self {
         // Compute next event_id based on maximum event_id in history
@@ -1499,6 +1499,8 @@ impl OrchestrationContext {
     ///
     /// # Parameters
     ///
+    /// * `orchestration_name` - The name of the orchestration being executed.
+    /// * `orchestration_version` - The semantic version string of the orchestration.
     /// * `worker_id` - Optional dispatcher worker ID for logging correlation.
     ///   - `Some(id)`: Used by runtime dispatchers to include worker_id in traces
     ///   - `None`: Used by standalone/test execution without runtime context
@@ -1506,8 +1508,8 @@ impl OrchestrationContext {
         history: Vec<Event>,
         execution_id: u64,
         instance_id: String,
-        orchestration_name: Option<String>,
-        orchestration_version: Option<String>,
+        orchestration_name: String,
+        orchestration_version: String,
         worker_id: Option<String>,
     ) -> Self {
         Self {
@@ -1520,6 +1522,76 @@ impl OrchestrationContext {
                 worker_id,
             ))),
         }
+    }
+
+    /// Returns the orchestration instance identifier.
+    ///
+    /// This is the unique identifier for this orchestration instance, typically
+    /// provided when starting the orchestration.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use duroxide::OrchestrationContext;
+    /// # async fn example(ctx: OrchestrationContext) {
+    /// let id = ctx.instance_id();
+    /// ctx.trace_info(format!("Processing instance: {}", id));
+    /// # }
+    /// ```
+    pub fn instance_id(&self) -> String {
+        self.inner.lock().unwrap().instance_id.clone()
+    }
+
+    /// Returns the current execution ID within this orchestration instance.
+    ///
+    /// The execution ID increments each time `continue_as_new()` is called.
+    /// Execution 1 is the initial execution.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use duroxide::OrchestrationContext;
+    /// # async fn example(ctx: OrchestrationContext) {
+    /// let exec_id = ctx.execution_id();
+    /// ctx.trace_info(format!("Execution #{}", exec_id));
+    /// # }
+    /// ```
+    pub fn execution_id(&self) -> u64 {
+        self.inner.lock().unwrap().execution_id
+    }
+
+    /// Returns the orchestration name.
+    ///
+    /// This is the name registered with the orchestration registry.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use duroxide::OrchestrationContext;
+    /// # async fn example(ctx: OrchestrationContext) {
+    /// let name = ctx.orchestration_name();
+    /// ctx.trace_info(format!("Running orchestration: {}", name));
+    /// # }
+    /// ```
+    pub fn orchestration_name(&self) -> String {
+        self.inner.lock().unwrap().orchestration_name.clone()
+    }
+
+    /// Returns the orchestration version.
+    ///
+    /// This is the semantic version string associated with the orchestration.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use duroxide::OrchestrationContext;
+    /// # async fn example(ctx: OrchestrationContext) {
+    /// let version = ctx.orchestration_version();
+    /// ctx.trace_info(format!("Version: {}", version));
+    /// # }
+    /// ```
+    pub fn orchestration_version(&self) -> String {
+        self.inner.lock().unwrap().orchestration_version.clone()
     }
 
     /// Returns the current logical time in milliseconds based on the last
@@ -2383,8 +2455,8 @@ pub fn run_turn_with<O, F>(
     history: Vec<Event>,
     execution_id: u64,
     instance_id: String,
-    orchestration_name: Option<String>,
-    orchestration_version: Option<String>,
+    orchestration_name: String,
+    orchestration_version: String,
     orchestrator: impl Fn(OrchestrationContext) -> F,
 ) -> (Vec<Event>, Vec<Action>, Option<O>)
 where
@@ -2422,8 +2494,8 @@ pub fn run_turn_with_status<O, F>(
     history: Vec<Event>,
     execution_id: u64,
     instance_id: String,
-    orchestration_name: Option<String>,
-    orchestration_version: Option<String>,
+    orchestration_name: String,
+    orchestration_version: String,
     worker_id: String,
     orchestrator: impl Fn(OrchestrationContext) -> F,
 ) -> (Vec<Event>, Vec<Action>, Option<O>, Option<String>)
@@ -2453,8 +2525,8 @@ pub fn run_turn_with_status_and_cancellations<O, F>(
     history: Vec<Event>,
     execution_id: u64,
     instance_id: String,
-    orchestration_name: Option<String>,
-    orchestration_version: Option<String>,
+    orchestration_name: String,
+    orchestration_version: String,
     worker_id: String,
     orchestrator: impl Fn(OrchestrationContext) -> F,
 ) -> (Vec<Event>, Vec<Action>, Option<O>, Option<String>, Vec<u64>)
@@ -2499,8 +2571,8 @@ where
         history,
         1,
         "test-instance".to_string(),
-        Some("TestOrch".to_string()),
-        Some("1.0.0".to_string()),
+        "TestOrch".to_string(),
+        "1.0.0".to_string(),
         orchestrator,
     )
 }

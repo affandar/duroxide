@@ -389,3 +389,169 @@ async fn test_prune_during_active_continue_as_new() {
         "Should complete with final value"
     );
 }
+
+/// Test: prune_executions_bulk includes running instances (issue #44)
+///
+/// Covers:
+/// - Bulk prune finds instances with Running current execution
+/// - Old ContinuedAsNew executions of running instances can be pruned
+/// - The running execution is never pruned (protected by prune_executions)
+#[tokio::test]
+async fn test_prune_bulk_includes_running_instances() {
+    let (store, _temp_dir) = common::create_sqlite_store_disk().await;
+    let client = Client::new(store.clone());
+
+    // Track execution count
+    let execution_counter = Arc::new(AtomicU32::new(0));
+    let execution_counter_clone = execution_counter.clone();
+
+    // Activity that signals execution number
+    let activities = ActivityRegistry::builder()
+        .register("SignalExecution", move |_ctx: ActivityContext, input: String| {
+            let counter = execution_counter_clone.clone();
+            async move {
+                let exec_num: u32 = input.parse().unwrap_or(0);
+                counter.store(exec_num, Ordering::SeqCst);
+                Ok(format!("exec-{}", exec_num))
+            }
+        })
+        .build();
+
+    // Orchestration that does many ContinueAsNew cycles, pausing mid-chain
+    let orchestrations = OrchestrationRegistry::builder()
+        .register(
+            "LongRunningWithContinueAsNew",
+            |ctx: OrchestrationContext, count_str: String| async move {
+                let count: u32 = count_str.parse().unwrap_or(0);
+
+                // Signal which execution we're on
+                ctx.schedule_activity("SignalExecution", count.to_string())
+                    .into_activity()
+                    .await?;
+
+                if count == 5 {
+                    // On execution 5, wait for external signal to proceed
+                    // This keeps us "Running" with multiple old executions
+                    let _signal = ctx.schedule_wait("proceed").into_event().await;
+                }
+
+                if count < 10 {
+                    ctx.continue_as_new((count + 1).to_string()).await
+                } else {
+                    Ok(format!("Final: {}", count))
+                }
+            },
+        )
+        .build();
+
+    let _rt = runtime::Runtime::start_with_options(
+        store.clone(),
+        Arc::new(activities),
+        orchestrations,
+        fast_runtime_options(),
+    )
+    .await;
+
+    // Start the orchestration
+    client
+        .start_orchestration("bulk-prune-running", "LongRunningWithContinueAsNew", "0")
+        .await
+        .unwrap();
+
+    // Wait for execution 5 (will be waiting for external event)
+    let deadline = std::time::Instant::now() + Duration::from_secs(15);
+    while execution_counter.load(Ordering::SeqCst) < 5 {
+        if std::time::Instant::now() > deadline {
+            panic!("Orchestration never reached execution 5");
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    // Give a moment for the orchestration to reach the wait state
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // Verify we're running with multiple executions
+    let info = client.get_instance_info("bulk-prune-running").await.unwrap();
+    assert_eq!(info.status, "Running", "Should be running and waiting for event");
+
+    let executions_before = client.list_executions("bulk-prune-running").await.unwrap();
+    assert!(
+        executions_before.len() >= 5,
+        "Should have at least 5 executions, got {}",
+        executions_before.len()
+    );
+
+    // KEY TEST: Use prune_executions_bulk with no filter
+    // Previously this would skip running instances entirely
+    let result = client
+        .prune_executions_bulk(
+            InstanceFilter {
+                instance_ids: None, // All instances
+                completed_before: None,
+                limit: Some(100),
+            },
+            PruneOptions {
+                keep_last: Some(2),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    // Bulk prune should have processed our running instance
+    assert!(
+        result.instances_processed >= 1,
+        "Should process at least 1 instance (the running one)"
+    );
+
+    // Old executions should have been deleted
+    assert!(
+        result.executions_deleted >= 3,
+        "Should have pruned old executions, got {} deleted",
+        result.executions_deleted
+    );
+
+    // Verify the current execution (running) is still there
+    let info_after = client.get_instance_info("bulk-prune-running").await.unwrap();
+    assert_eq!(info_after.status, "Running", "Instance should still be running");
+
+    // Should have at most 2 executions now
+    let executions_after = client.list_executions("bulk-prune-running").await.unwrap();
+    assert!(
+        executions_after.len() <= 2,
+        "Should have at most 2 executions after prune, got {}",
+        executions_after.len()
+    );
+    assert!(
+        executions_after.contains(&info_after.current_execution_id),
+        "Current execution must be preserved"
+    );
+
+    // Resume the orchestration by sending the external event
+    client
+        .raise_event("bulk-prune-running", "proceed", "go!")
+        .await
+        .unwrap();
+
+    // Wait for completion
+    let deadline = std::time::Instant::now() + Duration::from_secs(15);
+    loop {
+        if let Ok(info) = client.get_instance_info("bulk-prune-running").await {
+            if info.status == "Completed" {
+                break;
+            }
+        }
+        if std::time::Instant::now() > deadline {
+            panic!("Orchestration never completed after event");
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    // Verify final state
+    let final_info = client.get_instance_info("bulk-prune-running").await.unwrap();
+    assert_eq!(final_info.status, "Completed");
+    assert!(
+        final_info.output.unwrap().contains("Final: 10"),
+        "Should complete with final value after event"
+    );
+}

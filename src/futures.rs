@@ -619,8 +619,8 @@ impl Future for DurableFuture {
                                 // Extract context for structured logging
                                 let instance_id = &inner.instance_id;
                                 let execution_id = inner.execution_id;
-                                let orch_name = inner.orchestration_name.as_deref().unwrap_or("unknown");
-                                let orch_version = inner.orchestration_version.as_deref().unwrap_or("unknown");
+                                let orch_name = &inner.orchestration_name;
+                                let orch_version = &inner.orchestration_version;
                                 let worker_id = inner.worker_id.as_deref().unwrap_or("unknown");
 
                                 // Log to tracing only on first execution (not during replay)

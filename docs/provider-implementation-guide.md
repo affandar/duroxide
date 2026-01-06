@@ -2203,6 +2203,27 @@ These contracts MUST be followed by all provider implementations. Violations wil
 | **Current execution protected** | The execution with `execution_id = current_execution_id` MUST NEVER be pruned | `WHERE execution_id != current_execution_id` |
 | **Running protected** | Executions with `status = 'Running'` MUST NEVER be pruned | `WHERE status != 'Running'` |
 | **Atomic** | All deletions in a prune call MUST be atomic (single transaction) | Use database transactions |
+| **Bulk includes all instances** | `prune_executions_bulk` MUST include Running instances in the candidate set | No status filter on instance selection |
+
+**Important: `prune_executions_bulk` includes Running instances**
+
+The bulk prune API selects instances of ALL statuses (including Running) because:
+1. The underlying `prune_executions` call protects the current execution regardless of its status
+2. Long-running orchestrations using `continue_as_new()` may have many old executions needing cleanup
+3. Only OLD executions (with status `ContinuedAsNew`) are eligible for deletion
+4. The current Running execution is never touched
+
+```sql
+-- prune_executions_bulk candidate selection (all statuses)
+SELECT i.instance_id FROM instances i
+LEFT JOIN executions e ON i.instance_id = e.instance_id 
+  AND i.current_execution_id = e.execution_id
+WHERE 1=1  -- No status filter; prune_executions handles safety
+
+-- prune_executions deletes from this set (with safety filters)
+WHERE execution_id != current_execution_id  -- Protect current
+  AND status != 'Running'                    -- Protect running
+```
 
 **`keep_last` Semantics:**
 
