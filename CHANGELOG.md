@@ -5,6 +5,44 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.10] - 2026-01-06
+
+**Release:** <https://crates.io/crates/duroxide/0.1.10>
+
+### Added
+
+- **Rolling Deployment Support** - Exponential backoff for unregistered handlers
+  
+  Unregistered orchestrations and activities now use exponential backoff instead of
+  immediate failure, enabling graceful rolling deployments in multi-node clusters:
+  
+  - Messages abandoned with backoff (1s → 2s → 4s → ... up to 60s max)
+  - Bounce between nodes until one with the handler registered picks it up
+  - Eventually fail as `ErrorDetails::Poison` if handler never becomes available
+  - Configurable via `UnregisteredBackoffConfig` (defaults: 1s base, 60s max, 6 exponent cap)
+
+- **New scenario tests** for rolling deployments
+  - `e2e_rolling_deployment_new_activity` - Multi-node deployment with new activity
+  - `e2e_rolling_deployment_version_upgrade` - Version upgrade via continue-as-new
+
+- **Consolidated unregistered handler tests** in `tests/unregistered_backoff_tests.rs`
+  - `unknown_version_fails_with_poison` - Version mismatch handling
+  - `continue_as_new_to_missing_version_fails_with_poison` - CAN to missing version
+  - `delete_poisoned_orchestration` - Cleanup after poison
+  - Plus existing backoff behavior tests
+
+### Changed
+
+- **BREAKING:** `ConfigErrorKind::MissingVersion` removed - unregistered handlers now use backoff/poison path
+- `config_error` metric now only tracks nondeterminism (unregistered handlers result in `poison`)
+- Updated `docs/metrics-specification.md` with new error type behaviors
+- Updated `docs/ORCHESTRATION-GUIDE.md` error handling section
+
+### Removed
+
+- `tests/unknown_activity_tests.rs` - consolidated into `unregistered_backoff_tests.rs`
+- `tests/unknown_orchestration_tests.rs` - consolidated into `unregistered_backoff_tests.rs`
+
 ## [0.1.9] - 2026-01-05
 
 **Release:** <https://crates.io/crates/duroxide/0.1.9>
