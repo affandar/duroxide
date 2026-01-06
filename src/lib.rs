@@ -583,9 +583,6 @@ pub enum PoisonMessageType {
 /// Configuration error kinds.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ConfigErrorKind {
-    UnregisteredOrchestration,
-    UnregisteredActivity,
-    MissingVersion { requested_version: String },
     Nondeterminism,
 }
 
@@ -629,11 +626,6 @@ impl ErrorDetails {
                 resource,
                 message,
             } => match kind {
-                ConfigErrorKind::UnregisteredOrchestration => format!("unregistered:{resource}"),
-                ConfigErrorKind::UnregisteredActivity => format!("unregistered:{resource}"),
-                ConfigErrorKind::MissingVersion { requested_version } => {
-                    format!("canceled: missing version {resource}@{requested_version}")
-                }
                 ConfigErrorKind::Nondeterminism => message
                     .as_ref()
                     .map(|m| format!("nondeterministic: {m}"))

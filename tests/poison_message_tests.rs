@@ -798,7 +798,10 @@ async fn e2e_poison_message_creates_instance_if_missing() {
         .expect("Instance MUST exist after poison handling");
 
     assert_eq!(instance_info.instance_id, instance);
-    assert_eq!(instance_info.orchestration_name, "NeverRuns", "Should have correct orchestration name");
+    assert_eq!(
+        instance_info.orchestration_name, "NeverRuns",
+        "Should have correct orchestration name"
+    );
     assert_eq!(instance_info.status, "Failed", "Status should be Failed");
 
     // Verify history contains proper events (OrchestrationStarted + OrchestrationFailed)
@@ -807,11 +810,17 @@ async fn e2e_poison_message_creates_instance_if_missing() {
         .await
         .expect("Should get history");
 
-    assert!(history.len() >= 2, "History should have at least 2 events, got {}", history.len());
+    assert!(
+        history.len() >= 2,
+        "History should have at least 2 events, got {}",
+        history.len()
+    );
 
     // First event should be OrchestrationStarted
     match &history[0].kind {
-        duroxide::EventKind::OrchestrationStarted { name, version, input, .. } => {
+        duroxide::EventKind::OrchestrationStarted {
+            name, version, input, ..
+        } => {
             assert_eq!(name, "NeverRuns", "Started event should have orchestration name");
             assert!(!version.is_empty(), "Started event should have version");
             assert!(input.contains("test"), "Started event should have input");

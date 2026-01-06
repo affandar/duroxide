@@ -10,9 +10,13 @@
 //! - Concurrent orchestration execution
 //! - Complex activity workflows
 //! - Single-thread runtime mode (for embedded hosts)
+//! - Rolling deployment scenarios (multi-node with version upgrades)
 
 #[path = "scenarios/toygres.rs"]
 mod toygres;
 
 #[path = "scenarios/single_thread.rs"]
 mod single_thread;
+
+#[path = "scenarios/rolling_deployment.rs"]
+mod rolling_deployment;

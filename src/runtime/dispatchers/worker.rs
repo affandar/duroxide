@@ -49,8 +49,6 @@ enum ActivityOutcome {
     Success,
     /// Activity failed with an application error
     AppError,
-    /// Activity failed due to configuration error (e.g., unregistered)
-    ConfigError,
     /// Orchestration was cancelled, activity result dropped
     Cancelled,
 }
@@ -306,7 +304,9 @@ async fn execute_activity(
         }
         None => {
             manager_handle.abort();
-            handle_unregistered_activity(rt, &ctx, start_time).await
+            abandon_unregistered_activity(rt, &ctx).await;
+            // Early return after abandonment - no ack_result needed since we abandoned
+            return;
         }
     };
 
@@ -499,48 +499,34 @@ async fn handle_activity_error(
     (ack_result, ActivityOutcome::AppError)
 }
 
-/// Handle unregistered activity (configuration error).
-async fn handle_unregistered_activity(
-    rt: &Arc<Runtime>,
-    ctx: &ActivityWorkContext,
-    start_time: std::time::Instant,
-) -> (Result<(), crate::providers::ProviderError>, ActivityOutcome) {
-    let duration_ms = start_time.elapsed().as_millis() as u64;
-    let duration_seconds = duration_ms as f64 / 1000.0;
+/// Abandon unregistered activity with exponential backoff for rolling deployment support.
+///
+/// The poison message handling will eventually fail the activity if genuinely missing.
+async fn abandon_unregistered_activity(rt: &Arc<Runtime>, ctx: &ActivityWorkContext) {
+    let backoff = rt.options.unregistered_backoff.delay(ctx.attempt_count);
+    let remaining_attempts = rt.options.max_attempts.saturating_sub(ctx.attempt_count);
 
-    tracing::error!(
+    tracing::warn!(
         target: "duroxide::runtime",
-        instance_id = %ctx.instance,
+        instance = %ctx.instance,
         execution_id = %ctx.execution_id,
         activity_name = %ctx.activity_name,
         activity_id = %ctx.activity_id,
         worker_id = %ctx.worker_id,
-        outcome = "system_error",
-        error_type = "unregistered",
-        duration_ms = %duration_ms,
-        "Activity failed (unregistered)"
+        attempt_count = %ctx.attempt_count,
+        max_attempts = %rt.options.max_attempts,
+        remaining_attempts = %remaining_attempts,
+        backoff_secs = %backoff.as_secs_f32(),
+        "Activity not registered, abandoning with {:.1}s backoff (will poison in {} more attempts)",
+        backoff.as_secs_f32(),
+        remaining_attempts
     );
 
-    rt.record_activity_execution(&ctx.activity_name, "config_error", duration_seconds, 0);
-
-    let ack_result = rt
+    // Abandon with delay - poison handling will eventually terminate if genuinely missing
+    let _ = rt
         .history_store
-        .ack_work_item(
-            &ctx.lock_token,
-            Some(WorkItem::ActivityFailed {
-                instance: ctx.instance.clone(),
-                execution_id: ctx.execution_id,
-                id: ctx.activity_id,
-                details: crate::ErrorDetails::Configuration {
-                    kind: crate::ConfigErrorKind::UnregisteredActivity,
-                    resource: ctx.activity_name.clone(),
-                    message: None,
-                },
-            }),
-        )
+        .abandon_work_item(&ctx.lock_token, Some(backoff), false)
         .await;
-
-    (ack_result, ActivityOutcome::ConfigError)
 }
 
 // ============================================================================
@@ -558,7 +544,6 @@ async fn handle_activity_outcome(
         Ok(()) => match outcome {
             ActivityOutcome::Success => rt.record_activity_success(),
             ActivityOutcome::AppError => rt.record_activity_app_error(),
-            ActivityOutcome::ConfigError => rt.record_activity_config_error(),
             ActivityOutcome::Cancelled => {}
         },
         Err(e) => {

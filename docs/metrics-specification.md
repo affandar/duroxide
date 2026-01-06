@@ -142,7 +142,8 @@ duroxide_orchestration_completions_total{final_turn_count="50+"}
 - `error_type` (string) - Error classification:
   - `"app_error"` - Application/business logic error
   - `"infrastructure_error"` - Provider/storage failure
-  - `"config_error"` - Configuration issue (unregistered, nondeterminism)
+  - `"config_error"` - Configuration issue (nondeterminism only)
+  - `"poison"` - Unregistered handler after max attempts (rolling deployment scenario)
 - `error_category` (string) - High-level error category (e.g., "database", "network", "logic", "validation")
 
 **Purpose:** Root cause analysis, distinguish infrastructure vs application errors
@@ -247,13 +248,15 @@ sum(rate(duroxide_orchestration_turns_bucket{le="100"}[5m]))
 
 ### 1.8 `duroxide_orchestration_configuration_errors_total` (Counter)
 
-**Description:** Configuration-level orchestration errors (unregistered orchestrations, nondeterminism)
+**Description:** Configuration-level orchestration errors (nondeterminism detection)
 
 **Labels:**
 - `orchestration_name` (string) - Orchestration name
 - `error_category` (string) - Error category
 
-**Purpose:** Track deployment/configuration issues separately
+**Purpose:** Track nondeterminism bugs - these require code fixes
+
+**Note:** Unregistered orchestrations no longer result in config errors. They use exponential backoff and eventually fail as poison messages, which allows rolling deployments where new orchestrations may not be registered on all nodes yet.
 
 ---
 
@@ -370,7 +373,8 @@ duroxide_orchestrator_queue_depth / duroxide_worker_queue_depth
   - `"success"` - Executed successfully
   - `"app_error"` - Application/business logic error
   - `"infra_error"` - Infrastructure failure
-  - `"config_error"` - Configuration issue (unregistered activity)
+  - `"config_error"` - Configuration issue (activity-specific configuration problems)
+  - `"poison"` - Unregistered activity after max attempts (rolling deployment scenario)
 - `retry_attempt` (string) - Retry attempt number:
   - `"0"` - First attempt
   - `"1"` - First retry
@@ -443,12 +447,14 @@ topk(5,
 
 ### 2.4 `duroxide_activity_configuration_errors_total` (Counter)
 
-**Description:** Configuration-level activity errors (unregistered activities)
+**Description:** Configuration-level activity errors
 
 **Labels:**
 - `activity_name` (string) - Activity name
 
 **Purpose:** Track deployment/configuration issues separately
+
+**Note:** Unregistered activities no longer result in immediate config errors. They use exponential backoff and eventually fail as poison messages, which supports rolling deployments where activities may not be registered on all nodes yet.
 
 ---
 

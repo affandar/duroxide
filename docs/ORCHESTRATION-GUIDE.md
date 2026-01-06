@@ -966,10 +966,11 @@ match client.wait_for_orchestration("test", Duration::from_secs(10)).await {
                 // Business logic error - may want to retry with different input
             }
             "configuration" => {
-                // Unregistered orchestration/activity - needs deployment fix
+                // Nondeterminism detected - requires code fix
             }
             "infrastructure" => {
                 // Provider/database error - may be transient
+                // Note: Poison errors (unregistered handlers after backoff) also fall here
             }
             _ => {}
         }
@@ -1219,14 +1220,18 @@ async fn order_workflow(ctx: OrchestrationContext, input: String) -> Result<Stri
 ```
 
 **Configuration Errors** - Deployment issues that abort orchestration execution before your code runs:
-- Unregistered orchestrations/activities
-- Nondeterminism (code changed between replays)
-- Missing versions
+- **Nondeterminism** (code changed between replays) - Immediate failure
+- **Unregistered orchestrations/activities** - Uses exponential backoff, eventually fails as Poison
+
+For unregistered handlers, the runtime automatically backs off to support **rolling deployments**:
+- Message is abandoned with exponential backoff (1s → 2s → 4s → ... up to 60s)
+- Eventually picked up by a node with the handler registered
+- If all retry attempts exhaust, fails as `ErrorDetails::Poison`
 
 Your orchestration code **never sees** these errors. The runtime:
 1. Records the failure in history (ActivityFailed + OrchestrationFailed events)
-2. Marks the orchestration as failed with ErrorDetails::Configuration
-3. Requires deployment fix (register missing activity, fix nondeterministic code)
+2. Marks the orchestration as failed with ErrorDetails::Configuration (nondeterminism) or ErrorDetails::Poison (unregistered)
+3. Requires deployment fix (register missing handler, fix nondeterministic code)
 
 **Infrastructure Errors** - Provider/system failures that abort execution:
 - Database connection failures

@@ -215,7 +215,7 @@ async fn error_handling_early_debit_failure_fs() {
     error_handling_early_debit_failure_with(store).await;
 }
 
-// 5) Unknown activity handler: should fail with configuration error (turn aborts)
+// 5) Unknown activity handler: should eventually poison after backoff attempts
 async fn unknown_activity_fails_with(store: StdArc<dyn Provider>) {
     let activity_registry = ActivityRegistry::builder().build();
     let orchestration = |ctx: OrchestrationContext, _input: String| async move {
@@ -229,8 +229,24 @@ async fn unknown_activity_fails_with(store: StdArc<dyn Provider>) {
         .register("MissingActivityTest", orchestration)
         .build();
 
-    let rt =
-        runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+    // Use fast backoff for testing
+    let options = duroxide::runtime::RuntimeOptions {
+        max_attempts: 3,
+        dispatcher_min_poll_interval: std::time::Duration::from_millis(10),
+        unregistered_backoff: duroxide::runtime::UnregisteredBackoffConfig {
+            base_delay: std::time::Duration::from_millis(10),
+            max_delay: std::time::Duration::from_millis(50),
+        },
+        ..Default::default()
+    };
+
+    let rt = runtime::Runtime::start_with_options(
+        store.clone(),
+        Arc::new(activity_registry),
+        orchestration_registry,
+        options,
+    )
+    .await;
     let client = duroxide::Client::new(store.clone());
     client
         .start_orchestration("inst-unknown-act-1", "MissingActivityTest", "")
@@ -243,17 +259,14 @@ async fn unknown_activity_fails_with(store: StdArc<dyn Provider>) {
         .unwrap()
     {
         duroxide::OrchestrationStatus::Failed { details } => {
-            assert!(matches!(
-                details,
-                duroxide::ErrorDetails::Configuration {
-                    kind: duroxide::ConfigErrorKind::UnregisteredActivity,
-                    resource,
-                    ..
-                } if resource == "Missing"
-            ));
+            // Should fail with application error from activity failure/poison
+            assert!(
+                matches!(details, duroxide::ErrorDetails::Application { .. })
+                    || matches!(details, duroxide::ErrorDetails::Poison { .. })
+            );
         }
         duroxide::OrchestrationStatus::Completed { output } => {
-            panic!("expected configuration failure, got success: {output}");
+            panic!("expected failure, got success: {output}");
         }
         _ => panic!("unexpected orchestration status"),
     }

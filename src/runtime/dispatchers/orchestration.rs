@@ -21,6 +21,15 @@ use tracing::warn;
 
 use super::super::{HistoryManager, Runtime, WorkItemReader};
 
+/// Error returned when orchestration processing fails before execution
+#[derive(Debug)]
+pub(crate) enum OrchestrationProcessingError {
+    /// The orchestration handler is not registered in the registry.
+    /// This typically occurs during rolling deployments when old instances
+    /// are processing work before the new handler is registered.
+    UnregisteredOrchestration,
+}
+
 /// Calculate the renewal interval based on lock timeout and buffer settings.
 ///
 /// # Logic
@@ -277,56 +286,87 @@ impl Runtime {
         let start_time = std::time::Instant::now();
         let mut turn_count = 0u64; // Track turns for this execution
 
-        // Log execution start with structured context and record metrics
-        if workitem_reader.has_orchestration_name() {
-            tracing::debug!(
-                target: "duroxide::runtime",
-                instance_id = %instance,
-                execution_id = %execution_id_to_use,
-                orchestration_name = %workitem_reader.orchestration_name,
-                orchestration_version = %version,
-                worker_id = %worker_id,
-                is_continue_as_new = %workitem_reader.is_continue_as_new,
-                "Orchestration started"
-            );
-
-            // Record orchestration start metric
-            // Note: We can't currently distinguish client-initiated vs suborchestration-initiated
-            // since we don't have parent context information available here.
-            let initiated_by = if workitem_reader.is_continue_as_new {
-                "continueAsNew"
-            } else {
-                "client"
-            };
-            self.record_orchestration_start(&workitem_reader.orchestration_name, &version, initiated_by);
-
-            // Increment active orchestrations gauge ONLY for brand new orchestrations
-            // Do NOT increment for continue-as-new - the orchestration was already active!
-            if history_mgr.is_full_history_empty() && !workitem_reader.is_continue_as_new {
-                self.increment_active_orchestrations();
-            }
-        } else if !workitem_reader.completion_messages.is_empty() {
+        // Log start for non-empty batches (we'll record metrics after handler resolution)
+        if !workitem_reader.has_orchestration_name() && !workitem_reader.completion_messages.is_empty() {
             // Empty orchestration name with completion messages - just warn and skip
             tracing::warn!(instance = %item.instance, "empty effective batch - this should not happen");
         }
 
         // Process the execution (unified path)
-        let (worker_items, orchestrator_items, select_cancelled_activities, execution_id_for_ack) =
-            if workitem_reader.has_orchestration_name() {
-                let (wi, oi, cancels) = self
-                    .handle_orchestration_atomic(
-                        instance,
-                        &mut history_mgr,
-                        &workitem_reader,
-                        execution_id_to_use,
-                        worker_id,
-                    )
-                    .await;
-                (wi, oi, cancels, execution_id_to_use)
-            } else {
-                // Empty effective batch
-                (vec![], vec![], vec![], execution_id_to_use)
-            };
+        let (worker_items, orchestrator_items, select_cancelled_activities, execution_id_for_ack) = if workitem_reader
+            .has_orchestration_name()
+        {
+            // Resolve handler and execute orchestration
+            let result = self
+                .resolve_and_execute_orchestration_handler(
+                    instance,
+                    &mut history_mgr,
+                    &workitem_reader,
+                    execution_id_to_use,
+                    worker_id,
+                )
+                .await;
+
+            match result {
+                Ok((wi, oi, cancels)) => {
+                    // Handler resolved successfully - now record metrics
+                    tracing::debug!(
+                        target: "duroxide::runtime",
+                        instance_id = %instance,
+                        execution_id = %execution_id_to_use,
+                        orchestration_name = %workitem_reader.orchestration_name,
+                        orchestration_version = %version,
+                        worker_id = %worker_id,
+                        is_continue_as_new = %workitem_reader.is_continue_as_new,
+                        "Orchestration started"
+                    );
+
+                    // Record orchestration start metric
+                    let initiated_by = if workitem_reader.is_continue_as_new {
+                        "continueAsNew"
+                    } else {
+                        "client"
+                    };
+                    self.record_orchestration_start(&workitem_reader.orchestration_name, &version, initiated_by);
+
+                    // Increment active orchestrations gauge ONLY for brand new orchestrations
+                    if history_mgr.is_full_history_empty() && !workitem_reader.is_continue_as_new {
+                        self.increment_active_orchestrations();
+                    }
+
+                    (wi, oi, cancels, execution_id_to_use)
+                }
+                Err(OrchestrationProcessingError::UnregisteredOrchestration) => {
+                    // Orchestration not registered - abandon with exponential backoff
+                    let backoff = self.options.unregistered_backoff.delay(attempt_count);
+                    let remaining_attempts = self.options.max_attempts.saturating_sub(attempt_count);
+
+                    tracing::warn!(
+                        target: "duroxide::runtime",
+                        instance = %instance,
+                        orchestration_name = %workitem_reader.orchestration_name,
+                        version = %workitem_reader.version.as_deref().unwrap_or("latest"),
+                        attempt_count = %attempt_count,
+                        max_attempts = %self.options.max_attempts,
+                        remaining_attempts = %remaining_attempts,
+                        backoff_secs = %backoff.as_secs_f32(),
+                        "Orchestration not registered, abandoning with {:.1}s backoff (will poison in {} more attempts)",
+                        backoff.as_secs_f32(),
+                        remaining_attempts
+                    );
+
+                    // Abandon with delay - poison handling will eventually terminate if genuinely missing
+                    let _ = self
+                        .history_store
+                        .abandon_orchestration_item(lock_token, Some(backoff), false)
+                        .await;
+                    return;
+                }
+            }
+        } else {
+            // Empty effective batch
+            (vec![], vec![], vec![], execution_id_to_use)
+        };
 
         // Atomically commit all changes
         let history_delta = history_mgr.delta();
@@ -594,15 +634,23 @@ impl Runtime {
         }
     }
 
-    /// Helper methods for atomic orchestration processing
-    pub(in crate::runtime) async fn handle_orchestration_atomic(
+    /// Resolves the orchestration handler from the registry and executes the orchestration.
+    ///
+    /// This function:
+    /// 1. Resolves the handler (exact version if specified, or latest via policy)
+    /// 2. Creates the OrchestrationStarted event if this is a new instance
+    /// 3. Runs the orchestration execution
+    ///
+    /// Returns `Err(UnregisteredOrchestration)` if the handler is not found in the registry,
+    /// which the caller should handle by abandoning with backoff for rolling deployment support.
+    pub(in crate::runtime) async fn resolve_and_execute_orchestration_handler(
         self: &Arc<Self>,
         instance: &str,
         history_mgr: &mut HistoryManager,
         workitem_reader: &WorkItemReader,
         execution_id: u64,
         worker_id: &str,
-    ) -> (Vec<WorkItem>, Vec<WorkItem>, Vec<ScheduledActivityIdentifier>) {
+    ) -> Result<(Vec<WorkItem>, Vec<WorkItem>, Vec<ScheduledActivityIdentifier>), OrchestrationProcessingError> {
         let mut worker_items = Vec::new();
         let mut orchestrator_items = Vec::new();
         let mut cancelled_activities = Vec::new();
@@ -626,30 +674,10 @@ impl Runtime {
         let (resolved_version, handler) = match resolved_handler {
             Some((v, h)) => (v, h),
             None => {
-                // Not found in registry - fail with unregistered error
-                if history_mgr.is_empty() {
-                    history_mgr.append(Event::with_event_id(
-                        crate::INITIAL_EVENT_ID,
-                        instance,
-                        execution_id,
-                        None,
-                        EventKind::OrchestrationStarted {
-                            name: workitem_reader.orchestration_name.clone(),
-                            version: "0.0.0".to_string(), // Placeholder version for unregistered
-                            input: workitem_reader.input.clone(),
-                            parent_instance: workitem_reader.parent_instance.clone(),
-                            parent_id: workitem_reader.parent_id,
-                        },
-                    ));
-
-                    history_mgr.append_failed(crate::ErrorDetails::Configuration {
-                        kind: crate::ConfigErrorKind::UnregisteredOrchestration,
-                        resource: workitem_reader.orchestration_name.clone(),
-                        message: None,
-                    });
-                    self.record_orchestration_configuration_error();
-                }
-                return (worker_items, orchestrator_items, cancelled_activities);
+                // Handler not registered - return error for caller to handle
+                // This is expected during rolling deployments when new orchestrations
+                // are started before all nodes have the updated handler
+                return Err(OrchestrationProcessingError::UnregisteredOrchestration);
             }
         };
 
@@ -689,7 +717,7 @@ impl Runtime {
         orchestrator_items.extend(exec_orchestrator_items);
         cancelled_activities.extend(exec_cancelled_activities);
 
-        (worker_items, orchestrator_items, cancelled_activities)
+        Ok((worker_items, orchestrator_items, cancelled_activities))
     }
 
     /// Acknowledge an orchestration item with changes, using smart retry logic based on ProviderError

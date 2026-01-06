@@ -5,6 +5,7 @@
 - Fetch item batch in dispatchers!!
 - Size limits 
 - RaiseEvent pub/sub
+- **Rename "Turn" terminology to "ReplayEngine"** - rename `turn` variable to `replay_engine`, `TurnResult` to `ReplayResult`, etc. in `src/runtime/execution.rs` and related files.
 - **Provider validation test for orphan activities** (issue #37)
   - Test scenario: instance deleted while activities in worker queue (without `CancelInstance`)
   - Blocked: Provider trait needs `delete_instance` or `archive_instance` method first

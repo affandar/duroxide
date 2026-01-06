@@ -14,6 +14,72 @@ use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tracing::warn;
 
+/// Configuration for exponential backoff when encountering unregistered orchestrations/activities.
+///
+/// During rolling deployments, work items for unregistered handlers are abandoned
+/// with exponential backoff instead of immediately failing. This allows the runtime
+/// to wait for the handler to be registered on upgraded nodes.
+///
+/// # Backoff Calculation
+///
+/// For a work item with `attempt_count` (1-based):
+/// - Delay = `base_delay * 2^(attempt_count - 1)`, capped at `max_delay`
+///
+/// # Example with Default Configuration
+///
+/// With default settings (`base_delay: 1s`, `max_delay: 60s`):
+/// - Attempt 1: 1s delay
+/// - Attempt 2: 2s delay
+/// - Attempt 3: 4s delay
+/// - Attempt 4: 8s delay
+/// - Attempt 5: 16s delay
+/// - Attempt 6: 32s delay
+/// - Attempt 7+: 60s delay (capped)
+#[derive(Debug, Clone)]
+pub struct UnregisteredBackoffConfig {
+    /// Base delay for the first backoff attempt.
+    /// Default: 1 second
+    pub base_delay: Duration,
+
+    /// Maximum delay cap for any backoff attempt.
+    /// Default: 60 seconds
+    pub max_delay: Duration,
+}
+
+impl UnregisteredBackoffConfig {
+    /// Maximum exponent for backoff calculation (caps at 64x base delay)
+    const MAX_BACKOFF_EXPONENT: u32 = 6;
+    /// Default base delay for unregistered handler backoff
+    const DEFAULT_BASE_DELAY: Duration = Duration::from_secs(1);
+    /// Default maximum delay for unregistered handler backoff
+    const DEFAULT_MAX_DELAY: Duration = Duration::from_secs(60);
+
+    /// Calculate the backoff delay for a given attempt count (1-based).
+    ///
+    /// # Arguments
+    ///
+    /// * `attempt_count` - The fetch attempt number (1-based from provider)
+    ///
+    /// # Returns
+    ///
+    /// The backoff delay, capped at `max_delay`
+    pub fn delay(&self, attempt_count: u32) -> Duration {
+        // attempt_count is 1-based, so subtract 1 for exponent
+        let exponent = attempt_count.saturating_sub(1).min(Self::MAX_BACKOFF_EXPONENT);
+        let delay = self.base_delay.saturating_mul(1 << exponent);
+        delay.min(self.max_delay)
+    }
+}
+
+impl Default for UnregisteredBackoffConfig {
+    fn default() -> Self {
+        Self {
+            base_delay: Self::DEFAULT_BASE_DELAY,
+            max_delay: Self::DEFAULT_MAX_DELAY,
+        }
+    }
+}
+
 /// Configuration options for the Runtime.
 ///
 /// # Example
@@ -117,6 +183,15 @@ pub struct RuntimeOptions {
     /// Default: Disabled with basic logging
     pub observability: ObservabilityConfig,
 
+    /// Configuration for backoff when encountering unregistered orchestrations/activities.
+    ///
+    /// During rolling deployments, work items for unregistered handlers are abandoned
+    /// with exponential backoff instead of immediately failing. This allows the runtime
+    /// to wait for the handler to be registered on upgraded nodes.
+    ///
+    /// Default: 1s base delay, 60s max delay
+    pub unregistered_backoff: UnregisteredBackoffConfig,
+
     /// Maximum fetch attempts before a message is considered poison.
     ///
     /// After this many fetch attempts, the runtime will immediately fail
@@ -156,6 +231,7 @@ impl Default for RuntimeOptions {
             worker_lock_timeout: Duration::from_secs(30),
             worker_lock_renewal_buffer: Duration::from_secs(5),
             observability: ObservabilityConfig::default(),
+            unregistered_backoff: UnregisteredBackoffConfig::default(),
             max_attempts: 10,
             activity_cancellation_grace_period: Duration::from_secs(10),
         }
@@ -404,13 +480,6 @@ impl Runtime {
     fn record_activity_app_error(&self) {
         if let Some(handle) = &self.observability_handle {
             handle.record_activity_app_error();
-        }
-    }
-
-    #[inline]
-    fn record_activity_config_error(&self) {
-        if let Some(handle) = &self.observability_handle {
-            handle.record_activity_config_error();
         }
     }
 
