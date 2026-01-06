@@ -136,9 +136,9 @@ fn calculate_unregistered_backoff(attempt_count: u32, config: &UnregisteredBacko
 // Attempt 7+: 60s (capped)
 ```
 
-### Log Level Escalation
+### Logging
 
-Use WARN level for all backoff attempts with a consistent message format showing remaining attempts before poison:
+Use WARN level for all backoff attempts with a consistent message format showing remaining attempts before poison. This is user error (missing handler registration), not infrastructure error:
 
 ```rust
 fn log_unregistered_orchestration_backoff(
@@ -232,49 +232,9 @@ pub enum ConfigErrorKind {
 // (If there are no other variants, the entire ConfigErrorKind may be removed)
 ```
 
-#### 2. Add poison state to HistoryManager
+#### 2. Orchestration Dispatcher (`orchestration.rs`)
 
-HistoryManager needs to signal when history is unprocessable, with a reason. This allows for future extensibility (e.g., corrupted history from fuzz testing).
-
-```rust
-// In src/runtime/state_helpers.rs
-
-/// Reason why the history cannot be processed
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PoisonReason {
-    /// The orchestration handler was not found in the registry
-    UnregisteredOrchestration,
-    // /// The history is corrupt or malformed (future: fuzz testing)
-    // Corrupted { message: String },
-}
-
-pub struct HistoryManager {
-    // ... existing fields ...
-    
-    /// If set, indicates the history cannot be processed and should be
-    /// abandoned/poisoned with the specified reason.
-    poison_reason: Option<PoisonReason>,
-}
-
-impl HistoryManager {
-    /// Mark this history as poisoned (unprocessable)
-    pub fn mark_poisoned(&mut self, reason: PoisonReason) {
-        self.poison_reason = Some(reason);
-    }
-    
-    /// Check if this history is poisoned and get the reason
-    pub fn poison_reason(&self) -> Option<&PoisonReason> {
-        self.poison_reason.as_ref()
-    }
-    
-    /// Check if this history is processable
-    pub fn is_processable(&self) -> bool {
-        self.poison_reason.is_none()
-    }
-}
-```
-
-#### 3. Orchestration Dispatcher (`orchestration.rs`)
+No changes to HistoryManager are needed. The handler resolution and backoff handling can all happen in the dispatcher. When the handler is not found, we simply abandon with backoff instead of appending failure events.
 
 **In `handle_orchestration_atomic` - handler resolution:**
 
@@ -294,57 +254,40 @@ None => {
 
 // AFTER:
 None => {
-    // Not found in registry - mark as poisoned, don't create any history events
-    // Caller will handle based on poison reason
-    history_mgr.mark_poisoned(PoisonReason::UnregisteredOrchestration);
+    // Not found in registry - abandon with backoff for rolling deployment support
+    // Don't create any history events - let poison handling create them if genuinely missing
+    
+    let backoff = calculate_unregistered_backoff(attempt_count, &self.options.unregistered_backoff);
+    let remaining = if attempt_count >= self.options.max_attempts {
+        0
+    } else {
+        self.options.max_attempts - attempt_count
+    };
+    
+    tracing::warn!(
+        target: "duroxide::runtime",
+        instance = %instance,
+        orchestration_name = %workitem_reader.orchestration_name,
+        version = %workitem_reader.version.as_deref().unwrap_or("latest"),
+        attempt_count = %attempt_count,
+        max_attempts = %self.options.max_attempts,
+        remaining_attempts = %remaining,
+        backoff_secs = %backoff.as_secs_f32(),
+        "Orchestration not registered, abandoning with {:.1}s backoff (will poison in {} more attempts)",
+        backoff.as_secs_f32(),
+        remaining
+    );
+    
+    // Abandon with delay - let poison handling eventually terminate if genuinely missing
+    let _ = self.history_store
+        .abandon_orchestration_item(lock_token, Some(backoff), false)
+        .await;
+    
     return (worker_items, orchestrator_items, cancelled_activities);
 }
 ```
 
-**In `process_orchestration_item` - after `handle_orchestration_atomic` returns:**
-
-```rust
-// After handle_orchestration_atomic returns, check if history is processable
-if let Some(poison_reason) = history_mgr.poison_reason() {
-    match poison_reason {
-        PoisonReason::UnregisteredOrchestration => {
-            // Calculate backoff from attempt_count and config
-            let backoff = calculate_unregistered_backoff(attempt_count, &self.options.unregistered_backoff);
-            let remaining = if attempt_count >= self.options.max_attempts {
-                0
-            } else {
-                self.options.max_attempts - attempt_count
-            };
-            
-            tracing::warn!(
-                target: "duroxide::runtime",
-                instance = %instance,
-                orchestration_name = %workitem_reader.orchestration_name,
-                version = %workitem_reader.version.as_deref().unwrap_or("latest"),
-                attempt_count = %attempt_count,
-                max_attempts = %self.options.max_attempts,
-                remaining_attempts = %remaining,
-                backoff_secs = %backoff.as_secs_f32(),
-                "Orchestration not registered, abandoning with {:.1}s backoff (will poison in {} more attempts)",
-                backoff.as_secs_f32(),
-                remaining
-            );
-            
-            // Abandon with delay - let poison handling eventually terminate if genuinely missing
-            let _ = self.history_store
-                .abandon_orchestration_item(lock_token, Some(backoff), false)
-                .await;
-            
-            self.record_unregistered_orchestration_backoff();
-        }
-        // Future: handle other poison reasons differently
-        // PoisonReason::Corrupted { message } => { ... }
-    }
-    return;
-}
-```
-
-#### 4. Worker Dispatcher (`worker.rs`)
+#### 3. Worker Dispatcher (`worker.rs`)
 
 Similar pattern - instead of acking with `ActivityFailed`, abandon with backoff:
 
@@ -381,14 +324,11 @@ if !activities.contains(&ctx.activity_name) {
         .abandon_work_item(&ctx.lock_token, Some(backoff), false)
         .await;
     
-    rt.record_unregistered_activity_backoff();
     return;
 }
 ```
 
-#### 5. RuntimeOptions
-
-Add configurable backoff settings:
+#### 4. RuntimeOptions
 
 Add configurable backoff settings:
 
@@ -409,23 +349,6 @@ impl Default for RuntimeOptions {
             unregistered_backoff: UnregisteredBackoffConfig::default(),
         }
     }
-}
-```
-
-#### 4. Metrics (optional but recommended)
-
-Add counters for observability:
-
-```rust
-// In observability.rs
-pub struct MetricsSnapshot {
-    // ... existing fields ...
-    
-    /// Unregistered orchestration backoff events
-    pub unregistered_orch_backoff: u64,
-    
-    /// Unregistered activity backoff events  
-    pub unregistered_activity_backoff: u64,
 }
 ```
 
@@ -513,21 +436,180 @@ Total: ~7 seconds. Consider increasing `max_attempts` for clusters with slower r
 
 ### Unit Tests
 
-1. `test_unregistered_orchestration_abandons_with_backoff`
-2. `test_unregistered_activity_abandons_with_backoff`
-3. `test_backoff_calculation_exponential`
-4. `test_backoff_caps_at_max`
-5. `test_backoff_respects_custom_config`
+1. `test_backoff_calculation_exponential`
+2. `test_backoff_caps_at_max`
+3. `test_backoff_respects_custom_config`
 
-### E2E Tests
+### Integration Tests (`tests/deletion_integration_tests.rs`)
 
-1. `e2e_unregistered_orchestration_eventually_poisons` - Verify poison handling kicks in
-2. `e2e_unregistered_activity_eventually_poisons` - Same for activities
-3. `e2e_rolling_deployment_three_nodes` - Simulates real rolling upgrade scenario
+1. `test_cancel_orchestration_during_unregistered_backoff` - Cancel an orchestration that is bouncing with backoff (not yet poisoned)
+2. `test_force_delete_orchestration_during_unregistered_backoff` - Force delete an orchestration during backoff
+3. `test_delete_poisoned_orchestration` - Verify that after poison, orchestration can be deleted gracefully (status is Failed, no force needed)
 
-### Rolling Deployment Simulation Test
+### Unregistered Handler Tests (`tests/unknown_orchestration_tests.rs`)
 
-This test simulates a realistic rolling upgrade across a 3-node cluster:
+**Existing tests to update (currently expect ConfigError, will need to expect Poison after backoff):**
+1. `unknown_orchestration_fails_gracefully` - Missing orchestration name
+
+**New tests to add:**
+1. `unknown_version_fails_gracefully` - Existing orchestration name but missing version (e.g., `start_orchestration_versioned("inst", "ExistingOrch", "9.9.9", "")`)
+2. `continue_as_new_to_missing_version_fails_gracefully` - CAN switches to a version that doesn't exist
+
+### Scenario Tests (`tests/scenarios/rolling_deployment.rs`)
+
+1. `e2e_rolling_deployment_three_nodes` - Simulates real rolling upgrade with missing orchestration/activity
+2. `e2e_rolling_deployment_version_upgrade` - CAN switches to new version during rolling deployment (old nodes don't have new version yet)
+
+### Scenario Test: Rolling Deployment Simulation (`tests/scenarios/rolling_deployment.rs`)
+
+This file contains two tests simulating realistic rolling upgrades:
+
+#### Test 1: `e2e_rolling_deployment_three_nodes`
+
+Simulates rolling deployment with a new activity:
+
+```rust
+/// E2E: Simulates rolling deployment across 3 nodes
+///
+/// Scenario:
+/// - 3 "nodes" (runtimes) sharing same provider
+/// - Initially: 2 nodes have old code (no NewActivity), 1 node has new code
+/// - Work item for NewActivity is enqueued
+/// - Old nodes repeatedly abandon with backoff
+/// - After 2 seconds: old nodes "upgrade" (get new code)
+/// - Work item eventually succeeds on upgraded node
+```
+
+#### Test 2: `e2e_rolling_deployment_version_upgrade`
+
+Simulates CAN (continue-as-new) switching to a new version during rolling deployment:
+
+```rust
+/// E2E: Simulates rolling deployment with version upgrade via CAN
+///
+/// Scenario:
+/// - Orchestration v1.0.0 is running, does continue_as_new to v2.0.0
+/// - 2 nodes have only v1.0.0, 1 node has both v1.0.0 and v2.0.0
+/// - CAN message for v2.0.0 bounces on old nodes with backoff
+/// - After upgrade, v2.0.0 executes successfully
+///
+/// This validates that version-specific backoff works correctly during
+/// rolling deployments where new versions are introduced.
+#[tokio::test]
+async fn e2e_rolling_deployment_version_upgrade() {
+    let provider = Arc::new(
+        SqliteProvider::new_in_memory()
+            .await
+            .expect("Failed to create provider"),
+    );
+    
+    // v1.0.0 handler - does CAN to v2.0.0
+    fn v1_handler() -> impl Fn(OrchestrationContext, String) -> _ {
+        |ctx: OrchestrationContext, _input: String| async move {
+            // Continue as new to v2.0.0
+            ctx.continue_as_new_versioned("2.0.0", "upgraded").await
+        }
+    }
+    
+    // v2.0.0 handler - just completes
+    fn v2_handler() -> impl Fn(OrchestrationContext, String) -> _ {
+        |_ctx: OrchestrationContext, input: String| async move {
+            Ok::<_, String>(format!("v2-completed:{}", input))
+        }
+    }
+    
+    // Old nodes: only have v1.0.0
+    let orchestrations_old = OrchestrationRegistry::builder()
+        .register_versioned("VersionedOrch", "1.0.0", v1_handler())
+        .build();
+    
+    // New node: has both v1.0.0 and v2.0.0
+    let orchestrations_new = OrchestrationRegistry::builder()
+        .register_versioned("VersionedOrch", "1.0.0", v1_handler())
+        .register_versioned("VersionedOrch", "2.0.0", v2_handler())
+        .build();
+    
+    let activities = Arc::new(ActivityRegistry::builder().build());
+    
+    let options = RuntimeOptions {
+        max_attempts: 10,
+        dispatcher_min_poll_interval: Duration::from_millis(10),
+        unregistered_backoff: UnregisteredBackoffConfig {
+            base_delay: Duration::from_millis(100),
+            max_delay: Duration::from_millis(500),
+        },
+        ..Default::default()
+    };
+    
+    // Start nodes: 2 old (v1 only), 1 new (v1+v2)
+    let rt1 = runtime::Runtime::start_with_options(
+        provider.clone(), activities.clone(), orchestrations_old.clone(), options.clone(),
+    ).await;
+    let rt2 = runtime::Runtime::start_with_options(
+        provider.clone(), activities.clone(), orchestrations_old.clone(), options.clone(),
+    ).await;
+    let rt3 = runtime::Runtime::start_with_options(
+        provider.clone(), activities.clone(), orchestrations_new.clone(), options.clone(),
+    ).await;
+    
+    let client = Client::new(provider.clone());
+    
+    // Start orchestration at v1.0.0 - it will CAN to v2.0.0
+    client
+        .start_orchestration_versioned("version-upgrade-test", "VersionedOrch", "1.0.0", "{}")
+        .await
+        .expect("start should succeed");
+    
+    // Simulate rolling upgrade: after 2 seconds, upgrade old nodes
+    tokio::spawn({
+        let rt1 = rt1.clone();
+        let rt2 = rt2.clone();
+        let provider = provider.clone();
+        let activities = activities.clone();
+        let orchestrations_new = orchestrations_new.clone();
+        let options = options.clone();
+        async move {
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            rt1.shutdown(None).await;
+            let _rt1_new = runtime::Runtime::start_with_options(
+                provider.clone(), activities.clone(), orchestrations_new.clone(), options.clone(),
+            ).await;
+            
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            rt2.shutdown(None).await;
+            let _rt2_new = runtime::Runtime::start_with_options(
+                provider.clone(), activities.clone(), orchestrations_new.clone(), options.clone(),
+            ).await;
+        }
+    });
+    
+    // Wait for orchestration to complete
+    let status = client
+        .wait_for_orchestration("version-upgrade-test", Duration::from_secs(10))
+        .await
+        .expect("wait should succeed");
+    
+    // Should complete successfully with v2 output
+    match status {
+        OrchestrationStatus::Completed { output } => {
+            assert!(
+                output.contains("v2-completed"),
+                "Should have v2 output, got: {}", output
+            );
+        }
+        OrchestrationStatus::Failed { details } => {
+            panic!(
+                "Orchestration should NOT fail during rolling deployment. \
+                 CAN to v2.0.0 should have bounced until upgraded node picked it up. \
+                 Error: {details:?}"
+            );
+        }
+        other => panic!("Unexpected status: {other:?}"),
+    }
+    
+    rt3.shutdown(None).await;
+}
+```
 
 ```rust
 /// E2E: Simulates rolling deployment across 3 nodes
@@ -759,20 +841,20 @@ Add `PoisonMessageType::UnregisteredOrchestration` variant.
 ## Implementation Checklist
 
 - [ ] Remove `ConfigErrorKind::UnregisteredOrchestration` and `ConfigErrorKind::UnregisteredActivity`
-- [ ] Add `PoisonReason` enum with `UnregisteredOrchestration` variant (and commented `Corrupted`)
-- [ ] Add `poison_reason: Option<PoisonReason>` field and methods to `HistoryManager`
 - [ ] Add `UnregisteredBackoffConfig` struct with `base_delay` and `max_delay`
 - [ ] Add `unregistered_backoff` field to `RuntimeOptions`
 - [ ] Add `calculate_unregistered_backoff()` helper function
-- [ ] Modify `handle_orchestration_atomic` to mark poisoned instead of failing
-- [ ] Modify `process_orchestration_item` to check poison_reason and handle accordingly
+- [ ] Modify `handle_orchestration_atomic` to abandon with backoff instead of failing
 - [ ] Modify worker dispatcher to abandon unregistered activities with backoff
-- [ ] Add metrics counters for backoff events
-- [ ] Update tests in `unknown_orchestration_tests.rs` (currently expect ConfigError)
+- [ ] Update tests in `unknown_orchestration_tests.rs`:
+  - [ ] Update `unknown_orchestration_fails_gracefully` (expect Poison after backoff)
+  - [ ] Add `unknown_version_fails_gracefully` (missing version of existing orchestration)
+  - [ ] Add `continue_as_new_to_missing_version_fails_gracefully`
 - [ ] Add unit tests for backoff calculation
-- [ ] Add unit tests for custom config
-- [ ] Add `e2e_unregistered_orchestration_eventually_poisons` test
-- [ ] Add `e2e_unregistered_activity_eventually_poisons` test
-- [ ] Add `e2e_rolling_deployment_three_nodes` test
+- [ ] Add integration test: `test_cancel_orchestration_during_unregistered_backoff`
+- [ ] Add integration test: `test_force_delete_orchestration_during_unregistered_backoff`
+- [ ] Add integration test: `test_delete_poisoned_orchestration` (verify graceful delete after poison)
+- [ ] Add scenario test: `e2e_rolling_deployment_three_nodes`
+- [ ] Add scenario test: `e2e_rolling_deployment_version_upgrade` (CAN to new version)
 - [ ] Update ORCHESTRATION-GUIDE.md
 - [ ] Update CHANGELOG.md
