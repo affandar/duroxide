@@ -132,3 +132,7 @@ Reference `prompts/duroxide-*.md` for structured tasks:
 - `duroxide-update-docs-tests.md` - Documentation and test updates with OTel audit
 - `duroxide-create-scenario-test.md` - Convert patterns to regression tests
 - `duroxide-stress-test.md` - Performance testing
+
+## Workflow Rules
+
+- **Never commit or push without explicit user permission.** Always ask before running `git commit` or `git push`.
