@@ -699,3 +699,137 @@ async fn e2e_activity_poisons_suborchestration_poisons_parent() {
 
     rt.shutdown(None).await;
 }
+
+/// E2E: Poison message creates instance if it didn't exist (issue #43)
+///
+/// Background: Instances are created during ack_orchestration_item, not enqueue.
+/// When a StartOrchestration message is detected as poison on first fetch,
+/// the instance doesn't exist yet. The fail_orchestration_as_poison function
+/// must create the instance with proper metadata, not leave an orphaned queue item.
+///
+/// This test verifies:
+/// 1. StartOrchestration is enqueued (instance doesn't exist yet)
+/// 2. First fetch is poisoned (injected attempt_count > max_attempts)
+/// 3. Instance IS created with Failed status
+/// 4. Instance has proper metadata (orchestration_name, version, status)
+/// 5. History contains OrchestrationStarted and OrchestrationFailed events
+#[tokio::test]
+async fn e2e_poison_message_creates_instance_if_missing() {
+    let sqlite = Arc::new(
+        SqliteProvider::new_in_memory()
+            .await
+            .expect("Failed to create provider"),
+    );
+    let provider = Arc::new(PoisonInjectingProvider::new(sqlite));
+
+    // Register orchestration that should never run (we'll poison it immediately)
+    let orchestrations = OrchestrationRegistry::builder()
+        .register("NeverRuns", |_ctx: OrchestrationContext, _input: String| async move {
+            panic!("This orchestration code should never execute - message is poison");
+        })
+        .build();
+
+    let activities = ActivityRegistry::builder().build();
+
+    // Inject poison BEFORE starting runtime - first fetch will see attempt_count=11
+    provider.inject_orchestration_poison(11);
+
+    let rt = runtime::Runtime::start_with_options(
+        provider.clone() as Arc<dyn Provider>,
+        Arc::new(activities),
+        orchestrations,
+        fast_runtime_options(10), // max_attempts=10, so 11 triggers poison
+    )
+    .await;
+
+    let client = Client::new(provider.clone() as Arc<dyn Provider>);
+
+    let instance = "poison-creates-instance-test";
+
+    // Note: At this point, the instance should NOT exist (instances are created on ack, not enqueue)
+    // We don't verify this because the runtime may race and process the message before we can check
+
+    // Start orchestration - enqueues StartOrchestration work item
+    client
+        .start_orchestration(instance, "NeverRuns", r#"{"test":"data"}"#)
+        .await
+        .expect("start should succeed (just enqueues)");
+
+    // Wait for orchestration to complete (should fail as poison)
+    let status = client
+        .wait_for_orchestration(instance, Duration::from_secs(5))
+        .await
+        .expect("wait should succeed");
+
+    // Verify: Orchestration should be in Failed state with poison error
+    match &status {
+        OrchestrationStatus::Failed { details } => {
+            if let ErrorDetails::Poison {
+                attempt_count,
+                max_attempts,
+                message_type,
+                ..
+            } = details
+            {
+                assert_eq!(*attempt_count, 11, "Should have injected attempt_count");
+                assert_eq!(*max_attempts, 10, "Should have max_attempts from options");
+
+                if let PoisonMessageType::Orchestration {
+                    instance: inst,
+                    execution_id,
+                } = message_type
+                {
+                    assert_eq!(inst, instance, "Message type should reference our instance");
+                    assert_eq!(*execution_id, INITIAL_EXECUTION_ID);
+                } else {
+                    panic!("Expected Orchestration poison type, got: {message_type:?}");
+                }
+            } else {
+                panic!("Expected Poison error, got: {details:?}");
+            }
+        }
+        other => panic!("Expected Failed status, got: {other:?}"),
+    }
+
+    // KEY VERIFICATION: Instance was created with proper metadata
+    let instance_info = client
+        .get_instance_info(instance)
+        .await
+        .expect("Instance MUST exist after poison handling");
+
+    assert_eq!(instance_info.instance_id, instance);
+    assert_eq!(instance_info.orchestration_name, "NeverRuns", "Should have correct orchestration name");
+    assert_eq!(instance_info.status, "Failed", "Status should be Failed");
+
+    // Verify history contains proper events (OrchestrationStarted + OrchestrationFailed)
+    let history = client
+        .read_execution_history(instance, INITIAL_EXECUTION_ID)
+        .await
+        .expect("Should get history");
+
+    assert!(history.len() >= 2, "History should have at least 2 events, got {}", history.len());
+
+    // First event should be OrchestrationStarted
+    match &history[0].kind {
+        duroxide::EventKind::OrchestrationStarted { name, version, input, .. } => {
+            assert_eq!(name, "NeverRuns", "Started event should have orchestration name");
+            assert!(!version.is_empty(), "Started event should have version");
+            assert!(input.contains("test"), "Started event should have input");
+        }
+        other => panic!("First event should be OrchestrationStarted, got: {other:?}"),
+    }
+
+    // Last event should be OrchestrationFailed
+    let last_event = history.last().expect("Should have events");
+    match &last_event.kind {
+        duroxide::EventKind::OrchestrationFailed { details } => {
+            assert!(
+                matches!(details, ErrorDetails::Poison { .. }),
+                "Failed event should have Poison details, got: {details:?}"
+            );
+        }
+        other => panic!("Last event should be OrchestrationFailed, got: {other:?}"),
+    }
+
+    rt.shutdown(None).await;
+}
