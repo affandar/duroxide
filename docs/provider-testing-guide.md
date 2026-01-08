@@ -584,7 +584,7 @@ The validation test suite includes **92+ individual test functions** organized i
     - `test_cancelling_nonexistent_activities_is_idempotent` - Cancelling activities that don't exist is silently ignored
     - `test_batch_cancellation_deletes_multiple_activities` - Multiple activities can be cancelled in a single `ack_orchestration_item`
 
-12. **Deletion Tests (12 tests)** - `duroxide::provider_validations::deletion`
+12. **Deletion Tests (13 tests)** - `duroxide::provider_validations::deletion`
     - `test_delete_terminal_instances` - Delete completed/failed instances
     - `test_delete_running_rejected_force_succeeds` - Running instances rejected without force
     - `test_delete_nonexistent_instance` - Deleting non-existent instance is idempotent
@@ -597,6 +597,7 @@ The validation test suite includes **92+ individual test functions** organized i
     - `test_delete_get_parent_id` - Get parent instance ID for sub-orchestrations
     - `test_list_children` - List direct children of an instance
     - `test_force_delete_prevents_ack_recreation` - Force delete prevents ack from recreating
+    - `test_stale_activity_after_delete_recreate` - Stale activity completion after delete+recreate doesn't corrupt new instance
 
 13. **Pruning Tests (3 tests)** - `duroxide::provider_validations::prune`
     - `test_prune_options_combinations` - Verify keep_last and completed_before work together
@@ -980,7 +981,7 @@ This generates `stress-test-results.md` with:
 
 - **Test Implementation**: `src/provider_validation/` (individual test modules)
 - **Test API**: `src/provider_validations.rs` (test function exports)
-- **Example Usage**: `tests/sqlite_provider_validations.rs` (complete example with all 80 tests)
+- **Example Usage**: `tests/sqlite_provider_validations.rs` (complete example with all 100 tests)
 - **Test Specification**: See individual test function documentation
 - **Provider Guide**: `docs/provider-implementation-guide.md`
 - **Built-in Providers**: `src/providers/sqlite.rs`

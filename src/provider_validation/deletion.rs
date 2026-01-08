@@ -940,6 +940,224 @@ pub async fn test_delete_instances_atomic_orphan_detection<F: ProviderFactory>(f
     tracing::info!("✓ CRITICAL TEST PASSED: delete_instances_atomic orphan detection");
 }
 
+/// CRITICAL TEST: Stale activity from deleted instance doesn't corrupt recreated instance
+///
+/// Scenario:
+/// 1. Create instance A (execution_id=1), schedule activity (id=2)
+/// 2. Activity starts execution (worker fetches + holds lock)
+/// 3. Force delete instance A
+/// 4. Recreate instance A with same ID/name/version/input (execution_id=1 again)
+/// 5. Old activity tries to complete → ack should FAIL
+/// 6. New instance should NOT see stale completion
+///
+/// This tests a critical safety invariant: force delete must clear worker_queue
+/// entries so stale completions can't corrupt a recreated instance.
+pub async fn test_stale_activity_after_delete_recreate<F: ProviderFactory>(factory: &F) {
+    tracing::info!("→ CRITICAL TEST: stale activity after delete+recreate");
+    let provider = factory.create_provider().await;
+    let mgmt = provider.as_management_capability().unwrap();
+    let instance_id = "stale-activity-recreate";
+
+    // Step 1: Create instance and schedule an activity
+    provider
+        .enqueue_for_orchestrator(start_item(instance_id), None)
+        .await
+        .unwrap();
+
+    let (_item, orch_lock, _) = provider
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+        .await
+        .unwrap()
+        .unwrap();
+
+    // Ack with OrchestrationStarted + ActivityScheduled events
+    provider
+        .ack_orchestration_item(
+            &orch_lock,
+            INITIAL_EXECUTION_ID,
+            vec![
+                Event::with_event_id(
+                    1,
+                    instance_id,
+                    INITIAL_EXECUTION_ID,
+                    None,
+                    EventKind::OrchestrationStarted {
+                        name: "TestOrch".to_string(),
+                        version: "1.0.0".to_string(),
+                        input: "{}".to_string(),
+                        parent_instance: None,
+                        parent_id: None,
+                    },
+                ),
+                Event::with_event_id(
+                    2,
+                    instance_id,
+                    INITIAL_EXECUTION_ID,
+                    Some(2),
+                    EventKind::ActivityScheduled {
+                        name: "OldActivity".to_string(),
+                        input: "old-input".to_string(),
+                    },
+                ),
+            ],
+            vec![WorkItem::ActivityExecute {
+                instance: instance_id.to_string(),
+                execution_id: INITIAL_EXECUTION_ID,
+                id: 2,
+                name: "OldActivity".to_string(),
+                input: "old-input".to_string(),
+            }],
+            vec![],
+            ExecutionMetadata {
+                orchestration_name: Some("TestOrch".to_string()),
+                orchestration_version: Some("1.0.0".to_string()),
+                ..Default::default()
+            },
+            vec![],
+        )
+        .await
+        .unwrap();
+
+    // Step 2: Worker fetches the activity (holds the lock)
+    let (_work_item, old_worker_lock, _) = provider
+        .fetch_work_item(Duration::from_secs(30), Duration::ZERO)
+        .await
+        .unwrap()
+        .unwrap();
+
+    // Step 3: Force delete instance A
+    let delete_result = mgmt.delete_instance(instance_id, true).await.unwrap();
+    assert!(
+        delete_result.instances_deleted >= 1,
+        "Force delete should succeed"
+    );
+
+    // Verify instance is gone
+    assert!(
+        mgmt.get_instance_info(instance_id).await.is_err(),
+        "Instance should be deleted"
+    );
+
+    // Step 4: Recreate instance A with same ID, name, version, input
+    provider
+        .enqueue_for_orchestrator(start_item(instance_id), None)
+        .await
+        .unwrap();
+
+    let (_item2, orch_lock2, _) = provider
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+        .await
+        .unwrap()
+        .unwrap();
+
+    // Ack the start of new instance
+    provider
+        .ack_orchestration_item(
+            &orch_lock2,
+            INITIAL_EXECUTION_ID,
+            vec![Event::with_event_id(
+                1,
+                instance_id,
+                INITIAL_EXECUTION_ID,
+                None,
+                EventKind::OrchestrationStarted {
+                    name: "TestOrch".to_string(),
+                    version: "1.0.0".to_string(),
+                    input: "{}".to_string(),
+                    parent_instance: None,
+                    parent_id: None,
+                },
+            )],
+            vec![],
+            vec![],
+            ExecutionMetadata {
+                orchestration_name: Some("TestOrch".to_string()),
+                orchestration_version: Some("1.0.0".to_string()),
+                ..Default::default()
+            },
+            vec![],
+        )
+        .await
+        .unwrap();
+
+    // Step 5: Verify new instance exists
+    let info = mgmt.get_instance_info(instance_id).await.unwrap();
+    assert_eq!(info.orchestration_name, "TestOrch");
+
+    // Step 6: OLD activity tries to complete - should FAIL
+    // The worker_queue entry was deleted when we force-deleted the instance,
+    // so ack_work_item should fail because the lock_token no longer exists.
+    let old_ack_result = provider
+        .ack_work_item(
+            &old_worker_lock,
+            Some(WorkItem::ActivityCompleted {
+                instance: instance_id.to_string(),
+                execution_id: INITIAL_EXECUTION_ID,
+                id: 2,
+                result: "stale-result-from-old-instance".to_string(),
+            }),
+        )
+        .await;
+
+    // CRITICAL: The stale ack must fail
+    assert!(
+        old_ack_result.is_err(),
+        "CRITICAL: Stale activity ack must fail to prevent corruption of recreated instance"
+    );
+
+    // Step 7: Verify new instance wasn't corrupted
+    // Enqueue an event to trigger a fetch and verify no stale completion is present
+    provider
+        .enqueue_for_orchestrator(
+            WorkItem::ExternalRaised {
+                instance: instance_id.to_string(),
+                name: "probe-event".to_string(),
+                data: "{}".to_string(),
+            },
+            None,
+        )
+        .await
+        .unwrap();
+
+    let (item, lock_token, _) = provider
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+        .await
+        .unwrap()
+        .unwrap();
+
+    // The new instance should have NO completion messages from the old activity
+    let has_stale_completion = item.messages.iter().any(|m| {
+        matches!(
+            m,
+            WorkItem::ActivityCompleted { result, .. } if result.contains("stale-result")
+        )
+    });
+    assert!(
+        !has_stale_completion,
+        "CRITICAL: New instance must NOT see stale completion from deleted instance. Messages: {:?}",
+        item.messages
+    );
+
+    // Cleanup: ack without changes and delete
+    let _ = provider
+        .ack_orchestration_item(
+            &lock_token,
+            INITIAL_EXECUTION_ID,
+            vec![],
+            vec![],
+            vec![],
+            ExecutionMetadata {
+                status: Some("Completed".to_string()),
+                ..Default::default()
+            },
+            vec![],
+        )
+        .await;
+    let _ = mgmt.delete_instance(instance_id, true).await;
+
+    tracing::info!("✓ CRITICAL TEST PASSED: stale activity after delete+recreate");
+}
+
 // ===== Helper for creating child instances =====
 
 async fn create_child_instance(provider: &dyn crate::providers::Provider, instance_id: &str, parent_id: &str) {

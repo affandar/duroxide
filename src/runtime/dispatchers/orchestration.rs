@@ -196,10 +196,7 @@ impl Runtime {
                                 if e.is_retryable() {
                                     // Exponential backoff for retryable errors (database locks, etc.)
                                     consecutive_retryable_errors += 1;
-                                    let backoff_ms = std::cmp::min(
-                                        100 * (2_u64.pow(consecutive_retryable_errors.min(5))),
-                                        5000
-                                    );
+                                    let backoff_ms = (100 * 2_u64.pow(consecutive_retryable_errors)).min(3000);
                                     warn!(
                                         "Error fetching orchestration item (retryable, attempt {}): {:?}, backing off {}ms",
                                         consecutive_retryable_errors, e, backoff_ms

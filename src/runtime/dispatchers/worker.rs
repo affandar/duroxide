@@ -114,18 +114,37 @@ impl Runtime {
                         let min_interval = rt.options.dispatcher_min_poll_interval;
                         let start_time = std::time::Instant::now();
 
-                        let (work_found, reset_error_counter) = process_next_work_item(
+                        let work_found = match process_next_work_item(
                             &rt,
                             &activities,
                             &shutdown,
                             &worker_id,
-                            &mut consecutive_retryable_errors,
                         )
-                        .await;
-
-                        if reset_error_counter {
-                            consecutive_retryable_errors = 0;
-                        }
+                        .await
+                        {
+                            Ok(found) => {
+                                consecutive_retryable_errors = 0;
+                                found
+                            }
+                            Err(e) if e.is_retryable() => {
+                                // Exponential backoff for retryable errors (database locks, etc.)
+                                consecutive_retryable_errors += 1;
+                                let backoff_ms = (100 * 2_u64.pow(consecutive_retryable_errors)).min(3000);
+                                warn!(
+                                    "Error fetching work item (retryable, attempt {}): {:?}, backing off {}ms",
+                                    consecutive_retryable_errors, e, backoff_ms
+                                );
+                                tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
+                                continue;
+                            }
+                            Err(e) => {
+                                // Permanent errors - log and continue with normal polling
+                                warn!("Error fetching work item (permanent): {:?}", e);
+                                consecutive_retryable_errors = 0;
+                                tokio::time::sleep(Duration::from_millis(100)).await;
+                                continue;
+                            }
+                        };
 
                         // Enforce minimum polling interval to prevent hot loops
                         if !work_found {
@@ -144,91 +163,65 @@ impl Runtime {
 }
 
 /// Process the next available work item from the queue.
-/// Returns `(work_found, reset_error_counter)` tuple:
-/// - work_found: true if work was processed
-/// - reset_error_counter: true if error counter should be reset
+///
+/// Returns:
+/// - `Ok(true)` if work was found and processed
+/// - `Ok(false)` if no work was available
+/// - `Err(e)` if fetch failed (caller handles backoff)
 async fn process_next_work_item(
     rt: &Arc<Runtime>,
     activities: &Arc<registry::ActivityRegistry>,
     shutdown: &Arc<std::sync::atomic::AtomicBool>,
     worker_id: &str,
-    consecutive_retryable_errors: &mut u32,
-) -> (bool, bool) {
-    let fetch_result = rt
+) -> Result<bool, crate::providers::ProviderError> {
+    let (item, token, attempt_count) = match rt
         .history_store
         .fetch_work_item(rt.options.worker_lock_timeout, rt.options.dispatcher_long_poll_timeout)
-        .await;
+        .await?
+    {
+        Some(result) => result,
+        None => return Ok(false),
+    };
 
-    match fetch_result {
-        Ok(Some((item, token, attempt_count))) => {
-            let item_serialized = serde_json::to_string(&item).unwrap_or_default();
+    let item_serialized = serde_json::to_string(&item).unwrap_or_default();
 
-            match item {
-                WorkItem::ActivityExecute {
-                    instance,
-                    execution_id,
-                    id,
-                    name,
-                    input,
-                } => {
-                    let ctx = ActivityWorkContext {
-                        instance,
-                        execution_id,
-                        activity_id: id,
-                        activity_name: name,
-                        input,
-                        lock_token: token,
-                        attempt_count,
-                        item_serialized,
-                        worker_id: worker_id.to_string(),
-                    };
+    match item {
+        WorkItem::ActivityExecute {
+            instance,
+            execution_id,
+            id,
+            name,
+            input,
+        } => {
+            let ctx = ActivityWorkContext {
+                instance,
+                execution_id,
+                activity_id: id,
+                activity_name: name,
+                input,
+                lock_token: token,
+                attempt_count,
+                item_serialized,
+                worker_id: worker_id.to_string(),
+            };
 
-                    // Note: We no longer check execution state at fetch time.
-                    // Cancellation is detected during lock renewal (lock stealing).
-                    if ctx.attempt_count > rt.options.max_attempts {
-                        // Handle poison messages
-                        handle_poison_message(rt, &ctx).await;
-                    } else {
-                        // Execute activity with cancellation support
-                        execute_activity(rt, activities, shutdown, ctx).await;
-                    }
-                }
-                other => {
-                    error!(?other, "unexpected WorkItem in Worker dispatcher; state corruption");
-                    panic!("unexpected WorkItem in Worker dispatcher");
-                }
-            }
-            // Work found and processed - reset error counter
-            (true, true)
-        }
-        Ok(None) => {
-            // No work available - reset error counter
-            (false, true)
-        }
-        Err(e) => {
-            if e.is_retryable() {
-                // Exponential backoff for retryable errors (database locks, etc.)
-                *consecutive_retryable_errors += 1;
-                let backoff_ms = std::cmp::min(
-                    100 * (2_u64.pow((*consecutive_retryable_errors).min(5))),
-                    5000,
-                );
-                warn!(
-                    "Error fetching work item (retryable, attempt {}): {:?}, backing off {}ms",
-                    consecutive_retryable_errors, e, backoff_ms
-                );
-                tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
-                // Don't reset counter - maintain backoff state
-                (false, false)
+            // Note: We no longer check execution state at fetch time.
+            // Cancellation is detected during lock renewal (lock stealing).
+            if ctx.attempt_count > rt.options.max_attempts {
+                // Handle poison messages
+                handle_poison_message(rt, &ctx).await;
             } else {
-                // Permanent errors - log and continue with normal polling
-                warn!("Error fetching work item (permanent): {:?}", e);
-                tokio::time::sleep(Duration::from_millis(100)).await;
-                // Reset counter for permanent errors
-                (false, true)
+                // Execute activity with cancellation support
+                execute_activity(rt, activities, shutdown, ctx).await;
             }
+        }
+        other => {
+            error!(?other, "unexpected WorkItem in Worker dispatcher; state corruption");
+            panic!("unexpected WorkItem in Worker dispatcher");
         }
     }
+
+    Ok(true)
 }
 
 /// Enforce minimum polling interval to prevent hot loops.
