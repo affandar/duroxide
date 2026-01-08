@@ -133,6 +133,7 @@ impl Runtime {
                 let worker_id = format!("orch-{worker_idx}-{}", rt.runtime_id);
                 let handle = tokio::spawn(async move {
                     // debug!("Orchestration worker {} started", worker_id);
+                    let mut consecutive_retryable_errors = 0u32;
                     loop {
                         // Check shutdown flag before fetching
                         if shutdown.load(Ordering::Relaxed) {
@@ -151,6 +152,9 @@ impl Runtime {
                             .await
                         {
                             Ok(Some((item, lock_token, attempt_count))) => {
+                                // Reset error counter on success
+                                consecutive_retryable_errors = 0;
+                                
                                 // Spawn lock renewal task for this orchestration
                                 let renewal_handle = spawn_orchestration_lock_renewal_task(
                                     Arc::clone(&rt.history_store),
@@ -185,12 +189,28 @@ impl Runtime {
                                 work_found = true;
                             }
                             Ok(None) => {
-                                // No work available
+                                // No work available - reset error counter
+                                consecutive_retryable_errors = 0;
                             }
                             Err(e) => {
-                                warn!("Error fetching orchestration item: {:?}", e);
-                                // Backoff on error
-                                tokio::time::sleep(Duration::from_millis(100)).await;
+                                if e.is_retryable() {
+                                    // Exponential backoff for retryable errors (database locks, etc.)
+                                    consecutive_retryable_errors += 1;
+                                    let backoff_ms = std::cmp::min(
+                                        100 * (2_u64.pow(consecutive_retryable_errors.min(5))),
+                                        5000
+                                    );
+                                    warn!(
+                                        "Error fetching orchestration item (retryable, attempt {}): {:?}, backing off {}ms",
+                                        consecutive_retryable_errors, e, backoff_ms
+                                    );
+                                    tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
+                                } else {
+                                    // Permanent errors - log and continue with normal polling
+                                    warn!("Error fetching orchestration item (permanent): {:?}", e);
+                                    consecutive_retryable_errors = 0;
+                                    tokio::time::sleep(Duration::from_millis(100)).await;
+                                }
                                 continue;
                             }
                         }

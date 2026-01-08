@@ -104,6 +104,8 @@ impl Runtime {
                 let worker_id = format!("work-{worker_idx}-{}", rt.runtime_id);
 
                 let handle = tokio::spawn(async move {
+                    let mut consecutive_retryable_errors: u32 = 0;
+                    
                     loop {
                         if shutdown.load(Ordering::Relaxed) {
                             break;
@@ -112,7 +114,18 @@ impl Runtime {
                         let min_interval = rt.options.dispatcher_min_poll_interval;
                         let start_time = std::time::Instant::now();
 
-                        let work_found = process_next_work_item(&rt, &activities, &shutdown, &worker_id).await;
+                        let (work_found, reset_error_counter) = process_next_work_item(
+                            &rt,
+                            &activities,
+                            &shutdown,
+                            &worker_id,
+                            &mut consecutive_retryable_errors,
+                        )
+                        .await;
+
+                        if reset_error_counter {
+                            consecutive_retryable_errors = 0;
+                        }
 
                         // Enforce minimum polling interval to prevent hot loops
                         if !work_found {
@@ -131,13 +144,16 @@ impl Runtime {
 }
 
 /// Process the next available work item from the queue.
-/// Returns `true` if work was found and processed, `false` otherwise.
+/// Returns `(work_found, reset_error_counter)` tuple:
+/// - work_found: true if work was processed
+/// - reset_error_counter: true if error counter should be reset
 async fn process_next_work_item(
     rt: &Arc<Runtime>,
     activities: &Arc<registry::ActivityRegistry>,
     shutdown: &Arc<std::sync::atomic::AtomicBool>,
     worker_id: &str,
-) -> bool {
+    consecutive_retryable_errors: &mut u32,
+) -> (bool, bool) {
     let fetch_result = rt
         .history_store
         .fetch_work_item(rt.options.worker_lock_timeout, rt.options.dispatcher_long_poll_timeout)
@@ -182,12 +198,35 @@ async fn process_next_work_item(
                     panic!("unexpected WorkItem in Worker dispatcher");
                 }
             }
-            true
+            // Work found and processed - reset error counter
+            (true, true)
         }
-        Ok(None) => false,
+        Ok(None) => {
+            // No work available - reset error counter
+            (false, true)
+        }
         Err(e) => {
-            warn!("Error fetching work item: {:?}", e);
-            false
+            if e.is_retryable() {
+                // Exponential backoff for retryable errors (database locks, etc.)
+                *consecutive_retryable_errors += 1;
+                let backoff_ms = std::cmp::min(
+                    100 * (2_u64.pow((*consecutive_retryable_errors).min(5))),
+                    5000,
+                );
+                warn!(
+                    "Error fetching work item (retryable, attempt {}): {:?}, backing off {}ms",
+                    consecutive_retryable_errors, e, backoff_ms
+                );
+                tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
+                // Don't reset counter - maintain backoff state
+                (false, false)
+            } else {
+                // Permanent errors - log and continue with normal polling
+                warn!("Error fetching work item (permanent): {:?}", e);
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                // Reset counter for permanent errors
+                (false, true)
+            }
         }
     }
 }
