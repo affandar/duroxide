@@ -2,6 +2,7 @@
 
 ### Active TODOs
 
+- move away from Otel, just use standard rust metrics
 - Fetch item batch in dispatchers!!
 - Size limits 
 - RaiseEvent pub/sub
