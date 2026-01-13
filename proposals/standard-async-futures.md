@@ -59,16 +59,33 @@ Problems:
 ```rust
 // src/lib.rs
 pub enum Action {
-    CallActivity { scheduling_event_id: u64, name: String, input: String },
+    CallActivity { 
+        scheduling_event_id: u64, 
+        name: String, 
+        input: String,
+        retry_policy: Option<RetryPolicy>,
+        options: Option<ActivityOptions>,
+    },
     CreateTimer { scheduling_event_id: u64, fire_at_ms: u64 },
     WaitExternal { scheduling_event_id: u64, name: String },
-    StartSubOrchestration { ... },
+    StartSubOrchestration { 
+        scheduling_event_id: u64,
+        name: String,
+        version: Option<String>,
+        instance: String,
+        input: String,
+    },
     ContinueAsNew { ... },
     SystemCall { ... },
     
-    // NEW: Explicit cancellation
+    // NEW: Explicit cancellation (by scheduling_event_id)
     Cancel { 
-        scheduling_event_id: u64,  // Event ID of the cancelled action
+        scheduling_event_id: u64,
+    },
+    
+    // NEW: Cancel external event subscription (by name)
+    CancelExternal {
+        event_name: String,
     },
 }
 ```
@@ -89,6 +106,12 @@ struct CtxInner {
     completions: HashMap<u64, CompletionResult>,
     /// Set of completion event_ids that have been consumed (for FIFO)
     consumed_completions: HashSet<u64>,
+    
+    // === External Event Tracking (name-based matching) ===
+    /// Map: event_name → list of completion payloads in arrival order
+    external_completions: HashMap<String, VecDeque<String>>,
+    /// Map: event_name → consumption count (how many have been consumed)
+    external_consumption_count: HashMap<String, usize>,
     
     // === Action Tracking ===
     /// Actions generated this turn (new schedules, cancels)
@@ -114,10 +137,20 @@ struct SchedulingEvent {
 }
 
 enum SchedulingKind {
-    Activity { name: String, input: String },
+    Activity { 
+        name: String, 
+        input: String,
+        retry_policy: Option<RetryPolicy>,  // For schedule_activity_with_retry
+        options: Option<ActivityOptions>,    // For schedule_activity_with_options
+    },
     Timer { fire_at_ms: u64 },
     External { name: String },
-    SubOrchestration { name: String, instance: String, input: String },
+    SubOrchestration { 
+        name: String, 
+        version: Option<String>,
+        instance: String, 
+        input: String,
+    },
     SystemCall { op: String, value: String },
 }
 
@@ -174,18 +207,59 @@ impl Future for TimerFuture {
 }
 
 /// Future for external event
+/// Note: Uses name-based matching with consumption order (not event_id)
 pub struct ExternalFuture {
-    scheduling_event_id: u64,
+    event_name: String,              // Match by name, not event_id
+    consumption_index: usize,        // Which occurrence (0 = first, 1 = second, etc.)
     ctx: OrchestrationContext,
     consumed: Cell<bool>,
 }
 
 impl Future for ExternalFuture {
     type Output = String;  // External events return payload
-    // ... similar impl
+    
+    fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
+        if self.consumed.get() {
+            return Poll::Pending;  // FusedFuture behavior
+        }
+        
+        let inner = self.ctx.inner.lock().unwrap();
+        
+        // Name-based matching with consumption order
+        if let Some(completions) = inner.external_completions.get(&self.event_name) {
+            if let Some(data) = completions.get(self.consumption_index) {
+                self.consumed.set(true);
+                return Poll::Ready(data.clone());
+            }
+        }
+        
+        Poll::Pending
+    }
 }
 
-// Similar for SubOrchestrationFuture, SystemCallFuture
+/// Future for sub-orchestration completion
+pub struct SubOrchestrationFuture {
+    scheduling_event_id: u64,
+    ctx: OrchestrationContext,
+    consumed: Cell<bool>,
+}
+
+impl Future for SubOrchestrationFuture {
+    type Output = Result<String, String>;
+    // Same pattern as ActivityFuture: lookup in completions map + FIFO check
+}
+
+/// Future for system call (trace, guid, utcnow)
+pub struct SystemCallFuture {
+    scheduling_event_id: u64,
+    ctx: OrchestrationContext,
+    consumed: Cell<bool>,
+}
+
+impl Future for SystemCallFuture {
+    type Output = String;
+    // Same pattern: lookup + FIFO
+}
 ```
 
 ### 3.4. Schedule-Time Validation
@@ -236,6 +310,8 @@ impl OrchestrationContext {
                 scheduling_event_id: event_id,
                 name: name.clone(),
                 input: input.clone(),
+                retry_policy: None,
+                options: None,
             });
             
             inner.cursor += 1;
@@ -249,17 +325,117 @@ impl OrchestrationContext {
         }
     }
     
+    /// Schedule activity with retry policy
+    pub fn schedule_activity_with_retry(
+        &self, 
+        name: impl Into<String>, 
+        input: impl Into<String>,
+        retry_policy: RetryPolicy,
+    ) -> ActivityFuture {
+        // Same as schedule_activity but with retry_policy in Action
+        // Determinism check also validates retry_policy matches history
+        // ...
+    }
+    
+    /// Schedule activity with options (timeout, cancellation grace period, etc.)
+    pub fn schedule_activity_with_options(
+        &self,
+        name: impl Into<String>,
+        input: impl Into<String>,
+        options: ActivityOptions,
+    ) -> ActivityFuture {
+        // Same as schedule_activity but with options in Action
+        // Determinism check also validates options match history
+        // ...
+    }
+    
     pub fn schedule_timer(&self, delay: Duration) -> TimerFuture {
         // Similar pattern: validate or create, return TimerFuture
     }
     
     pub fn schedule_wait(&self, name: impl Into<String>) -> ExternalFuture {
-        // Similar pattern
+        let name = name.into();
+        let mut inner = self.inner.lock().unwrap();
+        
+        // External events use name-based matching with consumption order
+        // Track how many times we've scheduled this name
+        let consumption_index = inner.external_consumption_count
+            .entry(name.clone())
+            .or_insert(0);
+        let index = *consumption_index;
+        *consumption_index += 1;
+        
+        // Cursor still advances for determinism (validates External in history)
+        // ...validation similar to activity...
+        
+        inner.cursor += 1;
+        
+        ExternalFuture {
+            event_name: name,
+            consumption_index: index,
+            ctx: self.clone(),
+            consumed: Cell::new(false),
+        }
+    }
+    
+    pub fn schedule_sub_orchestration(
+        &self,
+        name: impl Into<String>,
+        instance_id: impl Into<String>,
+        input: impl Into<String>,
+    ) -> SubOrchestrationFuture {
+        // Same pattern as activity: validate or create, return SubOrchestrationFuture
+        // ...
+    }
+    
+    pub fn schedule_sub_orchestration_with_version(
+        &self,
+        name: impl Into<String>,
+        version: impl Into<String>,
+        instance_id: impl Into<String>,
+        input: impl Into<String>,
+    ) -> SubOrchestrationFuture {
+        // Same with version field populated
+        // ...
     }
 }
 ```
 
-### 3.5. Poll with FIFO Enforcement
+### 3.5. External Event Name-Based Matching
+
+External events are matched by **name + consumption order**, not by scheduling_event_id. This is because:
+
+1. Multiple `schedule_wait("SameName")` calls may exist
+2. External events arrive by name (e.g., `client.raise_event("instance", "ApprovalEvent", "approved")`)
+3. First `schedule_wait("ApprovalEvent")` gets the first arrival, second gets the second, etc.
+
+**Context initialization for external events:**
+```rust
+fn initialize_context(ctx: &OrchestrationContext) {
+    // ... other initialization ...
+    
+    // Build external completions map: name → list of payloads in arrival order
+    inner.external_completions.clear();
+    for event in &inner.history {
+        if let EventKind::ExternalEvent { name, data, .. } = &event.kind {
+            inner.external_completions
+                .entry(name.clone())
+                .or_insert_with(VecDeque::new)
+                .push_back(data.clone());
+        }
+    }
+    
+    // Reset consumption counters
+    inner.external_consumption_count.clear();
+}
+```
+
+**Determinism guarantee:**
+- If code calls `schedule_wait("A")` twice, it gets consumption_index 0 and 1
+- On replay, same calls → same indices → same matching
+- Order of arrivals is preserved in history
+
+### 3.6. Poll with FIFO Enforcement
 
 Poll is now simple—just a lookup with FIFO ordering:
 
@@ -329,7 +505,7 @@ Given futures $F_1, F_2, \ldots, F_N$ with completions at event IDs $e_1, e_2, \
 
 Mathematical proof: See discussion in design notes.
 
-### 3.6. Drop-Based Cancellation with Dehydration Guard
+### 3.7. Drop-Based Cancellation with Dehydration Guard
 
 ```rust
 impl Drop for ActivityFuture {
@@ -339,7 +515,12 @@ impl Drop for ActivityFuture {
             return;
         }
         
-        let mut inner = self.ctx.inner.lock().unwrap();
+        // Use try_lock to avoid panic if lock is poisoned (e.g., panic elsewhere)
+        // If we can't get the lock, we skip cancellation recording.
+        // This is acceptable: the orchestration is likely in a bad state anyway.
+        let Ok(mut inner) = self.ctx.inner.try_lock() else {
+            return;
+        };
         
         // Dehydrating = normal suspension, not cancellation
         if inner.dehydrating {
@@ -357,9 +538,35 @@ impl Drop for ActivityFuture {
         });
     }
 }
+
+impl Drop for ExternalFuture {
+    fn drop(&mut self) {
+        // ExternalFuture uses name-based matching, cancellation is simpler
+        if self.consumed.get() {
+            return;
+        }
+        
+        let Ok(mut inner) = self.ctx.inner.try_lock() else {
+            return;
+        };
+        
+        if inner.dehydrating {
+            return;
+        }
+        
+        // For external events, we record cancellation by name
+        // (No scheduling_event_id to reference)
+        // This tells the runtime to stop waiting for this event
+        inner.pending_actions.push(Action::CancelExternal {
+            event_name: self.event_name.clone(),
+        });
+    }
+}
+
+// TimerFuture, SubOrchestrationFuture, SystemCallFuture follow same Drop pattern
 ```
 
-### 3.7. Turn Execution with Dehydration Flag
+### 3.8. Turn Execution with Dehydration Flag
 
 ```rust
 // src/runtime/replay_engine.rs
