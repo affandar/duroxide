@@ -1,0 +1,765 @@
+# Proposal: Standard Async/Await Support
+
+**Status:** Draft  
+**Author:** Copilot  
+**Created:** 2026-01-13  
+**Goal:** Enable standard Rust `async/await`, `futures::join!`, and `futures::select!` in orchestrations.
+
+---
+
+## 1. Summary
+
+This proposal replaces duroxide's current poll-driven validation model with a schedule-time validation model. The key changes:
+
+1. **Validation at schedule-time**: History matching happens when `ctx.schedule_*()` is called, not during `poll()`
+2. **Separate future types**: `ActivityFuture`, `TimerFuture`, etc. with direct output types (no `.into_activity()`)
+3. **Drop-based cancellation**: Dropping a future records `Action::Cancel`
+4. **FIFO completion ordering**: `poll()` only returns `Ready` when this completion is next in history order
+5. **Dehydration flag**: Prevents cancellation when orchestration suspends normally
+
+These changes make standard `futures::select!` and `futures::join!` safe to use.
+
+---
+
+## 2. The Problem
+
+### Current Architecture
+
+```rust
+// Today: DurableFuture::poll() does everything
+fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<DurableOutput> {
+    let mut inner = self.ctx.inner.lock().unwrap();
+    
+    // 1. Scan history for next unclaimed scheduling event
+    // 2. Validate it matches our parameters
+    // 3. Claim the event_id
+    // 4. Scan for completion
+    // 5. Check FIFO ordering
+    // 6. Return Ready or Pending
+    
+    // ~100 lines per Kind variant
+}
+```
+
+Problems:
+- **Opaque futures**: Runtime can't see inside `async {}` blocks to cancel activities
+- **Custom combinators required**: `select2`/`join` must manually inspect futures
+- **Complex poll logic**: Each `Kind` variant has ~100 lines of history scanning
+
+### Why Standard Select Seems Unsafe
+
+`futures::select!` polls futures in pseudo-random order when multiple are ready. This appears non-deterministic, but with FIFO enforcement in `poll()`, the winner is always the one with the earliest completion—regardless of poll order.
+
+---
+
+## 3. Detailed Design
+
+### 3.1. Extend `Action` for Cancellation
+
+```rust
+// src/lib.rs
+pub enum Action {
+    CallActivity { scheduling_event_id: u64, name: String, input: String },
+    CreateTimer { scheduling_event_id: u64, fire_at_ms: u64 },
+    WaitExternal { scheduling_event_id: u64, name: String },
+    StartSubOrchestration { ... },
+    ContinueAsNew { ... },
+    SystemCall { ... },
+    
+    // NEW: Explicit cancellation
+    Cancel { 
+        scheduling_event_id: u64,  // Event ID of the cancelled action
+    },
+}
+```
+
+### 3.2. Add `EventKind::CancelRequested`
+
+```rust
+// src/lib.rs
+pub enum EventKind {
+    // ... existing variants ...
+    
+    // NEW: Persisted cancellation intent
+    CancelRequested {
+        target_event_id: u64,  // The scheduling event being cancelled
+    },
+}
+```
+
+This ensures cancellation survives replay.
+
+### 3.3. Context State Changes
+
+```rust
+// src/lib.rs
+struct CtxInner {
+    // === Scheduling Cursor ===
+    /// Ordered list of scheduling events from history (extracted at turn start)
+    scheduling_events: Vec<SchedulingEvent>,
+    /// Current position in scheduling_events (advances with each schedule call)
+    cursor: usize,
+    
+    // === Completion State ===
+    /// Map: scheduling_event_id → completion result (populated at turn start)
+    completions: HashMap<u64, CompletionResult>,
+    /// Set of completion event_ids that have been consumed (for FIFO)
+    consumed_completions: HashSet<u64>,
+    
+    // === Action Tracking ===
+    /// Actions generated this turn (new schedules, cancels)
+    pending_actions: Vec<Action>,
+    /// Next event_id to assign for new events
+    next_event_id: u64,
+    
+    // === Dehydration ===
+    /// When true, Drop impls do not record cancellation
+    dehydrating: bool,
+    
+    // === Metadata ===
+    execution_id: u64,
+    instance_id: String,
+    // ... other existing fields ...
+    
+    // REMOVED: claimed_scheduling_events, cancelled_source_ids, wakers
+}
+
+struct SchedulingEvent {
+    event_id: u64,
+    kind: SchedulingKind,
+}
+
+enum SchedulingKind {
+    Activity { name: String, input: String },
+    Timer { fire_at_ms: u64 },
+    External { name: String },
+    SubOrchestration { name: String, instance: String, input: String },
+    SystemCall { op: String, value: String },
+}
+
+enum CompletionResult {
+    Activity(Result<String, String>),
+    Timer,
+    External(String),
+    SubOrchestration(Result<String, String>),
+}
+```
+
+### 3.4. Separate Future Types
+
+```rust
+// src/futures.rs
+
+/// Future for activity completion
+pub struct ActivityFuture {
+    scheduling_event_id: u64,
+    ctx: OrchestrationContext,
+    consumed: Cell<bool>,
+}
+
+impl Future for ActivityFuture {
+    type Output = Result<String, String>;  // Direct type, not DurableOutput
+    
+    fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
+        // See §3.6 for implementation
+    }
+}
+
+impl FusedFuture for ActivityFuture {
+    fn is_terminated(&self) -> bool {
+        self.consumed.get()
+    }
+}
+
+impl Drop for ActivityFuture {
+    fn drop(&mut self) {
+        // See §3.7 for implementation
+    }
+}
+
+/// Future for timer completion
+pub struct TimerFuture {
+    scheduling_event_id: u64,
+    ctx: OrchestrationContext,
+    consumed: Cell<bool>,
+}
+
+impl Future for TimerFuture {
+    type Output = ();  // Timers return unit
+    // ... similar impl
+}
+
+/// Future for external event
+pub struct ExternalFuture {
+    scheduling_event_id: u64,
+    ctx: OrchestrationContext,
+    consumed: Cell<bool>,
+}
+
+impl Future for ExternalFuture {
+    type Output = String;  // External events return payload
+    // ... similar impl
+}
+
+// Similar for SubOrchestrationFuture, SystemCallFuture
+```
+
+### 3.5. Schedule-Time Validation
+
+Validation moves from `poll()` to `schedule_*()`. This is the critical change.
+
+```rust
+// src/lib.rs
+impl OrchestrationContext {
+    pub fn schedule_activity(&self, name: impl Into<String>, input: impl Into<String>) -> ActivityFuture {
+        let name = name.into();
+        let input = input.into();
+        let mut inner = self.inner.lock().unwrap();
+        
+        let scheduling_event_id = if inner.cursor < inner.scheduling_events.len() {
+            // === REPLAY PATH ===
+            let expected = &inner.scheduling_events[inner.cursor];
+            
+            // Determinism check
+            match &expected.kind {
+                SchedulingKind::Activity { name: hist_name, input: hist_input } => {
+                    if *hist_name != name || *hist_input != input {
+                        panic!(
+                            "Non-determinism detected at cursor {}: \
+                             history has Activity({:?}, {:?}) but code scheduled Activity({:?}, {:?})",
+                            inner.cursor, hist_name, hist_input, name, input
+                        );
+                    }
+                }
+                other => {
+                    panic!(
+                        "Non-determinism detected at cursor {}: \
+                         history has {:?} but code scheduled Activity",
+                        inner.cursor, other
+                    );
+                }
+            }
+            
+            inner.cursor += 1;
+            expected.event_id
+            
+        } else {
+            // === NEW EXECUTION PATH ===
+            let event_id = inner.next_event_id;
+            inner.next_event_id += 1;
+            
+            inner.pending_actions.push(Action::CallActivity {
+                scheduling_event_id: event_id,
+                name: name.clone(),
+                input: input.clone(),
+            });
+            
+            inner.cursor += 1;
+            event_id
+        };
+        
+        ActivityFuture {
+            scheduling_event_id,
+            ctx: self.clone(),
+            consumed: Cell::new(false),
+        }
+    }
+    
+    pub fn schedule_timer(&self, delay: Duration) -> TimerFuture {
+        // Similar pattern: validate or create, return TimerFuture
+    }
+    
+    pub fn schedule_wait(&self, name: impl Into<String>) -> ExternalFuture {
+        // Similar pattern
+    }
+}
+```
+
+### 3.6. Poll with FIFO Enforcement
+
+Poll is now simple—just a lookup with FIFO ordering:
+
+```rust
+impl Future for ActivityFuture {
+    type Output = Result<String, String>;
+    
+    fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
+        if self.consumed.get() {
+            // Already returned Ready, FusedFuture behavior
+            return Poll::Pending;
+        }
+        
+        let inner = self.ctx.inner.lock().unwrap();
+        
+        // Check if our completion exists
+        let completion = match inner.completions.get(&self.scheduling_event_id) {
+            Some(CompletionResult::Activity(result)) => result.clone(),
+            _ => return Poll::Pending,  // No completion yet
+        };
+        
+        // Get our completion's event_id from history
+        let our_completion_event_id = inner.get_completion_event_id(self.scheduling_event_id);
+        
+        if let Some(our_event_id) = our_completion_event_id {
+            // FIFO check: can we consume this completion?
+            if inner.can_consume(our_event_id) {
+                drop(inner);  // Release lock before mutating
+                
+                let mut inner = self.ctx.inner.lock().unwrap();
+                inner.consumed_completions.insert(our_event_id);
+                drop(inner);
+                
+                self.consumed.set(true);
+                return Poll::Ready(completion);
+            }
+        }
+        
+        Poll::Pending
+    }
+}
+
+impl CtxInner {
+    /// Returns true if all completions with event_id < target have been consumed
+    fn can_consume(&self, target_event_id: u64) -> bool {
+        // Check all completion events in history
+        for event in &self.completion_events {
+            if event.event_id < target_event_id {
+                if !self.consumed_completions.contains(&event.event_id) {
+                    // An earlier completion hasn't been consumed yet
+                    return false;
+                }
+            }
+        }
+        true
+    }
+}
+```
+
+**Why FIFO makes random poll order safe:**
+
+Given futures $F_1, F_2, \ldots, F_N$ with completions at event IDs $e_1, e_2, \ldots$:
+
+1. Only the future with $e_{\min} = \min\{e_i\}$ can return `Ready`
+2. All others are blocked by the FIFO check
+3. Poll order is irrelevant—winner is determined by history
+
+Mathematical proof: See discussion in design notes.
+
+### 3.7. Drop-Based Cancellation with Dehydration Guard
+
+```rust
+impl Drop for ActivityFuture {
+    fn drop(&mut self) {
+        // Already completed - nothing to cancel
+        if self.consumed.get() {
+            return;
+        }
+        
+        let mut inner = self.ctx.inner.lock().unwrap();
+        
+        // Dehydrating = normal suspension, not cancellation
+        if inner.dehydrating {
+            return;
+        }
+        
+        // Check if completion exists (might have arrived but not consumed)
+        if inner.completions.contains_key(&self.scheduling_event_id) {
+            return;
+        }
+        
+        // This is a real cancellation (e.g., select loser)
+        inner.pending_actions.push(Action::Cancel {
+            scheduling_event_id: self.scheduling_event_id,
+        });
+    }
+}
+```
+
+### 3.8. Turn Execution with Dehydration Flag
+
+```rust
+// src/runtime/replay_engine.rs
+
+pub fn run_turn<F, O>(
+    ctx: OrchestrationContext,
+    mut orchestration: F,
+) -> TurnResult<O>
+where
+    F: Future<Output = O>,
+{
+    // Phase 1: Initialize context from history
+    initialize_context(&ctx);
+    
+    // Phase 2: Ensure dehydrating = false during execution
+    ctx.set_dehydrating(false);
+    
+    // Phase 3: Poll the orchestration
+    let mut pinned = std::pin::pin!(orchestration);
+    let poll_result = poll_once(pinned.as_mut());
+    
+    // Phase 4: Set dehydrating = true BEFORE the future is dropped
+    ctx.set_dehydrating(true);
+    
+    // Phase 5: Extract results (future drops here with dehydrating=true)
+    match poll_result {
+        Poll::Ready(output) => {
+            let actions = ctx.take_pending_actions();
+            TurnResult::Completed { output, actions }
+        }
+        Poll::Pending => {
+            let actions = ctx.take_pending_actions();
+            TurnResult::Blocked { actions }
+        }
+    }
+    // orchestration future dropped here, all DurableFuture drops are no-ops
+}
+
+fn initialize_context(ctx: &OrchestrationContext) {
+    let mut inner = ctx.inner.lock().unwrap();
+    
+    // Extract scheduling events in order
+    inner.scheduling_events = inner.history.iter()
+        .filter_map(|e| match &e.kind {
+            EventKind::ActivityScheduled { name, input } => Some(SchedulingEvent {
+                event_id: e.event_id,
+                kind: SchedulingKind::Activity { name: name.clone(), input: input.clone() },
+            }),
+            EventKind::TimerCreated { fire_at_ms } => Some(SchedulingEvent {
+                event_id: e.event_id,
+                kind: SchedulingKind::Timer { fire_at_ms: *fire_at_ms },
+            }),
+            EventKind::ExternalSubscribed { name } => Some(SchedulingEvent {
+                event_id: e.event_id,
+                kind: SchedulingKind::External { name: name.clone() },
+            }),
+            // ... other scheduling events
+            _ => None,
+        })
+        .collect();
+    
+    // Build completion map: scheduling_event_id → result
+    inner.completions = inner.history.iter()
+        .filter_map(|e| {
+            let source = e.source_event_id?;
+            match &e.kind {
+                EventKind::ActivityCompleted { result } => 
+                    Some((source, CompletionResult::Activity(Ok(result.clone())))),
+                EventKind::ActivityFailed { details } => 
+                    Some((source, CompletionResult::Activity(Err(details.display_message())))),
+                EventKind::TimerFired { .. } => 
+                    Some((source, CompletionResult::Timer)),
+                EventKind::ExternalEvent { data, .. } => 
+                    Some((source, CompletionResult::External(data.clone()))),
+                // ... other completions
+                _ => None,
+            }
+        })
+        .collect();
+    
+    // Extract completion event IDs for FIFO ordering
+    inner.completion_events = inner.history.iter()
+        .filter(|e| matches!(&e.kind,
+            EventKind::ActivityCompleted { .. } |
+            EventKind::ActivityFailed { .. } |
+            EventKind::TimerFired { .. } |
+            EventKind::ExternalEvent { .. } |
+            EventKind::SubOrchestrationCompleted { .. } |
+            EventKind::SubOrchestrationFailed { .. }
+        ))
+        .map(|e| CompletionEvent { 
+            event_id: e.event_id, 
+            source_event_id: e.source_event_id.unwrap() 
+        })
+        .collect();
+    
+    // Reset cursor
+    inner.cursor = 0;
+    inner.consumed_completions.clear();
+    inner.pending_actions.clear();
+}
+```
+
+---
+
+## 4. Replay Engine Walkthrough
+
+### Example History
+
+```
+Event 1: OrchestrationStarted { input: "start" }
+Event 2: ActivityScheduled { name: "A", input: "x" }
+Event 3: TimerCreated { fire_at_ms: 1705000000 }
+Event 4: ActivityCompleted { source: 2, result: "a_result" }
+Event 5: TimerFired { source: 3 }
+Event 6: ActivityScheduled { name: "B", input: "y" }
+// B hasn't completed - that's why we're replaying
+```
+
+### Turn Initialization
+
+```rust
+scheduling_events = [
+    { event_id: 2, kind: Activity("A", "x") },
+    { event_id: 3, kind: Timer(1705000000) },
+    { event_id: 6, kind: Activity("B", "y") },
+]
+
+completions = {
+    2 → Activity(Ok("a_result")),
+    3 → Timer,
+}
+
+completion_events = [
+    { event_id: 4, source: 2 },
+    { event_id: 5, source: 3 },
+]
+
+cursor = 0
+consumed_completions = {}
+dehydrating = false
+```
+
+### Orchestration Execution
+
+```rust
+async fn my_orch(ctx: OrchestrationContext, input: String) -> Result<String, String> {
+    // Statement 1: Schedule activity A
+    let a = ctx.schedule_activity("A", "x").await?;
+```
+
+| Step | Action |
+|------|--------|
+| `schedule_activity("A", "x")` | cursor=0, check scheduling_events[0] |
+| | Match: Activity("A", "x") ✓ |
+| | Return ActivityFuture { event_id: 2 } |
+| | cursor → 1 |
+| `.await` polls future | completions[2] exists |
+| | completion_events[4].source = 2 |
+| | can_consume(4)? No earlier completions → YES |
+| | consumed_completions.insert(4) |
+| | Return Ready(Ok("a_result")) |
+
+```rust
+    // Statement 2: Wait for timer
+    ctx.schedule_timer(Duration::from_secs(60)).await;
+```
+
+| Step | Action |
+|------|--------|
+| `schedule_timer(60s)` | cursor=1, check scheduling_events[1] |
+| | Match: Timer ✓ |
+| | Return TimerFuture { event_id: 3 } |
+| | cursor → 2 |
+| `.await` polls future | completions[3] exists (Timer) |
+| | can_consume(5)? event_id 4 consumed → YES |
+| | consumed_completions.insert(5) |
+| | Return Ready(()) |
+
+```rust
+    // Statement 3: Schedule activity B
+    let b = ctx.schedule_activity("B", "y").await?;
+```
+
+| Step | Action |
+|------|--------|
+| `schedule_activity("B", "y")` | cursor=2, check scheduling_events[2] |
+| | Match: Activity("B", "y") ✓ |
+| | Return ActivityFuture { event_id: 6 } |
+| | cursor → 3 |
+| `.await` polls future | completions[6] does NOT exist |
+| | Return Pending |
+
+**Turn ends.** Orchestration blocked on B.
+
+```rust
+// Runtime sets dehydrating = true
+// Orchestration future is dropped
+// ActivityFuture for B is dropped
+//   → consumed = false
+//   → dehydrating = true
+//   → NO cancellation recorded (correct!)
+```
+
+### Non-Determinism Detection
+
+If code changes between deployments:
+
+**History says:**
+```
+Event 2: ActivityScheduled { name: "A", input: "x" }
+```
+
+**New code does:**
+```rust
+let b = ctx.schedule_activity("B", "different").await?;
+```
+
+| Step | Result |
+|------|--------|
+| `schedule_activity("B", "different")` | cursor=0 |
+| Check scheduling_events[0] | Activity("A", "x") |
+| Code requested | Activity("B", "different") |
+| **MISMATCH** | panic!("Non-determinism detected...") |
+
+---
+
+## 5. Select Race Example
+
+```rust
+futures::select! {
+    result = ctx.schedule_activity("Slow", "data").fuse() => {
+        return Ok(result?);
+    }
+    _ = ctx.schedule_timer(Duration::from_secs(5)).fuse() => {
+        return Ok("timeout".into());
+    }
+}
+```
+
+### Scenario: Timer Fires First
+
+**History:**
+```
+Event 2: ActivityScheduled { name: "Slow", input: "data" }
+Event 3: TimerCreated { fire_at_ms: ... }
+Event 4: TimerFired { source: 3 }
+// Activity still running
+```
+
+**Execution:**
+
+| Step | Action |
+|------|--------|
+| `schedule_activity("Slow")` | Match history, return ActivityFuture { event_id: 2 } |
+| `schedule_timer(5s)` | Match history, return TimerFuture { event_id: 3 } |
+| `select!` polls (random order) | |
+| Activity.poll() | completions[2] = None → Pending |
+| Timer.poll() | completions[3] = Timer, can_consume(4) → Ready |
+| `select!` picks timer | |
+| Activity future dropped | dehydrating=false, no completion → Cancel recorded |
+| pending_actions | [Action::Cancel { scheduling_event_id: 2 }] |
+
+**FIFO Guarantee:**
+
+Even if `select!` polled timer first:
+- Timer.poll() → Ready (event 4 is first completion)
+- Activity never had a chance anyway
+
+Even if `select!` polled activity first:
+- Activity.poll() → Pending (no completion exists)
+- Timer.poll() → Ready
+
+Same winner, regardless of poll order.
+
+---
+
+## 6. API Changes
+
+### Before
+
+```rust
+// Old: Unified type with conversion methods
+let result = ctx.schedule_activity("Task", input).into_activity().await?;
+ctx.schedule_timer(Duration::from_secs(5)).into_timer().await;
+let event = ctx.schedule_wait("Approval").into_event().await;
+
+// Old: Custom combinators
+let (winner, _) = ctx.select2(future_a, future_b).await;
+let results = ctx.join(vec![f1, f2, f3]).await;
+```
+
+### After
+
+```rust
+// New: Direct await
+let result = ctx.schedule_activity("Task", input).await?;
+ctx.schedule_timer(Duration::from_secs(5)).await;
+let event = ctx.schedule_wait("Approval").await;
+
+// New: Standard combinators
+futures::select! {
+    a = future_a.fuse() => handle_a(a),
+    b = future_b.fuse() => handle_b(b),
+}
+let (r1, r2, r3) = futures::join!(f1, f2, f3);
+```
+
+---
+
+## 7. Migration Strategy
+
+### Phase 1: Add Infrastructure
+
+- Add `Action::Cancel` variant
+- Add `EventKind::CancelRequested` variant
+- Add `dehydrating` flag to `CtxInner`
+- Add scheduling cursor and completion map fields
+
+### Phase 2: Create New Future Types
+
+- Create `ActivityFuture`, `TimerFuture`, `ExternalFuture`, `SubOrchestrationFuture`
+- Implement `Future`, `FusedFuture`, `Drop` for each
+- Implement FIFO check in poll()
+
+### Phase 3: Refactor Schedule Methods
+
+- Move validation from `poll()` to `schedule_*()`
+- Return specific future types instead of `DurableFuture`
+- Initialize context state at turn start
+
+### Phase 4: Update Turn Execution
+
+- Set `dehydrating` flag around poll
+- Remove old claiming/scanning logic
+
+### Phase 5: Deprecate Old API
+
+- Deprecate `select2`, `join` methods
+- Deprecate `.into_activity()`, `.into_timer()`, etc.
+- Remove `DurableOutput` enum
+- Remove `DurableFuture` unified type
+- Remove `AggregateDurableFuture`
+
+---
+
+## 8. Files Changed
+
+| File | Changes |
+|------|---------|
+| `src/lib.rs` | Add `Action::Cancel`, `EventKind::CancelRequested`, update `CtxInner`, new schedule methods |
+| `src/futures.rs` | Replace `DurableFuture` with separate types, remove `Kind` enum, remove `AggregateDurableFuture` |
+| `src/runtime/replay_engine.rs` | Add context initialization, dehydration guard, remove old claiming logic |
+| `src/runtime/execution.rs` | Update turn execution to use new model |
+| `docs/ORCHESTRATION-GUIDE.md` | Update API examples |
+| `tests/*.rs` | Update to new API |
+
+---
+
+## 9. Risks & Mitigations
+
+### Risk: Accidental Non-Determinism
+
+**Issue:** Users using `tokio::spawn` inside orchestrations.
+
+**Mitigation:** This creates threads/tasks outside duroxide control. We can't prevent it at compile time. Runtime will detect divergence during replay and panic with clear error.
+
+### Risk: History Bloat from Cancellation
+
+**Issue:** Schedule + immediate Cancel in same turn creates two events.
+
+**Mitigation:** Optimization: If `Action::Cancel` targets an action from the same turn that hasn't been persisted yet, remove both from pending_actions (no-op).
+
+### Risk: Breaking Change
+
+**Issue:** Existing code uses `.into_activity()`, `select2`, etc.
+
+**Mitigation:** 
+- Phase deprecation over 2 releases
+- Provide migration guide
+- Keep old API as deprecated wrappers initially
+
+### Risk: Subtle Semantic Changes
+
+**Issue:** Currently dropping unawaited future might panic; now it cancels.
+
+**Mitigation:** Add `#[must_use]` to all future types so compiler warns on unawaited futures.

@@ -210,3 +210,7 @@
 - redo the orchestration registry change with gpt5 and compare
 - mermaid diagrams for orchestrations???
 - remove the into_activity() and similar methods
+
+- **Standard Future Semantics** (see `proposals/standard-async-futures.md`)
+  - Enable standard async/await, futures::join/select
+  - Move to Command-First architecture with Drop-based cancellation
