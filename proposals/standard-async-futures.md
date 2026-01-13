@@ -73,23 +73,7 @@ pub enum Action {
 }
 ```
 
-### 3.2. Add `EventKind::CancelRequested`
-
-```rust
-// src/lib.rs
-pub enum EventKind {
-    // ... existing variants ...
-    
-    // NEW: Persisted cancellation intent
-    CancelRequested {
-        target_event_id: u64,  // The scheduling event being cancelled
-    },
-}
-```
-
-This ensures cancellation survives replay.
-
-### 3.3. Context State Changes
+### 3.2. Context State Changes
 
 ```rust
 // src/lib.rs
@@ -145,7 +129,7 @@ enum CompletionResult {
 }
 ```
 
-### 3.4. Separate Future Types
+### 3.3. Separate Future Types
 
 ```rust
 // src/futures.rs
@@ -204,7 +188,7 @@ impl Future for ExternalFuture {
 // Similar for SubOrchestrationFuture, SystemCallFuture
 ```
 
-### 3.5. Schedule-Time Validation
+### 3.4. Schedule-Time Validation
 
 Validation moves from `poll()` to `schedule_*()`. This is the critical change.
 
@@ -275,7 +259,7 @@ impl OrchestrationContext {
 }
 ```
 
-### 3.6. Poll with FIFO Enforcement
+### 3.5. Poll with FIFO Enforcement
 
 Poll is now simple—just a lookup with FIFO ordering:
 
@@ -345,7 +329,7 @@ Given futures $F_1, F_2, \ldots, F_N$ with completions at event IDs $e_1, e_2, \
 
 Mathematical proof: See discussion in design notes.
 
-### 3.7. Drop-Based Cancellation with Dehydration Guard
+### 3.6. Drop-Based Cancellation with Dehydration Guard
 
 ```rust
 impl Drop for ActivityFuture {
@@ -375,7 +359,7 @@ impl Drop for ActivityFuture {
 }
 ```
 
-### 3.8. Turn Execution with Dehydration Flag
+### 3.7. Turn Execution with Dehydration Flag
 
 ```rust
 // src/runtime/replay_engine.rs
@@ -691,7 +675,6 @@ let (r1, r2, r3) = futures::join!(f1, f2, f3);
 ### Phase 1: Add Infrastructure
 
 - Add `Action::Cancel` variant
-- Add `EventKind::CancelRequested` variant
 - Add `dehydrating` flag to `CtxInner`
 - Add scheduling cursor and completion map fields
 
@@ -726,7 +709,7 @@ let (r1, r2, r3) = futures::join!(f1, f2, f3);
 
 | File | Changes |
 |------|---------|
-| `src/lib.rs` | Add `Action::Cancel`, `EventKind::CancelRequested`, update `CtxInner`, new schedule methods |
+| `src/lib.rs` | Add `Action::Cancel`, update `CtxInner`, new schedule methods |
 | `src/futures.rs` | Replace `DurableFuture` with separate types, remove `Kind` enum, remove `AggregateDurableFuture` |
 | `src/runtime/replay_engine.rs` | Add context initialization, dehydration guard, remove old claiming logic |
 | `src/runtime/execution.rs` | Update turn execution to use new model |
@@ -763,3 +746,225 @@ let (r1, r2, r3) = futures::join!(f1, f2, f3);
 **Issue:** Currently dropping unawaited future might panic; now it cancels.
 
 **Mitigation:** Add `#[must_use]` to all future types so compiler warns on unawaited futures.
+
+---
+
+## 10. Code Removal Checklist
+
+### 10.1. `src/futures.rs` - Remove Entirely
+
+| Item | Lines (approx) | Description |
+|------|----------------|-------------|
+| `Kind` enum | ~20 | Activity, Timer, External, SubOrch, System variants |
+| `DurableFuture` struct | ~10 | Unified future type with `claimed_event_id`, `ctx`, `kind` |
+| `DurableOutput` enum | ~10 | Activity, Timer, External, SubOrchestration variants |
+| `impl Future for DurableFuture` | ~500 | Massive match on Kind with history scanning per variant |
+| `can_consume_completion()` | ~30 | FIFO helper (replaced by simpler logic in new poll) |
+| `AggregateDurableFuture` | ~200 | Custom select/join implementation |
+| `AggregateMode` enum | ~5 | Select vs Join mode |
+| `AggregateOutput` enum | ~10 | Select vs Join output wrapper |
+
+### 10.2. `src/lib.rs` - Fields to Remove from `CtxInner`
+
+```rust
+// DELETE these fields
+claimed_scheduling_events: HashSet<u64>,    // Replaced by cursor
+cancelled_source_ids: HashSet<u64>,         // Re-derived each turn via Drop
+cancelled_activity_ids: HashSet<u64>,       // Re-derived each turn via Drop
+consumed_external_events: HashSet<String>,  // Merged into completions map
+```
+
+### 10.3. `src/lib.rs` - Methods to Remove
+
+**Conversion methods on DurableFuture:**
+```rust
+// DELETE
+pub fn into_activity(self) -> impl Future<Output = Result<String, String>>
+pub fn into_timer(self) -> impl Future<Output = ()>
+pub fn into_event(self) -> impl Future<Output = String>
+pub fn into_sub_orchestration(self) -> impl Future<Output = Result<String, String>>
+```
+
+**Custom combinators on OrchestrationContext:**
+```rust
+// DELETE
+pub fn select2(&self, a: DurableFuture, b: DurableFuture) -> SelectFuture
+pub fn select3(...) // if exists
+pub fn select4(...) // if exists
+pub fn join(&self, futures: Vec<DurableFuture>) -> JoinFuture
+```
+
+**Helper methods:**
+```rust
+// DELETE
+pub(crate) fn take_cancelled_activity_ids(&self) -> Vec<u64>
+```
+
+### 10.4. Summary
+
+| Location | Lines Removed |
+|----------|---------------|
+| `src/futures.rs` | ~785 |
+| `src/lib.rs` (CtxInner fields) | ~10 |
+| `src/lib.rs` (methods) | ~70 |
+| **Total Removed** | **~865** |
+| **New Code Added** | ~350 |
+| **Net Reduction** | **~515 lines** |
+
+---
+
+## 11. Test Migration Guide
+
+### 11.1. Pattern Replacements
+
+| Old Pattern | New Pattern |
+|-------------|-------------|
+| `ctx.schedule_activity("A", "x").into_activity().await?` | `ctx.schedule_activity("A", "x").await?` |
+| `ctx.schedule_timer(Duration::from_secs(5)).into_timer().await` | `ctx.schedule_timer(Duration::from_secs(5)).await` |
+| `ctx.schedule_wait("Event").into_event().await` | `ctx.schedule_wait("Event").await` |
+| `ctx.schedule_sub_orchestration(...).into_sub_orchestration().await?` | `ctx.schedule_sub_orchestration(...).await?` |
+
+### 11.2. Combinator Replacements
+
+**select2 → futures::select!**
+```rust
+// OLD
+let (winner_idx, output) = ctx.select2(
+    ctx.schedule_activity("A", "x"),
+    ctx.schedule_timer(Duration::from_secs(5)),
+).await;
+match output {
+    DurableOutput::Activity(result) => ...,
+    DurableOutput::Timer => ...,
+}
+
+// NEW
+futures::select! {
+    result = ctx.schedule_activity("A", "x").fuse() => {
+        // result: Result<String, String>
+    }
+    _ = ctx.schedule_timer(Duration::from_secs(5)).fuse() => {
+        // timeout
+    }
+}
+```
+
+**join → futures::join!**
+```rust
+// OLD
+let futures = vec![
+    ctx.schedule_activity("A", "1"),
+    ctx.schedule_activity("B", "2"),
+    ctx.schedule_activity("C", "3"),
+];
+let results = ctx.join(futures).await;
+for output in results {
+    match output {
+        DurableOutput::Activity(Ok(s)) => ...,
+        _ => ...,
+    }
+}
+
+// NEW
+let (a, b, c) = futures::join!(
+    ctx.schedule_activity("A", "1"),
+    ctx.schedule_activity("B", "2"),
+    ctx.schedule_activity("C", "3"),
+);
+// a, b, c are each Result<String, String>
+```
+
+### 11.3. Files Requiring Test Updates
+
+| Test File | Changes Needed |
+|-----------|----------------|
+| `tests/e2e_samples.rs` | Update all `.into_activity()` calls, replace `select2`/`join` |
+| `tests/cancellation_tests.rs` | Replace `select2` with `futures::select!` |
+| `tests/determinism_tests.rs` | Update API calls |
+| `tests/replay_tests.rs` | Update API calls |
+| `tests/scenarios/*.rs` | Update all orchestration patterns |
+| `src/provider_stress_test/*.rs` | Update stress test orchestrations |
+| `examples/*.rs` | Update all examples |
+
+### 11.4. Import Changes
+
+```rust
+// OLD
+use duroxide::{DurableFuture, DurableOutput, OrchestrationContext};
+
+// NEW
+use duroxide::{ActivityFuture, TimerFuture, ExternalFuture, OrchestrationContext};
+use futures::{select, join};
+use futures::FutureExt; // for .fuse()
+```
+
+---
+
+## 12. Documentation Updates
+
+### 12.1. README.md
+
+| Section | Changes |
+|---------|---------|
+| "Key types" | Remove `DurableFuture`, `DurableOutput`. Add `ActivityFuture`, `TimerFuture`, etc. Remove mention of `.into_activity()`, `select2`, `join` |
+| "Hello world" example | Remove `.into_activity()` from `ctx.schedule_activity(...).into_activity().await` |
+| "Parallel fan-out" example | Replace `ctx.join(vec![...])` with `futures::join!()`. Remove `DurableOutput` match |
+| "Control flow + timers" example | Replace `ctx.select2(a, b).await` with `futures::select!`. Remove `DurableOutput` match |
+| "Error handling" example | Remove `.into_activity()` |
+| "How it works" section | Update "Deterministic future aggregation: `ctx.select2`..." to mention `futures::select!` and FIFO enforcement |
+
+### 12.2. docs/ORCHESTRATION-GUIDE.md
+
+| Section | Changes |
+|---------|---------|
+| Quick Start example | Remove all `.into_activity()` calls |
+| API Reference | Remove `into_activity()`, `into_timer()`, `into_event()`, `into_sub_orchestration()` |
+| | Remove `select2`, `select3`, `select4`, `join` method docs |
+| | Add guidance: "Use `futures::select!` and `futures::join!`" |
+| Common Patterns | Update all patterns to use standard combinators |
+| Anti-Patterns | Add note: "`tokio::spawn` breaks determinism" |
+| Complete Examples | Update all examples |
+
+### 12.3. docs/durable-futures-internals.md
+
+**This document needs major rewrite.** Current content describes:
+- `Kind` enum (removed)
+- Claim system (replaced by cursor)
+- `DurableFuture` unified type (replaced by separate types)
+- Aggregate futures (removed, use standard combinators)
+
+| Section | Changes |
+|---------|---------|
+| "The DurableFuture Type" | Rewrite to describe separate future types |
+| "The Claim System" | Replace with "Scheduling Cursor" explanation |
+| "Polling and Replay" | Simplify—poll is now just a map lookup + FIFO check |
+| "Aggregate Futures (Select/Join)" | Remove entirely—explain using standard `futures::*` |
+| Add new section | "Drop-Based Cancellation" |
+| Add new section | "Dehydration Guard" |
+
+### 12.4. docs/replay-engine.md
+
+| Section | Changes |
+|---------|---------|
+| Turn Lifecycle | Update to show schedule-time validation instead of poll-time |
+| Determinism Model | Explain cursor-based validation |
+| Data Flow | Update `CtxInner` fields description |
+
+### 12.5. Other Docs (Minor Updates)
+
+| File | Changes |
+|------|---------|
+| `docs/external-events.md` | Remove `.into_event()` from examples |
+| `docs/sub-orchestrations.md` | Remove `.into_sub_orchestration()` from examples |
+| `docs/continue-as-new.md` | Update examples if any use old API |
+| `docs/observability-guide.md` | Update examples if any use old API |
+| `QUICK_START.md` | Update examples |
+| `examples/README.md` | Update descriptions |
+
+### 12.6. Docstrings in Code
+
+| Location | Changes |
+|----------|---------|
+| `src/lib.rs` module docs | Update all examples in `//!` comments |
+| `OrchestrationContext` docs | Update method docs, remove `select2`/`join` |
+| `ActivityFuture` etc. | Add docs explaining FIFO ordering, Drop cancellation |
