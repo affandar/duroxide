@@ -1253,9 +1253,10 @@ async fn test_activity_completes_after_continue_as_new() {
     // Orchestration that continues as new after first execution
     let orchestrations = OrchestrationRegistry::builder()
         .register("CANOrch", |ctx: OrchestrationContext, input: String| async move {
+            ctx.initialize_v2();
             let count: i32 = input.parse().unwrap_or(0);
 
-            let result = ctx.schedule_activity("TrackedActivity", &input).into_activity().await?;
+            let result = ctx.schedule_activity_v2("TrackedActivity", &input).await?;
 
             if count < 2 {
                 return ctx.continue_as_new((count + 1).to_string()).await;
