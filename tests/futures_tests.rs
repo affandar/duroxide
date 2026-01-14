@@ -1,4 +1,7 @@
 // Use SQLite via common helper
+// NOTE: These tests validate v1 API (select, select2, join) behavior
+// They use deprecated API and should remain on v1 to test backward compatibility
+#![allow(deprecated)]
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self, OrchestrationStatus};
 use duroxide::{ActivityContext, DurableOutput, EventKind, OrchestrationContext, OrchestrationRegistry};
