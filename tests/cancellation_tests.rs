@@ -12,15 +12,16 @@ async fn cancel_parent_down_propagates_to_child() {
 
     // Child waits for an external event indefinitely (until canceled)
     let child = |ctx: OrchestrationContext, _input: String| async move {
-        let _ = ctx.schedule_wait("Go").into_event().await;
+        ctx.initialize_v2();
+        let _ = ctx.schedule_wait_v2("Go").await;
         Ok("done".to_string())
     };
 
     // Parent starts child and awaits it (will block until canceled)
     let parent = |ctx: OrchestrationContext, _input: String| async move {
+        ctx.initialize_v2();
         let _res = ctx
-            .schedule_sub_orchestration("Child", "seed")
-            .into_sub_orchestration()
+            .schedule_sub_orchestration_v2("Child", "seed")
             .await;
         Ok("parent_done".to_string())
     };
@@ -129,7 +130,10 @@ async fn cancel_parent_down_propagates_to_child() {
 async fn cancel_after_completion_is_noop() {
     let (store, _td) = common::create_sqlite_store_disk().await;
 
-    let orch = |_ctx: OrchestrationContext, _input: String| async move { Ok("ok".to_string()) };
+    let orch = |ctx: OrchestrationContext, _input: String| async move {
+        ctx.initialize_v2();
+        Ok("ok".to_string())
+    };
 
     let orchestration_registry = OrchestrationRegistry::builder().register("Quick", orch).build();
     let activity_registry = ActivityRegistry::builder().build();
@@ -180,11 +184,13 @@ async fn cancel_after_completion_is_noop() {
 async fn cancel_child_directly_signals_parent() {
     let (store, _td) = common::create_sqlite_store_disk().await;
 
+    #[allow(deprecated)]
     let child = |_ctx: OrchestrationContext, _input: String| async move {
         // Just wait forever until canceled
         futures::future::pending::<Result<String, String>>().await
     };
 
+    #[allow(deprecated)]
     let parent = |ctx: OrchestrationContext, _input: String| async move {
         match ctx
             .schedule_sub_orchestration("ChildD", "x")
@@ -256,13 +262,14 @@ async fn cancel_continue_as_new_second_exec() {
     let (store, _td) = common::create_sqlite_store_disk().await;
 
     let orch = |ctx: OrchestrationContext, input: String| async move {
+        ctx.initialize_v2();
         match input.as_str() {
             "start" => {
                 return ctx.continue_as_new("wait").await;
             }
             "wait" => {
                 // Park until canceled
-                let _ = ctx.schedule_wait("Go").into_event().await;
+                let _ = ctx.schedule_wait_v2("Go").await;
                 Ok("done".to_string())
             }
             _ => Ok(input),
