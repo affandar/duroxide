@@ -33,10 +33,11 @@ async fn sample_hello_world_fs() {
 
     // Orchestrator: emit a trace, call Hello twice, return result using input
     let orchestration = |ctx: OrchestrationContext, input: String| async move {
+        ctx.initialize_v2();
         ctx.trace_info("hello_world started");
-        let res = ctx.schedule_activity("Hello", "Rust").into_activity().await?;
+        let res = ctx.schedule_activity_v2("Hello", "Rust").await?;
         ctx.trace_info(format!("hello_world result={res} "));
-        let res1 = ctx.schedule_activity("Hello", input).into_activity().await?;
+        let res1 = ctx.schedule_activity_v2("Hello", input).await?;
         ctx.trace_info(format!("hello_world result={res1} "));
         Ok(res1)
     };
@@ -91,12 +92,13 @@ async fn sample_basic_control_flow_fs() {
 
     // Orchestrator: get a flag and branch
     let orchestration = |ctx: OrchestrationContext, _input: String| async move {
-        let flag = ctx.schedule_activity("GetFlag", "").into_activity().await.unwrap();
+        ctx.initialize_v2();
+        let flag = ctx.schedule_activity_v2("GetFlag", "").await.unwrap();
         ctx.trace_info(format!("control_flow flag decided = {flag}"));
         if flag == "yes" {
-            Ok(ctx.schedule_activity("SayYes", "").into_activity().await.unwrap())
+            Ok(ctx.schedule_activity_v2("SayYes", "").await.unwrap())
         } else {
-            Ok(ctx.schedule_activity("SayNo", "").into_activity().await.unwrap())
+            Ok(ctx.schedule_activity_v2("SayNo", "").await.unwrap())
         }
     };
 
@@ -144,9 +146,10 @@ async fn sample_loop_fs() {
 
     // Orchestrator: loop three times, updating an accumulator
     let orchestration = |ctx: OrchestrationContext, _input: String| async move {
+        ctx.initialize_v2();
         let mut acc = String::from("start");
         for i in 0..3 {
-            acc = ctx.schedule_activity("Append", acc).into_activity().await.unwrap();
+            acc = ctx.schedule_activity_v2("Append", acc).await.unwrap();
             ctx.trace_info(format!("loop iteration {i} completed acc={acc}"));
         }
         Ok(acc)
@@ -203,14 +206,15 @@ async fn sample_error_handling_fs() {
 
     // Orchestrator: try fragile, on error call Recover
     let orchestration = |ctx: OrchestrationContext, _input: String| async move {
-        match ctx.schedule_activity("Fragile", "bad").into_activity().await {
+        ctx.initialize_v2();
+        match ctx.schedule_activity_v2("Fragile", "bad").await {
             Ok(v) => {
                 ctx.trace_info(format!("fragile succeeded value={v}"));
                 Ok(v)
             }
             Err(e) => {
                 ctx.trace_warn(format!("fragile failed error={e}"));
-                let rec = ctx.schedule_activity("Recover", "").into_activity().await.unwrap();
+                let rec = ctx.schedule_activity_v2("Recover", "").await.unwrap();
                 if rec != "recovered" {
                     ctx.trace_error(format!("unexpected recovery value={rec}"));
                 }
@@ -267,14 +271,15 @@ async fn sample_timeout_with_timer_race_fs() {
 
     // Orchestration: race LongOp vs 100ms timer and error if timer wins
     let orchestration = |ctx: OrchestrationContext, _input: String| async move {
-        let act = ctx.schedule_activity("LongOp", "");
-        let t = ctx.schedule_timer(Duration::from_millis(100));
-        let (_idx, out) = ctx.select(vec![act, t]).await;
-        match out {
-            duroxide::DurableOutput::Timer => Err("timeout".to_string()),
-            duroxide::DurableOutput::Activity(Ok(s)) => Ok(s),
-            duroxide::DurableOutput::Activity(Err(e)) => Err(e),
-            other => panic!("unexpected output: {other:?}"),
+        ctx.initialize_v2();
+        let mut act = std::pin::pin!(ctx.schedule_activity_v2("LongOp", ""));
+        let mut timer = std::pin::pin!(ctx.schedule_timer_v2(Duration::from_millis(100)));
+        futures::select! {
+            result = act => match result {
+                Ok(s) => Ok(s),
+                Err(e) => Err(e),
+            },
+            _ = timer => Err("timeout".to_string()),
         }
     };
 
@@ -321,15 +326,15 @@ async fn sample_select2_activity_vs_external_fs() {
         .build();
 
     let orchestration = |ctx: OrchestrationContext, _input: String| async move {
-        let act = ctx.schedule_activity("Sleep", "");
-        let evt = ctx.schedule_wait("Go");
-        let (idx, out) = ctx.select2(act, evt).await;
-        // Demonstrate using the index to branch
-        match (idx, out) {
-            (0, duroxide::DurableOutput::Activity(Ok(s))) => Ok(format!("activity:{s}")),
-            (1, duroxide::DurableOutput::External(payload)) => Ok(format!("event:{payload}")),
-            (0, duroxide::DurableOutput::Activity(Err(e))) => Err(e),
-            other => panic!("unexpected: {other:?}"),
+        ctx.initialize_v2();
+        let mut act = std::pin::pin!(ctx.schedule_activity_v2("Sleep", ""));
+        let mut evt = std::pin::pin!(ctx.schedule_wait_v2("Go"));
+        futures::select! {
+            result = act => match result {
+                Ok(s) => Ok(format!("activity:{s}")),
+                Err(e) => Err(e),
+            },
+            payload = evt => Ok(format!("event:{payload}")),
         }
     };
 
@@ -391,18 +396,13 @@ async fn dtf_legacy_gabbar_greetings_fs() {
         .build();
 
     let orchestration = |ctx: OrchestrationContext, _input: String| async move {
-        // Schedule two greetings in parallel using deterministic join
-        let a = ctx.schedule_activity("Greetings", "Gabbar");
-        let b = ctx.schedule_activity("Greetings", "Samba");
-        let outs = ctx.join(vec![a, b]).await;
-        let mut vals: Vec<String> = outs
-            .into_iter()
-            .map(|o| match o {
-                duroxide::DurableOutput::Activity(Ok(s)) => s,
-                duroxide::DurableOutput::Activity(Err(e)) => panic!("activity failed: {e}"),
-                other => panic!("unexpected output: {other:?}"),
-            })
-            .collect();
+        ctx.initialize_v2();
+        // Schedule two greetings in parallel using futures::join!
+        let (a, b) = futures::join!(
+            ctx.schedule_activity_v2("Greetings", "Gabbar"),
+            ctx.schedule_activity_v2("Greetings", "Samba")
+        );
+        let mut vals: Vec<String> = vec![a.unwrap(), b.unwrap()];
         // For a stable assertion build a canonical order
         vals.sort();
         Ok(format!("{}, {}", vals[0].clone(), vals[1].clone()))
@@ -504,7 +504,8 @@ async fn sample_status_polling_fs() {
 
     let activity_registry = ActivityRegistry::builder().build();
     let orchestration = |ctx: OrchestrationContext, _input: String| async move {
-        ctx.schedule_timer(Duration::from_millis(20)).into_timer().await;
+        ctx.initialize_v2();
+        ctx.schedule_timer_v2(Duration::from_millis(20)).await;
         Ok("done".to_string())
     };
     let orchestration_registry = OrchestrationRegistry::builder()
@@ -551,13 +552,14 @@ async fn sample_sub_orchestration_basic_fs() {
         .build();
 
     let child_upper = |ctx: OrchestrationContext, input: String| async move {
-        let up = ctx.schedule_activity("Upper", input).into_activity().await.unwrap();
+        ctx.initialize_v2();
+        let up = ctx.schedule_activity_v2("Upper", input).await.unwrap();
         Ok(up)
     };
     let parent = |ctx: OrchestrationContext, input: String| async move {
+        ctx.initialize_v2();
         let r = ctx
-            .schedule_sub_orchestration("ChildUpper", input)
-            .into_sub_orchestration()
+            .schedule_sub_orchestration_v2("ChildUpper", input)
             .await
             .unwrap();
         Ok(format!("parent:{r}"))
@@ -609,22 +611,21 @@ async fn sample_sub_orchestration_fanout_fs() {
         .build();
 
     let child_sum = |ctx: OrchestrationContext, input: String| async move {
-        let s = ctx.schedule_activity("Add", input).into_activity().await.unwrap();
+        ctx.initialize_v2();
+        let s = ctx.schedule_activity_v2("Add", input).await.unwrap();
         Ok(s)
     };
     let parent = |ctx: OrchestrationContext, _input: String| async move {
-        let a = ctx.schedule_sub_orchestration("ChildSum", "1,2");
-        let b = ctx.schedule_sub_orchestration("ChildSum", "3,4");
-        let outs = ctx.join(vec![a, b]).await;
-        let mut nums: Vec<i64> = outs
-            .into_iter()
-            .map(|o| match o {
-                duroxide::DurableOutput::SubOrchestration(Ok(s)) => s.parse::<i64>().unwrap(),
-                duroxide::DurableOutput::SubOrchestration(Err(e)) => panic!("child failed: {e}"),
-                other => panic!("unexpected output: {other:?}"),
-            })
-            .collect();
-        let total: i64 = nums.drain(..).sum();
+        ctx.initialize_v2();
+        let (a, b) = futures::join!(
+            ctx.schedule_sub_orchestration_v2("ChildSum", "1,2"),
+            ctx.schedule_sub_orchestration_v2("ChildSum", "3,4")
+        );
+        let nums: Vec<i64> = vec![
+            a.unwrap().parse::<i64>().unwrap(),
+            b.unwrap().parse::<i64>().unwrap(),
+        ];
+        let total: i64 = nums.iter().sum();
         Ok(format!("total={total}"))
     };
 
@@ -671,20 +672,21 @@ async fn sample_sub_orchestration_chained_fs() {
         .build();
 
     let leaf = |ctx: OrchestrationContext, input: String| async move {
-        Ok(ctx.schedule_activity("AppendX", input).into_activity().await.unwrap())
+        ctx.initialize_v2();
+        Ok(ctx.schedule_activity_v2("AppendX", input).await.unwrap())
     };
     let mid = |ctx: OrchestrationContext, input: String| async move {
+        ctx.initialize_v2();
         let r = ctx
-            .schedule_sub_orchestration("Leaf", input)
-            .into_sub_orchestration()
+            .schedule_sub_orchestration_v2("Leaf", input)
             .await
             .unwrap();
         Ok(format!("{r}-mid"))
     };
     let root = |ctx: OrchestrationContext, input: String| async move {
+        ctx.initialize_v2();
         let r = ctx
-            .schedule_sub_orchestration("Mid", input)
-            .into_sub_orchestration()
+            .schedule_sub_orchestration_v2("Mid", input)
             .await
             .unwrap();
         Ok(format!("root:{r}"))
@@ -731,10 +733,12 @@ async fn sample_detached_orchestration_scheduling_fs() {
         .build();
 
     let chained = |ctx: OrchestrationContext, input: String| async move {
-        ctx.schedule_timer(Duration::from_millis(5)).into_timer().await;
-        Ok(ctx.schedule_activity("Echo", input).into_activity().await.unwrap())
+        ctx.initialize_v2();
+        ctx.schedule_timer_v2(Duration::from_millis(5)).await;
+        Ok(ctx.schedule_activity_v2("Echo", input).await.unwrap())
     };
     let coordinator = |ctx: OrchestrationContext, _input: String| async move {
+        ctx.initialize_v2();
         ctx.schedule_orchestration("Chained", "W1", "A");
         ctx.schedule_orchestration("Chained", "W2", "B");
         Ok("scheduled".to_string())

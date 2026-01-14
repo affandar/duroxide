@@ -1279,10 +1279,18 @@ impl CtxInner {
                             input: input.clone(),
                         })
                     }
-                    EventKind::SystemCall { op, value } => Some(SchedulingKind::SystemCall {
-                        op: op.clone(),
-                        value: value.clone(),
-                    }),
+                    EventKind::SystemCall { op, value } => {
+                        // Exclude trace SystemCalls from v2 cursor since they're fire-and-forget
+                        // (synchronous, no await) and still use the v1 path
+                        if op.starts_with(SYSCALL_OP_TRACE_PREFIX) {
+                            None
+                        } else {
+                            Some(SchedulingKind::SystemCall {
+                                op: op.clone(),
+                                value: value.clone(),
+                            })
+                        }
+                    },
                     _ => None,
                 };
                 kind.map(|k| SchedulingEvent { event_id: e.event_id, kind: k })
