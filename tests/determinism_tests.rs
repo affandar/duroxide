@@ -1,3 +1,5 @@
+// NOTE: Some tests validate v1 API behavior (ctx.join) and should remain on deprecated API
+#![allow(deprecated)]
 use duroxide::providers::Provider;
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
