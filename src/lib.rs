@@ -3036,11 +3036,14 @@ where
     match poll_once(fut.as_mut()) {
         Poll::Ready(out) => {
             ctx.inner.lock().unwrap().logging_enabled_this_poll = true;
+            ctx.set_dehydrating(true);
             let actions = ctx.take_actions();
             let hist_after = ctx.inner.lock().unwrap().history.clone();
             (hist_after, actions, Some(out))
         }
         Poll::Pending => {
+            // Set dehydrating before future is dropped to prevent spurious cancellations
+            ctx.set_dehydrating(true);
             let actions = ctx.take_actions();
             let hist_after = ctx.inner.lock().unwrap().history.clone();
             (hist_after, actions, None)
@@ -3108,6 +3111,8 @@ where
     match poll_once(fut.as_mut()) {
         Poll::Ready(out) => {
             ctx.inner.lock().unwrap().logging_enabled_this_poll = true;
+            // Set dehydrating before future is dropped (orchestration completed, but still good practice)
+            ctx.set_dehydrating(true);
             let actions = ctx.take_actions();
             let cancelled_activity_ids = ctx.take_cancelled_activity_ids();
             let hist_after = ctx.inner.lock().unwrap().history.clone();
@@ -3115,6 +3120,10 @@ where
             (hist_after, actions, Some(out), nondet, cancelled_activity_ids)
         }
         Poll::Pending => {
+            // CRITICAL: Set dehydrating BEFORE dropping the future.
+            // This prevents v2 futures from recording Action::Cancel during normal suspension.
+            // The future will be dropped when `fut` goes out of scope at the end of this block.
+            ctx.set_dehydrating(true);
             let actions = ctx.take_actions();
             let cancelled_activity_ids = ctx.take_cancelled_activity_ids();
             let hist_after = ctx.inner.lock().unwrap().history.clone();
