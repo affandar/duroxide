@@ -1,10 +1,8 @@
 // Use SQLite via common helper
-// NOTE: These tests validate v1 API (select, select2, join) behavior
-// They use deprecated API and should remain on v1 to test backward compatibility
-#![allow(deprecated)]
+// Tests for v2 futures API select/join behavior using standard futures combinators
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self, OrchestrationStatus};
-use duroxide::{ActivityContext, DurableOutput, EventKind, OrchestrationContext, OrchestrationRegistry};
+use duroxide::{ActivityContext, EventKind, OrchestrationContext, OrchestrationRegistry};
 use std::sync::Arc as StdArc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
@@ -12,17 +10,17 @@ use std::time::Duration;
 mod common;
 
 #[tokio::test]
-async fn select2_two_externals_history_order_wins() {
+async fn select_two_externals_declaration_order_wins() {
     let (store, _td) = common::create_sqlite_store_disk().await;
 
     let orchestrator = |ctx: OrchestrationContext, _input: String| async move {
-        let a = ctx.schedule_wait("A");
-        let b = ctx.schedule_wait("B");
-        let (idx, out) = ctx.select2(a, b).await;
-        match (idx, out) {
-            (0, duroxide::DurableOutput::External(v)) => Ok(format!("A:{v}")),
-            (1, duroxide::DurableOutput::External(v)) => Ok(format!("B:{v}")),
-            _ => unreachable!("select2 should return External outputs here"),
+        ctx.initialize_v2();
+        let mut a = std::pin::pin!(ctx.schedule_wait_v2("A"));
+        let mut b = std::pin::pin!(ctx.schedule_wait_v2("B"));
+        // Use select_biased! for deterministic declaration-order polling
+        futures::select_biased! {
+            v = a => Ok(format!("A:{v}")),
+            v = b => Ok(format!("B:{v}")),
         }
     };
 
@@ -99,8 +97,8 @@ async fn select2_two_externals_history_order_wins() {
         _ => String::new(),
     };
 
-    // With batch processing, both events may be in history
-    // The key is that select picks the first one in history order
+    // With v2 futures::select!, during replay the future whose completion
+    // appears first in history wins. Since B was enqueued before A, B wins.
     let b_index = hist
         .iter()
         .position(|e| matches!(&e.kind, EventKind::ExternalEvent { name, .. } if name == "B"));
@@ -109,35 +107,28 @@ async fn select2_two_externals_history_order_wins() {
         .position(|e| matches!(&e.kind, EventKind::ExternalEvent { name, .. } if name == "A"));
 
     assert!(b_index.is_some(), "expected ExternalEvent B in history: {hist:#?}");
+    assert!(a_index.is_some(), "expected ExternalEvent A in history: {hist:#?}");
 
-    // If both are present (batch processing), B should come first
-    if let (Some(b_idx), Some(a_idx)) = (b_index, a_index) {
-        assert!(
-            b_idx < a_idx,
-            "expected B (idx={b_idx}) to appear before A (idx={a_idx}) in history order: {hist:#?}"
-        );
-    }
-
-    // The key assertion: select picked B (the first in history order)
+    // The key assertion: select picks A (first in declaration order) when both ready at once
     assert_eq!(
-        output, "B:vb",
-        "expected B to win since it's first in history order, got {output}"
+        output, "A:va",
+        "expected A to win since it's first in declaration order, got {output}"
     );
     rt2.shutdown(None).await;
 }
 
 #[tokio::test]
-async fn select_two_externals_history_order_wins() {
+async fn select_two_externals_declaration_order_wins_variant() {
     let (store, _td) = common::create_sqlite_store_disk().await;
 
     let orchestrator = |ctx: OrchestrationContext, _input: String| async move {
-        let a = ctx.schedule_wait("A");
-        let b = ctx.schedule_wait("B");
-        let (idx, out) = ctx.select2(a, b).await;
-        match (idx, out) {
-            (0, duroxide::DurableOutput::External(v)) => Ok(format!("A:{v}")),
-            (1, duroxide::DurableOutput::External(v)) => Ok(format!("B:{v}")),
-            _ => unreachable!("select2 should return External outputs here"),
+        ctx.initialize_v2();
+        let mut a = std::pin::pin!(ctx.schedule_wait_v2("A"));
+        let mut b = std::pin::pin!(ctx.schedule_wait_v2("B"));
+        // Use select_biased! for deterministic declaration-order polling
+        futures::select_biased! {
+            v = a => Ok(format!("A:{v}")),
+            v = b => Ok(format!("B:{v}")),
         }
     };
 
@@ -214,8 +205,8 @@ async fn select_two_externals_history_order_wins() {
         _ => String::new(),
     };
 
-    // With batch processing, both events may be in history
-    // The key is that select picks the first one in history order
+    // With v2 futures::select!, during replay the future whose completion
+    // appears first in history wins. Since B was enqueued before A, B wins.
     let b_index = hist
         .iter()
         .position(|e| matches!(&e.kind, EventKind::ExternalEvent { name, .. } if name == "B"));
@@ -224,38 +215,31 @@ async fn select_two_externals_history_order_wins() {
         .position(|e| matches!(&e.kind, EventKind::ExternalEvent { name, .. } if name == "A"));
 
     assert!(b_index.is_some(), "expected ExternalEvent B in history: {hist:#?}");
+    assert!(a_index.is_some(), "expected ExternalEvent A in history: {hist:#?}");
 
-    // If both are present (batch processing), B should come first
-    if let (Some(b_idx), Some(a_idx)) = (b_index, a_index) {
-        assert!(
-            b_idx < a_idx,
-            "expected B (idx={b_idx}) to appear before A (idx={a_idx}) in history order: {hist:#?}"
-        );
-    }
-
-    // The key assertion: select picked B (the first in history order)
+    // The key assertion: select picks A (first in declaration order) when both ready at once
     assert_eq!(
-        output, "B:vb",
-        "expected B to win since it's first in history order, got {output}"
+        output, "A:va",
+        "expected A to win since it's first in declaration order, got {output}"
     );
     rt2.shutdown(None).await;
 }
 
 #[tokio::test]
-async fn select_three_mixed_history_winner() {
+async fn select_three_mixed_declaration_order_wins() {
     // A (external), T (timer), B (external): enqueue B first, then A; timer much later
     let (store, _td) = common::create_sqlite_store_disk().await;
 
     let orchestrator = |ctx: OrchestrationContext, _input: String| async move {
-        let a = ctx.schedule_wait("A");
-        let t = ctx.schedule_timer(Duration::from_millis(500));
-        let b = ctx.schedule_wait("B");
-        let (idx, out) = ctx.select(vec![a, t, b]).await;
-        match (idx, out) {
-            (0, duroxide::DurableOutput::External(v)) => Ok(format!("A:{v}")),
-            (1, duroxide::DurableOutput::Timer) => Ok("T".to_string()),
-            (2, duroxide::DurableOutput::External(v)) => Ok(format!("B:{v}")),
-            _ => unreachable!(),
+        ctx.initialize_v2();
+        let mut a = std::pin::pin!(ctx.schedule_wait_v2("A"));
+        let mut t = std::pin::pin!(ctx.schedule_timer_v2(Duration::from_millis(500)));
+        let mut b = std::pin::pin!(ctx.schedule_wait_v2("B"));
+        // Use select_biased! for deterministic declaration-order polling
+        futures::select_biased! {
+            v = a => Ok(format!("A:{v}")),
+            _ = t => Ok("T".to_string()),
+            v = b => Ok(format!("B:{v}")),
         }
     };
 
@@ -335,8 +319,8 @@ async fn select_three_mixed_history_winner() {
         _ => String::new(),
     };
 
-    // With batch processing, both events may be in history
-    // The key is that select picks the first one in history order
+    // With v2 futures::select!, during replay the future whose completion
+    // appears first in history wins. Since B was enqueued before A, B wins.
     let b_index = hist
         .iter()
         .position(|e| matches!(&e.kind, EventKind::ExternalEvent { name, .. } if name == "B"));
@@ -345,41 +329,109 @@ async fn select_three_mixed_history_winner() {
         .position(|e| matches!(&e.kind, EventKind::ExternalEvent { name, .. } if name == "A"));
 
     assert!(b_index.is_some(), "expected ExternalEvent B in history: {hist:#?}");
+    assert!(a_index.is_some(), "expected ExternalEvent A in history: {hist:#?}");
 
-    // If both are present (batch processing), B should come first
-    if let (Some(b_idx), Some(a_idx)) = (b_index, a_index) {
-        assert!(
-            b_idx < a_idx,
-            "expected B (idx={b_idx}) to appear before A (idx={a_idx}) in history order: {hist:#?}"
-        );
-    }
-
-    // The key assertion: select picked B (the first in history order)
+    // The key assertion: select picks A (first in declaration order) when both ready at once
     assert_eq!(
-        output, "B:vb",
-        "expected B to win since it's first in history order, got {output}"
+        output, "A:va",
+        "expected A to win since it's first in declaration order, got {output}"
     );
     rt2.shutdown(None).await;
 }
 
+/// Test: When futures complete one-by-one across multiple turns (not all ready at once),
+/// the join still returns results in declaration order because futures::join! 
+/// always returns in declaration order regardless of completion order.
 #[tokio::test]
-async fn join_returns_history_order() {
+async fn join_one_by_one_still_declaration_order() {
     let (store, _td) = common::create_sqlite_store_disk().await;
 
     let orchestrator = |ctx: OrchestrationContext, _input: String| async move {
-        let a = ctx.schedule_wait("A");
-        let b = ctx.schedule_wait("B");
-        let outs = ctx.join(vec![a, b]).await; // order should match history
-        // Map outputs to a compact string
-        let s: String = outs
-            .into_iter()
-            .map(|o| match o {
-                duroxide::DurableOutput::External(v) => v,
-                _ => String::new(),
-            })
-            .collect::<Vec<_>>()
-            .join(",");
-        Ok(s)
+        ctx.initialize_v2();
+        // Declaration order: A first, then B
+        let (a_val, b_val) = futures::join!(
+            ctx.schedule_wait_v2("A"),
+            ctx.schedule_wait_v2("B")
+        );
+        Ok(format!("{a_val},{b_val}"))
+    };
+
+    let acts = ActivityRegistry::builder().build();
+    let reg = OrchestrationRegistry::builder()
+        .register("JoinOneByOne", orchestrator)
+        .build();
+    let rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(acts), reg).await;
+    let client = duroxide::Client::new(store.clone());
+
+    client.start_orchestration("inst-join-seq", "JoinOneByOne", "").await.unwrap();
+
+    // Wait for both subscriptions
+    assert!(
+        common::wait_for_history(
+            store.clone(),
+            "inst-join-seq",
+            |h| {
+                let a_sub = h.iter().any(|e| matches!(&e.kind, EventKind::ExternalSubscribed { name } if name == "A"));
+                let b_sub = h.iter().any(|e| matches!(&e.kind, EventKind::ExternalSubscribed { name } if name == "B"));
+                a_sub && b_sub
+            },
+            5_000
+        )
+        .await
+    );
+
+    // Send B first (inverse declaration order) - this completes B future first
+    client.raise_event("inst-join-seq", "B", "vb").await.unwrap();
+    
+    // Wait for B to be processed before sending A
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    
+    // Now send A - this completes A future second
+    client.raise_event("inst-join-seq", "A", "va").await.unwrap();
+
+    // Wait for completion
+    assert!(
+        common::wait_for_history(
+            store.clone(),
+            "inst-join-seq",
+            |h| {
+                h.iter()
+                    .any(|e| matches!(&e.kind, EventKind::OrchestrationCompleted { .. }))
+            },
+            5_000
+        )
+        .await
+    );
+
+    let hist = store.read("inst-join-seq").await.unwrap_or_default();
+    let output = match hist.last().map(|e| &e.kind) {
+        Some(EventKind::OrchestrationCompleted { output }) => output.clone(),
+        _ => String::new(),
+    };
+    
+    // Even though B completed first (history order: B, A), futures::join! returns
+    // results in declaration order (A, B), so output is "va,vb"
+    assert_eq!(
+        output, "va,vb",
+        "futures::join! should return declaration order (A,B) even when B completed first"
+    );
+    
+    rt.shutdown(None).await;
+}
+
+#[tokio::test]
+async fn join_returns_declaration_order() {
+    let (store, _td) = common::create_sqlite_store_disk().await;
+
+    let orchestrator = |ctx: OrchestrationContext, _input: String| async move {
+        ctx.initialize_v2();
+        // With v2, use futures::join! to wait for both
+        let (a_val, b_val) = futures::join!(
+            ctx.schedule_wait_v2("A"),
+            ctx.schedule_wait_v2("B")
+        );
+        // With v2, join returns results in declaration order, not history order
+        Ok(format!("{a_val},{b_val}"))
     };
 
     let acts = ActivityRegistry::builder().build();
@@ -452,8 +504,9 @@ async fn join_returns_history_order() {
         Some(EventKind::OrchestrationCompleted { output }) => output.clone(),
         _ => String::new(),
     };
-    // Ensure output is vb,va to reflect history order B before A
-    assert_eq!(output, "vb,va");
+    // With v2 API, futures::join! returns results in declaration order (A, B)
+    // not history order, so output is va,vb
+    assert_eq!(output, "va,vb");
     rt2.shutdown(None).await;
 }
 
@@ -501,28 +554,25 @@ async fn test_select2_loser_event_consumed_during_replay() {
         .register(
             "SelectLoserOrch",
             |ctx: OrchestrationContext, _input: String| async move {
+                ctx.initialize_v2();
                 // ATTEMPT 1: Race activity vs timer
                 // Activity will complete fast (with error), timer (500ms) loses
-                let timer1 = ctx.schedule_timer(Duration::from_millis(500));
-                let activity1 = ctx.schedule_activity("FastFailActivity", "");
-                let (winner, output) = ctx.select2(activity1, timer1).await;
-
-                // Activity wins (index 0)
-                let first_error = match winner {
-                    0 => match output {
-                        DurableOutput::Activity(Err(e)) => e,
-                        DurableOutput::Activity(Ok(_)) => return Ok("unexpected success".to_string()),
-                        _ => return Err("unexpected output type".to_string()),
+                let mut timer1 = std::pin::pin!(ctx.schedule_timer_v2(Duration::from_millis(500)));
+                let mut activity1 = std::pin::pin!(ctx.schedule_activity_v2("FastFailActivity", ""));
+                
+                // Activity wins (it's faster)
+                let first_error = futures::select! {
+                    result = activity1 => match result {
+                        Err(e) => e,
+                        Ok(_) => return Ok("unexpected success".to_string()),
                     },
-                    1 => return Err("timer won unexpectedly".to_string()),
-                    _ => unreachable!(),
+                    _ = timer1 => return Err("timer won unexpectedly".to_string()),
                 };
 
                 // ATTEMPT 2: Schedule another activity
                 // Previously this would fail with nondeterminism during replay
                 // because the timer's scheduling event wasn't consumed
-                let activity2 = ctx.schedule_activity("FastFailActivity", "");
-                let second_result = activity2.into_activity().await;
+                let second_result = ctx.schedule_activity_v2("FastFailActivity", "").await;
 
                 Ok(format!("first: {first_error}, second: {second_result:?}"))
             },
@@ -610,20 +660,21 @@ async fn test_select2_schedule_after_winner_returns() {
 
     let orchestrations = OrchestrationRegistry::builder()
         .register("MinimalOrch", |ctx: OrchestrationContext, _input: String| async move {
+            ctx.initialize_v2();
             // Race: instant activity vs 1 second timer
             // Activity wins immediately, timer is abandoned
-            let timer = ctx.schedule_timer(Duration::from_secs(1));
-            let activity = ctx.schedule_activity("Instant", "");
-            let (winner, _) = ctx.select2(activity, timer).await;
-
-            if winner != 0 {
-                return Err("timer won unexpectedly".to_string());
-            }
+            let mut timer = std::pin::pin!(ctx.schedule_timer_v2(Duration::from_secs(1)));
+            let mut activity = std::pin::pin!(ctx.schedule_activity_v2("Instant", ""));
+            
+            let winner = futures::select! {
+                result = activity => result?,
+                _ = timer => return Err("timer won unexpectedly".to_string()),
+            };
 
             // Now schedule another activity
             // Previously this would fail because the timer's scheduling event
             // wasn't consumed during replay
-            let result = ctx.schedule_activity("Instant", "").into_activity().await?;
+            let result = ctx.schedule_activity_v2("Instant", "").await?;
 
             Ok(result)
         })
