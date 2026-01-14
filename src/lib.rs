@@ -426,6 +426,7 @@ use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
 
 pub mod client;
 pub mod futures;
+pub mod futures_v2;
 pub mod runtime;
 // Re-export descriptor type for public API ergonomics
 pub use runtime::OrchestrationDescriptor;
@@ -1058,6 +1059,72 @@ pub enum Action {
         op: String,
         value: String,
     },
+
+    // === New variants for standard async futures support ===
+
+    /// Cancel a scheduled operation (activity, timer, sub-orchestration).
+    /// Recorded when a future is dropped before completion (e.g., select loser).
+    Cancel {
+        /// The scheduling event_id of the operation being cancelled
+        scheduling_event_id: u64,
+    },
+
+    /// Cancel an external event subscription (by name).
+    /// Recorded when an ExternalFuture is dropped before the event arrives.
+    CancelExternal {
+        /// The event name being unsubscribed
+        event_name: String,
+    },
+}
+
+// === Types for standard async futures support (Phase 1 infrastructure) ===
+
+/// A scheduling event extracted from history for cursor-based validation.
+#[derive(Debug, Clone)]
+pub(crate) struct SchedulingEvent {
+    pub event_id: u64,
+    pub kind: SchedulingKind,
+}
+
+/// The kind of scheduling event.
+#[derive(Debug, Clone)]
+pub(crate) enum SchedulingKind {
+    Activity {
+        name: String,
+        input: String,
+    },
+    Timer {
+        fire_at_ms: u64,
+    },
+    External {
+        name: String,
+    },
+    SubOrchestration {
+        name: String,
+        instance: String,
+        input: String,
+    },
+    SystemCall {
+        op: String,
+        value: String,
+    },
+}
+
+/// A completion result extracted from history.
+#[derive(Debug, Clone)]
+pub(crate) enum CompletionResult {
+    Activity(Result<String, String>),
+    Timer,
+    External(String),
+    SubOrchestration(Result<String, String>),
+    SystemCall(String),
+}
+
+/// A completion event for FIFO ordering.
+#[derive(Debug, Clone)]
+pub(crate) struct CompletionEvent {
+    pub event_id: u64,
+    pub source_event_id: u64,
 }
 
 #[derive(Debug)]
@@ -1083,6 +1150,32 @@ struct CtxInner {
 
     // Track consumed external events (by name) since they're searched, not cursor-based
     consumed_external_events: std::collections::HashSet<String>,
+
+    // === New fields for standard async futures support ===
+    
+    /// Ordered list of scheduling events from history (extracted at turn start)
+    scheduling_events_v2: Vec<SchedulingEvent>,
+    
+    /// Current position in scheduling_events (advances with each schedule call)
+    cursor_v2: usize,
+    
+    /// Map: scheduling_event_id → completion result (populated at turn start)
+    completions_v2: std::collections::HashMap<u64, CompletionResult>,
+    
+    /// Completion events for FIFO ordering (populated at turn start)
+    completion_events_v2: Vec<CompletionEvent>,
+    
+    /// Set of completion event_ids that have been consumed (for FIFO in new model)
+    consumed_completions_v2: std::collections::HashSet<u64>,
+    
+    /// Map: event_name → list of completion payloads in arrival order
+    external_completions_v2: std::collections::HashMap<String, std::collections::VecDeque<String>>,
+    
+    /// Map: event_name → consumption count (how many have been consumed this turn)
+    external_consumption_count_v2: std::collections::HashMap<String, usize>,
+    
+    /// When true, Drop impls do not record cancellation (set during dehydration)
+    dehydrating: bool,
 
     // Execution metadata
     execution_id: u64,
@@ -1123,6 +1216,15 @@ impl CtxInner {
             cancelled_source_ids: Default::default(),
             cancelled_activity_ids: Default::default(),
             consumed_external_events: Default::default(),
+            // New fields for standard async futures - initialized empty, populated by initialize_v2()
+            scheduling_events_v2: Vec::new(),
+            cursor_v2: 0,
+            completions_v2: Default::default(),
+            completion_events_v2: Vec::new(),
+            consumed_completions_v2: Default::default(),
+            external_completions_v2: Default::default(),
+            external_consumption_count_v2: Default::default(),
+            dehydrating: false,
             execution_id,
             instance_id,
             orchestration_name,
@@ -1144,6 +1246,127 @@ impl CtxInner {
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0)
+    }
+
+    /// Initialize the v2 fields from history for the new cursor-based model.
+    /// Called at the start of each turn.
+    #[allow(dead_code)]
+    fn initialize_v2(&mut self) {
+        // Extract scheduling events in order
+        self.scheduling_events_v2 = self.history.iter()
+            .filter_map(|e| {
+                let kind = match &e.kind {
+                    EventKind::ActivityScheduled { name, input } => Some(SchedulingKind::Activity {
+                        name: name.clone(),
+                        input: input.clone(),
+                    }),
+                    EventKind::TimerCreated { fire_at_ms } => Some(SchedulingKind::Timer {
+                        fire_at_ms: *fire_at_ms,
+                    }),
+                    EventKind::ExternalSubscribed { name } => Some(SchedulingKind::External {
+                        name: name.clone(),
+                    }),
+                    EventKind::SubOrchestrationScheduled { name, instance, input } => {
+                        Some(SchedulingKind::SubOrchestration {
+                            name: name.clone(),
+                            instance: instance.clone(),
+                            input: input.clone(),
+                        })
+                    }
+                    EventKind::SystemCall { op, value } => Some(SchedulingKind::SystemCall {
+                        op: op.clone(),
+                        value: value.clone(),
+                    }),
+                    _ => None,
+                };
+                kind.map(|k| SchedulingEvent { event_id: e.event_id, kind: k })
+            })
+            .collect();
+
+        // Build completions map: scheduling_event_id → result
+        self.completions_v2.clear();
+        for e in &self.history {
+            if let Some(source) = e.source_event_id {
+                let result = match &e.kind {
+                    EventKind::ActivityCompleted { result } => {
+                        Some(CompletionResult::Activity(Ok(result.clone())))
+                    }
+                    EventKind::ActivityFailed { details } => {
+                        Some(CompletionResult::Activity(Err(details.display_message())))
+                    }
+                    EventKind::TimerFired { .. } => Some(CompletionResult::Timer),
+                    EventKind::SubOrchestrationCompleted { result } => {
+                        Some(CompletionResult::SubOrchestration(Ok(result.clone())))
+                    }
+                    EventKind::SubOrchestrationFailed { details } => {
+                        Some(CompletionResult::SubOrchestration(Err(details.display_message())))
+                    }
+                    _ => None,
+                };
+                if let Some(r) = result {
+                    self.completions_v2.insert(source, r);
+                }
+            }
+        }
+
+        // Build completion events for FIFO ordering
+        self.completion_events_v2 = self.history.iter()
+            .filter_map(|e| {
+                let is_completion = matches!(&e.kind,
+                    EventKind::ActivityCompleted { .. } |
+                    EventKind::ActivityFailed { .. } |
+                    EventKind::TimerFired { .. } |
+                    EventKind::SubOrchestrationCompleted { .. } |
+                    EventKind::SubOrchestrationFailed { .. }
+                );
+                if is_completion {
+                    e.source_event_id.map(|source| CompletionEvent {
+                        event_id: e.event_id,
+                        source_event_id: source,
+                    })
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        // Build external completions map: name → list of payloads in arrival order
+        self.external_completions_v2.clear();
+        for e in &self.history {
+            if let EventKind::ExternalEvent { name, data, .. } = &e.kind {
+                self.external_completions_v2
+                    .entry(name.clone())
+                    .or_default()
+                    .push_back(data.clone());
+            }
+        }
+
+        // Reset cursor and consumption state
+        self.cursor_v2 = 0;
+        self.consumed_completions_v2.clear();
+        self.external_consumption_count_v2.clear();
+    }
+
+    /// Check if a completion can be consumed according to FIFO ordering (v2 model).
+    /// Returns true if all completions with event_id < target have been consumed.
+    #[allow(dead_code)]
+    fn can_consume_v2(&self, target_event_id: u64) -> bool {
+        for ce in &self.completion_events_v2 {
+            if ce.event_id < target_event_id {
+                if !self.consumed_completions_v2.contains(&ce.event_id) {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
+    /// Get the completion event_id for a given scheduling event_id (v2 model).
+    #[allow(dead_code)]
+    fn get_completion_event_id_v2(&self, scheduling_event_id: u64) -> Option<u64> {
+        self.completion_events_v2.iter()
+            .find(|ce| ce.source_event_id == scheduling_event_id)
+            .map(|ce| ce.event_id)
     }
 
     // Note: deterministic GUID generation was removed from public API.
@@ -1542,6 +1765,26 @@ impl OrchestrationContext {
     /// ```
     pub fn instance_id(&self) -> String {
         self.inner.lock().unwrap().instance_id.clone()
+    }
+
+    /// Set the dehydrating flag. When true, Drop impls should not record cancellation.
+    /// Called by the runtime before dropping the orchestration future at end of turn.
+    #[allow(dead_code)]
+    pub(crate) fn set_dehydrating(&self, value: bool) {
+        self.inner.lock().unwrap().dehydrating = value;
+    }
+
+    /// Get the dehydrating flag value.
+    #[allow(dead_code)]
+    pub(crate) fn is_dehydrating(&self) -> bool {
+        self.inner.lock().unwrap().dehydrating
+    }
+
+    /// Initialize v2 context state from history (for new cursor-based model).
+    /// Called at the start of each turn by user code until runtime integration is complete.
+    #[allow(dead_code)]
+    pub fn initialize_v2(&self) {
+        self.inner.lock().unwrap().initialize_v2();
     }
 
     /// Returns the current execution ID within this orchestration instance.
@@ -2410,6 +2653,322 @@ impl OrchestrationContext {
     ) {
         let payload = crate::_typed_codec::Json::encode(input).expect("encode");
         self.schedule_orchestration_versioned(name, version, instance, payload)
+    }
+}
+
+// === Standard async futures (v2) - schedule-time validation ===
+
+impl OrchestrationContext {
+    /// Schedule an activity using the v2 model (schedule-time validation).
+    ///
+    /// Unlike the original `schedule_activity()`, this validates against history
+    /// immediately and returns a future with a direct `Result<String, String>` output.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let result = ctx.schedule_activity_v2("Greet", "World").await?;
+    /// ```
+    #[allow(dead_code)]
+    pub fn schedule_activity_v2(
+        &self,
+        name: impl Into<String>,
+        input: impl Into<String>,
+    ) -> futures_v2::ActivityFuture {
+        let name = name.into();
+        let input = input.into();
+        let mut inner = self.inner.lock().expect("Mutex should not be poisoned");
+
+        let scheduling_event_id = if inner.cursor_v2 < inner.scheduling_events_v2.len() {
+            // === REPLAY PATH ===
+            let cursor_pos = inner.cursor_v2;
+            let expected = &inner.scheduling_events_v2[cursor_pos];
+            let event_id = expected.event_id;  // Extract before validation
+
+            // Determinism check
+            match &expected.kind {
+                SchedulingKind::Activity {
+                    name: hist_name,
+                    input: hist_input,
+                } => {
+                    if *hist_name != name || *hist_input != input {
+                        panic!(
+                            "Non-determinism detected at cursor {}: \
+                             history has Activity({:?}, {:?}) but code scheduled Activity({:?}, {:?})",
+                            cursor_pos, hist_name, hist_input, name, input
+                        );
+                    }
+                }
+                other => {
+                    panic!(
+                        "Non-determinism detected at cursor {}: \
+                         history has {:?} but code scheduled Activity",
+                        cursor_pos, other
+                    );
+                }
+            }
+
+            inner.cursor_v2 += 1;
+            event_id
+        } else {
+            // === NEW EXECUTION PATH ===
+            let event_id = inner.next_event_id;
+            inner.next_event_id += 1;
+
+            let exec_id = inner.execution_id;
+            let inst_id = inner.instance_id.clone();
+
+            inner.history.push(Event::with_event_id(
+                event_id,
+                inst_id,
+                exec_id,
+                None,
+                EventKind::ActivityScheduled {
+                    name: name.clone(),
+                    input: input.clone(),
+                },
+            ));
+
+            inner.record_action(Action::CallActivity {
+                scheduling_event_id: event_id,
+                name: name.clone(),
+                input: input.clone(),
+            });
+
+            inner.cursor_v2 += 1;
+            event_id
+        };
+
+        futures_v2::ActivityFuture {
+            scheduling_event_id,
+            ctx: self.clone(),
+            consumed: Cell::new(false),
+        }
+    }
+
+    /// Schedule a timer using the v2 model (schedule-time validation).
+    ///
+    /// Returns a future that resolves to `()` when the timer fires.
+    #[allow(dead_code)]
+    pub fn schedule_timer_v2(&self, delay: std::time::Duration) -> futures_v2::TimerFuture {
+        let delay_ms = delay.as_millis() as u64;
+        let mut inner = self.inner.lock().expect("Mutex should not be poisoned");
+
+        let fire_at_ms = inner.now_ms() + delay_ms;
+
+        let scheduling_event_id = if inner.cursor_v2 < inner.scheduling_events_v2.len() {
+            // === REPLAY PATH ===
+            let cursor_pos = inner.cursor_v2;
+            let expected = &inner.scheduling_events_v2[cursor_pos];
+            let event_id = expected.event_id;  // Extract before validation
+
+            match &expected.kind {
+                SchedulingKind::Timer { .. } => {
+                    // Timer replay - we don't validate fire_at_ms since it depends on wall clock
+                }
+                other => {
+                    panic!(
+                        "Non-determinism detected at cursor {}: \
+                         history has {:?} but code scheduled Timer",
+                        cursor_pos, other
+                    );
+                }
+            }
+
+            inner.cursor_v2 += 1;
+            event_id
+        } else {
+            // === NEW EXECUTION PATH ===
+            let event_id = inner.next_event_id;
+            inner.next_event_id += 1;
+
+            let exec_id = inner.execution_id;
+            let inst_id = inner.instance_id.clone();
+
+            inner.history.push(Event::with_event_id(
+                event_id,
+                inst_id,
+                exec_id,
+                None,
+                EventKind::TimerCreated { fire_at_ms },
+            ));
+
+            inner.record_action(Action::CreateTimer {
+                scheduling_event_id: event_id,
+                fire_at_ms,
+            });
+
+            inner.cursor_v2 += 1;
+            event_id
+        };
+
+        futures_v2::TimerFuture {
+            scheduling_event_id,
+            ctx: self.clone(),
+            consumed: Cell::new(false),
+        }
+    }
+
+    /// Schedule an external event wait using the v2 model (name-based matching).
+    ///
+    /// Returns a future that resolves to the event payload `String`.
+    #[allow(dead_code)]
+    pub fn schedule_wait_v2(&self, name: impl Into<String>) -> futures_v2::ExternalFuture {
+        let name = name.into();
+        let mut inner = self.inner.lock().expect("Mutex should not be poisoned");
+
+        // Track consumption order for this event name
+        let consumption_index = *inner
+            .external_consumption_count_v2
+            .entry(name.clone())
+            .or_insert(0);
+        *inner.external_consumption_count_v2.get_mut(&name).unwrap() += 1;
+
+        let scheduling_event_id = if inner.cursor_v2 < inner.scheduling_events_v2.len() {
+            // === REPLAY PATH ===
+            let cursor_pos = inner.cursor_v2;
+            let expected = &inner.scheduling_events_v2[cursor_pos];
+            let event_id = expected.event_id;  // Extract before validation
+
+            match &expected.kind {
+                SchedulingKind::External { name: hist_name } => {
+                    if *hist_name != name {
+                        panic!(
+                            "Non-determinism detected at cursor {}: \
+                             history has External({:?}) but code scheduled External({:?})",
+                            cursor_pos, hist_name, name
+                        );
+                    }
+                }
+                other => {
+                    panic!(
+                        "Non-determinism detected at cursor {}: \
+                         history has {:?} but code scheduled External",
+                        cursor_pos, other
+                    );
+                }
+            }
+
+            inner.cursor_v2 += 1;
+            event_id
+        } else {
+            // === NEW EXECUTION PATH ===
+            let event_id = inner.next_event_id;
+            inner.next_event_id += 1;
+
+            let exec_id = inner.execution_id;
+            let inst_id = inner.instance_id.clone();
+
+            inner.history.push(Event::with_event_id(
+                event_id,
+                inst_id,
+                exec_id,
+                None,
+                EventKind::ExternalSubscribed { name: name.clone() },
+            ));
+
+            inner.record_action(Action::WaitExternal {
+                scheduling_event_id: event_id,
+                name: name.clone(),
+            });
+
+            inner.cursor_v2 += 1;
+            event_id
+        };
+
+        futures_v2::ExternalFuture {
+            event_name: name,
+            consumption_index,
+            scheduling_event_id,
+            ctx: self.clone(),
+            consumed: Cell::new(false),
+        }
+    }
+
+    /// Schedule a sub-orchestration using the v2 model (schedule-time validation).
+    ///
+    /// Returns a future that resolves to `Result<String, String>`.
+    #[allow(dead_code)]
+    pub fn schedule_sub_orchestration_v2(
+        &self,
+        name: impl Into<String>,
+        input: impl Into<String>,
+    ) -> futures_v2::SubOrchestrationFuture {
+        let name = name.into();
+        let input = input.into();
+        let mut inner = self.inner.lock().expect("Mutex should not be poisoned");
+
+        let scheduling_event_id = if inner.cursor_v2 < inner.scheduling_events_v2.len() {
+            // === REPLAY PATH ===
+            let cursor_pos = inner.cursor_v2;
+            let expected = &inner.scheduling_events_v2[cursor_pos];
+            let event_id = expected.event_id;  // Extract before validation
+
+            match &expected.kind {
+                SchedulingKind::SubOrchestration {
+                    name: hist_name,
+                    input: hist_input,
+                    ..
+                } => {
+                    if *hist_name != name || *hist_input != input {
+                        panic!(
+                            "Non-determinism detected at cursor {}: \
+                             history has SubOrchestration({:?}, {:?}) but code scheduled SubOrchestration({:?}, {:?})",
+                            cursor_pos, hist_name, hist_input, name, input
+                        );
+                    }
+                }
+                other => {
+                    panic!(
+                        "Non-determinism detected at cursor {}: \
+                         history has {:?} but code scheduled SubOrchestration",
+                        cursor_pos, other
+                    );
+                }
+            }
+
+            inner.cursor_v2 += 1;
+            event_id
+        } else {
+            // === NEW EXECUTION PATH ===
+            let event_id = inner.next_event_id;
+            inner.next_event_id += 1;
+
+            let exec_id = inner.execution_id;
+            let inst_id = inner.instance_id.clone();
+
+            // Derive child instance id from parent
+            let child_instance = format!("{}::sub::{}", inst_id, event_id);
+
+            inner.history.push(Event::with_event_id(
+                event_id,
+                inst_id,
+                exec_id,
+                None,
+                EventKind::SubOrchestrationScheduled {
+                    name: name.clone(),
+                    instance: child_instance.clone(),
+                    input: input.clone(),
+                },
+            ));
+
+            inner.record_action(Action::StartSubOrchestration {
+                scheduling_event_id: event_id,
+                name: name.clone(),
+                version: None,
+                instance: child_instance,
+                input: input.clone(),
+            });
+
+            inner.cursor_v2 += 1;
+            event_id
+        };
+
+        futures_v2::SubOrchestrationFuture {
+            scheduling_event_id,
+            ctx: self.clone(),
+            consumed: Cell::new(false),
+        }
     }
 }
 
