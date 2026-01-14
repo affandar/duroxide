@@ -1087,7 +1087,10 @@ pub(crate) struct SchedulingEvent {
 }
 
 /// The kind of scheduling event.
+/// Fields marked dead_code are parsed from history but not yet used in v2 validation;
+/// they exist for future extension (e.g., verifying timer fire times, sub-orchestration instances).
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub(crate) enum SchedulingKind {
     Activity {
         name: String,
@@ -1111,7 +1114,10 @@ pub(crate) enum SchedulingKind {
 }
 
 /// A completion result extracted from history.
+/// Variants marked dead_code are parsed from history but not yet consumed;
+/// they exist for future extension (e.g., system call v2 futures).
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub(crate) enum CompletionResult {
     Activity(Result<String, String>),
     Timer,
@@ -1352,10 +1358,10 @@ impl CtxInner {
     #[allow(dead_code)]
     fn can_consume_v2(&self, target_event_id: u64) -> bool {
         for ce in &self.completion_events_v2 {
-            if ce.event_id < target_event_id {
-                if !self.consumed_completions_v2.contains(&ce.event_id) {
-                    return false;
-                }
+            if ce.event_id < target_event_id
+                && !self.consumed_completions_v2.contains(&ce.event_id)
+            {
+                return false;
             }
         }
         true

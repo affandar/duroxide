@@ -1,12 +1,48 @@
-//! New future types for standard async/await support.
+//! New future types for standard async/await support (v2 API).
 //!
 //! These futures implement `std::future::Future` directly with specific output types,
 //! enabling use of standard `futures::select!` and `futures::join!` combinators.
 //!
-//! Key design principles:
-//! - Schedule-time validation (validation happens in `schedule_*_v2()`, not `poll()`)
-//! - FIFO completion ordering (poll only returns Ready when this is the earliest completion)
-//! - Drop-based cancellation (dropping records `Action::Cancel`, guarded by dehydrating flag)
+//! # Key Design Principles
+//!
+//! - **Schedule-time validation**: History matching happens in `schedule_*_v2()`, not `poll()`
+//! - **FIFO completion ordering**: `poll()` only returns `Ready` when this is the earliest completion
+//! - **Drop-based cancellation**: Dropping a future records `Action::Cancel`, guarded by dehydrating flag
+//! - **FusedFuture implementation**: All futures implement [`FusedFuture`] for safe use in select loops
+//!
+//! # Usage
+//!
+//! ```rust,ignore
+//! use futures::{select, join};
+//!
+//! let orchestration = |ctx: OrchestrationContext, input: String| async move {
+//!     ctx.initialize_v2();
+//!
+//!     // Sequential operations
+//!     let result = ctx.schedule_activity_v2("Process", &input).await?;
+//!
+//!     // Parallel operations with join
+//!     let (r1, r2) = join!(
+//!         ctx.schedule_activity_v2("Task1", "a"),
+//!         ctx.schedule_activity_v2("Task2", "b")
+//!     );
+//!
+//!     // Racing with select (timeout pattern)
+//!     let mut work = std::pin::pin!(ctx.schedule_activity_v2("SlowTask", ""));
+//!     let mut timeout = std::pin::pin!(ctx.schedule_timer_v2(Duration::from_secs(5)));
+//!
+//!     select! {
+//!         res = work => Ok(format!("completed: {:?}", res)),
+//!         _ = timeout => Ok("timeout".to_string()),
+//!     }
+//! };
+//! ```
+//!
+//! # Determinism Guarantees
+//!
+//! Despite `futures::select!` polling in non-deterministic order, the FIFO enforcement
+//! in `poll()` ensures the winner is always the one with the earliest completion event—
+//! making the outcome deterministic across replay.
 
 use std::cell::Cell;
 use std::future::Future;
@@ -141,18 +177,18 @@ impl Future for TimerFuture {
         }
 
         // FIFO check
-        if let Some(completion_event_id) = inner.get_completion_event_id_v2(self.scheduling_event_id)
-        {
-            if inner.can_consume_v2(completion_event_id) {
-                drop(inner);
-
-                let mut inner = self.ctx.inner.lock().expect("Mutex should not be poisoned");
-                inner.consumed_completions_v2.insert(completion_event_id);
-                drop(inner);
-
-                self.consumed.set(true);
-                return Poll::Ready(());
+        if let Some(completion_event_id) = inner.get_completion_event_id_v2(self.scheduling_event_id) {
+            if !inner.can_consume_v2(completion_event_id) {
+                return Poll::Pending;
             }
+            drop(inner);
+
+            let mut inner = self.ctx.inner.lock().expect("Mutex should not be poisoned");
+            inner.consumed_completions_v2.insert(completion_event_id);
+            drop(inner);
+
+            self.consumed.set(true);
+            return Poll::Ready(());
         }
 
         Poll::Pending
@@ -201,6 +237,8 @@ pub struct ExternalFuture {
     /// Which occurrence of this event (0 = first, 1 = second, etc.)
     pub(crate) consumption_index: usize,
     /// The scheduling event_id (for cursor tracking, not completion matching)
+    /// Reserved for future FIFO ordering of external events.
+    #[allow(dead_code)]
     pub(crate) scheduling_event_id: u64,
     /// Reference to the orchestration context
     pub(crate) ctx: OrchestrationContext,
@@ -219,11 +257,11 @@ impl Future for ExternalFuture {
         let inner = self.ctx.inner.lock().expect("Mutex should not be poisoned");
 
         // Name-based matching with consumption order
-        if let Some(completions) = inner.external_completions_v2.get(&self.event_name) {
-            if let Some(data) = completions.get(self.consumption_index) {
-                self.consumed.set(true);
-                return Poll::Ready(data.clone());
-            }
+        if let Some(completions) = inner.external_completions_v2.get(&self.event_name)
+            && let Some(data) = completions.get(self.consumption_index)
+        {
+            self.consumed.set(true);
+            return Poll::Ready(data.clone());
         }
 
         Poll::Pending
@@ -251,10 +289,10 @@ impl Drop for ExternalFuture {
         }
 
         // Check if this event has arrived
-        if let Some(completions) = inner.external_completions_v2.get(&self.event_name) {
-            if completions.get(self.consumption_index).is_some() {
-                return;
-            }
+        if let Some(completions) = inner.external_completions_v2.get(&self.event_name)
+            && completions.get(self.consumption_index).is_some()
+        {
+            return;
         }
 
         // Record cancellation by name
@@ -295,18 +333,18 @@ impl Future for SubOrchestrationFuture {
         };
 
         // FIFO check
-        if let Some(completion_event_id) = inner.get_completion_event_id_v2(self.scheduling_event_id)
-        {
-            if inner.can_consume_v2(completion_event_id) {
-                drop(inner);
-
-                let mut inner = self.ctx.inner.lock().expect("Mutex should not be poisoned");
-                inner.consumed_completions_v2.insert(completion_event_id);
-                drop(inner);
-
-                self.consumed.set(true);
-                return Poll::Ready(completion);
+        if let Some(completion_event_id) = inner.get_completion_event_id_v2(self.scheduling_event_id) {
+            if !inner.can_consume_v2(completion_event_id) {
+                return Poll::Pending;
             }
+            drop(inner);
+
+            let mut inner = self.ctx.inner.lock().expect("Mutex should not be poisoned");
+            inner.consumed_completions_v2.insert(completion_event_id);
+            drop(inner);
+
+            self.consumed.set(true);
+            return Poll::Ready(completion);
         }
 
         Poll::Pending
@@ -374,18 +412,18 @@ impl Future for SystemCallFuture {
         };
 
         // FIFO check
-        if let Some(completion_event_id) = inner.get_completion_event_id_v2(self.scheduling_event_id)
-        {
-            if inner.can_consume_v2(completion_event_id) {
-                drop(inner);
-
-                let mut inner = self.ctx.inner.lock().expect("Mutex should not be poisoned");
-                inner.consumed_completions_v2.insert(completion_event_id);
-                drop(inner);
-
-                self.consumed.set(true);
-                return Poll::Ready(result);
+        if let Some(completion_event_id) = inner.get_completion_event_id_v2(self.scheduling_event_id) {
+            if !inner.can_consume_v2(completion_event_id) {
+                return Poll::Pending;
             }
+            drop(inner);
+
+            let mut inner = self.ctx.inner.lock().expect("Mutex should not be poisoned");
+            inner.consumed_completions_v2.insert(completion_event_id);
+            drop(inner);
+
+            self.consumed.set(true);
+            return Poll::Ready(result);
         }
 
         Poll::Pending
