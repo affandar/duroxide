@@ -308,10 +308,10 @@ async fn test_prune_during_active_continue_as_new() {
         .register(
             "ActiveContinueOrch",
             |ctx: OrchestrationContext, count_str: String| async move {
+                ctx.initialize_v2();
                 let count: u32 = count_str.parse().unwrap_or(0);
                 // Call activity to track execution and create pause point
-                ctx.schedule_activity("SlowActivity", count.to_string())
-                    .into_activity()
+                ctx.schedule_activity_v2("SlowActivity", count.to_string())
                     .await?;
 
                 if count < 5 {
@@ -421,17 +421,17 @@ async fn test_prune_bulk_includes_running_instances() {
         .register(
             "LongRunningWithContinueAsNew",
             |ctx: OrchestrationContext, count_str: String| async move {
+                ctx.initialize_v2();
                 let count: u32 = count_str.parse().unwrap_or(0);
 
                 // Signal which execution we're on
-                ctx.schedule_activity("SignalExecution", count.to_string())
-                    .into_activity()
+                ctx.schedule_activity_v2("SignalExecution", count.to_string())
                     .await?;
 
                 if count == 5 {
                     // On execution 5, wait for external signal to proceed
                     // This keeps us "Running" with multiple old executions
-                    let _signal = ctx.schedule_wait("proceed").into_event().await;
+                    let _signal = ctx.schedule_wait_v2("proceed").await;
                 }
 
                 if count < 10 {

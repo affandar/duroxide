@@ -20,7 +20,8 @@ async fn test_default_polling_frequency() {
         .build();
 
     let orch = |ctx: OrchestrationContext, _: String| async move {
-        ctx.schedule_activity("QuickTask", "").into_activity().await
+        ctx.initialize_v2();
+        ctx.schedule_activity_v2("QuickTask", "").await
     };
 
     let orchestrations = OrchestrationRegistry::builder().register("TestOrch", orch).build();
@@ -62,7 +63,8 @@ async fn test_custom_polling_frequency() {
         .build();
 
     let orch = |ctx: OrchestrationContext, _: String| async move {
-        ctx.schedule_activity("QuickTask", "").into_activity().await
+        ctx.initialize_v2();
+        ctx.schedule_activity_v2("QuickTask", "").await
     };
 
     let orchestrations = OrchestrationRegistry::builder().register("TestOrch", orch).build();
@@ -101,7 +103,10 @@ async fn test_fast_polling() {
         .build();
 
     let orch =
-        |ctx: OrchestrationContext, _: String| async move { ctx.schedule_activity("Task", "").into_activity().await };
+        |ctx: OrchestrationContext, _: String| async move {
+            ctx.initialize_v2();
+            ctx.schedule_activity_v2("Task", "").await
+        };
 
     let orchestrations = OrchestrationRegistry::builder().register("FastOrch", orch).build();
 

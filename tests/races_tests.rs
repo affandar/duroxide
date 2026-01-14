@@ -18,7 +18,8 @@ fn fast_runtime_options() -> RuntimeOptions {
 
 async fn wait_external_completes_with(store: StdArc<dyn Provider>) {
     let orchestrator = |ctx: OrchestrationContext, _input: String| async move {
-        let data = ctx.schedule_wait("Only").into_event().await;
+        ctx.initialize_v2();
+        let data = ctx.schedule_wait_v2("Only").await;
         Ok(format!("only={data}"))
     };
 
@@ -153,13 +154,13 @@ async fn race_external_vs_timer_ordering_fs() {
 
 async fn race_event_vs_timer_event_wins_with(store: StdArc<dyn Provider>) {
     let orchestrator = |ctx: OrchestrationContext, _input: String| async move {
+        ctx.initialize_v2();
         // Subscribe first to ensure we can receive the event deterministically
-        let ev = ctx.schedule_wait("Race").into_event();
-        let t = ctx.schedule_timer(Duration::from_millis(100)).into_timer();
-        let race = select(ev, t);
-        match race.await {
-            Either::Left((data, _)) => Ok(data),
-            Either::Right((_, _)) => Ok("timer".to_string()),
+        let mut ev = std::pin::pin!(ctx.schedule_wait_v2("Race"));
+        let mut t = std::pin::pin!(ctx.schedule_timer_v2(Duration::from_millis(100)));
+        futures::select! {
+            data = ev => Ok(data),
+            _ = t => Ok("timer".to_string()),
         }
     };
 
