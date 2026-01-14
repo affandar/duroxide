@@ -1991,6 +1991,7 @@ impl OrchestrationContext {
 
     /// Generate a new deterministic GUID.
     /// Returns a future that resolves to a String GUID.
+    #[allow(deprecated)]
     pub fn new_guid(&self) -> impl Future<Output = Result<String, String>> {
         self.schedule_system_call(SYSCALL_OP_GUID).into_activity()
     }
@@ -2019,6 +2020,7 @@ impl OrchestrationContext {
     /// # Ok(())
     /// # }
     /// ```
+    #[allow(deprecated)]
     pub fn utcnow(&self) -> impl Future<Output = Result<SystemTime, String>> {
         let fut = self.schedule_system_call(SYSCALL_OP_UTCNOW_MS).into_activity();
         async move {
@@ -2137,6 +2139,10 @@ impl DurableFuture {
     /// Converts this unified future into a future that resolves only for
     /// an activity completion or failure.
     /// Await an activity result as a raw String (back-compat API).
+    #[deprecated(
+        since = "0.2.0",
+        note = "Use `ctx.schedule_activity_v2().await` instead. The v2 API provides direct `Result<String, String>` output without conversion."
+    )]
     pub fn into_activity(self) -> impl Future<Output = Result<String, String>> {
         struct Map(DurableFuture);
         impl Future for Map {
@@ -2160,6 +2166,10 @@ impl DurableFuture {
     /// # Errors
     ///
     /// Returns an error if the activity fails or if the result cannot be deserialized to the target type.
+    #[deprecated(
+        since = "0.2.0",
+        note = "Use `ctx.schedule_activity_v2().await` with manual deserialization instead."
+    )]
     pub fn into_activity_typed<Out: serde::de::DeserializeOwned>(self) -> impl Future<Output = Result<Out, String>> {
         struct Map(DurableFuture);
         impl Future for Map {
@@ -2183,6 +2193,10 @@ impl DurableFuture {
 
     /// Converts this unified future into a future that resolves when the
     /// corresponding timer fires.
+    #[deprecated(
+        since = "0.2.0",
+        note = "Use `ctx.schedule_timer_v2().await` instead. The v2 API returns `()` directly without conversion."
+    )]
     pub fn into_timer(self) -> impl Future<Output = ()> {
         struct Map(DurableFuture);
         impl Future for Map {
@@ -2202,6 +2216,10 @@ impl DurableFuture {
     /// Converts this unified future into a future that resolves with the
     /// payload of the correlated external event.
     /// Await an external event as a raw String (back-compat API).
+    #[deprecated(
+        since = "0.2.0",
+        note = "Use `ctx.schedule_wait_v2().await` instead. The v2 API returns `String` directly without conversion."
+    )]
     pub fn into_event(self) -> impl Future<Output = String> {
         struct Map(DurableFuture);
         impl Future for Map {
@@ -2221,6 +2239,11 @@ impl DurableFuture {
     }
 
     /// Await an external event decoded to a typed value.
+    #[deprecated(
+        since = "0.2.0",
+        note = "Use `ctx.schedule_wait_v2().await` with manual deserialization instead."
+    )]
+    #[allow(deprecated)]
     pub async fn into_event_typed<T: serde::de::DeserializeOwned>(self) -> T {
         // Deserialization should never fail if the type matches the stored data - if it does, it's a programming error
         crate::_typed_codec::Json::decode::<T>(&Self::into_event(self).await)
@@ -2230,6 +2253,10 @@ impl DurableFuture {
     /// Converts this unified future into a future that resolves only for
     /// a sub-orchestration completion or failure.
     /// Await a sub-orchestration result as a raw String (back-compat API).
+    #[deprecated(
+        since = "0.2.0",
+        note = "Use `ctx.schedule_sub_orchestration_v2().await` instead. The v2 API provides direct `Result<String, String>` output without conversion."
+    )]
     pub fn into_sub_orchestration(self) -> impl Future<Output = Result<String, String>> {
         struct Map(DurableFuture);
         impl Future for Map {
@@ -2253,6 +2280,11 @@ impl DurableFuture {
     /// # Errors
     ///
     /// Returns an error if the sub-orchestration fails or if the result cannot be deserialized to the target type.
+    #[deprecated(
+        since = "0.2.0",
+        note = "Use `ctx.schedule_sub_orchestration_v2().await` with manual deserialization instead."
+    )]
+    #[allow(deprecated)]
     pub async fn into_sub_orchestration_typed<Out: serde::de::DeserializeOwned>(self) -> Result<Out, String> {
         match Self::into_sub_orchestration(self).await {
             Ok(s) => crate::_typed_codec::Json::decode::<Out>(&s),
@@ -2303,6 +2335,10 @@ impl OrchestrationContext {
     /// - ✅ Retrying an external API with backoff
     /// - ✅ Waiting for async operation to complete
     /// - ❌ Activity that ONLY sleeps (use orchestration timer instead)
+    #[deprecated(
+        since = "0.2.0",
+        note = "Use `schedule_activity_v2()` instead. It returns a direct `Result<String, String>` future without requiring `.into_activity()`."
+    )]
     pub fn schedule_activity(&self, name: impl Into<String>, input: impl Into<String>) -> DurableFuture {
         // event_id will be claimed during first poll
         DurableFuture {
@@ -2316,6 +2352,11 @@ impl OrchestrationContext {
     }
 
     /// Typed helper that serializes input and later decodes output via `into_activity_typed`.
+    #[deprecated(
+        since = "0.2.0",
+        note = "Use `schedule_activity_v2()` with manual serialization/deserialization instead."
+    )]
+    #[allow(deprecated)]
     pub fn schedule_activity_typed<In: serde::Serialize, Out: serde::de::DeserializeOwned>(
         &self,
         name: impl Into<String>,
@@ -2365,6 +2406,7 @@ impl OrchestrationContext {
     /// # Errors
     ///
     /// Returns an error if all retry attempts fail or if a timeout occurs (timeouts are not retried).
+    #[allow(deprecated)]
     pub async fn schedule_activity_with_retry(
         &self,
         name: impl Into<String>,
@@ -2430,6 +2472,7 @@ impl OrchestrationContext {
     /// # Errors
     ///
     /// Returns an error if all retry attempts fail, if a timeout occurs, if input serialization fails, or if result deserialization fails.
+    #[allow(deprecated)]
     pub async fn schedule_activity_with_retry_typed<In: serde::Serialize, Out: serde::de::DeserializeOwned>(
         &self,
         name: impl Into<String>,
@@ -2470,6 +2513,10 @@ impl OrchestrationContext {
     /// # Ok(())
     /// # }
     /// ```
+    #[deprecated(
+        since = "0.2.0",
+        note = "Use `schedule_timer_v2()` instead. It returns a direct `()` future without requiring `.into_timer()`."
+    )]
     pub fn schedule_timer(&self, delay: std::time::Duration) -> DurableFuture {
         // No ID allocation here - event_id is discovered during first poll
         DurableFuture {
@@ -2482,6 +2529,10 @@ impl OrchestrationContext {
     }
 
     /// Subscribe to an external event by name and return its `DurableFuture`.
+    #[deprecated(
+        since = "0.2.0",
+        note = "Use `schedule_wait_v2()` instead. It returns a direct `String` future without requiring `.into_event()`."
+    )]
     pub fn schedule_wait(&self, name: impl Into<String>) -> DurableFuture {
         // No ID allocation here - event_id is discovered during first poll
         DurableFuture {
@@ -2495,12 +2546,21 @@ impl OrchestrationContext {
     }
 
     /// Typed external wait adapter pairs with `into_event_typed` for decoding.
+    #[deprecated(
+        since = "0.2.0",
+        note = "Use `schedule_wait_v2()` with manual deserialization instead."
+    )]
+    #[allow(deprecated)]
     pub fn schedule_wait_typed<T: serde::de::DeserializeOwned>(&self, name: impl Into<String>) -> DurableFuture {
         self.schedule_wait(name)
     }
 
     /// Schedule a sub-orchestration by name with deterministic child instance id derived
     /// from parent context and event_id (determined during first poll).
+    #[deprecated(
+        since = "0.2.0",
+        note = "Use `schedule_sub_orchestration_v2()` instead. It returns a direct `Result<String, String>` future without requiring `.into_sub_orchestration()`."
+    )]
     pub fn schedule_sub_orchestration(&self, name: impl Into<String>, input: impl Into<String>) -> DurableFuture {
         let name: String = name.into();
         let input: String = input.into();
@@ -2521,6 +2581,11 @@ impl OrchestrationContext {
         }
     }
 
+    #[deprecated(
+        since = "0.2.0",
+        note = "Use `schedule_sub_orchestration_v2()` with manual serialization/deserialization instead."
+    )]
+    #[allow(deprecated)]
     pub fn schedule_sub_orchestration_typed<In: serde::Serialize, Out: serde::de::DeserializeOwned>(
         &self,
         name: impl Into<String>,
@@ -2982,14 +3047,26 @@ impl OrchestrationContext {
 
 impl OrchestrationContext {
     /// Deterministic select over two futures: returns (winner_index, DurableOutput)
+    #[deprecated(
+        since = "0.2.0",
+        note = "Use `futures::select!` with v2 futures instead. Example: `futures::select! { a = fut_a.fuse() => ..., b = fut_b.fuse() => ... }`"
+    )]
     pub fn select2(&self, a: DurableFuture, b: DurableFuture) -> SelectFuture {
         SelectFuture(AggregateDurableFuture::new_select(self.clone(), vec![a, b]))
     }
     /// Deterministic select over N futures
+    #[deprecated(
+        since = "0.2.0",
+        note = "Use `futures::select!` with v2 futures instead."
+    )]
     pub fn select(&self, futures: Vec<DurableFuture>) -> SelectFuture {
         SelectFuture(AggregateDurableFuture::new_select(self.clone(), futures))
     }
     /// Deterministic join over N futures (history order)
+    #[deprecated(
+        since = "0.2.0",
+        note = "Use `futures::join!` with v2 futures instead. Example: `let (a, b) = futures::join!(fut_a, fut_b);`"
+    )]
     pub fn join(&self, futures: Vec<DurableFuture>) -> JoinFuture {
         JoinFuture(AggregateDurableFuture::new_join(self.clone(), futures))
     }
