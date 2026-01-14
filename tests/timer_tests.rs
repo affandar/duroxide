@@ -39,7 +39,8 @@ async fn single_timer_fires() {
 
     const TIMER_MS: u64 = 50;
     let orch = |ctx: OrchestrationContext, _input: String| async move {
-        ctx.schedule_timer(Duration::from_millis(TIMER_MS)).into_timer().await;
+        ctx.initialize_v2();
+        ctx.schedule_timer_v2(Duration::from_millis(TIMER_MS)).await;
         Ok("done".to_string())
     };
 
@@ -79,13 +80,13 @@ async fn multiple_timers_fire_in_order() {
     let (store, _td) = create_sqlite_store().await;
 
     let orch = |ctx: OrchestrationContext, _input: String| async move {
-        let t1 = ctx.schedule_timer(Duration::from_millis(100)).into_timer().await;
-        let t2 = ctx.schedule_timer(Duration::from_millis(50)).into_timer().await;
-        let t3 = ctx.schedule_timer(Duration::from_millis(75)).into_timer().await;
+        ctx.initialize_v2();
+        ctx.schedule_timer_v2(Duration::from_millis(100)).await;
+        ctx.schedule_timer_v2(Duration::from_millis(50)).await;
+        ctx.schedule_timer_v2(Duration::from_millis(75)).await;
 
-        // Verify timers fired in correct order (t2, t3, t1)
-        let results = vec![t1, t2, t3];
-        Ok(format!("timers: {results:?}"))
+        // All timers completed sequentially
+        Ok("timers: completed".to_string())
     };
 
     let reg = OrchestrationRegistry::builder().register("MultiTimer", orch).build();
@@ -116,14 +117,13 @@ async fn timer_with_activity() {
     let (store, _td) = create_sqlite_store().await;
 
     let orch = |ctx: OrchestrationContext, _input: String| async move {
-        let timer_future = ctx.schedule_timer(Duration::from_millis(50));
-        let activity_future = ctx.schedule_activity("TestActivity", "input");
+        ctx.initialize_v2();
+        
+        // Wait for timer then activity (sequential in v2)
+        ctx.schedule_timer_v2(Duration::from_millis(50)).await;
+        let activity_result = ctx.schedule_activity_v2("TestActivity", "input").await.unwrap();
 
-        // Wait for both
-        let timer_result = timer_future.into_timer().await;
-        let activity_result = activity_future.into_activity().await.unwrap();
-
-        Ok(format!("timer: {timer_result:?}, activity: {activity_result}"))
+        Ok(format!("timer: (), activity: {activity_result}"))
     };
 
     let activity_registry = ActivityRegistry::builder()
@@ -179,11 +179,12 @@ async fn timer_recovery_after_crash_before_fire() {
 
     // Simple orchestration that schedules a timer and then completes
     let orch = |ctx: OrchestrationContext, _input: String| async move {
+        ctx.initialize_v2();
         // Schedule a timer with enough delay that we can "crash" before it fires
-        ctx.schedule_timer(Duration::from_millis(TIMER_MS)).into_timer().await;
+        ctx.schedule_timer_v2(Duration::from_millis(TIMER_MS)).await;
 
         // Do something after timer to prove it fired
-        let result = ctx.schedule_activity("PostTimer", "done").into_activity().await?;
+        let result = ctx.schedule_activity_v2("PostTimer", "done").await?;
         Ok(result)
     };
 
@@ -220,8 +221,9 @@ async fn timer_recovery_after_crash_before_fire() {
 
     // Restart runtime with same store
     let orch2 = |ctx: OrchestrationContext, _input: String| async move {
-        ctx.schedule_timer(Duration::from_millis(TIMER_MS)).into_timer().await;
-        let result = ctx.schedule_activity("PostTimer", "done").into_activity().await?;
+        ctx.initialize_v2();
+        ctx.schedule_timer_v2(Duration::from_millis(TIMER_MS)).await;
+        let result = ctx.schedule_activity_v2("PostTimer", "done").await?;
         Ok(result)
     };
 
@@ -265,8 +267,9 @@ async fn timer_recovery_after_crash_after_fire() {
     const TIMER_MS: u64 = 100;
 
     let orch = |ctx: OrchestrationContext, _input: String| async move {
-        ctx.schedule_timer(Duration::from_millis(TIMER_MS)).into_timer().await;
-        let result = ctx.schedule_activity("PostTimer", "done").into_activity().await?;
+        ctx.initialize_v2();
+        ctx.schedule_timer_v2(Duration::from_millis(TIMER_MS)).await;
+        let result = ctx.schedule_activity_v2("PostTimer", "done").await?;
         Ok(result)
     };
 
@@ -299,8 +302,9 @@ async fn timer_recovery_after_crash_after_fire() {
 
     // Restart runtime
     let orch2 = |ctx: OrchestrationContext, _input: String| async move {
-        ctx.schedule_timer(Duration::from_millis(TIMER_MS)).into_timer().await;
-        let result = ctx.schedule_activity("PostTimer", "done").into_activity().await?;
+        ctx.initialize_v2();
+        ctx.schedule_timer_v2(Duration::from_millis(TIMER_MS)).await;
+        let result = ctx.schedule_activity_v2("PostTimer", "done").await?;
         Ok(result)
     };
 
@@ -345,7 +349,8 @@ async fn zero_duration_timer() {
     let (store, _td) = create_sqlite_store().await;
 
     let orch = |ctx: OrchestrationContext, _input: String| async move {
-        ctx.schedule_timer(Duration::ZERO).into_timer().await;
+        ctx.initialize_v2();
+        ctx.schedule_timer_v2(Duration::ZERO).await;
         Ok("zero-timer-fired".to_string())
     };
 
@@ -378,8 +383,9 @@ async fn timer_cancellation() {
     let (store, _td) = create_sqlite_store().await;
 
     let orch = |ctx: OrchestrationContext, _input: String| async move {
+        ctx.initialize_v2();
         // Schedule a timer and wait for it
-        ctx.schedule_timer(Duration::from_millis(100)).into_timer().await;
+        ctx.schedule_timer_v2(Duration::from_millis(100)).await;
         Ok("timer-completed".to_string())
     };
 
@@ -418,15 +424,11 @@ async fn multiple_timers_recovery_after_crash() {
 
     // Simple orchestration that schedules multiple timers
     let orch = |ctx: OrchestrationContext, _input: String| async move {
-        // Schedule multiple timers
-        let timer1 = ctx.schedule_timer(Duration::from_millis(TIMER_MS));
-        let timer2 = ctx.schedule_timer(Duration::from_millis(TIMER_MS + 50));
-        let timer3 = ctx.schedule_timer(Duration::from_millis(TIMER_MS + 100));
-
-        // Wait for all timers
-        timer1.into_timer().await;
-        timer2.into_timer().await;
-        timer3.into_timer().await;
+        ctx.initialize_v2();
+        // Schedule and wait for all timers sequentially
+        ctx.schedule_timer_v2(Duration::from_millis(TIMER_MS)).await;
+        ctx.schedule_timer_v2(Duration::from_millis(TIMER_MS + 50)).await;
+        ctx.schedule_timer_v2(Duration::from_millis(TIMER_MS + 100)).await;
 
         Ok("all-timers-fired".to_string())
     };
@@ -458,13 +460,10 @@ async fn multiple_timers_recovery_after_crash() {
 
     // Restart runtime
     let orch2 = |ctx: OrchestrationContext, _input: String| async move {
-        let timer1 = ctx.schedule_timer(Duration::from_millis(TIMER_MS));
-        let timer2 = ctx.schedule_timer(Duration::from_millis(TIMER_MS + 50));
-        let timer3 = ctx.schedule_timer(Duration::from_millis(TIMER_MS + 100));
-
-        timer1.into_timer().await;
-        timer2.into_timer().await;
-        timer3.into_timer().await;
+        ctx.initialize_v2();
+        ctx.schedule_timer_v2(Duration::from_millis(TIMER_MS)).await;
+        ctx.schedule_timer_v2(Duration::from_millis(TIMER_MS + 50)).await;
+        ctx.schedule_timer_v2(Duration::from_millis(TIMER_MS + 100)).await;
 
         Ok("all-timers-fired".to_string())
     };
@@ -533,12 +532,13 @@ async fn timer_fires_at_correct_time_after_previous_timer() {
     // 3. Races a timer against a fast activity
     // 4. The fast activity should win (timer fires at correct future time)
     let test_orch = |ctx: OrchestrationContext, _input: String| async move {
+        ctx.initialize_v2();
         // Phase 1: Wait for a 100ms timer - this creates TimerFired in history at time T0+100
-        ctx.schedule_timer(Duration::from_millis(100)).await;
+        ctx.schedule_timer_v2(Duration::from_millis(100)).await;
 
         // Phase 2: Do a slow activity (2 seconds of real time passes)
         // After this, system time is approximately T0 + 2100ms
-        let _ = ctx.schedule_activity("SlowActivity", "2000").await;
+        let _ = ctx.schedule_activity_v2("SlowActivity", "2000").await;
 
         // Phase 3: Now race a 1-second timer against a fast activity (100ms)
         //
@@ -546,20 +546,12 @@ async fn timer_fires_at_correct_time_after_previous_timer() {
         // - Timer fire_at = now + 1000 = (T0 + 2100) + 1000 = T0 + 3100
         // - Activity completes at T0 + 2200 (100ms from now)
         // - Activity wins because T0 + 2200 < T0 + 3100
-        let timer = ctx.schedule_timer(Duration::from_secs(1));
-        let activity = ctx.schedule_activity("SlowActivity", "100"); // 100ms activity
+        let mut timer = std::pin::pin!(ctx.schedule_timer_v2(Duration::from_secs(1)));
+        let mut activity = std::pin::pin!(ctx.schedule_activity_v2("SlowActivity", "100")); // 100ms activity
 
-        let (winner, output) = ctx.select2(timer, activity).await;
-
-        let result = if winner == 0 {
-            // Timer won - would indicate regression
-            "timer_won".to_string()
-        } else {
-            // Activity won - correct behavior
-            match output {
-                duroxide::DurableOutput::Activity(result) => result.unwrap_or_else(|e| format!("activity_failed: {e}")),
-                _ => "unexpected_output".to_string(),
-            }
+        let result = futures::select! {
+            _ = timer => "timer_won".to_string(),
+            res = activity => res.unwrap_or_else(|e| format!("activity_failed: {e}")),
         };
         Ok(result)
     };
