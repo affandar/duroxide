@@ -133,6 +133,7 @@ async fn continue_as_new_event_routes_to_latest() {
 
     // Orchestrator: first execution continues immediately; second waits for "Go" then completes with payload
     let orch = |ctx: OrchestrationContext, input: String| async move {
+        ctx.initialize_v2();
         match input.as_str() {
             "start" => {
                 ctx.trace_info("first exec -> continue".to_string());
@@ -140,7 +141,7 @@ async fn continue_as_new_event_routes_to_latest() {
             }
             "wait" => {
                 ctx.trace_info("second exec -> subscribe and wait".to_string());
-                let v = ctx.schedule_wait("Go").into_event().await;
+                let v = ctx.schedule_wait_v2("Go").await;
                 Ok(v)
             }
             _ => Ok(input),
@@ -245,6 +246,7 @@ async fn continue_as_new_event_drop_then_process() {
 
     // Orchestrator: first execution continues; second waits for Go twice (second send expected to deliver)
     let orch = |ctx: OrchestrationContext, input: String| async move {
+        ctx.initialize_v2();
         match input.as_str() {
             "start" => {
                 ctx.trace_info("first exec -> continue".to_string());
@@ -252,7 +254,7 @@ async fn continue_as_new_event_drop_then_process() {
             }
             "wait" => {
                 ctx.trace_info("second exec -> subscribe and wait".to_string());
-                let v = ctx.schedule_wait("Go").into_event().await;
+                let v = ctx.schedule_wait_v2("Go").await;
                 Ok(v)
             }
             _ => Ok(input),
@@ -353,10 +355,11 @@ async fn event_drop_then_retry_after_subscribe() {
     let (store, _td) = common::create_sqlite_store_disk().await;
 
     let orch = |ctx: OrchestrationContext, _input: String| async move {
+        ctx.initialize_v2();
         ctx.trace_info("subscribe after a short delay".to_string());
         // Introduce a small timer before subscribing to simulate early event arrival
-        ctx.schedule_timer(Duration::from_millis(100)).into_timer().await;
-        let v = ctx.schedule_wait("Data").into_event().await;
+        ctx.schedule_timer_v2(Duration::from_millis(100)).await;
+        let v = ctx.schedule_wait_v2("Data").await;
         Ok(v)
     };
 
@@ -431,8 +434,9 @@ async fn old_execution_completions_are_ignored() {
 
     // Orchestration that waits for external events (stays active)
     let orch = |ctx: OrchestrationContext, _input: String| async move {
+        ctx.initialize_v2();
         // Wait for an external event to keep the orchestration active
-        let _result = ctx.schedule_wait("continue_signal").into_event().await;
+        let _result = ctx.schedule_wait_v2("continue_signal").await;
         Ok("orchestration_complete".to_string())
     };
 
@@ -490,7 +494,8 @@ async fn future_execution_completions_are_ignored() {
 
     // Simple orchestration that waits for external events
     let orch = |ctx: OrchestrationContext, _input: String| async move {
-        let _result = ctx.schedule_wait("test_event").into_event().await;
+        ctx.initialize_v2();
+        let _result = ctx.schedule_wait_v2("test_event").await;
         Ok("completed".to_string())
     };
 
