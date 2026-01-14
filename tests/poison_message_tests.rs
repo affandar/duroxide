@@ -308,7 +308,8 @@ async fn e2e_activity_item_poison_fails_orchestration() {
         .register(
             "OrchWithActivity",
             |ctx: OrchestrationContext, _input: String| async move {
-                ctx.schedule_activity("TestActivity", "{}").into_activity().await
+                ctx.initialize_v2();
+                ctx.schedule_activity_v2("TestActivity", "{}").await
             },
         )
         .build();
@@ -488,12 +489,13 @@ async fn e2e_one_poisoned_activity_among_many() {
         .register(
             "MultiActivityOrch",
             |ctx: OrchestrationContext, _input: String| async move {
+                ctx.initialize_v2();
                 // First activity
-                let _r1 = ctx.schedule_activity("Activity1", "{}").into_activity().await?;
+                let _r1 = ctx.schedule_activity_v2("Activity1", "{}").await?;
                 // Second activity - this one will be poisoned
-                let _r2 = ctx.schedule_activity("Activity2", "{}").into_activity().await?;
+                let _r2 = ctx.schedule_activity_v2("Activity2", "{}").await?;
                 // Third activity - should not run
-                let r3 = ctx.schedule_activity("Activity3", "{}").into_activity().await?;
+                let r3 = ctx.schedule_activity_v2("Activity3", "{}").await?;
                 Ok::<_, String>(r3)
             },
         )
@@ -624,16 +626,17 @@ async fn e2e_activity_poisons_suborchestration_poisons_parent() {
         .register(
             "GrandparentOrch",
             |ctx: OrchestrationContext, _input: String| async move {
-                ctx.schedule_sub_orchestration("ChildWithActivityOrch", "{}")
-                    .into_sub_orchestration()
+                ctx.initialize_v2();
+                ctx.schedule_sub_orchestration_v2("ChildWithActivityOrch", "{}")
                     .await
             },
         )
         .register(
             "ChildWithActivityOrch",
             |ctx: OrchestrationContext, _input: String| async move {
+                ctx.initialize_v2();
                 // This activity will be poisoned
-                ctx.schedule_activity("ChildActivity", "{}").into_activity().await
+                ctx.schedule_activity_v2("ChildActivity", "{}").await
             },
         )
         .build();

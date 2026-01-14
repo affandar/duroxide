@@ -1,3 +1,5 @@
+// NOTE: Uses ctx.select2/ctx.join to test v1 API behavior
+#![allow(deprecated)]
 use duroxide::runtime::{self, registry::ActivityRegistry};
 use duroxide::{ActivityContext, OrchestrationContext, OrchestrationRegistry};
 use std::sync::Arc;

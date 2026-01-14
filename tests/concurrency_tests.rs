@@ -1,3 +1,5 @@
+// NOTE: Uses ctx.join to test v1 API behavior
+#![allow(deprecated)]
 use duroxide::EventKind;
 use duroxide::providers::Provider;
 use std::sync::Arc;

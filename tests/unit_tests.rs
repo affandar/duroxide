@@ -1,3 +1,5 @@
+// NOTE: Uses run_turn() to test v1 API behavior
+#![allow(deprecated)]
 use duroxide::EventKind;
 use duroxide::providers::Provider;
 use duroxide::providers::ProviderAdmin;
