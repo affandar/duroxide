@@ -1131,16 +1131,23 @@ async fn sample_versioning_start_latest_vs_exact_fs() {
 async fn sample_versioning_sub_orchestration_explicit_vs_policy_fs() {
     let (store, _temp_dir) = common::create_sqlite_store_disk().await;
 
-    let child_v1 = |_: OrchestrationContext, _in: String| async move { Ok("c1".to_string()) };
-    let child_v2 = |_: OrchestrationContext, _in: String| async move { Ok("c2".to_string()) };
+    let child_v1 = |ctx: OrchestrationContext, _in: String| async move {
+        ctx.initialize_v2();
+        Ok("c1".to_string())
+    };
+    let child_v2 = |ctx: OrchestrationContext, _in: String| async move {
+        ctx.initialize_v2();
+        Ok("c2".to_string())
+    };
+    #[allow(deprecated)]
     let parent = |ctx: OrchestrationContext, _in: String| async move {
-        // Explicit versioned call -> expect c1
+        // Explicit versioned call -> expect c1 (using old API - no v2 versioned variant yet)
         let a = ctx
             .schedule_sub_orchestration_versioned("Child", Some("1.0.0".to_string()), "exp")
             .into_sub_orchestration()
             .await
             .unwrap();
-        // Policy-based call (Latest) -> expect c2
+        // Policy-based call (Latest) -> expect c2 (using old API for consistency)
         let b = ctx
             .schedule_sub_orchestration("Child", "pol")
             .into_sub_orchestration()
@@ -1269,15 +1276,16 @@ async fn sample_cancellation_parent_cascades_to_children_fs() {
 
     // Child: waits forever (until canceled). This demonstrates cooperative cancellation via runtime.
     let child = |ctx: OrchestrationContext, _input: String| async move {
-        let _ = ctx.schedule_wait("Go").into_event().await;
+        ctx.initialize_v2();
+        let _ = ctx.schedule_wait_v2("Go").await;
         Ok("done".to_string())
     };
 
     // Parent: starts child and awaits its completion.
     let parent = |ctx: OrchestrationContext, _input: String| async move {
+        ctx.initialize_v2();
         let _ = ctx
-            .schedule_sub_orchestration("ChildSample", "seed")
-            .into_sub_orchestration()
+            .schedule_sub_orchestration_v2("ChildSample", "seed")
             .await?;
         Ok::<_, String>("parent_done".to_string())
     };
@@ -1399,8 +1407,9 @@ async fn sample_basic_error_handling_fs() {
 
     // Simple orchestration that calls the activity
     let orchestration = |ctx: OrchestrationContext, input: String| async move {
+        ctx.initialize_v2();
         ctx.trace_info("Starting validation");
-        let result = ctx.schedule_activity("ValidateInput", input).into_activity().await?;
+        let result = ctx.schedule_activity_v2("ValidateInput", input).await?;
         ctx.trace_info(format!("Validation result: {result}"));
         Ok(result)
     };
@@ -1482,16 +1491,16 @@ async fn sample_nested_function_error_handling_fs() {
     async fn process_and_format(ctx: &OrchestrationContext, data: &str) -> Result<String, String> {
         ctx.trace_info("Starting processing");
         let processed = ctx
-            .schedule_activity("ProcessData", data.to_string())
-            .into_activity()
+            .schedule_activity_v2("ProcessData", data.to_string())
             .await?;
         ctx.trace_info("Starting formatting");
-        let formatted = ctx.schedule_activity("FormatOutput", processed).into_activity().await?;
+        let formatted = ctx.schedule_activity_v2("FormatOutput", processed).await?;
         Ok(formatted)
     }
 
     // Orchestration that uses nested function with `?`
     let orchestration = |ctx: OrchestrationContext, input: String| async move {
+        ctx.initialize_v2();
         ctx.trace_info("Starting orchestration");
         let result = process_and_format(&ctx, &input).await?;
         ctx.trace_info("Orchestration completed");
@@ -1573,11 +1582,11 @@ async fn sample_error_recovery_fs() {
 
     // Orchestration with explicit error recovery
     let orchestration = |ctx: OrchestrationContext, input: String| async move {
+        ctx.initialize_v2();
         ctx.trace_info("Starting orchestration");
 
         match ctx
-            .schedule_activity("ProcessData", input.clone())
-            .into_activity()
+            .schedule_activity_v2("ProcessData", input.clone())
             .await
         {
             Ok(result) => {
@@ -1586,7 +1595,7 @@ async fn sample_error_recovery_fs() {
             }
             Err(e) => {
                 ctx.trace_info("Processing failed, logging error");
-                let _ = ctx.schedule_activity("LogError", e.clone()).into_activity().await;
+                let _ = ctx.schedule_activity_v2("LogError", e.clone()).await;
                 Err(format!("Failed to process '{input}': {e}"))
             }
         }
@@ -1698,6 +1707,7 @@ async fn sample_self_pruning_eternal_orchestration() {
 
     // Eternal orchestration that processes 5 batches then completes
     let orchestration = |ctx: OrchestrationContext, state_str: String| async move {
+        ctx.initialize_v2();
         #[derive(Serialize, Deserialize)]
         struct State {
             batch_num: u32,
@@ -1711,14 +1721,12 @@ async fn sample_self_pruning_eternal_orchestration() {
 
         // Process current batch
         let _result = ctx
-            .schedule_activity("ProcessBatch", state.batch_num.to_string())
-            .into_activity()
+            .schedule_activity_v2("ProcessBatch", state.batch_num.to_string())
             .await?;
 
         // Prune old executions (keep only current) - do this on every iteration
         let _prune_result = ctx
-            .schedule_activity("PruneSelf", "".to_string())
-            .into_activity()
+            .schedule_activity_v2("PruneSelf", "".to_string())
             .await?;
 
         if state.batch_num >= state.total_batches - 1 {
