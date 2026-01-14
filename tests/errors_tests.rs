@@ -41,16 +41,17 @@ async fn error_handling_compensation_on_ship_failure_with(store: StdArc<dyn Prov
         .build();
 
     let orchestration = |ctx: OrchestrationContext, _input: String| async move {
-        let deb = ctx.schedule_activity("Debit", "ok").into_activity().await;
+        ctx.initialize_v2();
+        let deb = ctx.schedule_activity_v2("Debit", "ok").await;
         let deb = parse_activity_result(&deb);
         match deb {
             Err(e) => Ok(format!("debit_failed:{e}")),
             Ok(deb_val) => {
-                let ship = ctx.schedule_activity("Ship", "fail_ship").into_activity().await;
+                let ship = ctx.schedule_activity_v2("Ship", "fail_ship").await;
                 match parse_activity_result(&ship) {
                     Ok(_) => Ok("ok".to_string()),
                     Err(_) => {
-                        let cred = ctx.schedule_activity("Credit", deb_val).into_activity().await.unwrap();
+                        let cred = ctx.schedule_activity_v2("Credit", deb_val).await.unwrap();
                         Ok(format!("rolled_back:{cred}"))
                     }
                 }
@@ -109,9 +110,10 @@ async fn error_handling_success_path_with(store: StdArc<dyn Provider>) {
         .build();
 
     let orchestration = |ctx: OrchestrationContext, _input: String| async move {
-        let deb = ctx.schedule_activity("Debit", "ok").into_activity().await;
+        ctx.initialize_v2();
+        let deb = ctx.schedule_activity_v2("Debit", "ok").await;
         parse_activity_result(&deb).unwrap();
-        let ship = ctx.schedule_activity("Ship", "ok").into_activity().await;
+        let ship = ctx.schedule_activity_v2("Ship", "ok").await;
         parse_activity_result(&ship).unwrap();
         Ok("ok".to_string())
     };
@@ -168,7 +170,8 @@ async fn error_handling_early_debit_failure_with(store: StdArc<dyn Provider>) {
         .build();
 
     let orchestration = |ctx: OrchestrationContext, _input: String| async move {
-        let deb = ctx.schedule_activity("Debit", "fail").into_activity().await;
+        ctx.initialize_v2();
+        let deb = ctx.schedule_activity_v2("Debit", "fail").await;
         match deb {
             Err(e) => Ok(format!("debit_failed:{e}")),
             Ok(_) => unreachable!(),
@@ -219,7 +222,8 @@ async fn error_handling_early_debit_failure_fs() {
 async fn unknown_activity_fails_with(store: StdArc<dyn Provider>) {
     let activity_registry = ActivityRegistry::builder().build();
     let orchestration = |ctx: OrchestrationContext, _input: String| async move {
-        match ctx.schedule_activity("Missing", "foo").into_activity().await {
+        ctx.initialize_v2();
+        match ctx.schedule_activity_v2("Missing", "foo").await {
             Ok(v) => Ok(format!("unexpected_ok:{v}")),
             Err(e) => Ok(format!("err={e}")),
         }
@@ -288,7 +292,8 @@ async fn event_after_completion_is_ignored_fs() {
     let instance = "inst-post-complete-1";
     // Orchestration: subscribe and exit on first event
     let orchestration = |ctx: OrchestrationContext, _input: String| async move {
-        let _ = ctx.schedule_wait("Once").into_event().await;
+        ctx.initialize_v2();
+        let _ = ctx.schedule_wait_v2("Once").await;
         Ok("done".to_string())
     };
 
@@ -345,23 +350,23 @@ async fn event_before_subscription_after_start_is_ignored() {
     let (store, _temp_dir) = common::create_sqlite_store_disk().await;
     let activity_registry = ActivityRegistry::builder().build();
     let orchestration = |ctx: OrchestrationContext, _input: String| async move {
+        ctx.initialize_v2();
         info!("Orchestration started");
         // Delay before subscribing to simulate missing subscription window
-        ctx.schedule_timer(Duration::from_millis(10)).into_timer().await;
+        ctx.schedule_timer_v2(Duration::from_millis(10)).await;
         info!("Subscribing to event");
-        // Subscribe, then wait for event with timeout
-        let ev = ctx.schedule_wait("Evt");
-        let to = ctx.schedule_timer(Duration::from_millis(1000));
-        match ctx.select2(ev, to).await {
-            (0, duroxide::DurableOutput::External(data)) => {
+        // Subscribe, then wait for event with timeout using futures::select!
+        let mut ev = std::pin::pin!(ctx.schedule_wait_v2("Evt"));
+        let mut timeout = std::pin::pin!(ctx.schedule_timer_v2(Duration::from_millis(1000)));
+        futures::select! {
+            data = ev => {
                 info!("Event received: {}", data);
                 Ok(data)
             }
-            (1, duroxide::DurableOutput::Timer) => {
+            _ = timeout => {
                 info!("Timeout waiting for event");
                 panic!("timeout waiting for Evt after subscription")
             }
-            _ => unreachable!(),
         }
     };
 
@@ -418,8 +423,9 @@ async fn history_cap_exceeded_with(store: StdArc<dyn Provider>) {
     // Orchestration that schedules more than CAP events.
     // Each activity emits two events (Scheduled + Completed). With CAP=1024, 600 activities exceed.
     let orchestration = |ctx: OrchestrationContext, _input: String| async move {
+        ctx.initialize_v2();
         for i in 0..600u32 {
-            let _ = ctx.schedule_activity("Noop", format!("{i}")).into_activity().await;
+            let _ = ctx.schedule_activity_v2("Noop", format!("{i}")).await;
         }
         Ok("done".to_string())
     };
@@ -537,8 +543,9 @@ async fn orchestration_propagates_activity_failure_fs() {
         .build();
 
     let orchestration_registry = OrchestrationRegistry::builder()
-        .register("PropagateFail", |ctx, _| async move {
-            let r = ctx.schedule_activity("Fail", "x").into_activity().await;
+        .register("PropagateFail", |ctx: OrchestrationContext, _| async move {
+            ctx.initialize_v2();
+            let r = ctx.schedule_activity_v2("Fail", "x").await;
             r.map(|_v| "ok".to_string())
         })
         .build();
@@ -602,8 +609,9 @@ async fn typed_activity_decode_error_fs() {
         })
         .build();
     let orch = |ctx: OrchestrationContext, _in: String| async move {
+        ctx.initialize_v2();
         // Pass invalid payload (not JSON for AOnly)
-        let res = ctx.schedule_activity("FmtA", "not-json").into_activity().await;
+        let res = ctx.schedule_activity_v2("FmtA", "not-json").await;
         // The activity worker decodes input; expect Err
         assert!(res.is_err());
         Ok("ok".to_string())
@@ -635,6 +643,7 @@ async fn typed_activity_decode_error_fs() {
 }
 
 #[tokio::test]
+#[allow(deprecated)] // Uses typed API which has no v2 equivalent yet
 async fn typed_event_decode_error_fs() {
     let (store, _temp_dir) = common::create_sqlite_store_disk().await;
     let activity_registry = ActivityRegistry::builder().build();
