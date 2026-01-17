@@ -347,7 +347,7 @@ pub fn inline_activity(_attr: TokenStream, item: TokenStream) -> TokenStream {
 
 #[proc_macro_attribute]
 pub fn activity(attr: TokenStream, item: TokenStream) -> TokenStream {
-    let fn_item = parse_macro_input!(item as ItemFn);
+    let mut fn_item = parse_macro_input!(item as ItemFn);
     let name = match parse_name_arg(attr) {
         Ok(Some(n)) => n,
         Ok(None) => fn_item.sig.ident.to_string(),
@@ -360,18 +360,91 @@ pub fn activity(attr: TokenStream, item: TokenStream) -> TokenStream {
             .into();
     }
 
-    let register_fn = format_ident!("__duroxide_register_activity_{}", fn_item.sig.ident);
-    let fn_ident = &fn_item.sig.ident;
+    // Transform the user's function into:
+    // - an internal activity handler (same signature/body, renamed)
+    // - a scheduling stub (same original name) callable from orchestrations
+    //
+    // This supports your "activities are outside the orchestration fn" assumption,
+    // while keeping ergonomics close to normal async Rust (`greet(&ctx, input).await?`).
+    let orig_ident = fn_item.sig.ident.clone();
+    let impl_ident = format_ident!("__duroxide_activity_impl_{}", orig_ident);
+    fn_item.sig.ident = impl_ident.clone();
+
+    let (stub_input_pat, stub_input_ty) = match fn_item.sig.inputs.len() {
+        0 => (syn::parse_quote! { _input }, syn::parse_quote! { () }),
+        1 => {
+            let FnArg::Typed(p) = fn_item.sig.inputs.first().unwrap() else {
+                return syn::Error::new(fn_item.sig.inputs.span(), "activity cannot take self")
+                    .to_compile_error()
+                    .into();
+            };
+            (p.pat.as_ref().clone(), (*p.ty).clone())
+        }
+        2 => {
+            // Expect (ActivityContext, In)
+            let first = fn_item.sig.inputs.first().unwrap();
+            let second = fn_item.sig.inputs.iter().nth(1).unwrap();
+            let FnArg::Typed(first) = first else {
+                return syn::Error::new(first.span(), "activity cannot take self")
+                    .to_compile_error()
+                    .into();
+            };
+            if !is_path_ident(&first.ty, "ActivityContext") {
+                return syn::Error::new(
+                    first.ty.span(),
+                    "if two parameters are used, the first must be ActivityContext",
+                )
+                .to_compile_error()
+                .into();
+            }
+            let FnArg::Typed(second) = second else {
+                return syn::Error::new(second.span(), "activity cannot take self")
+                    .to_compile_error()
+                    .into();
+            };
+            (second.pat.as_ref().clone(), (*second.ty).clone())
+        }
+        _ => {
+            return syn::Error::new(
+                fn_item.sig.inputs.span(),
+                "activity supports 0 args, 1 arg, or (ActivityContext, 1 arg)",
+            )
+            .to_compile_error()
+            .into();
+        }
+    };
+
+    let out_ty = match extract_result_ok_type(&fn_item.sig.output) {
+        Ok(t) => t,
+        Err(e) => return e.to_compile_error().into(),
+    };
+
+    let register_fn = format_ident!("__duroxide_register_activity_{}", orig_ident);
+    let tmp_ident = format_ident!("__duroxide_activity_arg_{}", orig_ident);
+
     let expanded = quote! {
         #[allow(non_snake_case)]
         #fn_item
+
+        #[allow(non_snake_case)]
+        pub fn #orig_ident(
+            ctx: &::duroxide::OrchestrationContext,
+            #stub_input_pat: #stub_input_ty
+        ) -> impl ::std::future::Future<Output = ::std::result::Result<#out_ty, ::std::string::String>> + '_ {
+            async move {
+                let #tmp_ident = #stub_input_pat;
+                ctx.schedule_activity_typed::<#stub_input_ty, #out_ty>(#name, &#tmp_ident)
+                    .into_activity_typed::<#out_ty>()
+                    .await
+            }
+        }
 
         #[doc(hidden)]
         #[allow(non_snake_case)]
         fn #register_fn(
             builder: ::duroxide::runtime::registry::ActivityRegistryBuilder
         ) -> ::duroxide::runtime::registry::ActivityRegistryBuilder {
-            builder.register_typed(#name, #fn_ident)
+            builder.register_typed(#name, #impl_ident)
         }
 
         ::duroxide::inventory::submit! {

@@ -1,13 +1,13 @@
 use duroxide::{ActivityContext, OrchestrationContext};
 
+#[duroxide::activity(name = "InlineMacroHello::greet")]
+async fn greet(_ctx: ActivityContext, name: String) -> Result<String, String> {
+    Ok(format!("Hello, {name}!"))
+}
+
 #[duroxide::orchestration]
 async fn InlineMacroHello(ctx: OrchestrationContext, name: String) -> Result<String, String> {
-    #[duroxide::inline_activity]
-    async fn greet(name: String) -> Result<String, String> {
-        Ok(format!("Hello, {name}!"))
-    }
-
-    let greeting = greet(name).await?;
+    let greeting = greet(&ctx, name).await?;
     ctx.trace_info(format!("greeting = {greeting}"));
     Ok(greeting)
 }
