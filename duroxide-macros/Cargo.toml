@@ -1,0 +1,17 @@
+[package]
+name = "duroxide-macros"
+version = "0.1.0"
+edition = "2024"
+description = "Procedural macros for duroxide durable execution framework"
+license = "MIT"
+repository = "https://github.com/affandar/duroxide"
+keywords = ["durable", "workflow", "orchestration", "async", "macros"]
+categories = ["asynchronous", "concurrency"]
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = "1"
+quote = "1"
+syn = { version = "2", features = ["full", "parsing", "extra-traits"] }

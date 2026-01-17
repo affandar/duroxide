@@ -457,6 +457,87 @@ pub use providers::{
 // Re-export deletion/pruning types for Client API users
 pub use providers::{DeleteInstanceResult, InstanceFilter, InstanceTree, PruneOptions, PruneResult};
 
+// Re-export proc macros when the macros feature is enabled
+#[cfg(feature = "macros")]
+pub use duroxide_macros::{durable_activity, durable_workflow};
+
+/// Schedule an activity call from an orchestration with clean syntax.
+///
+/// This macro transforms activity calls to look like regular function calls while
+/// using the duroxide durable execution framework underneath.
+///
+/// # Usage
+///
+/// ```rust,ignore
+/// // With a single typed input - serialized directly
+/// let result = activity!(ctx, greet(name)).await?;
+///
+/// // With no arguments
+/// let result = activity!(ctx, get_config()).await?;
+///
+/// // Using the result
+/// let greeting: String = activity!(ctx, greet("World".to_string())).await?;
+/// ```
+///
+/// # Note on Serialization
+///
+/// Single arguments are serialized directly using `serde_json::to_string`.
+/// If your activity expects a different format, serialize manually:
+/// ```rust,ignore
+/// let input = serde_json::to_string(&my_struct).unwrap();
+/// ctx.schedule_activity("my_activity", input).into_activity().await?;
+/// ```
+#[macro_export]
+macro_rules! activity {
+    // Pattern with single argument: serialize directly
+    ($ctx:expr, $func:ident($arg:expr)) => {{
+        let __serialized = ::serde_json::to_string(&$arg)
+            .expect("activity input serialization should not fail");
+        $ctx.schedule_activity(stringify!($func), __serialized)
+            .into_activity()
+    }};
+    // Pattern with no arguments: empty string
+    ($ctx:expr, $func:ident()) => {{
+        $ctx.schedule_activity(stringify!($func), String::new())
+            .into_activity()
+    }};
+}
+
+/// Schedule an activity call and deserialize the result to a specific type.
+///
+/// This is a convenience macro that combines `activity!` with result deserialization.
+///
+/// # Usage
+///
+/// ```rust,ignore
+/// let user: User = activity_typed!(ctx, fetch_user(user_id)).await?;
+/// ```
+#[macro_export]
+macro_rules! activity_typed {
+    // Pattern with single argument
+    ($ctx:expr, $func:ident($arg:expr)) => {{
+        let __serialized = ::serde_json::to_string(&$arg)
+            .expect("activity input serialization should not fail");
+        async {
+            let __result_str = $ctx.schedule_activity(stringify!($func), __serialized)
+                .into_activity()
+                .await?;
+            ::serde_json::from_str(&__result_str)
+                .map_err(|e| format!("activity result deserialization error: {}", e))
+        }
+    }};
+    // Pattern with no arguments
+    ($ctx:expr, $func:ident()) => {{
+        async {
+            let __result_str = $ctx.schedule_activity(stringify!($func), String::new())
+                .into_activity()
+                .await?;
+            ::serde_json::from_str(&__result_str)
+                .map_err(|e| format!("activity result deserialization error: {}", e))
+        }
+    }};
+}
+
 // Type aliases for improved readability and maintainability
 /// Shared reference to a Provider implementation
 pub type ProviderRef = Arc<dyn providers::Provider>;
