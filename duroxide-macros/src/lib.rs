@@ -5,6 +5,7 @@ use syn::{
     parse_macro_input,
     punctuated::Punctuated,
     spanned::Spanned,
+    visit_mut::VisitMut,
     Expr, ExprCall, ExprPath, FnArg, Ident, Item, ItemFn, Pat, PatIdent, PathArguments, ReturnType, Stmt, Type,
     TypePath,
 };
@@ -24,7 +25,7 @@ fn parse_name_arg(attr: TokenStream) -> Result<Option<String>, syn::Error> {
         if let syn::Meta::NameValue(nv) = meta
             && nv.path.is_ident("name")
         {
-            if let syn::Expr::Lit(expr_lit) = nv.value
+            if let syn::Expr::Lit(ref expr_lit) = nv.value
                 && let syn::Lit::Str(s) = expr_lit.lit
             {
                 return Ok(Some(s.value()));
