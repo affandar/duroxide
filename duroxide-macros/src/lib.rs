@@ -26,7 +26,7 @@ fn parse_name_arg(attr: TokenStream) -> Result<Option<String>, syn::Error> {
             && nv.path.is_ident("name")
         {
             if let syn::Expr::Lit(ref expr_lit) = nv.value
-                && let syn::Lit::Str(s) = expr_lit.lit
+                && let syn::Lit::Str(s) = &expr_lit.lit
             {
                 return Ok(Some(s.value()));
             }
