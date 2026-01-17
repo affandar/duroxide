@@ -29,6 +29,8 @@ async-trait = "0.1"
 tracing = { version = "0.1", features = ["std"] }
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter", "json"] }
 semver = "1"
+inventory = "0.3"
+duroxide-macros = { path = "duroxide-macros" }
 
 # OpenTelemetry observability (optional)
 opentelemetry = { version = "0.27", optional = true }
@@ -49,6 +51,7 @@ duroxide = { path = ".", features = ["sqlite", "test-hooks"] }
 [workspace]
 members = [
     ".",
+    "duroxide-macros",
     "sqlite-stress",
 ]
 

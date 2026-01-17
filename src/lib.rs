@@ -431,6 +431,15 @@ pub mod runtime;
 pub use runtime::OrchestrationDescriptor;
 pub mod providers;
 
+/// Compile-time auto-registration helpers (optional, additive).
+pub mod auto_registry;
+
+/// Re-export `inventory` so proc-macros can submit without extra deps in user crates.
+pub use inventory;
+
+/// Proc-macros (re-exported from `duroxide-macros`).
+pub use duroxide_macros::{activity, inline_activity, orchestration};
+
 #[cfg(feature = "provider-test")]
 pub mod provider_validations;
 
