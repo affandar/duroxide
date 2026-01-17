@@ -7,7 +7,13 @@ async fn greet(_ctx: ActivityContext, name: String) -> Result<String, String> {
 
 #[duroxide::orchestration]
 async fn InlineMacroHello(ctx: OrchestrationContext, name: String) -> Result<String, String> {
-    let greeting = greet(&ctx, name).await?;
+    let f1 = greet_future(&ctx, name.clone());
+    let f2 = greet_future(&ctx, name);
+
+    // compile-only: ensure join composition works with the generated durable stub
+    let _ = ctx.join(vec![f1, f2]).await;
+
+    let greeting = greet(&ctx, "world".to_string()).await?;
     ctx.trace_info(format!("greeting = {greeting}"));
     Ok(greeting)
 }

@@ -421,6 +421,7 @@ pub fn activity(attr: TokenStream, item: TokenStream) -> TokenStream {
 
     let register_fn = format_ident!("__duroxide_register_activity_{}", orig_ident);
     let tmp_ident = format_ident!("__duroxide_activity_arg_{}", orig_ident);
+    let durable_fn_ident = format_ident!("{}_future", orig_ident);
 
     let expanded = quote! {
         #[allow(non_snake_case)]
@@ -437,6 +438,18 @@ pub fn activity(attr: TokenStream, item: TokenStream) -> TokenStream {
                     .into_activity_typed::<#out_ty>()
                     .await
             }
+        }
+
+        /// Durable (composable) variant for `join`/`select`.
+        ///
+        /// Use `.into_activity()` / `.into_activity_typed()` to await.
+        #[allow(non_snake_case)]
+        pub fn #durable_fn_ident(
+            ctx: &::duroxide::OrchestrationContext,
+            #stub_input_pat: #stub_input_ty
+        ) -> ::duroxide::DurableFuture {
+            let #tmp_ident = #stub_input_pat;
+            ctx.schedule_activity_typed::<#stub_input_ty, #out_ty>(#name, &#tmp_ident)
         }
 
         #[doc(hidden)]
