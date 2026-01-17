@@ -309,6 +309,7 @@ fn expand_inline_activity_wrappers(orch_ident: &Ident, inline_acts: &[InlineActi
                 .unwrap_or_else(|| syn::parse_quote! { ctx });
             quote! {
                 #[::duroxide::activity(name = #act_name)]
+                #[allow(non_snake_case)]
                 async fn #wrapper_ident(
                     #ctx_pat: ::duroxide::ActivityContext,
                     #input_pat: #in_ty
@@ -319,6 +320,7 @@ fn expand_inline_activity_wrappers(orch_ident: &Ident, inline_acts: &[InlineActi
         } else {
             quote! {
                 #[::duroxide::activity(name = #act_name)]
+                #[allow(non_snake_case)]
                 async fn #wrapper_ident(
                     _ctx: ::duroxide::ActivityContext,
                     #input_pat: #in_ty
@@ -361,9 +363,11 @@ pub fn activity(attr: TokenStream, item: TokenStream) -> TokenStream {
     let register_fn = format_ident!("__duroxide_register_activity_{}", fn_item.sig.ident);
     let fn_ident = &fn_item.sig.ident;
     let expanded = quote! {
+        #[allow(non_snake_case)]
         #fn_item
 
         #[doc(hidden)]
+        #[allow(non_snake_case)]
         fn #register_fn(
             builder: ::duroxide::runtime::registry::ActivityRegistryBuilder
         ) -> ::duroxide::runtime::registry::ActivityRegistryBuilder {
@@ -416,9 +420,11 @@ pub fn orchestration(attr: TokenStream, item: TokenStream) -> TokenStream {
     let expanded = quote! {
         #inline_wrappers
 
+        #[allow(non_snake_case)]
         #fn_item
 
         #[doc(hidden)]
+        #[allow(non_snake_case)]
         fn #register_fn(
             builder: ::duroxide::runtime::registry::OrchestrationRegistryBuilder
         ) -> ::duroxide::runtime::registry::OrchestrationRegistryBuilder {
