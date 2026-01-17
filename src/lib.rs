@@ -2012,6 +2012,14 @@ impl DurableFuture {
     }
 }
 
+pub use duroxide_macros::{activity, orchestration};
+
+#[doc(hidden)]
+pub mod internal {
+    pub use serde_json;
+    pub use inventory;
+}
+
 impl OrchestrationContext {
     /// Schedule an activity and return a `DurableFuture` correlated to it.
     ///

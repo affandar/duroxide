@@ -67,6 +67,19 @@ pub type ActivityRegistry = Registry<dyn ActivityHandler>;
 pub type OrchestrationRegistryBuilder = RegistryBuilder<dyn OrchestrationHandler>;
 pub type ActivityRegistryBuilder = RegistryBuilder<dyn ActivityHandler>;
 
+pub struct ActivityRegistration {
+    pub name: &'static str,
+    pub factory: fn() -> Arc<dyn ActivityHandler>,
+}
+
+pub struct OrchestrationRegistration {
+    pub name: &'static str,
+    pub factory: fn() -> Arc<dyn OrchestrationHandler>,
+}
+
+inventory::collect!(ActivityRegistration);
+inventory::collect!(OrchestrationRegistration);
+
 // ============================================================================
 // Generic Registry Implementation
 // ============================================================================
@@ -402,6 +415,19 @@ impl OrchestrationRegistryBuilder {
         self.policy.insert(name.into(), policy);
         self
     }
+
+    pub fn register_auto(mut self) -> Self {
+        for registration in inventory::iter::<OrchestrationRegistration> {
+             if self.check_duplicate(registration.name, &DEFAULT_VERSION, "orchestration") {
+                continue;
+            }
+            self.map
+                .entry(registration.name.to_string())
+                .or_default()
+                .insert(DEFAULT_VERSION, (registration.factory)());
+        }
+        self
+    }
 }
 
 // ============================================================================
@@ -471,5 +497,19 @@ impl ActivityRegistryBuilder {
         Fut: std::future::Future<Output = Result<String, String>> + Send + 'static,
     {
         self.register_all_handlers(items, |builder, name, f| builder.register(name, f))
+    }
+
+    pub fn register_auto(mut self) -> Self {
+        for registration in inventory::iter::<ActivityRegistration> {
+             if self.check_duplicate(registration.name, &DEFAULT_VERSION, "activity") {
+                continue;
+            }
+            self.map
+                .entry(registration.name.to_string())
+                .or_default()
+                .insert(DEFAULT_VERSION, (registration.factory)());
+            self.policy.insert(registration.name.to_string(), VersionPolicy::Latest);
+        }
+        self
     }
 }
