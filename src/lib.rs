@@ -461,61 +461,49 @@ pub use providers::{DeleteInstanceResult, InstanceFilter, InstanceTree, PruneOpt
 #[cfg(feature = "macros")]
 pub use duroxide_macros::{durable_activity, durable_workflow};
 
-/// Schedule an activity call from an orchestration with clean syntax.
-///
-/// This macro transforms activity calls to look like regular function calls while
-/// using the duroxide durable execution framework underneath.
+/// Schedule an activity call with clean method-like syntax.
 ///
 /// # Usage
 ///
 /// ```rust,ignore
-/// // With a single typed input - serialized directly
-/// let result = activity!(ctx, greet(name)).await?;
+/// // Method-like syntax - reads naturally as "ctx dot activity"
+/// let user = activity!(ctx.fetch_user(user_id)).await?;
+/// let config = activity!(ctx.get_config()).await?;
 ///
-/// // With no arguments
-/// let result = activity!(ctx, get_config()).await?;
-///
-/// // Using the result
-/// let greeting: String = activity!(ctx, greet("World".to_string())).await?;
+/// // Works great with typed structs
+/// let payment = activity!(ctx.process_payment(payment_request)).await?;
 /// ```
 ///
-/// # Note on Serialization
+/// # Serialization
 ///
-/// Single arguments are serialized directly using `serde_json::to_string`.
-/// If your activity expects a different format, serialize manually:
-/// ```rust,ignore
-/// let input = serde_json::to_string(&my_struct).unwrap();
-/// ctx.schedule_activity("my_activity", input).into_activity().await?;
-/// ```
+/// Arguments are automatically serialized using `serde_json::to_string()`.
+/// Activities receive the JSON string and should deserialize as needed.
 #[macro_export]
 macro_rules! activity {
-    // Pattern with single argument: serialize directly
-    ($ctx:expr, $func:ident($arg:expr)) => {{
+    // Method-like syntax: activity!(ctx.func(arg))
+    ($ctx:ident.$func:ident($arg:expr)) => {{
         let __serialized = ::serde_json::to_string(&$arg)
             .expect("activity input serialization should not fail");
         $ctx.schedule_activity(stringify!($func), __serialized)
             .into_activity()
     }};
-    // Pattern with no arguments: empty string
-    ($ctx:expr, $func:ident()) => {{
+    // Method-like syntax, no args: activity!(ctx.func())
+    ($ctx:ident.$func:ident()) => {{
         $ctx.schedule_activity(stringify!($func), String::new())
             .into_activity()
     }};
 }
 
-/// Schedule an activity call and deserialize the result to a specific type.
-///
-/// This is a convenience macro that combines `activity!` with result deserialization.
+/// Schedule an activity and deserialize the result to a typed value.
 ///
 /// # Usage
 ///
 /// ```rust,ignore
-/// let user: User = activity_typed!(ctx, fetch_user(user_id)).await?;
+/// let user: User = activity_typed!(ctx.fetch_user(user_id)).await?;
 /// ```
 #[macro_export]
 macro_rules! activity_typed {
-    // Pattern with single argument
-    ($ctx:expr, $func:ident($arg:expr)) => {{
+    ($ctx:ident.$func:ident($arg:expr)) => {{
         let __serialized = ::serde_json::to_string(&$arg)
             .expect("activity input serialization should not fail");
         async {
@@ -526,8 +514,7 @@ macro_rules! activity_typed {
                 .map_err(|e| format!("activity result deserialization error: {}", e))
         }
     }};
-    // Pattern with no arguments
-    ($ctx:expr, $func:ident()) => {{
+    ($ctx:ident.$func:ident()) => {{
         async {
             let __result_str = $ctx.schedule_activity(stringify!($func), String::new())
                 .into_activity()
@@ -535,6 +522,20 @@ macro_rules! activity_typed {
             ::serde_json::from_str(&__result_str)
                 .map_err(|e| format!("activity result deserialization error: {}", e))
         }
+    }};
+}
+
+/// Schedule a timer with clean syntax.
+///
+/// # Usage
+///
+/// ```rust,ignore
+/// timer!(ctx, Duration::from_secs(5)).await;  // Wait 5 seconds
+/// ```
+#[macro_export]
+macro_rules! timer {
+    ($ctx:ident, $duration:expr) => {{
+        $ctx.schedule_timer($duration).into_timer()
     }};
 }
 
