@@ -51,8 +51,12 @@ struct SimInner {
     bindings: HashMap<u64, Option<u64>>,
     // schedule_id -> completion payload
     results: HashMap<u64, SimCompletion>,
-    // external inbox: name -> queue of payloads
-    externals: HashMap<String, VecDeque<String>>,
+    // external arrivals: name -> payloads in arrival order
+    external_arrivals: HashMap<String, Vec<String>>,
+    // external subscription indices: name -> next subscription index
+    external_next_index: HashMap<String, usize>,
+    // schedule_id -> (name, subscription_index)
+    external_subscriptions: HashMap<u64, (String, usize)>,
 }
 
 #[derive(Clone, Default)]
@@ -162,14 +166,19 @@ impl SimCtx {
         inner.results.insert(schedule_id, completion);
     }
 
-    fn deliver_external(&self, name: String, data: String) {
+    fn bind_external_subscription(&self, schedule_id: u64, name: &str) {
         let mut inner = self.inner.lock().unwrap();
-        inner.externals.entry(name).or_default().push_back(data);
+        let idx = inner.external_next_index.entry(name.to_string()).or_insert(0);
+        let subscription_index = *idx;
+        *idx += 1;
+        inner
+            .external_subscriptions
+            .insert(schedule_id, (name.to_string(), subscription_index));
     }
 
-    fn try_take_external(&self, name: &str) -> Option<String> {
+    fn deliver_external(&self, name: String, data: String) {
         let mut inner = self.inner.lock().unwrap();
-        inner.externals.get_mut(name).and_then(|q| q.pop_front())
+        inner.external_arrivals.entry(name).or_default().push(data);
     }
 }
 
@@ -230,17 +239,23 @@ impl Future for SimExternalFuture {
     type Output = String;
 
     fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
-        // We still require the subscription to be bound to history for determinism,
-        // but delivery is name-based.
-        {
-            let inner = self.inner.lock().unwrap();
-            if !matches!(inner.bindings.get(&self.token), Some(Some(_))) {
-                return Poll::Pending;
-            }
-        }
-        let mut inner = self.inner.lock().unwrap();
-        match inner.externals.get_mut(&self.event_name).and_then(|q| q.pop_front()) {
-            Some(v) => Poll::Ready(v),
+        // Subscription must be validated/bound to history, and each subscription gets a stable
+        // consumption index in schedule order so poll order can't steal earlier events.
+        let inner = self.inner.lock().unwrap();
+        let schedule_id = match inner.bindings.get(&self.token) {
+            Some(Some(id)) => *id,
+            _ => return Poll::Pending,
+        };
+        let (name, subscription_index) = match inner.external_subscriptions.get(&schedule_id) {
+            Some(v) => v,
+            None => return Poll::Pending,
+        };
+        let arrivals = match inner.external_arrivals.get(name) {
+            Some(a) => a,
+            None => return Poll::Pending,
+        };
+        match arrivals.get(*subscription_index) {
+            Some(v) => Poll::Ready(v.clone()),
             None => Poll::Pending,
         }
     }
@@ -434,6 +449,11 @@ where
                 ctx.bind_token(emitted.token, event.event_id());
                 open_schedules.insert(event.event_id());
 
+                // For ExternalSubscribed, bind a deterministic consumption index
+                if let EventKind::ExternalSubscribed { name } = &event.kind {
+                    ctx.bind_external_subscription(event.event_id(), name);
+                }
+
                 // For SystemCall we also deliver the recorded value and allow one poll
                 if let EventKind::SystemCall { op, value } = &event.kind {
                     ctx.set_completion(
@@ -551,6 +571,31 @@ mod tests {
         )
     }
 
+    fn ext_subscribed(event_id: u64, name: &str) -> Event {
+        Event::with_event_id(
+            event_id,
+            "inst",
+            1,
+            None,
+            EventKind::ExternalSubscribed {
+                name: name.to_string(),
+            },
+        )
+    }
+
+    fn ext_event(event_id: u64, name: &str, data: &str) -> Event {
+        Event::with_event_id(
+            event_id,
+            "inst",
+            1,
+            None,
+            EventKind::ExternalEvent {
+                name: name.to_string(),
+                data: data.to_string(),
+            },
+        )
+    }
+
     #[test]
     fn mismatch_schedule_is_nondeterminism() {
         let history = vec![started(1), act_scheduled(2, "A", "x")];
@@ -624,6 +669,32 @@ mod tests {
         .unwrap();
 
         // All actions were replayed by history; nothing new beyond history
+        assert!(out.actions_to_take.is_empty());
+    }
+
+    #[test]
+    fn external_events_deliver_in_subscription_order_not_poll_order() {
+        // Two subscriptions to the same name. First event must go to the first subscription.
+        // Even if orchestration awaits the second subscription first, it should not steal the first event.
+        let history = vec![
+            started(1),
+            ext_subscribed(2, "E"),
+            ext_subscribed(3, "E"),
+            ext_event(4, "E", "first"),
+            ext_event(5, "E", "second"),
+        ];
+
+        let out = evaluate_simplified(history, |ctx| async move {
+            let e1 = ctx.subscribe_external("E");
+            let e2 = ctx.subscribe_external("E");
+
+            // Await the second subscription first; it should still receive the second payload.
+            let v2 = e2.await;
+            let v1 = e1.await;
+            (v1, v2)
+        })
+        .unwrap();
+
         assert!(out.actions_to_take.is_empty());
     }
 }
