@@ -2073,11 +2073,15 @@ impl OrchestrationContext {
                 SYSCALL_OP_UTCNOW_MS => inner.now_ms().to_string(),
                 _ => String::new(),
             };
-            Some(inner.emit_action(Action::SystemCall {
+            let token = inner.emit_action(Action::SystemCall {
                 scheduling_event_id: 0, // Will be assigned by replay engine
                 op: op.to_string(),
-                value: computed_value,
-            }))
+                value: computed_value.clone(),
+            });
+            // For system calls, deliver result immediately (they're synchronous)
+            // The token is used as the key - we don't wait for event loop binding
+            inner.simplified_results.insert(token, SimplifiedResult::SystemCallValue(computed_value));
+            Some(token)
         } else {
             None
         };
@@ -2186,7 +2190,16 @@ impl OrchestrationContext {
     pub fn continue_as_new(&self, input: impl Into<String>) -> impl Future<Output = Result<String, String>> {
         let mut inner = self.inner.lock().unwrap();
         let input: String = input.into();
-        inner.record_action(Action::ContinueAsNew { input, version: None });
+        let action = Action::ContinueAsNew {
+            input,
+            version: None,
+        };
+        // In simplified mode, emit action; in legacy mode, record action
+        if inner.replay_mode == ReplayMode::Simplified {
+            inner.emit_action(action);
+        } else {
+            inner.record_action(action);
+        }
         ContinueAsNewFuture
     }
 
@@ -2207,10 +2220,16 @@ impl OrchestrationContext {
         input: impl Into<String>,
     ) -> impl Future<Output = Result<String, String>> {
         let mut inner = self.inner.lock().unwrap();
-        inner.record_action(Action::ContinueAsNew {
+        let action = Action::ContinueAsNew {
             input: input.into(),
             version: Some(version.into()),
-        });
+        };
+        // In simplified mode, emit action; in legacy mode, record action
+        if inner.replay_mode == ReplayMode::Simplified {
+            inner.emit_action(action);
+        } else {
+            inner.record_action(action);
+        }
         ContinueAsNewFuture
     }
 }
