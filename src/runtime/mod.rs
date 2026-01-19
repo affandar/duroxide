@@ -252,6 +252,10 @@ pub use state_helpers::{HistoryManager, WorkItemReader};
 pub mod execution;
 pub mod replay_engine;
 
+// Phase 1: replay-simplification prototype harness (test-only).
+#[cfg(test)]
+mod replay_engine_simplified;
+
 pub use observability::{LogFormat, ObservabilityConfig};
 
 /// High-level orchestration status derived from history.
