@@ -15,6 +15,18 @@ Conceptually this is similar to Temporal’s replay contract and Durable Task-st
 
 This can “slide in” by keeping the existing runtime boundary (`ReplayEngine` input/output) stable and replacing only the internals.
 
+## Relationship to earlier proposal
+An earlier proposal, [standard-async-futures.md](standard-async-futures.md), explores enabling standard Rust async/await support by moving validation to schedule-time and using FIFO gating in `Future::poll()`.
+
+This replay-simplification proposal aims to solve the same core problems (standard `async {}` composition and deterministic concurrency) but does so by moving the “hard parts” into a single replay loop that processes history events, rather than making each future implementation responsible for history scanning.
+
+### Coverage notes
+- This model addresses the main problems identified in the earlier proposal:
+   - reducing/centralizing replay complexity (less logic inside each `poll()`),
+   - enabling `async {}` blocks that await durable operations,
+   - making deterministic racing/joining feasible via workflow-safe combinators.
+- One concrete mechanism from the earlier proposal is still required here: a **dehydration mechanism** to prevent Drop-based cancellation from firing when the orchestration is merely suspending and the runtime drops the orchestration future at the end of an evaluation.
+
 ## Goals
 - Make determinism checks explicit and auditable: “emitted action sequence must match schedule event sequence”.
 - Make replay driven by the history event stream.
@@ -93,6 +105,19 @@ Two distinct concepts:
    - Dropping a durable future can request cancellation of in-flight work (best-effort).
    - This is used for resource usage and cleanup only.
 
+### Dehydration mechanism (required)
+Because the runtime may drop the pinned orchestration future when an evaluation reaches a suspension point, any in-scope durable futures will also be dropped as a consequence. If `Drop` is used to request cancellation, this would incorrectly cancel in-flight work during normal suspension.
+
+To prevent that, the runtime must provide a **dehydration guard**:
+
+- The orchestration evaluation sets a flag (e.g., `ctx.dehydrating = true`) immediately before it relinquishes control back to the dispatcher (i.e., when the workflow is not complete but must wait for future history).
+- Durable future `Drop` handlers must check this flag and become a no-op when `dehydrating == true`.
+- The flag must be cleared (`dehydrating = false`) at the beginning of the next evaluation before polling resumes.
+
+This keeps cancellation semantics correct:
+- **User drop** (e.g., loser branch dropped by deterministic combinator or user control flow): `dehydrating == false` => cancellation can be recorded.
+- **Runtime drop due to suspension**: `dehydrating == true` => no cancellation is recorded.
+
 ## Async blocks and workflow-safe combinators
 One motivation for this replay simplification is enabling orchestrations to express deterministic concurrency using Rust `async { ... }` blocks that await durable operations.
 
@@ -139,6 +164,9 @@ emitted_actions = []
 open = {}
 actions_to_take = []
 must_poll = true
+
+// Dehydration guard
+ctx.dehydrating = false
 
 // 2) Process history in order
 for event in working_history:
@@ -196,6 +224,11 @@ if must_poll:
 
 // 4) Remaining emitted actions are new commands beyond history
 actions_to_take.extend(emitted_actions)
+
+// If we are returning Continue (i.e., waiting for future history), mark dehydration before
+// dropping the orchestration future so Drop-based cancellation does not trigger.
+if returning TurnResult::Continue:
+   ctx.dehydrating = true
 
 return TurnResult::Continue + actions_to_take
 ```
@@ -265,3 +298,4 @@ Goal: integrate the model end-to-end.
 - Terminal consistency: should we require workflow terminal to match terminal events in history, or is “history authoritative” sufficient initially?
 - SystemCall: confirm how user-facing API emits/awaits system calls so replay can match and deliver values.
 - Combinators: confirm the exact surface API for workflow-safe `select`/`join` over `async { ... }` blocks and the operand ordering rules required for determinism.
+- Dehydration guard: define exact flag lifetime and where it lives (likely on `CtxInner`), ensuring it is set before orchestration future drop on suspension and cleared before polling on the next evaluation.
