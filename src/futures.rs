@@ -7,7 +7,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use crate::{Action, Event, EventKind, OrchestrationContext};
+use crate::{Action, Event, EventKind, OrchestrationContext, ReplayMode, SimplifiedResult};
 
 /// Helper function to check if a completion event can be consumed according to FIFO ordering.
 ///
@@ -65,8 +65,10 @@ pub enum DurableOutput {
 /// Common fields `claimed_event_id` and `ctx` are stored directly on the struct,
 /// while operation-specific data is stored in the `kind` variant.
 pub struct DurableFuture {
-    /// The event ID claimed by this future during scheduling (set on first poll)
+    /// The event ID claimed by this future during scheduling (set on first poll) - Legacy mode
     pub(crate) claimed_event_id: Cell<Option<u64>>,
+    /// Token for simplified mode (set when action is emitted)
+    pub(crate) simplified_token: Cell<Option<u64>>,
     /// Reference to the orchestration context
     pub(crate) ctx: OrchestrationContext,
     /// Operation-specific data
@@ -105,12 +107,36 @@ impl Future for DurableFuture {
         // Safety: We never move fields that are !Unpin; we only take &mut to mutate inner Cells and use ctx by reference.
         let this = unsafe { self.get_unchecked_mut() };
 
-        // Common fields: this.claimed_event_id, this.ctx
+        // Common fields: this.claimed_event_id, this.simplified_token, this.ctx
         match &mut this.kind {
             Kind::Activity { name, input } => {
                 // Mutex lock should never fail in normal operation - if poisoned, it indicates a serious bug
+                let inner = this.ctx.inner.lock().expect("Mutex should not be poisoned");
+
+                // === SIMPLIFIED MODE ===
+                if inner.replay_mode == ReplayMode::Simplified {
+                    // Token was set at schedule time - just check for result
+                    let token = this.simplified_token.get()
+                        .expect("simplified_token should be set at schedule time");
+                    if let Some(result) = inner.get_result(token) {
+                        return match result {
+                            SimplifiedResult::ActivityOk(v) => {
+                                Poll::Ready(DurableOutput::Activity(Ok(v.clone())))
+                            }
+                            SimplifiedResult::ActivityErr(e) => {
+                                Poll::Ready(DurableOutput::Activity(Err(e.clone())))
+                            }
+                            _ => Poll::Pending, // Wrong completion type - should not happen
+                        };
+                    }
+                    return Poll::Pending;
+                }
+                
+                // Re-acquire as mutable for legacy mode
+                drop(inner);
                 let mut inner = this.ctx.inner.lock().expect("Mutex should not be poisoned");
 
+                // === LEGACY MODE ===
                 // Step 1: Claim scheduling event_id if not already claimed
                 if this.claimed_event_id.get().is_none() {
                     // Find next unclaimed SCHEDULING event in history (global order enforcement)
@@ -231,8 +257,26 @@ impl Future for DurableFuture {
             }
             Kind::Timer { delay_ms } => {
                 // Mutex lock should never fail in normal operation - if poisoned, it indicates a serious bug
-                let mut inner = this.ctx.inner.lock().expect("Mutex should not be poisoned");
+                let inner = this.ctx.inner.lock().expect("Mutex should not be poisoned");
 
+                // === SIMPLIFIED MODE ===
+                if inner.replay_mode == ReplayMode::Simplified {
+                    // Token was set at schedule time - just check for result
+                    let token = this.simplified_token.get()
+                        .expect("simplified_token should be set at schedule time");
+                    if let Some(result) = inner.get_result(token) {
+                        return match result {
+                            SimplifiedResult::TimerFired => Poll::Ready(DurableOutput::Timer),
+                            _ => Poll::Pending, // Wrong completion type - should not happen
+                        };
+                    }
+                    return Poll::Pending;
+                }
+                
+                // Re-acquire as mutable for legacy mode
+                drop(inner);
+                let mut inner = this.ctx.inner.lock().expect("Mutex should not be poisoned");
+                // === LEGACY MODE ===
                 // Step 1: Claim scheduling event_id
                 if this.claimed_event_id.get().is_none() {
                     // Enforce global scheduling order
@@ -330,14 +374,44 @@ impl Future for DurableFuture {
                 Poll::Pending
             }
             Kind::External { name, result } => {
-                // Check if we already have the result cached
+                // Check if we already have the result cached (legacy mode only)
                 if let Some(cached) = result.borrow().clone() {
                     return Poll::Ready(DurableOutput::External(cached));
                 }
 
                 // Mutex lock should never fail in normal operation - if poisoned, it indicates a serious bug
+                let inner = this.ctx.inner.lock().expect("Mutex should not be poisoned");
+
+                // === SIMPLIFIED MODE ===
+                if inner.replay_mode == ReplayMode::Simplified {
+                    // Token was set at schedule time - just check for result
+                    let token = this.simplified_token.get()
+                        .expect("simplified_token should be set at schedule time");
+                    
+                    // Check for direct result delivery
+                    if let Some(res) = inner.get_result(token) {
+                        return match res {
+                            SimplifiedResult::ExternalEvent(data) => {
+                                Poll::Ready(DurableOutput::External(data.clone()))
+                            }
+                            _ => Poll::Pending,
+                        };
+                    }
+
+                    // Also check external event by schedule_id (for subscription-based delivery)
+                    if let Some(schedule_id) = inner.get_bound_schedule_id(token) {
+                        if let Some(data) = inner.get_external_event(schedule_id) {
+                            return Poll::Ready(DurableOutput::External(data.clone()));
+                        }
+                    }
+                    return Poll::Pending;
+                }
+                
+                // Re-acquire as mutable for legacy mode
+                drop(inner);
                 let mut inner = this.ctx.inner.lock().expect("Mutex should not be poisoned");
 
+                // === LEGACY MODE ===
                 // Step 1: Claim ExternalSubscribed event_id
                 if this.claimed_event_id.get().is_none() {
                     // Enforce global scheduling order
@@ -450,8 +524,32 @@ impl Future for DurableFuture {
                 input,
             } => {
                 // Mutex lock should never fail in normal operation - if poisoned, it indicates a serious bug
+                let inner = this.ctx.inner.lock().expect("Mutex should not be poisoned");
+
+                // === SIMPLIFIED MODE ===
+                if inner.replay_mode == ReplayMode::Simplified {
+                    // Token was set at schedule time - just check for result
+                    let token = this.simplified_token.get()
+                        .expect("simplified_token should be set at schedule time");
+                    if let Some(res) = inner.get_result(token) {
+                        return match res {
+                            SimplifiedResult::SubOrchOk(v) => {
+                                Poll::Ready(DurableOutput::SubOrchestration(Ok(v.clone())))
+                            }
+                            SimplifiedResult::SubOrchErr(e) => {
+                                Poll::Ready(DurableOutput::SubOrchestration(Err(e.clone())))
+                            }
+                            _ => Poll::Pending,
+                        };
+                    }
+                    return Poll::Pending;
+                }
+                
+                // Re-acquire as mutable for legacy mode
+                drop(inner);
                 let mut inner = this.ctx.inner.lock().expect("Mutex should not be poisoned");
 
+                // === LEGACY MODE ===
                 // Step 1: Claim SubOrchestrationScheduled event_id
                 if this.claimed_event_id.get().is_none() {
                     // Enforce global scheduling order
@@ -576,14 +674,37 @@ impl Future for DurableFuture {
                 Poll::Pending
             }
             Kind::System { op, value } => {
-                // Check if we already computed the value
+                // Check if we already computed the value (legacy mode cache)
                 if let Some(v) = value.borrow().clone() {
                     return Poll::Ready(DurableOutput::Activity(Ok(v)));
                 }
 
                 // Mutex lock should never fail in normal operation - if poisoned, it indicates a serious bug
+                let inner = this.ctx.inner.lock().expect("Mutex should not be poisoned");
+
+                // === SIMPLIFIED MODE ===
+                if inner.replay_mode == ReplayMode::Simplified {
+                    // Token was set at schedule time - check for result
+                    let token = this.simplified_token.get()
+                        .expect("simplified_token should be set at schedule time");
+                    if let Some(res) = inner.get_result(token) {
+                        return match res {
+                            SimplifiedResult::SystemCallValue(v) => {
+                                Poll::Ready(DurableOutput::Activity(Ok(v.clone())))
+                            }
+                            _ => Poll::Pending,
+                        };
+                    }
+                    // System calls are synchronous in first execution, so value should be in cache
+                    // (set by schedule_system_call), but during replay we wait for result delivery
+                    return Poll::Pending;
+                }
+                
+                // Re-acquire as mutable for legacy mode
+                drop(inner);
                 let mut inner = this.ctx.inner.lock().expect("Mutex should not be poisoned");
 
+                // === LEGACY MODE ===
                 // Step 1: Try to adopt from history (replay)
                 if this.claimed_event_id.get().is_none() {
                     // Look for matching SystemCall event in history
@@ -722,7 +843,7 @@ const _: () = {
 };
 
 // Helper function to generate deterministic GUIDs
-fn generate_guid() -> String {
+pub(crate) fn generate_guid() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     let timestamp = SystemTime::now()

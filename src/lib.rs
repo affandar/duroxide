@@ -1060,8 +1060,70 @@ pub enum Action {
     },
 }
 
+/// Replay mode for orchestration context.
+///
+/// Controls how `schedule_*()` methods behave and how durable futures resolve:
+/// - `Legacy`: Current behavior - mutates history, futures scan history for completions
+/// - `Simplified`: New model - emits actions, futures check results map
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum ReplayMode {
+    /// Legacy mode: schedule_*() mutates history, futures scan history for completions.
+    /// This is the current production behavior.
+    #[default]
+    Legacy,
+    /// Simplified mode: schedule_*() emits actions to buffer, futures check results map.
+    /// Used by the new commands-vs-history replay model.
+    Simplified,
+}
+
+/// Result delivered to a durable future in simplified replay mode.
+#[derive(Debug, Clone)]
+pub(crate) enum SimplifiedResult {
+    /// Activity completed successfully
+    ActivityOk(String),
+    /// Activity failed with error
+    ActivityErr(String),
+    /// Timer fired
+    TimerFired,
+    /// Sub-orchestration completed successfully
+    SubOrchOk(String),
+    /// Sub-orchestration failed with error
+    SubOrchErr(String),
+    /// External event received
+    ExternalEvent(String),
+    /// System call value
+    SystemCallValue(String),
+}
+
 #[derive(Debug)]
 struct CtxInner {
+    // === Replay Mode ===
+    /// Current replay mode (Legacy or Simplified)
+    replay_mode: ReplayMode,
+    
+    /// Whether we're currently replaying history (true) or processing new events (false).
+    /// In simplified mode: true while processing baseline_history events, false after.
+    /// Users can check this via `ctx.is_replaying()` to skip side effects during replay.
+    is_replaying: bool,
+
+    // === Simplified Mode State ===
+    /// Token counter for simplified mode (each schedule_*() call gets a unique token)
+    simplified_next_token: u64,
+    /// Emitted actions in simplified mode (token -> Action kind info)
+    /// Token is used to correlate with schedule events during replay
+    simplified_emitted: Vec<(u64, Action)>,
+    /// Results map: token -> completion result (populated by replay engine)
+    simplified_results: std::collections::HashMap<u64, SimplifiedResult>,
+    /// Token -> schedule_id binding (set when replay engine matches action to history)
+    simplified_bindings: std::collections::HashMap<u64, u64>,
+    /// External subscriptions: schedule_id -> (name, subscription_index)
+    simplified_external_subscriptions: std::collections::HashMap<u64, (String, usize)>,
+    /// External arrivals: name -> list of payloads in arrival order
+    simplified_external_arrivals: std::collections::HashMap<String, Vec<String>>,
+    /// Next subscription index per external event name
+    simplified_external_next_index: std::collections::HashMap<String, usize>,
+
+    // === Legacy Mode State ===
     history: Vec<Event>,
     actions: Vec<Action>,
 
@@ -1115,6 +1177,22 @@ impl CtxInner {
             .unwrap_or(1);
 
         Self {
+            // Replay mode - default to Legacy for backward compatibility
+            replay_mode: ReplayMode::Legacy,
+            
+            // Start in replaying state - will be set to false when we move past baseline history
+            is_replaying: true,
+
+            // Simplified mode state (unused in Legacy mode)
+            simplified_next_token: 0,
+            simplified_emitted: Vec::new(),
+            simplified_results: Default::default(),
+            simplified_bindings: Default::default(),
+            simplified_external_subscriptions: Default::default(),
+            simplified_external_arrivals: Default::default(),
+            simplified_external_next_index: Default::default(),
+
+            // Legacy mode state
             history,
             actions: Vec::new(),
             next_event_id,
@@ -1144,6 +1222,83 @@ impl CtxInner {
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0)
+    }
+
+    // === Simplified Mode Helpers ===
+
+    /// Emit an action in simplified mode and return a token for correlation.
+    fn emit_action(&mut self, action: Action) -> u64 {
+        debug_assert_eq!(
+            self.replay_mode,
+            ReplayMode::Simplified,
+            "emit_action should only be called in Simplified mode"
+        );
+        self.simplified_next_token += 1;
+        let token = self.simplified_next_token;
+        self.simplified_emitted.push((token, action));
+        token
+    }
+
+    /// Drain all emitted actions (called by replay engine after polling).
+    fn drain_emitted_actions(&mut self) -> Vec<(u64, Action)> {
+        std::mem::take(&mut self.simplified_emitted)
+    }
+
+    /// Bind a token to a schedule_id (called by replay engine when matching action to history).
+    fn bind_token(&mut self, token: u64, schedule_id: u64) {
+        self.simplified_bindings.insert(token, schedule_id);
+    }
+
+    /// Get the schedule_id bound to a token (returns None if not yet bound).
+    fn get_bound_schedule_id(&self, token: u64) -> Option<u64> {
+        self.simplified_bindings.get(&token).copied()
+    }
+
+    /// Deliver a completion result for a schedule_id.
+    fn deliver_result(&mut self, schedule_id: u64, result: SimplifiedResult) {
+        // Find the token that was bound to this schedule_id
+        for (&token, &sid) in &self.simplified_bindings {
+            if sid == schedule_id {
+                self.simplified_results.insert(token, result);
+                return;
+            }
+        }
+        // affandar : cr : lets think through this a bit more deeply. when / why would no binding be found??
+
+        // If no binding found, store by schedule_id directly (will be looked up by schedule_id)
+        // This handles the case where results arrive before binding
+    }
+
+    /// Check if a result is available for a token.
+    fn get_result(&self, token: u64) -> Option<&SimplifiedResult> {
+        self.simplified_results.get(&token)
+    }
+
+    /// Bind an external subscription to a deterministic index.
+    fn bind_external_subscription(&mut self, schedule_id: u64, name: &str) {
+        let idx = self
+            .simplified_external_next_index
+            .entry(name.to_string())
+            .or_insert(0);
+        let subscription_index = *idx;
+        *idx += 1;
+        self.simplified_external_subscriptions
+            .insert(schedule_id, (name.to_string(), subscription_index));
+    }
+
+    /// Deliver an external event (appends to arrival list for the name).
+    fn deliver_external_event(&mut self, name: String, data: String) {
+        self.simplified_external_arrivals
+            .entry(name)
+            .or_default()
+            .push(data);
+    }
+
+    /// Get external event data for a subscription (by schedule_id).
+    fn get_external_event(&self, schedule_id: u64) -> Option<&String> {
+        let (name, subscription_index) = self.simplified_external_subscriptions.get(&schedule_id)?;
+        let arrivals = self.simplified_external_arrivals.get(name)?;
+        arrivals.get(*subscription_index)
     }
 
     // Note: deterministic GUID generation was removed from public API.
@@ -1526,6 +1681,184 @@ impl OrchestrationContext {
         }
     }
 
+    /// Set the replay mode for this context.
+    /// This is used by the replay engine to switch between legacy and simplified modes.
+    pub(crate) fn set_replay_mode(&self, mode: ReplayMode) {
+        self.inner.lock().unwrap().replay_mode = mode;
+    }
+
+    /// Get the current replay mode.
+    #[allow(dead_code)]
+    pub(crate) fn replay_mode(&self) -> ReplayMode {
+        self.inner.lock().unwrap().replay_mode
+    }
+
+    /// Check if the orchestration is currently replaying history.
+    ///
+    /// Returns `true` when processing events from persisted history (replay),
+    /// and `false` when executing new logic beyond the stored history.
+    ///
+    /// This is useful for skipping side effects during replay, such as:
+    /// - Logging/tracing that should only happen on first execution
+    /// - Metrics that shouldn't be double-counted
+    /// - External notifications that shouldn't be re-sent
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use duroxide::OrchestrationContext;
+    /// # async fn example(ctx: OrchestrationContext) {
+    /// if !ctx.is_replaying() {
+    ///     // Only log on first execution, not during replay
+    ///     println!("Starting workflow for the first time");
+    /// }
+    /// # }
+    /// ```
+    pub fn is_replaying(&self) -> bool {
+        self.inner.lock().unwrap().is_replaying
+    }
+
+    /// Set the replaying state (used by replay engine).
+    pub(crate) fn set_is_replaying(&self, is_replaying: bool) {
+        self.inner.lock().unwrap().is_replaying = is_replaying;
+    }
+
+    // =========================================================================
+    // Simplified Mode Tracing (Replay-Guarded)
+    // =========================================================================
+    //
+    // These trace methods are only available in simplified replay mode.
+    // They use `is_replaying()` as a guard instead of system calls, which means:
+    // - No history events are created for traces
+    // - Traces only emit on first execution, not during replay
+    // - Much simpler and more efficient than system-call-based tracing
+
+    /// Emit a trace entry with the specified level (simplified mode only).
+    ///
+    /// This method guards the trace with `is_replaying()` - traces are only
+    /// emitted on first execution, not during replay. No system call or
+    /// history event is created.
+    ///
+    /// # Panics
+    ///
+    /// Panics if called in legacy replay mode. Use `trace()` for legacy mode.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use duroxide::OrchestrationContext;
+    /// # async fn example(ctx: OrchestrationContext) {
+    /// ctx.trace_simplified("INFO", "Processing order");
+    /// # }
+    /// ```
+    pub fn trace_simplified(&self, level: impl Into<String>, message: impl Into<String>) {
+        let inner = self.inner.lock().unwrap();
+        assert_eq!(
+            inner.replay_mode,
+            ReplayMode::Simplified,
+            "trace_simplified is only available in simplified replay mode"
+        );
+        
+        // Only trace if not replaying
+        if !inner.is_replaying {
+            let level_str = level.into();
+            let msg = message.into();
+            
+            match level_str.to_uppercase().as_str() {
+                "INFO" => tracing::info!(
+                    target: "duroxide::orchestration",
+                    instance_id = %inner.instance_id,
+                    execution_id = %inner.execution_id,
+                    orchestration_name = %inner.orchestration_name,
+                    orchestration_version = %inner.orchestration_version,
+                    "{}",
+                    msg
+                ),
+                "WARN" => tracing::warn!(
+                    target: "duroxide::orchestration",
+                    instance_id = %inner.instance_id,
+                    execution_id = %inner.execution_id,
+                    orchestration_name = %inner.orchestration_name,
+                    orchestration_version = %inner.orchestration_version,
+                    "{}",
+                    msg
+                ),
+                "ERROR" => tracing::error!(
+                    target: "duroxide::orchestration",
+                    instance_id = %inner.instance_id,
+                    execution_id = %inner.execution_id,
+                    orchestration_name = %inner.orchestration_name,
+                    orchestration_version = %inner.orchestration_version,
+                    "{}",
+                    msg
+                ),
+                "DEBUG" => tracing::debug!(
+                    target: "duroxide::orchestration",
+                    instance_id = %inner.instance_id,
+                    execution_id = %inner.execution_id,
+                    orchestration_name = %inner.orchestration_name,
+                    orchestration_version = %inner.orchestration_version,
+                    "{}",
+                    msg
+                ),
+                _ => tracing::trace!(
+                    target: "duroxide::orchestration",
+                    instance_id = %inner.instance_id,
+                    execution_id = %inner.execution_id,
+                    orchestration_name = %inner.orchestration_name,
+                    orchestration_version = %inner.orchestration_version,
+                    level = %level_str,
+                    "{}",
+                    msg
+                ),
+            }
+        }
+    }
+
+    /// Convenience wrapper for INFO level tracing (simplified mode only).
+    ///
+    /// See [`trace_simplified`](Self::trace_simplified) for details.
+    pub fn trace_info_simplified(&self, message: impl Into<String>) {
+        self.trace_simplified("INFO", message);
+    }
+
+    /// Convenience wrapper for WARN level tracing (simplified mode only).
+    ///
+    /// See [`trace_simplified`](Self::trace_simplified) for details.
+    pub fn trace_warn_simplified(&self, message: impl Into<String>) {
+        self.trace_simplified("WARN", message);
+    }
+
+    /// Convenience wrapper for ERROR level tracing (simplified mode only).
+    ///
+    /// See [`trace_simplified`](Self::trace_simplified) for details.
+    pub fn trace_error_simplified(&self, message: impl Into<String>) {
+        self.trace_simplified("ERROR", message);
+    }
+
+    /// Convenience wrapper for DEBUG level tracing (simplified mode only).
+    ///
+    /// See [`trace_simplified`](Self::trace_simplified) for details.
+    pub fn trace_debug_simplified(&self, message: impl Into<String>) {
+        self.trace_simplified("DEBUG", message);
+    }
+
+    /// Drain emitted actions (simplified mode only).
+    /// Returns a list of (token, Action) pairs.
+    pub(crate) fn drain_emitted_actions(&self) -> Vec<(u64, Action)> {
+        self.inner.lock().unwrap().drain_emitted_actions()
+    }
+
+    /// Bind a token to a schedule_id (simplified mode only).
+    pub(crate) fn bind_token(&self, token: u64, schedule_id: u64) {
+        self.inner.lock().unwrap().bind_token(token, schedule_id);
+    }
+
+    /// Deliver a result for a token (simplified mode only).
+    pub(crate) fn deliver_result(&self, schedule_id: u64, result: SimplifiedResult) {
+        self.inner.lock().unwrap().deliver_result(schedule_id, result);
+    }
+
     /// Returns the orchestration instance identifier.
     ///
     /// This is the unique identifier for this orchestration instance, typically
@@ -1730,8 +2063,29 @@ impl OrchestrationContext {
 
     /// Schedule a system call operation (internal helper).
     pub(crate) fn schedule_system_call(&self, op: &str) -> DurableFuture {
+        let mut inner = self.inner.lock().expect("Mutex should not be poisoned");
+        
+        // In simplified mode, emit action at schedule time (not poll time)
+        let simplified_token = if inner.replay_mode == ReplayMode::Simplified {
+            // For system calls, compute value immediately (they're synchronous)
+            let computed_value = match op {
+                SYSCALL_OP_GUID => generate_guid(),
+                SYSCALL_OP_UTCNOW_MS => inner.now_ms().to_string(),
+                _ => String::new(),
+            };
+            Some(inner.emit_action(Action::SystemCall {
+                scheduling_event_id: 0, // Will be assigned by replay engine
+                op: op.to_string(),
+                value: computed_value,
+            }))
+        } else {
+            None
+        };
+        drop(inner);
+        
         DurableFuture {
             claimed_event_id: Cell::new(None),
+            simplified_token: Cell::new(simplified_token),
             ctx: self.clone(),
             kind: Kind::System {
                 op: op.to_string(),
@@ -1877,6 +2231,7 @@ pub use crate::futures::{DurableFuture, DurableOutput, JoinFuture, SelectFuture}
 /// A unified future for activities, timers, and external events that carries a
 /// correlation ID. Useful for composing with `futures::select`/`join`.
 use crate::futures::Kind;
+use crate::futures::generate_guid;
 
 // Internal tag to classify DurableFuture kinds for history indexing
 use crate::futures::AggregateDurableFuture;
@@ -2055,14 +2410,28 @@ impl OrchestrationContext {
     /// - ✅ Waiting for async operation to complete
     /// - ❌ Activity that ONLY sleeps (use orchestration timer instead)
     pub fn schedule_activity(&self, name: impl Into<String>, input: impl Into<String>) -> DurableFuture {
-        // event_id will be claimed during first poll
+        let name: String = name.into();
+        let input: String = input.into();
+        
+        let mut inner = self.inner.lock().expect("Mutex should not be poisoned");
+        
+        // In simplified mode, emit action at schedule time (not poll time)
+        let simplified_token = if inner.replay_mode == ReplayMode::Simplified {
+            Some(inner.emit_action(Action::CallActivity {
+                scheduling_event_id: 0, // Will be assigned by replay engine
+                name: name.clone(),
+                input: input.clone(),
+            }))
+        } else {
+            None
+        };
+        drop(inner);
+        
         DurableFuture {
             claimed_event_id: Cell::new(None),
+            simplified_token: Cell::new(simplified_token),
             ctx: self.clone(),
-            kind: Kind::Activity {
-                name: name.into(),
-                input: input.into(),
-            },
+            kind: Kind::Activity { name, input },
         }
     }
 
@@ -2222,24 +2591,54 @@ impl OrchestrationContext {
     /// # }
     /// ```
     pub fn schedule_timer(&self, delay: std::time::Duration) -> DurableFuture {
-        // No ID allocation here - event_id is discovered during first poll
+        let delay_ms = delay.as_millis() as u64;
+        
+        let mut inner = self.inner.lock().expect("Mutex should not be poisoned");
+        
+        // In simplified mode, emit action at schedule time (not poll time)
+        let simplified_token = if inner.replay_mode == ReplayMode::Simplified {
+            let now = inner.now_ms();
+            let fire_at_ms = now.saturating_add(delay_ms);
+            Some(inner.emit_action(Action::CreateTimer {
+                scheduling_event_id: 0, // Will be assigned by replay engine
+                fire_at_ms,
+            }))
+        } else {
+            None
+        };
+        drop(inner);
+        
         DurableFuture {
             claimed_event_id: Cell::new(None),
+            simplified_token: Cell::new(simplified_token),
             ctx: self.clone(),
-            kind: Kind::Timer {
-                delay_ms: delay.as_millis() as u64,
-            },
+            kind: Kind::Timer { delay_ms },
         }
     }
 
     /// Subscribe to an external event by name and return its `DurableFuture`.
     pub fn schedule_wait(&self, name: impl Into<String>) -> DurableFuture {
-        // No ID allocation here - event_id is discovered during first poll
+        let name: String = name.into();
+        
+        let mut inner = self.inner.lock().expect("Mutex should not be poisoned");
+        
+        // In simplified mode, emit action at schedule time (not poll time)
+        let simplified_token = if inner.replay_mode == ReplayMode::Simplified {
+            Some(inner.emit_action(Action::WaitExternal {
+                scheduling_event_id: 0, // Will be assigned by replay engine
+                name: name.clone(),
+            }))
+        } else {
+            None
+        };
+        drop(inner);
+        
         DurableFuture {
             claimed_event_id: Cell::new(None),
+            simplified_token: Cell::new(simplified_token),
             ctx: self.clone(),
             kind: Kind::External {
-                name: name.into(),
+                name,
                 result: RefCell::new(None),
             },
         }
@@ -2259,9 +2658,27 @@ impl OrchestrationContext {
         // Instance will be determined during polling based on event_id
         // Use a placeholder for now
         let child_instance = RefCell::new(String::from("sub::pending"));
+        
+        let mut inner = self.inner.lock().expect("Mutex should not be poisoned");
+        
+        // In simplified mode, emit action at schedule time (not poll time)
+        let simplified_token = if inner.replay_mode == ReplayMode::Simplified {
+            let placeholder_instance = format!("sub::pending_{}", inner.simplified_next_token + 1);
+            Some(inner.emit_action(Action::StartSubOrchestration {
+                scheduling_event_id: 0, // Will be assigned by replay engine
+                name: name.clone(),
+                version: None,
+                instance: placeholder_instance,
+                input: input.clone(),
+            }))
+        } else {
+            None
+        };
+        drop(inner);
 
         DurableFuture {
             claimed_event_id: Cell::new(None),
+            simplified_token: Cell::new(simplified_token),
             ctx: self.clone(),
             kind: Kind::SubOrch {
                 name,
@@ -2288,16 +2705,36 @@ impl OrchestrationContext {
         version: Option<String>,
         input: impl Into<String>,
     ) -> DurableFuture {
+        let name: String = name.into();
+        let input: String = input.into();
         let child_instance = RefCell::new(String::from("sub::pending"));
+        
+        let mut inner = self.inner.lock().expect("Mutex should not be poisoned");
+        
+        // In simplified mode, emit action at schedule time (not poll time)
+        let simplified_token = if inner.replay_mode == ReplayMode::Simplified {
+            let placeholder_instance = format!("sub::pending_{}", inner.simplified_next_token + 1);
+            Some(inner.emit_action(Action::StartSubOrchestration {
+                scheduling_event_id: 0, // Will be assigned by replay engine
+                name: name.clone(),
+                version: version.clone(),
+                instance: placeholder_instance,
+                input: input.clone(),
+            }))
+        } else {
+            None
+        };
+        drop(inner);
 
         DurableFuture {
             claimed_event_id: Cell::new(None),
+            simplified_token: Cell::new(simplified_token),
             ctx: self.clone(),
             kind: Kind::SubOrch {
-                name: name.into(),
+                name,
                 version,
                 instance: child_instance,
-                input: input.into(),
+                input,
             },
         }
     }

@@ -87,11 +87,16 @@ impl Runtime {
         debug!(
             instance = %instance,
             message_count = messages.len(),
+            simplified_mode = self.options.use_simplified_replay,
             "starting orchestration turn atomically"
         );
         // Use full history (always contains only current execution)
         let current_execution_history = history_mgr.full_history();
-        let mut turn = ReplayEngine::new(instance.to_string(), execution_id, current_execution_history);
+        // Get the persisted history length for is_replaying tracking
+        let persisted_len = history_mgr.original_len();
+        let mut turn = ReplayEngine::new(instance.to_string(), execution_id, current_execution_history)
+            .with_simplified_mode(self.options.use_simplified_replay)
+            .with_persisted_history_len(persisted_len);
 
         // Prep completions from incoming messages
         if !messages.is_empty() {

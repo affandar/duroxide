@@ -123,6 +123,13 @@ impl HistoryManager {
     pub fn is_empty(&self) -> bool {
         self.history.is_empty() && self.delta.is_empty()
     }
+    
+    /// Get the length of the original (persisted) history from the database.
+    /// This does NOT include events added to delta this turn.
+    /// Used by simplified replay mode to correctly track is_replaying state.
+    pub fn original_len(&self) -> usize {
+        self.history.len()
+    }
 
     /// Get a human-readable status string
     pub fn status(&self) -> &'static str {

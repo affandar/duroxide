@@ -377,10 +377,10 @@ fn to_completion(event: &Event) -> Option<(u64, SimCompletion)> {
     let source_id = event.source_event_id?;
     match &event.kind {
         EventKind::ActivityCompleted { result } => Some((source_id, SimCompletion::ActivityOk(result.clone()))),
-        EventKind::ActivityFailed { details } => Some((source_id, SimCompletion::ActivityErr(format!("{details:?}")))),
+        EventKind::ActivityFailed { details } => Some((source_id, SimCompletion::ActivityErr(details.display_message()))),
         EventKind::TimerFired { fire_at_ms } => Some((source_id, SimCompletion::TimerFired { fire_at_ms: *fire_at_ms })),
         EventKind::SubOrchestrationCompleted { result } => Some((source_id, SimCompletion::SubOrchOk(result.clone()))),
-        EventKind::SubOrchestrationFailed { details } => Some((source_id, SimCompletion::SubOrchErr(format!("{details:?}")))),
+        EventKind::SubOrchestrationFailed { details } => Some((source_id, SimCompletion::SubOrchErr(details.display_message()))),
         _ => None,
     }
 }
@@ -837,5 +837,230 @@ mod tests {
         .unwrap();
 
         assert!(out.actions_to_take.is_empty());
+    }
+}
+
+/// Tests for the real OrchestrationContext running in simplified mode.
+/// These tests validate that the modal switch approach works correctly.
+#[cfg(test)]
+mod real_ctx_simplified_tests {
+    use super::*;
+    use crate::{Action, OrchestrationContext, ReplayMode, SimplifiedResult};
+    use crate::futures::DurableOutput;
+
+    fn noop_waker() -> Waker {
+        fn clone(_: *const ()) -> RawWaker {
+            RawWaker::new(std::ptr::null(), &VTABLE)
+        }
+        fn wake(_: *const ()) {}
+        fn wake_by_ref(_: *const ()) {}
+        fn drop(_: *const ()) {}
+
+        static VTABLE: RawWakerVTable = RawWakerVTable::new(clone, wake, wake_by_ref, drop);
+        unsafe { Waker::from_raw(RawWaker::new(std::ptr::null(), &VTABLE)) }
+    }
+
+    fn poll_once<F: Future>(fut: Pin<&mut F>) -> Poll<F::Output> {
+        let waker = noop_waker();
+        let mut cx = Context::from_waker(&waker);
+        fut.poll(&mut cx)
+    }
+
+    #[test]
+    fn real_ctx_simplified_mode_emits_activity_action() {
+        // Create context in simplified mode
+        let ctx = OrchestrationContext::new(
+            vec![],
+            1,
+            "test-inst".to_string(),
+            "TestOrch".to_string(),
+            "1.0.0".to_string(),
+            None,
+        );
+        ctx.set_replay_mode(ReplayMode::Simplified);
+
+        // Schedule an activity
+        let fut = ctx.schedule_activity("MyActivity", "my-input");
+        let mut pinned = std::pin::pin!(fut);
+
+        // First poll should emit the action and return Pending
+        let result = poll_once(pinned.as_mut());
+        assert!(matches!(result, Poll::Pending));
+
+        // Check that the action was emitted
+        let emitted = ctx.drain_emitted_actions();
+        assert_eq!(emitted.len(), 1);
+        let (token, action) = &emitted[0];
+        assert!(*token > 0);
+        match action {
+            Action::CallActivity { name, input, .. } => {
+                assert_eq!(name, "MyActivity");
+                assert_eq!(input, "my-input");
+            }
+            _ => panic!("Expected CallActivity action"),
+        }
+    }
+
+    #[test]
+    fn real_ctx_simplified_mode_activity_resolves_on_result() {
+        // Create context in simplified mode
+        let ctx = OrchestrationContext::new(
+            vec![],
+            1,
+            "test-inst".to_string(),
+            "TestOrch".to_string(),
+            "1.0.0".to_string(),
+            None,
+        );
+        ctx.set_replay_mode(ReplayMode::Simplified);
+
+        // Schedule an activity
+        let fut = ctx.schedule_activity("MyActivity", "my-input");
+        let mut pinned = std::pin::pin!(fut);
+
+        // First poll should emit the action
+        let _ = poll_once(pinned.as_mut());
+
+        // Get the token and bind it to a schedule_id
+        let emitted = ctx.drain_emitted_actions();
+        let (token, _) = &emitted[0];
+        ctx.bind_token(*token, 100); // Bind to schedule_id 100
+
+        // Deliver a result
+        ctx.deliver_result(100, SimplifiedResult::ActivityOk("result-value".to_string()));
+
+        // Now the future should resolve
+        let result = poll_once(pinned.as_mut());
+        match result {
+            Poll::Ready(DurableOutput::Activity(Ok(v))) => {
+                assert_eq!(v, "result-value");
+            }
+            other => panic!("Expected Poll::Ready(Activity(Ok(...))), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn real_ctx_simplified_mode_timer_emits_and_resolves() {
+        use std::time::Duration;
+
+        let ctx = OrchestrationContext::new(
+            vec![],
+            1,
+            "test-inst".to_string(),
+            "TestOrch".to_string(),
+            "1.0.0".to_string(),
+            None,
+        );
+        ctx.set_replay_mode(ReplayMode::Simplified);
+
+        // Schedule a timer
+        let fut = ctx.schedule_timer(Duration::from_secs(5));
+        let mut pinned = std::pin::pin!(fut);
+
+        // First poll should emit the action
+        let _ = poll_once(pinned.as_mut());
+
+        // Get the token
+        let emitted = ctx.drain_emitted_actions();
+        assert_eq!(emitted.len(), 1);
+        let (token, action) = &emitted[0];
+        match action {
+            Action::CreateTimer { fire_at_ms, .. } => {
+                assert!(*fire_at_ms > 0);
+            }
+            _ => panic!("Expected CreateTimer action"),
+        }
+
+        // Bind and deliver result
+        ctx.bind_token(*token, 200);
+        ctx.deliver_result(200, SimplifiedResult::TimerFired);
+
+        // Timer should resolve
+        let result = poll_once(pinned.as_mut());
+        assert!(matches!(result, Poll::Ready(DurableOutput::Timer)));
+    }
+
+    #[test]
+    fn real_ctx_simplified_mode_suborchestration_emits_and_resolves() {
+        let ctx = OrchestrationContext::new(
+            vec![],
+            1,
+            "test-inst".to_string(),
+            "TestOrch".to_string(),
+            "1.0.0".to_string(),
+            None,
+        );
+        ctx.set_replay_mode(ReplayMode::Simplified);
+
+        // Schedule a sub-orchestration
+        let fut = ctx.schedule_sub_orchestration("ChildOrch", "child-input");
+        let mut pinned = std::pin::pin!(fut);
+
+        // First poll should emit the action
+        let _ = poll_once(pinned.as_mut());
+
+        // Get the token
+        let emitted = ctx.drain_emitted_actions();
+        assert_eq!(emitted.len(), 1);
+        let (token, action) = &emitted[0];
+        match action {
+            Action::StartSubOrchestration { name, input, .. } => {
+                assert_eq!(name, "ChildOrch");
+                assert_eq!(input, "child-input");
+            }
+            _ => panic!("Expected StartSubOrchestration action"),
+        }
+
+        // Bind and deliver result
+        ctx.bind_token(*token, 300);
+        ctx.deliver_result(300, SimplifiedResult::SubOrchOk("child-result".to_string()));
+
+        // Sub-orchestration should resolve
+        let result = poll_once(pinned.as_mut());
+        match result {
+            Poll::Ready(DurableOutput::SubOrchestration(Ok(v))) => {
+                assert_eq!(v, "child-result");
+            }
+            other => panic!("Expected Poll::Ready(SubOrchestration(Ok(...))), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn real_ctx_simplified_mode_actions_emitted_in_schedule_order_not_poll_order() {
+        // This is the critical test: actions must be emitted in SCHEDULE order,
+        // not in the order futures are polled.
+        let ctx = OrchestrationContext::new(
+            vec![],
+            1,
+            "test-inst".to_string(),
+            "TestOrch".to_string(),
+            "1.0.0".to_string(),
+            None,
+        );
+        ctx.set_replay_mode(ReplayMode::Simplified);
+
+        // Schedule A first, then B
+        let _fut_a = ctx.schedule_activity("ActivityA", "input-a");
+        let _fut_b = ctx.schedule_activity("ActivityB", "input-b");
+
+        // Actions should already be emitted (at schedule time), in schedule order
+        let emitted = ctx.drain_emitted_actions();
+        assert_eq!(emitted.len(), 2, "Both actions should be emitted at schedule time");
+        
+        // Verify order: A first, then B (schedule order)
+        match &emitted[0].1 {
+            Action::CallActivity { name, input, .. } => {
+                assert_eq!(name, "ActivityA", "First action should be ActivityA");
+                assert_eq!(input, "input-a");
+            }
+            _ => panic!("Expected CallActivity action"),
+        }
+        match &emitted[1].1 {
+            Action::CallActivity { name, input, .. } => {
+                assert_eq!(name, "ActivityB", "Second action should be ActivityB");
+                assert_eq!(input, "input-b");
+            }
+            _ => panic!("Expected CallActivity action"),
+        }
     }
 }

@@ -217,6 +217,15 @@ pub struct RuntimeOptions {
     ///
     /// Default: 10 seconds
     pub activity_cancellation_grace_period: Duration,
+    
+    /// Use simplified replay mode (experimental).
+    ///
+    /// When enabled, the replay engine uses a commands-vs-history model
+    /// instead of the legacy history mutation model. This is an internal
+    /// implementation detail being validated before becoming the default.
+    ///
+    /// Default: false (use legacy replay mode)
+    pub use_simplified_replay: bool,
 }
 
 impl Default for RuntimeOptions {
@@ -234,6 +243,7 @@ impl Default for RuntimeOptions {
             unregistered_backoff: UnregisteredBackoffConfig::default(),
             max_attempts: 10,
             activity_cancellation_grace_period: Duration::from_secs(10),
+            use_simplified_replay: false, // Legacy mode by default
         }
     }
 }
