@@ -51,6 +51,8 @@ struct SimInner {
     bindings: HashMap<u64, Option<u64>>,
     // schedule_id -> completion payload
     results: HashMap<u64, SimCompletion>,
+    // schedule_id -> schedule kind (for completion validation)
+    schedule_kinds: HashMap<u64, SimActionKind>,
     // external arrivals: name -> payloads in arrival order
     external_arrivals: HashMap<String, Vec<String>>,
     // external subscription indices: name -> next subscription index
@@ -383,6 +385,17 @@ fn to_completion(event: &Event) -> Option<(u64, SimCompletion)> {
     }
 }
 
+fn completion_matches_schedule(schedule: &SimActionKind, completion: &SimCompletion) -> bool {
+    match (schedule, completion) {
+        (SimActionKind::CallActivity { .. }, SimCompletion::ActivityOk(_)) => true,
+        (SimActionKind::CallActivity { .. }, SimCompletion::ActivityErr(_)) => true,
+        (SimActionKind::CreateTimer { .. }, SimCompletion::TimerFired { .. }) => true,
+        (SimActionKind::StartSubOrchestration { .. }, SimCompletion::SubOrchOk(_)) => true,
+        (SimActionKind::StartSubOrchestration { .. }, SimCompletion::SubOrchErr(_)) => true,
+        _ => false,
+    }
+}
+
 /// Phase-1 simplified evaluator.
 ///
 /// - Processes a fixed history in order.
@@ -400,6 +413,21 @@ where
         return Err("corrupted history: first event must be OrchestrationStarted".to_string());
     }
 
+    // Match current runtime behavior: terminal histories are not processed.
+    // The orchestration dispatcher acks them without invoking user code.
+    if history.iter().any(|e| {
+        matches!(
+            e.kind,
+            EventKind::OrchestrationCompleted { .. }
+                | EventKind::OrchestrationFailed { .. }
+                | EventKind::OrchestrationContinuedAsNew { .. }
+        )
+    }) {
+        return Ok(SimplifiedOutcome {
+            actions_to_take: Vec::new(),
+        });
+    }
+
     let ctx = SimCtx::new();
     let mut fut = Box::pin(orchestrator(ctx.clone()));
 
@@ -409,20 +437,6 @@ where
     let mut must_poll = true;
 
     for event in &history {
-        // Forced exit by history (cancel/terminal)
-        match &event.kind {
-            EventKind::OrchestrationCancelRequested { .. }
-            | EventKind::OrchestrationCompleted { .. }
-            | EventKind::OrchestrationFailed { .. }
-            | EventKind::OrchestrationContinuedAsNew { .. } => {
-                // Phase 1: we just stop; action emission is irrelevant past forced exit.
-                return Ok(SimplifiedOutcome {
-                    actions_to_take: Vec::new(),
-                });
-            }
-            _ => {}
-        }
-
         if must_poll {
             let _ = poll_once(fut.as_mut());
             emitted_actions.extend(ctx.drain_emitted());
@@ -448,6 +462,12 @@ where
                 // Bind token -> schedule_id and mark schedule open
                 ctx.bind_token(emitted.token, event.event_id());
                 open_schedules.insert(event.event_id());
+
+                // Record schedule kind for later completion validation
+                {
+                    let mut inner = ctx.inner.lock().unwrap();
+                    inner.schedule_kinds.insert(event.event_id(), emitted.kind.clone());
+                }
 
                 // For ExternalSubscribed, bind a deterministic consumption index
                 if let EventKind::ExternalSubscribed { name } = &event.kind {
@@ -480,6 +500,20 @@ where
                     return Err("nondeterminism: completion without open schedule".to_string());
                 }
 
+                // Validate completion kind matches the schedule kind
+                {
+                    let inner = ctx.inner.lock().unwrap();
+                    let sched = inner
+                        .schedule_kinds
+                        .get(&schedule_id)
+                        .ok_or_else(|| "nondeterminism: completion without known schedule kind".to_string())?;
+                    if !completion_matches_schedule(sched, &completion) {
+                        return Err(format!(
+                            "nondeterminism: completion kind mismatch for id={schedule_id}, schedule={sched:?}, completion={completion:?}"
+                        ));
+                    }
+                }
+
                 ctx.set_completion(schedule_id, completion);
                 must_poll = true;
             }
@@ -490,8 +524,15 @@ where
                 must_poll = true;
             }
 
-            // Other events ignored in phase 1
-            _ => {}
+            // Cancellation request is not terminal; allow history to continue.
+            EventKind::OrchestrationCancelRequested { .. } => {}
+
+            // Terminal events are handled by the early terminal-history bail-out above.
+            EventKind::OrchestrationCompleted { .. }
+            | EventKind::OrchestrationFailed { .. }
+            | EventKind::OrchestrationContinuedAsNew { .. } => {
+                unreachable!("terminal histories are bailed out before replay")
+            }
         }
     }
 
@@ -571,6 +612,32 @@ mod tests {
         )
     }
 
+    fn sub_scheduled(event_id: u64, name: &str, instance: &str, input: &str) -> Event {
+        Event::with_event_id(
+            event_id,
+            "inst",
+            1,
+            None,
+            EventKind::SubOrchestrationScheduled {
+                name: name.to_string(),
+                instance: instance.to_string(),
+                input: input.to_string(),
+            },
+        )
+    }
+
+    fn sub_completed(event_id: u64, source_event_id: u64, result: &str) -> Event {
+        Event::with_event_id(
+            event_id,
+            "inst",
+            1,
+            Some(source_event_id),
+            EventKind::SubOrchestrationCompleted {
+                result: result.to_string(),
+            },
+        )
+    }
+
     fn ext_subscribed(event_id: u64, name: &str) -> Event {
         Event::with_event_id(
             event_id,
@@ -592,6 +659,30 @@ mod tests {
             EventKind::ExternalEvent {
                 name: name.to_string(),
                 data: data.to_string(),
+            },
+        )
+    }
+
+    fn cancel_requested(event_id: u64, reason: &str) -> Event {
+        Event::with_event_id(
+            event_id,
+            "inst",
+            1,
+            None,
+            EventKind::OrchestrationCancelRequested {
+                reason: reason.to_string(),
+            },
+        )
+    }
+
+    fn orch_completed(event_id: u64, output: &str) -> Event {
+        Event::with_event_id(
+            event_id,
+            "inst",
+            1,
+            None,
+            EventKind::OrchestrationCompleted {
+                output: output.to_string(),
             },
         )
     }
@@ -692,6 +783,56 @@ mod tests {
             let v2 = e2.await;
             let v1 = e1.await;
             (v1, v2)
+        })
+        .unwrap();
+
+        assert!(out.actions_to_take.is_empty());
+    }
+
+    #[test]
+    fn completion_kind_mismatch_is_nondeterminism() {
+        // Schedule activity A (id=2) but record a TimerFired completion against it.
+        let history = vec![
+            started(1),
+            act_scheduled(2, "A", "x"),
+            timer_fired(3, 2, 123),
+        ];
+
+        let res = evaluate_simplified(history, |ctx| async move {
+            let a = ctx.schedule_activity("A", "x");
+            let _ = a.await;
+        });
+
+        assert!(res.is_err());
+        let msg = res.err().unwrap();
+        assert!(msg.contains("completion kind mismatch"));
+    }
+
+    #[test]
+    fn sub_orchestration_completion_kind_mismatch_is_nondeterminism() {
+        // Schedule suborch (id=2) but record an ActivityCompleted against it.
+        let history = vec![
+            started(1),
+            sub_scheduled(2, "Child", "child-1", "{}"),
+            act_completed(3, 2, "oops"),
+        ];
+
+        let res = evaluate_simplified(history, |ctx| async move {
+            let c = ctx.start_sub_orchestration("Child", "child-1", "{}");
+            let _ = c.await;
+        });
+
+        assert!(res.is_err());
+        let msg = res.err().unwrap();
+        assert!(msg.contains("completion kind mismatch"));
+    }
+
+    #[test]
+    fn cancel_requested_is_not_terminal() {
+        let history = vec![started(1), cancel_requested(2, "please"), orch_completed(3, "ok")];
+
+        let out = evaluate_simplified(history, |_ctx| async move {
+            // Return immediately; terminal history should be consistent.
         })
         .unwrap();
 

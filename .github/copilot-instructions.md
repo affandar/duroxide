@@ -63,6 +63,14 @@ tokio::select! { ... }              // NEVER use tokio::select in orchestrations
 
 ## Build & Test Commands
 
+When available, prefer **nextest** for running tests (faster, better output). In this repo the alias is:
+
+```bash
+cargo nt
+```
+
+If nextest isn't installed, fall back to `cargo test`.
+
 ```bash
 cargo build --all-targets              # Build everything
 cargo test                             # Run all tests
