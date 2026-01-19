@@ -7,6 +7,7 @@
 // engine is swapped.
 
 #![cfg(test)]
+#![allow(dead_code)]
 
 use crate::{Event, EventKind};
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -34,10 +35,10 @@ struct SimEmittedAction {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum SimCompletion {
     ActivityOk(String),
-    ActivityErr(crate::ErrorDetails),
+    ActivityErr(String),
     TimerFired { fire_at_ms: u64 },
     SubOrchOk(String),
-    SubOrchErr(crate::ErrorDetails),
+    SubOrchErr(String),
     ExternalEvent { name: String, data: String },
     SystemCallValue { op: String, value: String },
 }
@@ -64,31 +65,44 @@ impl SimCtx {
         Self::default()
     }
 
-    fn emit_action(&self, kind: SimActionKind) -> SimHandle {
+    fn emit_action(&self, kind: SimActionKind) -> u64 {
         let mut inner = self.inner.lock().unwrap();
         inner.next_token += 1;
         let token = inner.next_token;
         inner.bindings.insert(token, None);
         inner.emitted.push_back(SimEmittedAction { token, kind });
-        SimHandle {
+        token
+    }
+
+    fn schedule_activity(&self, name: impl Into<String>, input: impl Into<String>) -> SimActivityFuture {
+        let token = self.emit_action(SimActionKind::CallActivity {
+            name: name.into(),
+            input: input.into(),
+        });
+        SimActivityFuture {
             token,
             inner: self.inner.clone(),
         }
     }
 
-    fn schedule_activity(&self, name: impl Into<String>, input: impl Into<String>) -> SimHandle {
-        self.emit_action(SimActionKind::CallActivity {
-            name: name.into(),
-            input: input.into(),
-        })
+    fn schedule_timer(&self, fire_at_ms: u64) -> SimTimerFuture {
+        let token = self.emit_action(SimActionKind::CreateTimer { fire_at_ms });
+        SimTimerFuture {
+            token,
+            inner: self.inner.clone(),
+        }
     }
 
-    fn schedule_timer(&self, fire_at_ms: u64) -> SimHandle {
-        self.emit_action(SimActionKind::CreateTimer { fire_at_ms })
-    }
-
-    fn subscribe_external(&self, name: impl Into<String>) -> SimHandle {
-        self.emit_action(SimActionKind::SubscribeExternal { name: name.into() })
+    fn subscribe_external(&self, name: impl Into<String>) -> SimExternalFuture {
+        let event_name = name.into();
+        let token = self.emit_action(SimActionKind::SubscribeExternal {
+            name: event_name.clone(),
+        });
+        SimExternalFuture {
+            token,
+            event_name,
+            inner: self.inner.clone(),
+        }
     }
 
     fn start_detached(&self, name: impl Into<String>, instance: impl Into<String>, input: impl Into<String>) {
@@ -104,16 +118,24 @@ impl SimCtx {
         name: impl Into<String>,
         instance: impl Into<String>,
         input: impl Into<String>,
-    ) -> SimHandle {
-        self.emit_action(SimActionKind::StartSubOrchestration {
+    ) -> SimSubOrchestrationFuture {
+        let token = self.emit_action(SimActionKind::StartSubOrchestration {
             name: name.into(),
             instance: instance.into(),
             input: input.into(),
-        })
+        });
+        SimSubOrchestrationFuture {
+            token,
+            inner: self.inner.clone(),
+        }
     }
 
-    fn system_call(&self, op: impl Into<String>) -> SimHandle {
-        self.emit_action(SimActionKind::SystemCall { op: op.into() })
+    fn system_call(&self, op: impl Into<String>) -> SimSystemCallFuture {
+        let token = self.emit_action(SimActionKind::SystemCall { op: op.into() });
+        SimSystemCallFuture {
+            token,
+            inner: self.inner.clone(),
+        }
     }
 
     fn drain_emitted(&self) -> VecDeque<SimEmittedAction> {
@@ -149,30 +171,15 @@ impl SimCtx {
         let mut inner = self.inner.lock().unwrap();
         inner.externals.get_mut(name).and_then(|q| q.pop_front())
     }
-
-    fn try_take_completion_for_token(&self, token: u64) -> Option<SimCompletion> {
-        let inner = self.inner.lock().unwrap();
-        let schedule_id = match inner.bindings.get(&token).copied().flatten() {
-            Some(id) => id,
-            None => return None,
-        };
-        inner.results.get(&schedule_id).cloned()
-    }
 }
 
-struct SimHandle {
+struct SimActivityFuture {
     token: u64,
     inner: Arc<Mutex<SimInner>>,
 }
 
-impl SimHandle {
-    fn token(&self) -> u64 {
-        self.token
-    }
-}
-
-impl Future for SimHandle {
-    type Output = SimCompletion;
+impl Future for SimActivityFuture {
+    type Output = Result<String, String>;
 
     fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
         let token = self.token;
@@ -182,7 +189,105 @@ impl Future for SimHandle {
             _ => return Poll::Pending,
         };
         match inner.results.get(&schedule_id) {
-            Some(c) => Poll::Ready(c.clone()),
+            Some(SimCompletion::ActivityOk(v)) => Poll::Ready(Ok(v.clone())),
+            Some(SimCompletion::ActivityErr(e)) => Poll::Ready(Err(e.clone())),
+            Some(other) => Poll::Ready(Err(format!("unexpected activity completion: {other:?}"))),
+            None => Poll::Pending,
+        }
+    }
+}
+
+struct SimTimerFuture {
+    token: u64,
+    inner: Arc<Mutex<SimInner>>,
+}
+
+impl Future for SimTimerFuture {
+    type Output = ();
+
+    fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let token = self.token;
+        let inner = self.inner.lock().unwrap();
+        let schedule_id = match inner.bindings.get(&token) {
+            Some(Some(id)) => *id,
+            _ => return Poll::Pending,
+        };
+        match inner.results.get(&schedule_id) {
+            Some(SimCompletion::TimerFired { .. }) => Poll::Ready(()),
+            Some(_other) => Poll::Ready(()),
+            None => Poll::Pending,
+        }
+    }
+}
+
+struct SimExternalFuture {
+    token: u64,
+    event_name: String,
+    inner: Arc<Mutex<SimInner>>,
+}
+
+impl Future for SimExternalFuture {
+    type Output = String;
+
+    fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
+        // We still require the subscription to be bound to history for determinism,
+        // but delivery is name-based.
+        {
+            let inner = self.inner.lock().unwrap();
+            if !matches!(inner.bindings.get(&self.token), Some(Some(_))) {
+                return Poll::Pending;
+            }
+        }
+        let mut inner = self.inner.lock().unwrap();
+        match inner.externals.get_mut(&self.event_name).and_then(|q| q.pop_front()) {
+            Some(v) => Poll::Ready(v),
+            None => Poll::Pending,
+        }
+    }
+}
+
+struct SimSubOrchestrationFuture {
+    token: u64,
+    inner: Arc<Mutex<SimInner>>,
+}
+
+impl Future for SimSubOrchestrationFuture {
+    type Output = Result<String, String>;
+
+    fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let token = self.token;
+        let inner = self.inner.lock().unwrap();
+        let schedule_id = match inner.bindings.get(&token) {
+            Some(Some(id)) => *id,
+            _ => return Poll::Pending,
+        };
+        match inner.results.get(&schedule_id) {
+            Some(SimCompletion::SubOrchOk(v)) => Poll::Ready(Ok(v.clone())),
+            Some(SimCompletion::SubOrchErr(e)) => Poll::Ready(Err(e.clone())),
+            Some(other) => Poll::Ready(Err(format!("unexpected suborch completion: {other:?}"))),
+            None => Poll::Pending,
+        }
+    }
+}
+
+struct SimSystemCallFuture {
+    token: u64,
+    inner: Arc<Mutex<SimInner>>,
+}
+
+impl Future for SimSystemCallFuture {
+    type Output = String;
+
+    fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let token = self.token;
+        let inner = self.inner.lock().unwrap();
+        let schedule_id = match inner.bindings.get(&token) {
+            Some(Some(id)) => *id,
+            _ => return Poll::Pending,
+        };
+        match inner.results.get(&schedule_id) {
+            Some(SimCompletion::SystemCallValue { value, .. }) => Poll::Ready(value.clone()),
+            Some(other) => Poll::Ready(format!("unexpected systemcall completion: {other:?}")),
             None => Poll::Pending,
         }
     }
@@ -255,10 +360,10 @@ fn to_completion(event: &Event) -> Option<(u64, SimCompletion)> {
     let source_id = event.source_event_id?;
     match &event.kind {
         EventKind::ActivityCompleted { result } => Some((source_id, SimCompletion::ActivityOk(result.clone()))),
-        EventKind::ActivityFailed { details } => Some((source_id, SimCompletion::ActivityErr(details.clone()))),
+        EventKind::ActivityFailed { details } => Some((source_id, SimCompletion::ActivityErr(format!("{details:?}")))),
         EventKind::TimerFired { fire_at_ms } => Some((source_id, SimCompletion::TimerFired { fire_at_ms: *fire_at_ms })),
         EventKind::SubOrchestrationCompleted { result } => Some((source_id, SimCompletion::SubOrchOk(result.clone()))),
-        EventKind::SubOrchestrationFailed { details } => Some((source_id, SimCompletion::SubOrchErr(details.clone()))),
+        EventKind::SubOrchestrationFailed { details } => Some((source_id, SimCompletion::SubOrchErr(format!("{details:?}")))),
         _ => None,
     }
 }
@@ -451,7 +556,7 @@ mod tests {
         let history = vec![started(1), act_scheduled(2, "A", "x")];
 
         let res = evaluate_simplified(history, |ctx| async move {
-            let _ = ctx.schedule_activity("B", "y");
+            let _fut = ctx.schedule_activity("B", "y");
         });
 
         assert!(res.is_err());
@@ -514,7 +619,7 @@ mod tests {
             let _ = a.await;
             let _b = ctx.schedule_activity("B", "y");
             let t = ctx.schedule_timer(999);
-            let _ = t.await;
+            t.await;
         })
         .unwrap();
 
