@@ -214,7 +214,76 @@ This prerequisite is complete when the simplified implementation can be swapped 
 2) Start Phase 2 implementation in the production replay engine behind a feature flag or internal toggle (if helpful), and port Phase-1 tests into `src/runtime/replay_engine_tests.rs`-style coverage.
 3) Implement dehydration guard and verify cancellation tests in `tests/scenarios/single_thread.rs` still pass.
 4) Run provider validation tests (and/or `cargo nt`) once the production engine behavior changes.
+---
 
+## Phase 2 Implementation Plan: Modal Switch Approach
+
+**Checkpoint commit:** `555c5751653ac770a94d3962f743b7a2d7f6ad58`
+
+> **Note:** We are going to try this path out. If it gets too complex or creates too much churn, we can revert to the checkpoint commit, change approach, and try again.
+
+### Why a modal switch?
+
+The Phase 1 harness validated the commands-vs-history replay logic, but it uses its own `SimCtx` and `SimFuture` types. Production uses `OrchestrationContext` and `DurableFuture`, which work differently:
+
+| Aspect | Current (Legacy) Model | Simplified Model |
+|--------|------------------------|------------------|
+| `schedule_*()` | Mutates `ctx.history` (appends schedule event) | Emits action to buffer (no history mutation) |
+| `DurableFuture::poll()` | Scans history for completion event | Checks results map for delivered completion |
+| Replay engine | `run_turn_with_status_and_cancellations` | Event-processing loop (validated in Phase 1) |
+
+Swapping `execute_orchestration()` alone is **not sufficient** — the orchestration context and durable futures must also participate in the new model.
+
+### Approach: Add a replay mode to `CtxInner`
+
+```rust
+enum ReplayMode {
+    Legacy,      // schedule_*() mutates history, futures scan history
+    Simplified,  // schedule_*() emits actions, futures check results map
+}
+```
+
+### Implementation steps
+
+1. **Add mode and emit buffer to `CtxInner`**
+   - New field: `replay_mode: ReplayMode`
+   - New field: `emitted_actions: Vec<Action>` (or similar buffer)
+   - New field: `results: HashMap<u64, CompletionResult>` (for delivering completions)
+
+2. **Make `schedule_*()` mode-aware**
+   - When `Legacy`: current behavior (append schedule event to history)
+   - When `Simplified`: emit action to buffer, return token-based future
+
+3. **Make `DurableFuture::poll()` mode-aware**
+   - When `Legacy`: current behavior (scan history)
+   - When `Simplified`: check results map
+
+4. **Swap `execute_orchestration()` internals**
+   - When `Simplified`: use the event-processing loop from Phase 1 harness
+   - Validate emitted actions against history schedule events
+   - Plug completions into results map and re-poll
+
+5. **Feature flag or runtime toggle**
+   - Allow legacy mode by default
+   - Enable simplified mode for testing/gradual rollout
+
+### What stays the same (API boundary)
+
+The caller in `execution.rs` continues to use:
+- `ReplayEngine::new(instance, execution_id, baseline_history)`
+- `turn.prep_completions(messages)`
+- `turn.execute_orchestration(handler, input, ...)`
+- `turn.history_delta()`, `turn.pending_actions()`, `turn.cancelled_activity_ids()`
+
+These do not change. Only the internal machinery changes.
+
+### Risk mitigation
+
+- Feature flag allows fallback to legacy mode
+- Checkpoint commit allows full revert if approach is too invasive
+- Incremental testing: enable simplified mode in specific test files first
+
+---
 ## Change history (recent commits)
 
 - Phase 1 harness added (test-only)
