@@ -2123,10 +2123,36 @@ impl OrchestrationContext {
         }
     }
 
+    /// Simplified version of system call scheduling - returns impl Future instead of DurableFuture.
+    /// System calls are computed synchronously and don't need external resolution.
+    fn simplified_schedule_system_call(&self, op: &str) -> impl Future<Output = Result<String, String>> {
+        let mut inner = self.inner.lock().expect("Mutex should not be poisoned");
+        
+        // Compute value immediately (system calls are synchronous)
+        let computed_value = match op {
+            SYSCALL_OP_GUID => generate_guid(),
+            SYSCALL_OP_UTCNOW_MS => inner.now_ms().to_string(),
+            _ => String::new(),
+        };
+        
+        let token = inner.emit_action(Action::SystemCall {
+            scheduling_event_id: 0, // Will be assigned by replay engine
+            op: op.to_string(),
+            value: computed_value.clone(),
+        });
+        
+        // For system calls, deliver result immediately (they're synchronous)
+        inner.simplified_results.insert(token, SimplifiedResult::SystemCallValue(computed_value.clone()));
+        drop(inner);
+        
+        // Return a future that immediately resolves
+        std::future::ready(Ok(computed_value))
+    }
+
     /// Generate a new deterministic GUID.
     /// Returns a future that resolves to a String GUID.
     pub fn new_guid(&self) -> impl Future<Output = Result<String, String>> {
-        self.schedule_system_call(SYSCALL_OP_GUID).into_activity()
+        self.simplified_schedule_system_call(SYSCALL_OP_GUID)
     }
 
     /// Generate a new deterministic GUID as a DurableFuture.
@@ -2154,7 +2180,7 @@ impl OrchestrationContext {
     /// # }
     /// ```
     pub fn utcnow(&self) -> impl Future<Output = Result<SystemTime, String>> {
-        let fut = self.schedule_system_call(SYSCALL_OP_UTCNOW_MS).into_activity();
+        let fut = self.simplified_schedule_system_call(SYSCALL_OP_UTCNOW_MS);
         async move {
             let s = fut.await?;
             let ms = s.parse::<u64>().map_err(|e| e.to_string())?;
@@ -2543,24 +2569,24 @@ impl OrchestrationContext {
             // Each attempt: optionally race against per-attempt timeout
             let activity_result = if let Some(timeout) = policy.timeout {
                 // Race activity vs per-attempt timeout
-                let deadline = self.schedule_timer(timeout);
-                let activity = self.schedule_activity(&name, &input);
-                let (winner, output) = self.select2(activity, deadline).await;
+                let deadline = async {
+                    self.simplified_schedule_timer(timeout).await;
+                    Err::<String, String>("timeout: activity timed out".to_string())
+                };
+                let activity = self.simplified_schedule_activity(&name, &input);
+                let (winner, output) = self.simplified_select2(activity, deadline).await;
 
-                match winner {
-                    0 => match output {
-                        DurableOutput::Activity(result) => result,
-                        _ => unreachable!(),
-                    },
-                    1 => {
+                match (winner, output) {
+                    (0, result) => result,
+                    (1, Err(e)) => {
                         // Timeout fired - exit immediately, no retry for timeouts
-                        return Err("timeout: activity timed out".to_string());
+                        return Err(e);
                     }
                     _ => unreachable!(),
                 }
             } else {
                 // No timeout - just await the activity
-                self.schedule_activity(&name, &input).into_activity().await
+                self.simplified_schedule_activity(&name, &input).await
             };
 
             match activity_result {
@@ -2578,7 +2604,7 @@ impl OrchestrationContext {
                         );
                         let delay = policy.delay_for_attempt(attempt);
                         if !delay.is_zero() {
-                            self.schedule_timer(delay).into_timer().await;
+                            self.simplified_schedule_timer(delay).await;
                         }
                     }
                 }
