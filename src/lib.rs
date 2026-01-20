@@ -1089,8 +1089,8 @@ pub(crate) enum SimplifiedResult {
     SubOrchOk(String),
     /// Sub-orchestration failed with error
     SubOrchErr(String),
-    /// External event received
-    ExternalEvent(String),
+    /// External event data (NOTE: External events delivered via get_external_event, not SimplifiedResult)
+    ExternalData(String),
     /// System call value
     SystemCallValue(String),
 }
@@ -1682,9 +1682,11 @@ impl OrchestrationContext {
     }
 
     /// Set the replay mode for this context.
-    /// This is used by the replay engine to switch between legacy and simplified modes.
-    pub(crate) fn set_replay_mode(&self, mode: ReplayMode) {
-        self.inner.lock().unwrap().replay_mode = mode;
+    /// NOTE: This is deprecated as simplified mode is now the only mode.
+    #[allow(dead_code)]
+    #[deprecated(note = "Simplified mode is now the only mode. This method has no effect.")]
+    pub(crate) fn set_replay_mode(&self, _mode: ReplayMode) {
+        // No-op: simplified mode is always on
     }
 
     /// Get the current replay mode.
@@ -1879,10 +1881,17 @@ impl OrchestrationContext {
 
     /// Returns the current logical time in milliseconds based on the last
     /// `TimerFired` event in history.
+    /// 
+    /// NOTE: This was used by legacy run_turn* functions, now deprecated.
+    #[allow(dead_code)]
+    #[deprecated(note = "Legacy mode removed. Use runtime tests instead of run_turn.")]
     fn take_actions(&self) -> Vec<Action> {
         std::mem::take(&mut self.inner.lock().unwrap().actions)
     }
 
+    /// NOTE: This was used by legacy run_turn* functions, now deprecated.
+    #[allow(dead_code)]
+    #[deprecated(note = "Legacy mode removed. Use runtime tests instead of run_turn.")]
     pub(crate) fn take_cancelled_activity_ids(&self) -> Vec<u64> {
         let mut inner = self.inner.lock().expect("Mutex should not be poisoned");
         inner.cancelled_activity_ids.drain().collect()

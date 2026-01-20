@@ -95,7 +95,6 @@ impl Runtime {
         // Get the persisted history length for is_replaying tracking
         let persisted_len = history_mgr.original_len();
         let mut turn = ReplayEngine::new(instance.to_string(), execution_id, current_execution_history)
-            .with_simplified_mode(self.options.use_simplified_replay)
             .with_persisted_history_len(persisted_len);
 
         // Prep completions from incoming messages

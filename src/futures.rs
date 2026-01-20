@@ -391,7 +391,7 @@ impl Future for DurableFuture {
                     // Check for direct result delivery
                     if let Some(res) = inner.get_result(token) {
                         return match res {
-                            SimplifiedResult::ExternalEvent(data) => {
+                            SimplifiedResult::ExternalData(data) => {
                                 Poll::Ready(DurableOutput::External(data.clone()))
                             }
                             _ => Poll::Pending,

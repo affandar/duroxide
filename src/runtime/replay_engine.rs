@@ -950,7 +950,9 @@ impl ReplayEngine {
 // === Simplified mode helper types and functions ===
 
 /// Action kind for tracking schedule types (simplified mode)
+/// NOTE: Fields are intentionally unused - we only match on variant type, not field values
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 enum ActionKind {
     Activity { name: String, input: String },
     Timer { fire_at_ms: u64 },

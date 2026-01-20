@@ -218,13 +218,14 @@ pub struct RuntimeOptions {
     /// Default: 10 seconds
     pub activity_cancellation_grace_period: Duration,
     
-    /// Use simplified replay mode (experimental).
+    /// DEPRECATED: Simplified replay mode is now the only mode.
     ///
-    /// When enabled, the replay engine uses a commands-vs-history model
-    /// instead of the legacy history mutation model. This is an internal
-    /// implementation detail being validated before becoming the default.
+    /// This field has no effect. Simplified mode is always enabled (Phase 2).
+    /// It's kept for backward compatibility with code that sets it explicitly.
     ///
-    /// Default: false (use legacy replay mode)
+    /// The simplified replay engine uses a commands-vs-history model
+    /// instead of the removed legacy history mutation model.
+    #[deprecated(note = "Simplified replay mode is now the only mode. This field has no effect.")]
     pub use_simplified_replay: bool,
 }
 
