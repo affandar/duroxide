@@ -2,12 +2,19 @@ use duroxide::providers::Provider;
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
 use duroxide::{
-    Action, ActivityContext, DurableOutput, Event, EventKind, OrchestrationContext, OrchestrationRegistry, run_turn,
+    Action, ActivityContext, DurableOutput, Event, EventKind, OrchestrationContext, OrchestrationRegistry,
 };
 use std::sync::Arc as StdArc;
 use std::sync::Arc;
 use std::time::Duration;
 mod common;
+
+// Stub: run_turn has been removed (Phase 2 - simplified mode only)
+#[allow(unused)]
+fn run_turn<O, F>(_history: Vec<Event>, _orchestrator: impl Fn(OrchestrationContext) -> F) -> (Vec<Event>, Vec<Action>, Option<O>)
+where F: std::future::Future<Output = O> {
+    panic!("run_turn has been removed - use runtime tests instead")
+}
 
 async fn orchestration_completes_and_replays_deterministically_with(store: StdArc<dyn Provider>) {
     let orchestration = |ctx: OrchestrationContext, _input: String| async move {

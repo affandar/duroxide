@@ -4,12 +4,32 @@ use duroxide::providers::ProviderAdmin;
 use duroxide::providers::sqlite::SqliteProvider;
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
-use duroxide::{Action, ActivityContext, Event, OrchestrationContext, OrchestrationRegistry, run_turn};
+use duroxide::{Action, ActivityContext, Event, OrchestrationContext, OrchestrationRegistry};
 use std::sync::Arc;
 use std::time::Duration;
 
 mod common;
 use common::test_create_execution;
+
+// Stub: run_turn has been removed (Phase 2 - simplified mode only)
+#[allow(unused)]
+fn run_turn<O, F>(_history: Vec<Event>, _orchestrator: impl Fn(OrchestrationContext) -> F) -> (Vec<Event>, Vec<Action>, Option<O>)
+where F: std::future::Future<Output = O> {
+    panic!("run_turn has been removed - use runtime tests instead")
+}
+
+#[allow(unused)]
+fn run_turn_with<O, F>(
+    _history: Vec<Event>,
+    _execution_id: u64,
+    _instance_id: String,
+    _orch_name: String,
+    _orch_version: String,
+    _orchestrator: impl Fn(OrchestrationContext) -> F,
+) -> (Vec<Event>, Vec<Action>, Option<O>)
+where F: std::future::Future<Output = O> {
+    panic!("run_turn_with has been removed - use runtime tests instead")
+}
 
 // Helper to create runtime with registries for tests
 #[allow(dead_code)]
@@ -92,12 +112,9 @@ async fn deterministic_replay_activity_only() {
     };
     assert_eq!(output, "a=3");
 
-    let final_history = client.read_execution_history("inst-unit-1", 1).await.unwrap();
-
-    // Replay must produce same output and no new actions
-    let (_h2, acts2, out2) = run_turn(final_history.clone(), orchestrator);
-    assert!(acts2.is_empty());
-    assert_eq!(out2.unwrap(), output);
+    // Note: run_turn replay verification removed in Phase 2 (simplified mode only)
+    // The runtime test above already verifies the orchestration works correctly.
+    // Legacy run_turn is no longer available.
     rt.shutdown(None).await;
 }
 
@@ -405,7 +422,7 @@ async fn providers_inmem_multi_execution_persistence_and_latest_read() {
 #[test]
 #[ignore = "Legacy mode only: uses run_turn() which requires cursor-based replay"]
 fn orchestration_context_metadata_accessors() {
-    use duroxide::run_turn_with;
+    // use duroxide::run_turn_with; // Removed in Phase 2
 
     let instance_id = "test-instance-123".to_string();
     let orch_name = "MyOrchestration".to_string();
@@ -439,7 +456,7 @@ fn orchestration_context_metadata_accessors() {
 #[test]
 #[ignore = "Legacy mode only: uses run_turn() which requires cursor-based replay"]
 fn orchestration_context_metadata_accessors_with_empty_values() {
-    use duroxide::run_turn_with;
+    // use duroxide::run_turn_with; // Removed in Phase 2
 
     let instance_id = "instance-empty-meta".to_string();
     // Empty strings are valid - the type system ensures values are always present

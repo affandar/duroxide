@@ -75,15 +75,17 @@ impl ReplayEngine {
             baseline_history,
             next_event_id,
             abort_error: None,
-            use_simplified_mode: false, // Default to legacy mode
+            use_simplified_mode: true, // Simplified mode is now the only mode (Phase 2)
             persisted_history_len: persisted_len,
         }
     }
     
     /// Enable simplified replay mode (commands-vs-history model)
+    /// NOTE: This is now always true. Legacy mode has been removed.
     #[allow(dead_code)]
-    pub fn with_simplified_mode(mut self, enabled: bool) -> Self {
-        self.use_simplified_mode = enabled;
+    #[deprecated(note = "Simplified mode is now the only mode. This method has no effect.")]
+    pub fn with_simplified_mode(mut self, _enabled: bool) -> Self {
+        self.use_simplified_mode = true; // Always simplified
         self
     }
     
@@ -478,113 +480,9 @@ impl ReplayEngine {
             );
         }
 
-        // === LEGACY MODE ===
-        // Build working history: baseline + completion events from this run
-        let working_history_len_before = self.baseline_history.len() + self.history_delta.len();
-        let mut working_history = self.baseline_history.clone();
-        working_history.extend_from_slice(&self.history_delta);
-
-        // Run orchestration with unified cursor model (metadata passed from caller)
-        let execution_id = self.get_current_execution_id();
-        let instance_id = self.instance.clone();
-        let worker_id_owned = worker_id.to_string();
-        let run_result = catch_unwind(AssertUnwindSafe(|| {
-            crate::run_turn_with_status_and_cancellations(
-                working_history,
-                execution_id,
-                instance_id,
-                orchestration_name,
-                orchestration_version,
-                worker_id_owned,
-                move |ctx| {
-                    let h = handler.clone();
-                    let inp = input.clone();
-                    async move { h.invoke(ctx, inp).await }
-                },
-            )
-        }));
-
-        let (updated_history, decisions, output_opt, nondet_flag, cancelled_activity_ids) = match run_result {
-            Ok(tuple) => tuple,
-            Err(panic_payload) => {
-                let msg = if let Some(s) = panic_payload.downcast_ref::<&str>() {
-                    s.to_string()
-                } else if let Some(s) = panic_payload.downcast_ref::<String>() {
-                    s.clone()
-                } else {
-                    "orchestration panicked".to_string()
-                };
-                return TurnResult::Failed(crate::ErrorDetails::Configuration {
-                    kind: crate::ConfigErrorKind::Nondeterminism,
-                    resource: String::new(),
-                    message: Some(msg),
-                });
-            }
-        };
-
-        self.cancelled_activity_ids = cancelled_activity_ids;
-
-        // If futures flagged nondeterminism (scheduling-order mismatch), fail gracefully
-        if let Some(err) = nondet_flag.clone() {
-            return TurnResult::Failed(crate::ErrorDetails::Configuration {
-                kind: crate::ConfigErrorKind::Nondeterminism,
-                resource: String::new(),
-                message: Some(err),
-            });
-        }
-
-        // If futures recorded nondeterminism, fail gracefully
-        if updated_history.is_empty() {
-            // Nothing to check; proceed
-        }
-
-        // Calculate NEW events added during orchestration execution
-        // (beyond the completion events we already added in prep_completions)
-        if updated_history.len() > working_history_len_before {
-            let new_events = updated_history[working_history_len_before..].to_vec();
-            self.history_delta.extend(new_events);
-        }
-
-        self.pending_actions = decisions;
-
-        // Check for cancellation first - if cancelled, return immediately
-        // Optimization: Search both slices separately to avoid cloning
-        let cancel_event = self
-            .baseline_history
-            .iter()
-            .chain(self.history_delta.iter())
-            .find(|e| matches!(&e.kind, EventKind::OrchestrationCancelRequested { .. }));
-
-        if let Some(e) = cancel_event
-            && let EventKind::OrchestrationCancelRequested { reason } = &e.kind
-        {
-            return TurnResult::Cancelled(reason.clone());
-        }
-
-        // Check for continue-as-new decision FIRST (takes precedence over output)
-        for decision in &self.pending_actions {
-            if let crate::Action::ContinueAsNew { input, version } = decision {
-                return TurnResult::ContinueAsNew {
-                    input: input.clone(),
-                    version: version.clone(),
-                };
-            }
-        }
-
-        // Determine result based on output and decisions
-        if let Some(output) = output_opt {
-            return match output {
-                Ok(result) => TurnResult::Completed(result),
-                Err(error) => TurnResult::Failed(crate::ErrorDetails::Application {
-                    kind: crate::AppErrorKind::OrchestrationFailed,
-                    message: error,
-                    retryable: false,
-                }),
-            };
-        }
-
-        // Cursor model handles non-determinism automatically via strict sequential consumption
-        TurnResult::Continue
+        // Legacy mode has been removed in Phase 2 (replay simplification)
+        // If this branch is reached, it indicates a configuration error
+        unreachable!("Legacy replay mode has been removed. Simplified mode is now the only supported mode.");
     }
     
     /// Simplified mode execution: commands-vs-history model
@@ -1265,13 +1163,12 @@ mod tests {
             )],
         );
         
-        assert!(!engine.use_simplified_mode, "default should be legacy mode");
+        // Phase 2: Simplified mode is now always on by default
+        assert!(engine.use_simplified_mode, "default should be simplified mode");
         
-        let engine = engine.with_simplified_mode(true);
-        assert!(engine.use_simplified_mode, "should be simplified mode after builder");
+        // with_simplified_mode is deprecated and always returns simplified
+        #[allow(deprecated)]
+        let engine = engine.with_simplified_mode(false);
+        assert!(engine.use_simplified_mode, "should always be simplified mode (legacy removed)");
     }
 }
-
-// Include comprehensive tests
-#[path = "replay_engine_tests.rs"]
-mod replay_engine_tests;

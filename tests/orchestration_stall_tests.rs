@@ -23,14 +23,49 @@
 //! completions are automatically skipped in FIFO ordering checks.
 
 #![allow(dead_code)] // Tests are ignored but code should still compile
+#![allow(unused_imports)] // Legacy imports no longer exist
 
-use duroxide::{Event, EventKind, OrchestrationContext, run_turn};
+use duroxide::{Event, EventKind, OrchestrationContext};
 use std::time::Duration;
+
+// Stub: run_turn has been removed (Phase 2 - simplified mode only)
+// These tests are all ignored and kept for historical reference
+#[allow(unused)]
+fn run_turn<O, F>(_history: Vec<Event>, _orchestrator: impl Fn(OrchestrationContext) -> F) -> (Vec<Event>, Vec<duroxide::Action>, Option<O>)
+where F: std::future::Future<Output = O> {
+    panic!("run_turn has been removed - use runtime tests instead")
+}
+
+#[allow(unused)]
+fn run_turn_with<O, F>(
+    _history: Vec<Event>,
+    _execution_id: u64,
+    _instance_id: String,
+    _orch_name: String,
+    _orch_version: String,
+    _orchestrator: impl Fn(OrchestrationContext) -> F,
+) -> (Vec<Event>, Vec<duroxide::Action>, Option<O>)
+where F: std::future::Future<Output = O> {
+    panic!("run_turn_with has been removed - use runtime tests instead")
+}
+
+#[allow(unused)]
+fn run_turn_with_status<O, F>(
+    _history: Vec<Event>,
+    _execution_id: u64,
+    _instance_id: String,
+    _orch_name: String,
+    _orch_version: String,
+    _worker_id: String,
+    _orchestrator: impl Fn(OrchestrationContext) -> F,
+) -> (Vec<Event>, Vec<duroxide::Action>, Option<O>, Option<String>)
+where F: std::future::Future<Output = O> {
+    panic!("run_turn_with_status has been removed - use runtime tests instead")
+}
 
 /// Core repro: Two select2s with activity winners create stale timers that
 /// should NOT block a subsequent timer in a third select2.
 #[test]
-#[ignore = "Legacy mode only: uses run_turn() which requires cursor-based replay"]
 #[ignore = "Legacy mode only: uses run_turn() which requires cursor-based replay"]
 fn select2_loser_timer_does_not_block_later_timer() {
     let orchestrator = |ctx: OrchestrationContext| async move {
@@ -631,7 +666,7 @@ fn both_ready_first_argument_wins() {
 #[test]
 #[ignore = "Legacy mode only: uses run_turn() which requires cursor-based replay"]
 fn new_execution_starts_clean() {
-    use duroxide::run_turn_with;
+    // use duroxide::run_turn_with; // Removed in Phase 2
 
     // This orchestrator is for execution 2 (after CAN)
     let orchestrator = |ctx: OrchestrationContext| async move {
@@ -1399,7 +1434,7 @@ fn sequential_select2s_accumulate_cancelled_sources() {
 #[test]
 #[ignore = "Legacy mode only: uses run_turn() which requires cursor-based replay"]
 fn schedule_order_mismatch_triggers_nondeterminism() {
-    use duroxide::run_turn_with_status;
+    // use duroxide::run_turn_with_status; // Removed in Phase 2
     // Orchestration schedules ACTIVITY first, then TIMER
     let orchestrator = |ctx: OrchestrationContext| async move {
         let activity = ctx.schedule_activity("Task", "input");
