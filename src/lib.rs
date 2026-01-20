@@ -2782,7 +2782,19 @@ impl OrchestrationContext {
         let input: String = input.into();
         let mut inner = self.inner.lock().unwrap();
 
-        // Assign event_id for the chained orchestration event
+        // In simplified mode, use emit_action (replay engine handles event IDs)
+        if inner.replay_mode == ReplayMode::Simplified {
+            let _ = inner.emit_action(Action::StartOrchestrationDetached {
+                scheduling_event_id: 0, // Will be assigned by replay engine
+                name,
+                version: None,
+                instance,
+                input,
+            });
+            return;
+        }
+
+        // Legacy mode: manually manage event IDs and history
         let event_id = inner.next_event_id;
         inner.next_event_id += 1;
         let exec_id = inner.execution_id;
@@ -2831,6 +2843,19 @@ impl OrchestrationContext {
         let input: String = input.into();
         let mut inner = self.inner.lock().unwrap();
 
+        // In simplified mode, use emit_action (replay engine handles event IDs)
+        if inner.replay_mode == ReplayMode::Simplified {
+            let _ = inner.emit_action(Action::StartOrchestrationDetached {
+                scheduling_event_id: 0, // Will be assigned by replay engine
+                name,
+                version,
+                instance,
+                input,
+            });
+            return;
+        }
+
+        // Legacy mode: manually manage event IDs and history
         let event_id = inner.next_event_id;
         inner.next_event_id += 1;
         let exec_id = inner.execution_id;
@@ -2867,6 +2892,53 @@ impl OrchestrationContext {
         let payload = crate::_typed_codec::Json::encode(input).expect("encode");
         self.schedule_orchestration_versioned(name, version, instance, payload)
     }
+
+    // =========================================================================
+    // Simplified Schedule Orchestration (fire-and-forget, no completion)
+    // =========================================================================
+
+    /// Simplified version of schedule_orchestration for fire-and-forget detached orchestrations.
+    ///
+    /// This schedules an independent orchestration that runs without awaiting its result.
+    /// The runtime will prefix the instance ID with the parent instance to ensure global uniqueness.
+    ///
+    /// Panics if called when not in simplified replay mode.
+    pub fn simplified_schedule_orchestration(
+        &self,
+        name: impl Into<String>,
+        instance: impl Into<String>,
+        input: impl Into<String>,
+    ) {
+        let name: String = name.into();
+        let instance: String = instance.into();
+        let input: String = input.into();
+
+        let mut inner = self.inner.lock().expect("Mutex should not be poisoned");
+
+        assert!(
+            inner.replay_mode == ReplayMode::Simplified,
+            "simplified_schedule_orchestration can only be used in simplified replay mode"
+        );
+
+        let _ = inner.emit_action(Action::StartOrchestrationDetached {
+            scheduling_event_id: 0, // Will be assigned by replay engine
+            name,
+            version: None,
+            instance,
+            input,
+        });
+    }
+
+    /// Typed version of simplified_schedule_orchestration.
+    pub fn simplified_schedule_orchestration_typed<In: serde::Serialize>(
+        &self,
+        name: impl Into<String>,
+        instance: impl Into<String>,
+        input: &In,
+    ) {
+        let payload = crate::_typed_codec::Json::encode(input).expect("encode");
+        self.simplified_schedule_orchestration(name, instance, payload)
+    }
 }
 
 // Aggregate future machinery lives in crate::futures
@@ -2883,6 +2955,348 @@ impl OrchestrationContext {
     /// Deterministic join over N futures (history order)
     pub fn join(&self, futures: Vec<DurableFuture>) -> JoinFuture {
         JoinFuture(AggregateDurableFuture::new_join(self.clone(), futures))
+    }
+    
+    // =========================================================================
+    // Simplified mode variants - work with any Future type
+    // =========================================================================
+    
+    /// Schedule an activity and return a simple future (simplified mode only).
+    /// 
+    /// This is the simplified mode equivalent of `schedule_activity().into_activity()`.
+    /// It returns a regular `impl Future` that can be used with standard combinators
+    /// like `futures::join_all` and `futures::select_biased!`.
+    /// 
+    /// # Panics
+    /// 
+    /// Panics if called when not in simplified replay mode.
+    /// 
+    /// # Example
+    /// 
+    /// ```rust,no_run
+    /// # use duroxide::OrchestrationContext;
+    /// # async fn example(ctx: OrchestrationContext) -> Result<String, String> {
+    /// // Fan-out to multiple activities
+    /// let f1 = ctx.simplified_schedule_activity("Process", "A");
+    /// let f2 = ctx.simplified_schedule_activity("Process", "B");
+    /// let results = ctx.simplified_join(vec![f1, f2]).await;
+    /// # Ok("done".to_string())
+    /// # }
+    /// ```
+    pub fn simplified_schedule_activity(
+        &self,
+        name: impl Into<String>,
+        input: impl Into<String>,
+    ) -> impl Future<Output = Result<String, String>> {
+        let name: String = name.into();
+        let input: String = input.into();
+        
+        let mut inner = self.inner.lock().expect("Mutex should not be poisoned");
+        
+        // Only works in simplified mode
+        assert!(
+            inner.replay_mode == ReplayMode::Simplified,
+            "simplified_schedule_activity can only be used in simplified replay mode"
+        );
+        
+        // Emit action at schedule time
+        let token = inner.emit_action(Action::CallActivity {
+            scheduling_event_id: 0, // Will be assigned by replay engine
+            name: name.clone(),
+            input: input.clone(),
+        });
+        drop(inner);
+        
+        // Return a future that polls for the result
+        let ctx = self.clone();
+        std::future::poll_fn(move |_cx| {
+            let inner = ctx.inner.lock().expect("Mutex should not be poisoned");
+            if let Some(result) = inner.get_result(token) {
+                match result {
+                    SimplifiedResult::ActivityOk(s) => Poll::Ready(Ok(s.clone())),
+                    SimplifiedResult::ActivityErr(e) => Poll::Ready(Err(e.clone())),
+                    _ => Poll::Pending, // Wrong result type, keep waiting
+                }
+            } else {
+                Poll::Pending
+            }
+        })
+    }
+    
+    /// Typed version of simplified_schedule_activity that serializes input and deserializes output.
+    pub fn simplified_schedule_activity_typed<In: serde::Serialize, Out: serde::de::DeserializeOwned>(
+        &self,
+        name: impl Into<String>,
+        input: &In,
+    ) -> impl Future<Output = Result<Out, String>> {
+        let payload = crate::_typed_codec::Json::encode(input).expect("encode");
+        let fut = self.simplified_schedule_activity(name, payload);
+        async move {
+            let s = fut.await?;
+            crate::_typed_codec::Json::decode::<Out>(&s)
+        }
+    }
+    
+    /// Schedule a timer and return a simple future (simplified mode only).
+    /// 
+    /// This is the simplified mode equivalent of `schedule_timer().into_timer()`.
+    /// 
+    /// # Panics
+    /// 
+    /// Panics if called when not in simplified replay mode.
+    pub fn simplified_schedule_timer(
+        &self,
+        delay: std::time::Duration,
+    ) -> impl Future<Output = ()> {
+        let delay_ms = delay.as_millis() as u64;
+        
+        let mut inner = self.inner.lock().expect("Mutex should not be poisoned");
+        
+        assert!(
+            inner.replay_mode == ReplayMode::Simplified,
+            "simplified_schedule_timer can only be used in simplified replay mode"
+        );
+        
+        let now = inner.now_ms();
+        let fire_at_ms = now.saturating_add(delay_ms);
+        let token = inner.emit_action(Action::CreateTimer {
+            scheduling_event_id: 0,
+            fire_at_ms,
+        });
+        drop(inner);
+        
+        let ctx = self.clone();
+        std::future::poll_fn(move |_cx| {
+            let inner = ctx.inner.lock().expect("Mutex should not be poisoned");
+            if let Some(result) = inner.get_result(token) {
+                match result {
+                    SimplifiedResult::TimerFired => Poll::Ready(()),
+                    _ => Poll::Pending,
+                }
+            } else {
+                Poll::Pending
+            }
+        })
+    }
+    
+    /// Subscribe to an external event and return a simple future (simplified mode only).
+    /// 
+    /// This is the simplified mode equivalent of `schedule_wait().into_event()`.
+    /// 
+    /// # Panics
+    /// 
+    /// Panics if called when not in simplified replay mode.
+    pub fn simplified_schedule_wait(
+        &self,
+        name: impl Into<String>,
+    ) -> impl Future<Output = String> {
+        let name: String = name.into();
+        
+        let mut inner = self.inner.lock().expect("Mutex should not be poisoned");
+        
+        assert!(
+            inner.replay_mode == ReplayMode::Simplified,
+            "simplified_schedule_wait can only be used in simplified replay mode"
+        );
+        
+        let token = inner.emit_action(Action::WaitExternal {
+            scheduling_event_id: 0,
+            name: name.clone(),
+        });
+        // Bind external subscription for lookup
+        let schedule_id = token; // In simplified mode, token is used as temporary schedule_id
+        inner.bind_external_subscription(schedule_id, &name);
+        drop(inner);
+        
+        let ctx = self.clone();
+        std::future::poll_fn(move |_cx| {
+            let inner = ctx.inner.lock().expect("Mutex should not be poisoned");
+            // Check for external event by looking up the bound schedule_id
+            if let Some(bound_id) = inner.get_bound_schedule_id(token) {
+                if let Some(data) = inner.get_external_event(bound_id) {
+                    return Poll::Ready(data.clone());
+                }
+            }
+            // Also check directly by token (before binding is updated)
+            if let Some(data) = inner.get_external_event(token) {
+                return Poll::Ready(data.clone());
+            }
+            Poll::Pending
+        })
+    }
+    
+    /// Typed version of simplified_schedule_wait.
+    pub fn simplified_schedule_wait_typed<T: serde::de::DeserializeOwned>(
+        &self,
+        name: impl Into<String>,
+    ) -> impl Future<Output = T> {
+        let fut = self.simplified_schedule_wait(name);
+        async move {
+            let s = fut.await;
+            crate::_typed_codec::Json::decode::<T>(&s).expect("decode")
+        }
+    }
+    
+    /// Schedule a sub-orchestration and return a simple future (simplified mode only).
+    /// 
+    /// This is the simplified mode equivalent of `schedule_sub_orchestration().into_sub_orchestration()`.
+    /// The child instance ID is auto-generated from the event ID.
+    /// 
+    /// # Panics
+    /// 
+    /// Panics if called when not in simplified replay mode.
+    pub fn simplified_schedule_sub_orchestration(
+        &self,
+        name: impl Into<String>,
+        input: impl Into<String>,
+    ) -> impl Future<Output = Result<String, String>> {
+        self.simplified_schedule_sub_orchestration_with_id(name, None::<String>, input)
+    }
+    
+    /// Schedule a sub-orchestration with an explicit instance ID (simplified mode only).
+    /// 
+    /// If `instance` is `Some`, that exact value is used as the child instance ID.
+    /// If `instance` is `None`, the instance ID is auto-generated from the event ID (e.g., `sub::5`).
+    /// 
+    /// This is useful for tests that need to know the exact child instance ID without
+    /// guessing based on event sequence.
+    /// 
+    /// # Panics
+    /// 
+    /// Panics if called when not in simplified replay mode.
+    pub fn simplified_schedule_sub_orchestration_with_id(
+        &self,
+        name: impl Into<String>,
+        instance: Option<impl Into<String>>,
+        input: impl Into<String>,
+    ) -> impl Future<Output = Result<String, String>> {
+        let name: String = name.into();
+        let instance: Option<String> = instance.map(|s| s.into());
+        let input: String = input.into();
+        
+        let mut inner = self.inner.lock().expect("Mutex should not be poisoned");
+        
+        assert!(
+            inner.replay_mode == ReplayMode::Simplified,
+            "simplified_schedule_sub_orchestration_with_id can only be used in simplified replay mode"
+        );
+        
+        // Use explicit instance if provided, otherwise use placeholder that will be replaced
+        let placeholder_instance = instance.unwrap_or_else(|| format!("sub::pending_{}", inner.simplified_next_token + 1));
+        let token = inner.emit_action(Action::StartSubOrchestration {
+            scheduling_event_id: 0,
+            name: name.clone(),
+            version: None,
+            instance: placeholder_instance,
+            input: input.clone(),
+        });
+        drop(inner);
+        
+        let ctx = self.clone();
+        std::future::poll_fn(move |_cx| {
+            let inner = ctx.inner.lock().expect("Mutex should not be poisoned");
+            if let Some(result) = inner.get_result(token) {
+                match result {
+                    SimplifiedResult::SubOrchOk(s) => Poll::Ready(Ok(s.clone())),
+                    SimplifiedResult::SubOrchErr(e) => Poll::Ready(Err(e.clone())),
+                    _ => Poll::Pending,
+                }
+            } else {
+                Poll::Pending
+            }
+        })
+    }
+    
+    /// Typed version of simplified_schedule_sub_orchestration.
+    pub fn simplified_schedule_sub_orchestration_typed<In: serde::Serialize, Out: serde::de::DeserializeOwned>(
+        &self,
+        name: impl Into<String>,
+        input: &In,
+    ) -> impl Future<Output = Result<Out, String>> {
+        self.simplified_schedule_sub_orchestration_with_id_typed(name, None::<String>, input)
+    }
+    
+    /// Typed version of simplified_schedule_sub_orchestration_with_id.
+    pub fn simplified_schedule_sub_orchestration_with_id_typed<In: serde::Serialize, Out: serde::de::DeserializeOwned>(
+        &self,
+        name: impl Into<String>,
+        instance: Option<impl Into<String>>,
+        input: &In,
+    ) -> impl Future<Output = Result<Out, String>> {
+        let payload = crate::_typed_codec::Json::encode(input).expect("encode");
+        let fut = self.simplified_schedule_sub_orchestration_with_id(name, instance, payload);
+        async move {
+            let s = fut.await?;
+            crate::_typed_codec::Json::decode::<Out>(&s)
+        }
+    }
+    
+    /// Simplified join: await all futures concurrently using futures::join_all.
+    /// Works with any Future type, not just DurableFuture.
+    /// 
+    /// In simplified mode, this is preferred over ctx.join() because it works
+    /// with the standard future model rather than requiring DurableFuture.
+    pub async fn simplified_join<T, F>(&self, futures: Vec<F>) -> Vec<T>
+    where
+        F: Future<Output = T>,
+    {
+        ::futures::future::join_all(futures).await
+    }
+    
+    /// Simplified join for exactly 2 futures (convenience method).
+    pub async fn simplified_join2<T1, T2, F1, F2>(&self, f1: F1, f2: F2) -> (T1, T2)
+    where
+        F1: Future<Output = T1>,
+        F2: Future<Output = T2>,
+    {
+        ::futures::future::join(f1, f2).await
+    }
+    
+    /// Simplified join for exactly 3 futures (convenience method).
+    pub async fn simplified_join3<T1, T2, T3, F1, F2, F3>(&self, f1: F1, f2: F2, f3: F3) -> (T1, T2, T3)
+    where
+        F1: Future<Output = T1>,
+        F2: Future<Output = T2>,
+        F3: Future<Output = T3>,
+    {
+        ::futures::future::join3(f1, f2, f3).await
+    }
+    
+    /// Simplified select over 2 futures: returns the result of whichever completes first.
+    /// Uses futures::select_biased! for determinism (first branch polled first).
+    /// 
+    /// Returns (0, result) if first future wins, (1, result) if second future wins.
+    pub async fn simplified_select2<T, F1, F2>(&self, f1: F1, f2: F2) -> (usize, T)
+    where
+        F1: Future<Output = T>,
+        F2: Future<Output = T>,
+    {
+        use ::futures::FutureExt;
+        let mut f1 = std::pin::pin!(f1.fuse());
+        let mut f2 = std::pin::pin!(f2.fuse());
+        ::futures::select_biased! {
+            result = f1 => (0, result),
+            result = f2 => (1, result),
+        }
+    }
+    
+    /// Simplified select over 3 futures.
+    /// Uses futures::select_biased! for determinism (earlier branches polled first).
+    pub async fn simplified_select3<T, F1, F2, F3>(&self, f1: F1, f2: F2, f3: F3) -> (usize, T)
+    where
+        F1: Future<Output = T>,
+        F2: Future<Output = T>,
+        F3: Future<Output = T>,
+    {
+        use ::futures::FutureExt;
+        let mut f1 = std::pin::pin!(f1.fuse());
+        let mut f2 = std::pin::pin!(f2.fuse());
+        let mut f3 = std::pin::pin!(f3.fuse());
+        ::futures::select_biased! {
+            result = f1 => (0, result),
+            result = f2 => (1, result),
+            result = f3 => (2, result),
+        }
     }
 }
 

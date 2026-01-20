@@ -651,3 +651,147 @@ async fn test_select2_schedule_after_winner_returns() {
 
     rt.shutdown(None).await;
 }
+
+// =============================================================================
+// Simplified Mode Futures Tests
+// =============================================================================
+
+/// Test that awaiting B does not block on unawaited A's completion arriving first.
+///
+/// Scenario:
+/// - Schedule activity A (don't await)
+/// - Schedule activity B and await it
+/// - A completes before B in history
+/// - Expectation: B's await should resolve when B completes, not block on A
+///
+/// This tests that the simplified replay engine correctly handles out-of-order
+/// completions relative to await order.
+#[tokio::test]
+async fn simplified_futures_unawaited_completion_does_not_block() {
+    use std::sync::atomic::AtomicUsize;
+
+    static A_COUNTER: AtomicUsize = AtomicUsize::new(0);
+    static B_COUNTER: AtomicUsize = AtomicUsize::new(0);
+    A_COUNTER.store(0, Ordering::SeqCst);
+    B_COUNTER.store(0, Ordering::SeqCst);
+
+    let (store, _temp_dir) = common::create_sqlite_store_disk().await;
+
+    let activity_registry = ActivityRegistry::builder()
+        .register(
+            "ActivityA",
+            |_ctx: ActivityContext, input: String| async move {
+                A_COUNTER.fetch_add(1, Ordering::SeqCst);
+                // A is fast - completes quickly
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                Ok(format!("A:{input}"))
+            },
+        )
+        .register(
+            "ActivityB",
+            |_ctx: ActivityContext, input: String| async move {
+                B_COUNTER.fetch_add(1, Ordering::SeqCst);
+                // B is slower
+                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                Ok(format!("B:{input}"))
+            },
+        )
+        .build();
+
+    // Orchestration: schedule A (don't await), then schedule and await B
+    let orchestration = |ctx: OrchestrationContext, _input: String| async move {
+        // Schedule A but don't await it yet
+        let a_future = ctx.simplified_schedule_activity("ActivityA", "first");
+
+        // Schedule B and await it immediately
+        let b_result = ctx
+            .simplified_schedule_activity("ActivityB", "second")
+            .await?;
+
+        // Now await A
+        let a_result = a_future.await?;
+
+        Ok(format!("B={b_result},A={a_result}"))
+    };
+
+    let orchestration_registry = OrchestrationRegistry::builder()
+        .register("UnawaitedFirst", orchestration)
+        .build();
+
+    let options = runtime::RuntimeOptions {
+        use_simplified_replay: true,
+        orchestration_concurrency: 1,
+        worker_concurrency: 2, // Allow both activities to run concurrently
+        ..Default::default()
+    };
+
+    let rt = runtime::Runtime::start_with_options(
+        store.clone(),
+        StdArc::new(activity_registry),
+        orchestration_registry,
+        options,
+    )
+    .await;
+
+    let client = duroxide::Client::new(store.clone());
+    client
+        .start_orchestration("unawaited-first-1", "UnawaitedFirst", "")
+        .await
+        .unwrap();
+
+    match client
+        .wait_for_orchestration("unawaited-first-1", std::time::Duration::from_secs(10))
+        .await
+        .unwrap()
+    {
+        OrchestrationStatus::Completed { output } => {
+            // Both should complete
+            assert!(
+                output.contains("B=B:second"),
+                "Should have B result: {output}"
+            );
+            assert!(
+                output.contains("A=A:first"),
+                "Should have A result: {output}"
+            );
+
+            // Verify both activities ran exactly once
+            assert_eq!(A_COUNTER.load(Ordering::SeqCst), 1, "A should run once");
+            assert_eq!(B_COUNTER.load(Ordering::SeqCst), 1, "B should run once");
+        }
+        OrchestrationStatus::Failed { details } => {
+            panic!("orchestration failed: {}", details.display_message())
+        }
+        other => panic!("unexpected orchestration status: {:?}", other),
+    }
+
+    // Verify history order: A's ActivityScheduled comes before B's, but completion order
+    // depends on timing. The key is that the orchestration completed successfully,
+    // meaning B's await didn't block on A's completion.
+    let hist = store.read("unawaited-first-1").await.unwrap();
+    let mut a_scheduled_id = None;
+    let mut b_scheduled_id = None;
+
+    for event in &hist {
+        match &event.kind {
+            EventKind::ActivityScheduled { name, .. } => {
+                if name == "ActivityA" {
+                    a_scheduled_id = Some(event.event_id);
+                } else if name == "ActivityB" {
+                    b_scheduled_id = Some(event.event_id);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // A should be scheduled before B (lower event_id)
+    assert!(
+        a_scheduled_id.unwrap() < b_scheduled_id.unwrap(),
+        "A should be scheduled before B: A={:?}, B={:?}",
+        a_scheduled_id,
+        b_scheduled_id
+    );
+
+    rt.shutdown(None).await;
+}

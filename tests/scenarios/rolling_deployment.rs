@@ -72,8 +72,11 @@ async fn e2e_rolling_deployment_three_nodes() {
     let activities_old = Arc::new(ActivityRegistry::builder().build());
 
     // Fast options with short backoff for testing
+    // Note: max_attempts is set high (50) to allow enough bouncing between nodes
+    // during rolling deployment. With 3 nodes where 2 don't have the activity,
+    // the work item needs many chances to land on the correct node (node 3).
     let options = RuntimeOptions {
-        max_attempts: 10,
+        max_attempts: 50,
         dispatcher_min_poll_interval: Duration::from_millis(10),
         unregistered_backoff: UnregisteredBackoffConfig {
             base_delay: Duration::from_millis(50),

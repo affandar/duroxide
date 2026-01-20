@@ -286,12 +286,62 @@ Example tests:
 - FIFO completion plugging drives action emission predictably
 
 ### Phase 2: “Bring the hammer down” (swap schedule semantics + swap engine)
-Goal: integrate the model end-to-end.
+Goal: integrate the model end-to-end and **remove all legacy replay code**.
 
-1) Change real `schedule_*()` methods to emit actions (not schedule events) under the runtime’s new mode.
-2) Swap `ReplayEngine::execute_orchestration` to use the new evaluator.
-3) Keep public API stable unless forced by correctness.
-4) Update runtime mapping so that returned actions are executed by dispatchers and persisted as schedule events as needed.
+#### Step 1: Port all tests to simplified_* APIs
+- Convert all existing e2e/integration tests to use `simplified_schedule_*()` methods
+- Run full test suite with `use_simplified_replay: true`
+- Skip tests that have hard blockers and document them
+
+#### Step 2: Remove legacy replay infrastructure
+The following must be **completely removed** (no backward compatibility):
+
+**Legacy APIs to remove from `src/lib.rs`:**
+- `DurableFuture` struct and all methods (`into_activity()`, `into_timer()`, `into_event()`, `into_sub_orchestration()`)
+- `schedule_activity()`, `schedule_timer()`, `schedule_wait()`, `schedule_sub_orchestration()` (non-simplified versions)
+- `run_turn()`, `run_turn_with()`, `run_turn_with_status()`, `run_turn_with_status_and_cancellations()`
+- `poll_once()` function
+- `TurnResult` type (legacy variant)
+- Legacy fields in `CtxInner`: `history`, `next_event_id`, `claimed_scheduling_events`, `cursor`, `pending_external_events`, etc.
+- `ReplayMode` enum (becomes unnecessary when only one mode exists)
+
+**Legacy code in `src/futures.rs`:**
+- Entire `DurableFuture` `Future` implementation with history scanning/cursor logic
+- `AggregateDurableFuture`, `SelectFuture`, `JoinFuture` (legacy versions)
+- All cursor-based replay logic
+
+**Legacy code in `src/runtime/replay_engine.rs`:**
+- `execute_orchestration()` legacy mode branch
+- All cursor/history-scanning logic
+- `use_simplified_mode` flag (becomes default/only mode)
+
+**Test harnesses to remove:**
+- `src/runtime/replay_engine_simplified.rs` (test-only harness, no longer needed)
+
+#### Step 3: Rename simplified_* to become THE API
+- `simplified_schedule_activity()` → `schedule_activity()`
+- `simplified_schedule_timer()` → `schedule_timer()`
+- `simplified_schedule_wait()` → `schedule_wait()`
+- `simplified_schedule_sub_orchestration()` → `schedule_sub_orchestration()`
+- `simplified_schedule_sub_orchestration_with_id()` → `schedule_sub_orchestration_with_id()`
+- `simplified_schedule_orchestration()` → `schedule_orchestration()`
+- `simplified_join()`, `simplified_join2()`, `simplified_join3()` → `join()`, `join2()`, `join3()`
+- `simplified_select2()`, `simplified_select3()` → `select2()`, `select3()`
+- `trace_*_simplified()` → `trace_*()` (or integrate into existing trace API)
+- Remove `use_simplified_replay` from `RuntimeOptions` (always on)
+
+#### Step 4: Update documentation
+- Update `docs/ORCHESTRATION-GUIDE.md` with new API
+- Update all examples in `examples/`
+- Update `docs/durable-futures-internals.md` to reflect new architecture
+- Update `docs/replay-engine.md` if exists
+
+#### Migration report
+At the end of Phase 2, generate a report documenting:
+- Tests successfully ported
+- Tests skipped with reasons
+- Tests disabled (no longer relevant)
+- Any semantic changes or behavior differences discovered
 
 ## Open questions
 - External events: require prior `ExternalSubscribed` or allow “deliver by name” without subscription?

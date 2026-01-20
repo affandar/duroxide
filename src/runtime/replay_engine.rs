@@ -1103,6 +1103,8 @@ fn action_to_event(action: &Action, instance: &str, execution_id: u64, event_id:
 }
 
 /// Update an action's scheduling_event_id to the correct event_id
+/// Also generates the actual sub-orchestration instance ID from the event_id
+/// (unless an explicit instance ID was provided, indicated by not starting with "sub::pending_")
 fn update_action_event_id(action: Action, event_id: u64) -> Action {
     match action {
         Action::CallActivity { name, input, .. } => Action::CallActivity {
@@ -1118,12 +1120,21 @@ fn update_action_event_id(action: Action, event_id: u64) -> Action {
             scheduling_event_id: event_id,
             name,
         },
-        Action::StartSubOrchestration { name, instance, input, version, .. } => Action::StartSubOrchestration {
-            scheduling_event_id: event_id,
-            name,
-            instance,
-            input,
-            version,
+        Action::StartSubOrchestration { name, instance, input, version, .. } => {
+            // If instance starts with "sub::pending_", it's a placeholder that needs to be replaced
+            // Otherwise, it's an explicit instance ID provided by the user
+            let final_instance = if instance.starts_with("sub::pending_") {
+                format!("sub::{event_id}")
+            } else {
+                instance
+            };
+            Action::StartSubOrchestration {
+                scheduling_event_id: event_id,
+                name,
+                instance: final_instance,
+                input,
+                version,
+            }
         },
         Action::SystemCall { op, value, .. } => Action::SystemCall {
             scheduling_event_id: event_id,
