@@ -1177,13 +1177,13 @@ impl CtxInner {
             .unwrap_or(1);
 
         Self {
-            // Replay mode - default to Legacy for backward compatibility
-            replay_mode: ReplayMode::Legacy,
+            // Phase 2: Simplified mode is now the only mode
+            replay_mode: ReplayMode::Simplified,
             
             // Start in replaying state - will be set to false when we move past baseline history
             is_replaying: true,
 
-            // Simplified mode state (unused in Legacy mode)
+            // Simplified mode state
             simplified_next_token: 0,
             simplified_emitted: Vec::new(),
             simplified_results: Default::default(),
@@ -1192,7 +1192,7 @@ impl CtxInner {
             simplified_external_arrivals: Default::default(),
             simplified_external_next_index: Default::default(),
 
-            // Legacy mode state
+            // Legacy mode state (deprecated - kept for compatibility)
             history,
             actions: Vec::new(),
             next_event_id,
