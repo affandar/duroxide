@@ -7,14 +7,14 @@ use std::sync::Arc;
 
 /// This example demonstrates the CORRECT way to handle delays and timeouts.
 ///
-/// ⚠️ CRITICAL MISTAKES TO AVOID:
-/// 1. Using activities for orchestration delays (use timers instead)
-/// 2. Calling .await directly on schedule methods (missing .into_*())
-/// 3. Using non-deterministic operations in orchestrations
+/// ⚠️ KEY CONCEPTS:
+/// 1. Use timers for orchestration delays (not activities!)
+/// 2. Activities can do any async operations (HTTP, sleep, etc.)
+/// 3. Use simplified_select2 for timeout patterns
 ///
 /// This example shows:
-/// 1. ✅ CORRECT: Using timers for orchestration delays with .into_timer().await
-/// 2. ✅ CORRECT: Using timers for timeouts with select2
+/// 1. ✅ CORRECT: Using timers for orchestration delays
+/// 2. ✅ CORRECT: Using simplified_select2 for timeout patterns
 /// 3. ✅ CORRECT: Activities can use tokio::time::sleep() and any async operations
 
 #[tokio::main]
@@ -49,16 +49,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // ✅ CORRECT: Use timer for delay
         ctx.trace_info("Waiting 2 seconds...");
-        ctx.schedule_timer(std::time::Duration::from_secs(2)).into_timer().await; // MUST use .into_timer().await!
-        // ❌ WRONG: ctx.schedule_timer(Duration::from_secs(2)).await;  // Missing .into_timer()!
+        ctx.simplified_schedule_timer(std::time::Duration::from_secs(2)).await;
         ctx.trace_info("Timer fired! Processing data...");
 
         // Process some data after the delay
-        let result = ctx
-            .schedule_activity("ProcessData", input)
-            .into_activity() // MUST use .into_activity().await!
-            .await?;
-        // ❌ WRONG: ctx.schedule_activity("ProcessData", input).await;  // Missing .into_activity()!
+        let result = ctx.simplified_schedule_activity("ProcessData", input).await?;
 
         ctx.trace_info("Processing complete!");
         Ok(format!("Delayed result: {result}"))
@@ -68,29 +63,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let timeout_orchestration = |ctx: OrchestrationContext, input: String| async move {
         ctx.trace_info("Starting timeout example orchestration");
 
-        // ✅ CORRECT: Use timer for timeout with select2
-        let work = ctx.schedule_activity("SlowOperation", input.clone());
-        let timeout = ctx.schedule_timer(std::time::Duration::from_secs(5)); // 5 second timeout
+        // ✅ CORRECT: Use simplified_select2 for timeout pattern
+        // Both arms must return the same type - wrap timer in async block
+        let work = ctx.simplified_schedule_activity("SlowOperation", input.clone());
+        let timeout = async {
+            ctx.simplified_schedule_timer(std::time::Duration::from_secs(5)).await;
+            Err::<String, String>("timeout".to_string())
+        };
 
         ctx.trace_info("Racing work against timeout...");
-        let (winner_index, result) = ctx.select2(work, timeout).await;
+        let (winner_index, result) = ctx.simplified_select2(work, timeout).await;
 
-        match winner_index {
-            0 => {
+        match (winner_index, result) {
+            (0, Ok(value)) => {
                 // Work completed first
-                match result {
-                    DurableOutput::Activity(Ok(value)) => {
-                        ctx.trace_info("Work completed within timeout");
-                        Ok(format!("Success: {value}"))
-                    }
-                    DurableOutput::Activity(Err(e)) => {
-                        ctx.trace_info("Work failed");
-                        Err(format!("Work failed: {e}"))
-                    }
-                    _ => unreachable!(),
-                }
+                ctx.trace_info("Work completed within timeout");
+                Ok(format!("Success: {value}"))
             }
-            1 => {
+            (0, Err(e)) => {
+                // Work failed
+                ctx.trace_info("Work failed");
+                Err(format!("Work failed: {e}"))
+            }
+            (1, Err(_)) => {
                 // Timeout occurred first
                 ctx.trace_info("Operation timed out");
                 Err("Operation timed out after 5 seconds".to_string())
@@ -165,11 +160,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     rt.shutdown(None).await;
 
     println!("\n📚 Key Takeaways:");
-    println!("✅ Use ctx.schedule_timer(ms).into_timer().await for orchestration delays");
-    println!("✅ Use ctx.schedule_activity(name, input).into_activity().await for work");
-    println!("✅ Use ctx.select2(work, timeout) for timeout patterns");
+    println!("✅ Use ctx.simplified_schedule_timer(duration).await for orchestration delays");
+    println!("✅ Use ctx.simplified_schedule_activity(name, input).await for work");
+    println!("✅ Use ctx.simplified_select2(work, timeout) for timeout patterns");
     println!("✅ Activities can use tokio::time::sleep(), HTTP calls, database queries, etc.");
-    println!("❌ Never call .await directly on schedule methods (missing .into_*()!)");
     println!("❌ Never use non-deterministic operations in orchestrations");
 
     Ok(())

@@ -38,7 +38,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ctx.trace_info("Starting greeting orchestration");
 
         // Schedule and await the greeting activity
-        let greeting = ctx.schedule_activity("Greet", name).into_activity().await?;
+        let greeting = ctx.simplified_schedule_activity("Greet", name).await?;
 
         ctx.trace_info(format!("Greeting completed: {greeting}"));
         Ok(greeting)

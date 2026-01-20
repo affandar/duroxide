@@ -57,11 +57,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let greeting_orch = |ctx: OrchestrationContext, name: String| async move {
         ctx.trace_info("Starting greeting orchestration");
 
-        let greeting = ctx.schedule_activity("Greet", name.clone()).into_activity().await?;
+        let greeting = ctx.simplified_schedule_activity("Greet", name.clone()).await?;
 
         ctx.trace_info(format!("Got greeting: {greeting}"));
 
-        let farewell = ctx.schedule_activity("Farewell", name).into_activity().await?;
+        let farewell = ctx.simplified_schedule_activity("Farewell", name).await?;
 
         ctx.trace_info("Orchestration completing");
         Ok::<_, String>(format!("{greeting} | {farewell}"))
