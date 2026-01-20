@@ -31,7 +31,7 @@ async fn activity_reliability_after_crash_before_completion_enqueue() {
         ctx.trace_info("Starting activity reliability test orchestration");
 
         // Schedule an activity
-        let result = ctx.schedule_activity("TestActivity", input).into_activity().await?;
+        let result = ctx.simplified_schedule_activity("TestActivity", input).await?;
 
         ctx.trace_info("Activity completed successfully");
         Ok(format!("Activity result: {result}"))
@@ -361,7 +361,7 @@ async fn worker_abandon_on_ack_failure_enables_retry() {
 
     let orchestrations = runtime::registry::OrchestrationRegistry::builder()
         .register("AckFailOrch", |ctx: OrchestrationContext, _input: String| async move {
-            ctx.schedule_activity("CountingActivity", "{}").into_activity().await
+            ctx.simplified_schedule_activity("CountingActivity", "{}").await
         })
         .build();
 

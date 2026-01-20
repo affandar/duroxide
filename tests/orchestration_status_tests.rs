@@ -36,7 +36,7 @@ async fn test_status_running() {
         .build();
 
     let orchestration = |ctx: OrchestrationContext, _input: String| async move {
-        ctx.schedule_activity("BlockForever", "").into_activity().await
+        ctx.simplified_schedule_activity("BlockForever", "").await
     };
 
     let orchestrations = OrchestrationRegistry::builder()
@@ -75,7 +75,7 @@ async fn test_status_completed() {
         .build();
 
     let orchestration = |ctx: OrchestrationContext, input: String| async move {
-        ctx.schedule_activity("ReturnValue", input).into_activity().await
+        ctx.simplified_schedule_activity("ReturnValue", input).await
     };
 
     let orchestrations = OrchestrationRegistry::builder()
@@ -127,7 +127,7 @@ async fn test_status_failed() {
         .build();
 
     let orchestration = |ctx: OrchestrationContext, _input: String| async move {
-        ctx.schedule_activity("FailActivity", "").into_activity().await
+        ctx.simplified_schedule_activity("FailActivity", "").await
     };
 
     let orchestrations = OrchestrationRegistry::builder()
@@ -263,7 +263,7 @@ async fn test_status_cancelled() {
         .build();
 
     let orchestration = |ctx: OrchestrationContext, _input: String| async move {
-        ctx.schedule_activity("LongTask", "").into_activity().await
+        ctx.simplified_schedule_activity("LongTask", "").await
     };
 
     let orchestrations = OrchestrationRegistry::builder()
@@ -325,7 +325,7 @@ async fn test_status_lifecycle_transitions() {
         .build();
 
     let orchestration = |ctx: OrchestrationContext, _input: String| async move {
-        ctx.schedule_activity("QuickTask", "").into_activity().await
+        ctx.simplified_schedule_activity("QuickTask", "").await
     };
 
     let orchestrations = OrchestrationRegistry::builder()
@@ -393,11 +393,11 @@ async fn test_status_independence() {
         .build();
 
     let success_orch = |ctx: OrchestrationContext, _input: String| async move {
-        ctx.schedule_activity("SuccessTask", "").into_activity().await
+        ctx.simplified_schedule_activity("SuccessTask", "").await
     };
 
     let fail_orch = |ctx: OrchestrationContext, _input: String| async move {
-        ctx.schedule_activity("FailTask", "").into_activity().await
+        ctx.simplified_schedule_activity("FailTask", "").await
     };
 
     let orchestrations = OrchestrationRegistry::builder()

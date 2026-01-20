@@ -33,12 +33,12 @@ async fn code_swap_triggers_nondeterminism() {
 
     // Code A: schedules activity "A1" then waits for completion
     let orch_a = |ctx: OrchestrationContext, _input: String| async move {
-        let res = ctx.schedule_activity("A1", "foo").into_activity().await.unwrap();
+        let res = ctx.simplified_schedule_activity("A1", "foo").await.unwrap();
         Ok(res)
     };
     // Code B: schedules activity "B1" (different name/id)
     let orch_b = |ctx: OrchestrationContext, _input: String| async move {
-        let res = ctx.schedule_activity("B1", "bar").into_activity().await.unwrap();
+        let res = ctx.simplified_schedule_activity("B1", "bar").await.unwrap();
         Ok(res)
     };
 
@@ -204,7 +204,7 @@ async fn unexpected_completion_id_triggers_nondeterminism() {
 
     // Orchestration that waits for external events (doesn't schedule anything with ID 999)
     let orch = |ctx: OrchestrationContext, _input: String| async move {
-        let _result = ctx.schedule_wait("test_event").into_event().await;
+        let _result = ctx.simplified_schedule_wait("test_event").await;
         Ok("external_completed".to_string())
     };
 
@@ -269,7 +269,7 @@ async fn unexpected_timer_completion_triggers_nondeterminism() {
     // Simple orchestration that just waits for external events (doesn't create any timers)
     let orch = |ctx: OrchestrationContext, _input: String| async move {
         // Wait for an external event, but don't create any timers
-        let _result = ctx.schedule_wait("test").into_event().await;
+        let _result = ctx.simplified_schedule_wait("test").await;
         Ok("done".to_string())
     };
 
@@ -345,7 +345,7 @@ async fn continue_as_new_with_unconsumed_completion_triggers_nondeterminism() {
             let _activity_future = ctx.schedule_activity("MyActivity", "test_input");
 
             // Wait for an external event - this blocks the orchestration
-            let _ = ctx.schedule_wait("proceed_signal").into_event().await;
+            let _ = ctx.simplified_schedule_wait("proceed_signal").await;
 
             // When we get the signal, call continue_as_new
             // The activity is still pending and its completion might be in the batch
@@ -450,7 +450,7 @@ async fn execution_id_filtering_without_continue_as_new_triggers_nondeterminism(
     // Orchestration that schedules an activity but doesn't use continue_as_new
     let orch = |ctx: OrchestrationContext, _input: String| async move {
         ctx.trace_info("scheduling activity".to_string());
-        let result = ctx.schedule_activity("TestActivity", "input").into_activity().await;
+        let result = ctx.simplified_schedule_activity("TestActivity", "input").await;
         ctx.trace_info("got result, completing".to_string());
         result
     };
@@ -521,7 +521,7 @@ async fn duplicate_external_events_are_handled_gracefully() {
     // Orchestration that waits for external event
     let orch = |ctx: OrchestrationContext, _input: String| async move {
         ctx.trace_info("waiting for external event".to_string());
-        let result = ctx.schedule_wait("test_signal").into_event().await;
+        let result = ctx.simplified_schedule_wait("test_signal").await;
         Ok(result)
     };
 

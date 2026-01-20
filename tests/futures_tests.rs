@@ -626,7 +626,7 @@ async fn test_select2_schedule_after_winner_returns() {
             // Now schedule another activity
             // Previously this would fail because the timer's scheduling event
             // wasn't consumed during replay
-            let result = ctx.schedule_activity("Instant", "").into_activity().await?;
+            let result = ctx.simplified_schedule_activity("Instant", "").await?;
 
             Ok(result)
         })

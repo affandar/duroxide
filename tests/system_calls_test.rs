@@ -63,7 +63,7 @@ async fn test_utcnow_ms() {
             let time1 = ctx.utcnow().await?;
 
             // Add a small timer to ensure time progresses
-            ctx.schedule_timer(Duration::from_millis(100)).into_timer().await;
+            ctx.simplified_schedule_timer(Duration::from_millis(100)).await;
 
             let time2 = ctx.utcnow().await?;
 

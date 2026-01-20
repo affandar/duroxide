@@ -42,7 +42,7 @@ async fn orchestration_completes_and_replays_deterministically_with(store: StdAr
             _ => unreachable!("A must be activity result"),
         };
 
-        let b = ctx.schedule_activity("B", a.clone()).into_activity().await.unwrap();
+        let b = ctx.simplified_schedule_activity("B", a.clone()).await.unwrap();
         Ok(format!("id=_hidden, start={start}, a={a}, b={b}"))
     };
 
@@ -115,7 +115,7 @@ async fn orchestration_completes_and_replays_deterministically_with(store: StdAr
             _ => unreachable!("A must be activity result"),
         };
 
-        let b = ctx.schedule_activity("B", a.clone()).into_activity().await.unwrap();
+        let b = ctx.simplified_schedule_activity("B", a.clone()).await.unwrap();
         Ok(format!("id=_hidden, start={start}, a={a}, b={b}"))
     };
 
@@ -189,7 +189,7 @@ async fn test_trace_deterministic_in_history() {
 
     let orch = |ctx: OrchestrationContext, _: String| async move {
         ctx.trace_info("Test trace message");
-        let result = ctx.schedule_activity("GetValue", "").into_activity().await?;
+        let result = ctx.simplified_schedule_activity("GetValue", "").await?;
         ctx.trace_warn("Warning message");
         ctx.trace_error("Error message");
         Ok(result)
@@ -259,7 +259,7 @@ async fn test_trace_deterministic_in_history() {
 fn action_emission_single_turn() {
     // Await the scheduled activity once so it is polled and records its action, then remain pending
     let orchestrator = |ctx: OrchestrationContext| async move {
-        let _ = ctx.schedule_activity("A", "1").into_activity().await;
+        let _ = ctx.simplified_schedule_activity("A", "1").await;
         unreachable!()
     };
 
@@ -281,7 +281,7 @@ fn action_emission_single_turn() {
 #[tokio::test]
 async fn deterministic_replay_activity_only() {
     let orchestrator = |ctx: OrchestrationContext, _input: String| async move {
-        let a = ctx.schedule_activity("A", "2").into_activity().await.unwrap();
+        let a = ctx.simplified_schedule_activity("A", "2").await.unwrap();
         Ok(a)
     };
 

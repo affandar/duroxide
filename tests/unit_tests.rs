@@ -46,7 +46,7 @@ async fn create_test_runtime(activity_registry: ActivityRegistry) -> Arc<runtime
 fn action_emission_single_turn() {
     // Await the scheduled activity once so it is polled and records its action, then remain pending
     let orchestrator = |ctx: OrchestrationContext| async move {
-        let _ = ctx.schedule_activity("A", "1").into_activity().await;
+        let _ = ctx.simplified_schedule_activity("A", "1").await;
         unreachable!()
     };
 
@@ -75,7 +75,7 @@ fn action_emission_single_turn() {
 #[tokio::test]
 async fn deterministic_replay_activity_only() {
     let orchestrator = |ctx: OrchestrationContext| async move {
-        let a = ctx.schedule_activity("A", "2").into_activity().await.unwrap();
+        let a = ctx.simplified_schedule_activity("A", "2").await.unwrap();
         format!("a={a}")
     };
 
@@ -128,7 +128,7 @@ async fn runtime_duplicate_orchestration_deduped_single_execution() {
     let orchestration_registry = OrchestrationRegistry::builder()
         .register("TestOrch", |ctx, _| async move {
             // Slow a bit to allow duplicate enqueue to happen
-            ctx.schedule_timer(Duration::from_millis(20)).into_timer().await;
+            ctx.simplified_schedule_timer(Duration::from_millis(20)).await;
             Ok("ok".to_string())
         })
         .build();
@@ -233,7 +233,7 @@ async fn orchestration_status_apis() {
     let activity_registry = ActivityRegistry::builder().build();
     let orchestration_registry = OrchestrationRegistry::builder()
         .register("ShortTimer", |ctx, _| async move {
-            ctx.schedule_timer(Duration::from_millis(100)).into_timer().await;
+            ctx.simplified_schedule_timer(Duration::from_millis(100)).await;
             Ok("ok".to_string())
         })
         .register("AlwaysFails", |_ctx, _| async move { Err("boom".to_string()) })

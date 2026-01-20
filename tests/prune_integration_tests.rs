@@ -431,7 +431,7 @@ async fn test_prune_bulk_includes_running_instances() {
                 if count == 5 {
                     // On execution 5, wait for external signal to proceed
                     // This keeps us "Running" with multiple old executions
-                    let _signal = ctx.schedule_wait("proceed").into_event().await;
+                    let _signal = ctx.simplified_schedule_wait("proceed").await;
                 }
 
                 if count < 10 {

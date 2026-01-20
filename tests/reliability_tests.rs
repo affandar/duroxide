@@ -12,7 +12,7 @@ async fn external_duplicate_workitems_dedup() {
     let (store, _td) = common::create_sqlite_store_disk().await;
 
     let orch = |ctx: OrchestrationContext, _input: String| async move {
-        let v = ctx.schedule_wait("Evt").into_event().await;
+        let v = ctx.simplified_schedule_wait("Evt").await;
         Ok(v)
     };
     let orchestration_registry = OrchestrationRegistry::builder().register("WaitEvt", orch).build();
@@ -68,7 +68,7 @@ async fn timer_duplicate_workitems_dedup() {
     let (store, _td) = common::create_sqlite_store_disk().await;
 
     let orch = |ctx: OrchestrationContext, _input: String| async move {
-        ctx.schedule_timer(Duration::from_millis(100)).into_timer().await;
+        ctx.simplified_schedule_timer(Duration::from_millis(100)).await;
         Ok("t".to_string())
     };
     let orchestration_registry = OrchestrationRegistry::builder().register("OneTimer", orch).build();
@@ -240,7 +240,7 @@ async fn crash_after_dequeue_before_append_completion() {
 
     let orch = |ctx: OrchestrationContext, _input: String| async move {
         // Wait for external then complete with payload
-        let v = ctx.schedule_wait("Evt").into_event().await;
+        let v = ctx.simplified_schedule_wait("Evt").await;
         Ok(v)
     };
     let orchestration_registry = OrchestrationRegistry::builder().register("WaitEvt", orch).build();
@@ -291,7 +291,7 @@ async fn crash_after_append_before_ack_timer() {
     let (store, _td) = common::create_sqlite_store_disk().await;
 
     let orch = |ctx: OrchestrationContext, _input: String| async move {
-        ctx.schedule_timer(Duration::from_millis(50)).into_timer().await;
+        ctx.simplified_schedule_timer(Duration::from_millis(50)).await;
         Ok("t".to_string())
     };
     let orchestration_registry = OrchestrationRegistry::builder().register("OneTimer", orch).build();

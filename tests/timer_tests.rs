@@ -39,7 +39,7 @@ async fn single_timer_fires() {
 
     const TIMER_MS: u64 = 50;
     let orch = |ctx: OrchestrationContext, _input: String| async move {
-        ctx.schedule_timer(Duration::from_millis(TIMER_MS)).into_timer().await;
+        ctx.simplified_schedule_timer(Duration::from_millis(TIMER_MS)).await;
         Ok("done".to_string())
     };
 
@@ -79,9 +79,9 @@ async fn multiple_timers_fire_in_order() {
     let (store, _td) = create_sqlite_store().await;
 
     let orch = |ctx: OrchestrationContext, _input: String| async move {
-        let t1 = ctx.schedule_timer(Duration::from_millis(100)).into_timer().await;
-        let t2 = ctx.schedule_timer(Duration::from_millis(50)).into_timer().await;
-        let t3 = ctx.schedule_timer(Duration::from_millis(75)).into_timer().await;
+        let t1 = ctx.simplified_schedule_timer(Duration::from_millis(100)).await;
+        let t2 = ctx.simplified_schedule_timer(Duration::from_millis(50)).await;
+        let t3 = ctx.simplified_schedule_timer(Duration::from_millis(75)).await;
 
         // Verify timers fired in correct order (t2, t3, t1)
         let results = vec![t1, t2, t3];
@@ -180,10 +180,10 @@ async fn timer_recovery_after_crash_before_fire() {
     // Simple orchestration that schedules a timer and then completes
     let orch = |ctx: OrchestrationContext, _input: String| async move {
         // Schedule a timer with enough delay that we can "crash" before it fires
-        ctx.schedule_timer(Duration::from_millis(TIMER_MS)).into_timer().await;
+        ctx.simplified_schedule_timer(Duration::from_millis(TIMER_MS)).await;
 
         // Do something after timer to prove it fired
-        let result = ctx.schedule_activity("PostTimer", "done").into_activity().await?;
+        let result = ctx.simplified_schedule_activity("PostTimer", "done").await?;
         Ok(result)
     };
 
@@ -220,8 +220,8 @@ async fn timer_recovery_after_crash_before_fire() {
 
     // Restart runtime with same store
     let orch2 = |ctx: OrchestrationContext, _input: String| async move {
-        ctx.schedule_timer(Duration::from_millis(TIMER_MS)).into_timer().await;
-        let result = ctx.schedule_activity("PostTimer", "done").into_activity().await?;
+        ctx.simplified_schedule_timer(Duration::from_millis(TIMER_MS)).await;
+        let result = ctx.simplified_schedule_activity("PostTimer", "done").await?;
         Ok(result)
     };
 
@@ -265,8 +265,8 @@ async fn timer_recovery_after_crash_after_fire() {
     const TIMER_MS: u64 = 100;
 
     let orch = |ctx: OrchestrationContext, _input: String| async move {
-        ctx.schedule_timer(Duration::from_millis(TIMER_MS)).into_timer().await;
-        let result = ctx.schedule_activity("PostTimer", "done").into_activity().await?;
+        ctx.simplified_schedule_timer(Duration::from_millis(TIMER_MS)).await;
+        let result = ctx.simplified_schedule_activity("PostTimer", "done").await?;
         Ok(result)
     };
 
@@ -299,8 +299,8 @@ async fn timer_recovery_after_crash_after_fire() {
 
     // Restart runtime
     let orch2 = |ctx: OrchestrationContext, _input: String| async move {
-        ctx.schedule_timer(Duration::from_millis(TIMER_MS)).into_timer().await;
-        let result = ctx.schedule_activity("PostTimer", "done").into_activity().await?;
+        ctx.simplified_schedule_timer(Duration::from_millis(TIMER_MS)).await;
+        let result = ctx.simplified_schedule_activity("PostTimer", "done").await?;
         Ok(result)
     };
 
@@ -345,7 +345,7 @@ async fn zero_duration_timer() {
     let (store, _td) = create_sqlite_store().await;
 
     let orch = |ctx: OrchestrationContext, _input: String| async move {
-        ctx.schedule_timer(Duration::ZERO).into_timer().await;
+        ctx.simplified_schedule_timer(Duration::ZERO).await;
         Ok("zero-timer-fired".to_string())
     };
 
@@ -379,7 +379,7 @@ async fn timer_cancellation() {
 
     let orch = |ctx: OrchestrationContext, _input: String| async move {
         // Schedule a timer and wait for it
-        ctx.schedule_timer(Duration::from_millis(100)).into_timer().await;
+        ctx.simplified_schedule_timer(Duration::from_millis(100)).await;
         Ok("timer-completed".to_string())
     };
 

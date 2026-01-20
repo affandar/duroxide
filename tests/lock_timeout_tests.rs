@@ -53,7 +53,7 @@ async fn orchestration_with_custom_timeout_completes() {
     let (store, _temp_dir) = common::create_sqlite_store_disk().await;
 
     let orch = |ctx: OrchestrationContext, _input: String| async move {
-        let result = ctx.schedule_activity("TestActivity", "data").into_activity().await?;
+        let result = ctx.simplified_schedule_activity("TestActivity", "data").await?;
         Ok(result)
     };
 
@@ -104,7 +104,7 @@ async fn very_short_lock_timeout_works() {
     let (store, _temp_dir) = common::create_sqlite_store_disk().await;
 
     let orch = |ctx: OrchestrationContext, _input: String| async move {
-        let result = ctx.schedule_activity("FastActivity", "data").into_activity().await?;
+        let result = ctx.simplified_schedule_activity("FastActivity", "data").await?;
         Ok(result)
     };
 
@@ -160,7 +160,7 @@ async fn long_running_activity_with_lock_renewal() {
     let (store, _temp_dir) = common::create_sqlite_store_disk().await;
 
     let orch = |ctx: OrchestrationContext, _input: String| async move {
-        let result = ctx.schedule_activity("LongActivity", "data").into_activity().await?;
+        let result = ctx.simplified_schedule_activity("LongActivity", "data").await?;
         Ok(result)
     };
 
@@ -217,7 +217,7 @@ async fn short_activity_no_renewal_needed() {
     let (store, _temp_dir) = common::create_sqlite_store_disk().await;
 
     let orch = |ctx: OrchestrationContext, _input: String| async move {
-        let result = ctx.schedule_activity("QuickActivity", "data").into_activity().await?;
+        let result = ctx.simplified_schedule_activity("QuickActivity", "data").await?;
         Ok(result)
     };
 
@@ -272,7 +272,7 @@ async fn lock_renewal_short_timeout() {
     let (store, _temp_dir) = common::create_sqlite_store_disk().await;
 
     let orch = |ctx: OrchestrationContext, _input: String| async move {
-        let result = ctx.schedule_activity("MediumActivity", "data").into_activity().await?;
+        let result = ctx.simplified_schedule_activity("MediumActivity", "data").await?;
         Ok(result)
     };
 
@@ -330,7 +330,7 @@ async fn custom_renewal_buffer() {
     let (store, _temp_dir) = common::create_sqlite_store_disk().await;
 
     let orch = |ctx: OrchestrationContext, _input: String| async move {
-        let result = ctx.schedule_activity("LongActivity", "data").into_activity().await?;
+        let result = ctx.simplified_schedule_activity("LongActivity", "data").await?;
         Ok(result)
     };
 
@@ -507,7 +507,7 @@ async fn orchestration_lock_renewal_prevents_expiration() {
             |ctx: OrchestrationContext, _input: String| async move {
                 // The processing delay is injected by test hook BEFORE this code runs
                 // Schedule a quick activity to prove orchestration works
-                let result = ctx.schedule_activity("QuickActivity", "{}").into_activity().await?;
+                let result = ctx.simplified_schedule_activity("QuickActivity", "{}").await?;
                 Ok(format!("completed: {result}"))
             },
         )

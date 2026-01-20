@@ -127,7 +127,7 @@ async fn test_instance_discovery() {
         .register(
             "TestOrchestration",
             |ctx: OrchestrationContext, input: String| async move {
-                let result = ctx.schedule_activity("TestActivity", input).into_activity().await?;
+                let result = ctx.simplified_schedule_activity("TestActivity", input).await?;
                 Ok(result)
             },
         )
@@ -202,7 +202,7 @@ async fn test_instance_info() {
         .register(
             "TestOrchestration",
             |ctx: OrchestrationContext, input: String| async move {
-                let result = ctx.schedule_activity("TestActivity", input).into_activity().await?;
+                let result = ctx.simplified_schedule_activity("TestActivity", input).await?;
                 Ok(result)
             },
         )
@@ -268,7 +268,7 @@ async fn test_execution_info() {
         .register(
             "TestOrchestration",
             |ctx: OrchestrationContext, input: String| async move {
-                let result = ctx.schedule_activity("TestActivity", input).into_activity().await?;
+                let result = ctx.simplified_schedule_activity("TestActivity", input).await?;
                 Ok(result)
             },
         )
@@ -425,14 +425,14 @@ async fn test_system_metrics() {
         .register(
             "SuccessOrchestration",
             |ctx: OrchestrationContext, input: String| async move {
-                let result = ctx.schedule_activity("TestActivity", input).into_activity().await?;
+                let result = ctx.simplified_schedule_activity("TestActivity", input).await?;
                 Ok(result)
             },
         )
         .register(
             "FailureOrchestration",
             |ctx: OrchestrationContext, input: String| async move {
-                let _result = ctx.schedule_activity("FailingActivity", input).into_activity().await?;
+                let _result = ctx.simplified_schedule_activity("FailingActivity", input).await?;
                 Ok("Should not reach here".to_string())
             },
         )
@@ -440,7 +440,7 @@ async fn test_system_metrics() {
             "RunningOrchestration",
             |ctx: OrchestrationContext, _input: String| async move {
                 // Wait for external event (never comes)
-                let _event = ctx.schedule_wait("NeverComes").into_event().await;
+                let _event = ctx.simplified_schedule_wait("NeverComes").await;
                 Ok("Should not reach here".to_string())
             },
         )
@@ -518,7 +518,7 @@ async fn test_queue_depths() {
         .register(
             "QueueTestOrchestration",
             |ctx: OrchestrationContext, input: String| async move {
-                let result = ctx.schedule_activity("SlowActivity", input).into_activity().await?;
+                let result = ctx.simplified_schedule_activity("SlowActivity", input).await?;
                 Ok(result)
             },
         )
@@ -624,7 +624,7 @@ async fn test_complex_workflow_management() {
                     .await?;
 
                 // Update inventory
-                let _inventory = ctx.schedule_activity("UpdateInventory", order).into_activity().await?;
+                let _inventory = ctx.simplified_schedule_activity("UpdateInventory", order).await?;
 
                 Ok(result)
             },

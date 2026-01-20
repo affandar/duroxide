@@ -17,11 +17,11 @@ where
     F2: Fn() -> StdArc<dyn Provider>,
 {
     let orchestrator = |ctx: OrchestrationContext, _input: String| async move {
-        let s1 = ctx.schedule_activity("Step", "1").into_activity().await.unwrap();
-        let s2 = ctx.schedule_activity("Step", "2").into_activity().await.unwrap();
-        let _ = ctx.schedule_wait("Resume").into_event().await;
-        let s3 = ctx.schedule_activity("Step", "3").into_activity().await.unwrap();
-        let s4 = ctx.schedule_activity("Step", "4").into_activity().await.unwrap();
+        let s1 = ctx.simplified_schedule_activity("Step", "1").await.unwrap();
+        let s2 = ctx.simplified_schedule_activity("Step", "2").await.unwrap();
+        let _ = ctx.simplified_schedule_wait("Resume").await;
+        let s3 = ctx.simplified_schedule_activity("Step", "3").await.unwrap();
+        let s4 = ctx.simplified_schedule_activity("Step", "4").await.unwrap();
         Ok(format!("{s1}{s2}{s3}{s4}"))
     };
 
@@ -201,7 +201,7 @@ async fn recovery_multiple_orchestrations_sqlite_provider() {
             .into_activity()
             .await
             .unwrap();
-        ctx.schedule_timer(Duration::from_millis(200)).into_timer().await;
+        ctx.simplified_schedule_timer(Duration::from_millis(200)).await;
         let _a2 = ctx
             .schedule_activity("Echo", input.clone())
             .into_activity()
@@ -210,22 +210,22 @@ async fn recovery_multiple_orchestrations_sqlite_provider() {
         Ok(format!("done:{input}"))
     };
     let orch_upper_only = |ctx: OrchestrationContext, input: String| async move {
-        let up = ctx.schedule_activity("Upper", input).into_activity().await.unwrap();
+        let up = ctx.simplified_schedule_activity("Upper", input).await.unwrap();
         Ok(format!("upper:{up}"))
     };
     let orch_wait_event_then_echo = |ctx: OrchestrationContext, input: String| async move {
-        let _ = ctx.schedule_wait("Go").into_event().await;
-        let echoed = ctx.schedule_activity("Echo", input).into_activity().await.unwrap();
+        let _ = ctx.simplified_schedule_wait("Go").await;
+        let echoed = ctx.simplified_schedule_activity("Echo", input).await.unwrap();
         Ok(format!("acked:{echoed}"))
     };
     let orch_compute_sum = |ctx: OrchestrationContext, input: String| async move {
         // input format: "a,b"
-        let sum = ctx.schedule_activity("Add", input).into_activity().await.unwrap();
+        let sum = ctx.simplified_schedule_activity("Add", input).await.unwrap();
         Ok(format!("sum={sum}"))
     };
     let orch_two_timers = |ctx: OrchestrationContext, input: String| async move {
-        ctx.schedule_timer(Duration::from_millis(150)).into_timer().await;
-        ctx.schedule_timer(Duration::from_millis(150)).into_timer().await;
+        ctx.simplified_schedule_timer(Duration::from_millis(150)).await;
+        ctx.simplified_schedule_timer(Duration::from_millis(150)).await;
         let _ = ctx
             .schedule_activity("Echo", input.clone())
             .into_activity()

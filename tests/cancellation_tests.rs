@@ -12,7 +12,7 @@ async fn cancel_parent_down_propagates_to_child() {
 
     // Child waits for an external event indefinitely (until canceled)
     let child = |ctx: OrchestrationContext, _input: String| async move {
-        let _ = ctx.schedule_wait("Go").into_event().await;
+        let _ = ctx.simplified_schedule_wait("Go").await;
         Ok("done".to_string())
     };
 
@@ -262,7 +262,7 @@ async fn cancel_continue_as_new_second_exec() {
             }
             "wait" => {
                 // Park until canceled
-                let _ = ctx.schedule_wait("Go").into_event().await;
+                let _ = ctx.simplified_schedule_wait("Go").await;
                 Ok("done".to_string())
             }
             _ => Ok(input),
@@ -458,7 +458,7 @@ async fn cancel_parent_with_multiple_children() {
 
     // Child waits for an external event indefinitely (until canceled)
     let child = |ctx: OrchestrationContext, _input: String| async move {
-        let _ = ctx.schedule_wait("Go").into_event().await;
+        let _ = ctx.simplified_schedule_wait("Go").await;
         Ok("done".to_string())
     };
 
@@ -622,7 +622,7 @@ async fn activity_receives_cancellation_signal() {
 
     // Orchestration that schedules the long activity
     let orchestration = |ctx: OrchestrationContext, _input: String| async move {
-        let _result = ctx.schedule_activity("LongActivity", "input").into_activity().await;
+        let _result = ctx.simplified_schedule_activity("LongActivity", "input").await;
         Ok("done".to_string())
     };
 
@@ -756,7 +756,7 @@ async fn select2_loser_activity_receives_cancellation_signal() {
         assert_eq!(winner, 1, "timer should win");
 
         // Keep going to prove the orchestration isn't terminal.
-        ctx.schedule_timer(Duration::from_millis(50)).into_timer().await;
+        ctx.simplified_schedule_timer(Duration::from_millis(50)).await;
         Ok("done".to_string())
     };
 
@@ -864,7 +864,7 @@ async fn activity_result_dropped_when_orchestration_cancelled() {
 
     // Orchestration that schedules the slow activity
     let orchestration = |ctx: OrchestrationContext, _input: String| async move {
-        let _result = ctx.schedule_activity("SlowActivity", "input").into_activity().await;
+        let _result = ctx.simplified_schedule_activity("SlowActivity", "input").await;
         Ok("done".to_string())
     };
 
@@ -961,7 +961,7 @@ async fn activity_skipped_when_orchestration_terminal_at_fetch() {
         // Schedule activity (enqueues to worker queue)
         let _handle = ctx.schedule_activity("A", "input");
         // Wait for external event (will block until cancelled)
-        let _ = ctx.schedule_wait("Go").into_event().await;
+        let _ = ctx.simplified_schedule_wait("Go").await;
         Ok("ok".to_string())
     };
 
@@ -1094,7 +1094,7 @@ async fn activity_aborted_after_cancellation_grace() {
     };
 
     let orchestration = |ctx: OrchestrationContext, _input: String| async move {
-        let _ = ctx.schedule_activity("Stubborn", "input").into_activity().await;
+        let _ = ctx.simplified_schedule_activity("Stubborn", "input").await;
         Ok("ok".to_string())
     };
 
@@ -1187,7 +1187,7 @@ async fn multiple_cancel_calls_are_idempotent() {
 
     // Orchestration that waits for an event (will block until canceled)
     let orch = |ctx: OrchestrationContext, _input: String| async move {
-        let _ = ctx.schedule_wait("Go").into_event().await;
+        let _ = ctx.simplified_schedule_wait("Go").await;
         Ok("done".to_string())
     };
 

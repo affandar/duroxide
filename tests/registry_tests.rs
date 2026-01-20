@@ -276,7 +276,7 @@ async fn activity_context_metadata() {
 
     let orchestrations = OrchestrationRegistry::builder()
         .register("InspectOrch", |ctx: OrchestrationContext, _input: String| async move {
-            ctx.schedule_activity("Inspect", "payload").into_activity().await
+            ctx.simplified_schedule_activity("Inspect", "payload").await
         })
         .build();
 

@@ -217,7 +217,7 @@ fn single_stale_loser_handled() {
         assert_eq!(winner, 0);
 
         // Await another timer - should not be blocked by stale timeout
-        ctx.schedule_timer(Duration::from_secs(5)).into_timer().await;
+        ctx.simplified_schedule_timer(Duration::from_secs(5)).await;
 
         "completed"
     };
@@ -282,7 +282,7 @@ fn select2_loser_activity_does_not_block_later_timer() {
         assert_eq!(winner, 1, "timer should win");
 
         // Await another timer - should not be blocked by stale activity
-        ctx.schedule_timer(Duration::from_secs(5)).into_timer().await;
+        ctx.simplified_schedule_timer(Duration::from_secs(5)).await;
 
         "completed"
     };
@@ -352,7 +352,7 @@ fn multiple_retry_pattern_then_timer_completes() {
         }
 
         // Final await - should not be blocked by 3 stale timeout timers
-        ctx.schedule_timer(Duration::from_secs(10)).into_timer().await;
+        ctx.simplified_schedule_timer(Duration::from_secs(10)).await;
 
         "all_retries_done"
     };
@@ -1153,7 +1153,7 @@ fn mixed_loser_types_do_not_block() {
         assert_eq!(w2, 0, "activity should win");
 
         // Final timer - should not be blocked by stale activity or timer
-        ctx.schedule_timer(Duration::from_secs(5)).into_timer().await;
+        ctx.simplified_schedule_timer(Duration::from_secs(5)).await;
 
         "completed"
     };
@@ -1251,7 +1251,7 @@ fn sequential_select2s_accumulate_cancelled_sources() {
         }
 
         // Final timer - should complete despite 5 stale timers
-        ctx.schedule_timer(Duration::from_secs(1)).into_timer().await;
+        ctx.simplified_schedule_timer(Duration::from_secs(1)).await;
 
         "all_done"
     };

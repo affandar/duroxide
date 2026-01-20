@@ -138,7 +138,7 @@ async fn test_delete_instance_bulk_safety() {
             Ok("done".to_string())
         })
         .register("WaitOrch", |ctx: OrchestrationContext, _input: String| async move {
-            ctx.schedule_wait("never").into_event().await;
+            ctx.simplified_schedule_wait("never").await;
             Ok("done".to_string())
         })
         .register("ParentOrch", |ctx: OrchestrationContext, _input: String| async move {

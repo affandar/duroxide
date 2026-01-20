@@ -166,7 +166,7 @@ async fn test_force_delete_in_flight_work() {
             Ok("done".to_string())
         })
         .register("WaitOnEvent", |ctx: OrchestrationContext, _input: String| async move {
-            ctx.schedule_wait("my-event").into_event().await;
+            ctx.simplified_schedule_wait("my-event").await;
             Ok("done".to_string())
         })
         .build();
@@ -320,7 +320,7 @@ async fn test_identity_reuse_after_delete() {
             Ok(input)
         })
         .register("WaitOrch", |ctx: OrchestrationContext, _input: String| async move {
-            ctx.schedule_wait("never").into_event().await;
+            ctx.simplified_schedule_wait("never").await;
             Ok("done".to_string())
         })
         .build();
@@ -390,7 +390,7 @@ async fn test_delete_error_cases() {
 
     let orchestrations = OrchestrationRegistry::builder()
         .register("WaitOrch", |ctx: OrchestrationContext, _input: String| async move {
-            ctx.schedule_wait("never").into_event().await;
+            ctx.simplified_schedule_wait("never").await;
             Ok("done".to_string())
         })
         .register("ParentOrch", |ctx: OrchestrationContext, _input: String| async move {
@@ -496,7 +496,7 @@ async fn test_dispatcher_resilience_after_delete() {
             Ok("done".to_string())
         })
         .register("WaitOrch", |ctx: OrchestrationContext, _input: String| async move {
-            ctx.schedule_wait("never").into_event().await;
+            ctx.simplified_schedule_wait("never").await;
             Ok("done".to_string())
         })
         .build();
