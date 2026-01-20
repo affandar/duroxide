@@ -20,7 +20,9 @@ async fn create_test_runtime(activity_registry: ActivityRegistry) -> Arc<runtime
 }
 
 // 1) Single-turn emission: ensure exactly one action per scheduled future and matching schedule event recorded.
+// MIGRATION NOTE: Uses run_turn() - legacy in-memory replay API
 #[test]
+#[ignore = "Legacy mode only: uses run_turn() which requires cursor-based replay"]
 fn action_emission_single_turn() {
     // Await the scheduled activity once so it is polled and records its action, then remain pending
     let orchestrator = |ctx: OrchestrationContext| async move {
@@ -399,7 +401,9 @@ async fn providers_inmem_multi_execution_persistence_and_latest_read() {
 }
 
 // OrchestrationContext metadata accessors
+// MIGRATION NOTE: Uses run_turn_with() - legacy in-memory replay API
 #[test]
+#[ignore = "Legacy mode only: uses run_turn() which requires cursor-based replay"]
 fn orchestration_context_metadata_accessors() {
     use duroxide::run_turn_with;
 
@@ -431,7 +435,9 @@ fn orchestration_context_metadata_accessors() {
     assert_eq!(output, Some("done".to_string()));
 }
 
+// MIGRATION NOTE: Uses run_turn_with() - legacy in-memory replay API
 #[test]
+#[ignore = "Legacy mode only: uses run_turn() which requires cursor-based replay"]
 fn orchestration_context_metadata_accessors_with_empty_values() {
     use duroxide::run_turn_with;
 

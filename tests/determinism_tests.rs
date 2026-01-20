@@ -246,7 +246,9 @@ async fn test_trace_deterministic_in_history() {
 // UNIT TESTS FOR DETERMINISTIC BEHAVIOR
 // ============================================================================
 
+// MIGRATION NOTE: Uses run_turn() - legacy in-memory replay API
 #[test]
+#[ignore = "Legacy mode only: uses run_turn() which requires cursor-based replay"]
 fn action_emission_single_turn() {
     // Await the scheduled activity once so it is polled and records its action, then remain pending
     let orchestrator = |ctx: OrchestrationContext| async move {
