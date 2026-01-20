@@ -399,10 +399,10 @@ impl Future for DurableFuture {
                     }
 
                     // Also check external event by schedule_id (for subscription-based delivery)
-                    if let Some(schedule_id) = inner.get_bound_schedule_id(token) {
-                        if let Some(data) = inner.get_external_event(schedule_id) {
-                            return Poll::Ready(DurableOutput::External(data.clone()));
-                        }
+                    if let Some(schedule_id) = inner.get_bound_schedule_id(token)
+                        && let Some(data) = inner.get_external_event(schedule_id)
+                    {
+                        return Poll::Ready(DurableOutput::External(data.clone()));
                     }
                     return Poll::Pending;
                 }
