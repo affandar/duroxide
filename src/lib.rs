@@ -1758,61 +1758,9 @@ impl OrchestrationContext {
             ReplayMode::Simplified,
             "trace_simplified is only available in simplified replay mode"
         );
+        drop(inner);
         
-        // Only trace if not replaying
-        if !inner.is_replaying {
-            let level_str = level.into();
-            let msg = message.into();
-            
-            match level_str.to_uppercase().as_str() {
-                "INFO" => tracing::info!(
-                    target: "duroxide::orchestration",
-                    instance_id = %inner.instance_id,
-                    execution_id = %inner.execution_id,
-                    orchestration_name = %inner.orchestration_name,
-                    orchestration_version = %inner.orchestration_version,
-                    "{}",
-                    msg
-                ),
-                "WARN" => tracing::warn!(
-                    target: "duroxide::orchestration",
-                    instance_id = %inner.instance_id,
-                    execution_id = %inner.execution_id,
-                    orchestration_name = %inner.orchestration_name,
-                    orchestration_version = %inner.orchestration_version,
-                    "{}",
-                    msg
-                ),
-                "ERROR" => tracing::error!(
-                    target: "duroxide::orchestration",
-                    instance_id = %inner.instance_id,
-                    execution_id = %inner.execution_id,
-                    orchestration_name = %inner.orchestration_name,
-                    orchestration_version = %inner.orchestration_version,
-                    "{}",
-                    msg
-                ),
-                "DEBUG" => tracing::debug!(
-                    target: "duroxide::orchestration",
-                    instance_id = %inner.instance_id,
-                    execution_id = %inner.execution_id,
-                    orchestration_name = %inner.orchestration_name,
-                    orchestration_version = %inner.orchestration_version,
-                    "{}",
-                    msg
-                ),
-                _ => tracing::trace!(
-                    target: "duroxide::orchestration",
-                    instance_id = %inner.instance_id,
-                    execution_id = %inner.execution_id,
-                    orchestration_name = %inner.orchestration_name,
-                    orchestration_version = %inner.orchestration_version,
-                    level = %level_str,
-                    "{}",
-                    msg
-                ),
-            }
-        }
+        self.trace_simplified_internal(&level.into(), &message.into());
     }
 
     /// Convenience wrapper for INFO level tracing (simplified mode only).
@@ -1985,13 +1933,81 @@ impl OrchestrationContext {
         let level_str = level.into();
         let msg = message.into();
 
-        // Schedule and poll system call synchronously for deterministic replay
+        // In simplified mode, delegate to trace_simplified (no system calls)
+        {
+            let inner = self.inner.lock().expect("Mutex should not be poisoned");
+            if inner.replay_mode == ReplayMode::Simplified {
+                drop(inner);
+                // Use the internal implementation directly to avoid assertion
+                self.trace_simplified_internal(&level_str, &msg);
+                return;
+            }
+        }
+
+        // Legacy mode: Schedule and poll system call synchronously for deterministic replay
         // Format: "trace:{level}:{message}"
         // Note: Actual logging happens inside the System future during first execution only
         let op = format!("{SYSCALL_OP_TRACE_PREFIX}{level_str}:{msg}");
         let mut fut = Box::pin(self.schedule_system_call(&op));
         // Poll immediately to record the event synchronously
         let _ = poll_once(fut.as_mut());
+    }
+    
+    /// Internal implementation of trace_simplified (shared by trace() in simplified mode)
+    fn trace_simplified_internal(&self, level: &str, message: &str) {
+        let inner = self.inner.lock().unwrap();
+        
+        // Only trace if not replaying
+        if !inner.is_replaying {
+            match level.to_uppercase().as_str() {
+                "INFO" => tracing::info!(
+                    target: "duroxide::orchestration",
+                    instance_id = %inner.instance_id,
+                    execution_id = %inner.execution_id,
+                    orchestration_name = %inner.orchestration_name,
+                    orchestration_version = %inner.orchestration_version,
+                    "{}",
+                    message
+                ),
+                "WARN" => tracing::warn!(
+                    target: "duroxide::orchestration",
+                    instance_id = %inner.instance_id,
+                    execution_id = %inner.execution_id,
+                    orchestration_name = %inner.orchestration_name,
+                    orchestration_version = %inner.orchestration_version,
+                    "{}",
+                    message
+                ),
+                "ERROR" => tracing::error!(
+                    target: "duroxide::orchestration",
+                    instance_id = %inner.instance_id,
+                    execution_id = %inner.execution_id,
+                    orchestration_name = %inner.orchestration_name,
+                    orchestration_version = %inner.orchestration_version,
+                    "{}",
+                    message
+                ),
+                "DEBUG" => tracing::debug!(
+                    target: "duroxide::orchestration",
+                    instance_id = %inner.instance_id,
+                    execution_id = %inner.execution_id,
+                    orchestration_name = %inner.orchestration_name,
+                    orchestration_version = %inner.orchestration_version,
+                    "{}",
+                    message
+                ),
+                _ => tracing::trace!(
+                    target: "duroxide::orchestration",
+                    instance_id = %inner.instance_id,
+                    execution_id = %inner.execution_id,
+                    orchestration_name = %inner.orchestration_name,
+                    orchestration_version = %inner.orchestration_version,
+                    level = %level,
+                    "{}",
+                    message
+                ),
+            }
+        }
     }
 
     /// Convenience wrapper for INFO level tracing.

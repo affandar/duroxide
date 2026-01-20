@@ -167,7 +167,12 @@ async fn test_deterministic_replay_with_sqlite() {
     orchestration_completes_and_replays_deterministically_with(store).await;
 }
 
+// MIGRATION NOTE: This test verifies traces are stored as SystemCall events in history.
+// In simplified mode, traces are NOT stored in history - they emit directly to tracing.
+// This is an intentional semantic change: simplified traces don't pollute history.
+// This test is only relevant for legacy mode which is being removed.
 #[tokio::test]
+#[ignore = "Legacy mode only: traces stored in history as SystemCall events"]
 async fn test_trace_deterministic_in_history() {
     let activities = ActivityRegistry::builder()
         .register("GetValue", |_ctx: ActivityContext, _: String| async move {
@@ -314,7 +319,12 @@ async fn deterministic_replay_activity_only() {
     }
 }
 
+// MIGRATION NOTE: This test verifies traces are stored as SystemCall events in history.
+// In simplified mode, traces are NOT stored in history - they emit directly to tracing.
+// This is an intentional semantic change: simplified traces don't pollute history.
+// This test is only relevant for legacy mode which is being removed.
 #[tokio::test]
+#[ignore = "Legacy mode only: traces stored in history as SystemCall events"]
 async fn test_trace_fire_and_forget() {
     let activities = ActivityRegistry::builder()
         .register("DoWork", |_ctx: ActivityContext, _: String| async move {

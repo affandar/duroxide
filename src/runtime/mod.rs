@@ -243,7 +243,7 @@ impl Default for RuntimeOptions {
             unregistered_backoff: UnregisteredBackoffConfig::default(),
             max_attempts: 10,
             activity_cancellation_grace_period: Duration::from_secs(10),
-            use_simplified_replay: false, // Legacy mode by default
+            use_simplified_replay: true, // Simplified mode is now the default (Phase 2)
         }
     }
 }

@@ -915,9 +915,36 @@ impl Future for AggregateDurableFuture {
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = unsafe { self.get_unchecked_mut() };
 
+        // Check if we're in simplified mode
+        let is_simplified = {
+            let inner = this.ctx.inner.lock().expect("Mutex should not be poisoned");
+            inner.replay_mode == ReplayMode::Simplified
+        };
+
         match this.mode {
             AggregateMode::Select => {
-                // Two-phase polling to handle replay correctly:
+                if is_simplified {
+                    // Simplified mode: poll all children, return first ready
+                    // Cancellation of losers is handled by the simplified runtime
+                    let mut ready_results: Vec<Option<DurableOutput>> = vec![None; this.children.len()];
+                    for (i, child) in this.children.iter_mut().enumerate() {
+                        if let Poll::Ready(output) = Pin::new(child).poll(cx) {
+                            ready_results[i] = Some(output);
+                        }
+                    }
+
+                    // Return first ready (biased toward lower indices)
+                    if let Some(winner_idx) = ready_results.iter().position(|r| r.is_some()) {
+                        let output = ready_results[winner_idx].take().unwrap();
+                        return Poll::Ready(AggregateOutput::Select {
+                            winner_index: winner_idx,
+                            output,
+                        });
+                    }
+                    return Poll::Pending;
+                }
+                
+                // Legacy mode: Two-phase polling to handle replay correctly:
                 // Phase 1: Poll ALL children to ensure they claim their scheduling events.
                 //          During replay, the winner might return Ready immediately, but
                 //          losers still need to claim their scheduling events to avoid
@@ -972,6 +999,41 @@ impl Future for AggregateDurableFuture {
                 Poll::Pending
             }
             AggregateMode::Join => {
+                // Check if we're in simplified mode
+                let is_simplified = {
+                    let inner = this.ctx.inner.lock().expect("Mutex should not be poisoned");
+                    inner.replay_mode == ReplayMode::Simplified
+                };
+                
+                if is_simplified {
+                    // Simplified mode: just poll all children and return when all ready
+                    // Order doesn't matter here - results are already delivered in history order
+                    let mut results: Vec<Option<DurableOutput>> = vec![None; this.children.len()];
+                    loop {
+                        let mut made_progress = false;
+                        for (i, child) in this.children.iter_mut().enumerate() {
+                            if results[i].is_some() {
+                                continue;
+                            }
+                            if let Poll::Ready(output) = Pin::new(child).poll(cx) {
+                                results[i] = Some(output);
+                                made_progress = true;
+                            }
+                        }
+
+                        if results.iter().all(|r| r.is_some()) {
+                            // All ready - return in original order (simplified mode handles history order)
+                            let outputs: Vec<DurableOutput> = results.into_iter().map(|r| r.unwrap()).collect();
+                            return Poll::Ready(AggregateOutput::Join { outputs });
+                        }
+
+                        if !made_progress {
+                            return Poll::Pending;
+                        }
+                    }
+                }
+                
+                // Legacy mode: Fixed-point polling with history-based ordering
                 // Fixed-point polling: keep polling children until no new results appear
                 // This allows cascading consumption respecting completion FIFO ordering.
                 let mut results: Vec<Option<DurableOutput>> = vec![None; this.children.len()];

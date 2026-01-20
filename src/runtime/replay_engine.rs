@@ -878,9 +878,11 @@ impl ReplayEngine {
                     must_poll = true;
                 }
                 
-                EventKind::OrchestrationCancelRequested { reason } => {
-                    // Not terminal, but we'll return Cancelled at the end
-                    return TurnResult::Cancelled(reason.clone());
+                EventKind::OrchestrationCancelRequested { .. } => {
+                    // Cancel is handled at the end of the turn, after all history is processed.
+                    // This allows the orchestration to run and produce output, but cancel
+                    // takes precedence when returning the final result.
+                    // Don't return early here - just continue processing.
                 }
                 
                 // These should have been filtered out above
@@ -943,6 +945,20 @@ impl ReplayEngine {
             
             // Add to pending_actions
             self.pending_actions.push(updated_action);
+        }
+        
+        // Check for cancellation first - if cancelled, return immediately
+        // This matches legacy mode behavior: cancel takes precedence over completion
+        let cancel_event = self
+            .baseline_history
+            .iter()
+            .chain(self.history_delta.iter())
+            .find(|e| matches!(&e.kind, EventKind::OrchestrationCancelRequested { .. }));
+
+        if let Some(e) = cancel_event
+            && let EventKind::OrchestrationCancelRequested { reason } = &e.kind
+        {
+            return TurnResult::Cancelled(reason.clone());
         }
         
         // Check for continue-as-new in pending_actions
