@@ -309,7 +309,7 @@
 //! - **Public data model**: `Event`, `Action` for history and decisions
 //! - **Orchestration driver**: `run_turn`, `run_turn_with`, and `Executor`
 //! - **OrchestrationContext**: Schedule activities, timers, and external events
-//! - **DurableFuture**: Unified futures that can be composed with `join`/`select`
+//! - **Deterministic futures**: `schedule_*()` return standard `Future`s that can be composed with `join`/`select`
 //! - **Runtime**: In-process execution engine with dispatchers and workers
 //! - **Providers**: Pluggable storage backends (filesystem, in-memory)
 //!
@@ -2468,9 +2468,8 @@ impl OrchestrationContext {
         }
     }
     
-    /// Schedule a sub-orchestration and return a simple future (simplified mode only).
-    /// 
-    /// This is the simplified mode equivalent of `schedule_sub_orchestration().into_sub_orchestration()`.
+    /// Schedule a sub-orchestration and return a future.
+    ///
     /// The child instance ID is auto-generated from the event ID.
     /// 
     /// # Panics
@@ -2577,11 +2576,8 @@ impl OrchestrationContext {
         }
     }
     
-    /// Simplified join: await all futures concurrently using futures::join_all.
-    /// Works with any Future type, not just DurableFuture.
-    /// 
-    /// In simplified mode, this is preferred over ctx.join() because it works
-    /// with the standard future model rather than requiring DurableFuture.
+    /// Await all futures concurrently using `futures::future::join_all`.
+    /// Works with any `Future` type.
     pub async fn join<T, F>(&self, futures: Vec<F>) -> Vec<T>
     where
         F: Future<Output = T>,

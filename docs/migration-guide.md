@@ -27,15 +27,15 @@ You DON'T need to version when:
 ```rust
 // Version 1.0.0
 let orchestration_v1 = |ctx: OrchestrationContext, input: String| async move {
-    let result = ctx.schedule_activity("ProcessV1", input).into_activity().await?;
+    let result = ctx.schedule_activity("ProcessV1", input).await?;
     Ok(result)
 };
 
 // Version 2.0.0 - Added validation step
 let orchestration_v2 = |ctx: OrchestrationContext, input: String| async move {
     // New validation step
-    let validated = ctx.schedule_activity("Validate", &input).into_activity().await?;
-    let result = ctx.schedule_activity("ProcessV2", validated).into_activity().await?;
+    let validated = ctx.schedule_activity("Validate", &input).await?;
+    let result = ctx.schedule_activity("ProcessV2", validated).await?;
     Ok(result)
 };
 

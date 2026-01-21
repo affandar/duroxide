@@ -345,7 +345,7 @@ impl Client {
     /// # use duroxide::{Client, ClientError};
     /// # async fn example(client: Client) -> Result<(), ClientError> {
     /// // Orchestration waiting for approval
-    /// // ctx.schedule_wait("ApprovalEvent").into_event().await
+    /// // ctx.schedule_wait("ApprovalEvent").await
     ///
     /// // External system/human approves
     /// client.raise_event(

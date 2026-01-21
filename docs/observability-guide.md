@@ -126,7 +126,7 @@ async fn process_order(ctx: OrchestrationContext, order: String) -> Result<Strin
     ctx.trace_info("Processing order started");
     
     let validated = ctx.schedule_activity("ValidateOrder", order.clone())
-        .into_activity().await?;
+        .await?;
     
     ctx.trace_info(format!("Validation result: {}", validated));
     

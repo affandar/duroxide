@@ -6,7 +6,7 @@ Sub-orchestrations allow an orchestration to schedule another orchestration, awa
 
 - Deterministic replay: parent histories use correlation IDs; replays adopt the same child instance IDs and resolve by completion events.
 - Idempotence: retries or replays must not start duplicate children nor append duplicate completions.
-- Same programming model: sub-orchestrations compose like activities via `DurableFuture` and `join`/`select`.
+- Same programming model: sub-orchestrations compose like activities via `join`/`select`.
 
 ### Public API
 
@@ -19,20 +19,9 @@ impl OrchestrationContext {
         &self,
         name: impl Into<String>,
         input: impl Into<String>,
-    ) -> DurableFuture;
+    ) -> impl Future<Output = Result<String, String>>;
 }
-
-impl DurableFuture {
-    /// Await a sub-orchestration result (Ok) or error (Err).
-    pub fn into_sub_orchestration(self) -> impl Future<Output = Result<String, String>>;
-}
-
-pub enum DurableOutput {
-    Activity(Result<String, String>),
-    Timer,
-    External(String),
-    SubOrchestration(Result<String, String>),
-}
+```
 ```
 
 ### History model
@@ -79,7 +68,7 @@ StartSubOrchestration { id, name, instance, input }
      - `SubOrchCompleted { instance: parent, id, result }`
      - `SubOrchFailed { instance: parent, id, error }`
 3) Router appends the corresponding completion event in the parent history.
-4) The parent `DurableFuture` resolves by finding the completion by `id` in its own history.
+4) The parent future resolves by finding the completion by `id` in its own history.
 
 ### Idempotence and retries
 
@@ -91,7 +80,7 @@ StartSubOrchestration { id, name, instance, input }
 
 ### Failure semantics
 
-- Parent awaits a sub-orchestration via `.into_sub_orchestration().await` and receives:
+- Parent awaits a sub-orchestration via `.await` and receives:
   - `Ok(String)` — child completed with output
   - `Err(String)` — child failed with error
 - Orchestrators can compensate or branch on error just like activity failures.
@@ -102,13 +91,12 @@ Basic parent/child:
 
 ```rust
 let child_upper = |ctx: OrchestrationContext, input: String| async move {
-    let up = ctx.schedule_activity("Upper", input).into_activity().await?;
+    let up = ctx.schedule_activity("Upper", input).await?;
     Ok(up)
 };
 
 let parent = |ctx: OrchestrationContext, input: String| async move {
-    let r = ctx.schedule_sub_orchestration("ChildUpper", input)
-        .into_sub_orchestration().await?;
+    let r = ctx.schedule_sub_orchestration("ChildUpper", input).await?;
     Ok(format!("parent:{r}"))
 };
 ```
@@ -116,10 +104,11 @@ let parent = |ctx: OrchestrationContext, input: String| async move {
 Fan-out and join:
 
 ```rust
-let a = ctx.schedule_sub_orchestration("ChildSum", "1,2").into_sub_orchestration();
-let b = ctx.schedule_sub_orchestration("ChildSum", "3,4").into_sub_orchestration();
-let (ra, rb) = futures::join!(a, b);
-let total = ra?.parse::<i64>().unwrap() + rb?.parse::<i64>().unwrap();
+let a = ctx.schedule_sub_orchestration("ChildSum", "1,2");
+let b = ctx.schedule_sub_orchestration("ChildSum", "3,4");
+let results = ctx.join(vec![a, b]).await;
+let total = results[0].as_ref().unwrap().parse::<i64>().unwrap() 
+          + results[1].as_ref().unwrap().parse::<i64>().unwrap();
 Ok(total.to_string())
 ```
 
@@ -127,14 +116,14 @@ Chained sub-orchestrations (root -> mid -> leaf):
 
 ```rust
 let leaf = |ctx: OrchestrationContext, input: String| async move {
-    Ok(ctx.schedule_activity("AppendX", input).into_activity().await?)
+    Ok(ctx.schedule_activity("AppendX", input).await?)
 };
 let mid = |ctx: OrchestrationContext, input: String| async move {
-    let r = ctx.schedule_sub_orchestration("Leaf", input).into_sub_orchestration().await?;
+    let r = ctx.schedule_sub_orchestration("Leaf", input).await?;
     Ok(format!("{r}-mid"))
 };
 let root = |ctx: OrchestrationContext, input: String| async move {
-    let r = ctx.schedule_sub_orchestration("Mid", input).into_sub_orchestration().await?;
+    let r = ctx.schedule_sub_orchestration("Mid", input).await?;
     Ok(format!("root:{r}"))
 };
 ```

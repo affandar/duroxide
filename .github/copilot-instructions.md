@@ -21,27 +21,28 @@ Only fall back to `cargo test` if nextest is not available. Never use `cargo tes
 - **WorkDispatcher** (worker queue): Executes activities with automatic lock renewal for long-running work
 
 **Core types:**
-- `OrchestrationContext` - Schedules work via `schedule_activity()`, `schedule_timer()`, `schedule_wait()`, `schedule_sub_orchestration()`
-- `DurableFuture` - Must call `.into_activity()`, `.into_timer()`, `.into_event()` before `.await`
+- `OrchestrationContext` - Schedules work via `schedule_activity()`, `schedule_timer()`, `schedule_wait()`, `schedule_sub_orchestration()` - all return futures you can `.await` directly
 - `Event`/`Action` - Immutable history entries; providers only store, never generate IDs
 - `Provider` trait - Storage abstraction with peek-lock semantics (`src/providers/mod.rs`)
 
 ## Critical Patterns
 
-**DurableFuture conversion (REQUIRED):**
+**Awaiting schedule_* methods:**
 ```rust
-// ✅ CORRECT - always convert before await
-let result = ctx.schedule_activity("Task", input).into_activity().await?;
-ctx.schedule_timer(Duration::from_secs(5)).into_timer().await;
-
-// ❌ WRONG - will not compile
-let result = ctx.schedule_activity("Task", input).await;  // Missing .into_activity()!
+// schedule_* methods return futures that can be awaited directly
+let result = ctx.schedule_activity("Task", input).await?;
+ctx.schedule_timer(Duration::from_secs(5)).await;
+let event_data = ctx.schedule_wait("MyEvent").await;
+let sub_result = ctx.schedule_sub_orchestration("Child", input).await?;
 ```
 
 **Use ctx.join/select, NOT tokio::join/select:**
 ```rust
 // ✅ CORRECT - deterministic, history-ordered resolution
-let (idx, result) = ctx.select2(timer, activity).await;
+match ctx.select2(timer, activity).await {
+    Either2::First(()) => { /* timer won */ }
+    Either2::Second(result) => { /* activity won */ }
+}
 let results = ctx.join(vec![f1, f2, f3]).await;
 
 // ❌ WRONG - non-deterministic, breaks replay

@@ -62,7 +62,7 @@ async fn process_order(ctx: OrchestrationContext, order: Order) -> Result<String
     ctx.trace_info("Order processing started");
     
     let validation_result = ctx.schedule_activity("ValidateOrder", order.id.clone())
-        .into_activity().await?;
+        .await?;
     
     ctx.trace_info(format!("Validation: {}", validation_result));
     
@@ -102,7 +102,7 @@ async fn payment_workflow(
     ctx.trace_info(format!("Processing payment for order {}", request.order_id));
     
     // Process payment
-    match ctx.schedule_activity("ChargeCard", request.amount).into_activity().await {
+    match ctx.schedule_activity("ChargeCard", request.amount).await {
         Ok(transaction_id) => {
             ctx.trace_info(format!("Payment successful, transaction: {}", transaction_id));
             Ok(transaction_id)
@@ -110,7 +110,7 @@ async fn payment_workflow(
         Err(e) => {
             ctx.trace_warn(format!("Payment failed: {}, initiating refund flow", e));
             // Compensation logic
-            ctx.schedule_activity("RefundOrder", request.order_id).into_activity().await?;
+            ctx.schedule_activity("RefundOrder", request.order_id).await?;
             Err("payment_failed_refunded".to_string())
         }
     }
@@ -315,7 +315,7 @@ Include observability information in your library docs:
 ///
 /// ```rust
 /// let transaction_id = ctx.schedule_activity("Payments::ChargeCard", amount)
-///     .into_activity().await?;
+///     .await?;
 /// ```
 pub async fn charge_card(amount: String) -> Result<String, String> {
     // Implementation

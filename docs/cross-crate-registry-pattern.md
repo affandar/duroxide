@@ -209,7 +209,6 @@ pub async fn provision_postgres_orchestration(
     
     let vm_output = ctx
         .schedule_activity_typed(activities::provision_vm::NAME, vm_input)
-        .into_activity_typed()
         .await?;
     
     // Build output
@@ -673,7 +672,6 @@ async fn deploy_multi_cloud_app(
             "db-instance",
             db_config,
         )
-        .into_sub_orchestration_typed()
         .await?;
     
     // Deploy compute on AWS
@@ -683,7 +681,6 @@ async fn deploy_multi_cloud_app(
             "app-cluster",
             cluster_config,
         )
-        .into_sub_orchestration_typed()
         .await?;
     
     Ok(DeployMultiCloudOutput {

@@ -313,7 +313,7 @@ async fn join_returns_schedule_order() {
 // When subsequent code tried to schedule new operations, it would see the
 // unclaimed event and report a nondeterminism error.
 //
-// Fix: Modified AggregateDurableFuture::poll for AggregateMode::Select to use
+// Fix: Modified select/join behavior to ensure deterministic ordering
 // two-phase polling: first poll ALL children to ensure they claim their
 // scheduling events, then check which one is ready.
 

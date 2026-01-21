@@ -15,7 +15,7 @@ fn continue_as_new_versioned(&self, version: &str, input: &str) -> impl Future<O
 ```rust
 async fn my_orchestration(ctx: OrchestrationContext, input: String) -> Result<String, String> {
     // Do some work...
-    let result = ctx.schedule_activity("DoWork", input.clone()).into_activity().await?;
+    let result = ctx.schedule_activity("DoWork", input.clone()).await?;
     
     if should_continue(&result) {
         // MUST use `return` and `.await` - future never resolves

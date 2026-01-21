@@ -44,8 +44,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     // 3. Define orchestration (deterministic coordination)
     let orchestration = |ctx: OrchestrationContext, name: String| async move {
-        let greeting = ctx.schedule_activity("Greet", name)
-            .into_activity().await?;
+        let greeting = ctx.schedule_activity("Greet", name).await?;
         Ok(greeting)
     };
     
@@ -124,13 +123,13 @@ activities.register("ProvisionVM", |ctx: ActivityContext, config| async move {
 
 // ✅ GOOD: Orchestration coordinates multiple activities
 async fn deploy_app(ctx: OrchestrationContext, config: String) -> Result<String, String> {
-    let vm_id = ctx.schedule_activity("ProvisionVM", config.clone()).into_activity().await?;
-    let app_id = ctx.schedule_activity("DeployApp", vm_id).into_activity().await?;
-    let health = ctx.schedule_activity("HealthCheck", app_id.clone()).into_activity().await?;
+    let vm_id = ctx.schedule_activity("ProvisionVM", config.clone()).await?;
+    let app_id = ctx.schedule_activity("DeployApp", vm_id).await?;
+    let health = ctx.schedule_activity("HealthCheck", app_id.clone()).await?;
     
     if health != "healthy" {
         // ✅ Business logic in orchestration
-        ctx.schedule_activity("Rollback", app_id).into_activity().await?;
+        ctx.schedule_activity("Rollback", app_id).await?;
         return Err("Deployment unhealthy".to_string());
     }
     
@@ -258,34 +257,37 @@ Orchestrations can run for hours/days/months and must survive crashes.
 ```rust
 async fn my_orchestration(ctx: OrchestrationContext, input: String) -> Result<String, String> {
     // Turn 1 (first execution):
-    let result = ctx.schedule_activity("Step1", input).into_activity().await?;
+    let result = ctx.schedule_activity("Step1", input).await?;
     // ↑ Schedules Step1, waits for completion
     // [CRASH happens here]
     
     // Turn 2 (after restart - REPLAY):
-    let result = ctx.schedule_activity("Step1", input).into_activity().await?;
+    let result = ctx.schedule_activity("Step1", input).await?;
     // ↑ Doesn't re-schedule! Reads Step1 completion from history
     
-    let result2 = ctx.schedule_activity("Step2", result).into_activity().await?;
+    let result2 = ctx.schedule_activity("Step2", result).await?;
     // ↑ Schedules Step2 for FIRST time (not in history yet)
     
     Ok(result2)
 }
 ```
 
-### Durable Futures
+### Scheduling Work
 
-All `schedule_*` methods return `DurableFuture`:
-- Unified type that can represent any async operation
-- **Must convert** before awaiting: `.into_activity()`, `.into_timer()`, `.into_event()`, `.into_sub_orchestration()`
-- Can compose with `ctx.select2()` / `ctx.join()`
+All `schedule_*` methods return futures that can be awaited directly:
 
 ```rust
-let fut = ctx.schedule_activity("Task", "input");
-// fut is DurableFuture - can't await directly!
+// Activities return Result<String, String>
+let result = ctx.schedule_activity("Task", "input").await?;
 
-let result = fut.into_activity().await?;
-// ✅ Now converted to awaitable future
+// Timers return ()
+ctx.schedule_timer(Duration::from_secs(5)).await;
+
+// External events return String
+let data = ctx.schedule_wait("EventName").await;
+
+// Sub-orchestrations return Result<String, String>
+let child_result = ctx.schedule_sub_orchestration("Child", "input").await?;
 ```
 
 ---
@@ -303,11 +305,11 @@ async fn safe_orchestration(ctx: OrchestrationContext, count: i32) -> Result<Str
     
     // ✅ Loops
     for i in 0..count {
-        ctx.schedule_activity("Process", i.to_string()).into_activity().await?;
+        ctx.schedule_activity("Process", i.to_string()).await?;
     }
     
     // ✅ Pattern matching
-    let status = ctx.schedule_activity("GetStatus", "").into_activity().await?;
+    let status = ctx.schedule_activity("GetStatus", "").await?;
     match status.as_str() {
         "ready" => { /* ... */ }
         "pending" => { /* ... */ }
@@ -315,10 +317,10 @@ async fn safe_orchestration(ctx: OrchestrationContext, count: i32) -> Result<Str
     }
     
     // ✅ Timers for delays
-    ctx.schedule_timer(std::time::Duration::from_secs(5)).into_timer().await;
+    ctx.schedule_timer(std::time::Duration::from_secs(5)).await;
     
     // ✅ External events for signals
-    let approval = ctx.schedule_wait("ApprovalEvent").into_event().await;
+    let approval = ctx.schedule_wait("ApprovalEvent").await;
     
     // ✅ Logging (replay-safe)
     ctx.trace_info("Step completed");
@@ -352,9 +354,6 @@ async fn unsafe_orchestration(ctx: OrchestrationContext, _input: String) -> Resu
     // ❌ Sleep in orchestration
     tokio::time::sleep(std::time::Duration::from_secs(5)).await;  // Use ctx.schedule_timer() instead!
     
-    // ❌ Direct await on activity (wrong type!)
-    let result = ctx.schedule_activity("Task", "input").await;  // Missing .into_activity()!
-    
     Ok("unsafe".to_string())
 }
 ```
@@ -369,16 +368,16 @@ async fn safe_version(ctx: OrchestrationContext, _input: String) -> Result<Strin
     let now = ctx.utcnow_ms().await?;
     
     // ✅ I/O → Use activities
-    let file_contents = ctx.schedule_activity("ReadFile", "data.txt").into_activity().await?;
+    let file_contents = ctx.schedule_activity("ReadFile", "data.txt").await?;
     
     // ✅ HTTP → Use activities
-    let response = ctx.schedule_activity("HttpGet", "https://api.example.com").into_activity().await?;
+    let response = ctx.schedule_activity("HttpGet", "https://api.example.com").await?;
     
     // ✅ Sleep → Use timers
-    ctx.schedule_timer(5000).into_timer().await;
+    ctx.schedule_timer(std::time::Duration::from_secs(5)).await;
     
-    // ✅ Activity → Use .into_activity()
-    let result = ctx.schedule_activity("Task", "input").into_activity().await?;
+    // ✅ Activity
+    let result = ctx.schedule_activity("Task", "input").await?;
     
     Ok(result)
 }
@@ -394,21 +393,20 @@ async fn safe_version(ctx: OrchestrationContext, _input: String) -> Result<Strin
 
 ```rust
 // String I/O (basic)
-fn schedule_activity(&self, name: impl Into<String>, input: impl Into<String>) -> DurableFuture
+fn schedule_activity(&self, name: impl Into<String>, input: impl Into<String>) 
+    -> impl Future<Output = Result<String, String>>
 
 // Typed I/O (with serde)
 fn schedule_activity_typed<In: Serialize, Out: DeserializeOwned>(
     &self, 
     name: impl Into<String>, 
     input: &In
-) -> DurableFuture
+) -> impl Future<Output = Result<Out, String>>
 
 // Usage:
-let result = ctx.schedule_activity("ProcessOrder", order_json)
-    .into_activity().await?;
+let result = ctx.schedule_activity("ProcessOrder", order_json).await?;
 
-let result: OrderResult = ctx.schedule_activity_typed("ProcessOrder", &order_data)
-    .into_activity_typed().await?;
+let result: OrderResult = ctx.schedule_activity_typed("ProcessOrder", &order_data).await?;
 ```
 
 #### Scheduling Activities with Retry
@@ -446,41 +444,39 @@ let result = ctx.schedule_activity_with_retry("Task", input, policy).await?;
 #### Scheduling Timers
 
 ```rust
-// Delay in milliseconds
-fn schedule_timer(&self, delay: Duration) -> DurableFuture
+// Delay as Duration
+fn schedule_timer(&self, delay: Duration) -> impl Future<Output = ()>
 
 // Usage:
-ctx.schedule_timer(Duration::from_secs(5)).into_timer().await;  // Wait 5 seconds
-ctx.schedule_timer(Duration::from_secs(60)).into_timer().await;  // Wait 1 minute
+ctx.schedule_timer(Duration::from_secs(5)).await;  // Wait 5 seconds
+ctx.schedule_timer(Duration::from_secs(60)).await;  // Wait 1 minute
 ```
 
 #### External Events
 
 ```rust
 // Wait for external signal by name
-fn schedule_wait(&self, name: impl Into<String>) -> DurableFuture
+fn schedule_wait(&self, name: impl Into<String>) -> impl Future<Output = String>
 
 // Usage:
-let approval_data = ctx.schedule_wait("ApprovalEvent").into_event().await;
+let approval_data = ctx.schedule_wait("ApprovalEvent").await;
 
 // Typed version
-let approval: ApprovalData = ctx.schedule_wait("ApprovalEvent")
-    .into_event_typed().await;
+let approval: ApprovalData = ctx.schedule_wait_typed("ApprovalEvent").await;
 ```
 
 #### Sub-Orchestrations
 
 ```rust
 // Start child orchestration
-fn schedule_sub_orchestration(&self, name: impl Into<String>, input: impl Into<String>) -> DurableFuture
+fn schedule_sub_orchestration(&self, name: impl Into<String>, input: impl Into<String>) 
+    -> impl Future<Output = Result<String, String>>
 
 // Usage:
-let child_result = ctx.schedule_sub_orchestration("ChildWorkflow", input_json)
-    .into_sub_orchestration().await?;
+let child_result = ctx.schedule_sub_orchestration("ChildWorkflow", input_json).await?;
 
 // Typed version
-let child_result: ChildOutput = ctx.schedule_sub_orchestration_typed("ChildWorkflow", &child_input)
-    .into_sub_orchestration_typed().await?;
+let child_result: ChildOutput = ctx.schedule_sub_orchestration_typed("ChildWorkflow", &child_input).await?;
 ```
 
 #### Detached Orchestrations (Fire-and-Forget)
@@ -497,31 +493,28 @@ ctx.schedule_orchestration("EmailNotification", "email-123", email_json);
 #### Composition (Select/Join)
 
 ```rust
-// Select: first to complete wins
-fn select2(&self, a: DurableFuture, b: DurableFuture) -> SelectFuture
-fn select(&self, futures: Vec<DurableFuture>) -> SelectFuture
+// Select: first to complete wins, returns Either2 or Either3
+async fn select2<T1, T2, F1, F2>(&self, f1: F1, f2: F2) -> Either2<T1, T2>
+async fn select3<T1, T2, T3, F1, F2, F3>(&self, f1: F1, f2: F2, f3: F3) -> Either3<T1, T2, T3>
 
 // Join: wait for all
-fn join(&self, futures: Vec<DurableFuture>) -> JoinFuture
+async fn join<T, F>(&self, futures: Vec<F>) -> Vec<T>
+async fn join3<T1, T2, T3, F1, F2, F3>(&self, f1: F1, f2: F2, f3: F3) -> (T1, T2, T3)
 
 // Usage:
 let timer = ctx.schedule_timer(Duration::from_secs(30));
 let approval = ctx.schedule_wait("Approval");
-let (winner, output) = ctx.select2(timer, approval).await;
 
-match winner {
-    0 => println!("Timed out"),
-    1 => println!("Approved: {:?}", output),
-    _ => unreachable!(),
+match ctx.select2(timer, approval).await {
+    Either2::First(()) => println!("Timed out"),
+    Either2::Second(data) => println!("Approved: {}", data),
 }
 
 // Join example
-let futs = vec![
-    ctx.schedule_activity("Task1", "a"),
-    ctx.schedule_activity("Task2", "b"),
-    ctx.schedule_activity("Task3", "c"),
-];
-let results = ctx.join(futs).await;  // Wait for all 3
+let f1 = ctx.schedule_activity("Task1", "a");
+let f2 = ctx.schedule_activity("Task2", "b");
+let f3 = ctx.schedule_activity("Task3", "c");
+let results = ctx.join(vec![f1, f2, f3]).await;  // Wait for all 3
 ```
 
 #### Continue As New
@@ -533,7 +526,7 @@ fn continue_as_new(&self, input: impl Into<String>) -> impl Future<Output = Resu
 
 // Usage:
 async fn pagination(ctx: OrchestrationContext, cursor: String) -> Result<String, String> {
-    let next_cursor = ctx.schedule_activity("ProcessPage", cursor).into_activity().await?;
+    let next_cursor = ctx.schedule_activity("ProcessPage", cursor).await?;
     
     if next_cursor == "EOF" {
         Ok("done".to_string())
@@ -883,10 +876,10 @@ loop {
 ```rust
 // In your orchestration:
 async fn approval_workflow(ctx: OrchestrationContext, order_id: String) -> Result<String, String> {
-    let result = ctx.schedule_activity("SubmitForApproval", order_id).into_activity().await?;
+    let result = ctx.schedule_activity("SubmitForApproval", order_id).await?;
     
     // Wait for approval event
-    let approval = ctx.schedule_wait("ManagerApproval").into_event().await;
+    let approval = ctx.schedule_wait("ManagerApproval").await;
     
     Ok(approval)
 }
@@ -1011,19 +1004,19 @@ async fn process_order(ctx: OrchestrationContext, order_json: String) -> Result<
     
     // Step 1: Validate
     let validated = ctx.schedule_activity("ValidateOrder", order_json)
-        .into_activity().await?;
+        .await?;
     
     // Step 2: Charge payment
     let payment_result = ctx.schedule_activity("ChargePayment", validated)
-        .into_activity().await?;
+        .await?;
     
     // Step 3: Ship order
     let tracking = ctx.schedule_activity("ShipOrder", payment_result)
-        .into_activity().await?;
+        .await?;
     
     // Step 4: Send confirmation
     let confirmation = ctx.schedule_activity("SendConfirmation", tracking)
-        .into_activity().await?;
+        .await?;
     
     ctx.trace_info("Order processing completed");
     Ok(confirmation)
@@ -1046,15 +1039,14 @@ async fn process_users(ctx: OrchestrationContext, user_ids_json: String) -> Resu
     // Fan-in: Wait for all to complete (deterministic order)
     let results = ctx.join(futures).await;
     
-    // Process results
+    // Process results - each result is Result<String, String>
     let mut successes = 0;
     for result in results {
         match result {
-            DurableOutput::Activity(Ok(_)) => successes += 1,
-            DurableOutput::Activity(Err(e)) => {
+            Ok(_) => successes += 1,
+            Err(e) => {
                 ctx.trace_warn(format!("User processing failed: {}", e));
             }
-            _ => {}
         }
     }
     
@@ -1068,31 +1060,24 @@ async fn process_users(ctx: OrchestrationContext, user_ids_json: String) -> Resu
 async fn approval_workflow(ctx: OrchestrationContext, request_json: String) -> Result<String, String> {
     // Submit approval request
     let request_id = ctx.schedule_activity("SubmitApprovalRequest", request_json)
-        .into_activity().await?;
+        .await?;
     
     // Wait for approval or timeout
     let timeout = ctx.schedule_timer(std::time::Duration::from_millis(86_400_000));  // 24 hours
     let approval = ctx.schedule_wait("ApprovalEvent");
     
-    let (winner, output) = ctx.select2(timeout, approval).await;
-    
-    match winner {
-        0 => {
+    match ctx.select2(timeout, approval).await {
+        Either2::First(()) => {
             // Timed out - escalate
             ctx.trace_warn("Approval timed out, escalating");
             ctx.schedule_activity("EscalateApproval", request_id)
-                .into_activity().await
+                .await
         }
-        1 => {
-            // Approved - extract data
-            if let DurableOutput::External(data) = output {
-                ctx.trace_info("Approval received");
-                Ok(data)
-            } else {
-                Err("Unexpected output type".to_string())
-            }
+        Either2::Second(approval_data) => {
+            // Approved - use the data
+            ctx.trace_info("Approval received");
+            Ok(approval_data)
         }
-        _ => unreachable!(),
     }
 }
 ```
@@ -1103,7 +1088,7 @@ async fn approval_workflow(ctx: OrchestrationContext, request_json: String) -> R
 async fn saga_orchestration(ctx: OrchestrationContext, order_json: String) -> Result<String, String> {
     // Step 1: Reserve inventory
     let reservation = match ctx.schedule_activity("ReserveInventory", order_json.clone())
-        .into_activity().await 
+        .await 
     {
         Ok(r) => r,
         Err(e) => {
@@ -1114,14 +1099,14 @@ async fn saga_orchestration(ctx: OrchestrationContext, order_json: String) -> Re
     
     // Step 2: Charge payment
     match ctx.schedule_activity("ChargePayment", reservation.clone())
-        .into_activity().await 
+        .await 
     {
         Ok(payment) => Ok(payment),
         Err(e) => {
             // Compensation: Release inventory
             ctx.trace_warn(format!("Payment failed: {}, releasing inventory", e));
             ctx.schedule_activity("ReleaseInventory", reservation)
-                .into_activity().await?;
+                .await?;
             Err("Payment failed, order cancelled".to_string())
         }
     }
@@ -1182,13 +1167,13 @@ async fn manual_retry(ctx: OrchestrationContext, task_input: String) -> Result<S
         ctx.trace_info(format!("Attempt {} of {}", attempt, max_attempts));
         
         match ctx.schedule_activity("UnreliableTask", task_input.clone())
-            .into_activity().await 
+            .await 
         {
             Ok(result) => return Ok(result),
             Err(e) => {
                 ctx.trace_warn(format!("Attempt {} failed: {}", attempt, e));
                 if attempt < max_attempts {
-                    ctx.schedule_timer(delay).into_timer().await;
+                    ctx.schedule_timer(delay).await;
                     delay *= 2;
                 } else {
                     return Err(format!("Failed after {} attempts", max_attempts));
@@ -1207,7 +1192,7 @@ Duroxide classifies errors into three categories for proper handling and metrics
 **Application Errors** - Business logic failures that your orchestration code sees and handles:
 ```rust
 async fn order_workflow(ctx: OrchestrationContext, input: String) -> Result<String, String> {
-    match ctx.schedule_activity("ProcessPayment", input).into_activity().await {
+    match ctx.schedule_activity("ProcessPayment", input).await {
         Ok(txn_id) => Ok(format!("paid:{txn_id}")),
         Err(e) => {
             // This is an Application error - you handle it
@@ -1265,7 +1250,7 @@ async fn accumulate_results(ctx: OrchestrationContext, items_json: String) -> Re
         ctx.trace_info(format!("Processing item {} of {}", i + 1, items.len()));
         
         let result = ctx.schedule_activity("ProcessItem", item.clone())
-            .into_activity().await?;
+            .await?;
         
         accumulator.push(result);
     }
@@ -1281,14 +1266,14 @@ async fn accumulate_results(ctx: OrchestrationContext, items_json: String) -> Re
 async fn conditional_workflow(ctx: OrchestrationContext, order_json: String) -> Result<String, String> {
     // Get order value
     let order_value: f64 = ctx.schedule_activity("GetOrderValue", order_json.clone())
-        .into_activity_typed().await?;
+        .await?;
     
     if order_value > 1000.0 {
         // High value - require approval
         ctx.trace_info("High-value order, requiring approval");
         
         let approval_request = ctx.schedule_activity("CreateApprovalRequest", order_json.clone())
-            .into_activity().await?;
+            .await?;
         
         let timeout = ctx.schedule_timer(std::time::Duration::from_millis(3600_000));  // 1 hour
         let approval = ctx.schedule_wait("ManagerApproval");
@@ -1301,7 +1286,7 @@ async fn conditional_workflow(ctx: OrchestrationContext, order_json: String) -> 
     }
     
     // Process the order
-    ctx.schedule_activity("ProcessOrder", order_json).into_activity().await
+    ctx.schedule_activity("ProcessOrder", order_json).await
 }
 ```
 
@@ -1315,7 +1300,7 @@ async fn parent_workflow(ctx: OrchestrationContext, batch_json: String) -> Resul
     let mut results = Vec::new();
     for batch in batches {
         let result = ctx.schedule_sub_orchestration("ProcessBatch", batch)
-            .into_sub_orchestration().await?;
+            .await?;
         results.push(result);
     }
     
@@ -1325,7 +1310,7 @@ async fn parent_workflow(ctx: OrchestrationContext, batch_json: String) -> Resul
 async fn child_workflow(ctx: OrchestrationContext, batch: String) -> Result<String, String> {
     // Child has its own event history, isolated from parent
     let processed = ctx.schedule_activity("ProcessBatchItems", batch)
-        .into_activity().await?;
+        .await?;
     
     ctx.trace_info("Batch processing completed");
     Ok(processed)
@@ -1340,10 +1325,10 @@ async fn eternal_monitor(ctx: OrchestrationContext, state_json: String) -> Resul
     
     // Do one iteration of work
     let check_result = ctx.schedule_activity("CheckSystem", state_json)
-        .into_activity().await?;
+        .await?;
     
     // Wait before next check
-    ctx.schedule_timer(std::time::Duration::from_millis(60_000)).into_timer().await;  // 1 minute
+    ctx.schedule_timer(std::time::Duration::from_millis(60_000)).await;  // 1 minute
     
     // Continue with updated state - await and return to terminate this execution
     return ctx.continue_as_new(check_result).await;
@@ -1408,14 +1393,14 @@ activities.register("ProcessPremiumOrder", |ctx: ActivityContext, order_json: St
 async fn good_orch(ctx: OrchestrationContext, order_json: String) -> Result<String, String> {
     // Get order value
     let value_str = ctx.schedule_activity("GetOrderValue", order_json.clone())
-        .into_activity().await?;
+        .await?;
     let value: f64 = value_str.parse().unwrap();
     
     // ✅ Business logic in orchestration
     if value > 1000.0 {
         // Send for approval
         ctx.schedule_activity("SendApprovalRequest", order_json.clone())
-            .into_activity().await?;
+            .await?;
         
         // ✅ Orchestration-level timeout control
         let timeout = ctx.schedule_timer(std::time::Duration::from_millis(3600_000));  // 1 hour
@@ -1429,12 +1414,12 @@ async fn good_orch(ctx: OrchestrationContext, order_json: String) -> Result<Stri
     
     // ✅ Control flow in orchestration
     let customer_type = ctx.schedule_activity("GetCustomerType", order_json.clone())
-        .into_activity().await?;
+        .await?;
     
     if customer_type == "premium" {
-        ctx.schedule_activity("ProcessPremiumOrder", order_json).into_activity().await
+        ctx.schedule_activity("ProcessPremiumOrder", order_json).await
     } else {
-        ctx.schedule_activity("ProcessStandardOrder", order_json).into_activity().await
+        ctx.schedule_activity("ProcessStandardOrder", order_json).await
     }
 }
 ```
@@ -1452,9 +1437,9 @@ async fn good_orch(ctx: OrchestrationContext, order_json: String) -> Result<Stri
 // WRONG - Random branching
 async fn bad_orch(ctx: OrchestrationContext) -> Result<String, String> {
     if rand::random::<bool>() {  // Different on each replay!
-        ctx.schedule_activity("PathA", "").into_activity().await
+        ctx.schedule_activity("PathA", "").await
     } else {
-        ctx.schedule_activity("PathB", "").into_activity().await
+        ctx.schedule_activity("PathB", "").await
     }
 }
 ```
@@ -1462,30 +1447,18 @@ async fn bad_orch(ctx: OrchestrationContext) -> Result<String, String> {
 ```rust
 // CORRECT - Deterministic branching based on activity result
 async fn good_orch(ctx: OrchestrationContext) -> Result<String, String> {
-    let decision = ctx.schedule_activity("MakeDecision", "").into_activity().await?;
+    let decision = ctx.schedule_activity("MakeDecision", "").await?;
     
     if decision == "A" {
-        ctx.schedule_activity("PathA", "").into_activity().await
+        ctx.schedule_activity("PathA", "").await
     } else {
-        ctx.schedule_activity("PathB", "").into_activity().await
+        ctx.schedule_activity("PathB", "").await
     }
 }
 ```
 
-### ❌ Anti-Pattern 3: Forgetting .into_*() Conversion
-
-```rust
-// WRONG - Missing conversion (won't compile)
-async fn bad_orch(ctx: OrchestrationContext) -> Result<String, String> {
-    let result = ctx.schedule_activity("Task", "input").await?;  // Error!
-    Ok(result)
-}
-```
-
-```rust
-// CORRECT - With conversion
-async fn good_orch(ctx: OrchestrationContext) -> Result<String, String> {
-    let result = ctx.schedule_activity("Task", "input").into_activity().await?;
+### ❌ Anti-Pattern 3: Using tokio::select! or tokio::join!
+    let result = ctx.schedule_activity("Task", "input").await?;
     Ok(result)
 }
 ```
@@ -1500,7 +1473,7 @@ activities.register("Wait30Seconds", |ctx: ActivityContext, _: String| async mov
 });
 
 async fn bad_delay(ctx: OrchestrationContext) -> Result<String, String> {
-    ctx.schedule_activity("Wait30Seconds", "").into_activity().await?;
+    ctx.schedule_activity("Wait30Seconds", "").await?;
     // Just wasted a worker slot for 30 seconds!
     Ok("done".to_string())
 }
@@ -1509,7 +1482,7 @@ async fn bad_delay(ctx: OrchestrationContext) -> Result<String, String> {
 ```rust
 // CORRECT - Use timer for pure delays
 async fn good_delay(ctx: OrchestrationContext) -> Result<String, String> {
-    ctx.schedule_timer(std::time::Duration::from_millis(30_000)).into_timer().await;
+    ctx.schedule_timer(std::time::Duration::from_millis(30_000)).await;
     // Timer doesn't block workers, handled by timer dispatcher
     Ok("done".to_string())
 }
@@ -1541,7 +1514,7 @@ async fn good_delay(ctx: OrchestrationContext) -> Result<String, String> {
 async fn bad_poll(ctx: OrchestrationContext, task_id: String) -> Result<String, String> {
     loop {
         let status = ctx.schedule_activity("CheckStatus", task_id.clone())
-            .into_activity().await?;
+            .await?;
         
         if status == "complete" {
             return Ok(status);
@@ -1556,13 +1529,13 @@ async fn bad_poll(ctx: OrchestrationContext, task_id: String) -> Result<String, 
 async fn good_poll(ctx: OrchestrationContext, task_id: String) -> Result<String, String> {
     for _ in 0..100 {  // Max iterations to prevent infinite history
         let status = ctx.schedule_activity("CheckStatus", task_id.clone())
-            .into_activity().await?;
+            .await?;
         
         if status == "complete" {
             return Ok(status);
         }
         
-        ctx.schedule_timer(std::time::Duration::from_millis(5000)).into_timer().await;  // Wait 5s before retry
+        ctx.schedule_timer(std::time::Duration::from_millis(5000)).await;  // Wait 5s before retry
     }
     
     Err("Polling timeout".to_string())
@@ -1573,12 +1546,12 @@ async fn good_poll(ctx: OrchestrationContext, task_id: String) -> Result<String,
 ```rust
 async fn eternal_poll(ctx: OrchestrationContext, task_id: String) -> Result<String, String> {
     let status = ctx.schedule_activity("CheckStatus", task_id.clone())
-        .into_activity().await?;
+        .await?;
     
     if status == "complete" {
         Ok(status)
     } else {
-        ctx.schedule_timer(std::time::Duration::from_millis(5000)).into_timer().await;
+        ctx.schedule_timer(std::time::Duration::from_millis(5000)).await;
         return ctx.continue_as_new(task_id).await;  // Fresh history for next iteration
     }
 }
@@ -1602,7 +1575,7 @@ async fn bad_graph(ctx: OrchestrationContext, _input: String) -> Result<String, 
     // This activity may receive different JSON on replay,
     // causing nondeterminism detection to fail
     ctx.schedule_activity("ProcessGraph", graph_json)
-        .into_activity().await
+        .await
 }
 ```
 
@@ -1620,7 +1593,7 @@ async fn good_graph(ctx: OrchestrationContext, _input: String) -> Result<String,
     let graph_json = serde_json::to_string(&nodes)?;
     
     ctx.schedule_activity("ProcessGraph", graph_json)
-        .into_activity().await
+        .await
 }
 ```
 
@@ -1649,7 +1622,7 @@ When an orchestration replays, it must make the same decisions as the original r
 ### E-Commerce Order Processing
 
 ```rust
-use duroxide::{OrchestrationContext, DurableOutput};
+use duroxide::OrchestrationContext;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize)]
@@ -1677,7 +1650,7 @@ async fn process_order_orchestration(
     
     // 1. Validate order
     let validation_result = ctx.schedule_activity("ValidateOrder", order_json.clone())
-        .into_activity().await?;
+        .await?;
     
     // 2. Reserve inventory for all items (fan-out)
     let reservation_futures: Vec<_> = order.items.iter()
@@ -1689,10 +1662,8 @@ async fn process_order_orchestration(
     
     let reservation_results = ctx.join(reservation_futures).await;
     
-    // Check all reservations succeeded
-    let all_reserved = reservation_results.iter().all(|r| {
-        matches!(r, DurableOutput::Activity(Ok(_)))
-    });
+    // Check all reservations succeeded - each result is Result<String, String>
+    let all_reserved = reservation_results.iter().all(|r| r.is_ok());
     
     if !all_reserved {
         ctx.trace_error("Inventory reservation failed");
@@ -1701,14 +1672,14 @@ async fn process_order_orchestration(
     
     // 3. Charge payment
     let payment_result = ctx.schedule_activity("ChargePayment", order_json.clone())
-        .into_activity().await;
+        .await;
     
     match payment_result {
         Ok(payment_id) => {
             // 4. Fulfill order
             ctx.trace_info("Payment successful, fulfilling order");
             let fulfillment = ctx.schedule_activity("FulfillOrder", order_json)
-                .into_activity().await?;
+                .await?;
             
             Ok(fulfillment)
         }
@@ -1744,38 +1715,31 @@ async fn document_approval(
     let approval_request = ctx.schedule_activity(
         "SendApprovalRequest",
         format!("{{\"document_id\": \"{}\", \"level\": \"manager\"}}", document_id)
-    ).into_activity().await?;
+    ).await?;
     
     // 2. Wait for approval or timeout (24 hours)
     let manager_timeout = ctx.schedule_timer(std::time::Duration::from_millis(86_400_000));
     let manager_approval = ctx.schedule_wait(format!("ManagerApproval_{}", document_id));
     
-    let (winner, output) = ctx.select2(manager_timeout, manager_approval).await;
-    
-    let approval_data = match winner {
-        0 => {
+    let approval_data = match ctx.select2(manager_timeout, manager_approval).await {
+        Either2::First(()) => {
             // Manager didn't respond - auto-escalate to director
             ctx.trace_warn("Manager approval timeout, escalating to director");
             
             ctx.schedule_activity(
                 "SendApprovalRequest",
                 format!("{{\"document_id\": \"{}\", \"level\": \"director\"}}", document_id)
-            ).into_activity().await?;
+            ).await?;
             
             // Wait for director (no timeout)
             ctx.schedule_wait(format!("DirectorApproval_{}", document_id))
-                .into_event().await
+                .await
         }
-        1 => {
+        Either2::Second(data) => {
             // Manager approved
-            if let DurableOutput::External(data) = output {
-                ctx.trace_info("Manager approved document");
-                data
-            } else {
-                return Err("Unexpected output type".to_string());
-            }
+            ctx.trace_info("Manager approved document");
+            data
         }
-        _ => unreachable!(),
     };
     
     // 3. Finalize document
@@ -1783,7 +1747,7 @@ async fn document_approval(
         document_id, approval_data);
     
     ctx.schedule_activity("FinalizeDocument", finalize_input)
-        .into_activity().await
+        .await
 }
 ```
 
@@ -1798,7 +1762,7 @@ async fn batch_processor(
     
     // Fetch next batch
     let batch_result = ctx.schedule_activity("FetchBatch", cursor)
-        .into_activity().await?;
+        .await?;
     
     let batch: BatchResult = serde_json::from_str(&batch_result)?;
     
@@ -1809,10 +1773,8 @@ async fn batch_processor(
     
     let results = ctx.join(process_futures).await;
     
-    // Count successes
-    let success_count = results.iter()
-        .filter(|r| matches!(r, DurableOutput::Activity(Ok(_))))
-        .count();
+    // Count successes - each result is Result<String, String>
+    let success_count = results.iter().filter(|r| r.is_ok()).count();
     
     ctx.trace_info(format!("Processed {} of {} items", success_count, batch.items.len()));
     
@@ -1846,7 +1808,7 @@ use duroxide::{OrchestrationContext, Event, run_turn};
 async fn test_my_orchestration_logic() {
     // Define orchestration
     let orch = |ctx: OrchestrationContext, input: String| async move {
-        let result = ctx.schedule_activity("Task", input).into_activity().await?;
+        let result = ctx.schedule_activity("Task", input).await?;
         Ok(result)
     };
     
@@ -1908,7 +1870,7 @@ async fn test_full_workflow() {
         .build();
     
     let orch = |ctx: OrchestrationContext, input: String| async move {
-        ctx.schedule_activity("Task", input).into_activity().await
+        ctx.schedule_activity("Task", input).await
     };
     
     let orchestrations = OrchestrationRegistry::builder()
@@ -1969,7 +1931,7 @@ async fn order_with_tracking(ctx: OrchestrationContext, order_json: String) -> R
     let validated = ctx.schedule_activity(
         "ValidateOrder",
         format!("{{\"order\": {}, \"correlation_id\": \"{}\"}}", order_json, correlation_id)
-    ).into_activity().await?;
+    ).await?;
     
     // Activities can log with correlation ID for tracing
     // ...
@@ -1991,20 +1953,19 @@ async fn robust_batch_processing(ctx: OrchestrationContext, items_json: String) 
     
     let results = ctx.join(futures).await;
     
-    // Collect successes and failures
+    // Collect successes and failures - each result is Result<String, String>
     let mut successes = Vec::new();
     let mut failures = Vec::new();
     
     for (i, result) in results.iter().enumerate() {
         match result {
-            DurableOutput::Activity(Ok(output)) => {
+            Ok(output) => {
                 successes.push((i, output.clone()));
             }
-            DurableOutput::Activity(Err(error)) => {
+            Err(error) => {
                 failures.push((i, error.clone()));
                 ctx.trace_warn(format!("Item {} failed: {}", i, error));
             }
-            _ => {}
         }
     }
     
@@ -2038,7 +1999,6 @@ async fn typed_workflow(
     // Compile-time type safety
     let validation: ValidationResult = ctx
         .schedule_activity_typed("ValidateOrder", &order)
-        .into_activity_typed()
         .await?;
     
     let order_id = ctx.new_guid().await?;
@@ -2100,10 +2060,10 @@ T+1:01  v1.0.1 calls continue_as_new() → resolves to v1.0.2
 async fn debuggable_orch(ctx: OrchestrationContext, input: String) -> Result<String, String> {
     ctx.trace_info(format!("Starting with input: {}", input));
     
-    let step1 = ctx.schedule_activity("Step1", input).into_activity().await?;
+    let step1 = ctx.schedule_activity("Step1", input).await?;
     ctx.trace_info(format!("Step1 completed: {}", step1));
     
-    let step2 = ctx.schedule_activity("Step2", step1).into_activity().await?;
+    let step2 = ctx.schedule_activity("Step2", step1).await?;
     ctx.trace_info(format!("Step2 completed: {}", step2));
     
     ctx.trace_info("Workflow completed successfully");
@@ -2149,7 +2109,7 @@ async fn dynamic_workflow(ctx: OrchestrationContext, config_json: String) -> Res
     let mut result = config_json;
     for activity_name in activity_names {
         result = ctx.schedule_activity(activity_name, result)
-            .into_activity().await?;
+            .await?;
     }
     
     Ok(result)
@@ -2164,18 +2124,18 @@ async fn order_actor(ctx: OrchestrationContext, state_json: String) -> Result<()
     let mut state: OrderState = serde_json::from_str(&state_json)?;
     
     // Wait for next command
-    let command = ctx.schedule_wait("OrderCommand").into_event().await;
+    let command = ctx.schedule_wait("OrderCommand").await;
     let cmd: Command = serde_json::from_str(&command)?;
     
     match cmd.action.as_str() {
         "cancel" => {
             state.status = "cancelled".to_string();
-            ctx.schedule_activity("SendCancellationEmail", state_json).into_activity().await?;
+            ctx.schedule_activity("SendCancellationEmail", state_json).await?;
             Ok(())  // Terminal
         }
         "ship" => {
             state.status = "shipped".to_string();
-            ctx.schedule_activity("ShipOrder", serde_json::to_string(&state)?).into_activity().await?;
+            ctx.schedule_activity("ShipOrder", serde_json::to_string(&state)?).await?;
             
             // Continue waiting for more commands
             return ctx.continue_as_new(serde_json::to_string(&state)?).await;
@@ -2200,7 +2160,7 @@ Each orchestration turn appends events. Keep history manageable:
 // ❌ Bad - Creates millions of events
 async fn bad_loop(ctx: OrchestrationContext, _input: String) -> Result<String, String> {
     for i in 0..1_000_000 {  // Too many!
-        ctx.schedule_activity("Process", i.to_string()).into_activity().await?;
+        ctx.schedule_activity("Process", i.to_string()).await?;
     }
     Ok(())
 }
@@ -2214,7 +2174,7 @@ async fn good_loop(ctx: OrchestrationContext, state_json: String) -> Result<Stri
     // Process batch of 100
     for i in 0..100 {
         ctx.schedule_activity("Process", (state.offset + i).to_string())
-            .into_activity().await?;
+            .await?;
     }
     
     state.offset += 100;
@@ -2233,7 +2193,7 @@ async fn good_loop(ctx: OrchestrationContext, state_json: String) -> Result<Stri
 // ❌ Slow - One DB call per item
 async fn slow_updates(ctx: OrchestrationContext, items: Vec<String>) -> Result<(), String> {
     for item in items {
-        ctx.schedule_activity("UpdateItem", item).into_activity().await?;
+        ctx.schedule_activity("UpdateItem", item).await?;
     }
     Ok(())
 }
@@ -2242,7 +2202,7 @@ async fn slow_updates(ctx: OrchestrationContext, items: Vec<String>) -> Result<(
 ```rust
 // ✅ Fast - Batch update in single activity
 async fn fast_updates(ctx: OrchestrationContext, items_json: String) -> Result<(), String> {
-    ctx.schedule_activity("UpdateItemsBatch", items_json).into_activity().await?;
+    ctx.schedule_activity("UpdateItemsBatch", items_json).await?;
     Ok(())
 }
 ```
@@ -2251,38 +2211,23 @@ async fn fast_updates(ctx: OrchestrationContext, items_json: String) -> Result<(
 
 ## Common Gotchas
 
-### 1. Forgetting .into_*() Conversion
-
-**Error:**
-```
-the trait `From<DurableFuture>` is not implemented for `Result<String, String>`
-```
-
-**Fix:** Add `.into_activity()` / `.into_timer()` / `.into_event()` / `.into_sub_orchestration()`
-
-### 2. Using await on DurableFuture Directly
-
-**Won't Compile:**
-```rust
-let result = ctx.schedule_activity("Task", "input").await?;
-```
-
-**Must Convert First:**
-```rust
-let result = ctx.schedule_activity("Task", "input").into_activity().await?;
-```
-
-### 3. Non-Deterministic Control Flow
+### 1. Non-Deterministic Control Flow
 
 **Symptom:** Orchestration replays differently, causes nondeterminism errors
 
 **Fix:** Base all decisions on activity results or external events, never on time/random
 
-### 4. Activities That Only Sleep
+### 2. Activities That Only Sleep
 
 **Symptom:** Activity that only sleeps without doing actual work
 
 **Fix:** Use `ctx.schedule_timer()` in orchestration; activities can sleep/poll as part of their work (e.g., provisioning resources)
+
+### 3. Using tokio::select! or tokio::join! in Orchestrations
+
+**Symptom:** Non-deterministic behavior on replay
+
+**Fix:** Use `ctx.select2()` / `ctx.select3()` and `ctx.join()` instead—these use `futures::select_biased!` for determinism
 
 ---
 
@@ -2307,28 +2252,17 @@ let result = ctx.schedule_activity("Task", "input").into_activity().await?;
 
 | Method | Returns | Use For |
 |--------|---------|---------|
-| `schedule_activity(name, input)` | `DurableFuture` | Database, HTTP, file I/O |
-| `schedule_timer(delay)` | `DurableFuture` | Delays, timeouts, scheduling |
-| `schedule_wait(event_name)` | `DurableFuture` | External signals, human input |
-| `schedule_sub_orchestration(name, input)` | `DurableFuture` | Child workflows |
+| `schedule_activity(name, input)` | `impl Future<Output = Result<String, String>>` | Database, HTTP, file I/O |
+| `schedule_timer(delay)` | `impl Future<Output = ()>` | Delays, timeouts, scheduling |
+| `schedule_wait(event_name)` | `impl Future<Output = String>` | External signals, human input |
+| `schedule_sub_orchestration(name, input)` | `impl Future<Output = Result<String, String>>` | Child workflows |
 | `schedule_orchestration(name, instance, input)` | `()` | Fire-and-forget |
-| `select2(a, b)` / `select(vec)` | `SelectFuture` | First to complete |
-| `join(vec)` | `JoinFuture` | Wait for all |
+| `select2(a, b)` | `Either2<T1, T2>` | First to complete |
+| `join(vec)` | `Vec<T>` | Wait for all |
 | `continue_as_new(input)` | `impl Future` (never resolves) | Reset history, keep running |
-| `new_guid()` | `Future<String>` | Correlation IDs |
-| `utcnow_ms()` | `Future<u64>` | Timestamps |
+| `new_guid()` | `impl Future<Output = Result<String, String>>` | Correlation IDs |
+| `utcnow_ms()` | `impl Future<Output = Result<u64, String>>` | Timestamps |
 | `trace_info/warn/error(msg)` | `()` | Logging |
-
-### DurableFuture Conversions
-
-| Conversion | Return Type | Use After |
-|------------|-------------|-----------|
-| `.into_activity()` | `impl Future<Output = Result<String, String>>` | `schedule_activity` |
-| `.into_activity_typed<T>()` | `impl Future<Output = Result<T, String>>` | `schedule_activity_typed` |
-| `.into_timer()` | `impl Future<Output = ()>` | `schedule_timer` |
-| `.into_event()` | `impl Future<Output = String>` | `schedule_wait` |
-| `.into_event_typed<T>()` | `impl Future<Output = T>` | `schedule_wait_typed` |
-| `.into_sub_orchestration()` | `impl Future<Output = Result<String, String>>` | `schedule_sub_orchestration` |
 
 ---
 
