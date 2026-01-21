@@ -1135,30 +1135,13 @@ pub enum Action {
     },
 }
 
-/// Replay mode for orchestration context.
-///
-/// Controls how `schedule_*()` methods behave and how durable futures resolve:
-/// - `Legacy`: Current behavior - mutates history, futures scan history for completions
-/// - `Simplified`: New model - emits actions, futures check results map
-#[doc(hidden)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum ReplayMode {
-    /// Legacy mode: schedule_*() mutates history, futures scan history for completions.
-    /// This is the current production behavior.
-    #[default]
-    Legacy,
-    /// Simplified mode: schedule_*() emits actions to buffer, futures check results map.
-    /// Used by the new commands-vs-history replay model.
-    Simplified,
-}
-
-/// Result delivered to a durable future in simplified replay mode.
+/// Result delivered to a durable future upon completion.
 /// 
 /// This enum represents the completion states for various durable operations.
 #[doc(hidden)]
 #[derive(Debug, Clone)]
 #[allow(dead_code)] // ExternalData is part of the design but delivered via get_external_event
-pub enum SimplifiedResult {
+pub enum CompletionResult {
     /// Activity completed successfully
     ActivityOk(String),
     /// Activity failed with error
@@ -1169,7 +1152,7 @@ pub enum SimplifiedResult {
     SubOrchOk(String),
     /// Sub-orchestration failed with error
     SubOrchErr(String),
-    /// External event data (NOTE: External events delivered via get_external_event, not SimplifiedResult)
+    /// External event data (NOTE: External events delivered via get_external_event, not CompletionResult)
     ExternalData(String),
     /// System call value
     SystemCallValue(String),
@@ -1177,33 +1160,29 @@ pub enum SimplifiedResult {
 
 #[derive(Debug)]
 struct CtxInner {
-    // === Replay Mode ===
-    /// Current replay mode (Legacy or Simplified)
-    replay_mode: ReplayMode,
-    
     /// Whether we're currently replaying history (true) or processing new events (false).
-    /// In simplified mode: true while processing baseline_history events, false after.
+    /// True while processing baseline_history events, false after.
     /// Users can check this via `ctx.is_replaying()` to skip side effects during replay.
     is_replaying: bool,
 
-    // === Simplified Mode State ===
-    /// Token counter for simplified mode (each schedule_*() call gets a unique token)
-    simplified_next_token: u64,
-    /// Emitted actions in simplified mode (token -> Action kind info)
+    // === Replay Engine State ===
+    /// Token counter (each schedule_*() call gets a unique token)
+    next_token: u64,
+    /// Emitted actions (token -> Action kind info)
     /// Token is used to correlate with schedule events during replay
-    simplified_emitted: Vec<(u64, Action)>,
+    emitted_actions: Vec<(u64, Action)>,
     /// Results map: token -> completion result (populated by replay engine)
-    simplified_results: std::collections::HashMap<u64, SimplifiedResult>,
+    completion_results: std::collections::HashMap<u64, CompletionResult>,
     /// Token -> schedule_id binding (set when replay engine matches action to history)
-    simplified_bindings: std::collections::HashMap<u64, u64>,
+    token_bindings: std::collections::HashMap<u64, u64>,
     /// External subscriptions: schedule_id -> (name, subscription_index)
-    simplified_external_subscriptions: std::collections::HashMap<u64, (String, usize)>,
+    external_subscriptions: std::collections::HashMap<u64, (String, usize)>,
     /// External arrivals: name -> list of payloads in arrival order
-    simplified_external_arrivals: std::collections::HashMap<String, Vec<String>>,
+    external_arrivals: std::collections::HashMap<String, Vec<String>>,
     /// Next subscription index per external event name
-    simplified_external_next_index: std::collections::HashMap<String, usize>,
+    external_next_index: std::collections::HashMap<String, usize>,
 
-    // === Legacy Mode State ===
+    // === Legacy Mode State (kept for DurableFuture compatibility) ===
     history: Vec<Event>,
     actions: Vec<Action>,
 
@@ -1257,22 +1236,19 @@ impl CtxInner {
             .unwrap_or(1);
 
         Self {
-            // Phase 2: Simplified mode is now the only mode
-            replay_mode: ReplayMode::Simplified,
-            
             // Start in replaying state - will be set to false when we move past baseline history
             is_replaying: true,
 
-            // Simplified mode state
-            simplified_next_token: 0,
-            simplified_emitted: Vec::new(),
-            simplified_results: Default::default(),
-            simplified_bindings: Default::default(),
-            simplified_external_subscriptions: Default::default(),
-            simplified_external_arrivals: Default::default(),
-            simplified_external_next_index: Default::default(),
+            // Replay engine state
+            next_token: 0,
+            emitted_actions: Vec::new(),
+            completion_results: Default::default(),
+            token_bindings: Default::default(),
+            external_subscriptions: Default::default(),
+            external_arrivals: Default::default(),
+            external_next_index: Default::default(),
 
-            // Legacy mode state (deprecated - kept for compatibility)
+            // Legacy mode state (kept for DurableFuture compatibility)
             history,
             actions: Vec::new(),
             next_event_id,
@@ -1304,42 +1280,37 @@ impl CtxInner {
             .unwrap_or(0)
     }
 
-    // === Simplified Mode Helpers ===
+    // === Replay Engine Helpers ===
 
-    /// Emit an action in simplified mode and return a token for correlation.
+    /// Emit an action and return a token for correlation.
     fn emit_action(&mut self, action: Action) -> u64 {
-        debug_assert_eq!(
-            self.replay_mode,
-            ReplayMode::Simplified,
-            "emit_action should only be called in Simplified mode"
-        );
-        self.simplified_next_token += 1;
-        let token = self.simplified_next_token;
-        self.simplified_emitted.push((token, action));
+        self.next_token += 1;
+        let token = self.next_token;
+        self.emitted_actions.push((token, action));
         token
     }
 
     /// Drain all emitted actions (called by replay engine after polling).
     fn drain_emitted_actions(&mut self) -> Vec<(u64, Action)> {
-        std::mem::take(&mut self.simplified_emitted)
+        std::mem::take(&mut self.emitted_actions)
     }
 
     /// Bind a token to a schedule_id (called by replay engine when matching action to history).
     fn bind_token(&mut self, token: u64, schedule_id: u64) {
-        self.simplified_bindings.insert(token, schedule_id);
+        self.token_bindings.insert(token, schedule_id);
     }
 
     /// Get the schedule_id bound to a token (returns None if not yet bound).
     fn get_bound_schedule_id(&self, token: u64) -> Option<u64> {
-        self.simplified_bindings.get(&token).copied()
+        self.token_bindings.get(&token).copied()
     }
 
     /// Deliver a completion result for a schedule_id.
-    fn deliver_result(&mut self, schedule_id: u64, result: SimplifiedResult) {
+    fn deliver_result(&mut self, schedule_id: u64, result: CompletionResult) {
         // Find the token that was bound to this schedule_id
-        for (&token, &sid) in &self.simplified_bindings {
+        for (&token, &sid) in &self.token_bindings {
             if sid == schedule_id {
-                self.simplified_results.insert(token, result);
+                self.completion_results.insert(token, result);
                 return;
             }
         }
@@ -1350,25 +1321,25 @@ impl CtxInner {
     }
 
     /// Check if a result is available for a token.
-    fn get_result(&self, token: u64) -> Option<&SimplifiedResult> {
-        self.simplified_results.get(&token)
+    fn get_result(&self, token: u64) -> Option<&CompletionResult> {
+        self.completion_results.get(&token)
     }
 
     /// Bind an external subscription to a deterministic index.
     fn bind_external_subscription(&mut self, schedule_id: u64, name: &str) {
         let idx = self
-            .simplified_external_next_index
+            .external_next_index
             .entry(name.to_string())
             .or_insert(0);
         let subscription_index = *idx;
         *idx += 1;
-        self.simplified_external_subscriptions
+        self.external_subscriptions
             .insert(schedule_id, (name.to_string(), subscription_index));
     }
 
     /// Deliver an external event (appends to arrival list for the name).
     fn deliver_external_event(&mut self, name: String, data: String) {
-        self.simplified_external_arrivals
+        self.external_arrivals
             .entry(name)
             .or_default()
             .push(data);
@@ -1376,8 +1347,8 @@ impl CtxInner {
 
     /// Get external event data for a subscription (by schedule_id).
     fn get_external_event(&self, schedule_id: u64) -> Option<&String> {
-        let (name, subscription_index) = self.simplified_external_subscriptions.get(&schedule_id)?;
-        let arrivals = self.simplified_external_arrivals.get(name)?;
+        let (name, subscription_index) = self.external_subscriptions.get(&schedule_id)?;
+        let arrivals = self.external_arrivals.get(name)?;
         arrivals.get(*subscription_index)
     }
 
@@ -1761,20 +1732,6 @@ impl OrchestrationContext {
         }
     }
 
-    /// Set the replay mode for this context.
-    /// NOTE: This is deprecated as simplified mode is now the only mode.
-    #[allow(dead_code)]
-    #[deprecated(note = "Simplified mode is now the only mode. This method has no effect.")]
-    pub(crate) fn set_replay_mode(&self, _mode: ReplayMode) {
-        // No-op: simplified mode is always on
-    }
-
-    /// Get the current replay mode.
-    #[allow(dead_code)]
-    pub(crate) fn replay_mode(&self) -> ReplayMode {
-        self.inner.lock().unwrap().replay_mode
-    }
-
     /// Check if the orchestration is currently replaying history.
     ///
     /// Returns `true` when processing events from persisted history (replay),
@@ -1822,93 +1779,103 @@ impl OrchestrationContext {
     // Simplified Mode Tracing (Replay-Guarded)
     // =========================================================================
     //
-    // These trace methods are only available in simplified replay mode.
-    // They use `is_replaying()` as a guard instead of system calls, which means:
+    // These trace methods use `is_replaying()` as a guard, which means:
     // - No history events are created for traces
     // - Traces only emit on first execution, not during replay
     // - Much simpler and more efficient than system-call-based tracing
 
-    /// Emit a trace entry with the specified level (simplified mode only).
+    /// Convenience wrapper for INFO level tracing.
     ///
-    /// This method guards the trace with `is_replaying()` - traces are only
-    /// emitted on first execution, not during replay. No system call or
-    /// history event is created.
-    ///
-    /// # Panics
-    ///
-    /// Panics if called in legacy replay mode. Use `trace()` for legacy mode.
+    /// Logs with INFO level and includes instance context automatically.
+    /// Only emits on first execution, not during replay.
     ///
     /// # Example
     ///
     /// ```rust,no_run
     /// # use duroxide::OrchestrationContext;
     /// # async fn example(ctx: OrchestrationContext) {
-    /// ctx.trace_simplified("INFO", "Processing order");
+    /// ctx.trace_info("Processing order");
+    /// ctx.trace_info(format!("Processing {} items", 42));
     /// # }
     /// ```
-    pub fn trace_simplified(&self, level: impl Into<String>, message: impl Into<String>) {
-        let inner = self.inner.lock().unwrap();
-        assert_eq!(
-            inner.replay_mode,
-            ReplayMode::Simplified,
-            "trace_simplified is only available in simplified replay mode"
-        );
-        drop(inner);
-        
-        self.trace_simplified_internal(&level.into(), &message.into());
+    pub fn trace_info(&self, message: impl Into<String>) {
+        self.trace("INFO", message);
     }
 
-    /// Convenience wrapper for INFO level tracing (simplified mode only).
+    /// Convenience wrapper for WARN level tracing.
     ///
-    /// See [`trace_simplified`](Self::trace_simplified) for details.
-    pub fn trace_info_simplified(&self, message: impl Into<String>) {
-        self.trace_simplified("INFO", message);
-    }
-
-    /// Convenience wrapper for WARN level tracing (simplified mode only).
+    /// Logs with WARN level and includes instance context automatically.
+    /// Only emits on first execution, not during replay.
     ///
-    /// See [`trace_simplified`](Self::trace_simplified) for details.
-    pub fn trace_warn_simplified(&self, message: impl Into<String>) {
-        self.trace_simplified("WARN", message);
-    }
-
-    /// Convenience wrapper for ERROR level tracing (simplified mode only).
+    /// # Example
     ///
-    /// See [`trace_simplified`](Self::trace_simplified) for details.
-    pub fn trace_error_simplified(&self, message: impl Into<String>) {
-        self.trace_simplified("ERROR", message);
+    /// ```rust,no_run
+    /// # use duroxide::OrchestrationContext;
+    /// # async fn example(ctx: OrchestrationContext) {
+    /// ctx.trace_warn("Retrying failed operation");
+    /// # }
+    /// ```
+    pub fn trace_warn(&self, message: impl Into<String>) {
+        self.trace("WARN", message);
     }
 
-    /// Convenience wrapper for DEBUG level tracing (simplified mode only).
+    /// Convenience wrapper for ERROR level tracing.
     ///
-    /// See [`trace_simplified`](Self::trace_simplified) for details.
-    pub fn trace_debug_simplified(&self, message: impl Into<String>) {
-        self.trace_simplified("DEBUG", message);
+    /// Logs with ERROR level and includes instance context automatically.
+    /// Only emits on first execution, not during replay.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use duroxide::OrchestrationContext;
+    /// # async fn example(ctx: OrchestrationContext) {
+    /// ctx.trace_error("Payment processing failed");
+    /// # }
+    /// ```
+    pub fn trace_error(&self, message: impl Into<String>) {
+        self.trace("ERROR", message);
     }
 
-    /// Drain emitted actions (simplified mode only).
+    /// Convenience wrapper for DEBUG level tracing.
+    ///
+    /// Logs with DEBUG level and includes instance context automatically.
+    /// Only emits on first execution, not during replay.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use duroxide::OrchestrationContext;
+    /// # async fn example(ctx: OrchestrationContext) {
+    /// ctx.trace_debug("Detailed state information");
+    /// # }
+    /// ```
+    pub fn trace_debug(&self, message: impl Into<String>) {
+        self.trace("DEBUG", message);
+    }
+
+    /// Drain emitted actions.
     /// Returns a list of (token, Action) pairs.
     #[doc(hidden)]
     pub fn drain_emitted_actions(&self) -> Vec<(u64, Action)> {
         self.inner.lock().unwrap().drain_emitted_actions()
     }
     
-    /// Get a snapshot of emitted actions without draining (simplified mode only).
+    /// Get a snapshot of emitted actions without draining.
     /// Returns a list of (token, Action) pairs.
     #[doc(hidden)]
     pub fn get_emitted_actions(&self) -> Vec<(u64, Action)> {
-        self.inner.lock().unwrap().simplified_emitted.clone()
+        self.inner.lock().unwrap().emitted_actions.clone()
     }
 
-    /// Bind a token to a schedule_id (simplified mode only).
+    /// Bind a token to a schedule_id.
     #[doc(hidden)]
     pub fn bind_token(&self, token: u64, schedule_id: u64) {
         self.inner.lock().unwrap().bind_token(token, schedule_id);
     }
 
-    /// Deliver a result for a token (simplified mode only).
+    /// Deliver a result for a token.
     #[doc(hidden)]
-    pub fn deliver_result(&self, schedule_id: u64, result: SimplifiedResult) {
+    pub fn deliver_result(&self, schedule_id: u64, result: CompletionResult) {
         self.inner.lock().unwrap().deliver_result(schedule_id, result);
     }
 
@@ -2020,8 +1987,7 @@ impl OrchestrationContext {
     /// # Determinism
     ///
     /// This method is replay-safe: logs are only emitted on first execution,
-    /// not during replay. A `SystemCall` event is created in history to ensure
-    /// deterministic replay behavior.
+    /// not during replay.
     ///
     /// # Example
     ///
@@ -2042,31 +2008,11 @@ impl OrchestrationContext {
     ///
     /// All logs include instance_id, execution_id, orchestration_name for correlation.
     pub fn trace(&self, level: impl Into<String>, message: impl Into<String>) {
-        let level_str = level.into();
-        let msg = message.into();
-
-        // In simplified mode, delegate to trace_simplified (no system calls)
-        {
-            let inner = self.inner.lock().expect("Mutex should not be poisoned");
-            if inner.replay_mode == ReplayMode::Simplified {
-                drop(inner);
-                // Use the internal implementation directly to avoid assertion
-                self.trace_simplified_internal(&level_str, &msg);
-                return;
-            }
-        }
-
-        // Legacy mode: Schedule and poll system call synchronously for deterministic replay
-        // Format: "trace:{level}:{message}"
-        // Note: Actual logging happens inside the System future during first execution only
-        let op = format!("{SYSCALL_OP_TRACE_PREFIX}{level_str}:{msg}");
-        let mut fut = Box::pin(self.schedule_system_call(&op));
-        // Poll immediately to record the event synchronously
-        let _ = poll_once(fut.as_mut());
+        self.trace_internal(&level.into(), &message.into());
     }
     
-    /// Internal implementation of trace_simplified (shared by trace() in simplified mode)
-    fn trace_simplified_internal(&self, level: &str, message: &str) {
+    /// Internal implementation of trace (guarded by is_replaying)
+    fn trace_internal(&self, level: &str, message: &str) {
         let inner = self.inner.lock().unwrap();
         
         // Only trace if not replaying
@@ -2122,73 +2068,6 @@ impl OrchestrationContext {
         }
     }
 
-    /// Convenience wrapper for INFO level tracing.
-    ///
-    /// Logs with INFO level and includes instance context automatically.
-    ///
-    /// # Example
-    ///
-    /// ```rust,no_run
-    /// # use duroxide::OrchestrationContext;
-    /// # async fn example(ctx: OrchestrationContext) {
-    /// ctx.trace_info("Order validation successful");
-    /// ctx.trace_info(format!("Processing {} items", 42));
-    /// # }
-    /// ```
-    pub fn trace_info(&self, message: impl Into<String>) {
-        self.trace("INFO", message.into())
-    }
-
-    /// Convenience wrapper for WARN level tracing.
-    ///
-    /// Logs with WARN level and includes instance context automatically.
-    ///
-    /// # Example
-    ///
-    /// ```rust,no_run
-    /// # use duroxide::OrchestrationContext;
-    /// # async fn example(ctx: OrchestrationContext) {
-    /// ctx.trace_warn("Retrying failed operation");
-    /// ctx.trace_warn(format!("Attempt {}/5", 3));
-    /// # }
-    /// ```
-    pub fn trace_warn(&self, message: impl Into<String>) {
-        self.trace("WARN", message.into())
-    }
-    /// Convenience wrapper for ERROR level tracing.
-    ///
-    /// Logs with ERROR level and includes instance context automatically.
-    ///
-    /// # Example
-    ///
-    /// ```rust,no_run
-    /// # use duroxide::OrchestrationContext;
-    /// # async fn example(ctx: OrchestrationContext) {
-    /// ctx.trace_error("Payment processing failed");
-    /// ctx.trace_error(format!("Critical error: {}", "timeout"));
-    /// # }
-    /// ```
-    pub fn trace_error(&self, message: impl Into<String>) {
-        self.trace("ERROR", message.into())
-    }
-
-    /// Convenience wrapper for DEBUG level tracing.
-    ///
-    /// Logs with DEBUG level and includes instance context automatically.
-    ///
-    /// # Example
-    ///
-    /// ```rust,no_run
-    /// # use duroxide::OrchestrationContext;
-    /// # async fn example(ctx: OrchestrationContext) {
-    /// ctx.trace_debug("Detailed state information");
-    /// ctx.trace_debug(format!("Variable value: {:?}", 42));
-    /// # }
-    /// ```
-    pub fn trace_debug(&self, message: impl Into<String>) {
-        self.trace("DEBUG", message.into())
-    }
-
     /// Schedule a system call operation (internal helper).
     /// System calls are computed synchronously and don't need external resolution.
     fn schedule_system_call(&self, op: &str) -> impl Future<Output = Result<String, String>> {
@@ -2208,7 +2087,7 @@ impl OrchestrationContext {
         });
         
         // For system calls, deliver result immediately (they're synchronous)
-        inner.simplified_results.insert(token, SimplifiedResult::SystemCallValue(computed_value.clone()));
+        inner.completion_results.insert(token, CompletionResult::SystemCallValue(computed_value.clone()));
         drop(inner);
         
         // Return a future that immediately resolves
@@ -2273,13 +2152,7 @@ impl OrchestrationContext {
             version: None,
         };
 
-        // affandar : cr : remove replaymode::simpilfied. everything is now "simplified"
-        // In simplified mode, emit action; in legacy mode, record action
-        if inner.replay_mode == ReplayMode::Simplified {
-            inner.emit_action(action);
-        } else {
-            inner.record_action(action);
-        }
+        inner.emit_action(action);
         ContinueAsNewFuture
     }
 
@@ -2304,12 +2177,7 @@ impl OrchestrationContext {
             input: input.into(),
             version: Some(version.into()),
         };
-        // In simplified mode, emit action; in legacy mode, record action
-        if inner.replay_mode == ReplayMode::Simplified {
-            inner.emit_action(action);
-        } else {
-            inner.record_action(action);
-        }
+        inner.emit_action(action);
         ContinueAsNewFuture
     }
 }
@@ -2590,37 +2458,8 @@ impl OrchestrationContext {
         let input: String = input.into();
         let mut inner = self.inner.lock().unwrap();
 
-        // In simplified mode, use emit_action (replay engine handles event IDs)
-        if inner.replay_mode == ReplayMode::Simplified {
-            let _ = inner.emit_action(Action::StartOrchestrationDetached {
-                scheduling_event_id: 0, // Will be assigned by replay engine
-                name,
-                version: None,
-                instance,
-                input,
-            });
-            return;
-        }
-
-        // Legacy mode: manually manage event IDs and history
-        let event_id = inner.next_event_id;
-        inner.next_event_id += 1;
-        let exec_id = inner.execution_id;
-        let inst_id = inner.instance_id.clone();
-
-        inner.history.push(Event::with_event_id(
-            event_id,
-            inst_id,
-            exec_id,
-            None,
-            EventKind::OrchestrationChained {
-                name: name.clone(),
-                instance: instance.clone(),
-                input: input.clone(),
-            },
-        ));
-        inner.record_action(Action::StartOrchestrationDetached {
-            scheduling_event_id: event_id,
+        let _ = inner.emit_action(Action::StartOrchestrationDetached {
+            scheduling_event_id: 0, // Will be assigned by replay engine
             name,
             version: None,
             instance,
@@ -2651,38 +2490,8 @@ impl OrchestrationContext {
         let input: String = input.into();
         let mut inner = self.inner.lock().unwrap();
 
-        // In simplified mode, use emit_action (replay engine handles event IDs)
-        if inner.replay_mode == ReplayMode::Simplified {
-            let _ = inner.emit_action(Action::StartOrchestrationDetached {
-                scheduling_event_id: 0, // Will be assigned by replay engine
-                name,
-                version,
-                instance,
-                input,
-            });
-            return;
-        }
-
-        // Legacy mode: manually manage event IDs and history
-        let event_id = inner.next_event_id;
-        inner.next_event_id += 1;
-        let exec_id = inner.execution_id;
-        let inst_id = inner.instance_id.clone();
-
-        inner.history.push(Event::with_event_id(
-            event_id,
-            inst_id,
-            exec_id,
-            None,
-            EventKind::OrchestrationChained {
-                name: name.clone(),
-                instance: instance.clone(),
-                input: input.clone(),
-            },
-        ));
-
-        inner.record_action(Action::StartOrchestrationDetached {
-            scheduling_event_id: event_id,
+        let _ = inner.emit_action(Action::StartOrchestrationDetached {
+            scheduling_event_id: 0, // Will be assigned by replay engine
             name,
             version,
             instance,
@@ -2700,71 +2509,19 @@ impl OrchestrationContext {
         let payload = crate::_typed_codec::Json::encode(input).expect("encode");
         self.schedule_orchestration_versioned(name, version, instance, payload)
     }
-
-    // =========================================================================
-    // Simplified Schedule Orchestration (fire-and-forget, no completion)
-    // =========================================================================
-
-    /// Simplified version of schedule_orchestration for fire-and-forget detached orchestrations.
-    ///
-    /// This schedules an independent orchestration that runs without awaiting its result.
-    /// The runtime will prefix the instance ID with the parent instance to ensure global uniqueness.
-    ///
-    /// Panics if called when not in simplified replay mode.
-    pub fn simplified_schedule_orchestration(
-        &self,
-        name: impl Into<String>,
-        instance: impl Into<String>,
-        input: impl Into<String>,
-    ) {
-        let name: String = name.into();
-        let instance: String = instance.into();
-        let input: String = input.into();
-
-        let mut inner = self.inner.lock().expect("Mutex should not be poisoned");
-
-        assert!(
-            inner.replay_mode == ReplayMode::Simplified,
-            "simplified_schedule_orchestration can only be used in simplified replay mode"
-        );
-
-        let _ = inner.emit_action(Action::StartOrchestrationDetached {
-            scheduling_event_id: 0, // Will be assigned by replay engine
-            name,
-            version: None,
-            instance,
-            input,
-        });
-    }
-
-    /// Typed version of simplified_schedule_orchestration.
-    pub fn simplified_schedule_orchestration_typed<In: serde::Serialize>(
-        &self,
-        name: impl Into<String>,
-        instance: impl Into<String>,
-        input: &In,
-    ) {
-        let payload = crate::_typed_codec::Json::encode(input).expect("encode");
-        self.simplified_schedule_orchestration(name, instance, payload)
-    }
 }
 
 // Aggregate future machinery lives in crate::futures
 
 impl OrchestrationContext {
     // =========================================================================
-    // Simplified mode variants - work with any Future type
+    // Core scheduling methods - work with any Future type
     // =========================================================================
     
-    /// Schedule an activity and return a simple future (simplified mode only).
+    /// Schedule an activity and return a simple future.
     /// 
-    /// This is the simplified mode equivalent of `schedule_activity().into_activity()`.
     /// It returns a regular `impl Future` that can be used with standard combinators
     /// like `futures::join_all` and `futures::select_biased!`.
-    /// 
-    /// # Panics
-    /// 
-    /// Panics if called when not in simplified replay mode.
     /// 
     /// # Example
     /// 
@@ -2788,12 +2545,6 @@ impl OrchestrationContext {
         
         let mut inner = self.inner.lock().expect("Mutex should not be poisoned");
         
-        // Only works in simplified mode
-        assert!(
-            inner.replay_mode == ReplayMode::Simplified,
-            "schedule_activity can only be used in simplified replay mode"
-        );
-        
         // Emit action at schedule time
         let token = inner.emit_action(Action::CallActivity {
             scheduling_event_id: 0, // Will be assigned by replay engine
@@ -2808,8 +2559,8 @@ impl OrchestrationContext {
             let inner = ctx.inner.lock().expect("Mutex should not be poisoned");
             if let Some(result) = inner.get_result(token) {
                 match result {
-                    SimplifiedResult::ActivityOk(s) => Poll::Ready(Ok(s.clone())),
-                    SimplifiedResult::ActivityErr(e) => Poll::Ready(Err(e.clone())),
+                    CompletionResult::ActivityOk(s) => Poll::Ready(Ok(s.clone())),
+                    CompletionResult::ActivityErr(e) => Poll::Ready(Err(e.clone())),
                     _ => Poll::Pending, // Wrong result type, keep waiting
                 }
             } else {
@@ -2832,13 +2583,7 @@ impl OrchestrationContext {
         }
     }
     
-    /// Schedule a timer and return a simple future (simplified mode only).
-    /// 
-    /// This is the simplified mode equivalent of `schedule_timer().into_timer()`.
-    /// 
-    /// # Panics
-    /// 
-    /// Panics if called when not in simplified replay mode.
+    /// Schedule a timer and return a simple future.
     pub fn schedule_timer(
         &self,
         delay: std::time::Duration,
@@ -2846,11 +2591,6 @@ impl OrchestrationContext {
         let delay_ms = delay.as_millis() as u64;
         
         let mut inner = self.inner.lock().expect("Mutex should not be poisoned");
-        
-        assert!(
-            inner.replay_mode == ReplayMode::Simplified,
-            "schedule_timer can only be used in simplified replay mode"
-        );
         
         let now = inner.now_ms();
         let fire_at_ms = now.saturating_add(delay_ms);
@@ -2865,7 +2605,7 @@ impl OrchestrationContext {
             let inner = ctx.inner.lock().expect("Mutex should not be poisoned");
             if let Some(result) = inner.get_result(token) {
                 match result {
-                    SimplifiedResult::TimerFired => Poll::Ready(()),
+                    CompletionResult::TimerFired => Poll::Ready(()),
                     _ => Poll::Pending,
                 }
             } else {
@@ -2874,13 +2614,7 @@ impl OrchestrationContext {
         })
     }
     
-    /// Subscribe to an external event and return a simple future (simplified mode only).
-    /// 
-    /// This is the simplified mode equivalent of `schedule_wait().into_event()`.
-    /// 
-    /// # Panics
-    /// 
-    /// Panics if called when not in simplified replay mode.
+    /// Subscribe to an external event and return a simple future.
     pub fn schedule_wait(
         &self,
         name: impl Into<String>,
@@ -2888,11 +2622,6 @@ impl OrchestrationContext {
         let name: String = name.into();
         
         let mut inner = self.inner.lock().expect("Mutex should not be poisoned");
-        
-        assert!(
-            inner.replay_mode == ReplayMode::Simplified,
-            "schedule_wait can only be used in simplified replay mode"
-        );
         
         let token = inner.emit_action(Action::WaitExternal {
             scheduling_event_id: 0,
@@ -2949,10 +2678,6 @@ impl OrchestrationContext {
     /// 
     /// This is useful for tests that need to know the exact child instance ID without
     /// guessing based on event sequence.
-    /// 
-    /// # Panics
-    /// 
-    /// Panics if called when not in simplified replay mode.
     pub fn schedule_sub_orchestration_with_id(
         &self,
         name: impl Into<String>,
@@ -2962,14 +2687,10 @@ impl OrchestrationContext {
         self.schedule_sub_orchestration_versioned_with_id(name, None, instance, input)
     }
     
-    /// Schedule a versioned sub-orchestration (simplified mode only).
+    /// Schedule a versioned sub-orchestration.
     /// 
     /// If `version` is `Some`, that specific version is used.
     /// If `version` is `None`, the registry's policy (e.g., Latest) is used.
-    /// 
-    /// # Panics
-    /// 
-    /// Panics if called when not in simplified replay mode.
     pub fn schedule_sub_orchestration_versioned(
         &self,
         name: impl Into<String>,
@@ -2979,7 +2700,7 @@ impl OrchestrationContext {
         self.schedule_sub_orchestration_versioned_with_id(name, version, None::<String>, input)
     }
     
-    /// Schedule a versioned sub-orchestration with an explicit instance ID (simplified mode only).
+    /// Schedule a versioned sub-orchestration with an explicit instance ID.
     pub fn schedule_sub_orchestration_versioned_with_id(
         &self,
         name: impl Into<String>,
@@ -2993,13 +2714,8 @@ impl OrchestrationContext {
         
         let mut inner = self.inner.lock().expect("Mutex should not be poisoned");
         
-        assert!(
-            inner.replay_mode == ReplayMode::Simplified,
-            "schedule_sub_orchestration_versioned_with_id can only be used in simplified replay mode"
-        );
-        
         // Use explicit instance if provided, otherwise use placeholder that will be replaced
-        let placeholder_instance = instance.unwrap_or_else(|| format!("sub::pending_{}", inner.simplified_next_token + 1));
+        let placeholder_instance = instance.unwrap_or_else(|| format!("sub::pending_{}", inner.next_token + 1));
         let token = inner.emit_action(Action::StartSubOrchestration {
             scheduling_event_id: 0,
             name: name.clone(),
@@ -3014,8 +2730,8 @@ impl OrchestrationContext {
             let inner = ctx.inner.lock().expect("Mutex should not be poisoned");
             if let Some(result) = inner.get_result(token) {
                 match result {
-                    SimplifiedResult::SubOrchOk(s) => Poll::Ready(Ok(s.clone())),
-                    SimplifiedResult::SubOrchErr(e) => Poll::Ready(Err(e.clone())),
+                    CompletionResult::SubOrchOk(s) => Poll::Ready(Ok(s.clone())),
+                    CompletionResult::SubOrchErr(e) => Poll::Ready(Err(e.clone())),
                     _ => Poll::Pending,
                 }
             } else {

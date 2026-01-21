@@ -560,7 +560,6 @@ async fn simplified_futures_unawaited_completion_does_not_block() {
         .build();
 
     let options = runtime::RuntimeOptions {
-        use_simplified_replay: true,
         orchestration_concurrency: 1,
         worker_concurrency: 2, // Allow both activities to run concurrently
         ..Default::default()

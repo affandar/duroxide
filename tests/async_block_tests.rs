@@ -77,7 +77,6 @@ async fn async_block_join_with_control_flow() {
         .build();
 
     let options = RuntimeOptions {
-        use_simplified_replay: true,
         orchestration_concurrency: 1,
         worker_concurrency: 4,
         ..Default::default()
@@ -175,7 +174,6 @@ async fn async_block_join_many() {
         .build();
 
     let options = RuntimeOptions {
-        use_simplified_replay: true,
         orchestration_concurrency: 1,
         worker_concurrency: 5,
         ..Default::default()
@@ -268,7 +266,6 @@ async fn async_block_sequential() {
         .build();
 
     let options = RuntimeOptions {
-        use_simplified_replay: true,
         orchestration_concurrency: 1,
         worker_concurrency: 1,
         ..Default::default()
@@ -358,7 +355,6 @@ async fn async_block_select_racing() {
         .build();
 
     let options = RuntimeOptions {
-        use_simplified_replay: true,
         orchestration_concurrency: 1,
         worker_concurrency: 4,
         ..Default::default()
@@ -440,7 +436,6 @@ async fn async_block_vs_durable_future() {
         .build();
 
     let options = RuntimeOptions {
-        use_simplified_replay: true,
         orchestration_concurrency: 1,
         worker_concurrency: 2,
         ..Default::default()
@@ -531,7 +526,6 @@ async fn async_block_select3_with_timers() {
         .build();
 
     let options = RuntimeOptions {
-        use_simplified_replay: true,
         orchestration_concurrency: 1,
         worker_concurrency: 1,
         ..Default::default()
@@ -620,7 +614,6 @@ async fn async_block_nested_join_in_select() {
         .build();
 
     let options = RuntimeOptions {
-        use_simplified_replay: true,
         orchestration_concurrency: 1,
         worker_concurrency: 3,
         ..Default::default()
@@ -738,7 +731,6 @@ async fn async_block_suborchestration_wins_race() {
         .build();
 
     let options = RuntimeOptions {
-        use_simplified_replay: true,
         orchestration_concurrency: 2, // Parent + child
         worker_concurrency: 2,
         ..Default::default()
@@ -853,7 +845,6 @@ async fn async_block_suborchestration_loses_race() {
         .build();
 
     let options = RuntimeOptions {
-        use_simplified_replay: true,
         orchestration_concurrency: 2,
         worker_concurrency: 2,
         ..Default::default()
@@ -1019,7 +1010,6 @@ async fn async_block_multiple_suborchestrations_joined() {
         .build();
 
     let options = RuntimeOptions {
-        use_simplified_replay: true,
         orchestration_concurrency: 4, // Parent + 3 children
         worker_concurrency: 3,
         ..Default::default()
@@ -1135,7 +1125,6 @@ async fn async_block_suborchestration_racing_timeout() {
         .build();
 
     let options = RuntimeOptions {
-        use_simplified_replay: true,
         orchestration_concurrency: 3,
         worker_concurrency: 2,
         ..Default::default()
@@ -1279,7 +1268,6 @@ async fn async_block_nested_suborchestration_chain() {
         .build();
 
     let options = RuntimeOptions {
-        use_simplified_replay: true,
         orchestration_concurrency: 5, // Parent + 2 children + 2 grandchildren
         worker_concurrency: 2,
         ..Default::default()

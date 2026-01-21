@@ -217,16 +217,6 @@ pub struct RuntimeOptions {
     ///
     /// Default: 10 seconds
     pub activity_cancellation_grace_period: Duration,
-    
-    /// DEPRECATED: Simplified replay mode is now the only mode.
-    ///
-    /// This field has no effect. Simplified mode is always enabled (Phase 2).
-    /// It's kept for backward compatibility with code that sets it explicitly.
-    ///
-    /// The simplified replay engine uses a commands-vs-history model
-    /// instead of the removed legacy history mutation model.
-    #[deprecated(note = "Simplified replay mode is now the only mode. This field has no effect.")]
-    pub use_simplified_replay: bool,
 }
 
 impl Default for RuntimeOptions {
@@ -244,7 +234,6 @@ impl Default for RuntimeOptions {
             unregistered_backoff: UnregisteredBackoffConfig::default(),
             max_attempts: 10,
             activity_cancellation_grace_period: Duration::from_secs(10),
-            use_simplified_replay: true, // Simplified mode is now the default (Phase 2)
         }
     }
 }

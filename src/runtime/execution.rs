@@ -87,7 +87,6 @@ impl Runtime {
         debug!(
             instance = %instance,
             message_count = messages.len(),
-            simplified_mode = self.options.use_simplified_replay,
             "starting orchestration turn atomically"
         );
         // Use full history (always contains only current execution)

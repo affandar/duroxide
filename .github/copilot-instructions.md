@@ -2,6 +2,18 @@
 
 A durable execution runtime for Rust. Key docs: `docs/ORCHESTRATION-GUIDE.md`, `docs/provider-implementation-guide.md`.
 
+## ⚠️ CRITICAL: Test Execution
+
+**ALWAYS use nextest for running tests.** This is mandatory - nextest provides faster execution and better output.
+
+```bash
+cargo nt                              # Run all tests (nextest alias)
+cargo nt -E 'test(/pattern/)'         # Filter tests by pattern
+cargo nt --test specific_test_file    # Run specific test file
+```
+
+Only fall back to `cargo test` if nextest is not available. Never use `cargo test` when `cargo nt` works.
+
 ## Architecture Overview
 
 **Two-queue message-driven runtime:**
@@ -63,21 +75,13 @@ tokio::select! { ... }              // NEVER use tokio::select in orchestrations
 
 ## Build & Test Commands
 
-When available, prefer **nextest** for running tests (faster, better output). In this repo the alias is:
-
 ```bash
-cargo nt
-```
-
-If nextest isn't installed, fall back to `cargo test`.
-
-```bash
+cargo nt                               # ⚠️ PREFERRED: Run all tests with nextest
+cargo nt -E 'test(/pattern/)'          # Filter tests by pattern
+cargo nt --test specific_test          # Run specific test file
 cargo build --all-targets              # Build everything
-cargo test                             # Run all tests
-cargo test --test cancellation_tests   # Specific test file
-cargo test --features provider-test    # Provider validation tests (70+ tests)
 cargo clippy --all-targets --all-features  # Full lint check
-cargo test --doc                       # Doctest validation
+cargo test --doc                       # Doctest validation (nextest doesn't run these)
 cargo run --example hello_world        # Run example
 ```
 

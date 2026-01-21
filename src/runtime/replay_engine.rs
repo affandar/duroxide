@@ -4,7 +4,7 @@
 #![allow(clippy::clone_on_ref_ptr)]
 
 use crate::{Action, Event, EventKind, providers::WorkItem, runtime::OrchestrationHandler};
-use crate::{OrchestrationContext, ReplayMode, SimplifiedResult};
+use crate::{OrchestrationContext, CompletionResult};
 use std::collections::{HashSet, VecDeque};
 use std::future::Future;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -50,13 +50,9 @@ pub struct ReplayEngine {
     /// Unified error collector for system-level errors that abort the turn
     pub(crate) abort_error: Option<crate::ErrorDetails>,
     
-    /// Use simplified replay mode (commands-vs-history model)
-    /// When true, uses the new event-processing loop instead of history mutation
-    pub(crate) use_simplified_mode: bool,
-    
     /// Number of events in baseline_history that were actually persisted (from DB).
     /// Events beyond this index in baseline_history are NEW this turn (not replay).
-    /// Used by simplified mode to correctly track is_replaying state.
+    /// Used to correctly track is_replaying state.
     persisted_history_len: usize,
 }
 
@@ -75,23 +71,13 @@ impl ReplayEngine {
             baseline_history,
             next_event_id,
             abort_error: None,
-            use_simplified_mode: true, // Simplified mode is now the only mode (Phase 2)
             persisted_history_len: persisted_len,
         }
     }
     
-    /// Enable simplified replay mode (commands-vs-history model)
-    /// NOTE: This is now always true. Legacy mode has been removed.
-    #[allow(dead_code)]
-    #[deprecated(note = "Simplified mode is now the only mode. This method has no effect.")]
-    pub fn with_simplified_mode(mut self, _enabled: bool) -> Self {
-        self.use_simplified_mode = true; // Always simplified
-        self
-    }
-    
     /// Set the number of events in baseline_history that were actually persisted.
     /// 
-    /// This is used by simplified mode to correctly track the `is_replaying` state.
+    /// This is used to correctly track the `is_replaying` state.
     /// Events at indices `0..persisted_len` in the working history are replays;
     /// events at indices `persisted_len..` are new this turn.
     ///
@@ -105,9 +91,8 @@ impl ReplayEngine {
 
     /// Stage 1: Convert completion messages directly to events
     /// 
-    /// This runs for BOTH legacy and simplified modes - the conversion from
-    /// WorkItem to Event is the same either way. The resulting history_delta
-    /// is then processed by the appropriate execution path.
+    /// The conversion from WorkItem to Event generates history_delta
+    /// which is then processed by the execution path.
     pub fn prep_completions(&mut self, messages: Vec<WorkItem>) {
         debug!(
             instance = %self.instance,
@@ -451,6 +436,11 @@ impl ReplayEngine {
 
     /// Stage 2: Execute one turn of the orchestration using the replay engine
     /// This stage runs the orchestration logic and generates history deltas and actions
+    ///
+    /// This implementation uses the commands-vs-history model:
+    /// 1. Processes history events in order, matching emitted actions
+    /// 2. Delivers completions to the results map
+    /// 3. Returns new actions beyond history as pending_actions
     pub fn execute_orchestration(
         &mut self,
         handler: Arc<dyn OrchestrationHandler>,
@@ -461,7 +451,6 @@ impl ReplayEngine {
     ) -> TurnResult {
         debug!(
             instance = %self.instance,
-            simplified_mode = %self.use_simplified_mode,
             "executing orchestration turn"
         );
         // Check abort_error FIRST - before running user code
@@ -469,37 +458,6 @@ impl ReplayEngine {
             return TurnResult::Failed(err);
         }
         
-        // Dispatch to appropriate execution mode
-        if self.use_simplified_mode {
-            return self.execute_orchestration_simplified(
-                handler,
-                input,
-                orchestration_name,
-                orchestration_version,
-                worker_id,
-            );
-        }
-
-        // Legacy mode has been removed in Phase 2 (replay simplification)
-        // If this branch is reached, it indicates a configuration error
-        unreachable!("Legacy replay mode has been removed. Simplified mode is now the only supported mode.");
-    }
-    
-    /// Simplified mode execution: commands-vs-history model
-    /// 
-    /// This implementation:
-    /// 1. Sets ReplayMode::Simplified on the context
-    /// 2. Processes history events in order, matching emitted actions
-    /// 3. Delivers completions to the results map
-    /// 4. Returns new actions beyond history as pending_actions
-    fn execute_orchestration_simplified(
-        &mut self,
-        handler: Arc<dyn OrchestrationHandler>,
-        input: String,
-        orchestration_name: String,
-        orchestration_version: String,
-        worker_id: &str,
-    ) -> TurnResult {
         // Build working history: baseline + completion events from this run
         let mut working_history = self.baseline_history.clone();
         working_history.extend_from_slice(&self.history_delta);
@@ -539,21 +497,15 @@ impl ReplayEngine {
             });
         }
         
-        // Create context in SIMPLIFIED mode
+        // Create context
         let ctx = OrchestrationContext::new(
-            Vec::new(), // Empty history - simplified mode doesn't use it
+            Vec::new(), // Empty history - not used by replay engine
             self.execution_id,
             self.instance.clone(),
             orchestration_name.clone(),
             orchestration_version.clone(),
             Some(worker_id.to_string()),
         );
-        {
-            let mut inner = ctx.inner.lock().expect("Mutex should not be poisoned");
-            inner.replay_mode = ReplayMode::Simplified;
-            // Set the now_ms for timers based on last history event or current time
-            // In real usage, this would come from the orchestrator queue message
-        }
         
         // Clone ctx for use in the async closure
         let ctx_for_future = ctx.clone();
@@ -601,7 +553,7 @@ impl ReplayEngine {
             // Poll if needed
             if must_poll {
                 let poll_result = catch_unwind(AssertUnwindSafe(|| {
-                    poll_once_simplified(fut.as_mut())
+                    poll_once(fut.as_mut())
                 }));
                 
                 match poll_result {
@@ -700,7 +652,7 @@ impl ReplayEngine {
                         return result;
                     }
                     // Deliver system call result immediately
-                    ctx.deliver_result(event.event_id(), SimplifiedResult::SystemCallValue(value.clone()));
+                    ctx.deliver_result(event.event_id(), CompletionResult::SystemCallValue(value.clone()));
                     must_poll = true;
                 }
                 
@@ -717,7 +669,7 @@ impl ReplayEngine {
                                 "completion kind mismatch: expected activity"
                             ));
                         }
-                        ctx.deliver_result(source_id, SimplifiedResult::ActivityOk(result.clone()));
+                        ctx.deliver_result(source_id, CompletionResult::ActivityOk(result.clone()));
                         must_poll = true;
                     }
                 }
@@ -729,7 +681,7 @@ impl ReplayEngine {
                                 "completion without open schedule"
                             ));
                         }
-                        ctx.deliver_result(source_id, SimplifiedResult::ActivityErr(details.display_message()));
+                        ctx.deliver_result(source_id, CompletionResult::ActivityErr(details.display_message()));
                         must_poll = true;
                     }
                 }
@@ -741,7 +693,7 @@ impl ReplayEngine {
                                 "completion without open schedule"
                             ));
                         }
-                        ctx.deliver_result(source_id, SimplifiedResult::TimerFired);
+                        ctx.deliver_result(source_id, CompletionResult::TimerFired);
                         must_poll = true;
                     }
                 }
@@ -753,7 +705,7 @@ impl ReplayEngine {
                                 "completion without open schedule"
                             ));
                         }
-                        ctx.deliver_result(source_id, SimplifiedResult::SubOrchOk(result.clone()));
+                        ctx.deliver_result(source_id, CompletionResult::SubOrchOk(result.clone()));
                         must_poll = true;
                     }
                 }
@@ -765,7 +717,7 @@ impl ReplayEngine {
                                 "completion without open schedule"
                             ));
                         }
-                        ctx.deliver_result(source_id, SimplifiedResult::SubOrchErr(details.display_message()));
+                        ctx.deliver_result(source_id, CompletionResult::SubOrchErr(details.display_message()));
                         must_poll = true;
                     }
                 }
@@ -800,7 +752,7 @@ impl ReplayEngine {
         // This may emit additional actions if completions resolved durable futures
         if must_poll && output_opt.is_none() {
             let poll_result = catch_unwind(AssertUnwindSafe(|| {
-                poll_once_simplified(fut.as_mut())
+                poll_once(fut.as_mut())
             }));
             
             match poll_result {
@@ -833,7 +785,7 @@ impl ReplayEngine {
             ctx.bind_token(token, event_id);
             
             // Update the action's scheduling_event_id to match the persisted event_id
-            // (in simplified mode, the action originally has the token as scheduling_event_id)
+            // (the action originally has the token as scheduling_event_id)
             let updated_action = update_action_event_id(action, event_id);
             
             // Convert action to event
@@ -947,9 +899,9 @@ impl ReplayEngine {
     }
 }
 
-// === Simplified mode helper types and functions ===
+// === Helper types and functions ===
 
-/// Action kind for tracking schedule types (simplified mode)
+/// Action kind for tracking schedule types
 /// NOTE: Fields are intentionally unused - we only match on variant type, not field values
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
@@ -1062,8 +1014,8 @@ fn update_action_event_id(action: Action, event_id: u64) -> Action {
     }
 }
 
-/// Poll a future once (simplified mode version)
-fn poll_once_simplified<F: Future>(fut: Pin<&mut F>) -> Poll<F::Output> {
+/// Poll a future once
+fn poll_once<F: Future>(fut: Pin<&mut F>) -> Poll<F::Output> {
     // Create a no-op waker
     static VTABLE: RawWakerVTable = RawWakerVTable::new(
         |_| RawWaker::new(std::ptr::null(), &VTABLE),
@@ -1143,34 +1095,5 @@ mod tests {
         assert_eq!(engine.instance, "test-instance");
         assert!(engine.history_delta.is_empty());
         assert!(!engine.made_progress());
-    }
-    
-    #[test]
-    fn test_simplified_mode_flag() {
-        let engine = ReplayEngine::new(
-            "test-instance".to_string(),
-            1,
-            vec![Event::with_event_id(
-                0,
-                "test-instance",
-                1,
-                None,
-                EventKind::OrchestrationStarted {
-                    name: "test-orch".to_string(),
-                    version: "1.0.0".to_string(),
-                    input: "test-input".to_string(),
-                    parent_instance: None,
-                    parent_id: None,
-                },
-            )],
-        );
-        
-        // Phase 2: Simplified mode is now always on by default
-        assert!(engine.use_simplified_mode, "default should be simplified mode");
-        
-        // with_simplified_mode is deprecated and always returns simplified
-        #[allow(deprecated)]
-        let engine = engine.with_simplified_mode(false);
-        assert!(engine.use_simplified_mode, "should always be simplified mode (legacy removed)");
     }
 }

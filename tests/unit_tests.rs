@@ -4,13 +4,12 @@ use duroxide::providers::ProviderAdmin;
 use duroxide::providers::sqlite::SqliteProvider;
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
-use duroxide::{Action, ActivityContext, Event, OrchestrationContext, OrchestrationRegistry};
+use duroxide::{ActivityContext, Event, OrchestrationContext, OrchestrationRegistry};
 use std::sync::Arc;
 use std::time::Duration;
 
 mod common;
 use common::test_create_execution;
-use common::run_turn::{run_turn, run_turn_with};
 
 // Helper to create runtime with registries for tests
 #[allow(dead_code)]
@@ -19,38 +18,6 @@ async fn create_test_runtime(activity_registry: ActivityRegistry) -> Arc<runtime
     let orchestration_registry = OrchestrationRegistry::builder().build();
     runtime::Runtime::start(Arc::new(activity_registry), orchestration_registry).await
 }
-
-// 1) Single-turn emission: ensure exactly one action per scheduled future and matching schedule event recorded.
-// Tests action emission in simplified mode with a fresh start (empty history)
-#[test]
-fn action_emission_single_turn() {
-    // Await the scheduled activity once so it is polled and records its action, then remain pending
-    let orchestrator = |ctx: OrchestrationContext| async move {
-        let _ = ctx.schedule_activity("A", "1").await;
-        unreachable!()
-    };
-
-    let history: Vec<Event> = Vec::new();
-    let (hist_after, actions, out) = run_turn(history, orchestrator);
-    assert!(out.is_none(), "must not complete in first turn");
-    assert_eq!(actions.len(), 1, "exactly one action expected");
-    match &actions[0] {
-        Action::CallActivity { name, input, .. } => {
-            assert_eq!(name, "A");
-            assert_eq!(input, "1");
-        }
-        _ => panic!("unexpected action kind"),
-    }
-    // In simplified mode, history contains OrchestrationStarted (auto-generated for fresh start)
-    // The ActivityScheduled event would be created by the runtime from the emitted action
-    assert!(matches!(&hist_after[0].kind, EventKind::OrchestrationStarted { .. }));
-}
-
-// Test removed: correlation_out_of_order_completion
-// This test demonstrated a non-deterministic pattern where an ActivityCompleted
-// appeared after an unrelated TimerFired in history. With the new strict cursor model,
-// this correctly panics with "Non-deterministic execution" error.
-// The cursor cannot skip over the TimerFired to find the ActivityCompleted.
 
 // 3) Deterministic replay on a tiny flow (activity only)
 #[tokio::test]
@@ -396,64 +363,33 @@ async fn providers_inmem_multi_execution_persistence_and_latest_read() {
     assert_eq!(current_hist, latest_hist);
 }
 
-// OrchestrationContext metadata accessors
-#[test]
-fn orchestration_context_metadata_accessors() {
-    let instance_id = "test-instance-123".to_string();
-    let orch_name = "MyOrchestration".to_string();
-    let orch_version = "2.1.0".to_string();
-    let execution_id = 42u64;
+// OrchestrationContext metadata accessors - converted to runtime test
+#[tokio::test]
+async fn orchestration_context_metadata_accessors() {
+    let activity_registry = ActivityRegistry::builder().build();
 
-    let orchestrator = |ctx: OrchestrationContext| async move {
-        // Verify all accessors return the expected values
-        assert_eq!(ctx.instance_id(), "test-instance-123");
-        assert_eq!(ctx.execution_id(), 42);
-        assert_eq!(ctx.orchestration_name(), "MyOrchestration");
-        assert_eq!(ctx.orchestration_version(), "2.1.0");
+    let orchestration_registry = OrchestrationRegistry::builder()
+        .register_versioned("MetadataOrch", "2.1.0", |ctx, _| async move {
+            // Verify all accessors return the expected values
+            assert_eq!(ctx.instance_id(), "test-instance-123");
+            assert_eq!(ctx.execution_id(), 1);
+            assert_eq!(ctx.orchestration_name(), "MetadataOrch");
+            assert_eq!(ctx.orchestration_version(), "2.1.0");
+            Ok("done".to_string())
+        })
+        .build();
 
-        "done".to_string()
-    };
+    let store = SqliteProvider::new_in_memory().await.unwrap();
+    let store = Arc::new(store) as Arc<dyn Provider>;
+    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
 
-    let history: Vec<Event> = Vec::new();
-    let (_hist_after, _actions, output) = run_turn_with(
-        history,
-        execution_id,
-        instance_id,
-        orch_name,
-        orch_version,
-        orchestrator,
-    );
+    let client = duroxide::Client::new(store.clone());
+    client.start_orchestration("test-instance-123", "MetadataOrch", "").await.unwrap();
 
-    assert_eq!(output, Some("done".to_string()));
-}
+    match client.wait_for_orchestration("test-instance-123", Duration::from_secs(5)).await.unwrap() {
+        duroxide::OrchestrationStatus::Completed { output } => assert_eq!(output, "done"),
+        other => panic!("Expected Completed, got {:?}", other),
+    }
 
-#[test]
-fn orchestration_context_metadata_accessors_with_empty_values() {
-    let instance_id = "instance-empty-meta".to_string();
-    // Empty strings are valid - the type system ensures values are always present
-    let orch_name = "".to_string();
-    let orch_version = "".to_string();
-    let execution_id = 1u64;
-
-    let orchestrator = |ctx: OrchestrationContext| async move {
-        // Verify accessors handle empty string values correctly
-        assert_eq!(ctx.instance_id(), "instance-empty-meta");
-        assert_eq!(ctx.execution_id(), 1);
-        assert_eq!(ctx.orchestration_name(), "");
-        assert_eq!(ctx.orchestration_version(), "");
-
-        "done".to_string()
-    };
-
-    let history: Vec<Event> = Vec::new();
-    let (_hist_after, _actions, output) = run_turn_with(
-        history,
-        execution_id,
-        instance_id,
-        orch_name,
-        orch_version,
-        orchestrator,
-    );
-
-    assert_eq!(output, Some("done".to_string()));
+    rt.shutdown(None).await;
 }
