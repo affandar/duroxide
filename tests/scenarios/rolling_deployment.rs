@@ -46,9 +46,7 @@ async fn e2e_rolling_deployment_three_nodes() {
             "RollingDeployOrch",
             |ctx: duroxide::OrchestrationContext, _input: String| async move {
                 let result = ctx
-                    .schedule_activity("NewActivity", "test-input")
-                    .into_activity()
-                    .await?;
+                    .schedule_activity("NewActivity", "test-input").await?;
                 Ok(result)
             },
         )

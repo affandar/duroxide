@@ -375,7 +375,7 @@ async fn fanout_orchestration(ctx: OrchestrationContext, input: String) -> Resul
 
     let success_count = results
         .iter()
-        .filter(|r| matches!(r, crate::DurableOutput::Activity(Ok(_))))
+        .filter(|r| r.is_ok())
         .count();
 
     Ok(format!("Completed {task_count} tasks ({success_count} succeeded)"))

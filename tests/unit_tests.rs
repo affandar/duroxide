@@ -10,26 +10,7 @@ use std::time::Duration;
 
 mod common;
 use common::test_create_execution;
-
-// Stub: run_turn has been removed (Phase 2 - simplified mode only)
-#[allow(unused)]
-fn run_turn<O, F>(_history: Vec<Event>, _orchestrator: impl Fn(OrchestrationContext) -> F) -> (Vec<Event>, Vec<Action>, Option<O>)
-where F: std::future::Future<Output = O> {
-    panic!("run_turn has been removed - use runtime tests instead")
-}
-
-#[allow(unused)]
-fn run_turn_with<O, F>(
-    _history: Vec<Event>,
-    _execution_id: u64,
-    _instance_id: String,
-    _orch_name: String,
-    _orch_version: String,
-    _orchestrator: impl Fn(OrchestrationContext) -> F,
-) -> (Vec<Event>, Vec<Action>, Option<O>)
-where F: std::future::Future<Output = O> {
-    panic!("run_turn_with has been removed - use runtime tests instead")
-}
+use common::run_turn::{run_turn, run_turn_with};
 
 // Helper to create runtime with registries for tests
 #[allow(dead_code)]
@@ -40,13 +21,12 @@ async fn create_test_runtime(activity_registry: ActivityRegistry) -> Arc<runtime
 }
 
 // 1) Single-turn emission: ensure exactly one action per scheduled future and matching schedule event recorded.
-// MIGRATION NOTE: Uses run_turn() - legacy in-memory replay API
+// Tests action emission in simplified mode with a fresh start (empty history)
 #[test]
-#[ignore = "Legacy mode only: uses run_turn() which requires cursor-based replay"]
 fn action_emission_single_turn() {
     // Await the scheduled activity once so it is polled and records its action, then remain pending
     let orchestrator = |ctx: OrchestrationContext| async move {
-        let _ = ctx.simplified_schedule_activity("A", "1").await;
+        let _ = ctx.schedule_activity("A", "1").await;
         unreachable!()
     };
 
@@ -61,8 +41,9 @@ fn action_emission_single_turn() {
         }
         _ => panic!("unexpected action kind"),
     }
-    // History should already contain ActivityScheduled
-    assert!(matches!(&hist_after[0].kind, EventKind::ActivityScheduled { .. }));
+    // In simplified mode, history contains OrchestrationStarted (auto-generated for fresh start)
+    // The ActivityScheduled event would be created by the runtime from the emitted action
+    assert!(matches!(&hist_after[0].kind, EventKind::OrchestrationStarted { .. }));
 }
 
 // Test removed: correlation_out_of_order_completion
@@ -75,7 +56,7 @@ fn action_emission_single_turn() {
 #[tokio::test]
 async fn deterministic_replay_activity_only() {
     let orchestrator = |ctx: OrchestrationContext| async move {
-        let a = ctx.simplified_schedule_activity("A", "2").await.unwrap();
+        let a = ctx.schedule_activity("A", "2").await.unwrap();
         format!("a={a}")
     };
 
@@ -128,7 +109,7 @@ async fn runtime_duplicate_orchestration_deduped_single_execution() {
     let orchestration_registry = OrchestrationRegistry::builder()
         .register("TestOrch", |ctx, _| async move {
             // Slow a bit to allow duplicate enqueue to happen
-            ctx.simplified_schedule_timer(Duration::from_millis(20)).await;
+            ctx.schedule_timer(Duration::from_millis(20)).await;
             Ok("ok".to_string())
         })
         .build();
@@ -188,9 +169,7 @@ async fn orchestration_descriptor_root_and_child() {
     let activity_registry = ActivityRegistry::builder().build();
     let parent = |ctx: OrchestrationContext, _| async move {
         let _ = ctx
-            .schedule_sub_orchestration("ChildDsc", "x")
-            .into_sub_orchestration()
-            .await;
+            .schedule_sub_orchestration("ChildDsc", "x").await;
         Ok("done".into())
     };
     let child = |_ctx: OrchestrationContext, _input: String| async move { Ok("child".into()) };
@@ -233,7 +212,7 @@ async fn orchestration_status_apis() {
     let activity_registry = ActivityRegistry::builder().build();
     let orchestration_registry = OrchestrationRegistry::builder()
         .register("ShortTimer", |ctx, _| async move {
-            ctx.simplified_schedule_timer(Duration::from_millis(100)).await;
+            ctx.schedule_timer(Duration::from_millis(100)).await;
             Ok("ok".to_string())
         })
         .register("AlwaysFails", |_ctx, _| async move { Err("boom".to_string()) })
@@ -418,12 +397,8 @@ async fn providers_inmem_multi_execution_persistence_and_latest_read() {
 }
 
 // OrchestrationContext metadata accessors
-// MIGRATION NOTE: Uses run_turn_with() - legacy in-memory replay API
 #[test]
-#[ignore = "Legacy mode only: uses run_turn() which requires cursor-based replay"]
 fn orchestration_context_metadata_accessors() {
-    // use duroxide::run_turn_with; // Removed in Phase 2
-
     let instance_id = "test-instance-123".to_string();
     let orch_name = "MyOrchestration".to_string();
     let orch_version = "2.1.0".to_string();
@@ -452,12 +427,8 @@ fn orchestration_context_metadata_accessors() {
     assert_eq!(output, Some("done".to_string()));
 }
 
-// MIGRATION NOTE: Uses run_turn_with() - legacy in-memory replay API
 #[test]
-#[ignore = "Legacy mode only: uses run_turn() which requires cursor-based replay"]
 fn orchestration_context_metadata_accessors_with_empty_values() {
-    // use duroxide::run_turn_with; // Removed in Phase 2
-
     let instance_id = "instance-empty-meta".to_string();
     // Empty strings are valid - the type system ensures values are always present
     let orch_name = "".to_string();

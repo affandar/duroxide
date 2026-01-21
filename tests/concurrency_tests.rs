@@ -4,27 +4,34 @@ use std::sync::Arc;
 mod common;
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
-use duroxide::{ActivityContext, Client, OrchestrationContext, OrchestrationRegistry};
+use duroxide::{ActivityContext, Client, Either3, OrchestrationContext, OrchestrationRegistry};
 use std::sync::Arc as StdArc;
 use std::time::Duration;
 
+use std::pin::Pin;
+use std::future::Future;
+
+// Type alias for boxed futures with heterogeneous outputs (Activity, External, Timer)
+type BoxedJoinFuture<'a> = Pin<Box<dyn Future<Output = Either3<Result<String, String>, String, ()>> + Send + 'a>>;
+
 async fn concurrent_orchestrations_different_activities_with(store: StdArc<dyn Provider>) {
     let o1 = |ctx: OrchestrationContext, _input: String| async move {
-        let f_a = ctx.schedule_activity("Add", "2,3");
-        let f_e = ctx.schedule_wait("Go");
-        let f_t = ctx.schedule_timer(Duration::from_millis(1));
+        // Wrap heterogeneous futures in boxed futures with common type
+        let f_a: BoxedJoinFuture = Box::pin(async { Either3::First(ctx.schedule_activity("Add", "2,3").await) });
+        let f_e: BoxedJoinFuture = Box::pin(async { Either3::Second(ctx.schedule_wait("Go").await) });
+        let f_t: BoxedJoinFuture = Box::pin(async { Either3::Third(ctx.schedule_timer(Duration::from_millis(1)).await) });
         let results = ctx.join(vec![f_a, f_e, f_t]).await;
 
         // Find activity and external results (order may vary due to history ordering)
         let mut a = None;
         let mut e = None;
-        for result in &results {
+        for result in results {
             match result {
-                duroxide::futures::DurableOutput::Activity(Ok(activity_result)) => {
-                    a = Some(activity_result.clone());
+                Either3::First(Ok(activity_result)) => {
+                    a = Some(activity_result);
                 }
-                duroxide::futures::DurableOutput::External(external_data) => {
-                    e = Some(external_data.clone());
+                Either3::Second(external_data) => {
+                    e = Some(external_data);
                 }
                 _ => {} // Ignore timer for now
             }
@@ -36,21 +43,22 @@ async fn concurrent_orchestrations_different_activities_with(store: StdArc<dyn P
         Ok(format!("o1:sum={a};evt={e}"))
     };
     let o2 = |ctx: OrchestrationContext, _input: String| async move {
-        let f_a = ctx.schedule_activity("Upper", "hi");
-        let f_e = ctx.schedule_wait("Go");
-        let f_t = ctx.schedule_timer(Duration::from_millis(1));
+        // Wrap heterogeneous futures in boxed futures with common type
+        let f_a: BoxedJoinFuture = Box::pin(async { Either3::First(ctx.schedule_activity("Upper", "hi").await) });
+        let f_e: BoxedJoinFuture = Box::pin(async { Either3::Second(ctx.schedule_wait("Go").await) });
+        let f_t: BoxedJoinFuture = Box::pin(async { Either3::Third(ctx.schedule_timer(Duration::from_millis(1)).await) });
         let results = ctx.join(vec![f_a, f_e, f_t]).await;
 
         // Find activity and external results (order may vary due to history ordering)
         let mut a = None;
         let mut e = None;
-        for result in &results {
+        for result in results {
             match result {
-                duroxide::futures::DurableOutput::Activity(Ok(activity_result)) => {
-                    a = Some(activity_result.clone());
+                Either3::First(Ok(activity_result)) => {
+                    a = Some(activity_result);
                 }
-                duroxide::futures::DurableOutput::External(external_data) => {
-                    e = Some(external_data.clone());
+                Either3::Second(external_data) => {
+                    e = Some(external_data);
                 }
                 _ => {} // Ignore timer for now
             }
@@ -185,21 +193,21 @@ async fn concurrent_orchestrations_different_activities_fs() {
 
 async fn concurrent_orchestrations_same_activities_with(store: StdArc<dyn Provider>) {
     let o1 = |ctx: OrchestrationContext, _input: String| async move {
-        let f_a = ctx.schedule_activity("Proc", "10");
-        let f_e = ctx.schedule_wait("Go");
-        let f_t = ctx.schedule_timer(Duration::from_millis(1));
+        let f_a: BoxedJoinFuture = Box::pin(async { Either3::First(ctx.schedule_activity("Proc", "10").await) });
+        let f_e: BoxedJoinFuture = Box::pin(async { Either3::Second(ctx.schedule_wait("Go").await) });
+        let f_t: BoxedJoinFuture = Box::pin(async { Either3::Third(ctx.schedule_timer(Duration::from_millis(1)).await) });
         let results = ctx.join(vec![f_a, f_e, f_t]).await;
 
         // Find activity and external results (order may vary due to history ordering)
         let mut a = None;
         let mut e = None;
-        for result in &results {
+        for result in results {
             match result {
-                duroxide::futures::DurableOutput::Activity(Ok(activity_result)) => {
-                    a = Some(activity_result.clone());
+                Either3::First(Ok(activity_result)) => {
+                    a = Some(activity_result);
                 }
-                duroxide::futures::DurableOutput::External(external_data) => {
-                    e = Some(external_data.clone());
+                Either3::Second(external_data) => {
+                    e = Some(external_data);
                 }
                 _ => {} // Ignore timer for now
             }
@@ -212,21 +220,21 @@ async fn concurrent_orchestrations_same_activities_with(store: StdArc<dyn Provid
     };
     let o2 = |ctx: OrchestrationContext, _input: String| async move {
         let _guid = ctx.new_guid().await?;
-        let f_a = ctx.schedule_activity("Proc", "20");
-        let f_e = ctx.schedule_wait("Go");
-        let f_t = ctx.schedule_timer(Duration::from_millis(1));
+        let f_a: BoxedJoinFuture = Box::pin(async { Either3::First(ctx.schedule_activity("Proc", "20").await) });
+        let f_e: BoxedJoinFuture = Box::pin(async { Either3::Second(ctx.schedule_wait("Go").await) });
+        let f_t: BoxedJoinFuture = Box::pin(async { Either3::Third(ctx.schedule_timer(Duration::from_millis(1)).await) });
         let results = ctx.join(vec![f_a, f_e, f_t]).await;
 
         // Find activity and external results (order may vary due to history ordering)
         let mut a = None;
         let mut e = None;
-        for result in &results {
+        for result in results {
             match result {
-                duroxide::futures::DurableOutput::Activity(Ok(activity_result)) => {
-                    a = Some(activity_result.clone());
+                Either3::First(Ok(activity_result)) => {
+                    a = Some(activity_result);
                 }
-                duroxide::futures::DurableOutput::External(external_data) => {
-                    e = Some(external_data.clone());
+                Either3::Second(external_data) => {
+                    e = Some(external_data);
                 }
                 _ => {} // Ignore timer for now
             }
@@ -343,20 +351,20 @@ async fn single_orchestration_with_join_test() {
 
     // Just run ONE orchestration (same as o1 from the concurrent test)
     let o1 = |ctx: OrchestrationContext, _input: String| async move {
-        let f_a = ctx.schedule_activity("Proc", "10");
-        let f_e = ctx.schedule_wait("Go");
-        let f_t = ctx.schedule_timer(Duration::from_millis(1));
+        let f_a: BoxedJoinFuture = Box::pin(async { Either3::First(ctx.schedule_activity("Proc", "10").await) });
+        let f_e: BoxedJoinFuture = Box::pin(async { Either3::Second(ctx.schedule_wait("Go").await) });
+        let f_t: BoxedJoinFuture = Box::pin(async { Either3::Third(ctx.schedule_timer(Duration::from_millis(1)).await) });
         let results = ctx.join(vec![f_a, f_e, f_t]).await;
 
         let mut a = None;
         let mut e = None;
-        for result in &results {
+        for result in results {
             match result {
-                duroxide::futures::DurableOutput::Activity(Ok(activity_result)) => {
-                    a = Some(activity_result.clone());
+                Either3::First(Ok(activity_result)) => {
+                    a = Some(activity_result);
                 }
-                duroxide::futures::DurableOutput::External(external_data) => {
-                    e = Some(external_data.clone());
+                Either3::Second(external_data) => {
+                    e = Some(external_data);
                 }
                 _ => {}
             }

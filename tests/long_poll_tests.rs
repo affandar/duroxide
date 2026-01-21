@@ -232,7 +232,7 @@ async fn test_dispatcher_uses_long_polling() {
         .build();
 
     let orch = |ctx: OrchestrationContext, _: String| async move {
-        ctx.simplified_schedule_activity("QuickTask", "").await
+        ctx.schedule_activity("QuickTask", "").await
     };
 
     let orchestrations = OrchestrationRegistry::builder().register("TestOrch", orch).build();

@@ -75,6 +75,7 @@ pub struct DurableFuture {
     pub(crate) kind: Kind,
 }
 
+#[allow(dead_code)] // Legacy: Kind variants constructed by legacy schedule_* methods
 pub(crate) enum Kind {
     Activity {
         name: String,
@@ -872,7 +873,8 @@ pub(crate) fn generate_guid() -> String {
     )
 }
 
-// Aggregate future machinery
+// Aggregate future machinery (legacy - not used in simplified mode)
+#[allow(dead_code)]
 enum AggregateMode {
     Select,
     Join,
@@ -883,12 +885,14 @@ pub enum AggregateOutput {
     Join { outputs: Vec<DurableOutput> },
 }
 
+#[allow(dead_code)] // Legacy: AggregateDurableFuture used by legacy ctx.select/join
 pub struct AggregateDurableFuture {
     ctx: OrchestrationContext,
     children: Vec<DurableFuture>,
     mode: AggregateMode,
 }
 
+#[allow(dead_code)] // Legacy: new_select/new_join used by legacy ctx.select/join
 impl AggregateDurableFuture {
     pub(crate) fn new_select(ctx: OrchestrationContext, children: Vec<DurableFuture>) -> Self {
         Self {

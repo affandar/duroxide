@@ -312,12 +312,12 @@ async fn large_payload_orchestration(
 
     let success_count = results
         .iter()
-        .filter(|r| matches!(r, crate::DurableOutput::Activity(Ok(_))))
+        .filter(|r| r.is_ok())
         .count();
 
     let sub_success_count = sub_results
         .iter()
-        .filter(|r| matches!(r, crate::DurableOutput::SubOrchestration(Ok(_))))
+        .filter(|r| r.is_ok())
         .count();
 
     // Return large payload result
@@ -351,8 +351,7 @@ async fn large_payload_sub_orchestration(
     let task2_input = generate_payload(medium_kb / 2);
     let result2 = ctx.schedule_activity("MediumPayloadTask", task2_input).await;
 
-    let success = matches!(result1, crate::DurableOutput::Activity(Ok(_)))
-        && matches!(result2, crate::DurableOutput::Activity(Ok(_)));
+    let success = result1.is_ok() && result2.is_ok();
 
     // Return medium payload
     let result_payload = generate_payload(medium_kb);

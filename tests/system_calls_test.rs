@@ -63,7 +63,7 @@ async fn test_utcnow_ms() {
             let time1 = ctx.utcnow().await?;
 
             // Add a small timer to ensure time progresses
-            ctx.simplified_schedule_timer(Duration::from_millis(100)).await;
+            ctx.schedule_timer(Duration::from_millis(100)).await;
 
             let time2 = ctx.utcnow().await?;
 
@@ -207,11 +207,11 @@ async fn test_system_calls_with_select() {
             let activity1 = ctx.schedule_activity("QuickTask", "task1");
             let activity2 = ctx.schedule_activity("QuickTask", "task2");
 
-            let (winner_idx, output) = ctx.select2(activity1, activity2).await;
+            let (winner_idx, output) = ctx.select2(activity1, activity2).await.into_tuple();
 
             let first_result = match output {
-                duroxide::DurableOutput::Activity(Ok(s)) => s,
-                _ => "unexpected".to_string(),
+                Ok(s) => s,
+                Err(e) => format!("error: {e}"),
             };
 
             // Get another system call to verify they work throughout the orchestration
@@ -276,47 +276,28 @@ async fn test_system_calls_join_with_activities() {
 
     let orchestrations = OrchestrationRegistry::builder()
         .register("TestJoin", |ctx: OrchestrationContext, _input: String| async move {
-            // Test 1: Join system call futures with activity futures
-            let guid_future = ctx.new_guid_future();
-            let time_future = ctx.utcnow_future();
-            let activity_future = ctx.schedule_activity("SlowTask", "data1");
-
-            let results = ctx.join(vec![guid_future, time_future, activity_future]).await;
-
-            // All should complete successfully
-            assert_eq!(results.len(), 3, "Should have 3 results from join");
-
-            // Extract and validate results
-            let guid = match &results[0] {
-                duroxide::DurableOutput::Activity(Ok(s)) => s.clone(),
-                _ => panic!("Expected GUID from first result"),
-            };
-
-            let time_str = match &results[1] {
-                duroxide::DurableOutput::Activity(Ok(s)) => s.clone(),
-                _ => panic!("Expected time from second result"),
-            };
-
-            let activity_result = match &results[2] {
-                duroxide::DurableOutput::Activity(Ok(s)) => s.clone(),
-                _ => panic!("Expected activity result from third result"),
-            };
+            // Test 1: Call system calls and activity separately since they have different return types
+            let guid = ctx.new_guid().await?;
+            let time = ctx.utcnow().await?;
+            let activity_result = ctx.schedule_activity("SlowTask", "data1").await?;
 
             // Validate the values
             assert_eq!(guid.len(), 36, "GUID should be 36 chars");
-            let time: u64 = time_str.parse().expect("Time should parse");
-            assert!(time > 0, "Time should be positive");
+            let time_ms = time.duration_since(std::time::UNIX_EPOCH)
+                .map_err(|e| e.to_string())?
+                .as_millis() as u64;
+            assert!(time_ms > 0, "Time should be positive");
             assert_eq!(activity_result, "processed:data1");
 
-            // Test 2: Select system call future vs activity future
-            let guid_future2 = ctx.new_guid_future();
-            let activity_future2 = ctx.schedule_activity("SlowTask", "data2");
+            // Test 2: Select between two activities (same type)
+            let activity1 = ctx.schedule_activity("SlowTask", "data2");
+            let activity2 = ctx.schedule_activity("SlowTask", "data3");
 
-            let (winner_idx, output) = ctx.select2(guid_future2, activity_future2).await;
+            let (winner_idx, output) = ctx.select2(activity1, activity2).await.into_tuple();
 
             let winner_result = match output {
-                duroxide::DurableOutput::Activity(Ok(s)) => s,
-                _ => panic!("Expected activity output"),
+                Ok(s) => s,
+                Err(e) => panic!("Expected activity output: {e}"),
             };
 
             // System call should typically win since it completes synchronously
@@ -325,7 +306,7 @@ async fn test_system_calls_join_with_activities() {
             Ok(format!(
                 "guid_len:{},time:{},activity:{},winner:{},winner_result:{}",
                 guid.len(),
-                time,
+                time_ms,
                 activity_result,
                 winner_idx,
                 winner_result

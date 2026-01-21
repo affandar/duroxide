@@ -10,11 +10,11 @@ use std::sync::Arc;
 /// ⚠️ KEY CONCEPTS:
 /// 1. Use timers for orchestration delays (not activities!)
 /// 2. Activities can do any async operations (HTTP, sleep, etc.)
-/// 3. Use simplified_select2 for timeout patterns
+/// 3. Use select2 for timeout patterns
 ///
 /// This example shows:
 /// 1. ✅ CORRECT: Using timers for orchestration delays
-/// 2. ✅ CORRECT: Using simplified_select2 for timeout patterns
+/// 2. ✅ CORRECT: Using select2 for timeout patterns
 /// 3. ✅ CORRECT: Activities can use tokio::time::sleep() and any async operations
 
 #[tokio::main]
@@ -49,11 +49,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // ✅ CORRECT: Use timer for delay
         ctx.trace_info("Waiting 2 seconds...");
-        ctx.simplified_schedule_timer(std::time::Duration::from_secs(2)).await;
+        ctx.schedule_timer(std::time::Duration::from_secs(2)).await;
         ctx.trace_info("Timer fired! Processing data...");
 
         // Process some data after the delay
-        let result = ctx.simplified_schedule_activity("ProcessData", input).await?;
+        let result = ctx.schedule_activity("ProcessData", input).await?;
 
         ctx.trace_info("Processing complete!");
         Ok(format!("Delayed result: {result}"))
@@ -63,16 +63,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let timeout_orchestration = |ctx: OrchestrationContext, input: String| async move {
         ctx.trace_info("Starting timeout example orchestration");
 
-        // ✅ CORRECT: Use simplified_select2 for timeout pattern
+        // ✅ CORRECT: Use select2 for timeout pattern
         // Both arms must return the same type - wrap timer in async block
-        let work = ctx.simplified_schedule_activity("SlowOperation", input.clone());
+        let work = ctx.schedule_activity("SlowOperation", input.clone());
         let timeout = async {
-            ctx.simplified_schedule_timer(std::time::Duration::from_secs(5)).await;
+            ctx.schedule_timer(std::time::Duration::from_secs(5)).await;
             Err::<String, String>("timeout".to_string())
         };
 
         ctx.trace_info("Racing work against timeout...");
-        let (winner_index, result) = ctx.simplified_select2(work, timeout).await;
+        let (winner_index, result) = ctx.select2(work, timeout).await.into_tuple();
 
         match (winner_index, result) {
             (0, Ok(value)) => {
@@ -160,9 +160,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     rt.shutdown(None).await;
 
     println!("\n📚 Key Takeaways:");
-    println!("✅ Use ctx.simplified_schedule_timer(duration).await for orchestration delays");
-    println!("✅ Use ctx.simplified_schedule_activity(name, input).await for work");
-    println!("✅ Use ctx.simplified_select2(work, timeout) for timeout patterns");
+    println!("✅ Use ctx.schedule_timer(duration).await for orchestration delays");
+    println!("✅ Use ctx.schedule_activity(name, input).await for work");
+    println!("✅ Use ctx.select2(work, timeout) for timeout patterns");
     println!("✅ Activities can use tokio::time::sleep(), HTTP calls, database queries, etc.");
     println!("❌ Never use non-deterministic operations in orchestrations");
 

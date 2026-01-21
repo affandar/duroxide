@@ -36,9 +36,9 @@ async fn async_block_join_with_control_flow() {
     let orchestration = |ctx: OrchestrationContext, _input: String| async move {
         // Block A: sequential activities with conditional logic
         let block_a = async {
-            let first = ctx.simplified_schedule_activity("Step", "A1").await?;
+            let first = ctx.schedule_activity("Step", "A1").await?;
             if first.contains("step") {
-                let second = ctx.simplified_schedule_activity("Step", "A2").await?;
+                let second = ctx.schedule_activity("Step", "A2").await?;
                 Ok::<_, String>(format!("A:[{first},{second}]"))
             } else {
                 Ok("A:fallback".to_string())
@@ -47,11 +47,11 @@ async fn async_block_join_with_control_flow() {
 
         // Block B: different control flow pattern
         let block_b = async {
-            let check = ctx.simplified_schedule_activity("Check", "B1").await?;
+            let check = ctx.schedule_activity("Check", "B1").await?;
             let mut results = vec![check];
             for i in 2..=3 {
                 let step = ctx
-                    .simplified_schedule_activity("Step", format!("B{i}"))
+                    .schedule_activity("Step", format!("B{i}"))
                     .await?;
                 results.push(step);
             }
@@ -60,14 +60,14 @@ async fn async_block_join_with_control_flow() {
 
         // Block C: timer + activity
         let block_c = async {
-            ctx.simplified_schedule_timer(std::time::Duration::from_millis(5))
+            ctx.schedule_timer(std::time::Duration::from_millis(5))
                 .await;
-            let result = ctx.simplified_schedule_activity("Step", "C1").await?;
+            let result = ctx.schedule_activity("Step", "C1").await?;
             Ok::<_, String>(format!("C:[timer,{result}]"))
         };
 
         // Join all blocks
-        let (a, b, c) = ctx.simplified_join3(block_a, block_b, block_c).await;
+        let (a, b, c) = ctx.join3(block_a, block_b, block_c).await;
 
         Ok(format!("{},{},{}", a?, b?, c?))
     };
@@ -148,7 +148,7 @@ async fn async_block_join_many() {
                 async move {
                     let delay = (5 - i) * 5; // Block 0 is slowest, block 4 is fastest
                     let result = ctx
-                        .simplified_schedule_activity("Work", delay.to_string())
+                        .schedule_activity("Work", delay.to_string())
                         .await?;
                     Ok::<_, String>(format!("block{}:{result}", i))
                 }
@@ -156,7 +156,7 @@ async fn async_block_join_many() {
             .collect();
 
         // Join all blocks
-        let results = ctx.simplified_join(blocks).await;
+        let results = ctx.join(blocks).await;
 
         // Collect results preserving order
         let mut outputs = Vec::new();
@@ -235,8 +235,8 @@ async fn async_block_sequential() {
     let orchestration = |ctx: OrchestrationContext, input: String| async move {
         // Phase 1: initial processing
         let phase1 = async {
-            let a = ctx.simplified_schedule_activity("Process", input).await?;
-            let b = ctx.simplified_schedule_activity("Process", "extra").await?;
+            let a = ctx.schedule_activity("Process", input).await?;
+            let b = ctx.schedule_activity("Process", "extra").await?;
             Ok::<_, String>(format!("{a}+{b}"))
         };
         let phase1_result = phase1.await?;
@@ -244,7 +244,7 @@ async fn async_block_sequential() {
         // Phase 2: uses phase1 result
         let phase2 = async {
             let result = ctx
-                .simplified_schedule_activity("Process", phase1_result)
+                .schedule_activity("Process", phase1_result)
                 .await?;
             Ok::<_, String>(result)
         };
@@ -252,10 +252,10 @@ async fn async_block_sequential() {
 
         // Phase 3: final wrap-up
         let phase3 = async {
-            ctx.simplified_schedule_timer(std::time::Duration::from_millis(5))
+            ctx.schedule_timer(std::time::Duration::from_millis(5))
                 .await;
             let final_result = ctx
-                .simplified_schedule_activity("Process", phase2_result)
+                .schedule_activity("Process", phase2_result)
                 .await?;
             Ok::<_, String>(format!("final:{final_result}"))
         };
@@ -337,19 +337,19 @@ async fn async_block_select_racing() {
     let orchestration = |ctx: OrchestrationContext, _input: String| async move {
         // Fast block: 2 fast activities
         let fast_block = async {
-            let a = ctx.simplified_schedule_activity("Fast", "1").await?;
-            let b = ctx.simplified_schedule_activity("Fast", "2").await?;
+            let a = ctx.schedule_activity("Fast", "1").await?;
+            let b = ctx.schedule_activity("Fast", "2").await?;
             Ok::<_, String>(format!("fast_block:[{a},{b}]"))
         };
 
         // Slow block: 1 slow activity then another
         let slow_block = async {
-            let a = ctx.simplified_schedule_activity("Slow", "1").await?;
-            let b = ctx.simplified_schedule_activity("Slow", "2").await?;
+            let a = ctx.schedule_activity("Slow", "1").await?;
+            let b = ctx.schedule_activity("Slow", "2").await?;
             Ok::<_, String>(format!("slow_block:[{a},{b}]"))
         };
 
-        let (winner_idx, result) = ctx.simplified_select2(fast_block, slow_block).await;
+        let (winner_idx, result) = ctx.select2(fast_block, slow_block).await.into_tuple();
         Ok(format!("winner:{winner_idx},result:{}", result?))
     };
 
@@ -422,16 +422,16 @@ async fn async_block_vs_durable_future() {
     // Orchestration: async block vs single durable future
     let orchestration = |ctx: OrchestrationContext, _input: String| async move {
         // Single durable future (fast)
-        let single_future = async { ctx.simplified_schedule_activity("Quick", "single").await };
+        let single_future = async { ctx.schedule_activity("Quick", "single").await };
 
         // Async block with multiple steps (slower overall)
         let multi_step_block = async {
-            let a = ctx.simplified_schedule_activity("Multi", "1").await?;
-            let b = ctx.simplified_schedule_activity("Multi", "2").await?;
+            let a = ctx.schedule_activity("Multi", "1").await?;
+            let b = ctx.schedule_activity("Multi", "2").await?;
             Ok::<_, String>(format!("block:[{a},{b}]"))
         };
 
-        let (winner_idx, result) = ctx.simplified_select2(single_future, multi_step_block).await;
+        let (winner_idx, result) = ctx.select2(single_future, multi_step_block).await.into_tuple();
         Ok(format!("winner:{winner_idx},result:{}", result?))
     };
 
@@ -500,29 +500,29 @@ async fn async_block_select3_with_timers() {
     let orchestration = |ctx: OrchestrationContext, _input: String| async move {
         // Block A: short timer, then activity
         let block_a = async {
-            ctx.simplified_schedule_timer(std::time::Duration::from_millis(10))
+            ctx.schedule_timer(std::time::Duration::from_millis(10))
                 .await;
-            let r = ctx.simplified_schedule_activity("Work", "A").await?;
+            let r = ctx.schedule_activity("Work", "A").await?;
             Ok::<_, String>(format!("A:{r}"))
         };
 
         // Block B: long timer (should lose)
         let block_b = async {
-            ctx.simplified_schedule_timer(std::time::Duration::from_millis(500))
+            ctx.schedule_timer(std::time::Duration::from_millis(500))
                 .await;
-            let r = ctx.simplified_schedule_activity("Work", "B").await?;
+            let r = ctx.schedule_activity("Work", "B").await?;
             Ok::<_, String>(format!("B:{r}"))
         };
 
         // Block C: medium timer
         let block_c = async {
-            ctx.simplified_schedule_timer(std::time::Duration::from_millis(100))
+            ctx.schedule_timer(std::time::Duration::from_millis(100))
                 .await;
-            let r = ctx.simplified_schedule_activity("Work", "C").await?;
+            let r = ctx.schedule_activity("Work", "C").await?;
             Ok::<_, String>(format!("C:{r}"))
         };
 
-        let (winner_idx, result) = ctx.simplified_select3(block_a, block_b, block_c).await;
+        let (winner_idx, result) = ctx.select3(block_a, block_b, block_c).await.into_tuple();
         Ok(format!("winner:{winner_idx},result:{}", result?))
     };
 
@@ -592,18 +592,18 @@ async fn async_block_nested_join_in_select() {
     let orchestration = |ctx: OrchestrationContext, _input: String| async move {
         // Timeout block
         let timeout = async {
-            ctx.simplified_schedule_timer(std::time::Duration::from_secs(2))
+            ctx.schedule_timer(std::time::Duration::from_secs(2))
                 .await;
             Ok::<_, String>("timeout".to_string())
         };
 
         // Work block: join 3 activities (should complete before timeout)
         let work = async {
-            let f1 = ctx.simplified_schedule_activity("Step", "1");
-            let f2 = ctx.simplified_schedule_activity("Step", "2");
-            let f3 = ctx.simplified_schedule_activity("Step", "3");
+            let f1 = ctx.schedule_activity("Step", "1");
+            let f2 = ctx.schedule_activity("Step", "2");
+            let f3 = ctx.schedule_activity("Step", "3");
 
-            let results = ctx.simplified_join(vec![f1, f2, f3]).await;
+            let results = ctx.join(vec![f1, f2, f3]).await;
             let mut outputs = Vec::new();
             for r in results {
                 outputs.push(r?);
@@ -611,7 +611,7 @@ async fn async_block_nested_join_in_select() {
             Ok::<_, String>(format!("work:[{}]", outputs.join(",")))
         };
 
-        let (winner_idx, result) = ctx.simplified_select2(work, timeout).await;
+        let (winner_idx, result) = ctx.select2(work, timeout).await.into_tuple();
         Ok(format!("winner:{winner_idx},result:{}", result?))
     };
 
@@ -703,7 +703,7 @@ async fn async_block_suborchestration_wins_race() {
 
     // Fast child orchestration
     let child = |ctx: OrchestrationContext, input: String| async move {
-        let result = ctx.simplified_schedule_activity("FastWork", input).await?;
+        let result = ctx.schedule_activity("FastWork", input).await?;
         CHILD_COMPLETED.fetch_add(1, Ordering::SeqCst);
         Ok(format!("child:{result}"))
     };
@@ -713,22 +713,22 @@ async fn async_block_suborchestration_wins_race() {
         // Block A: sub-orchestration + activity (fast)
         let suborchestration_block = async {
             let sub_result = ctx
-                .simplified_schedule_sub_orchestration("FastChild", "sub-input")
+                .schedule_sub_orchestration("FastChild", "sub-input")
                 .await?;
             let activity_result = ctx
-                .simplified_schedule_activity("FastWork", "after-sub")
+                .schedule_activity("FastWork", "after-sub")
                 .await?;
             Ok::<_, String>(format!("blockA:[{sub_result},{activity_result}]"))
         };
 
         // Block B: slow activities (should lose due to 2x500ms = 1 second)
         let slow_block = async {
-            let r1 = ctx.simplified_schedule_activity("SlowWork", "1").await?;
-            let r2 = ctx.simplified_schedule_activity("SlowWork", "2").await?;
+            let r1 = ctx.schedule_activity("SlowWork", "1").await?;
+            let r2 = ctx.schedule_activity("SlowWork", "2").await?;
             Ok::<_, String>(format!("blockB:[{r1},{r2}]"))
         };
 
-        let (winner_idx, result) = ctx.simplified_select2(suborchestration_block, slow_block).await;
+        let (winner_idx, result) = ctx.select2(suborchestration_block, slow_block).await.into_tuple();
         Ok(format!("winner:{winner_idx},result:{}", result?))
     };
 
@@ -816,11 +816,11 @@ async fn async_block_suborchestration_loses_race() {
     let slow_child = |ctx: OrchestrationContext, input: String| async move {
         // First slow activity
         let r1 = ctx
-            .simplified_schedule_activity("VerySlow", format!("{input}-1"))
+            .schedule_activity("VerySlow", format!("{input}-1"))
             .await?;
         // Second slow activity
         let r2 = ctx
-            .simplified_schedule_activity("VerySlow", format!("{input}-2"))
+            .schedule_activity("VerySlow", format!("{input}-2"))
             .await?;
 
         Ok(format!("child:[{r1},{r2}]"))
@@ -831,19 +831,19 @@ async fn async_block_suborchestration_loses_race() {
         // Block A: slow sub-orchestration (should lose)
         let slow_suborchestration_block = async {
             let sub_result = ctx
-                .simplified_schedule_sub_orchestration("SlowChild", "sub-input")
+                .schedule_sub_orchestration("SlowChild", "sub-input")
                 .await?;
             Ok::<_, String>(format!("blockA:{sub_result}"))
         };
 
         // Block B: fast activities (should win)
         let fast_block = async {
-            let r1 = ctx.simplified_schedule_activity("Fast", "1").await?;
-            let r2 = ctx.simplified_schedule_activity("Fast", "2").await?;
+            let r1 = ctx.schedule_activity("Fast", "1").await?;
+            let r2 = ctx.schedule_activity("Fast", "2").await?;
             Ok::<_, String>(format!("blockB:[{r1},{r2}]"))
         };
 
-        let (winner_idx, result) = ctx.simplified_select2(slow_suborchestration_block, fast_block).await;
+        let (winner_idx, result) = ctx.select2(slow_suborchestration_block, fast_block).await.into_tuple();
         Ok(format!("winner:{winner_idx},result:{}", result?))
     };
 
@@ -945,7 +945,7 @@ async fn async_block_multiple_suborchestrations_joined() {
     // Child A: simple transformation
     let child_a = |ctx: OrchestrationContext, input: String| async move {
         let result = ctx
-            .simplified_schedule_activity("Transform", format!("A-{input}"))
+            .schedule_activity("Transform", format!("A-{input}"))
             .await?;
         Ok(format!("childA:{result}"))
     };
@@ -953,20 +953,20 @@ async fn async_block_multiple_suborchestrations_joined() {
     // Child B: double transformation
     let child_b = |ctx: OrchestrationContext, input: String| async move {
         let r1 = ctx
-            .simplified_schedule_activity("Transform", format!("B1-{input}"))
+            .schedule_activity("Transform", format!("B1-{input}"))
             .await?;
         let r2 = ctx
-            .simplified_schedule_activity("Transform", format!("B2-{input}"))
+            .schedule_activity("Transform", format!("B2-{input}"))
             .await?;
         Ok(format!("childB:[{r1},{r2}]"))
     };
 
     // Child C: timer + transformation
     let child_c = |ctx: OrchestrationContext, input: String| async move {
-        ctx.simplified_schedule_timer(std::time::Duration::from_millis(5))
+        ctx.schedule_timer(std::time::Duration::from_millis(5))
             .await;
         let result = ctx
-            .simplified_schedule_activity("Transform", format!("C-{input}"))
+            .schedule_activity("Transform", format!("C-{input}"))
             .await?;
         Ok(format!("childC:timer+{result}"))
     };
@@ -980,10 +980,10 @@ async fn async_block_multiple_suborchestrations_joined() {
         // Block 1: call ChildA + activity
         let block1 = async {
             let sub = ctx
-                .simplified_schedule_sub_orchestration("ChildA", input1)
+                .schedule_sub_orchestration("ChildA", input1)
                 .await?;
             let act = ctx
-                .simplified_schedule_activity("Transform", "block1-extra")
+                .schedule_activity("Transform", "block1-extra")
                 .await?;
             Ok::<_, String>(format!("block1:[{sub},{act}]"))
         };
@@ -991,7 +991,7 @@ async fn async_block_multiple_suborchestrations_joined() {
         // Block 2: call ChildB
         let block2 = async {
             let sub = ctx
-                .simplified_schedule_sub_orchestration("ChildB", input2)
+                .schedule_sub_orchestration("ChildB", input2)
                 .await?;
             Ok::<_, String>(format!("block2:{sub}"))
         };
@@ -999,15 +999,15 @@ async fn async_block_multiple_suborchestrations_joined() {
         // Block 3: activity + call ChildC
         let block3 = async {
             let act = ctx
-                .simplified_schedule_activity("Transform", "block3-first")
+                .schedule_activity("Transform", "block3-first")
                 .await?;
             let sub = ctx
-                .simplified_schedule_sub_orchestration("ChildC", input3)
+                .schedule_sub_orchestration("ChildC", input3)
                 .await?;
             Ok::<_, String>(format!("block3:[{act},{sub}]"))
         };
 
-        let (r1, r2, r3) = ctx.simplified_join3(block1, block2, block3).await;
+        let (r1, r2, r3) = ctx.join3(block1, block2, block3).await;
         Ok(format!("{},{},{}", r1?, r2?, r3?))
     };
 
@@ -1089,13 +1089,13 @@ async fn async_block_suborchestration_racing_timeout() {
 
     // Fast child
     let fast_child = |ctx: OrchestrationContext, input: String| async move {
-        let r = ctx.simplified_schedule_activity("Work", input).await?;
+        let r = ctx.schedule_activity("Work", input).await?;
         Ok(format!("fast-child:{r}"))
     };
 
     // Slow child (should get cancelled)
     let slow_child = |ctx: OrchestrationContext, input: String| async move {
-        let r = ctx.simplified_schedule_activity("SlowWork", input).await?;
+        let r = ctx.schedule_activity("SlowWork", input).await?;
         Ok(format!("slow-child:{r}"))
     };
 
@@ -1104,7 +1104,7 @@ async fn async_block_suborchestration_racing_timeout() {
         // Block A: fast sub-orchestration (should win)
         let fast_block = async {
             let sub = ctx
-                .simplified_schedule_sub_orchestration("FastChild", "fast-input")
+                .schedule_sub_orchestration("FastChild", "fast-input")
                 .await?;
             Ok::<_, String>(format!("blockA:{sub}"))
         };
@@ -1112,19 +1112,19 @@ async fn async_block_suborchestration_racing_timeout() {
         // Block B: slow sub-orchestration (should lose)
         let slow_block = async {
             let sub = ctx
-                .simplified_schedule_sub_orchestration("SlowChild", "slow-input")
+                .schedule_sub_orchestration("SlowChild", "slow-input")
                 .await?;
             Ok::<_, String>(format!("blockB:{sub}"))
         };
 
         // Block C: long timeout (should lose to fast block)
         let timeout_block = async {
-            ctx.simplified_schedule_timer(std::time::Duration::from_secs(2))
+            ctx.schedule_timer(std::time::Duration::from_secs(2))
                 .await;
             Ok::<_, String>("blockC:timeout".to_string())
         };
 
-        let (winner_idx, result) = ctx.simplified_select3(fast_block, slow_block, timeout_block).await;
+        let (winner_idx, result) = ctx.select3(fast_block, slow_block, timeout_block).await.into_tuple();
         Ok(format!("winner:{winner_idx},result:{}", result?))
     };
 
@@ -1235,17 +1235,17 @@ async fn async_block_nested_suborchestration_chain() {
 
     // Grandchild: just does an activity
     let grandchild = |ctx: OrchestrationContext, input: String| async move {
-        let r = ctx.simplified_schedule_activity("Leaf", input).await?;
+        let r = ctx.schedule_activity("Leaf", input).await?;
         Ok(format!("grandchild:{r}"))
     };
 
     // Child: calls grandchild + does its own activity
     let child = |ctx: OrchestrationContext, input: String| async move {
         // Parallel: grandchild + own activity
-        let grandchild_fut = ctx.simplified_schedule_sub_orchestration("Grandchild", format!("gc-{input}"));
-        let own_activity = ctx.simplified_schedule_activity("Leaf", format!("child-{input}"));
+        let grandchild_fut = ctx.schedule_sub_orchestration("Grandchild", format!("gc-{input}"));
+        let own_activity = ctx.schedule_activity("Leaf", format!("child-{input}"));
 
-        let (gc_result, own_result) = ctx.simplified_join2(grandchild_fut, own_activity).await;
+        let (gc_result, own_result) = ctx.join2(grandchild_fut, own_activity).await;
         Ok(format!("child:[{},{}]", gc_result?, own_result?))
     };
 
@@ -1253,22 +1253,22 @@ async fn async_block_nested_suborchestration_chain() {
     let parent = |ctx: OrchestrationContext, input: String| async move {
         let child1 = async {
             let r = ctx
-                .simplified_schedule_sub_orchestration("Child", format!("c1-{input}"))
+                .schedule_sub_orchestration("Child", format!("c1-{input}"))
                 .await?;
             Ok::<_, String>(format!("block1:{r}"))
         };
 
         let child2 = async {
             // Timer + child call
-            ctx.simplified_schedule_timer(std::time::Duration::from_millis(5))
+            ctx.schedule_timer(std::time::Duration::from_millis(5))
                 .await;
             let r = ctx
-                .simplified_schedule_sub_orchestration("Child", format!("c2-{input}"))
+                .schedule_sub_orchestration("Child", format!("c2-{input}"))
                 .await?;
             Ok::<_, String>(format!("block2:timer+{r}"))
         };
 
-        let (r1, r2) = ctx.simplified_join2(child1, child2).await;
+        let (r1, r2) = ctx.join2(child1, child2).await;
         Ok(format!("{},{}", r1?, r2?))
     };
 

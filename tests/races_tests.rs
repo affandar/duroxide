@@ -18,7 +18,7 @@ fn fast_runtime_options() -> RuntimeOptions {
 
 async fn wait_external_completes_with(store: StdArc<dyn Provider>) {
     let orchestrator = |ctx: OrchestrationContext, _input: String| async move {
-        let data = ctx.simplified_schedule_wait("Only").await;
+        let data = ctx.schedule_wait("Only").await;
         Ok(format!("only={data}"))
     };
 
@@ -154,12 +154,12 @@ async fn race_external_vs_timer_ordering_fs() {
 async fn race_event_vs_timer_event_wins_with(store: StdArc<dyn Provider>) {
     let orchestrator = |ctx: OrchestrationContext, _input: String| async move {
         // Subscribe first to ensure we can receive the event deterministically
-        let ev = ctx.simplified_schedule_wait("Race");
+        let ev = ctx.schedule_wait("Race");
         let t = async {
-            ctx.simplified_schedule_timer(Duration::from_millis(100)).await;
+            ctx.schedule_timer(Duration::from_millis(100)).await;
             "timer".to_string()
         };
-        let (idx, result) = ctx.simplified_select2(ev, t).await;
+        let (idx, result) = ctx.select2(ev, t).await.into_tuple();
         match idx {
             0 => Ok(result), // event won
             _ => Ok(result), // timer won - result is already "timer"

@@ -1,24 +1,27 @@
 // Use SQLite via common helper
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self, OrchestrationStatus};
-use duroxide::{ActivityContext, DurableOutput, EventKind, OrchestrationContext, OrchestrationRegistry};
+use duroxide::{ActivityContext, Either2, EventKind, OrchestrationContext, OrchestrationRegistry};
 use std::sync::Arc as StdArc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
 mod common;
 
+/// Tests that select2 resolves based on which completion becomes visible first.
+/// In simplified replay, the engine may poll between history events, so the first delivered
+/// external completion (history order) can win even if it is not the first branch.
 #[tokio::test]
-async fn select2_two_externals_history_order_wins() {
+async fn select2_two_externals_first_delivery_wins() {
     let (store, _td) = common::create_sqlite_store_disk().await;
 
     let orchestrator = |ctx: OrchestrationContext, _input: String| async move {
         let a = ctx.schedule_wait("A");
         let b = ctx.schedule_wait("B");
-        let (idx, out) = ctx.select2(a, b).await;
+        let (idx, out) = ctx.select2(a, b).await.into_tuple();
         match (idx, out) {
-            (0, duroxide::DurableOutput::External(v)) => Ok(format!("A:{v}")),
-            (1, duroxide::DurableOutput::External(v)) => Ok(format!("B:{v}")),
+            (0, v) => Ok(format!("A:{v}")),
+            (1, v) => Ok(format!("B:{v}")),
             _ => unreachable!("select2 should return External outputs here"),
         }
     };
@@ -107,151 +110,38 @@ async fn select2_two_externals_history_order_wins() {
 
     assert!(b_index.is_some(), "expected ExternalEvent B in history: {hist:#?}");
 
-    // If both are present (batch processing), B should come first
+    // Both events should be in history (batch processing enqueued both)
     if let (Some(b_idx), Some(a_idx)) = (b_index, a_index) {
+        // History order is B before A because B was enqueued first
         assert!(
             b_idx < a_idx,
             "expected B (idx={b_idx}) to appear before A (idx={a_idx}) in history order: {hist:#?}"
         );
     }
 
-    // The key assertion: select picked B (the first in history order)
     assert_eq!(
         output, "B:vb",
-        "expected B to win since it's first in history order, got {output}"
+        "expected B to win since it is delivered first (history order), got {output}"
     );
     rt2.shutdown(None).await;
 }
 
+/// Tests that select3 resolves based on history order when multiple completions arrive in the same batch.
+/// B is enqueued first, so B appears first in history and wins.
 #[tokio::test]
-async fn select_two_externals_history_order_wins() {
-    let (store, _td) = common::create_sqlite_store_disk().await;
-
-    let orchestrator = |ctx: OrchestrationContext, _input: String| async move {
-        let a = ctx.schedule_wait("A");
-        let b = ctx.schedule_wait("B");
-        let (idx, out) = ctx.select2(a, b).await;
-        match (idx, out) {
-            (0, duroxide::DurableOutput::External(v)) => Ok(format!("A:{v}")),
-            (1, duroxide::DurableOutput::External(v)) => Ok(format!("B:{v}")),
-            _ => unreachable!("select2 should return External outputs here"),
-        }
-    };
-
-    let acts = ActivityRegistry::builder().build();
-    let reg = OrchestrationRegistry::builder()
-        .register("ABSelect", orchestrator)
-        .build();
-    let rt1 = runtime::Runtime::start_with_store(store.clone(), StdArc::new(acts), reg).await;
-    let client = duroxide::Client::new(store.clone());
-
-    client.start_orchestration("inst-ab", "ABSelect", "").await.unwrap();
-
-    assert!(
-        common::wait_for_history(
-            store.clone(),
-            "inst-ab",
-            |h| {
-                let mut seen_a = false;
-                let mut seen_b = false;
-                for e in h.iter() {
-                    if let EventKind::ExternalSubscribed { name } = &e.kind {
-                        if name == "A" {
-                            seen_a = true;
-                        }
-                        if name == "B" {
-                            seen_b = true;
-                        }
-                    }
-                }
-                seen_a && seen_b
-            },
-            3_000
-        )
-        .await,
-        "timeout waiting for subscriptions"
-    );
-    rt1.shutdown(None).await;
-
-    let wi_b = duroxide::providers::WorkItem::ExternalRaised {
-        instance: "inst-ab".to_string(),
-        name: "B".to_string(),
-        data: "vb".to_string(),
-    };
-    let wi_a = duroxide::providers::WorkItem::ExternalRaised {
-        instance: "inst-ab".to_string(),
-        name: "A".to_string(),
-        data: "va".to_string(),
-    };
-    let _ = store.enqueue_for_orchestrator(wi_b, None).await;
-    let _ = store.enqueue_for_orchestrator(wi_a, None).await;
-
-    let acts2 = ActivityRegistry::builder().build();
-    let reg2 = OrchestrationRegistry::builder()
-        .register("ABSelect", orchestrator)
-        .build();
-    let rt2 = runtime::Runtime::start_with_store(store.clone(), StdArc::new(acts2), reg2).await;
-
-    assert!(
-        common::wait_for_history(
-            store.clone(),
-            "inst-ab",
-            |h| {
-                h.iter()
-                    .any(|e| matches!(&e.kind, EventKind::OrchestrationCompleted { .. }))
-            },
-            5_000
-        )
-        .await,
-        "timeout waiting for completion"
-    );
-    let hist = store.read("inst-ab").await.unwrap_or_default();
-    let output = match hist.last().map(|e| &e.kind) {
-        Some(EventKind::OrchestrationCompleted { output }) => output.clone(),
-        _ => String::new(),
-    };
-
-    // With batch processing, both events may be in history
-    // The key is that select picks the first one in history order
-    let b_index = hist
-        .iter()
-        .position(|e| matches!(&e.kind, EventKind::ExternalEvent { name, .. } if name == "B"));
-    let a_index = hist
-        .iter()
-        .position(|e| matches!(&e.kind, EventKind::ExternalEvent { name, .. } if name == "A"));
-
-    assert!(b_index.is_some(), "expected ExternalEvent B in history: {hist:#?}");
-
-    // If both are present (batch processing), B should come first
-    if let (Some(b_idx), Some(a_idx)) = (b_index, a_index) {
-        assert!(
-            b_idx < a_idx,
-            "expected B (idx={b_idx}) to appear before A (idx={a_idx}) in history order: {hist:#?}"
-        );
-    }
-
-    // The key assertion: select picked B (the first in history order)
-    assert_eq!(
-        output, "B:vb",
-        "expected B to win since it's first in history order, got {output}"
-    );
-    rt2.shutdown(None).await;
-}
-
-#[tokio::test]
-async fn select_three_mixed_history_winner() {
+async fn select3_mixed_branch_order_winner() {
     // A (external), T (timer), B (external): enqueue B first, then A; timer much later
     let (store, _td) = common::create_sqlite_store_disk().await;
 
     let orchestrator = |ctx: OrchestrationContext, _input: String| async move {
-        let a = ctx.schedule_wait("A");
-        let t = ctx.schedule_timer(Duration::from_millis(500));
-        let b = ctx.schedule_wait("B");
-        let (idx, out) = ctx.select(vec![a, t, b]).await;
+        let a = async { Either2::First(ctx.schedule_wait("A").await) };
+        let t = async { Either2::Second(ctx.schedule_timer(Duration::from_millis(500)).await) };
+        let b = async { Either2::First(ctx.schedule_wait("B").await) };
+        let (idx, out) = ctx.select3(a, t, b).await.into_tuple();
         match (idx, out) {
-            (0, duroxide::DurableOutput::External(v)) => Ok(format!("A:{v}")),
-            (1, duroxide::DurableOutput::Timer) => Ok("T".to_string()),
-            (2, duroxide::DurableOutput::External(v)) => Ok(format!("B:{v}")),
+            (0, Either2::First(v)) => Ok(format!("A:{v}")),
+            (1, Either2::Second(_)) => Ok("T".to_string()),
+            (2, Either2::First(v)) => Ok(format!("B:{v}")),
             _ => unreachable!(),
         }
     };
@@ -333,7 +223,7 @@ async fn select_three_mixed_history_winner() {
     };
 
     // With batch processing, both events may be in history
-    // The key is that select picks the first one in history order
+    // When both externals are ready before timer, one of them wins (not the timer)
     let b_index = hist
         .iter()
         .position(|e| matches!(&e.kind, EventKind::ExternalEvent { name, .. } if name == "B"));
@@ -343,7 +233,7 @@ async fn select_three_mixed_history_winner() {
 
     assert!(b_index.is_some(), "expected ExternalEvent B in history: {hist:#?}");
 
-    // If both are present (batch processing), B should come first
+    // History order (B before A) because B was enqueued first
     if let (Some(b_idx), Some(a_idx)) = (b_index, a_index) {
         assert!(
             b_idx < a_idx,
@@ -351,113 +241,64 @@ async fn select_three_mixed_history_winner() {
         );
     }
 
-    // The key assertion: select picked B (the first in history order)
+    // B wins because it appears first in history order (enqueued first)
     assert_eq!(
         output, "B:vb",
-        "expected B to win since it's first in history order, got {output}"
+        "expected B to win since it is delivered first (history order), got {output}"
     );
     rt2.shutdown(None).await;
 }
 
-// MIGRATION NOTE: This test verifies that ctx.join() returns results in history/completion order
-// (order in which completions arrived), not schedule order. In simplified mode, the current
-// implementation returns results in schedule order because the replay engine handles FIFO ordering
-// internally. This semantic difference may need to be addressed if users rely on history ordering.
-// For now, marking as legacy-mode-only since it tests legacy AggregateDurableFuture behavior.
+// Test that join returns results in schedule order (the order futures were passed in).
+// This is the intuitive behavior: join(vec![a, b]) returns [result_a, result_b].
 #[tokio::test]
-#[ignore = "Legacy mode only: join returns history order, simplified mode returns schedule order"]
-async fn join_returns_history_order() {
+async fn join_returns_schedule_order() {
     let (store, _td) = common::create_sqlite_store_disk().await;
 
+    // Activity that returns its input after a variable delay
+    let delay_activity = |_ctx: ActivityContext, input: String| async move {
+        let (name, delay_ms): (String, u64) = serde_json::from_str(&input).unwrap();
+        tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
+        Ok(name)
+    };
+
     let orchestrator = |ctx: OrchestrationContext, _input: String| async move {
-        let a = ctx.schedule_wait("A");
-        let b = ctx.schedule_wait("B");
-        let outs = ctx.join(vec![a, b]).await; // order should match history
+        // Schedule A with longer delay, B with shorter delay
+        // Even though B completes first, join should return [A, B] (schedule order)
+        let a = ctx.schedule_activity("Delay", r#"["A",100]"#);
+        let b = ctx.schedule_activity("Delay", r#"["B",10]"#);
+        let outs = ctx.join(vec![a, b]).await;
         // Map outputs to a compact string
         let s: String = outs
             .into_iter()
-            .map(|o| match o {
-                duroxide::DurableOutput::External(v) => v,
-                _ => String::new(),
-            })
+            .map(|o| o.unwrap_or_else(|e| e))
             .collect::<Vec<_>>()
             .join(",");
         Ok(s)
     };
 
-    let acts = ActivityRegistry::builder().build();
+    let acts = ActivityRegistry::builder()
+        .register("Delay", delay_activity)
+        .build();
     let reg = OrchestrationRegistry::builder()
         .register("JoinAB", orchestrator)
         .build();
-    let rt1 = runtime::Runtime::start_with_store(store.clone(), StdArc::new(acts), reg).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(acts), reg).await;
     let client = duroxide::Client::new(store.clone());
 
     client.start_orchestration("inst-join", "JoinAB", "").await.unwrap();
-    assert!(
-        common::wait_for_history(
-            store.clone(),
-            "inst-join",
-            |h| {
-                let mut seen_a = false;
-                let mut seen_b = false;
-                for e in h.iter() {
-                    if let EventKind::ExternalSubscribed { name } = &e.kind {
-                        if name == "A" {
-                            seen_a = true;
-                        }
-                        if name == "B" {
-                            seen_b = true;
-                        }
-                    }
-                }
-                seen_a && seen_b
-            },
-            10_000
-        )
-        .await
-    );
-    rt1.shutdown(None).await;
-
-    // Enqueue B then A so history order is B, then A
-    let wi_b = duroxide::providers::WorkItem::ExternalRaised {
-        instance: "inst-join".to_string(),
-        name: "B".to_string(),
-        data: "vb".to_string(),
-    };
-    let wi_a = duroxide::providers::WorkItem::ExternalRaised {
-        instance: "inst-join".to_string(),
-        name: "A".to_string(),
-        data: "va".to_string(),
-    };
-    let _ = store.enqueue_for_orchestrator(wi_b, None).await;
-    let _ = store.enqueue_for_orchestrator(wi_a, None).await;
-
-    let acts2 = ActivityRegistry::builder().build();
-    let reg2 = OrchestrationRegistry::builder()
-        .register("JoinAB", orchestrator)
-        .build();
-    let rt2 = runtime::Runtime::start_with_store(store.clone(), StdArc::new(acts2), reg2).await;
-
-    assert!(
-        common::wait_for_history(
-            store.clone(),
-            "inst-join",
-            |h| {
-                h.iter()
-                    .any(|e| matches!(&e.kind, EventKind::OrchestrationCompleted { .. }))
-            },
-            5_000
-        )
-        .await
-    );
-    let hist = store.read("inst-join").await.unwrap_or_default();
-    let output = match hist.last().map(|e| &e.kind) {
-        Some(EventKind::OrchestrationCompleted { output }) => output.clone(),
-        _ => String::new(),
-    };
-    // Ensure output is vb,va to reflect history order B before A
-    assert_eq!(output, "vb,va");
-    rt2.shutdown(None).await;
+    
+    let status = client.wait_for_orchestration("inst-join", Duration::from_secs(5)).await.unwrap();
+    
+    match status {
+        duroxide::OrchestrationStatus::Completed { output } => {
+            // A was scheduled first, B second - join returns in schedule order
+            assert_eq!(output, "A,B", "join should return results in schedule order");
+        }
+        other => panic!("Expected Completed, got {:?}", other),
+    }
+    
+    rt.shutdown(None).await;
 }
 
 // ============================================================================
@@ -508,24 +349,19 @@ async fn test_select2_loser_event_consumed_during_replay() {
                 // Activity will complete fast (with error), timer (500ms) loses
                 let timer1 = ctx.schedule_timer(Duration::from_millis(500));
                 let activity1 = ctx.schedule_activity("FastFailActivity", "");
-                let (winner, output) = ctx.select2(activity1, timer1).await;
 
                 // Activity wins (index 0)
-                let first_error = match winner {
-                    0 => match output {
-                        DurableOutput::Activity(Err(e)) => e,
-                        DurableOutput::Activity(Ok(_)) => return Ok("unexpected success".to_string()),
-                        _ => return Err("unexpected output type".to_string()),
-                    },
-                    1 => return Err("timer won unexpectedly".to_string()),
-                    _ => unreachable!(),
+                let first_error = match ctx.select2(activity1, timer1).await {
+                    Either2::First(Err(e)) => e,
+                    Either2::First(Ok(_)) => return Ok("unexpected success".to_string()),
+                    Either2::Second(_) => return Err("timer won unexpectedly".to_string()),
                 };
 
                 // ATTEMPT 2: Schedule another activity
                 // Previously this would fail with nondeterminism during replay
                 // because the timer's scheduling event wasn't consumed
                 let activity2 = ctx.schedule_activity("FastFailActivity", "");
-                let second_result = activity2.into_activity().await;
+                let second_result = activity2.await;
 
                 Ok(format!("first: {first_error}, second: {second_result:?}"))
             },
@@ -617,16 +453,15 @@ async fn test_select2_schedule_after_winner_returns() {
             // Activity wins immediately, timer is abandoned
             let timer = ctx.schedule_timer(Duration::from_secs(1));
             let activity = ctx.schedule_activity("Instant", "");
-            let (winner, _) = ctx.select2(activity, timer).await;
-
-            if winner != 0 {
+            
+            if !ctx.select2(activity, timer).await.is_first() {
                 return Err("timer won unexpectedly".to_string());
             }
 
             // Now schedule another activity
             // Previously this would fail because the timer's scheduling event
             // wasn't consumed during replay
-            let result = ctx.simplified_schedule_activity("Instant", "").await?;
+            let result = ctx.schedule_activity("Instant", "").await?;
 
             Ok(result)
         })
@@ -707,11 +542,11 @@ async fn simplified_futures_unawaited_completion_does_not_block() {
     // Orchestration: schedule A (don't await), then schedule and await B
     let orchestration = |ctx: OrchestrationContext, _input: String| async move {
         // Schedule A but don't await it yet
-        let a_future = ctx.simplified_schedule_activity("ActivityA", "first");
+        let a_future = ctx.schedule_activity("ActivityA", "first");
 
         // Schedule B and await it immediately
         let b_result = ctx
-            .simplified_schedule_activity("ActivityB", "second")
+            .schedule_activity("ActivityB", "second")
             .await?;
 
         // Now await A

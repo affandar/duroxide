@@ -932,10 +932,10 @@ mod real_ctx_simplified_tests {
         // Now the future should resolve
         let result = poll_once(pinned.as_mut());
         match result {
-            Poll::Ready(DurableOutput::Activity(Ok(v))) => {
+            Poll::Ready(Ok(v)) => {
                 assert_eq!(v, "result-value");
             }
-            other => panic!("Expected Poll::Ready(Activity(Ok(...))), got {:?}", other),
+            other => panic!("Expected Poll::Ready(Ok(...)), got {:?}", other),
         }
     }
 
@@ -977,7 +977,7 @@ mod real_ctx_simplified_tests {
 
         // Timer should resolve
         let result = poll_once(pinned.as_mut());
-        assert!(matches!(result, Poll::Ready(DurableOutput::Timer)));
+        assert!(matches!(result, Poll::Ready(())));
     }
 
     #[test]
@@ -1018,10 +1018,10 @@ mod real_ctx_simplified_tests {
         // Sub-orchestration should resolve
         let result = poll_once(pinned.as_mut());
         match result {
-            Poll::Ready(DurableOutput::SubOrchestration(Ok(v))) => {
+            Poll::Ready(Ok(v)) => {
                 assert_eq!(v, "child-result");
             }
-            other => panic!("Expected Poll::Ready(SubOrchestration(Ok(...))), got {:?}", other),
+            other => panic!("Expected Poll::Ready(Ok(...)), got {:?}", other),
         }
     }
 

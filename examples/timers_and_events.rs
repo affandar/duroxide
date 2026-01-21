@@ -90,48 +90,48 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // Submit the request for approval
         let request_json = serde_json::to_string(&request).map_err(|e| format!("JSON serialize error: {e}"))?;
-        ctx.simplified_schedule_activity("SubmitForApproval", request_json).await?;
+        ctx.schedule_activity("SubmitForApproval", request_json).await?;
 
         // Set up a race between approval and timeout
         // Both arms must return the same type - wrap timer in async block
         let approval_timeout = async {
-            ctx.simplified_schedule_timer(std::time::Duration::from_secs(5)).await;
+            ctx.schedule_timer(std::time::Duration::from_secs(5)).await;
             None::<String>
         };
         let approval_event = async {
-            let data = ctx.simplified_schedule_wait("ApprovalEvent").await;
+            let data = ctx.schedule_wait("ApprovalEvent").await;
             Some(data)
         };
 
         ctx.trace_info("Waiting for approval or timeout...");
 
         // Race between approval event and timeout
-        let (winner_index, result) = ctx.simplified_select2(approval_timeout, approval_event).await;
+        let (winner_index, result) = ctx.select2(approval_timeout, approval_event).await.into_tuple();
 
         match (winner_index, result) {
             (0, None) => {
                 // Timeout occurred - send reminder and wait longer
                 ctx.trace_warn("Approval timeout - sending reminder");
-                ctx.simplified_schedule_activity("SendReminder", &request.request_id).await?;
+                ctx.schedule_activity("SendReminder", &request.request_id).await?;
 
                 // Wait a bit longer for approval
                 let extended_timeout = async {
-                    ctx.simplified_schedule_timer(std::time::Duration::from_secs(3)).await;
+                    ctx.schedule_timer(std::time::Duration::from_secs(3)).await;
                     None::<String>
                 };
                 let approval_event2 = async {
-                    let data = ctx.simplified_schedule_wait("ApprovalEvent").await;
+                    let data = ctx.schedule_wait("ApprovalEvent").await;
                     Some(data)
                 };
 
-                let (_, result2) = ctx.simplified_select2(extended_timeout, approval_event2).await;
+                let (_, result2) = ctx.select2(extended_timeout, approval_event2).await.into_tuple();
                 match result2 {
                     Some(approval_json) => {
                         let response: ApprovalResponse =
                             serde_json::from_str(&approval_json).map_err(|e| format!("JSON parse error: {e}"))?;
                         let response_json =
                             serde_json::to_string(&response).map_err(|e| format!("JSON serialize error: {e}"))?;
-                        ctx.simplified_schedule_activity("ProcessApproval", response_json).await?;
+                        ctx.schedule_activity("ProcessApproval", response_json).await?;
                         Ok(format!("Request {} processed after reminder", request.request_id))
                     }
                     None => {
@@ -146,7 +146,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     serde_json::from_str(&approval_json).map_err(|e| format!("JSON parse error: {e}"))?;
                 let response_json =
                     serde_json::to_string(&response).map_err(|e| format!("JSON serialize error: {e}"))?;
-                ctx.simplified_schedule_activity("ProcessApproval", response_json).await?;
+                ctx.schedule_activity("ProcessApproval", response_json).await?;
                 Ok(format!("Request {} processed promptly", request.request_id))
             }
             _ => Err("Unexpected race result".to_string()),

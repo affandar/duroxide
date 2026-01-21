@@ -1,3 +1,4 @@
+use duroxide::Either2;
 use duroxide::runtime;
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::{EventKind, OrchestrationContext, OrchestrationRegistry, OrchestrationStatus};
@@ -122,9 +123,7 @@ async fn continue_as_new_chain_with_activities() {
         // Execute an activity at each step
         let activity_input = format!("step-{count}");
         let result = ctx
-            .schedule_activity("Echo", activity_input)
-            .into_activity()
-            .await
+            .schedule_activity("Echo", activity_input).await
             .map_err(|e| format!("Activity failed: {e}"))?;
 
         assert_eq!(result, format!("step-{count}"));
@@ -392,7 +391,6 @@ async fn instance_actor_pattern_stress_test() {
                     k8s_name: input_data.k8s_name.clone(),
                 },
             )
-            .into_activity_typed::<GetInstanceConnectionOutput>()
             .await
             .map_err(|e| format!("Failed to get instance connection: {e}"))?;
 
@@ -408,7 +406,7 @@ async fn instance_actor_pattern_stress_test() {
                 ctx.trace_warn("No connection string available yet, skipping health check");
 
                 // Wait and retry
-                ctx.schedule_timer(Duration::from_millis(50)).into_timer().await; // 50ms (was 30s)
+                ctx.schedule_timer(Duration::from_millis(50)).await; // 50ms (was 30s)
 
                 input_data.iteration += 1;
                 let input_json =
@@ -425,7 +423,6 @@ async fn instance_actor_pattern_stress_test() {
                     connection_string: connection_string.clone(),
                 },
             )
-            .into_activity_typed::<TestConnectionOutput>()
             .await;
 
         // Step 4: Determine health status
@@ -452,7 +449,6 @@ async fn instance_actor_pattern_stress_test() {
                     error_message,
                 },
             )
-            .into_activity_typed::<RecordHealthCheckOutput>()
             .await
             .map_err(|e| format!("Failed to record health check: {e}"))?;
 
@@ -465,14 +461,13 @@ async fn instance_actor_pattern_stress_test() {
                     health_status: status.to_string(),
                 },
             )
-            .into_activity_typed::<UpdateInstanceHealthOutput>()
             .await
             .map_err(|e| format!("Failed to update instance health: {e}"))?;
 
         ctx.trace_info(format!("Health check complete, status: {status}"));
 
         // Step 7: Wait before next check
-        ctx.schedule_timer(Duration::from_millis(50)).into_timer().await; // 50ms (was 30s)
+        ctx.schedule_timer(Duration::from_millis(50)).await; // 50ms (was 30s)
 
         ctx.trace_info("Restarting instance actor with continue-as-new");
 
@@ -688,16 +683,14 @@ async fn timer_fires_at_correct_time_regression() {
         let timer = ctx.schedule_timer(Duration::from_secs(1));
         let activity = ctx.schedule_activity("SlowActivity", "100"); // 100ms activity
 
-        let (winner, output) = ctx.select2(timer, activity).await;
-
-        let result = if winner == 0 {
-            // Timer won - would indicate regression of the fix
-            "timer_won".to_string()
-        } else {
-            // Activity won - this is correct
-            match output {
-                duroxide::DurableOutput::Activity(result) => result.unwrap_or_else(|e| format!("activity_failed: {e}")),
-                _ => "unexpected_output".to_string(),
+        let result = match ctx.select2(timer, activity).await {
+            Either2::First(_) => {
+                // Timer won - would indicate regression of the fix
+                "timer_won".to_string()
+            }
+            Either2::Second(r) => {
+                // Activity won - this is correct
+                r.unwrap_or_else(|e| format!("activity_failed: {e}"))
             }
         };
         Ok(result)

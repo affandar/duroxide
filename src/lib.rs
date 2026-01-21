@@ -26,8 +26,7 @@
 //!
 //! // 3. Define your orchestration
 //! let orchestration = |ctx: OrchestrationContext, name: String| async move {
-//!     let greeting = ctx.schedule_activity("Greet", name)
-//!         .into_activity().await?;
+//!     let greeting = ctx.schedule_activity("Greet", name).await?;
 
 // Mutex poisoning indicates a panic in another thread - a critical error.
 // All expect()/unwrap() calls on mutex locks in this module are intentional:
@@ -79,7 +78,7 @@
 //! # use std::time::Duration;
 //! # async fn example(ctx: OrchestrationContext) -> Result<(), String> {
 //! // ✅ CORRECT: Orchestration-level delay using timer
-//! ctx.schedule_timer(Duration::from_secs(5)).into_timer().await;  // Wait 5 seconds
+//! ctx.schedule_timer(Duration::from_secs(5)).await;  // Wait 5 seconds
 //!
 //! // ✅ ALSO CORRECT: Activity can poll/sleep as part of its work
 //! // Example: Activity that provisions a VM and polls for readiness
@@ -92,7 +91,7 @@
 //! // });
 //!
 //! // ❌ WRONG: Activity that ONLY sleeps (use timer instead)
-//! // ctx.schedule_activity("Sleep5Seconds", "").into_activity().await;
+//! // ctx.schedule_activity("Sleep5Seconds", "").await;
 //! # Ok(())
 //! # }
 //! ```
@@ -155,30 +154,28 @@
 //! See `docs/provider-implementation-guide.md` and `src/providers/sqlite.rs` for a complete,
 //! production-grade provider implementation.
 //!
-//! ## ⚠️ Critical: DurableFuture Conversion Pattern
+//! ## Simplified API
 //!
-//! **All schedule methods return `DurableFuture` - you MUST convert before awaiting:**
+//! All schedule methods return typed futures that can be awaited directly:
 //!
 //! ```rust,no_run
 //! # use duroxide::OrchestrationContext;
 //! # use std::time::Duration;
 //! # async fn example(ctx: OrchestrationContext) -> Result<(), String> {
-//! // ✅ CORRECT patterns:
-//! let result = ctx.schedule_activity("Task", "input").into_activity().await?;
-//! ctx.schedule_timer(Duration::from_secs(5)).into_timer().await;
-//! let event = ctx.schedule_wait("Event").into_event().await;
-//! let sub_result = ctx.schedule_sub_orchestration("Sub", "input").into_sub_orchestration().await?;
+//! // Activities return Result<String, String>
+//! let result = ctx.schedule_activity("Task", "input").await?;
 //!
-//! // ❌ WRONG - These won't compile:
-//! // let result = ctx.schedule_activity("Task", "input").await;  // Missing .into_activity()!
-//! // ctx.schedule_timer(Duration::from_secs(5)).await;                            // Missing .into_timer()!
-//! // let event = ctx.schedule_wait("Event").await;              // Missing .into_event()!
+//! // Timers return ()
+//! ctx.schedule_timer(Duration::from_secs(5)).await;
+//!
+//! // External events return String
+//! let event = ctx.schedule_wait("Event").await;
+//!
+//! // Sub-orchestrations return Result<String, String>
+//! let sub_result = ctx.schedule_sub_orchestration("Sub", "input").await?;
 //! # Ok(())
 //! # }
 //! ```
-//!
-//! **Why this pattern?** `DurableFuture` is a unified type that can represent any async operation.
-//! The `.into_*()` methods convert it to the specific awaitable type you need.
 //!
 //! ## Common Patterns
 //!
@@ -186,15 +183,15 @@
 //! ```rust,no_run
 //! # use duroxide::OrchestrationContext;
 //! async fn chain_example(ctx: OrchestrationContext) -> Result<String, String> {
-//!     let step1 = ctx.schedule_activity("Step1", "input").into_activity().await?;
-//!     let step2 = ctx.schedule_activity("Step2", &step1).into_activity().await?;
+//!     let step1 = ctx.schedule_activity("Step1", "input").await?;
+//!     let step2 = ctx.schedule_activity("Step2", &step1).await?;
 //!     Ok(step2)
 //! }
 //! ```
 //!
 //! ### Fan-Out/Fan-In
 //! ```rust,no_run
-//! # use duroxide::{OrchestrationContext, DurableOutput};
+//! # use duroxide::OrchestrationContext;
 //! async fn fanout_example(ctx: OrchestrationContext) -> Vec<String> {
 //!     let futures = vec![
 //!         ctx.schedule_activity("Process", "item1"),
@@ -202,65 +199,53 @@
 //!         ctx.schedule_activity("Process", "item3"),
 //!     ];
 //!     let results = ctx.join(futures).await;
-//!     results.into_iter().map(|r| match r {
-//!         DurableOutput::Activity(Ok(s)) => s,
-//!         _ => "error".to_string(),
-//!     }).collect()
+//!     results.into_iter().filter_map(|r| r.ok()).collect()
 //! }
 //! ```
 //!
-//! ### Human-in-the-Loop
+//! ### Human-in-the-Loop (Timeout Pattern)
 //! ```rust,no_run
-//! # use duroxide::{OrchestrationContext, DurableOutput};
+//! # use duroxide::{OrchestrationContext, Either2};
 //! # use std::time::Duration;
 //! async fn approval_example(ctx: OrchestrationContext) -> String {
-//!     let timer = ctx.schedule_timer(Duration::from_secs(30)); // 30 second timeout
+//!     let timeout = ctx.schedule_timer(Duration::from_secs(30));
 //!     let approval = ctx.schedule_wait("ApprovalEvent");
 //!     
-//!     let (_, result) = ctx.select2(timer, approval).await;
-//!     match result {
-//!         DurableOutput::External(data) => data,
-//!         DurableOutput::Timer => "timeout".to_string(),
-//!         _ => "error".to_string(),
+//!     match ctx.select2(approval, timeout).await {
+//!         Either2::First(data) => data,
+//!         Either2::Second(()) => "timeout".to_string(),
 //!     }
 //! }
 //! ```
 //!
 //! ### Delays and Timeouts
 //! ```rust,no_run
-//! # use duroxide::{OrchestrationContext, DurableOutput};
+//! # use duroxide::{OrchestrationContext, Either2};
 //! # use std::time::Duration;
 //! async fn delay_example(ctx: OrchestrationContext) -> Result<String, String> {
-//!     // ✅ CORRECT: Use timer for orchestration-level delays
-//!     ctx.schedule_timer(Duration::from_secs(5)).into_timer().await;
+//!     // Use timer for orchestration-level delays
+//!     ctx.schedule_timer(Duration::from_secs(5)).await;
 //!     
 //!     // Process after delay
-//!     let result = ctx.schedule_activity("ProcessData", "input")
-//!         .into_activity().await?;
+//!     let result = ctx.schedule_activity("ProcessData", "input").await?;
 //!     Ok(result)
 //! }
 //!
 //! async fn timeout_example(ctx: OrchestrationContext) -> Result<String, String> {
 //!     // Race work against timeout
 //!     let work = ctx.schedule_activity("SlowOperation", "input");
-//!     let timeout = ctx.schedule_timer(Duration::from_secs(5));
+//!     let timeout = ctx.schedule_timer(Duration::from_secs(30));
 //!     
-//!     let (winner_index, result) = ctx.select2(work, timeout).await;
-//!     match winner_index {
-//!         0 => match result {
-//!             DurableOutput::Activity(Ok(value)) => Ok(value),
-//!             DurableOutput::Activity(Err(e)) => Err(format!("Work failed: {e}")),
-//!             _ => unreachable!(),
-//!         },
-//!         1 => Err("Operation timed out".to_string()),
-//!         _ => unreachable!(),
+//!     match ctx.select2(work, timeout).await {
+//!         Either2::First(result) => result,
+//!         Either2::Second(()) => Err("Operation timed out".to_string()),
 //!     }
 //! }
 //! ```
 //!
 //! ### Fan-Out/Fan-In with Error Handling
 //! ```rust,no_run
-//! # use duroxide::{OrchestrationContext, DurableOutput};
+//! # use duroxide::OrchestrationContext;
 //! async fn fanout_with_errors(ctx: OrchestrationContext, items: Vec<String>) -> Result<Vec<String>, String> {
 //!     // Schedule all work in parallel
 //!     let futures: Vec<_> = items.iter()
@@ -274,12 +259,11 @@
 //!     let mut successes = Vec::new();
 //!     for result in results {
 //!         match result {
-//!             DurableOutput::Activity(Ok(value)) => successes.push(value),
-//!             DurableOutput::Activity(Err(e)) => {
+//!             Ok(value) => successes.push(value),
+//!             Err(e) => {
 //!                 // Log error but continue processing other items
 //!                 ctx.trace_error(format!("Item processing failed: {e}"));
 //!             }
-//!             _ => return Err("Unexpected result type".to_string()),
 //!         }
 //!     }
 //!     
@@ -416,7 +400,6 @@
 //! 9. **Runtime** atomically commits history + queue changes via `ack_orchestration_item()`
 //!
 //! All operations are deterministic and replayable from history.
-use std::cell::{Cell, RefCell};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
@@ -463,6 +446,98 @@ pub type ProviderRef = Arc<dyn providers::Provider>;
 
 /// Shared reference to an OrchestrationHandler
 pub type OrchestrationHandlerRef = Arc<dyn runtime::OrchestrationHandler>;
+
+// ============================================================================
+// Heterogeneous Select Result Types
+// ============================================================================
+
+/// Result type for `select2` - represents which of two futures completed first.
+/// 
+/// Use this when racing two futures with different output types:
+/// ```rust,no_run
+/// # use duroxide::{OrchestrationContext, Either2};
+/// # use std::time::Duration;
+/// # async fn example(ctx: OrchestrationContext) -> Result<String, String> {
+/// let activity = ctx.schedule_activity("Work", "input");
+/// let timeout = ctx.schedule_timer(Duration::from_secs(30));
+/// 
+/// match ctx.select2(activity, timeout).await {
+///     Either2::First(result) => result,
+///     Either2::Second(()) => Err("Timed out".to_string()),
+/// }
+/// # }
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Either2<A, B> {
+    /// First future completed first
+    First(A),
+    /// Second future completed first  
+    Second(B),
+}
+
+impl<A, B> Either2<A, B> {
+    /// Returns true if this is the First variant
+    pub fn is_first(&self) -> bool {
+        matches!(self, Either2::First(_))
+    }
+    
+    /// Returns true if this is the Second variant
+    pub fn is_second(&self) -> bool {
+        matches!(self, Either2::Second(_))
+    }
+    
+    /// Returns the index of the winner (0 for First, 1 for Second)
+    pub fn index(&self) -> usize {
+        match self {
+            Either2::First(_) => 0,
+            Either2::Second(_) => 1,
+        }
+    }
+}
+
+impl<T> Either2<T, T> {
+    /// For homogeneous Either2 (both types are the same), extract as (index, value).
+    /// This is useful for migration from the old `(usize, T)` return type.
+    pub fn into_tuple(self) -> (usize, T) {
+        match self {
+            Either2::First(v) => (0, v),
+            Either2::Second(v) => (1, v),
+        }
+    }
+}
+
+/// Result type for `select3` - represents which of three futures completed first.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Either3<A, B, C> {
+    /// First future completed first
+    First(A),
+    /// Second future completed first
+    Second(B),
+    /// Third future completed first
+    Third(C),
+}
+
+impl<A, B, C> Either3<A, B, C> {
+    /// Returns the index of the winner (0 for First, 1 for Second, 2 for Third)
+    pub fn index(&self) -> usize {
+        match self {
+            Either3::First(_) => 0,
+            Either3::Second(_) => 1,
+            Either3::Third(_) => 2,
+        }
+    }
+}
+
+impl<T> Either3<T, T, T> {
+    /// For homogeneous Either3 (all types are the same), extract as (index, value).
+    pub fn into_tuple(self) -> (usize, T) {
+        match self {
+            Either3::First(v) => (0, v),
+            Either3::Second(v) => (1, v),
+            Either3::Third(v) => (2, v),
+        }
+    }
+}
 
 // System call operation constants
 pub(crate) const SYSCALL_OP_GUID: &str = "guid";
@@ -1065,8 +1140,9 @@ pub enum Action {
 /// Controls how `schedule_*()` methods behave and how durable futures resolve:
 /// - `Legacy`: Current behavior - mutates history, futures scan history for completions
 /// - `Simplified`: New model - emits actions, futures check results map
+#[doc(hidden)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub(crate) enum ReplayMode {
+pub enum ReplayMode {
     /// Legacy mode: schedule_*() mutates history, futures scan history for completions.
     /// This is the current production behavior.
     #[default]
@@ -1077,8 +1153,12 @@ pub(crate) enum ReplayMode {
 }
 
 /// Result delivered to a durable future in simplified replay mode.
+/// 
+/// This enum represents the completion states for various durable operations.
+#[doc(hidden)]
 #[derive(Debug, Clone)]
-pub(crate) enum SimplifiedResult {
+#[allow(dead_code)] // ExternalData is part of the design but delivered via get_external_event
+pub enum SimplifiedResult {
     /// Activity completed successfully
     ActivityOk(String),
     /// Activity failed with error
@@ -1263,10 +1343,10 @@ impl CtxInner {
                 return;
             }
         }
-        // affandar : cr : lets think through this a bit more deeply. when / why would no binding be found??
-
-        // If no binding found, store by schedule_id directly (will be looked up by schedule_id)
-        // This handles the case where results arrive before binding
+        tracing::warn!(
+            schedule_id,
+            "dropping completion result with no binding (unsupported for now)"
+        );
     }
 
     /// Check if a result is available for a token.
@@ -1720,9 +1800,22 @@ impl OrchestrationContext {
         self.inner.lock().unwrap().is_replaying
     }
 
-    /// Set the replaying state (used by replay engine).
-    pub(crate) fn set_is_replaying(&self, is_replaying: bool) {
+    /// Set the replaying state (used by replay engine and test harness).
+    #[doc(hidden)]
+    pub fn set_is_replaying(&self, is_replaying: bool) {
         self.inner.lock().unwrap().is_replaying = is_replaying;
+    }
+    
+    /// Bind an external subscription to a schedule_id (used by replay engine and test harness).
+    #[doc(hidden)]
+    pub fn bind_external_subscription(&self, schedule_id: u64, name: &str) {
+        self.inner.lock().unwrap().bind_external_subscription(schedule_id, name);
+    }
+    
+    /// Deliver an external event (used by replay engine and test harness).
+    #[doc(hidden)]
+    pub fn deliver_external_event(&self, name: String, data: String) {
+        self.inner.lock().unwrap().deliver_external_event(name, data);
     }
 
     // =========================================================================
@@ -1795,17 +1888,27 @@ impl OrchestrationContext {
 
     /// Drain emitted actions (simplified mode only).
     /// Returns a list of (token, Action) pairs.
-    pub(crate) fn drain_emitted_actions(&self) -> Vec<(u64, Action)> {
+    #[doc(hidden)]
+    pub fn drain_emitted_actions(&self) -> Vec<(u64, Action)> {
         self.inner.lock().unwrap().drain_emitted_actions()
+    }
+    
+    /// Get a snapshot of emitted actions without draining (simplified mode only).
+    /// Returns a list of (token, Action) pairs.
+    #[doc(hidden)]
+    pub fn get_emitted_actions(&self) -> Vec<(u64, Action)> {
+        self.inner.lock().unwrap().simplified_emitted.clone()
     }
 
     /// Bind a token to a schedule_id (simplified mode only).
-    pub(crate) fn bind_token(&self, token: u64, schedule_id: u64) {
+    #[doc(hidden)]
+    pub fn bind_token(&self, token: u64, schedule_id: u64) {
         self.inner.lock().unwrap().bind_token(token, schedule_id);
     }
 
     /// Deliver a result for a token (simplified mode only).
-    pub(crate) fn deliver_result(&self, schedule_id: u64, result: SimplifiedResult) {
+    #[doc(hidden)]
+    pub fn deliver_result(&self, schedule_id: u64, result: SimplifiedResult) {
         self.inner.lock().unwrap().deliver_result(schedule_id, result);
     }
 
@@ -2087,45 +2190,8 @@ impl OrchestrationContext {
     }
 
     /// Schedule a system call operation (internal helper).
-    pub(crate) fn schedule_system_call(&self, op: &str) -> DurableFuture {
-        let mut inner = self.inner.lock().expect("Mutex should not be poisoned");
-        
-        // In simplified mode, emit action at schedule time (not poll time)
-        let simplified_token = if inner.replay_mode == ReplayMode::Simplified {
-            // For system calls, compute value immediately (they're synchronous)
-            let computed_value = match op {
-                SYSCALL_OP_GUID => generate_guid(),
-                SYSCALL_OP_UTCNOW_MS => inner.now_ms().to_string(),
-                _ => String::new(),
-            };
-            let token = inner.emit_action(Action::SystemCall {
-                scheduling_event_id: 0, // Will be assigned by replay engine
-                op: op.to_string(),
-                value: computed_value.clone(),
-            });
-            // For system calls, deliver result immediately (they're synchronous)
-            // The token is used as the key - we don't wait for event loop binding
-            inner.simplified_results.insert(token, SimplifiedResult::SystemCallValue(computed_value));
-            Some(token)
-        } else {
-            None
-        };
-        drop(inner);
-        
-        DurableFuture {
-            claimed_event_id: Cell::new(None),
-            simplified_token: Cell::new(simplified_token),
-            ctx: self.clone(),
-            kind: Kind::System {
-                op: op.to_string(),
-                value: RefCell::new(None),
-            },
-        }
-    }
-
-    /// Simplified version of system call scheduling - returns impl Future instead of DurableFuture.
     /// System calls are computed synchronously and don't need external resolution.
-    fn simplified_schedule_system_call(&self, op: &str) -> impl Future<Output = Result<String, String>> {
+    fn schedule_system_call(&self, op: &str) -> impl Future<Output = Result<String, String>> {
         let mut inner = self.inner.lock().expect("Mutex should not be poisoned");
         
         // Compute value immediately (system calls are synchronous)
@@ -2152,12 +2218,6 @@ impl OrchestrationContext {
     /// Generate a new deterministic GUID.
     /// Returns a future that resolves to a String GUID.
     pub fn new_guid(&self) -> impl Future<Output = Result<String, String>> {
-        self.simplified_schedule_system_call(SYSCALL_OP_GUID)
-    }
-
-    /// Generate a new deterministic GUID as a DurableFuture.
-    /// This variant returns a DurableFuture that can be used with join/select.
-    pub fn new_guid_future(&self) -> DurableFuture {
         self.schedule_system_call(SYSCALL_OP_GUID)
     }
 
@@ -2180,45 +2240,12 @@ impl OrchestrationContext {
     /// # }
     /// ```
     pub fn utcnow(&self) -> impl Future<Output = Result<SystemTime, String>> {
-        let fut = self.simplified_schedule_system_call(SYSCALL_OP_UTCNOW_MS);
+        let fut = self.schedule_system_call(SYSCALL_OP_UTCNOW_MS);
         async move {
             let s = fut.await?;
             let ms = s.parse::<u64>().map_err(|e| e.to_string())?;
             Ok(UNIX_EPOCH + StdDuration::from_millis(ms))
         }
-    }
-
-    /// Get the current UTC time as a DurableFuture.
-    /// This variant returns a DurableFuture that can be used with join/select.
-    ///
-    /// **Note:** When awaited, this returns a String representation of milliseconds.
-    /// For direct use, prefer `utcnow()` which returns `SystemTime`.
-    ///
-    /// # Example
-    ///
-    /// ```rust,no_run
-    /// # use duroxide::{OrchestrationContext, DurableOutput};
-    /// # use std::time::{SystemTime, Duration, UNIX_EPOCH};
-    /// # async fn example(ctx: OrchestrationContext) -> Result<(), String> {
-    /// let time_future = ctx.utcnow_future();
-    /// let activity_future = ctx.schedule_activity("Task", "input");
-    ///
-    /// let results = ctx.join(vec![time_future, activity_future]).await;
-    /// for result in results {
-    ///     match result {
-    ///         DurableOutput::Activity(Ok(s)) => {
-    ///             // Parse timestamp string to SystemTime
-    ///             let ms: u64 = s.parse().map_err(|e: std::num::ParseIntError| e.to_string())?;
-    ///             let time = UNIX_EPOCH + Duration::from_millis(ms);
-    ///         }
-    ///         _ => {}
-    ///     }
-    /// }
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub fn utcnow_future(&self) -> DurableFuture {
-        self.schedule_system_call(SYSCALL_OP_UTCNOW_MS)
     }
 
     /// Continue the current execution as a new execution with fresh input.
@@ -2245,6 +2272,8 @@ impl OrchestrationContext {
             input,
             version: None,
         };
+
+        // affandar : cr : remove replaymode::simpilfied. everything is now "simplified"
         // In simplified mode, emit action; in legacy mode, record action
         if inner.replay_mode == ReplayMode::Simplified {
             inner.emit_action(action);
@@ -2300,12 +2329,7 @@ pub use crate::futures::{DurableFuture, DurableOutput, JoinFuture, SelectFuture}
 
 /// A unified future for activities, timers, and external events that carries a
 /// correlation ID. Useful for composing with `futures::select`/`join`.
-use crate::futures::Kind;
 use crate::futures::generate_guid;
-
-// Internal tag to classify DurableFuture kinds for history indexing
-use crate::futures::AggregateDurableFuture;
-// KindTag no longer needed - cursor model doesn't use it for matching
 
 // DurableFuture's Future impl lives in crate::futures
 
@@ -2438,83 +2462,6 @@ impl DurableFuture {
 }
 
 impl OrchestrationContext {
-    /// Schedule an activity and return a `DurableFuture` correlated to it.
-    ///
-    /// **Activities should be single-purpose execution units.**
-    /// Pull multi-step logic and control flow into orchestrations.
-    ///
-    /// ⚠️ **IMPORTANT**: You MUST call `.into_activity().await`, not just `.await`!
-    ///
-    /// # Examples
-    /// ```rust,no_run
-    /// # use duroxide::OrchestrationContext;
-    /// # async fn example(ctx: OrchestrationContext) -> Result<(), String> {
-    /// // ✅ CORRECT: Schedule and await activity
-    /// let result = ctx.schedule_activity("ProcessData", "input").into_activity().await?;
-    ///
-    /// // ❌ WRONG: This won't compile!
-    /// // let result = ctx.schedule_activity("ProcessData", "input").await;  // Missing .into_activity()!
-    /// # Ok(())
-    /// # }
-    /// ```
-    ///
-    /// # Good Activity Examples
-    /// - Database queries
-    /// - HTTP API calls (can include retries)
-    /// - File operations
-    /// - Data transformations
-    /// - VM provisioning (can poll for readiness internally)
-    /// - Any single-purpose work unit
-    ///
-    /// # What NOT to put in activities
-    /// - Multi-step business logic (pull into orchestration)
-    /// - Control flow decisions (if/match on business rules)
-    /// - Pure delays with no work (use `schedule_timer()` instead)
-    /// - Timeouts for orchestration coordination (use `select2` with timers)
-    ///
-    /// # Note on Sleep/Polling in Activities
-    ///
-    /// Activities **CAN** sleep or poll as part of their work:
-    /// - ✅ Provisioning a resource and polling for readiness
-    /// - ✅ Retrying an external API with backoff
-    /// - ✅ Waiting for async operation to complete
-    /// - ❌ Activity that ONLY sleeps (use orchestration timer instead)
-    pub fn schedule_activity(&self, name: impl Into<String>, input: impl Into<String>) -> DurableFuture {
-        let name: String = name.into();
-        let input: String = input.into();
-        
-        let mut inner = self.inner.lock().expect("Mutex should not be poisoned");
-        
-        // In simplified mode, emit action at schedule time (not poll time)
-        let simplified_token = if inner.replay_mode == ReplayMode::Simplified {
-            Some(inner.emit_action(Action::CallActivity {
-                scheduling_event_id: 0, // Will be assigned by replay engine
-                name: name.clone(),
-                input: input.clone(),
-            }))
-        } else {
-            None
-        };
-        drop(inner);
-        
-        DurableFuture {
-            claimed_event_id: Cell::new(None),
-            simplified_token: Cell::new(simplified_token),
-            ctx: self.clone(),
-            kind: Kind::Activity { name, input },
-        }
-    }
-
-    /// Typed helper that serializes input and later decodes output via `into_activity_typed`.
-    pub fn schedule_activity_typed<In: serde::Serialize, Out: serde::de::DeserializeOwned>(
-        &self,
-        name: impl Into<String>,
-        input: &In,
-    ) -> DurableFuture {
-        let payload = crate::_typed_codec::Json::encode(input).expect("encode");
-        self.schedule_activity(name, payload)
-    }
-
     /// Schedule activity with automatic retry on failure.
     ///
     /// **Retry behavior:**
@@ -2570,23 +2517,22 @@ impl OrchestrationContext {
             let activity_result = if let Some(timeout) = policy.timeout {
                 // Race activity vs per-attempt timeout
                 let deadline = async {
-                    self.simplified_schedule_timer(timeout).await;
+                    self.schedule_timer(timeout).await;
                     Err::<String, String>("timeout: activity timed out".to_string())
                 };
-                let activity = self.simplified_schedule_activity(&name, &input);
-                let (winner, output) = self.simplified_select2(activity, deadline).await;
+                let activity = self.schedule_activity(&name, &input);
 
-                match (winner, output) {
-                    (0, result) => result,
-                    (1, Err(e)) => {
+                match self.select2(activity, deadline).await {
+                    Either2::First(result) => result,
+                    Either2::Second(Err(e)) => {
                         // Timeout fired - exit immediately, no retry for timeouts
                         return Err(e);
                     }
-                    _ => unreachable!(),
+                    Either2::Second(Ok(_)) => unreachable!(),
                 }
             } else {
                 // No timeout - just await the activity
-                self.simplified_schedule_activity(&name, &input).await
+                self.schedule_activity(&name, &input).await
             };
 
             match activity_result {
@@ -2604,7 +2550,7 @@ impl OrchestrationContext {
                         );
                         let delay = policy.delay_for_attempt(attempt);
                         if !delay.is_zero() {
-                            self.simplified_schedule_timer(delay).await;
+                            self.schedule_timer(delay).await;
                         }
                     }
                 }
@@ -2629,195 +2575,6 @@ impl OrchestrationContext {
         let payload = crate::_typed_codec::Json::encode(input).expect("encode");
         let result = self.schedule_activity_with_retry(name, payload, policy).await?;
         crate::_typed_codec::Json::decode::<Out>(&result)
-    }
-
-    /// Schedule a timer for delays, timeouts, and scheduled execution.
-    ///
-    /// **Use this for any time-based waiting, NOT activities with sleep!**
-    ///
-    /// ⚠️ **IMPORTANT**: You MUST call `.into_timer().await`, not just `.await`!
-    ///
-    /// # Examples
-    /// ```rust,no_run
-    /// # use duroxide::OrchestrationContext;
-    /// # use std::time::Duration;
-    /// # async fn example(ctx: OrchestrationContext) -> Result<(), String> {
-    /// // ✅ CORRECT: Wait 5 seconds
-    /// ctx.schedule_timer(Duration::from_secs(5)).into_timer().await;
-    ///
-    /// // ❌ WRONG: This won't compile!
-    /// // ctx.schedule_timer(Duration::from_secs(5)).await;  // Missing .into_timer()!
-    ///
-    /// // Timeout pattern
-    /// let work = ctx.schedule_activity("LongTask", "input");
-    /// let timeout = ctx.schedule_timer(Duration::from_secs(30)); // 30 second timeout
-    /// let (winner, _) = ctx.select2(work, timeout).await;
-    /// match winner {
-    ///     0 => println!("Work completed"),
-    ///     1 => println!("Timed out"),
-    ///     _ => unreachable!(),
-    /// }
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub fn schedule_timer(&self, delay: std::time::Duration) -> DurableFuture {
-        let delay_ms = delay.as_millis() as u64;
-        
-        let mut inner = self.inner.lock().expect("Mutex should not be poisoned");
-        
-        // In simplified mode, emit action at schedule time (not poll time)
-        let simplified_token = if inner.replay_mode == ReplayMode::Simplified {
-            let now = inner.now_ms();
-            let fire_at_ms = now.saturating_add(delay_ms);
-            Some(inner.emit_action(Action::CreateTimer {
-                scheduling_event_id: 0, // Will be assigned by replay engine
-                fire_at_ms,
-            }))
-        } else {
-            None
-        };
-        drop(inner);
-        
-        DurableFuture {
-            claimed_event_id: Cell::new(None),
-            simplified_token: Cell::new(simplified_token),
-            ctx: self.clone(),
-            kind: Kind::Timer { delay_ms },
-        }
-    }
-
-    /// Subscribe to an external event by name and return its `DurableFuture`.
-    pub fn schedule_wait(&self, name: impl Into<String>) -> DurableFuture {
-        let name: String = name.into();
-        
-        let mut inner = self.inner.lock().expect("Mutex should not be poisoned");
-        
-        // In simplified mode, emit action at schedule time (not poll time)
-        let simplified_token = if inner.replay_mode == ReplayMode::Simplified {
-            Some(inner.emit_action(Action::WaitExternal {
-                scheduling_event_id: 0, // Will be assigned by replay engine
-                name: name.clone(),
-            }))
-        } else {
-            None
-        };
-        drop(inner);
-        
-        DurableFuture {
-            claimed_event_id: Cell::new(None),
-            simplified_token: Cell::new(simplified_token),
-            ctx: self.clone(),
-            kind: Kind::External {
-                name,
-                result: RefCell::new(None),
-            },
-        }
-    }
-
-    /// Typed external wait adapter pairs with `into_event_typed` for decoding.
-    pub fn schedule_wait_typed<T: serde::de::DeserializeOwned>(&self, name: impl Into<String>) -> DurableFuture {
-        self.schedule_wait(name)
-    }
-
-    /// Schedule a sub-orchestration by name with deterministic child instance id derived
-    /// from parent context and event_id (determined during first poll).
-    pub fn schedule_sub_orchestration(&self, name: impl Into<String>, input: impl Into<String>) -> DurableFuture {
-        let name: String = name.into();
-        let input: String = input.into();
-
-        // Instance will be determined during polling based on event_id
-        // Use a placeholder for now
-        let child_instance = RefCell::new(String::from("sub::pending"));
-        
-        let mut inner = self.inner.lock().expect("Mutex should not be poisoned");
-        
-        // In simplified mode, emit action at schedule time (not poll time)
-        let simplified_token = if inner.replay_mode == ReplayMode::Simplified {
-            let placeholder_instance = format!("sub::pending_{}", inner.simplified_next_token + 1);
-            Some(inner.emit_action(Action::StartSubOrchestration {
-                scheduling_event_id: 0, // Will be assigned by replay engine
-                name: name.clone(),
-                version: None,
-                instance: placeholder_instance,
-                input: input.clone(),
-            }))
-        } else {
-            None
-        };
-        drop(inner);
-
-        DurableFuture {
-            claimed_event_id: Cell::new(None),
-            simplified_token: Cell::new(simplified_token),
-            ctx: self.clone(),
-            kind: Kind::SubOrch {
-                name,
-                version: None,
-                instance: child_instance,
-                input,
-            },
-        }
-    }
-
-    pub fn schedule_sub_orchestration_typed<In: serde::Serialize, Out: serde::de::DeserializeOwned>(
-        &self,
-        name: impl Into<String>,
-        input: &In,
-    ) -> DurableFuture {
-        let payload = crate::_typed_codec::Json::encode(input).expect("encode");
-        self.schedule_sub_orchestration(name, payload)
-    }
-
-    /// Versioned sub-orchestration start (string I/O). If `version` is None, registry policy is used.
-    pub fn schedule_sub_orchestration_versioned(
-        &self,
-        name: impl Into<String>,
-        version: Option<String>,
-        input: impl Into<String>,
-    ) -> DurableFuture {
-        let name: String = name.into();
-        let input: String = input.into();
-        let child_instance = RefCell::new(String::from("sub::pending"));
-        
-        let mut inner = self.inner.lock().expect("Mutex should not be poisoned");
-        
-        // In simplified mode, emit action at schedule time (not poll time)
-        let simplified_token = if inner.replay_mode == ReplayMode::Simplified {
-            let placeholder_instance = format!("sub::pending_{}", inner.simplified_next_token + 1);
-            Some(inner.emit_action(Action::StartSubOrchestration {
-                scheduling_event_id: 0, // Will be assigned by replay engine
-                name: name.clone(),
-                version: version.clone(),
-                instance: placeholder_instance,
-                input: input.clone(),
-            }))
-        } else {
-            None
-        };
-        drop(inner);
-
-        DurableFuture {
-            claimed_event_id: Cell::new(None),
-            simplified_token: Cell::new(simplified_token),
-            ctx: self.clone(),
-            kind: Kind::SubOrch {
-                name,
-                version,
-                instance: child_instance,
-                input,
-            },
-        }
-    }
-
-    /// Versioned typed sub-orchestration.
-    pub fn schedule_sub_orchestration_versioned_typed<In: serde::Serialize, Out: serde::de::DeserializeOwned>(
-        &self,
-        name: impl Into<String>,
-        version: Option<String>,
-        input: &In,
-    ) -> DurableFuture {
-        let payload = crate::_typed_codec::Json::encode(input).expect("encode");
-        self.schedule_sub_orchestration_versioned(name, version, payload)
     }
 
     /// Schedule a detached orchestration with an explicit instance id.
@@ -2995,19 +2752,6 @@ impl OrchestrationContext {
 // Aggregate future machinery lives in crate::futures
 
 impl OrchestrationContext {
-    /// Deterministic select over two futures: returns (winner_index, DurableOutput)
-    pub fn select2(&self, a: DurableFuture, b: DurableFuture) -> SelectFuture {
-        SelectFuture(AggregateDurableFuture::new_select(self.clone(), vec![a, b]))
-    }
-    /// Deterministic select over N futures
-    pub fn select(&self, futures: Vec<DurableFuture>) -> SelectFuture {
-        SelectFuture(AggregateDurableFuture::new_select(self.clone(), futures))
-    }
-    /// Deterministic join over N futures (history order)
-    pub fn join(&self, futures: Vec<DurableFuture>) -> JoinFuture {
-        JoinFuture(AggregateDurableFuture::new_join(self.clone(), futures))
-    }
-    
     // =========================================================================
     // Simplified mode variants - work with any Future type
     // =========================================================================
@@ -3028,13 +2772,13 @@ impl OrchestrationContext {
     /// # use duroxide::OrchestrationContext;
     /// # async fn example(ctx: OrchestrationContext) -> Result<String, String> {
     /// // Fan-out to multiple activities
-    /// let f1 = ctx.simplified_schedule_activity("Process", "A");
-    /// let f2 = ctx.simplified_schedule_activity("Process", "B");
-    /// let results = ctx.simplified_join(vec![f1, f2]).await;
+    /// let f1 = ctx.schedule_activity("Process", "A");
+    /// let f2 = ctx.schedule_activity("Process", "B");
+    /// let results = ctx.join(vec![f1, f2]).await;
     /// # Ok("done".to_string())
     /// # }
     /// ```
-    pub fn simplified_schedule_activity(
+    pub fn schedule_activity(
         &self,
         name: impl Into<String>,
         input: impl Into<String>,
@@ -3047,7 +2791,7 @@ impl OrchestrationContext {
         // Only works in simplified mode
         assert!(
             inner.replay_mode == ReplayMode::Simplified,
-            "simplified_schedule_activity can only be used in simplified replay mode"
+            "schedule_activity can only be used in simplified replay mode"
         );
         
         // Emit action at schedule time
@@ -3074,14 +2818,14 @@ impl OrchestrationContext {
         })
     }
     
-    /// Typed version of simplified_schedule_activity that serializes input and deserializes output.
-    pub fn simplified_schedule_activity_typed<In: serde::Serialize, Out: serde::de::DeserializeOwned>(
+    /// Typed version of schedule_activity that serializes input and deserializes output.
+    pub fn schedule_activity_typed<In: serde::Serialize, Out: serde::de::DeserializeOwned>(
         &self,
         name: impl Into<String>,
         input: &In,
     ) -> impl Future<Output = Result<Out, String>> {
         let payload = crate::_typed_codec::Json::encode(input).expect("encode");
-        let fut = self.simplified_schedule_activity(name, payload);
+        let fut = self.schedule_activity(name, payload);
         async move {
             let s = fut.await?;
             crate::_typed_codec::Json::decode::<Out>(&s)
@@ -3095,7 +2839,7 @@ impl OrchestrationContext {
     /// # Panics
     /// 
     /// Panics if called when not in simplified replay mode.
-    pub fn simplified_schedule_timer(
+    pub fn schedule_timer(
         &self,
         delay: std::time::Duration,
     ) -> impl Future<Output = ()> {
@@ -3105,7 +2849,7 @@ impl OrchestrationContext {
         
         assert!(
             inner.replay_mode == ReplayMode::Simplified,
-            "simplified_schedule_timer can only be used in simplified replay mode"
+            "schedule_timer can only be used in simplified replay mode"
         );
         
         let now = inner.now_ms();
@@ -3137,7 +2881,7 @@ impl OrchestrationContext {
     /// # Panics
     /// 
     /// Panics if called when not in simplified replay mode.
-    pub fn simplified_schedule_wait(
+    pub fn schedule_wait(
         &self,
         name: impl Into<String>,
     ) -> impl Future<Output = String> {
@@ -3147,41 +2891,35 @@ impl OrchestrationContext {
         
         assert!(
             inner.replay_mode == ReplayMode::Simplified,
-            "simplified_schedule_wait can only be used in simplified replay mode"
+            "schedule_wait can only be used in simplified replay mode"
         );
         
         let token = inner.emit_action(Action::WaitExternal {
             scheduling_event_id: 0,
             name: name.clone(),
         });
-        // Bind external subscription for lookup
-        let schedule_id = token; // In simplified mode, token is used as temporary schedule_id
-        inner.bind_external_subscription(schedule_id, &name);
         drop(inner);
         
         let ctx = self.clone();
         std::future::poll_fn(move |_cx| {
             let inner = ctx.inner.lock().expect("Mutex should not be poisoned");
-            // Check for external event by looking up the bound schedule_id
+            // Only resolve once the token has been bound to a persisted schedule_id.
+            // External events arriving before subscription binding are currently unsupported.
             if let Some(bound_id) = inner.get_bound_schedule_id(token) {
                 if let Some(data) = inner.get_external_event(bound_id) {
                     return Poll::Ready(data.clone());
                 }
             }
-            // Also check directly by token (before binding is updated)
-            if let Some(data) = inner.get_external_event(token) {
-                return Poll::Ready(data.clone());
-            }
             Poll::Pending
         })
     }
     
-    /// Typed version of simplified_schedule_wait.
-    pub fn simplified_schedule_wait_typed<T: serde::de::DeserializeOwned>(
+    /// Typed version of schedule_wait.
+    pub fn schedule_wait_typed<T: serde::de::DeserializeOwned>(
         &self,
         name: impl Into<String>,
     ) -> impl Future<Output = T> {
-        let fut = self.simplified_schedule_wait(name);
+        let fut = self.schedule_wait(name);
         async move {
             let s = fut.await;
             crate::_typed_codec::Json::decode::<T>(&s).expect("decode")
@@ -3196,12 +2934,12 @@ impl OrchestrationContext {
     /// # Panics
     /// 
     /// Panics if called when not in simplified replay mode.
-    pub fn simplified_schedule_sub_orchestration(
+    pub fn schedule_sub_orchestration(
         &self,
         name: impl Into<String>,
         input: impl Into<String>,
     ) -> impl Future<Output = Result<String, String>> {
-        self.simplified_schedule_sub_orchestration_with_id(name, None::<String>, input)
+        self.schedule_sub_orchestration_with_id(name, None::<String>, input)
     }
     
     /// Schedule a sub-orchestration with an explicit instance ID (simplified mode only).
@@ -3215,9 +2953,37 @@ impl OrchestrationContext {
     /// # Panics
     /// 
     /// Panics if called when not in simplified replay mode.
-    pub fn simplified_schedule_sub_orchestration_with_id(
+    pub fn schedule_sub_orchestration_with_id(
         &self,
         name: impl Into<String>,
+        instance: Option<impl Into<String>>,
+        input: impl Into<String>,
+    ) -> impl Future<Output = Result<String, String>> {
+        self.schedule_sub_orchestration_versioned_with_id(name, None, instance, input)
+    }
+    
+    /// Schedule a versioned sub-orchestration (simplified mode only).
+    /// 
+    /// If `version` is `Some`, that specific version is used.
+    /// If `version` is `None`, the registry's policy (e.g., Latest) is used.
+    /// 
+    /// # Panics
+    /// 
+    /// Panics if called when not in simplified replay mode.
+    pub fn schedule_sub_orchestration_versioned(
+        &self,
+        name: impl Into<String>,
+        version: Option<String>,
+        input: impl Into<String>,
+    ) -> impl Future<Output = Result<String, String>> {
+        self.schedule_sub_orchestration_versioned_with_id(name, version, None::<String>, input)
+    }
+    
+    /// Schedule a versioned sub-orchestration with an explicit instance ID (simplified mode only).
+    pub fn schedule_sub_orchestration_versioned_with_id(
+        &self,
+        name: impl Into<String>,
+        version: Option<String>,
         instance: Option<impl Into<String>>,
         input: impl Into<String>,
     ) -> impl Future<Output = Result<String, String>> {
@@ -3229,7 +2995,7 @@ impl OrchestrationContext {
         
         assert!(
             inner.replay_mode == ReplayMode::Simplified,
-            "simplified_schedule_sub_orchestration_with_id can only be used in simplified replay mode"
+            "schedule_sub_orchestration_versioned_with_id can only be used in simplified replay mode"
         );
         
         // Use explicit instance if provided, otherwise use placeholder that will be replaced
@@ -3237,7 +3003,7 @@ impl OrchestrationContext {
         let token = inner.emit_action(Action::StartSubOrchestration {
             scheduling_event_id: 0,
             name: name.clone(),
-            version: None,
+            version,
             instance: placeholder_instance,
             input: input.clone(),
         });
@@ -3258,24 +3024,24 @@ impl OrchestrationContext {
         })
     }
     
-    /// Typed version of simplified_schedule_sub_orchestration.
-    pub fn simplified_schedule_sub_orchestration_typed<In: serde::Serialize, Out: serde::de::DeserializeOwned>(
+    /// Typed version of schedule_sub_orchestration.
+    pub fn schedule_sub_orchestration_typed<In: serde::Serialize, Out: serde::de::DeserializeOwned>(
         &self,
         name: impl Into<String>,
         input: &In,
     ) -> impl Future<Output = Result<Out, String>> {
-        self.simplified_schedule_sub_orchestration_with_id_typed(name, None::<String>, input)
+        self.schedule_sub_orchestration_with_id_typed(name, None::<String>, input)
     }
     
-    /// Typed version of simplified_schedule_sub_orchestration_with_id.
-    pub fn simplified_schedule_sub_orchestration_with_id_typed<In: serde::Serialize, Out: serde::de::DeserializeOwned>(
+    /// Typed version of schedule_sub_orchestration_with_id.
+    pub fn schedule_sub_orchestration_with_id_typed<In: serde::Serialize, Out: serde::de::DeserializeOwned>(
         &self,
         name: impl Into<String>,
         instance: Option<impl Into<String>>,
         input: &In,
     ) -> impl Future<Output = Result<Out, String>> {
         let payload = crate::_typed_codec::Json::encode(input).expect("encode");
-        let fut = self.simplified_schedule_sub_orchestration_with_id(name, instance, payload);
+        let fut = self.schedule_sub_orchestration_with_id(name, instance, payload);
         async move {
             let s = fut.await?;
             crate::_typed_codec::Json::decode::<Out>(&s)
@@ -3287,7 +3053,7 @@ impl OrchestrationContext {
     /// 
     /// In simplified mode, this is preferred over ctx.join() because it works
     /// with the standard future model rather than requiring DurableFuture.
-    pub async fn simplified_join<T, F>(&self, futures: Vec<F>) -> Vec<T>
+    pub async fn join<T, F>(&self, futures: Vec<F>) -> Vec<T>
     where
         F: Future<Output = T>,
     {
@@ -3295,7 +3061,7 @@ impl OrchestrationContext {
     }
     
     /// Simplified join for exactly 2 futures (convenience method).
-    pub async fn simplified_join2<T1, T2, F1, F2>(&self, f1: F1, f2: F2) -> (T1, T2)
+    pub async fn join2<T1, T2, F1, F2>(&self, f1: F1, f2: F2) -> (T1, T2)
     where
         F1: Future<Output = T1>,
         F2: Future<Output = T2>,
@@ -3304,7 +3070,7 @@ impl OrchestrationContext {
     }
     
     /// Simplified join for exactly 3 futures (convenience method).
-    pub async fn simplified_join3<T1, T2, T3, F1, F2, F3>(&self, f1: F1, f2: F2, f3: F3) -> (T1, T2, T3)
+    pub async fn join3<T1, T2, T3, F1, F2, F3>(&self, f1: F1, f2: F2, f3: F3) -> (T1, T2, T3)
     where
         F1: Future<Output = T1>,
         F2: Future<Output = T2>,
@@ -3314,39 +3080,57 @@ impl OrchestrationContext {
     }
     
     /// Simplified select over 2 futures: returns the result of whichever completes first.
+    /// Select over 2 futures with potentially different output types.
+    /// 
+    /// Returns `Either2::First(result)` if first future wins, `Either2::Second(result)` if second wins.
     /// Uses futures::select_biased! for determinism (first branch polled first).
     /// 
-    /// Returns (0, result) if first future wins, (1, result) if second future wins.
-    pub async fn simplified_select2<T, F1, F2>(&self, f1: F1, f2: F2) -> (usize, T)
+    /// # Example: Activity with timeout
+    /// ```rust,no_run
+    /// # use duroxide::{OrchestrationContext, Either2};
+    /// # use std::time::Duration;
+    /// # async fn example(ctx: OrchestrationContext) -> Result<String, String> {
+    /// let work = ctx.schedule_activity("SlowWork", "input");
+    /// let timeout = ctx.schedule_timer(Duration::from_secs(30));
+    /// 
+    /// match ctx.select2(work, timeout).await {
+    ///     Either2::First(result) => result,
+    ///     Either2::Second(()) => Err("Operation timed out".to_string()),
+    /// }
+    /// # }
+    /// ```
+    pub async fn select2<T1, T2, F1, F2>(&self, f1: F1, f2: F2) -> Either2<T1, T2>
     where
-        F1: Future<Output = T>,
-        F2: Future<Output = T>,
+        F1: Future<Output = T1>,
+        F2: Future<Output = T2>,
     {
         use ::futures::FutureExt;
         let mut f1 = std::pin::pin!(f1.fuse());
         let mut f2 = std::pin::pin!(f2.fuse());
         ::futures::select_biased! {
-            result = f1 => (0, result),
-            result = f2 => (1, result),
+            result = f1 => Either2::First(result),
+            result = f2 => Either2::Second(result),
         }
     }
     
-    /// Simplified select over 3 futures.
+    /// Select over 3 futures with potentially different output types.
+    /// 
+    /// Returns `Either3::First/Second/Third(result)` depending on which future completes first.
     /// Uses futures::select_biased! for determinism (earlier branches polled first).
-    pub async fn simplified_select3<T, F1, F2, F3>(&self, f1: F1, f2: F2, f3: F3) -> (usize, T)
+    pub async fn select3<T1, T2, T3, F1, F2, F3>(&self, f1: F1, f2: F2, f3: F3) -> Either3<T1, T2, T3>
     where
-        F1: Future<Output = T>,
-        F2: Future<Output = T>,
-        F3: Future<Output = T>,
+        F1: Future<Output = T1>,
+        F2: Future<Output = T2>,
+        F3: Future<Output = T3>,
     {
         use ::futures::FutureExt;
         let mut f1 = std::pin::pin!(f1.fuse());
         let mut f2 = std::pin::pin!(f2.fuse());
         let mut f3 = std::pin::pin!(f3.fuse());
         ::futures::select_biased! {
-            result = f1 => (0, result),
-            result = f2 => (1, result),
-            result = f3 => (2, result),
+            result = f1 => Either3::First(result),
+            result = f2 => Either3::Second(result),
+            result = f3 => Either3::Third(result),
         }
     }
 }

@@ -46,7 +46,7 @@ proptest! {
                 .register(
                     orch_name.clone(),
                     |ctx: OrchestrationContext, input: String| async move {
-                        let _ = ctx.simplified_schedule_activity("TestActivity", input.clone()).await;
+                        let _ = ctx.schedule_activity("TestActivity", input.clone()).await;
                         Ok(input)
                     },
                 )
@@ -239,7 +239,7 @@ proptest! {
                     move |ctx: OrchestrationContext, input: String| async move {
                         for i in 0..activity_count_clone {
                             let name = format!("Activity{i}");
-                            let _ = ctx.simplified_schedule_activity(&name, input.clone()).await;
+                            let _ = ctx.schedule_activity(&name, input.clone()).await;
                         }
                         Ok(input)
                     },
@@ -350,7 +350,7 @@ proptest! {
                     move |ctx: OrchestrationContext, input: String| async move {
                         for i in 0..activity_count_clone {
                             let name = format!("Activity{i}");
-                            let _ = ctx.simplified_schedule_activity(&name, input.clone()).await;
+                            let _ = ctx.schedule_activity(&name, input.clone()).await;
                         }
                         Ok(input)
                     },

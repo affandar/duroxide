@@ -70,7 +70,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Sample orchestrations
     let fast_orch = |ctx: OrchestrationContext, _input: String| async move {
         ctx.trace_info("Fast orchestration started");
-        let result = ctx.simplified_schedule_activity("FastTask", "data".to_string()).await?;
+        let result = ctx.schedule_activity("FastTask", "data".to_string()).await?;
         ctx.trace_info("Fast orchestration completed");
         Ok::<_, String>(result)
     };
@@ -78,10 +78,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let slow_orch = |ctx: OrchestrationContext, _input: String| async move {
         ctx.trace_info("Slow orchestration started");
 
-        let r1 = ctx.simplified_schedule_activity("SlowTask", "data".to_string());
-        let r2 = ctx.simplified_schedule_activity("SlowTask", "data".to_string());
+        let r1 = ctx.schedule_activity("SlowTask", "data".to_string());
+        let r2 = ctx.schedule_activity("SlowTask", "data".to_string());
 
-        let _results = ctx.simplified_join2(r1, r2).await;
+        let _results = ctx.join2(r1, r2).await;
 
         ctx.trace_info("All tasks completed");
         Ok::<_, String>("done".to_string())
@@ -90,7 +90,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let failing_orch = |ctx: OrchestrationContext, _input: String| async move {
         ctx.trace_info("Orchestration with potential failure");
 
-        match ctx.simplified_schedule_activity("FailingTask", "fail".to_string()).await {
+        match ctx.schedule_activity("FailingTask", "fail".to_string()).await {
             Ok(r) => Ok::<_, String>(r),
             Err(e) => {
                 ctx.trace_error(format!("Activity failed: {e}"));

@@ -25,7 +25,7 @@ async fn simplified_single_activity() {
 
     // Simple orchestrator: call one activity
     let orchestration = |ctx: OrchestrationContext, input: String| async move {
-        let result = ctx.simplified_schedule_activity("Echo", input).await?;
+        let result = ctx.schedule_activity("Echo", input).await?;
         Ok(result)
     };
 
@@ -92,8 +92,8 @@ async fn simplified_sequential_activities() {
     // Orchestrator: call two activities in sequence
     let orchestration = |ctx: OrchestrationContext, input: String| async move {
         // input = "5" -> add 1 -> "6" -> double -> "12"
-        let added = ctx.simplified_schedule_activity("Add", input).await?;
-        let doubled = ctx.simplified_schedule_activity("Double", added).await?;
+        let added = ctx.schedule_activity("Add", input).await?;
+        let doubled = ctx.schedule_activity("Double", added).await?;
         Ok(doubled)
     };
 
@@ -150,7 +150,7 @@ async fn simplified_timer() {
 
     // Orchestrator: wait for a short timer, then complete
     let orchestration = |ctx: OrchestrationContext, input: String| async move {
-        ctx.simplified_schedule_timer(std::time::Duration::from_millis(10)).await;
+        ctx.schedule_timer(std::time::Duration::from_millis(10)).await;
         Ok(format!("done: {input}"))
     };
 
@@ -244,7 +244,7 @@ async fn simplified_trace_emits_once() {
         // This trace should only emit ONCE (not during replay)
         ctx.trace_info_simplified("TRACE_MARKER_123 before activity");
         
-        let result = ctx.simplified_schedule_activity("Slow", input).await?;
+        let result = ctx.schedule_activity("Slow", input).await?;
         
         // This trace should also only emit ONCE
         ctx.trace_info_simplified("TRACE_MARKER_123 after activity");
@@ -332,7 +332,7 @@ async fn simplified_is_replaying_transitions() {
             NOT_REPLAYING_AT_START.fetch_add(1, Ordering::SeqCst);
         }
         
-        let result = ctx.simplified_schedule_activity("Work", input).await?;
+        let result = ctx.schedule_activity("Work", input).await?;
         
         // Check replaying state after activity completes
         if ctx.is_replaying() {
@@ -406,7 +406,7 @@ async fn simplified_is_replaying_transitions() {
 // Complex E2E Tests
 // =============================================================================
 
-/// Fan-out/fan-in: parallel activities with ctx.simplified_schedule_activity() and ctx.simplified_join()
+/// Fan-out/fan-in: parallel activities with ctx.schedule_activity() and ctx.join()
 #[tokio::test]
 async fn simplified_fan_out_fan_in() {
     let (store, _temp_dir) = common::create_sqlite_store_disk().await;
@@ -421,13 +421,13 @@ async fn simplified_fan_out_fan_in() {
 
     // Orchestrator: fan out to 3 activities, fan in results
     let orchestration = |ctx: OrchestrationContext, _input: String| async move {
-        // Use simplified_schedule_activity which returns a regular future directly
-        let f1 = ctx.simplified_schedule_activity("Process", "A");
-        let f2 = ctx.simplified_schedule_activity("Process", "B");
-        let f3 = ctx.simplified_schedule_activity("Process", "C");
+        // Use schedule_activity which returns a regular future directly
+        let f1 = ctx.schedule_activity("Process", "A");
+        let f2 = ctx.schedule_activity("Process", "B");
+        let f3 = ctx.schedule_activity("Process", "C");
         
-        // Use simplified_join which works with normal futures
-        let results = ctx.simplified_join(vec![f1, f2, f3]).await;
+        // Use join which works with normal futures
+        let results = ctx.join(vec![f1, f2, f3]).await;
         
         // Collect results, handling errors
         let mut outputs = Vec::new();
@@ -494,14 +494,14 @@ async fn simplified_sub_orchestration() {
 
     // Child orchestration: doubles the input
     let child = |ctx: OrchestrationContext, input: String| async move {
-        let result = ctx.simplified_schedule_activity("Double", input).await?;
+        let result = ctx.schedule_activity("Double", input).await?;
         Ok(result)
     };
 
     // Parent orchestration: calls child twice
     let parent = |ctx: OrchestrationContext, input: String| async move {
-        let first = ctx.simplified_schedule_sub_orchestration("Child", input).await?;
-        let second = ctx.simplified_schedule_sub_orchestration("Child", first).await?;
+        let first = ctx.schedule_sub_orchestration("Child", input).await?;
+        let second = ctx.schedule_sub_orchestration("Child", first).await?;
         Ok(second)
     };
 
@@ -558,7 +558,7 @@ async fn simplified_external_event() {
 
     // Orchestration waits for external event
     let orchestration = |ctx: OrchestrationContext, _input: String| async move {
-        let data = ctx.simplified_schedule_wait("approval").await;
+        let data = ctx.schedule_wait("approval").await;
         Ok(format!("approved:{data}"))
     };
 
@@ -642,7 +642,7 @@ async fn simplified_continue_as_new() {
             return Ok(format!("done:{current}"));
         }
         
-        let next = ctx.simplified_schedule_activity("Increment", input).await?;
+        let next = ctx.schedule_activity("Increment", input).await?;
         return ctx.continue_as_new(next).await;  // Terminates execution
     };
 
@@ -710,12 +710,12 @@ async fn simplified_activity_failure() {
 
     // Orchestration that handles activity failure
     let orchestration = |ctx: OrchestrationContext, input: String| async move {
-        let result = ctx.simplified_schedule_activity("FailingActivity", input.clone()).await;
+        let result = ctx.schedule_activity("FailingActivity", input.clone()).await;
         match result {
             Ok(_) => Ok("unexpected success".to_string()),
             Err(e) => {
                 // Activity failed, try fallback
-                let fallback = ctx.simplified_schedule_activity("SucceedingActivity", input).await?;
+                let fallback = ctx.schedule_activity("SucceedingActivity", input).await?;
                 Ok(format!("fallback:{fallback},error:{e}"))
             }
         }
@@ -766,7 +766,7 @@ async fn simplified_activity_failure() {
 
 /// Select2 test: first activity wins, second is cancelled
 #[tokio::test]
-async fn simplified_select2_first_wins() {
+async fn select2_first_wins() {
     let (store, _temp_dir) = common::create_sqlite_store_disk().await;
 
     let activity_registry = ActivityRegistry::builder()
@@ -782,11 +782,11 @@ async fn simplified_select2_first_wins() {
 
     // Orchestration: race two activities
     let orchestration = |ctx: OrchestrationContext, input: String| async move {
-        let fast = ctx.simplified_schedule_activity("Fast", input.clone());
-        let slow = ctx.simplified_schedule_activity("Slow", input);
+        let fast = ctx.schedule_activity("Fast", input.clone());
+        let slow = ctx.schedule_activity("Slow", input);
         
-        // Use simplified_select2 which works with normal futures
-        let (winner_index, result) = ctx.simplified_select2(fast, slow).await;
+        // Use select2 which works with normal futures
+        let (winner_index, result) = ctx.select2(fast, slow).await.into_tuple();
         let output = result?;
         Ok(format!("winner:{winner_index},output:{output}"))
     };
@@ -847,11 +847,11 @@ async fn simplified_timer_with_activity() {
 
     // Orchestration: timer, then activity, then timer, then done
     let orchestration = |ctx: OrchestrationContext, input: String| async move {
-        ctx.simplified_schedule_timer(std::time::Duration::from_millis(10)).await;
+        ctx.schedule_timer(std::time::Duration::from_millis(10)).await;
         
-        let result = ctx.simplified_schedule_activity("Work", input).await?;
+        let result = ctx.schedule_activity("Work", input).await?;
         
-        ctx.simplified_schedule_timer(std::time::Duration::from_millis(10)).await;
+        ctx.schedule_timer(std::time::Duration::from_millis(10)).await;
         
         Ok(format!("done:{result}"))
     };
@@ -987,12 +987,12 @@ async fn simplified_basic_control_flow() {
         .build();
 
     let orchestration = |ctx: OrchestrationContext, _input: String| async move {
-        let flag = ctx.simplified_schedule_activity("GetFlag", "").await?;
+        let flag = ctx.schedule_activity("GetFlag", "").await?;
         ctx.trace_info_simplified(format!("control_flow flag decided = {flag}"));
         if flag == "yes" {
-            Ok(ctx.simplified_schedule_activity("SayYes", "").await?)
+            Ok(ctx.schedule_activity("SayYes", "").await?)
         } else {
-            Ok(ctx.simplified_schedule_activity("SayNo", "").await?)
+            Ok(ctx.schedule_activity("SayNo", "").await?)
         }
     };
 
@@ -1050,7 +1050,7 @@ async fn simplified_loop_accumulation() {
     let orchestration = |ctx: OrchestrationContext, _input: String| async move {
         let mut acc = String::from("start");
         for i in 0..3 {
-            acc = ctx.simplified_schedule_activity("Append", acc).await?;
+            acc = ctx.schedule_activity("Append", acc).await?;
             ctx.trace_info_simplified(format!("loop iteration {i} completed acc={acc}"));
         }
         Ok(acc)
@@ -1119,14 +1119,14 @@ async fn simplified_error_handling_compensation() {
         .build();
 
     let orchestration = |ctx: OrchestrationContext, _input: String| async move {
-        match ctx.simplified_schedule_activity("Fragile", "bad").await {
+        match ctx.schedule_activity("Fragile", "bad").await {
             Ok(v) => {
                 ctx.trace_info_simplified(format!("fragile succeeded value={v}"));
                 Ok(v)
             }
             Err(e) => {
                 ctx.trace_warn_simplified(format!("fragile failed error={e}"));
-                let rec = ctx.simplified_schedule_activity("Recover", "").await?;
+                let rec = ctx.schedule_activity("Recover", "").await?;
                 if rec != "recovered" {
                     ctx.trace_error_simplified(format!("unexpected recovery value={rec}"));
                 }
@@ -1192,7 +1192,7 @@ async fn simplified_basic_error_handling() {
 
     let orchestration = |ctx: OrchestrationContext, input: String| async move {
         ctx.trace_info_simplified("Starting validation");
-        let result = ctx.simplified_schedule_activity("ValidateInput", input).await?;
+        let result = ctx.schedule_activity("ValidateInput", input).await?;
         ctx.trace_info_simplified(format!("Validation result: {result}"));
         Ok(result)
     };
@@ -1283,13 +1283,13 @@ async fn simplified_timeout_with_timer_race() {
 
     let orchestration = |ctx: OrchestrationContext, _input: String| async move {
         // Race activity vs short timeout - both arms return Result<String,String>
-        let activity = ctx.simplified_schedule_activity("LongOp", "");
+        let activity = ctx.schedule_activity("LongOp", "");
         let timer = async {
-            ctx.simplified_schedule_timer(Duration::from_millis(100)).await;
+            ctx.schedule_timer(Duration::from_millis(100)).await;
             Err::<String, String>("timeout".to_string())
         };
 
-        let (idx, result) = ctx.simplified_select2(activity, timer).await;
+        let (idx, result) = ctx.select2(activity, timer).await.into_tuple();
         match (idx, result) {
             (0, Ok(s)) => Ok(s),
             (0, Err(e)) => Err(e),
@@ -1343,7 +1343,7 @@ async fn simplified_timeout_with_timer_race() {
 
 /// Mixed race with select2: activity vs external event.
 #[tokio::test]
-async fn simplified_select2_activity_vs_external() {
+async fn select2_activity_vs_external() {
     let (store, _temp_dir) = common::create_sqlite_store_disk().await;
 
     let activity_registry = ActivityRegistry::builder()
@@ -1357,13 +1357,13 @@ async fn simplified_select2_activity_vs_external() {
     let orchestration = |ctx: OrchestrationContext, _input: String| async move {
         // Wrap activity to return String (not Result) so types match
         let act = async {
-            ctx.simplified_schedule_activity("Sleep", "")
+            ctx.schedule_activity("Sleep", "")
                 .await
                 .unwrap_or_else(|e| format!("error:{e}"))
         };
-        let evt = ctx.simplified_schedule_wait("Go");
+        let evt = ctx.schedule_wait("Go");
 
-        let (idx, result) = ctx.simplified_select2(act, evt).await;
+        let (idx, result) = ctx.select2(act, evt).await.into_tuple();
         match idx {
             0 => Ok(format!("activity:{result}")),
             1 => Ok(format!("event:{result}")),
@@ -1442,14 +1442,14 @@ async fn simplified_sub_orchestration_fanout() {
         .build();
 
     let child_sum = |ctx: OrchestrationContext, input: String| async move {
-        let s = ctx.simplified_schedule_activity("Add", input).await?;
+        let s = ctx.schedule_activity("Add", input).await?;
         Ok(s)
     };
 
     let parent = |ctx: OrchestrationContext, _input: String| async move {
-        let a = ctx.simplified_schedule_sub_orchestration("ChildSum", "1,2");
-        let b = ctx.simplified_schedule_sub_orchestration("ChildSum", "3,4");
-        let (r1, r2) = ctx.simplified_join2(a, b).await;
+        let a = ctx.schedule_sub_orchestration("ChildSum", "1,2");
+        let b = ctx.schedule_sub_orchestration("ChildSum", "3,4");
+        let (r1, r2) = ctx.join2(a, b).await;
         let n1: i64 = r1?.parse().unwrap();
         let n2: i64 = r2?.parse().unwrap();
         Ok(format!("total={}", n1 + n2))
@@ -1508,16 +1508,16 @@ async fn simplified_sub_orchestration_chained() {
         .build();
 
     let leaf = |ctx: OrchestrationContext, input: String| async move {
-        Ok(ctx.simplified_schedule_activity("AppendX", input).await?)
+        Ok(ctx.schedule_activity("AppendX", input).await?)
     };
 
     let mid = |ctx: OrchestrationContext, input: String| async move {
-        let r = ctx.simplified_schedule_sub_orchestration("Leaf", input).await?;
+        let r = ctx.schedule_sub_orchestration("Leaf", input).await?;
         Ok(format!("{r}-mid"))
     };
 
     let root = |ctx: OrchestrationContext, input: String| async move {
-        let r = ctx.simplified_schedule_sub_orchestration("Mid", input).await?;
+        let r = ctx.schedule_sub_orchestration("Mid", input).await?;
         Ok(format!("root:{r}"))
     };
 
@@ -1579,8 +1579,8 @@ async fn simplified_detached_orchestration_scheduling() {
         .build();
 
     let chained = |ctx: OrchestrationContext, input: String| async move {
-        ctx.simplified_schedule_timer(Duration::from_millis(5)).await;
-        Ok(ctx.simplified_schedule_activity("Echo", input).await?)
+        ctx.schedule_timer(Duration::from_millis(5)).await;
+        Ok(ctx.schedule_activity("Echo", input).await?)
     };
 
     let coordinator = |ctx: OrchestrationContext, _input: String| async move {
@@ -1679,7 +1679,7 @@ async fn simplified_typed_activity_and_orchestration() {
         .build();
 
     let orchestration = |ctx: OrchestrationContext, req: AddReq| async move {
-        let out: AddRes = ctx.simplified_schedule_activity_typed::<AddReq, AddRes>("Add", &req).await?;
+        let out: AddRes = ctx.schedule_activity_typed::<AddReq, AddRes>("Add", &req).await?;
         Ok(out)
     };
 
@@ -1735,7 +1735,7 @@ async fn simplified_typed_event() {
     let activity_registry = ActivityRegistry::builder().build();
 
     let orch = |ctx: OrchestrationContext, _in: ()| async move {
-        let ack: Ack = ctx.simplified_schedule_wait_typed::<Ack>("Ready").await;
+        let ack: Ack = ctx.schedule_wait_typed::<Ack>("Ready").await;
         Ok::<_, String>(serde_json::to_string(&ack).unwrap())
     };
 
@@ -1801,7 +1801,7 @@ async fn simplified_status_polling() {
 
     let activity_registry = ActivityRegistry::builder().build();
     let orchestration = |ctx: OrchestrationContext, _input: String| async move {
-        ctx.simplified_schedule_timer(std::time::Duration::from_millis(20)).await;
+        ctx.schedule_timer(std::time::Duration::from_millis(20)).await;
         Ok("done".to_string())
     };
     let orchestration_registry = OrchestrationRegistry::builder()
@@ -1868,8 +1868,8 @@ async fn simplified_nested_function_error_handling() {
 
     // Nested function that can fail with `?`
     async fn process_and_format(ctx: &OrchestrationContext, data: &str) -> Result<String, String> {
-        let processed = ctx.simplified_schedule_activity("ProcessData", data.to_string()).await?;
-        let formatted = ctx.simplified_schedule_activity("FormatOutput", processed).await?;
+        let processed = ctx.schedule_activity("ProcessData", data.to_string()).await?;
+        let formatted = ctx.schedule_activity("FormatOutput", processed).await?;
         Ok(formatted)
     }
 
@@ -1968,15 +1968,15 @@ async fn simplified_error_recovery_with_logging() {
         .build();
 
     let orchestration = |ctx: OrchestrationContext, input: String| async move {
-        let result = ctx.simplified_schedule_activity("ProcessData", input).await;
+        let result = ctx.schedule_activity("ProcessData", input).await;
 
         match result {
             Ok(processed) => Ok(processed),
             Err(error) => {
                 // Log the error
-                let _logged = ctx.simplified_schedule_activity("LogError", error).await?;
+                let _logged = ctx.schedule_activity("LogError", error).await?;
                 // Return a default value instead of failing
-                ctx.simplified_schedule_activity("DefaultValue", "").await
+                ctx.schedule_activity("DefaultValue", "").await
             }
         }
     };
@@ -2108,12 +2108,12 @@ async fn simplified_self_pruning_eternal_orchestration() {
 
         // Process current batch
         let _result = ctx
-            .simplified_schedule_activity("ProcessBatch", state.batch_num.to_string())
+            .schedule_activity("ProcessBatch", state.batch_num.to_string())
             .await?;
 
         // Prune old executions (keep only current)
         let _prune_result = ctx
-            .simplified_schedule_activity("PruneSelf", "")
+            .schedule_activity("PruneSelf", "")
             .await?;
 
         if state.batch_num >= state.total_batches - 1 {
@@ -2204,14 +2204,14 @@ async fn simplified_cancellation_parent_cascades_to_children() {
 
     // Child: waits forever (until canceled)
     let child = |ctx: OrchestrationContext, _input: String| async move {
-        let _ = ctx.simplified_schedule_wait("Go").await;
+        let _ = ctx.schedule_wait("Go").await;
         Ok("done".to_string())
     };
 
     // Parent: starts child with explicit ID and awaits its completion
     let parent = |ctx: OrchestrationContext, _input: String| async move {
         let _ = ctx
-            .simplified_schedule_sub_orchestration_with_id("ChildSample", Some("child-cancel-1"), "seed")
+            .schedule_sub_orchestration_with_id("ChildSample", Some("child-cancel-1"), "seed")
             .await?;
         Ok::<_, String>("parent_done".to_string())
     };

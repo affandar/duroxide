@@ -75,16 +75,13 @@ async fn sub_orchestration_versioned_explicit_and_policy() {
     let parent_explicit = |ctx: OrchestrationContext, _in: String| async move {
         let a = ctx
             .schedule_sub_orchestration_versioned("C", Some("1.0.0".to_string()), "A")
-            .into_sub_orchestration()
             .await
             .unwrap();
         Ok(a)
     };
     let parent_policy = |ctx: OrchestrationContext, _in: String| async move {
         let b = ctx
-            .schedule_sub_orchestration("C", "B")
-            .into_sub_orchestration()
-            .await
+            .schedule_sub_orchestration("C", "B").await
             .unwrap();
         Ok(b)
     };
@@ -290,9 +287,7 @@ async fn sub_orchestration_uses_latest_by_default_and_pinned_when_set() {
     // Parent: call child and return its output
     let parent = |ctx: OrchestrationContext, input: String| async move {
         let res = ctx
-            .schedule_sub_orchestration("ChildFlow", input)
-            .into_sub_orchestration()
-            .await
+            .schedule_sub_orchestration("ChildFlow", input).await
             .unwrap();
         Ok(res)
     };
@@ -359,9 +354,7 @@ async fn parent_calls_child_upgrade_child_and_verify_latest_used() {
     // Parent calls child and returns result
     let parent = |ctx: OrchestrationContext, input: String| async move {
         let res = ctx
-            .schedule_sub_orchestration("Child", input)
-            .into_sub_orchestration()
-            .await
+            .schedule_sub_orchestration("Child", input).await
             .unwrap();
         Ok(res)
     };

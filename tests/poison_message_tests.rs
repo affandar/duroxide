@@ -308,7 +308,7 @@ async fn e2e_activity_item_poison_fails_orchestration() {
         .register(
             "OrchWithActivity",
             |ctx: OrchestrationContext, _input: String| async move {
-                ctx.simplified_schedule_activity("TestActivity", "{}").await
+                ctx.schedule_activity("TestActivity", "{}").await
             },
         )
         .build();
@@ -397,9 +397,7 @@ async fn e2e_sub_orchestration_poison_fails_parent() {
     // Register parent orchestration that calls child
     let orchestrations = OrchestrationRegistry::builder()
         .register("ParentOrch", |ctx: OrchestrationContext, _input: String| async move {
-            ctx.schedule_sub_orchestration("ChildOrch", "{}")
-                .into_sub_orchestration()
-                .await
+            ctx.schedule_sub_orchestration("ChildOrch", "{}").await
         })
         .register("ChildOrch", |_ctx: OrchestrationContext, _input: String| async move {
             Ok::<_, String>("child-result".to_string())
@@ -489,11 +487,11 @@ async fn e2e_one_poisoned_activity_among_many() {
             "MultiActivityOrch",
             |ctx: OrchestrationContext, _input: String| async move {
                 // First activity
-                let _r1 = ctx.simplified_schedule_activity("Activity1", "{}").await?;
+                let _r1 = ctx.schedule_activity("Activity1", "{}").await?;
                 // Second activity - this one will be poisoned
-                let _r2 = ctx.simplified_schedule_activity("Activity2", "{}").await?;
+                let _r2 = ctx.schedule_activity("Activity2", "{}").await?;
                 // Third activity - should not run
-                let r3 = ctx.simplified_schedule_activity("Activity3", "{}").await?;
+                let r3 = ctx.schedule_activity("Activity3", "{}").await?;
                 Ok::<_, String>(r3)
             },
         )
@@ -624,16 +622,14 @@ async fn e2e_activity_poisons_suborchestration_poisons_parent() {
         .register(
             "GrandparentOrch",
             |ctx: OrchestrationContext, _input: String| async move {
-                ctx.schedule_sub_orchestration("ChildWithActivityOrch", "{}")
-                    .into_sub_orchestration()
-                    .await
+                ctx.schedule_sub_orchestration("ChildWithActivityOrch", "{}").await
             },
         )
         .register(
             "ChildWithActivityOrch",
             |ctx: OrchestrationContext, _input: String| async move {
                 // This activity will be poisoned
-                ctx.simplified_schedule_activity("ChildActivity", "{}").await
+                ctx.schedule_activity("ChildActivity", "{}").await
             },
         )
         .build();

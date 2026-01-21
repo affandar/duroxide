@@ -122,9 +122,7 @@ async fn unknown_activity_fails_with_poison() {
             |ctx: duroxide::OrchestrationContext, _input: String| async move {
                 // Try to call an activity that isn't registered
                 let result = ctx
-                    .schedule_activity("UnknownActivity", "input")
-                    .into_activity()
-                    .await?;
+                    .schedule_activity("UnknownActivity", "input").await?;
                 Ok(result)
             },
         )

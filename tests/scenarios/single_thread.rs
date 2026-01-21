@@ -32,7 +32,7 @@ async fn single_thread_basic_orchestration() {
         .build();
 
     let orchestration = |ctx: OrchestrationContext, input: String| async move {
-        let result = ctx.schedule_activity("Echo", input).into_activity().await?;
+        let result = ctx.schedule_activity("Echo", input).await?;
         Ok(result)
     };
 
@@ -81,9 +81,9 @@ async fn single_thread_sequential_activities() {
 
     let orchestration = |ctx: OrchestrationContext, input: String| async move {
         // Execute 3 activities sequentially
-        let r1 = ctx.schedule_activity("Add", input).into_activity().await?;
-        let r2 = ctx.schedule_activity("Add", r1).into_activity().await?;
-        let r3 = ctx.schedule_activity("Add", r2).into_activity().await?;
+        let r1 = ctx.schedule_activity("Add", input).await?;
+        let r2 = ctx.schedule_activity("Add", r1).await?;
+        let r3 = ctx.schedule_activity("Add", r2).await?;
         Ok(r3)
     };
 
@@ -127,7 +127,7 @@ async fn single_thread_timer_handling() {
 
     let orchestration = |ctx: OrchestrationContext, _input: String| async move {
         // Wait for a short timer
-        ctx.schedule_timer(Duration::from_millis(50)).into_timer().await;
+        ctx.schedule_timer(Duration::from_millis(50)).await;
         Ok("timer_done".to_string())
     };
 
@@ -218,7 +218,7 @@ async fn single_thread_concurrent_orchestrations() {
         .build();
 
     let orchestration = |ctx: OrchestrationContext, input: String| async move {
-        ctx.schedule_activity("Process", input).into_activity().await
+        ctx.schedule_activity("Process", input).await
     };
 
     let orchestrations = OrchestrationRegistry::builder()
@@ -273,7 +273,7 @@ async fn single_thread_single_concurrency() {
         .build();
 
     let orchestration = |ctx: OrchestrationContext, input: String| async move {
-        ctx.schedule_activity("Work", input).into_activity().await
+        ctx.schedule_activity("Work", input).await
     };
 
     let orchestrations = OrchestrationRegistry::builder()
@@ -358,9 +358,7 @@ async fn single_thread_1x1_cooperative_activity_cancellation() {
 
     let orchestration = |ctx: OrchestrationContext, _input: String| async move {
         let _result = ctx
-            .schedule_activity("CooperativeActivity", "input")
-            .into_activity()
-            .await;
+            .schedule_activity("CooperativeActivity", "input").await;
         Ok("done".to_string())
     };
 
@@ -468,7 +466,7 @@ async fn single_thread_1x1_runaway_activity_aborted() {
     };
 
     let orchestration = |ctx: OrchestrationContext, _input: String| async move {
-        let _ = ctx.schedule_activity("RunawayActivity", "input").into_activity().await;
+        let _ = ctx.schedule_activity("RunawayActivity", "input").await;
         Ok("ok".to_string())
     };
 

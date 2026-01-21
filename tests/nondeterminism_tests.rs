@@ -33,12 +33,12 @@ async fn code_swap_triggers_nondeterminism() {
 
     // Code A: schedules activity "A1" then waits for completion
     let orch_a = |ctx: OrchestrationContext, _input: String| async move {
-        let res = ctx.simplified_schedule_activity("A1", "foo").await.unwrap();
+        let res = ctx.schedule_activity("A1", "foo").await.unwrap();
         Ok(res)
     };
     // Code B: schedules activity "B1" (different name/id)
     let orch_b = |ctx: OrchestrationContext, _input: String| async move {
-        let res = ctx.simplified_schedule_activity("B1", "bar").await.unwrap();
+        let res = ctx.schedule_activity("B1", "bar").await.unwrap();
         Ok(res)
     };
 
@@ -48,38 +48,36 @@ async fn code_swap_triggers_nondeterminism() {
     let client = Client::new(store.clone());
     client.start_orchestration("inst-swap", "SwapTest", "").await.unwrap();
 
-    // Wait for ActivityScheduled("A1") to appear in history and capture it
-    let evt = common::wait_for_history_event(
+    // Wait for ActivityScheduled("A1") to appear in history and capture its schedule id.
+    let a1_schedule_id = common::wait_for_history_event(
         store.clone(),
         "inst-swap",
         |hist| {
             hist.iter().find_map(|e| match &e.kind {
-                EventKind::ActivityScheduled { name, .. } if name == "A1" => Some(e.clone()),
+                EventKind::ActivityScheduled { name, .. } if name == "A1" => Some(e.event_id),
                 _ => None,
             })
         },
         2000,
     )
     .await;
-    match evt {
-        Some(e) if matches!(&e.kind, EventKind::ActivityScheduled { .. }) => {}
-        _ => panic!("timed out waiting for A1 schedule"),
-    }
+    let a1_schedule_id = a1_schedule_id.expect("timed out waiting for A1 schedule");
 
-    // Simulate code swap: drop old runtime, create new one with registry B
-    drop(rt_a);
+    // Simulate code swap: properly shutdown old runtime, create new one with registry B
+    rt_a.shutdown(None).await;
     let reg_b = OrchestrationRegistry::builder().register("SwapTest", orch_b).build();
     let _rt_b = runtime::Runtime::start_with_store(store.clone(), StdArc::new(activity_registry), reg_b).await;
 
-    // Poke the instance so it activates and runs a turn (nondeterminism check occurs before completions)
-    // Use a timer that fires immediately to trigger a turn reliably
+    // Poke the instance so it activates and runs a turn.
+    // Use a *valid* completion for the existing A1 schedule id; this reliably wakes the
+    // orchestrator even under the "warn+drop unmatched completions" policy.
     let _ = store
         .enqueue_for_orchestrator(
-            WorkItem::TimerFired {
+            WorkItem::ActivityCompleted {
                 instance: "inst-swap".to_string(),
                 execution_id: 1,
-                id: 999,       // Use a high ID that won't conflict with orchestration timers
-                fire_at_ms: 0, // Fire immediately
+                id: a1_schedule_id,
+                result: serde_json::to_string(&Ok::<String, String>("poke".to_string())).unwrap(),
             },
             Some(Duration::ZERO),
         )
@@ -122,7 +120,7 @@ async fn completion_kind_mismatch_triggers_nondeterminism() {
     let orch = |ctx: OrchestrationContext, _input: String| async move {
         // Create a timer that fires in 1 second (1000ms)
         let timer_future = ctx.schedule_timer(Duration::from_millis(1000));
-        let _result = timer_future.into_timer().await;
+        let _result = timer_future.await;
         Ok("timer_completed".to_string())
     };
 
@@ -204,7 +202,7 @@ async fn unexpected_completion_id_triggers_nondeterminism() {
 
     // Orchestration that waits for external events (doesn't schedule anything with ID 999)
     let orch = |ctx: OrchestrationContext, _input: String| async move {
-        let _result = ctx.simplified_schedule_wait("test_event").await;
+        let _result = ctx.schedule_wait("test_event").await;
         Ok("external_completed".to_string())
     };
 
@@ -269,7 +267,7 @@ async fn unexpected_timer_completion_triggers_nondeterminism() {
     // Simple orchestration that just waits for external events (doesn't create any timers)
     let orch = |ctx: OrchestrationContext, _input: String| async move {
         // Wait for an external event, but don't create any timers
-        let _result = ctx.simplified_schedule_wait("test").await;
+        let _result = ctx.schedule_wait("test").await;
         Ok("done".to_string())
     };
 
@@ -345,7 +343,7 @@ async fn continue_as_new_with_unconsumed_completion_triggers_nondeterminism() {
             let _activity_future = ctx.schedule_activity("MyActivity", "test_input");
 
             // Wait for an external event - this blocks the orchestration
-            let _ = ctx.simplified_schedule_wait("proceed_signal").await;
+            let _ = ctx.schedule_wait("proceed_signal").await;
 
             // When we get the signal, call continue_as_new
             // The activity is still pending and its completion might be in the batch
@@ -450,7 +448,7 @@ async fn execution_id_filtering_without_continue_as_new_triggers_nondeterminism(
     // Orchestration that schedules an activity but doesn't use continue_as_new
     let orch = |ctx: OrchestrationContext, _input: String| async move {
         ctx.trace_info("scheduling activity".to_string());
-        let result = ctx.simplified_schedule_activity("TestActivity", "input").await;
+        let result = ctx.schedule_activity("TestActivity", "input").await;
         ctx.trace_info("got result, completing".to_string());
         result
     };
@@ -521,7 +519,7 @@ async fn duplicate_external_events_are_handled_gracefully() {
     // Orchestration that waits for external event
     let orch = |ctx: OrchestrationContext, _input: String| async move {
         ctx.trace_info("waiting for external event".to_string());
-        let result = ctx.simplified_schedule_wait("test_signal").await;
+        let result = ctx.schedule_wait("test_signal").await;
         Ok(result)
     };
 

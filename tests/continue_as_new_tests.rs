@@ -140,7 +140,7 @@ async fn continue_as_new_event_routes_to_latest() {
             }
             "wait" => {
                 ctx.trace_info("second exec -> subscribe and wait".to_string());
-                let v = ctx.simplified_schedule_wait("Go").await;
+                let v = ctx.schedule_wait("Go").await;
                 Ok(v)
             }
             _ => Ok(input),
@@ -252,7 +252,7 @@ async fn continue_as_new_event_drop_then_process() {
             }
             "wait" => {
                 ctx.trace_info("second exec -> subscribe and wait".to_string());
-                let v = ctx.simplified_schedule_wait("Go").await;
+                let v = ctx.schedule_wait("Go").await;
                 Ok(v)
             }
             _ => Ok(input),
@@ -355,8 +355,8 @@ async fn event_drop_then_retry_after_subscribe() {
     let orch = |ctx: OrchestrationContext, _input: String| async move {
         ctx.trace_info("subscribe after a short delay".to_string());
         // Introduce a small timer before subscribing to simulate early event arrival
-        ctx.simplified_schedule_timer(Duration::from_millis(100)).await;
-        let v = ctx.simplified_schedule_wait("Data").await;
+        ctx.schedule_timer(Duration::from_millis(100)).await;
+        let v = ctx.schedule_wait("Data").await;
         Ok(v)
     };
 
@@ -432,7 +432,7 @@ async fn old_execution_completions_are_ignored() {
     // Orchestration that waits for external events (stays active)
     let orch = |ctx: OrchestrationContext, _input: String| async move {
         // Wait for an external event to keep the orchestration active
-        let _result = ctx.simplified_schedule_wait("continue_signal").await;
+        let _result = ctx.schedule_wait("continue_signal").await;
         Ok("orchestration_complete".to_string())
     };
 
@@ -490,7 +490,7 @@ async fn future_execution_completions_are_ignored() {
 
     // Simple orchestration that waits for external events
     let orch = |ctx: OrchestrationContext, _input: String| async move {
-        let _result = ctx.simplified_schedule_wait("test_event").await;
+        let _result = ctx.schedule_wait("test_event").await;
         Ok("completed".to_string())
     };
 

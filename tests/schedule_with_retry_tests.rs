@@ -1255,7 +1255,7 @@ async fn test_activity_completes_after_continue_as_new() {
         .register("CANOrch", |ctx: OrchestrationContext, input: String| async move {
             let count: i32 = input.parse().unwrap_or(0);
 
-            let result = ctx.simplified_schedule_activity("TrackedActivity", &input).await?;
+            let result = ctx.schedule_activity("TrackedActivity", &input).await?;
 
             if count < 2 {
                 return ctx.continue_as_new((count + 1).to_string()).await;

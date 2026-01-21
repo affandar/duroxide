@@ -31,7 +31,7 @@ async fn activity_reliability_after_crash_before_completion_enqueue() {
         ctx.trace_info("Starting activity reliability test orchestration");
 
         // Schedule an activity
-        let result = ctx.simplified_schedule_activity("TestActivity", input).await?;
+        let result = ctx.schedule_activity("TestActivity", input).await?;
 
         ctx.trace_info("Activity completed successfully");
         Ok(format!("Activity result: {result}"))
@@ -211,9 +211,8 @@ async fn multiple_activities_reliability_after_crash() {
         let mut outputs = Vec::new();
         for result in results {
             match result {
-                DurableOutput::Activity(Ok(output)) => outputs.push(output),
-                DurableOutput::Activity(Err(e)) => return Err(e),
-                _ => return Err("Unexpected output type".to_string()),
+                Ok(output) => outputs.push(output),
+                Err(e) => return Err(e),
             }
         }
 
@@ -361,7 +360,7 @@ async fn worker_abandon_on_ack_failure_enables_retry() {
 
     let orchestrations = runtime::registry::OrchestrationRegistry::builder()
         .register("AckFailOrch", |ctx: OrchestrationContext, _input: String| async move {
-            ctx.simplified_schedule_activity("CountingActivity", "{}").await
+            ctx.schedule_activity("CountingActivity", "{}").await
         })
         .build();
 

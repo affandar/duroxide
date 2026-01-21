@@ -44,9 +44,7 @@ async fn e2e_replay_completion_only_must_use_version_from_history() {
         async move {
             v102_called.fetch_add(1, Ordering::SeqCst);
             let result = ctx
-                .schedule_activity("system-prune", "prune-input")
-                .into_activity()
-                .await?;
+                .schedule_activity("system-prune", "prune-input").await?;
             Ok(result)
         }
     };
@@ -59,9 +57,7 @@ async fn e2e_replay_completion_only_must_use_version_from_history() {
             v103_called.fetch_add(1, Ordering::SeqCst);
             // This schedules a DIFFERENT activity - incompatible during replay!
             let result = ctx
-                .schedule_activity("system-prune-2", "prune-input")
-                .into_activity()
-                .await?;
+                .schedule_activity("system-prune-2", "prune-input").await?;
             Ok(result)
         }
     };
@@ -193,9 +189,7 @@ async fn e2e_replay_completion_only_after_can_must_use_version_from_history() {
                 // Execution 2: schedule activity (this is where replay happens after restart)
                 exec2_called.fetch_add(1, Ordering::SeqCst);
                 let result = ctx
-                    .schedule_activity("system-prune", "prune-input")
-                    .into_activity()
-                    .await?;
+                    .schedule_activity("system-prune", "prune-input").await?;
                 Ok(result)
             }
         }
@@ -209,9 +203,7 @@ async fn e2e_replay_completion_only_after_can_must_use_version_from_history() {
             v103_called.fetch_add(1, Ordering::SeqCst);
             // This schedules a DIFFERENT activity - incompatible during replay!
             let result = ctx
-                .schedule_activity("system-prune-2", "prune-input")
-                .into_activity()
-                .await?;
+                .schedule_activity("system-prune-2", "prune-input").await?;
             Ok(result)
         }
     };
@@ -709,7 +701,7 @@ async fn e2e_can_input_preserved_during_completion_only_replay() {
         async move {
             inputs.lock().unwrap().push(input.clone());
             // Schedule activity to force a second turn
-            let result = ctx.schedule_activity("Echo", &input).into_activity().await?;
+            let result = ctx.schedule_activity("Echo", &input).await?;
             Ok(format!("v2-got-input:{result}"))
         }
     };
