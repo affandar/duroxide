@@ -403,12 +403,11 @@
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
-use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
+use std::task::{Context, Poll};
 
 // Public orchestration primitives and executor
 
 pub mod client;
-pub mod futures;
 pub mod runtime;
 // Re-export descriptor type for public API ergonomics
 pub use runtime::OrchestrationDescriptor;
@@ -542,7 +541,6 @@ impl<T> Either3<T, T, T> {
 // System call operation constants
 pub(crate) const SYSCALL_OP_GUID: &str = "guid";
 pub(crate) const SYSCALL_OP_UTCNOW_MS: &str = "utcnow_ms";
-pub(crate) const SYSCALL_OP_TRACE_PREFIX: &str = "trace:";
 
 use crate::_typed_codec::Codec;
 // LogLevel is now defined locally in this file
@@ -1182,59 +1180,23 @@ struct CtxInner {
     /// Next subscription index per external event name
     external_next_index: std::collections::HashMap<String, usize>,
 
-    // === Legacy Mode State (kept for DurableFuture compatibility) ===
-    history: Vec<Event>,
-    actions: Vec<Action>,
-
-    // Event ID generation
-    next_event_id: u64,
-
-    // Track claimed scheduling events (to prevent collision)
-    claimed_scheduling_events: std::collections::HashSet<u64>,
-
-    // Track consumed completions by event_id (FIFO enforcement)
-    consumed_completions: std::collections::HashSet<u64>,
-
-    // Track cancelled source_event_ids (select2 losers) - their completions are auto-skipped in FIFO
-    cancelled_source_ids: std::collections::HashSet<u64>,
-
-    // Track cancelled activity scheduling ids (select/select2 losers).
-    // These are ActivityScheduled event_ids for losers that should be cancelled via the provider.
-    cancelled_activity_ids: std::collections::HashSet<u64>,
-
-    // Track consumed external events (by name) since they're searched, not cursor-based
-    consumed_external_events: std::collections::HashSet<String>,
-
     // Execution metadata
     execution_id: u64,
     instance_id: String,
     orchestration_name: String,
     orchestration_version: String,
-    worker_id: Option<String>,
     logging_enabled_this_poll: bool,
-    // When set, indicates a nondeterminism condition detected by futures during polling
-    nondeterminism_error: Option<String>,
 }
 
 impl CtxInner {
     fn new(
-        history: Vec<Event>,
+        _history: Vec<Event>, // Kept for API compatibility, no longer used
         execution_id: u64,
         instance_id: String,
         orchestration_name: String,
         orchestration_version: String,
-        worker_id: Option<String>,
+        _worker_id: Option<String>, // Kept for API compatibility, no longer used
     ) -> Self {
-        // Compute next event_id based on maximum event_id in history
-        // (skip event_id=0 which are placeholders)
-        let next_event_id = history
-            .iter()
-            .map(|e| e.event_id())
-            .filter(|id| *id > 0)
-            .max()
-            .map(|max_id| max_id + 1)
-            .unwrap_or(1);
-
         Self {
             // Start in replaying state - will be set to false when we move past baseline history
             is_replaying: true,
@@ -1248,29 +1210,13 @@ impl CtxInner {
             external_arrivals: Default::default(),
             external_next_index: Default::default(),
 
-            // Legacy mode state (kept for DurableFuture compatibility)
-            history,
-            actions: Vec::new(),
-            next_event_id,
-            claimed_scheduling_events: Default::default(),
-            consumed_completions: Default::default(),
-            cancelled_source_ids: Default::default(),
-            cancelled_activity_ids: Default::default(),
-            consumed_external_events: Default::default(),
+            // Execution metadata
             execution_id,
             instance_id,
             orchestration_name,
             orchestration_version,
-            worker_id,
             logging_enabled_this_poll: false,
-            nondeterminism_error: None,
         }
-    }
-
-    fn record_action(&mut self, a: Action) {
-        // Scheduling a new action means this poll is producing new decisions
-        self.logging_enabled_this_poll = true;
-        self.actions.push(a);
     }
 
     fn now_ms(&self) -> u64 {
@@ -1949,24 +1895,6 @@ impl OrchestrationContext {
         self.inner.lock().unwrap().orchestration_version.clone()
     }
 
-    /// Returns the current logical time in milliseconds based on the last
-    /// `TimerFired` event in history.
-    /// 
-    /// NOTE: This was used by legacy run_turn* functions, now deprecated.
-    #[allow(dead_code)]
-    #[deprecated(note = "Legacy mode removed. Use runtime tests instead of run_turn.")]
-    fn take_actions(&self) -> Vec<Action> {
-        std::mem::take(&mut self.inner.lock().unwrap().actions)
-    }
-
-    /// NOTE: This was used by legacy run_turn* functions, now deprecated.
-    #[allow(dead_code)]
-    #[deprecated(note = "Legacy mode removed. Use runtime tests instead of run_turn.")]
-    pub(crate) fn take_cancelled_activity_ids(&self) -> Vec<u64> {
-        let mut inner = self.inner.lock().expect("Mutex should not be poisoned");
-        inner.cancelled_activity_ids.drain().collect()
-    }
-
     // Replay-safe logging control
     /// Indicates whether logging is enabled for the current poll. This is
     /// flipped on when a decision is recorded to minimize log noise.
@@ -2182,151 +2110,36 @@ impl OrchestrationContext {
     }
 }
 
-// Unified future/output that allows joining different orchestration primitives
+/// Generate a deterministic GUID for use in orchestrations.
+///
+/// Uses timestamp + thread-local counter for uniqueness.
+fn generate_guid() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
 
-/// Output of a `DurableFuture` when awaited via unified composition.
-pub use crate::futures::{DurableFuture, DurableOutput, JoinFuture, SelectFuture};
-
-// NOTE: Current replay model strictly consumes the next history event for each await.
-// This breaks down in races (e.g., select(timer, external)) where the host may append
-// multiple completions in one turn, and the "loser" event can end up ahead of the next
-// awaited operation, causing a replay mismatch. We will refactor to correlate by stable
-// IDs and buffer completions so futures resolve by correlation rather than head-of-queue
-// order, matching Durable Task semantics where multiple results can be present out of
-// arrival order without corrupting replay.
-
-/// A unified future for activities, timers, and external events that carries a
-/// correlation ID. Useful for composing with `futures::select`/`join`.
-use crate::futures::generate_guid;
-
-// DurableFuture's Future impl lives in crate::futures
-
-impl DurableFuture {
-    /// Converts this unified future into a future that resolves only for
-    /// an activity completion or failure.
-    /// Await an activity result as a raw String (back-compat API).
-    pub fn into_activity(self) -> impl Future<Output = Result<String, String>> {
-        struct Map(DurableFuture);
-        impl Future for Map {
-            type Output = Result<String, String>;
-            fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-                let this = unsafe { self.map_unchecked_mut(|s| &mut s.0) };
-                match this.poll(cx) {
-                    Poll::Ready(DurableOutput::Activity(v)) => Poll::Ready(v),
-                    Poll::Ready(other) => {
-                        panic!("into_activity used on non-activity future: {other:?}")
-                    }
-                    Poll::Pending => Poll::Pending,
-                }
-            }
-        }
-        Map(self)
+    // Thread-local counter for uniqueness within the same timestamp
+    thread_local! {
+        static COUNTER: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
     }
+    let counter = COUNTER.with(|c| {
+        let val = c.get();
+        c.set(val.wrapping_add(1));
+        val
+    });
 
-    /// Await an activity result decoded to a typed value.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the activity fails or if the result cannot be deserialized to the target type.
-    pub fn into_activity_typed<Out: serde::de::DeserializeOwned>(self) -> impl Future<Output = Result<Out, String>> {
-        struct Map(DurableFuture);
-        impl Future for Map {
-            type Output = Result<String, String>;
-            fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-                let this = unsafe { self.map_unchecked_mut(|s| &mut s.0) };
-                match this.poll(cx) {
-                    Poll::Ready(DurableOutput::Activity(v)) => Poll::Ready(v),
-                    Poll::Ready(other) => {
-                        panic!("into_activity used on non-activity future: {other:?}")
-                    }
-                    Poll::Pending => Poll::Pending,
-                }
-            }
-        }
-        async move {
-            let s = Map(self).await?;
-            crate::_typed_codec::Json::decode::<Out>(&s)
-        }
-    }
-
-    /// Converts this unified future into a future that resolves when the
-    /// corresponding timer fires.
-    pub fn into_timer(self) -> impl Future<Output = ()> {
-        struct Map(DurableFuture);
-        impl Future for Map {
-            type Output = ();
-            fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-                let this = unsafe { self.map_unchecked_mut(|s| &mut s.0) };
-                match this.poll(cx) {
-                    Poll::Ready(DurableOutput::Timer) => Poll::Ready(()),
-                    Poll::Ready(other) => panic!("into_timer used on non-timer future: {other:?}"),
-                    Poll::Pending => Poll::Pending,
-                }
-            }
-        }
-        Map(self)
-    }
-
-    /// Converts this unified future into a future that resolves with the
-    /// payload of the correlated external event.
-    /// Await an external event as a raw String (back-compat API).
-    pub fn into_event(self) -> impl Future<Output = String> {
-        struct Map(DurableFuture);
-        impl Future for Map {
-            type Output = String;
-            fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-                let this = unsafe { self.map_unchecked_mut(|s| &mut s.0) };
-                match this.poll(cx) {
-                    Poll::Ready(DurableOutput::External(v)) => Poll::Ready(v),
-                    Poll::Ready(other) => {
-                        panic!("into_event used on non-external future: {other:?}")
-                    }
-                    Poll::Pending => Poll::Pending,
-                }
-            }
-        }
-        Map(self)
-    }
-
-    /// Await an external event decoded to a typed value.
-    pub async fn into_event_typed<T: serde::de::DeserializeOwned>(self) -> T {
-        // Deserialization should never fail if the type matches the stored data - if it does, it's a programming error
-        crate::_typed_codec::Json::decode::<T>(&Self::into_event(self).await)
-            .expect("Deserialization should never fail for matching types")
-    }
-
-    /// Converts this unified future into a future that resolves only for
-    /// a sub-orchestration completion or failure.
-    /// Await a sub-orchestration result as a raw String (back-compat API).
-    pub fn into_sub_orchestration(self) -> impl Future<Output = Result<String, String>> {
-        struct Map(DurableFuture);
-        impl Future for Map {
-            type Output = Result<String, String>;
-            fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-                let this = unsafe { self.map_unchecked_mut(|s| &mut s.0) };
-                match this.poll(cx) {
-                    Poll::Ready(DurableOutput::SubOrchestration(v)) => Poll::Ready(v),
-                    Poll::Ready(other) => {
-                        panic!("into_sub_orchestration used on non-sub-orch future: {other:?}")
-                    }
-                    Poll::Pending => Poll::Pending,
-                }
-            }
-        }
-        Map(self)
-    }
-
-    /// Await a sub-orchestration result decoded to a typed value.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the sub-orchestration fails or if the result cannot be deserialized to the target type.
-    pub async fn into_sub_orchestration_typed<Out: serde::de::DeserializeOwned>(self) -> Result<Out, String> {
-        match Self::into_sub_orchestration(self).await {
-            Ok(s) => crate::_typed_codec::Json::decode::<Out>(&s),
-            Err(e) => Err(e),
-        }
-    }
+    // Format as UUID-like string
+    format!(
+        "{:08x}-{:04x}-{:04x}-{:04x}-{:012x}",
+        (timestamp >> 96) as u32,
+        ((timestamp >> 80) & 0xFFFF) as u16,
+        (counter & 0xFFFF) as u16,
+        ((timestamp >> 64) & 0xFFFF) as u16,
+        (timestamp & 0xFFFFFFFFFFFF) as u64
+    )
 }
 
 impl OrchestrationContext {
@@ -2851,26 +2664,4 @@ impl OrchestrationContext {
     }
 }
 
-fn noop_waker() -> Waker {
-    unsafe fn clone(_: *const ()) -> RawWaker {
-        RawWaker::new(std::ptr::null(), &VTABLE)
-    }
-    unsafe fn wake(_: *const ()) {}
-    unsafe fn wake_by_ref(_: *const ()) {}
-    unsafe fn drop(_: *const ()) {}
-    static VTABLE: RawWakerVTable = RawWakerVTable::new(clone, wake, wake_by_ref, drop);
-    unsafe { Waker::from_raw(RawWaker::new(std::ptr::null(), &VTABLE)) }
-}
 
-fn poll_once<F: Future>(mut fut: Pin<&mut F>) -> Poll<F::Output> {
-    let w = noop_waker();
-    let mut cx = Context::from_waker(&w);
-    fut.as_mut().poll(&mut cx)
-}
-
-// Legacy run_turn_* functions removed in Phase 2 (replay simplification)
-// These functions used the legacy cursor-based replay mode which has been
-// replaced by the simplified event-processing replay engine.
-//
-// For testing orchestrations, use the full runtime instead of run_turn().
-// See tests/simplified_replay_e2e.rs for examples.
