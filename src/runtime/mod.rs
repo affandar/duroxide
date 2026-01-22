@@ -737,7 +737,6 @@ impl Runtime {
         let runtime = Arc::new(Self {
             joins: Mutex::new(joins),
             history_store,
-
             orchestration_registry,
             current_execution_ids: Mutex::new(HashMap::new()),
             shutdown_flag: Arc::new(AtomicBool::new(false)),
