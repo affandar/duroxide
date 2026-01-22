@@ -11,6 +11,9 @@
 //! - Complex activity workflows
 //! - Single-thread runtime mode (for embedded hosts)
 //! - Rolling deployment scenarios (multi-node with version upgrades)
+#![allow(clippy::unwrap_used)]
+#![allow(clippy::clone_on_ref_ptr)]
+#![allow(clippy::expect_used)]
 
 #[path = "scenarios/toygres.rs"]
 mod toygres;

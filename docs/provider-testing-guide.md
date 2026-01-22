@@ -191,7 +191,6 @@ async fn custom_orchestration(ctx: OrchestrationContext, input: String) -> Resul
     
     for task in tasks {
         let result = ctx.schedule_activity("ProcessTask", task.to_string())
-            .into_activity()
             .await?;
         results.push(result);
     }

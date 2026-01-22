@@ -3,13 +3,16 @@
 //! This example demonstrates parallel execution of multiple activities
 //! and deterministic result aggregation - a common pattern for
 //! processing multiple items concurrently.
+#![allow(clippy::unwrap_used)]
+#![allow(clippy::clone_on_ref_ptr)]
+#![allow(clippy::expect_used)]
 //!
 //! Run with: `cargo run --example fan_out_fan_in`
 
 use duroxide::providers::sqlite::SqliteProvider;
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
-use duroxide::{ActivityContext, Client, DurableOutput, OrchestrationContext, OrchestrationRegistry};
+use duroxide::{ActivityContext, Client, OrchestrationContext, OrchestrationRegistry};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -91,7 +94,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut email_results = Vec::new();
         for result in profile_results {
             match result {
-                DurableOutput::Activity(Ok(profile_json)) => {
+                Ok(profile_json) => {
                     let profile: UserProfile =
                         serde_json::from_str(&profile_json).map_err(|e| format!("JSON parse error: {e}"))?;
                     ctx.trace_info(format!("Fetched profile for user {}", profile.user_id));
@@ -100,11 +103,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let email_future = ctx.schedule_activity("SendWelcomeEmail", profile_json);
                     email_results.push(email_future);
                 }
-                DurableOutput::Activity(Err(e)) => {
+                Err(e) => {
                     ctx.trace_error(format!("Failed to fetch user profile: {e}"));
                     return Err(format!("Profile fetch failed: {e}"));
                 }
-                _ => return Err("Unexpected result type".to_string()),
             }
         }
 
@@ -114,14 +116,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         for result in email_completions {
             match result {
-                DurableOutput::Activity(Ok(message)) => {
+                Ok(message) => {
                     ctx.trace_info(message);
                     success_count += 1;
                 }
-                DurableOutput::Activity(Err(e)) => {
+                Err(e) => {
                     ctx.trace_error(format!("Email failed: {e}"));
                 }
-                _ => {}
             }
         }
 

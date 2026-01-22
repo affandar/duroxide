@@ -3,6 +3,10 @@
 //! This test file validates the SQLite provider using the reusable
 //! provider validation test suite from `duroxide::provider_validations`.
 //!
+#![allow(clippy::unwrap_used)]
+#![allow(clippy::clone_on_ref_ptr)]
+#![allow(clippy::expect_used)]
+
 //! These tests automatically enable the `provider-test` feature when running
 //! tests within the duroxide repository.
 
@@ -21,8 +25,7 @@ mod tests {
             test_delete_get_parent_id, test_delete_instances_atomic, test_delete_instances_atomic_force,
             test_delete_instances_atomic_orphan_detection, test_delete_nonexistent_instance,
             test_delete_running_rejected_force_succeeds, test_delete_terminal_instances,
-            test_force_delete_prevents_ack_recreation, test_list_children,
-            test_stale_activity_after_delete_recreate,
+            test_force_delete_prevents_ack_recreation, test_list_children, test_stale_activity_after_delete_recreate,
         },
         // Long polling tests
         long_polling::{

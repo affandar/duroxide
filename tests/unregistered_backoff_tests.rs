@@ -1,3 +1,7 @@
+#![allow(clippy::unwrap_used)]
+#![allow(clippy::clone_on_ref_ptr)]
+#![allow(clippy::expect_used)]
+
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self, RuntimeOptions, UnregisteredBackoffConfig};
 use duroxide::{Client, EventKind, OrchestrationRegistry};
@@ -121,10 +125,7 @@ async fn unknown_activity_fails_with_poison() {
             "SimpleOrch",
             |ctx: duroxide::OrchestrationContext, _input: String| async move {
                 // Try to call an activity that isn't registered
-                let result = ctx
-                    .schedule_activity("UnknownActivity", "input")
-                    .into_activity()
-                    .await?;
+                let result = ctx.schedule_activity("UnknownActivity", "input").await?;
                 Ok(result)
             },
         )

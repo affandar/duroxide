@@ -1,4 +1,8 @@
 //! Observability-focused tests covering tracing for activities and orchestrations.
+#![allow(clippy::unwrap_used)]
+#![allow(clippy::clone_on_ref_ptr)]
+#![allow(clippy::expect_used)]
+
 mod common;
 
 use common::fault_injection::FailingProvider;
@@ -109,7 +113,7 @@ async fn activity_tracing_emits_all_levels() {
 
     let orchestrations = OrchestrationRegistry::builder()
         .register("TraceOrch", |ctx: OrchestrationContext, _input: String| async move {
-            ctx.schedule_activity("TraceActivity", "payload").into_activity().await
+            ctx.schedule_activity("TraceActivity", "payload").await
         })
         .build();
 
@@ -251,7 +255,6 @@ async fn metrics_capture_activity_and_orchestration_outcomes() {
     let orchestrations = OrchestrationRegistry::builder()
         .register("SuccessOrch", |ctx: OrchestrationContext, _input: String| async move {
             ctx.schedule_activity("AlwaysOk", "payload")
-                .into_activity()
                 .await
                 .expect("activity should succeed");
             Ok("done".to_string())
@@ -259,7 +262,7 @@ async fn metrics_capture_activity_and_orchestration_outcomes() {
         .register(
             "AppFailureOrch",
             |ctx: OrchestrationContext, _input: String| async move {
-                match ctx.schedule_activity("AlwaysFail", "payload").into_activity().await {
+                match ctx.schedule_activity("AlwaysFail", "payload").await {
                     Ok(_) => Ok("unexpected".to_string()),
                     Err(err) => Err(err),
                 }
@@ -268,11 +271,7 @@ async fn metrics_capture_activity_and_orchestration_outcomes() {
         .register(
             "ConfigFailureOrch",
             |ctx: OrchestrationContext, _input: String| async move {
-                match ctx
-                    .schedule_activity("MissingActivity", "payload")
-                    .into_activity()
-                    .await
-                {
+                match ctx.schedule_activity("MissingActivity", "payload").await {
                     Ok(_) => Ok("unexpected".to_string()),
                     Err(err) => Err(err),
                 }
@@ -481,7 +480,7 @@ async fn test_labeled_metrics_recording() {
 
     let orchestrations = OrchestrationRegistry::builder()
         .register("TestOrch", |ctx: OrchestrationContext, _input: String| async move {
-            ctx.schedule_activity("TestActivity", "input").into_activity().await
+            ctx.schedule_activity("TestActivity", "input").await
         })
         .build();
 
@@ -570,8 +569,8 @@ async fn test_activity_duration_tracking() {
 
     let orchestrations = OrchestrationRegistry::builder()
         .register("DurationOrch", |ctx: OrchestrationContext, _input: String| async move {
-            ctx.schedule_activity("SlowActivity", "").into_activity().await?;
-            ctx.schedule_activity("FastActivity", "").into_activity().await?;
+            ctx.schedule_activity("SlowActivity", "").await?;
+            ctx.schedule_activity("FastActivity", "").await?;
             Ok("done".to_string())
         })
         .build();
@@ -629,13 +628,11 @@ async fn test_error_classification_metrics() {
             |ctx: OrchestrationContext, error_type: String| async move {
                 match error_type.as_str() {
                     "app" => {
-                        ctx.schedule_activity("FailActivity", "").into_activity().await?;
+                        ctx.schedule_activity("FailActivity", "").await?;
                         Ok("unexpected".to_string())
                     }
                     "config" => {
-                        ctx.schedule_activity("UnregisteredActivity", "")
-                            .into_activity()
-                            .await?;
+                        ctx.schedule_activity("UnregisteredActivity", "").await?;
                         Ok("unexpected".to_string())
                     }
                     _ => Ok("ok".to_string()),
@@ -701,17 +698,17 @@ async fn test_active_orchestrations_gauge() {
 
     let orchestrations = OrchestrationRegistry::builder()
         .register("SimpleOrch", |ctx: OrchestrationContext, _input: String| async move {
-            ctx.schedule_activity("SlowActivity", "").into_activity().await
+            ctx.schedule_activity("SlowActivity", "").await
         })
         .register("CANOrch", |ctx: OrchestrationContext, input: String| async move {
             let count: u32 = input.parse().unwrap_or(0);
             if count < 1 {
                 // Do some work before continuing
-                ctx.schedule_activity("SlowActivity", "").into_activity().await?;
+                ctx.schedule_activity("SlowActivity", "").await?;
                 return ctx.continue_as_new((count + 1).to_string()).await;
             } else {
                 // Final execution also does work
-                ctx.schedule_activity("SlowActivity", "").into_activity().await?;
+                ctx.schedule_activity("SlowActivity", "").await?;
                 Ok("done".to_string())
             }
         })
@@ -779,10 +776,10 @@ async fn test_active_orchestrations_gauge_comprehensive() {
 
     let orchestrations = OrchestrationRegistry::builder()
         .register("TestOrch", |ctx: OrchestrationContext, _input: String| async move {
-            ctx.schedule_activity("Work", "").into_activity().await
+            ctx.schedule_activity("Work", "").await
         })
         .register("LongOrch", |ctx: OrchestrationContext, _input: String| async move {
-            ctx.schedule_activity("LongWork", "").into_activity().await
+            ctx.schedule_activity("LongWork", "").await
         })
         .build();
 
@@ -856,15 +853,13 @@ async fn test_separate_error_counters_exported() {
             "ConfigErrorOrch",
             |ctx: OrchestrationContext, _input: String| async move {
                 // Trigger config error by calling unregistered activity
-                ctx.schedule_activity("UnregisteredActivity", "")
-                    .into_activity()
-                    .await?;
+                ctx.schedule_activity("UnregisteredActivity", "").await?;
                 Ok("done".to_string())
             },
         )
         .register("AppErrorOrch", |ctx: OrchestrationContext, _input: String| async move {
             // Trigger app error
-            ctx.schedule_activity("FailActivity", "").into_activity().await?;
+            ctx.schedule_activity("FailActivity", "").await?;
             Ok("done".to_string())
         })
         .build();
@@ -921,20 +916,18 @@ async fn test_sub_orchestration_metrics() {
 
     let orchestrations = OrchestrationRegistry::builder()
         .register("ChildOrch", |ctx: OrchestrationContext, input: String| async move {
-            let result = ctx.schedule_activity("ChildActivity", input).into_activity().await?;
+            let result = ctx.schedule_activity("ChildActivity", input).await?;
             Ok(format!("child: {result}"))
         })
         .register("ParentOrch", |ctx: OrchestrationContext, _input: String| async move {
             // Call first sub-orchestration
             let result1 = ctx
                 .schedule_sub_orchestration("ChildOrch", "input1".to_string())
-                .into_sub_orchestration()
                 .await?;
 
             // Call second sub-orchestration
             let result2 = ctx
                 .schedule_sub_orchestration("ChildOrch", "input2".to_string())
-                .into_sub_orchestration()
                 .await?;
 
             Ok(format!("{result1} | {result2}"))
@@ -992,9 +985,7 @@ async fn test_versioned_orchestration_metrics() {
     let orchestrations = OrchestrationRegistry::builder()
         .register(
             "VersionedOrch",
-            |ctx: OrchestrationContext, _input: String| async move {
-                ctx.schedule_activity("TestActivity", "").into_activity().await
-            },
+            |ctx: OrchestrationContext, _input: String| async move { ctx.schedule_activity("TestActivity", "").await },
         )
         .build();
 
@@ -1059,7 +1050,7 @@ async fn test_provider_metrics_recorded() {
             // - enqueue_for_worker (when scheduling activity)
             // - fetch_work_item (worker polling)
             // - ack_work_item (after activity completes)
-            ctx.schedule_activity("TestActivity", "").into_activity().await
+            ctx.schedule_activity("TestActivity", "").await
         })
         .build();
 
@@ -1110,7 +1101,7 @@ async fn test_provider_error_metrics() {
 
     let orchestrations = OrchestrationRegistry::builder()
         .register("TestOrch", |ctx: OrchestrationContext, _input: String| async move {
-            ctx.schedule_activity("TestActivity", "").into_activity().await
+            ctx.schedule_activity("TestActivity", "").await
         })
         .build();
 
@@ -1216,7 +1207,7 @@ async fn test_queue_depth_gauges_tracking() {
 
     let orchestrations = OrchestrationRegistry::builder()
         .register("SlowOrch", |ctx: OrchestrationContext, _input: String| async move {
-            ctx.schedule_activity("SlowActivity", "").into_activity().await
+            ctx.schedule_activity("SlowActivity", "").await
         })
         .build();
 
@@ -1266,7 +1257,7 @@ async fn test_all_gauges_initialized_together() {
 
     let orchestrations = OrchestrationRegistry::builder()
         .register("BlockingOrch", |ctx: OrchestrationContext, _input: String| async move {
-            ctx.schedule_activity("BlockingActivity", "").into_activity().await
+            ctx.schedule_activity("BlockingActivity", "").await
         })
         .build();
 
@@ -1300,7 +1291,7 @@ async fn test_all_gauges_initialized_together() {
 
     let orchestrations2 = OrchestrationRegistry::builder()
         .register("BlockingOrch", |ctx: OrchestrationContext, _input: String| async move {
-            ctx.schedule_activity("BlockingActivity", "").into_activity().await
+            ctx.schedule_activity("BlockingActivity", "").await
         })
         .build();
 
@@ -1351,7 +1342,7 @@ async fn test_poison_message_metrics() {
         .register(
             "ActivityPoisonTest",
             |ctx: OrchestrationContext, _input: String| async move {
-                ctx.schedule_activity("TestActivity", "{}").into_activity().await
+                ctx.schedule_activity("TestActivity", "{}").await
             },
         )
         .build();

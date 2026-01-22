@@ -255,8 +255,10 @@ async fn test_descriptive_name() {
 ### From Duroxide Orchestrations
 
 **Direct mapping:**
-- `ctx.schedule_activity()` → `ctx.schedule_activity().into_activity().await`
-- `ctx.schedule_timer()` → `ctx.schedule_timer().into_timer().await`
+- `ctx.schedule_activity()` → `ctx.schedule_activity().await`
+- `ctx.schedule_timer()` → `ctx.schedule_timer().await`
+- `ctx.schedule_wait()` → `ctx.schedule_wait().await`
+- `ctx.schedule_sub_orchestration()` → `ctx.schedule_sub_orchestration().await`
 - `ctx.continue_as_new()` → `ctx.continue_as_new()`
 - `ctx.trace_*()` → `ctx.trace_*()` (already replay-safe)
 
@@ -268,11 +270,11 @@ async fn test_descriptive_name() {
 ### From Temporal Workflows
 
 **Mapping Temporal → Duroxide:**
-- `workflow.ExecuteActivity()` → `ctx.schedule_activity().into_activity().await`
-- `workflow.Sleep()` → `ctx.schedule_timer().into_timer().await`
+- `workflow.ExecuteActivity()` → `ctx.schedule_activity().await`
+- `workflow.Sleep()` → `ctx.schedule_timer().await`
 - `workflow.ContinueAsNew()` → `ctx.continue_as_new()`
-- `workflow.WaitCondition()` → `ctx.schedule_wait().into_event().await`
-- `workflow.ExecuteChildWorkflow()` → `ctx.schedule_sub_orchestration().into_sub_orchestration().await`
+- `workflow.WaitCondition()` → `ctx.schedule_wait().await`
+- `workflow.ExecuteChildWorkflow()` → `ctx.schedule_sub_orchestration().await`
 - `workflow.GetLogger()` → `ctx.trace_*()` methods
 
 **Key differences:**
@@ -283,11 +285,11 @@ async fn test_descriptive_name() {
 ### From Durable Tasks (.NET)
 
 **Mapping DTF → Duroxide:**
-- `context.CallActivityAsync()` → `ctx.schedule_activity().into_activity().await`
-- `context.CreateTimer()` → `ctx.schedule_timer().into_timer().await`
+- `context.CallActivityAsync()` → `ctx.schedule_activity().await`
+- `context.CreateTimer()` → `ctx.schedule_timer().await`
 - `context.ContinueAsNew()` → `ctx.continue_as_new()`
-- `context.WaitForExternalEvent()` → `ctx.schedule_wait().into_event().await`
-- `context.CallSubOrchestratorAsync()` → `ctx.schedule_sub_orchestration().into_sub_orchestration().await`
+- `context.WaitForExternalEvent()` → `ctx.schedule_wait().await`
+- `context.CallSubOrchestratorAsync()` → `ctx.schedule_sub_orchestration().await`
 - `context.GetInput<T>()` → Parse from `input: String` parameter
 
 **Key differences:**
@@ -374,7 +376,7 @@ func MyWorkflow(ctx workflow.Context, input MyInput) (MyOutput, error) {
 /// 
 /// **Porting Notes**:
 /// - ✅ **Ported completely**: 
-///   - Activity execution (`ExecuteActivity` → `schedule_activity().into_activity().await`)
+///   - Activity execution (`ExecuteActivity` → `schedule_activity().await`)
 ///   - Sequential flow (activities execute in order)
 ///   - Error handling (Go error → Rust Result)
 ///   - Logging (`GetLogger().Info()` → `ctx.trace_info()`)
@@ -416,26 +418,23 @@ async fn test_my_workflow_pattern() {
         
         let input_data: MyInput = serde_json::from_str(&input)?;
         
-        // For typed activities, use schedule_activity_typed
+        // For typed activities, use schedule_activity_typed and await directly
         let result1 = ctx
             .schedule_activity_typed::<MyInput, String>(
                 "Activity1",
                 &input_data
             )
-            .into_activity_typed::<String>()
             .await?;
         
         // Or for simple string-based activities:
         // let result1 = ctx
         //     .schedule_activity("Activity1", serde_json::to_string(&input_data)?)
-        //     .into_activity()
         //     .await?;
         
-        ctx.schedule_timer(Duration::from_millis(50)).into_timer().await; // 50ms instead of 5s
+        ctx.schedule_timer(Duration::from_millis(50)).await; // 50ms instead of 5s
         
         let result2 = ctx
             .schedule_activity("Activity2", result1)
-            .into_activity()
             .await?;
         
         let output = MyOutput { result: result2 };
@@ -495,7 +494,7 @@ Before finalizing the test:
 ### What to Document
 
 1. **✅ Ported Completely**: Features that map 1:1 with no changes
-   - Example: "Activity execution (`ExecuteActivity` → `schedule_activity().into_activity().await`)"
+   - Example: "Activity execution (`ExecuteActivity` → `schedule_activity().await`)"
    - Example: "Error handling (Go error → Rust Result)"
 
 2. **⚠️ Workarounds Used**: Features that work but require different approaches

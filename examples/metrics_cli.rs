@@ -3,6 +3,9 @@
 //! This CLI tool demonstrates how to consume and display duroxide metrics
 //! and logs in real-time.
 //!
+#![allow(clippy::unwrap_used)]
+#![allow(clippy::clone_on_ref_ptr)]
+#![allow(clippy::expect_used)]
 //! Run with:
 //! ```bash
 //! cargo run --example metrics_cli --features observability
@@ -70,10 +73,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Sample orchestrations
     let fast_orch = |ctx: OrchestrationContext, _input: String| async move {
         ctx.trace_info("Fast orchestration started");
-        let result = ctx
-            .schedule_activity("FastTask", "data".to_string())
-            .into_activity()
-            .await?;
+        let result = ctx.schedule_activity("FastTask", "data".to_string()).await?;
         ctx.trace_info("Fast orchestration completed");
         Ok::<_, String>(result)
     };
@@ -84,7 +84,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let r1 = ctx.schedule_activity("SlowTask", "data".to_string());
         let r2 = ctx.schedule_activity("SlowTask", "data".to_string());
 
-        let _results = ctx.join(vec![r1, r2]).await;
+        let _results = ctx.join2(r1, r2).await;
 
         ctx.trace_info("All tasks completed");
         Ok::<_, String>("done".to_string())
@@ -93,11 +93,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let failing_orch = |ctx: OrchestrationContext, _input: String| async move {
         ctx.trace_info("Orchestration with potential failure");
 
-        match ctx
-            .schedule_activity("FailingTask", "fail".to_string())
-            .into_activity()
-            .await
-        {
+        match ctx.schedule_activity("FailingTask", "fail".to_string()).await {
             Ok(r) => Ok::<_, String>(r),
             Err(e) => {
                 ctx.trace_error(format!("Activity failed: {e}"));

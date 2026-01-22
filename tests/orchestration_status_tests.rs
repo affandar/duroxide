@@ -1,4 +1,7 @@
 //! Tests for OrchestrationStatus determination across all scenarios
+#![allow(clippy::unwrap_used)]
+#![allow(clippy::clone_on_ref_ptr)]
+#![allow(clippy::expect_used)]
 
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self, OrchestrationStatus};
@@ -35,9 +38,8 @@ async fn test_status_running() {
         })
         .build();
 
-    let orchestration = |ctx: OrchestrationContext, _input: String| async move {
-        ctx.schedule_activity("BlockForever", "").into_activity().await
-    };
+    let orchestration =
+        |ctx: OrchestrationContext, _input: String| async move { ctx.schedule_activity("BlockForever", "").await };
 
     let orchestrations = OrchestrationRegistry::builder()
         .register("RunningOrch", orchestration)
@@ -74,9 +76,8 @@ async fn test_status_completed() {
         })
         .build();
 
-    let orchestration = |ctx: OrchestrationContext, input: String| async move {
-        ctx.schedule_activity("ReturnValue", input).into_activity().await
-    };
+    let orchestration =
+        |ctx: OrchestrationContext, input: String| async move { ctx.schedule_activity("ReturnValue", input).await };
 
     let orchestrations = OrchestrationRegistry::builder()
         .register("CompletedOrch", orchestration)
@@ -126,9 +127,8 @@ async fn test_status_failed() {
         })
         .build();
 
-    let orchestration = |ctx: OrchestrationContext, _input: String| async move {
-        ctx.schedule_activity("FailActivity", "").into_activity().await
-    };
+    let orchestration =
+        |ctx: OrchestrationContext, _input: String| async move { ctx.schedule_activity("FailActivity", "").await };
 
     let orchestrations = OrchestrationRegistry::builder()
         .register("FailedOrch", orchestration)
@@ -262,9 +262,8 @@ async fn test_status_cancelled() {
         })
         .build();
 
-    let orchestration = |ctx: OrchestrationContext, _input: String| async move {
-        ctx.schedule_activity("LongTask", "").into_activity().await
-    };
+    let orchestration =
+        |ctx: OrchestrationContext, _input: String| async move { ctx.schedule_activity("LongTask", "").await };
 
     let orchestrations = OrchestrationRegistry::builder()
         .register("CancellableOrch", orchestration)
@@ -324,9 +323,8 @@ async fn test_status_lifecycle_transitions() {
         })
         .build();
 
-    let orchestration = |ctx: OrchestrationContext, _input: String| async move {
-        ctx.schedule_activity("QuickTask", "").into_activity().await
-    };
+    let orchestration =
+        |ctx: OrchestrationContext, _input: String| async move { ctx.schedule_activity("QuickTask", "").await };
 
     let orchestrations = OrchestrationRegistry::builder()
         .register("LifecycleOrch", orchestration)
@@ -392,13 +390,11 @@ async fn test_status_independence() {
         })
         .build();
 
-    let success_orch = |ctx: OrchestrationContext, _input: String| async move {
-        ctx.schedule_activity("SuccessTask", "").into_activity().await
-    };
+    let success_orch =
+        |ctx: OrchestrationContext, _input: String| async move { ctx.schedule_activity("SuccessTask", "").await };
 
-    let fail_orch = |ctx: OrchestrationContext, _input: String| async move {
-        ctx.schedule_activity("FailTask", "").into_activity().await
-    };
+    let fail_orch =
+        |ctx: OrchestrationContext, _input: String| async move { ctx.schedule_activity("FailTask", "").await };
 
     let orchestrations = OrchestrationRegistry::builder()
         .register("SuccessOrch", success_orch)

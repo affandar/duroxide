@@ -154,7 +154,7 @@ impl Runtime {
                             Ok(Some((item, lock_token, attempt_count))) => {
                                 // Reset error counter on success
                                 consecutive_retryable_errors = 0;
-                                
+
                                 // Spawn lock renewal task for this orchestration
                                 let renewal_handle = spawn_orchestration_lock_renewal_task(
                                     Arc::clone(&rt.history_store),

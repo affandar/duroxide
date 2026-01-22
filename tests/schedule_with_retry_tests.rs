@@ -3,6 +3,9 @@
 //! This file contains:
 //! - Unit tests for RetryPolicy and BackoffStrategy
 //! - Integration tests for retry behavior
+#![allow(clippy::unwrap_used)]
+#![allow(clippy::clone_on_ref_ptr)]
+#![allow(clippy::expect_used)]
 //! - Stale event / cross-execution tests
 //! - Timeout vs error behavior tests
 
@@ -1255,7 +1258,7 @@ async fn test_activity_completes_after_continue_as_new() {
         .register("CANOrch", |ctx: OrchestrationContext, input: String| async move {
             let count: i32 = input.parse().unwrap_or(0);
 
-            let result = ctx.schedule_activity("TrackedActivity", &input).into_activity().await?;
+            let result = ctx.schedule_activity("TrackedActivity", &input).await?;
 
             if count < 2 {
                 return ctx.continue_as_new((count + 1).to_string()).await;

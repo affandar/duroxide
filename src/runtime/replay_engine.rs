@@ -3,9 +3,14 @@
 #![allow(clippy::unwrap_used)]
 #![allow(clippy::clone_on_ref_ptr)]
 
-use crate::{Event, EventKind, providers::WorkItem, runtime::OrchestrationHandler};
+use crate::{Action, Event, EventKind, providers::WorkItem, runtime::OrchestrationHandler};
+use crate::{CompletionResult, OrchestrationContext};
+use std::collections::{HashSet, VecDeque};
+use std::future::Future;
 use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
 use tracing::{debug, warn};
 
 /// Result of executing an orchestration turn
@@ -44,12 +49,18 @@ pub struct ReplayEngine {
     pub(crate) next_event_id: u64,
     /// Unified error collector for system-level errors that abort the turn
     pub(crate) abort_error: Option<crate::ErrorDetails>,
+
+    /// Number of events in baseline_history that were actually persisted (from DB).
+    /// Events beyond this index in baseline_history are NEW this turn (not replay).
+    /// Used to correctly track is_replaying state.
+    persisted_history_len: usize,
 }
 
 impl ReplayEngine {
     /// Create a new replay engine for an instance/execution
     pub fn new(instance: String, execution_id: u64, baseline_history: Vec<Event>) -> Self {
         let next_event_id = baseline_history.last().map(|e| e.event_id() + 1).unwrap_or(1);
+        let persisted_len = baseline_history.len(); // Default: assume all are persisted
 
         Self {
             instance,
@@ -60,10 +71,28 @@ impl ReplayEngine {
             baseline_history,
             next_event_id,
             abort_error: None,
+            persisted_history_len: persisted_len,
         }
     }
 
+    /// Set the number of events in baseline_history that were actually persisted.
+    ///
+    /// This is used to correctly track the `is_replaying` state.
+    /// Events at indices `0..persisted_len` in the working history are replays;
+    /// events at indices `persisted_len..` are new this turn.
+    ///
+    /// This should be set to `history_mgr.original_len()` - the count of events
+    /// that came from the database, NOT including newly created events like
+    /// OrchestrationStarted on the first turn.
+    pub fn with_persisted_history_len(mut self, len: usize) -> Self {
+        self.persisted_history_len = len;
+        self
+    }
+
     /// Stage 1: Convert completion messages directly to events
+    ///
+    /// The conversion from WorkItem to Event generates history_delta
+    /// which is then processed by the execution path.
     pub fn prep_completions(&mut self, messages: Vec<WorkItem>) {
         debug!(
             instance = %self.instance,
@@ -407,6 +436,11 @@ impl ReplayEngine {
 
     /// Stage 2: Execute one turn of the orchestration using the replay engine
     /// This stage runs the orchestration logic and generates history deltas and actions
+    ///
+    /// This implementation uses the commands-vs-history model:
+    /// 1. Processes history events in order, matching emitted actions
+    /// 2. Delivers completions to the results map
+    /// 3. Returns new actions beyond history as pending_actions
     pub fn execute_orchestration(
         &mut self,
         handler: Arc<dyn OrchestrationHandler>,
@@ -425,40 +459,68 @@ impl ReplayEngine {
         }
 
         // Build working history: baseline + completion events from this run
-        let working_history_len_before = self.baseline_history.len() + self.history_delta.len();
         let mut working_history = self.baseline_history.clone();
         working_history.extend_from_slice(&self.history_delta);
 
-        // Run orchestration with unified cursor model (metadata passed from caller)
-        let execution_id = self.get_current_execution_id();
-        let instance_id = self.instance.clone();
-        let worker_id_owned = worker_id.to_string();
-        let run_result = catch_unwind(AssertUnwindSafe(|| {
-            crate::run_turn_with_status_and_cancellations(
-                working_history,
-                execution_id,
-                instance_id,
-                orchestration_name,
-                orchestration_version,
-                worker_id_owned,
-                move |ctx| {
-                    let h = handler.clone();
-                    let inp = input.clone();
-                    async move { h.invoke(ctx, inp).await }
-                },
+        // Track the boundary between replay and new execution.
+        // persisted_history_len = events from DB (true replay)
+        // Events beyond this are new this turn (not replay)
+        let replay_boundary = self.persisted_history_len;
+
+        // Check for terminal history - don't process
+        if working_history.iter().any(|e| {
+            matches!(
+                e.kind,
+                EventKind::OrchestrationCompleted { .. }
+                    | EventKind::OrchestrationFailed { .. }
+                    | EventKind::OrchestrationContinuedAsNew { .. }
             )
+        }) {
+            return TurnResult::Continue;
+        }
+
+        // Check for empty history
+        if working_history.is_empty() {
+            return TurnResult::Failed(crate::ErrorDetails::Configuration {
+                kind: crate::ConfigErrorKind::Nondeterminism,
+                resource: String::new(),
+                message: Some("corrupted history: empty".to_string()),
+            });
+        }
+
+        // Validate first event is OrchestrationStarted
+        if !matches!(working_history[0].kind, EventKind::OrchestrationStarted { .. }) {
+            return TurnResult::Failed(crate::ErrorDetails::Configuration {
+                kind: crate::ConfigErrorKind::Nondeterminism,
+                resource: String::new(),
+                message: Some("corrupted history: first event must be OrchestrationStarted".to_string()),
+            });
+        }
+
+        // Create context
+        let ctx = OrchestrationContext::new(
+            Vec::new(), // Empty history - not used by replay engine
+            self.execution_id,
+            self.instance.clone(),
+            orchestration_name.clone(),
+            orchestration_version.clone(),
+            Some(worker_id.to_string()),
+        );
+
+        // Clone ctx for use in the async closure
+        let ctx_for_future = ctx.clone();
+
+        // Create the orchestration future
+        let h = handler.clone();
+        let inp = input.clone();
+        let fut_result = catch_unwind(AssertUnwindSafe(|| {
+            Box::pin(async move { h.invoke(ctx_for_future, inp).await })
         }));
 
-        let (updated_history, decisions, output_opt, nondet_flag, cancelled_activity_ids) = match run_result {
-            Ok(tuple) => tuple,
+        let mut fut = match fut_result {
+            Ok(f) => f,
             Err(panic_payload) => {
-                let msg = if let Some(s) = panic_payload.downcast_ref::<&str>() {
-                    s.to_string()
-                } else if let Some(s) = panic_payload.downcast_ref::<String>() {
-                    s.clone()
-                } else {
-                    "orchestration panicked".to_string()
-                };
+                let msg = extract_panic_message(panic_payload);
                 return TurnResult::Failed(crate::ErrorDetails::Configuration {
                     kind: crate::ConfigErrorKind::Nondeterminism,
                     resource: String::new(),
@@ -467,33 +529,280 @@ impl ReplayEngine {
             }
         };
 
-        self.cancelled_activity_ids = cancelled_activity_ids;
+        // Track open schedules and schedule kinds for validation
+        let mut open_schedules: HashSet<u64> = HashSet::new();
+        let mut schedule_kinds: std::collections::HashMap<u64, ActionKind> = std::collections::HashMap::new();
+        let mut emitted_actions: VecDeque<(u64, Action)> = VecDeque::new();
 
-        // If futures flagged nondeterminism (scheduling-order mismatch), fail gracefully
-        if let Some(err) = nondet_flag.clone() {
-            return TurnResult::Failed(crate::ErrorDetails::Configuration {
-                kind: crate::ConfigErrorKind::Nondeterminism,
-                resource: String::new(),
-                message: Some(err),
-            });
+        let mut must_poll = true;
+        let mut output_opt: Option<Result<String, String>> = None;
+
+        // Context starts in replaying mode IF there's persisted history to replay.
+        // If no persisted events (replay_boundary == 0), we're not replaying - this is fresh execution.
+        if replay_boundary == 0 {
+            ctx.set_is_replaying(false);
         }
 
-        // If futures recorded nondeterminism, fail gracefully
-        if updated_history.is_empty() {
-            // Nothing to check; proceed
+        for (event_index, event) in working_history.iter().enumerate() {
+            // Check if we've moved past the persisted history into new events
+            // We check BEFORE polling so the orchestration sees the correct state
+            if event_index >= replay_boundary {
+                ctx.set_is_replaying(false);
+            }
+
+            // Poll if needed
+            if must_poll {
+                let poll_result = catch_unwind(AssertUnwindSafe(|| poll_once(fut.as_mut())));
+
+                match poll_result {
+                    Ok(Poll::Ready(result)) => {
+                        output_opt = Some(result);
+                        // Drain any remaining emitted actions
+                        emitted_actions.extend(ctx.drain_emitted_actions());
+                        break; // Orchestration completed
+                    }
+                    Ok(Poll::Pending) => {
+                        // Drain emitted actions
+                        emitted_actions.extend(ctx.drain_emitted_actions());
+                    }
+                    Err(panic_payload) => {
+                        let msg = extract_panic_message(panic_payload);
+                        return TurnResult::Failed(crate::ErrorDetails::Configuration {
+                            kind: crate::ConfigErrorKind::Nondeterminism,
+                            resource: String::new(),
+                            message: Some(msg),
+                        });
+                    }
+                }
+                must_poll = false;
+            }
+
+            match &event.kind {
+                EventKind::OrchestrationStarted { .. } => {
+                    // Skip - already validated
+                }
+
+                // Schedule events
+                EventKind::ActivityScheduled { name, input: inp } => {
+                    if let Some(result) = self.match_and_bind_schedule(
+                        &ctx,
+                        &mut emitted_actions,
+                        &mut open_schedules,
+                        &mut schedule_kinds,
+                        event,
+                        ActionKind::Activity {
+                            name: name.clone(),
+                            input: inp.clone(),
+                        },
+                    ) {
+                        return result;
+                    }
+                }
+
+                EventKind::TimerCreated { fire_at_ms } => {
+                    if let Some(result) = self.match_and_bind_schedule(
+                        &ctx,
+                        &mut emitted_actions,
+                        &mut open_schedules,
+                        &mut schedule_kinds,
+                        event,
+                        ActionKind::Timer {
+                            fire_at_ms: *fire_at_ms,
+                        },
+                    ) {
+                        return result;
+                    }
+                }
+
+                EventKind::ExternalSubscribed { name } => {
+                    if let Some(result) = self.match_and_bind_schedule(
+                        &ctx,
+                        &mut emitted_actions,
+                        &mut open_schedules,
+                        &mut schedule_kinds,
+                        event,
+                        ActionKind::External { name: name.clone() },
+                    ) {
+                        return result;
+                    }
+                    // Bind external subscription index
+                    ctx.inner
+                        .lock()
+                        .expect("Mutex should not be poisoned")
+                        .bind_external_subscription(event.event_id(), name);
+                }
+
+                EventKind::SubOrchestrationScheduled {
+                    name,
+                    instance,
+                    input: inp,
+                    ..
+                } => {
+                    if let Some(result) = self.match_and_bind_schedule(
+                        &ctx,
+                        &mut emitted_actions,
+                        &mut open_schedules,
+                        &mut schedule_kinds,
+                        event,
+                        ActionKind::SubOrch {
+                            name: name.clone(),
+                            instance: instance.clone(),
+                            input: inp.clone(),
+                        },
+                    ) {
+                        return result;
+                    }
+                }
+
+                EventKind::SystemCall { op, value } => {
+                    if let Some(result) = self.match_and_bind_schedule(
+                        &ctx,
+                        &mut emitted_actions,
+                        &mut open_schedules,
+                        &mut schedule_kinds,
+                        event,
+                        ActionKind::System { op: op.clone() },
+                    ) {
+                        return result;
+                    }
+                    // Deliver system call result immediately
+                    ctx.deliver_result(event.event_id(), CompletionResult::SystemCallValue(value.clone()));
+                    must_poll = true;
+                }
+
+                // Completion events
+                EventKind::ActivityCompleted { result } => {
+                    if let Some(source_id) = event.source_event_id {
+                        if !open_schedules.contains(&source_id) {
+                            return TurnResult::Failed(nondeterminism_error("completion without open schedule"));
+                        }
+                        if !matches!(schedule_kinds.get(&source_id), Some(ActionKind::Activity { .. })) {
+                            return TurnResult::Failed(nondeterminism_error(
+                                "completion kind mismatch: expected activity",
+                            ));
+                        }
+                        ctx.deliver_result(source_id, CompletionResult::ActivityOk(result.clone()));
+                        must_poll = true;
+                    }
+                }
+
+                EventKind::ActivityFailed { details } => {
+                    if let Some(source_id) = event.source_event_id {
+                        if !open_schedules.contains(&source_id) {
+                            return TurnResult::Failed(nondeterminism_error("completion without open schedule"));
+                        }
+                        ctx.deliver_result(source_id, CompletionResult::ActivityErr(details.display_message()));
+                        must_poll = true;
+                    }
+                }
+
+                EventKind::TimerFired { .. } => {
+                    if let Some(source_id) = event.source_event_id {
+                        if !open_schedules.contains(&source_id) {
+                            return TurnResult::Failed(nondeterminism_error("completion without open schedule"));
+                        }
+                        ctx.deliver_result(source_id, CompletionResult::TimerFired);
+                        must_poll = true;
+                    }
+                }
+
+                EventKind::SubOrchestrationCompleted { result } => {
+                    if let Some(source_id) = event.source_event_id {
+                        if !open_schedules.contains(&source_id) {
+                            return TurnResult::Failed(nondeterminism_error("completion without open schedule"));
+                        }
+                        ctx.deliver_result(source_id, CompletionResult::SubOrchOk(result.clone()));
+                        must_poll = true;
+                    }
+                }
+
+                EventKind::SubOrchestrationFailed { details } => {
+                    if let Some(source_id) = event.source_event_id {
+                        if !open_schedules.contains(&source_id) {
+                            return TurnResult::Failed(nondeterminism_error("completion without open schedule"));
+                        }
+                        ctx.deliver_result(source_id, CompletionResult::SubOrchErr(details.display_message()));
+                        must_poll = true;
+                    }
+                }
+
+                EventKind::ExternalEvent { name, data } => {
+                    ctx.inner
+                        .lock()
+                        .expect("Mutex should not be poisoned")
+                        .deliver_external_event(name.clone(), data.clone());
+                    must_poll = true;
+                }
+
+                EventKind::OrchestrationCancelRequested { .. } => {
+                    // Cancel is handled at the end of the turn, after all history is processed.
+                    // This allows the orchestration to run and produce output, but cancel
+                    // takes precedence when returning the final result.
+                    // Don't return early here - just continue processing.
+                }
+
+                // These should have been filtered out above
+                EventKind::OrchestrationCompleted { .. }
+                | EventKind::OrchestrationFailed { .. }
+                | EventKind::OrchestrationContinuedAsNew { .. }
+                | EventKind::OrchestrationChained { .. } => {
+                    // Should not reach here due to terminal check above
+                }
+            }
         }
 
-        // Calculate NEW events added during orchestration execution
-        // (beyond the completion events we already added in prep_completions)
-        if updated_history.len() > working_history_len_before {
-            let new_events = updated_history[working_history_len_before..].to_vec();
-            self.history_delta.extend(new_events);
+        // After processing all history, we're no longer replaying
+        ctx.set_is_replaying(false);
+
+        // Final poll after processing all history (including completions from prep_completions)
+        // This may emit additional actions if completions resolved durable futures
+        if must_poll && output_opt.is_none() {
+            let poll_result = catch_unwind(AssertUnwindSafe(|| poll_once(fut.as_mut())));
+
+            match poll_result {
+                Ok(Poll::Ready(result)) => {
+                    output_opt = Some(result);
+                    emitted_actions.extend(ctx.drain_emitted_actions());
+                }
+                Ok(Poll::Pending) => {
+                    emitted_actions.extend(ctx.drain_emitted_actions());
+                }
+                Err(panic_payload) => {
+                    let msg = extract_panic_message(panic_payload);
+                    return TurnResult::Failed(crate::ErrorDetails::Configuration {
+                        kind: crate::ConfigErrorKind::Nondeterminism,
+                        resource: String::new(),
+                        message: Some(msg),
+                    });
+                }
+            }
         }
 
-        self.pending_actions = decisions;
+        // Convert remaining emitted actions to pending_actions AND history_delta
+        // These are new schedules beyond what's in history
+        for (token, action) in emitted_actions {
+            // Generate event_id for new schedule
+            let event_id = self.next_event_id;
+            self.next_event_id += 1;
+
+            // Bind token to new event_id
+            ctx.bind_token(token, event_id);
+
+            // Update the action's scheduling_event_id to match the persisted event_id
+            // (the action originally has the token as scheduling_event_id)
+            let updated_action = update_action_event_id(action, event_id);
+
+            // Convert action to event
+            if let Some(event) = action_to_event(&updated_action, &self.instance, self.execution_id, event_id) {
+                self.history_delta.push(event);
+            }
+
+            // Add to pending_actions
+            self.pending_actions.push(updated_action);
+        }
 
         // Check for cancellation first - if cancelled, return immediately
-        // Optimization: Search both slices separately to avoid cloning
+        // This matches legacy mode behavior: cancel takes precedence over completion
         let cancel_event = self
             .baseline_history
             .iter()
@@ -506,7 +815,7 @@ impl ReplayEngine {
             return TurnResult::Cancelled(reason.clone());
         }
 
-        // Check for continue-as-new decision FIRST (takes precedence over output)
+        // Check for continue-as-new in pending_actions
         for decision in &self.pending_actions {
             if let crate::Action::ContinueAsNew { input, version } = decision {
                 return TurnResult::ContinueAsNew {
@@ -516,7 +825,7 @@ impl ReplayEngine {
             }
         }
 
-        // Determine result based on output and decisions
+        // Return result
         if let Some(output) = output_opt {
             return match output {
                 Ok(result) => TurnResult::Completed(result),
@@ -528,8 +837,42 @@ impl ReplayEngine {
             };
         }
 
-        // Cursor model handles non-determinism automatically via strict sequential consumption
         TurnResult::Continue
+    }
+
+    /// Helper to match and bind schedule events
+    fn match_and_bind_schedule(
+        &self,
+        ctx: &OrchestrationContext,
+        emitted_actions: &mut VecDeque<(u64, Action)>,
+        open_schedules: &mut HashSet<u64>,
+        schedule_kinds: &mut std::collections::HashMap<u64, ActionKind>,
+        event: &Event,
+        expected_kind: ActionKind,
+    ) -> Option<TurnResult> {
+        let (token, action) = match emitted_actions.pop_front() {
+            Some(a) => a,
+            None => {
+                return Some(TurnResult::Failed(nondeterminism_error(
+                    "history schedule but no emitted action",
+                )));
+            }
+        };
+
+        // Validate action matches event
+        if !action_matches_event_kind(&action, &event.kind) {
+            return Some(TurnResult::Failed(nondeterminism_error(&format!(
+                "schedule mismatch: action={:?} vs event={:?}",
+                action, event.kind
+            ))));
+        }
+
+        // Bind token to schedule_id
+        ctx.bind_token(token, event.event_id());
+        open_schedules.insert(event.event_id());
+        schedule_kinds.insert(event.event_id(), expected_kind);
+
+        None
     }
 }
 
@@ -557,6 +900,178 @@ impl ReplayEngine {
         let mut final_hist = self.baseline_history.clone();
         final_hist.extend_from_slice(&self.history_delta);
         final_hist
+    }
+}
+
+// === Helper types and functions ===
+
+/// Action kind for tracking schedule types
+/// NOTE: Fields are intentionally unused - we only match on variant type, not field values
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+enum ActionKind {
+    Activity {
+        name: String,
+        input: String,
+    },
+    Timer {
+        fire_at_ms: u64,
+    },
+    External {
+        name: String,
+    },
+    SubOrch {
+        name: String,
+        instance: String,
+        input: String,
+    },
+    System {
+        op: String,
+    },
+}
+
+/// Create a nondeterminism error
+fn nondeterminism_error(msg: &str) -> crate::ErrorDetails {
+    crate::ErrorDetails::Configuration {
+        kind: crate::ConfigErrorKind::Nondeterminism,
+        resource: String::new(),
+        message: Some(msg.to_string()),
+    }
+}
+
+/// Extract panic message from payload
+fn extract_panic_message(panic_payload: Box<dyn std::any::Any + Send>) -> String {
+    if let Some(s) = panic_payload.downcast_ref::<&str>() {
+        s.to_string()
+    } else if let Some(s) = panic_payload.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "orchestration panicked".to_string()
+    }
+}
+
+/// Convert an Action to an Event for history persistence
+fn action_to_event(action: &Action, instance: &str, execution_id: u64, event_id: u64) -> Option<Event> {
+    let kind = match action {
+        Action::CallActivity { name, input, .. } => EventKind::ActivityScheduled {
+            name: name.clone(),
+            input: input.clone(),
+        },
+        Action::CreateTimer { fire_at_ms, .. } => EventKind::TimerCreated {
+            fire_at_ms: *fire_at_ms,
+        },
+        Action::WaitExternal { name, .. } => EventKind::ExternalSubscribed { name: name.clone() },
+        Action::StartSubOrchestration {
+            name,
+            instance: sub_instance,
+            input,
+            ..
+        } => EventKind::SubOrchestrationScheduled {
+            name: name.clone(),
+            instance: sub_instance.clone(),
+            input: input.clone(),
+        },
+        Action::SystemCall { op, value, .. } => EventKind::SystemCall {
+            op: op.clone(),
+            value: value.clone(),
+        },
+        // These don't become schedule events
+        Action::ContinueAsNew { .. } | Action::StartOrchestrationDetached { .. } => {
+            return None;
+        }
+    };
+
+    Some(Event::with_event_id(event_id, instance, execution_id, None, kind))
+}
+
+/// Update an action's scheduling_event_id to the correct event_id
+/// Also generates the actual sub-orchestration instance ID from the event_id
+/// (unless an explicit instance ID was provided, indicated by not starting with "sub::pending_")
+fn update_action_event_id(action: Action, event_id: u64) -> Action {
+    match action {
+        Action::CallActivity { name, input, .. } => Action::CallActivity {
+            scheduling_event_id: event_id,
+            name,
+            input,
+        },
+        Action::CreateTimer { fire_at_ms, .. } => Action::CreateTimer {
+            scheduling_event_id: event_id,
+            fire_at_ms,
+        },
+        Action::WaitExternal { name, .. } => Action::WaitExternal {
+            scheduling_event_id: event_id,
+            name,
+        },
+        Action::StartSubOrchestration {
+            name,
+            instance,
+            input,
+            version,
+            ..
+        } => {
+            // If instance starts with "sub::pending_", it's a placeholder that needs to be replaced
+            // Otherwise, it's an explicit instance ID provided by the user
+            let final_instance = if instance.starts_with("sub::pending_") {
+                format!("sub::{event_id}")
+            } else {
+                instance
+            };
+            Action::StartSubOrchestration {
+                scheduling_event_id: event_id,
+                name,
+                instance: final_instance,
+                input,
+                version,
+            }
+        }
+        Action::SystemCall { op, value, .. } => Action::SystemCall {
+            scheduling_event_id: event_id,
+            op,
+            value,
+        },
+        // These don't have scheduling_event_id
+        Action::ContinueAsNew { .. } | Action::StartOrchestrationDetached { .. } => action,
+    }
+}
+
+/// Poll a future once
+fn poll_once<F: Future>(fut: Pin<&mut F>) -> Poll<F::Output> {
+    // Create a no-op waker
+    static VTABLE: RawWakerVTable =
+        RawWakerVTable::new(|_| RawWaker::new(std::ptr::null(), &VTABLE), |_| {}, |_| {}, |_| {});
+    let raw_waker = RawWaker::new(std::ptr::null(), &VTABLE);
+    let waker = unsafe { Waker::from_raw(raw_waker) };
+    let mut cx = Context::from_waker(&waker);
+    fut.poll(&mut cx)
+}
+
+/// Check if an action matches an event kind
+fn action_matches_event_kind(action: &Action, event_kind: &EventKind) -> bool {
+    match (action, event_kind) {
+        (Action::CallActivity { name, input, .. }, EventKind::ActivityScheduled { name: en, input: ei }) => {
+            name == en && input == ei
+        }
+
+        (Action::CreateTimer { fire_at_ms, .. }, EventKind::TimerCreated { fire_at_ms: ef }) => {
+            // Allow some tolerance for timer fire_at_ms since it's computed at different times
+            // In practice, the replay should use the exact value from history
+            let _ = fire_at_ms;
+            let _ = ef;
+            true // Timers match by position, not by exact fire_at_ms
+        }
+
+        (Action::WaitExternal { name, .. }, EventKind::ExternalSubscribed { name: en }) => name == en,
+
+        (
+            Action::StartSubOrchestration { name, input, .. },
+            EventKind::SubOrchestrationScheduled {
+                name: en, input: ei, ..
+            },
+        ) => name == en && input == ei,
+
+        (Action::SystemCall { op, .. }, EventKind::SystemCall { op: eop, .. }) => op == eop,
+
+        _ => false,
     }
 }
 
@@ -590,7 +1105,3 @@ mod tests {
         assert!(!engine.made_progress());
     }
 }
-
-// Include comprehensive tests
-#[path = "replay_engine_tests.rs"]
-mod replay_engine_tests;

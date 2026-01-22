@@ -29,9 +29,13 @@
   - Cancel sub-orchestrations when we have a confirmed unobserved DurableFuture
   - Same triggers as activity cancellations: select2 loser, unawaited future, parent continues/completes
   - Currently: orphaned sub-orchestrations keep running or sit completed in DB forever
+  - **Gap identified**: When a sub-orchestration's DurableFuture is dropped (e.g., select2 loser),
+    we only add its source_id to `cancelled_source_ids` but NOT to a `cancelled_suborchestration_ids`.
+    Activities get added to `cancelled_activity_ids` which triggers provider-level lock stealing.
+    See `src/futures.rs` lines 953-956 - explicit check for `Kind::Activity`.
   - Desired: runtime cancels them automatically once confirmed unobserved
   - Related: `proposals/auto-pruning.md` (section: Unobserved Sub-Orchestration Completions)
-  - Complexity: Medium - need to track sub-orch DurableFutures same as activities
+  - Complexity: Medium - need to track sub-orch DurableFutures same as activities, add provider API
 
 - **History Validation**
   - Need to validate histories are well-formed before replay

@@ -105,7 +105,7 @@ impl Runtime {
 
                 let handle = tokio::spawn(async move {
                     let mut consecutive_retryable_errors: u32 = 0;
-                    
+
                     loop {
                         if shutdown.load(Ordering::Relaxed) {
                             break;
@@ -114,14 +114,7 @@ impl Runtime {
                         let min_interval = rt.options.dispatcher_min_poll_interval;
                         let start_time = std::time::Instant::now();
 
-                        let work_found = match process_next_work_item(
-                            &rt,
-                            &activities,
-                            &shutdown,
-                            &worker_id,
-                        )
-                        .await
-                        {
+                        let work_found = match process_next_work_item(&rt, &activities, &shutdown, &worker_id).await {
                             Ok(found) => {
                                 consecutive_retryable_errors = 0;
                                 found

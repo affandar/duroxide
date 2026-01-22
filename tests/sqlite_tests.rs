@@ -1,3 +1,7 @@
+#![allow(clippy::unwrap_used)]
+#![allow(clippy::clone_on_ref_ptr)]
+#![allow(clippy::expect_used)]
+
 use duroxide::providers::sqlite::SqliteProvider;
 use duroxide::providers::{ExecutionMetadata, Provider, ProviderAdmin, WorkItem};
 use duroxide::{ActivityContext, Event, EventKind};
@@ -481,10 +485,10 @@ async fn timer_recovery_after_crash_before_fire() {
     // Simple orchestration that schedules a timer and then completes
     let orch = |ctx: duroxide::OrchestrationContext, _input: String| async move {
         // Schedule a timer with enough delay that we can "crash" before it fires
-        ctx.schedule_timer(Duration::from_millis(TIMER_MS)).into_timer().await;
+        ctx.schedule_timer(Duration::from_millis(TIMER_MS)).await;
 
         // Do something after timer to prove it fired
-        let result = ctx.schedule_activity("PostTimer", "done").into_activity().await?;
+        let result = ctx.schedule_activity("PostTimer", "done").await?;
         Ok(result)
     };
 
@@ -525,8 +529,8 @@ async fn timer_recovery_after_crash_before_fire() {
 
     // Restart runtime with same store
     let orch2 = |ctx: duroxide::OrchestrationContext, _input: String| async move {
-        ctx.schedule_timer(Duration::from_millis(TIMER_MS)).into_timer().await;
-        let result = ctx.schedule_activity("PostTimer", "done").into_activity().await?;
+        ctx.schedule_timer(Duration::from_millis(TIMER_MS)).await;
+        let result = ctx.schedule_activity("PostTimer", "done").await?;
         Ok(result)
     };
 

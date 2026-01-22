@@ -22,24 +22,21 @@ Duroxide is a framework for building **reliable, long-running workflows** that c
 ```rust
 // ✅ CORRECT: Use timers for orchestration delays
 use std::time::Duration;
-ctx.schedule_timer(Duration::from_secs(5)).into_timer().await; // Wait 5 seconds
+ctx.schedule_timer(Duration::from_secs(5)).await; // Wait 5 seconds
 
 // ✅ ALSO CORRECT: Activities can use sleep, HTTP calls, database queries, etc.
 // Activities are just regular async functions and can do anything
 ```
 
-### 2. DurableFuture Conversion Pattern
-**CRITICAL: You MUST call `.into_*().await`, not just `.await`!**
+### 2. Direct Await Pattern
+**schedule_* methods return futures that can be awaited directly:**
 
 ```rust
-// ✅ CORRECT patterns:
-let result = ctx.schedule_activity("Task", "input").into_activity().await?;
-ctx.schedule_timer(Duration::from_secs(5)).into_timer().await;
-let event = ctx.schedule_wait("Event").into_event().await;
-
-// ❌ WRONG - Missing conversion methods:
-// let result = ctx.schedule_activity("Task", "input").await;  // Won't compile!
-// ctx.schedule_timer(Duration::from_secs(5)).await;                            // Won't compile!
+// ✅ CORRECT patterns - await directly:
+let result = ctx.schedule_activity("Task", "input").await?;
+ctx.schedule_timer(Duration::from_secs(5)).await;
+let event = ctx.schedule_wait("Event").await;
+let sub_result = ctx.schedule_sub_orchestration("Child", "input").await?;
 ```
 
 ## Minimal Example
@@ -63,8 +60,7 @@ let activities = ActivityRegistry::builder()
 
 // 2. Define an orchestration (your workflow)
 let orchestration = |ctx: OrchestrationContext, name: String| async move {
-    let greeting = ctx.schedule_activity("Greet", name)
-        .into_activity().await?;
+    let greeting = ctx.schedule_activity("Greet", name).await?;
     Ok(greeting)
 };
 
@@ -84,9 +80,9 @@ client.start_orchestration("inst-1", "HelloWorld", "World").await?; // Returns R
 ### 1. Function Chaining
 ```rust
 async fn process_order(ctx: OrchestrationContext) -> Result<String, String> {
-    let inventory = ctx.schedule_activity("ReserveInventory", "item1").into_activity().await?;
-    let payment = ctx.schedule_activity("ProcessPayment", "card123").into_activity().await?;
-    let shipping = ctx.schedule_activity("ShipItem", &inventory).into_activity().await?;
+    let inventory = ctx.schedule_activity("ReserveInventory", "item1").await?;
+    let payment = ctx.schedule_activity("ProcessPayment", "card123").await?;
+    let shipping = ctx.schedule_activity("ShipItem", &inventory).await?;
     Ok(shipping)
 }
 ```
@@ -106,15 +102,15 @@ async fn process_multiple(ctx: OrchestrationContext) -> Vec<String> {
 
 ### 3. Human-in-the-Loop (Approvals)
 ```rust
+use duroxide::Either2;
+
 async fn approval_workflow(ctx: OrchestrationContext) -> String {
     let timer = ctx.schedule_timer(std::time::Duration::from_secs(30)); // 30 second timeout
     let approval = ctx.schedule_wait("ApprovalEvent");
     
-    let (_, result) = ctx.select2(timer, approval).await;
-    match result {
-        DurableOutput::External(data) => data, // Got approval
-        DurableOutput::Timer => "timeout".to_string(), // Timeout
-        _ => "error".to_string(),
+    match ctx.select2(timer, approval).await {
+        Either2::First(()) => "timeout".to_string(), // Timeout
+        Either2::Second(data) => data, // Got approval
     }
 }
 ```
@@ -122,17 +118,13 @@ async fn approval_workflow(ctx: OrchestrationContext) -> String {
 ## Key APIs
 
 ### OrchestrationContext Methods
-- `ctx.schedule_activity(name, input)` - Schedule an activity
-- `ctx.schedule_timer(delay)` - Create a timer
-- `ctx.schedule_wait(event_name)` - Wait for external event
+- `ctx.schedule_activity(name, input)` - Schedule an activity (returns `impl Future<Output = Result<String, String>>`)
+- `ctx.schedule_timer(delay)` - Create a timer (returns `impl Future<Output = ()>`)
+- `ctx.schedule_wait(event_name)` - Wait for external event (returns `impl Future<Output = String>`)
+- `ctx.schedule_sub_orchestration(name, input)` - Start child orchestration (returns `impl Future<Output = Result<String, String>>`)
 - `ctx.join(futures)` - Wait for all futures to complete
-- `ctx.select2(future1, future2)` - Race between two futures
+- `ctx.select2(future1, future2)` - Race between two futures (returns `Either2<T1, T2>`)
 - `ctx.trace_info(message)` - Logging (replay-safe)
-
-### DurableFuture Methods
-- `.into_activity()` - Await activity result
-- `.into_timer()` - Await timer completion
-- `.into_event()` - Await external event
 
 ## Complete Working Example
 

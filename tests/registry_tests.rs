@@ -1,4 +1,7 @@
 //! Tests for registry composition features (merge, builder_from, register_all)
+#![allow(clippy::unwrap_used)]
+#![allow(clippy::clone_on_ref_ptr)]
+#![allow(clippy::expect_used)]
 
 use duroxide::providers::sqlite::SqliteProvider;
 use duroxide::runtime;
@@ -276,7 +279,7 @@ async fn activity_context_metadata() {
 
     let orchestrations = OrchestrationRegistry::builder()
         .register("InspectOrch", |ctx: OrchestrationContext, _input: String| async move {
-            ctx.schedule_activity("Inspect", "payload").into_activity().await
+            ctx.schedule_activity("Inspect", "payload").await
         })
         .build();
 

@@ -1,3 +1,7 @@
+#![allow(clippy::unwrap_used)]
+#![allow(clippy::clone_on_ref_ptr)]
+#![allow(clippy::expect_used)]
+
 pub mod fault_injection;
 
 use duroxide::providers::sqlite::SqliteProvider;

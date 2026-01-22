@@ -1027,10 +1027,7 @@ pub async fn test_stale_activity_after_delete_recreate<F: ProviderFactory>(facto
 
     // Step 3: Force delete instance A
     let delete_result = mgmt.delete_instance(instance_id, true).await.unwrap();
-    assert!(
-        delete_result.instances_deleted >= 1,
-        "Force delete should succeed"
-    );
+    assert!(delete_result.instances_deleted >= 1, "Force delete should succeed");
 
     // Verify instance is gone
     assert!(

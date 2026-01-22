@@ -1,4 +1,7 @@
 //! Comprehensive tests for the management interface including metrics
+#![allow(clippy::unwrap_used)]
+#![allow(clippy::clone_on_ref_ptr)]
+#![allow(clippy::expect_used)]
 
 use duroxide::providers::sqlite::SqliteProvider;
 use duroxide::runtime::registry::ActivityRegistry;
@@ -127,7 +130,7 @@ async fn test_instance_discovery() {
         .register(
             "TestOrchestration",
             |ctx: OrchestrationContext, input: String| async move {
-                let result = ctx.schedule_activity("TestActivity", input).into_activity().await?;
+                let result = ctx.schedule_activity("TestActivity", input).await?;
                 Ok(result)
             },
         )
@@ -202,7 +205,7 @@ async fn test_instance_info() {
         .register(
             "TestOrchestration",
             |ctx: OrchestrationContext, input: String| async move {
-                let result = ctx.schedule_activity("TestActivity", input).into_activity().await?;
+                let result = ctx.schedule_activity("TestActivity", input).await?;
                 Ok(result)
             },
         )
@@ -268,7 +271,7 @@ async fn test_execution_info() {
         .register(
             "TestOrchestration",
             |ctx: OrchestrationContext, input: String| async move {
-                let result = ctx.schedule_activity("TestActivity", input).into_activity().await?;
+                let result = ctx.schedule_activity("TestActivity", input).await?;
                 Ok(result)
             },
         )
@@ -425,14 +428,14 @@ async fn test_system_metrics() {
         .register(
             "SuccessOrchestration",
             |ctx: OrchestrationContext, input: String| async move {
-                let result = ctx.schedule_activity("TestActivity", input).into_activity().await?;
+                let result = ctx.schedule_activity("TestActivity", input).await?;
                 Ok(result)
             },
         )
         .register(
             "FailureOrchestration",
             |ctx: OrchestrationContext, input: String| async move {
-                let _result = ctx.schedule_activity("FailingActivity", input).into_activity().await?;
+                let _result = ctx.schedule_activity("FailingActivity", input).await?;
                 Ok("Should not reach here".to_string())
             },
         )
@@ -440,7 +443,7 @@ async fn test_system_metrics() {
             "RunningOrchestration",
             |ctx: OrchestrationContext, _input: String| async move {
                 // Wait for external event (never comes)
-                let _event = ctx.schedule_wait("NeverComes").into_event().await;
+                let _event = ctx.schedule_wait("NeverComes").await;
                 Ok("Should not reach here".to_string())
             },
         )
@@ -518,7 +521,7 @@ async fn test_queue_depths() {
         .register(
             "QueueTestOrchestration",
             |ctx: OrchestrationContext, input: String| async move {
-                let result = ctx.schedule_activity("SlowActivity", input).into_activity().await?;
+                let result = ctx.schedule_activity("SlowActivity", input).await?;
                 Ok(result)
             },
         )
@@ -612,19 +615,15 @@ async fn test_complex_workflow_management() {
             "OrderProcessing",
             |ctx: OrchestrationContext, order: String| async move {
                 // Process order
-                let result = ctx
-                    .schedule_activity("ProcessOrder", order.clone())
-                    .into_activity()
-                    .await?;
+                let result = ctx.schedule_activity("ProcessOrder", order.clone()).await?;
 
                 // Send confirmation email
                 let _email = ctx
                     .schedule_activity("SendEmail", format!("Order processed: {result}"))
-                    .into_activity()
                     .await?;
 
                 // Update inventory
-                let _inventory = ctx.schedule_activity("UpdateInventory", order).into_activity().await?;
+                let _inventory = ctx.schedule_activity("UpdateInventory", order).await?;
 
                 Ok(result)
             },

@@ -1,9 +1,13 @@
+#![allow(clippy::unwrap_used)]
+#![allow(clippy::clone_on_ref_ptr)]
+#![allow(clippy::expect_used)]
+
 use duroxide::providers::Provider;
 use std::sync::Arc;
 mod common;
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
-use duroxide::{ActivityContext, OrchestrationContext, OrchestrationRegistry};
+use duroxide::{ActivityContext, Either2, OrchestrationContext, OrchestrationRegistry};
 use std::sync::Arc as StdArc;
 use std::time::Duration;
 
@@ -41,16 +45,16 @@ async fn error_handling_compensation_on_ship_failure_with(store: StdArc<dyn Prov
         .build();
 
     let orchestration = |ctx: OrchestrationContext, _input: String| async move {
-        let deb = ctx.schedule_activity("Debit", "ok").into_activity().await;
+        let deb = ctx.schedule_activity("Debit", "ok").await;
         let deb = parse_activity_result(&deb);
         match deb {
             Err(e) => Ok(format!("debit_failed:{e}")),
             Ok(deb_val) => {
-                let ship = ctx.schedule_activity("Ship", "fail_ship").into_activity().await;
+                let ship = ctx.schedule_activity("Ship", "fail_ship").await;
                 match parse_activity_result(&ship) {
                     Ok(_) => Ok("ok".to_string()),
                     Err(_) => {
-                        let cred = ctx.schedule_activity("Credit", deb_val).into_activity().await.unwrap();
+                        let cred = ctx.schedule_activity("Credit", deb_val).await.unwrap();
                         Ok(format!("rolled_back:{cred}"))
                     }
                 }
@@ -109,9 +113,9 @@ async fn error_handling_success_path_with(store: StdArc<dyn Provider>) {
         .build();
 
     let orchestration = |ctx: OrchestrationContext, _input: String| async move {
-        let deb = ctx.schedule_activity("Debit", "ok").into_activity().await;
+        let deb = ctx.schedule_activity("Debit", "ok").await;
         parse_activity_result(&deb).unwrap();
-        let ship = ctx.schedule_activity("Ship", "ok").into_activity().await;
+        let ship = ctx.schedule_activity("Ship", "ok").await;
         parse_activity_result(&ship).unwrap();
         Ok("ok".to_string())
     };
@@ -168,7 +172,7 @@ async fn error_handling_early_debit_failure_with(store: StdArc<dyn Provider>) {
         .build();
 
     let orchestration = |ctx: OrchestrationContext, _input: String| async move {
-        let deb = ctx.schedule_activity("Debit", "fail").into_activity().await;
+        let deb = ctx.schedule_activity("Debit", "fail").await;
         match deb {
             Err(e) => Ok(format!("debit_failed:{e}")),
             Ok(_) => unreachable!(),
@@ -219,7 +223,7 @@ async fn error_handling_early_debit_failure_fs() {
 async fn unknown_activity_fails_with(store: StdArc<dyn Provider>) {
     let activity_registry = ActivityRegistry::builder().build();
     let orchestration = |ctx: OrchestrationContext, _input: String| async move {
-        match ctx.schedule_activity("Missing", "foo").into_activity().await {
+        match ctx.schedule_activity("Missing", "foo").await {
             Ok(v) => Ok(format!("unexpected_ok:{v}")),
             Err(e) => Ok(format!("err={e}")),
         }
@@ -288,7 +292,7 @@ async fn event_after_completion_is_ignored_fs() {
     let instance = "inst-post-complete-1";
     // Orchestration: subscribe and exit on first event
     let orchestration = |ctx: OrchestrationContext, _input: String| async move {
-        let _ = ctx.schedule_wait("Once").into_event().await;
+        let _ = ctx.schedule_wait("Once").await;
         Ok("done".to_string())
     };
 
@@ -347,21 +351,20 @@ async fn event_before_subscription_after_start_is_ignored() {
     let orchestration = |ctx: OrchestrationContext, _input: String| async move {
         info!("Orchestration started");
         // Delay before subscribing to simulate missing subscription window
-        ctx.schedule_timer(Duration::from_millis(10)).into_timer().await;
+        ctx.schedule_timer(Duration::from_millis(10)).await;
         info!("Subscribing to event");
         // Subscribe, then wait for event with timeout
         let ev = ctx.schedule_wait("Evt");
         let to = ctx.schedule_timer(Duration::from_millis(1000));
         match ctx.select2(ev, to).await {
-            (0, duroxide::DurableOutput::External(data)) => {
+            Either2::First(data) => {
                 info!("Event received: {}", data);
                 Ok(data)
             }
-            (1, duroxide::DurableOutput::Timer) => {
+            Either2::Second(_) => {
                 info!("Timeout waiting for event");
                 panic!("timeout waiting for Evt after subscription")
             }
-            _ => unreachable!(),
         }
     };
 
@@ -419,7 +422,7 @@ async fn history_cap_exceeded_with(store: StdArc<dyn Provider>) {
     // Each activity emits two events (Scheduled + Completed). With CAP=1024, 600 activities exceed.
     let orchestration = |ctx: OrchestrationContext, _input: String| async move {
         for i in 0..600u32 {
-            let _ = ctx.schedule_activity("Noop", format!("{i}")).into_activity().await;
+            let _ = ctx.schedule_activity("Noop", format!("{i}")).await;
         }
         Ok("done".to_string())
     };
@@ -538,7 +541,7 @@ async fn orchestration_propagates_activity_failure_fs() {
 
     let orchestration_registry = OrchestrationRegistry::builder()
         .register("PropagateFail", |ctx, _| async move {
-            let r = ctx.schedule_activity("Fail", "x").into_activity().await;
+            let r = ctx.schedule_activity("Fail", "x").await;
             r.map(|_v| "ok".to_string())
         })
         .build();
@@ -603,7 +606,7 @@ async fn typed_activity_decode_error_fs() {
         .build();
     let orch = |ctx: OrchestrationContext, _in: String| async move {
         // Pass invalid payload (not JSON for AOnly)
-        let res = ctx.schedule_activity("FmtA", "not-json").into_activity().await;
+        let res = ctx.schedule_activity("FmtA", "not-json").await;
         // The activity worker decodes input; expect Err
         assert!(res.is_err());
         Ok("ok".to_string())
@@ -640,7 +643,7 @@ async fn typed_event_decode_error_fs() {
     let activity_registry = ActivityRegistry::builder().build();
     let orch = |ctx: OrchestrationContext, _in: String| async move {
         // attempt to decode event into AOnly
-        let fut = ctx.schedule_wait_typed::<AOnly>("Evt").into_event_typed::<AOnly>();
+        let fut = ctx.schedule_wait_typed::<AOnly>("Evt");
         Ok(
             match futures::FutureExt::catch_unwind(std::panic::AssertUnwindSafe(fut)).await {
                 Ok(v) => {
@@ -678,5 +681,103 @@ async fn typed_event_decode_error_fs() {
         Err(error) => panic!("orchestration failed: {error}"),
     };
     assert_eq!(output, "decode_err");
+    rt.shutdown(None).await;
+}
+
+// ============================================================================
+// INSTANCE ID IDEMPOTENCE TESTS
+// ============================================================================
+
+/// Test that starting an orchestration with the same instance ID after completion
+/// returns the cached result rather than re-executing the orchestration.
+/// This verifies the deduplication behavior at the client/provider level.
+#[tokio::test]
+async fn test_instance_id_idempotence() {
+    let store = StdArc::new(
+        duroxide::providers::sqlite::SqliteProvider::new_in_memory()
+            .await
+            .unwrap(),
+    );
+
+    let orchestration = |ctx: OrchestrationContext, _input: String| async move {
+        // Use ctx.utcnow() to get a runtime-generated timestamp that would differ
+        // if the orchestration re-executed
+        let start = ctx.utcnow().await?;
+        let start_ms = start.duration_since(std::time::UNIX_EPOCH).unwrap().as_millis();
+        let a = ctx.schedule_activity("A", "1").await.unwrap();
+        ctx.schedule_timer(Duration::from_millis(50)).await;
+        let b = ctx.schedule_activity("B", a.clone()).await.unwrap();
+        Ok(format!("start={start_ms}, a={a}, b={b}"))
+    };
+
+    let activity_registry = ActivityRegistry::builder()
+        .register("A", |_ctx: ActivityContext, input: String| async move {
+            Ok(input.parse::<i32>().unwrap_or(0).saturating_add(1).to_string())
+        })
+        .register("B", |_ctx: ActivityContext, input: String| async move {
+            Ok(format!("B({input})"))
+        })
+        .build();
+
+    let orchestration_registry = OrchestrationRegistry::builder()
+        .register("IdempotenceTest", orchestration)
+        .build();
+
+    let rt =
+        runtime::Runtime::start_with_store(store.clone(), StdArc::new(activity_registry), orchestration_registry).await;
+
+    let client = duroxide::Client::new(store.clone());
+
+    // Start orchestration
+    client
+        .start_orchestration("idempotent-instance", "IdempotenceTest", "")
+        .await
+        .unwrap();
+
+    // Wait for completion
+    let status = client
+        .wait_for_orchestration("idempotent-instance", std::time::Duration::from_secs(10))
+        .await
+        .unwrap();
+
+    assert!(matches!(
+        status,
+        duroxide::runtime::OrchestrationStatus::Completed { .. }
+    ));
+
+    let result = match status {
+        duroxide::runtime::OrchestrationStatus::Completed { output } => output,
+        _ => panic!("Expected completed status"),
+    };
+
+    // Verify result has expected format
+    assert!(result.starts_with("start="), "Result should start with timestamp");
+    assert!(result.contains("a=2"), "Result should contain a=2");
+    assert!(result.contains("b=B(2)"), "Result should contain b=B(2)");
+
+    // Now start orchestration with same instance ID - should return cached result
+    client
+        .start_orchestration("idempotent-instance", "IdempotenceTest", "")
+        .await
+        .unwrap();
+
+    let status2 = client
+        .wait_for_orchestration("idempotent-instance", std::time::Duration::from_secs(10))
+        .await
+        .unwrap();
+
+    assert!(matches!(
+        status2,
+        duroxide::runtime::OrchestrationStatus::Completed { .. }
+    ));
+
+    let result2 = match status2 {
+        duroxide::runtime::OrchestrationStatus::Completed { output } => output,
+        _ => panic!("Expected completed status"),
+    };
+
+    // Should be identical - including the timestamp, proving it's cached not re-executed
+    assert_eq!(result2, result, "Second start should return cached result");
+
     rt.shutdown(None).await;
 }

@@ -48,7 +48,6 @@ How it works (brief)
 
 Key types
 - `OrchestrationContext`: schedules work (`schedule_activity`, `schedule_timer`, `schedule_wait`, `schedule_sub_orchestration`, `schedule_orchestration`) and exposes deterministic `select2/select/join`, `trace_*`, `continue_as_new`.
-- `DurableFuture`: returned by `schedule_*`; use `into_activity()`, `into_timer()`, `into_event()`, `into_sub_orchestration()` (and `_typed` variants) to await.
 - `Event`/`Action`: immutable history entries and host-side actions, including `ContinueAsNew`.
 - `Provider`: persistence + queues abstraction with atomic operations and lock renewal (`SqliteProvider` with in-memory and file-based modes).
 - `RuntimeOptions`: configure concurrency, lock timeouts, and lock renewal buffer for long-running activities.
@@ -86,7 +85,7 @@ let activities = ActivityRegistry::builder()
     .build();
 let orch = |ctx: OrchestrationContext, name: String| async move {
     ctx.trace_info("hello started");
-    let res = ctx.schedule_activity("Hello", name).into_activity().await.unwrap();
+    let res = ctx.schedule_activity("Hello", name).await.unwrap();
     Ok::<_, String>(res)
 };
 let orchestrations = OrchestrationRegistry::builder().register("HelloWorld", orch).build();
@@ -112,8 +111,8 @@ async fn fanout(ctx: OrchestrationContext) -> Vec<String> {
     outs
         .into_iter()
         .map(|o| match o {
-            duroxide::DurableOutput::Activity(Ok(s)) => s,
-            other => panic!("unexpected: {:?}", other),
+            Ok(s) => s,
+            Err(e) => panic!("activity failed: {}", e),
         })
         .collect()
 }
@@ -121,18 +120,16 @@ async fn fanout(ctx: OrchestrationContext) -> Vec<String> {
 
 Control flow + timers + externals
 ```rust
-use duroxide::DurableOutput;
+use duroxide::Either2;
 async fn control(ctx: OrchestrationContext) -> String {
     let a = ctx.schedule_timer(std::time::Duration::from_millis(10));
     let b = ctx.schedule_wait("Evt");
-    let (_idx, out) = ctx.select2(a, b).await;
-    match out {
-        DurableOutput::External(data) => data,
-        DurableOutput::Timer => {
+    match ctx.select2(a, b).await {
+        Either2::First(()) => {
             // timer won; fall back to waiting for the event deterministically
-            ctx.schedule_wait("Evt").into_event().await
+            ctx.schedule_wait("Evt").await
         }
-        other => panic!("unexpected: {:?}", other),
+        Either2::Second(data) => data,
     }
 }
 ```
@@ -140,11 +137,11 @@ async fn control(ctx: OrchestrationContext) -> String {
 Error handling (Result<String, String>)
 ```rust
 async fn comp_sample(ctx: OrchestrationContext) -> String {
-    match ctx.schedule_activity("Fragile", "bad").into_activity().await {
+    match ctx.schedule_activity("Fragile", "bad").await {
         Ok(v) => v,
         Err(e) => {
             ctx.trace_warn(format!("fragile failed error={e}"));
-            ctx.schedule_activity("Recover", "").into_activity().await.unwrap()
+            ctx.schedule_activity("Recover", "").await.unwrap()
         }
     }
 }

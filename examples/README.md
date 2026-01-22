@@ -63,9 +63,9 @@ Sequential operations where each step depends on the previous result:
 
 ```rust
 async fn chain_example(ctx: OrchestrationContext) -> Result<String, String> {
-    let step1 = ctx.schedule_activity("Step1", "input").into_activity().await?;
-    let step2 = ctx.schedule_activity("Step2", &step1).into_activity().await?;
-    let step3 = ctx.schedule_activity("Step3", &step2).into_activity().await?;
+    let step1 = ctx.schedule_activity("Step1", "input").await?;
+    let step2 = ctx.schedule_activity("Step2", &step1).await?;
+    let step3 = ctx.schedule_activity("Step3", &step2).await?;
     Ok(step3)
 }
 ```
@@ -75,16 +75,16 @@ Rollback operations on failure:
 
 ```rust
 async fn saga_example(ctx: OrchestrationContext) -> Result<String, String> {
-    let result1 = ctx.schedule_activity("ReserveInventory", "item1").into_activity().await?;
+    let result1 = ctx.schedule_activity("ReserveInventory", "item1").await?;
     
-    match ctx.schedule_activity("ProcessPayment", "card123").into_activity().await {
+    match ctx.schedule_activity("ProcessPayment", "card123").await {
         Ok(payment) => {
-            ctx.schedule_activity("ShipItem", &result1).into_activity().await?;
+            ctx.schedule_activity("ShipItem", &result1).await?;
             Ok("Order completed".to_string())
         }
         Err(e) => {
             // Compensate: release inventory
-            ctx.schedule_activity("ReleaseInventory", &result1).into_activity().await?;
+            ctx.schedule_activity("ReleaseInventory", &result1).await?;
             Err(format!("Payment failed, inventory released: {}", e))
         }
     }
@@ -103,13 +103,8 @@ async fn parent_orchestration(ctx: OrchestrationContext) -> Result<String, Strin
     // Wait for all to complete
     let results = ctx.join(vec![sub1, sub2]).await;
     
-    // Aggregate results
-    let mut success_count = 0;
-    for result in results {
-        if let DurableOutput::SubOrchestration(Ok(_)) = result {
-            success_count += 1;
-        }
-    }
+    // Aggregate results - each result is Result<String, String>
+    let success_count = results.iter().filter(|r| r.is_ok()).count();
     
     Ok(format!("Processed {} orders successfully", success_count))
 }

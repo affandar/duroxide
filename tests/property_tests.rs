@@ -1,4 +1,7 @@
 //! Property-based tests using proptest to verify invariants
+#![allow(clippy::unwrap_used)]
+#![allow(clippy::clone_on_ref_ptr)]
+#![allow(clippy::expect_used)]
 
 use duroxide::runtime::registry::{ActivityRegistry, OrchestrationRegistry};
 use duroxide::*;
@@ -46,7 +49,7 @@ proptest! {
                 .register(
                     orch_name.clone(),
                     |ctx: OrchestrationContext, input: String| async move {
-                        let _ = ctx.schedule_activity("TestActivity", input.clone()).into_activity().await;
+                        let _ = ctx.schedule_activity("TestActivity", input.clone()).await;
                         Ok(input)
                     },
                 )
@@ -239,7 +242,7 @@ proptest! {
                     move |ctx: OrchestrationContext, input: String| async move {
                         for i in 0..activity_count_clone {
                             let name = format!("Activity{i}");
-                            let _ = ctx.schedule_activity(&name, input.clone()).into_activity().await;
+                            let _ = ctx.schedule_activity(&name, input.clone()).await;
                         }
                         Ok(input)
                     },
@@ -350,7 +353,7 @@ proptest! {
                     move |ctx: OrchestrationContext, input: String| async move {
                         for i in 0..activity_count_clone {
                             let name = format!("Activity{i}");
-                            let _ = ctx.schedule_activity(&name, input.clone()).into_activity().await;
+                            let _ = ctx.schedule_activity(&name, input.clone()).await;
                         }
                         Ok(input)
                     },

@@ -1,3 +1,7 @@
+#![allow(clippy::unwrap_used)]
+#![allow(clippy::clone_on_ref_ptr)]
+#![allow(clippy::expect_used)]
+
 use duroxide::Event;
 use duroxide::EventKind;
 use duroxide::providers::sqlite::SqliteProvider;

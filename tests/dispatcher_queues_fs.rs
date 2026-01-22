@@ -1,3 +1,7 @@
+#![allow(clippy::unwrap_used)]
+#![allow(clippy::clone_on_ref_ptr)]
+#![allow(clippy::expect_used)]
+
 use std::sync::Arc as StdArc;
 use std::time::Duration;
 
@@ -32,7 +36,7 @@ async fn dispatcher_enqueues_timer_schedule_then_completes() {
     let store_dyn = store.clone() as StdArc<dyn duroxide::providers::Provider>;
 
     let orch = |ctx: OrchestrationContext, _input: String| async move {
-        ctx.schedule_timer(Duration::from_millis(50)).into_timer().await;
+        ctx.schedule_timer(Duration::from_millis(50)).await;
         Ok("ok".to_string())
     };
     let reg = OrchestrationRegistry::builder().register("OneTimer", orch).build();

@@ -2,7 +2,9 @@
 //!
 //! This test just ensures the stress test infrastructure doesn't break.
 //! It runs a single orchestration to validate the plumbing works.
-
+#![allow(clippy::unwrap_used)]
+#![allow(clippy::clone_on_ref_ptr)]
+#![allow(clippy::expect_used)]
 #![cfg(feature = "provider-test")]
 
 use duroxide::provider_stress_tests::StressTestConfig;

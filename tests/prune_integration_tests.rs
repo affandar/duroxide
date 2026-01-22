@@ -1,4 +1,7 @@
 //! Integration tests for execution pruning operations via Client API.
+#![allow(clippy::unwrap_used)]
+#![allow(clippy::clone_on_ref_ptr)]
+#![allow(clippy::expect_used)]
 
 use duroxide::providers::{InstanceFilter, PruneOptions};
 use duroxide::runtime::registry::ActivityRegistry;
@@ -310,9 +313,7 @@ async fn test_prune_during_active_continue_as_new() {
             |ctx: OrchestrationContext, count_str: String| async move {
                 let count: u32 = count_str.parse().unwrap_or(0);
                 // Call activity to track execution and create pause point
-                ctx.schedule_activity("SlowActivity", count.to_string())
-                    .into_activity()
-                    .await?;
+                ctx.schedule_activity("SlowActivity", count.to_string()).await?;
 
                 if count < 5 {
                     ctx.continue_as_new((count + 1).to_string()).await
@@ -424,14 +425,12 @@ async fn test_prune_bulk_includes_running_instances() {
                 let count: u32 = count_str.parse().unwrap_or(0);
 
                 // Signal which execution we're on
-                ctx.schedule_activity("SignalExecution", count.to_string())
-                    .into_activity()
-                    .await?;
+                ctx.schedule_activity("SignalExecution", count.to_string()).await?;
 
                 if count == 5 {
                     // On execution 5, wait for external signal to proceed
                     // This keeps us "Running" with multiple old executions
-                    let _signal = ctx.schedule_wait("proceed").into_event().await;
+                    let _signal = ctx.schedule_wait("proceed").await;
                 }
 
                 if count < 10 {

@@ -31,7 +31,7 @@ pub async fn my_orchestration(
 ) -> Result<String, String> {
     ctx.trace_info("Starting...");
     // Original logic
-    ctx.schedule_timer(Duration::from_secs(60)).into_timer().await;
+    ctx.schedule_timer(Duration::from_secs(60)).await;
     ctx.continue_as_new(input).await
 }
 
@@ -42,7 +42,7 @@ pub async fn my_orchestration_1_0_1(
 ) -> Result<String, String> {
     ctx.trace_info("[v1.0.1] Starting...");
     // Same logic with improved observability
-    ctx.schedule_timer(Duration::from_secs(60)).into_timer().await;
+    ctx.schedule_timer(Duration::from_secs(60)).await;
     ctx.continue_as_new(input).await
 }
 
@@ -53,7 +53,7 @@ pub async fn my_orchestration_1_0_2(
 ) -> Result<String, String> {
     ctx.trace_info("[v1.0.2] Starting...");
     // Updated logic with longer interval
-    ctx.schedule_timer(Duration::from_secs(300)).into_timer().await;
+    ctx.schedule_timer(Duration::from_secs(300)).await;
     ctx.continue_as_new(input).await
 }
 ```
@@ -232,7 +232,7 @@ pub async fn health_monitor_1_0_1(ctx: OrchestrationContext, input: String) -> R
         RetryPolicy::new(3).with_timeout(Duration::from_secs(30)),
     ).await?;
     
-    ctx.schedule_timer(Duration::from_secs(60)).into_timer().await;
+    ctx.schedule_timer(Duration::from_secs(60)).await;
     ctx.continue_as_new(input).await
 }
 ```

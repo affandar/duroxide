@@ -1,3 +1,8 @@
+#![allow(clippy::unwrap_used)]
+#![allow(clippy::clone_on_ref_ptr)]
+#![allow(clippy::expect_used)]
+
+use duroxide::Either2;
 use duroxide::providers::Provider;
 use duroxide::providers::sqlite::SqliteProvider;
 use duroxide::runtime::registry::ActivityRegistry;
@@ -39,7 +44,7 @@ async fn single_timer_fires() {
 
     const TIMER_MS: u64 = 50;
     let orch = |ctx: OrchestrationContext, _input: String| async move {
-        ctx.schedule_timer(Duration::from_millis(TIMER_MS)).into_timer().await;
+        ctx.schedule_timer(Duration::from_millis(TIMER_MS)).await;
         Ok("done".to_string())
     };
 
@@ -79,9 +84,9 @@ async fn multiple_timers_fire_in_order() {
     let (store, _td) = create_sqlite_store().await;
 
     let orch = |ctx: OrchestrationContext, _input: String| async move {
-        let t1 = ctx.schedule_timer(Duration::from_millis(100)).into_timer().await;
-        let t2 = ctx.schedule_timer(Duration::from_millis(50)).into_timer().await;
-        let t3 = ctx.schedule_timer(Duration::from_millis(75)).into_timer().await;
+        let t1 = ctx.schedule_timer(Duration::from_millis(100)).await;
+        let t2 = ctx.schedule_timer(Duration::from_millis(50)).await;
+        let t3 = ctx.schedule_timer(Duration::from_millis(75)).await;
 
         // Verify timers fired in correct order (t2, t3, t1)
         let results = vec![t1, t2, t3];
@@ -120,8 +125,8 @@ async fn timer_with_activity() {
         let activity_future = ctx.schedule_activity("TestActivity", "input");
 
         // Wait for both
-        let timer_result = timer_future.into_timer().await;
-        let activity_result = activity_future.into_activity().await.unwrap();
+        let timer_result = timer_future.await;
+        let activity_result = activity_future.await.unwrap();
 
         Ok(format!("timer: {timer_result:?}, activity: {activity_result}"))
     };
@@ -180,10 +185,10 @@ async fn timer_recovery_after_crash_before_fire() {
     // Simple orchestration that schedules a timer and then completes
     let orch = |ctx: OrchestrationContext, _input: String| async move {
         // Schedule a timer with enough delay that we can "crash" before it fires
-        ctx.schedule_timer(Duration::from_millis(TIMER_MS)).into_timer().await;
+        ctx.schedule_timer(Duration::from_millis(TIMER_MS)).await;
 
         // Do something after timer to prove it fired
-        let result = ctx.schedule_activity("PostTimer", "done").into_activity().await?;
+        let result = ctx.schedule_activity("PostTimer", "done").await?;
         Ok(result)
     };
 
@@ -220,8 +225,8 @@ async fn timer_recovery_after_crash_before_fire() {
 
     // Restart runtime with same store
     let orch2 = |ctx: OrchestrationContext, _input: String| async move {
-        ctx.schedule_timer(Duration::from_millis(TIMER_MS)).into_timer().await;
-        let result = ctx.schedule_activity("PostTimer", "done").into_activity().await?;
+        ctx.schedule_timer(Duration::from_millis(TIMER_MS)).await;
+        let result = ctx.schedule_activity("PostTimer", "done").await?;
         Ok(result)
     };
 
@@ -265,8 +270,8 @@ async fn timer_recovery_after_crash_after_fire() {
     const TIMER_MS: u64 = 100;
 
     let orch = |ctx: OrchestrationContext, _input: String| async move {
-        ctx.schedule_timer(Duration::from_millis(TIMER_MS)).into_timer().await;
-        let result = ctx.schedule_activity("PostTimer", "done").into_activity().await?;
+        ctx.schedule_timer(Duration::from_millis(TIMER_MS)).await;
+        let result = ctx.schedule_activity("PostTimer", "done").await?;
         Ok(result)
     };
 
@@ -299,8 +304,8 @@ async fn timer_recovery_after_crash_after_fire() {
 
     // Restart runtime
     let orch2 = |ctx: OrchestrationContext, _input: String| async move {
-        ctx.schedule_timer(Duration::from_millis(TIMER_MS)).into_timer().await;
-        let result = ctx.schedule_activity("PostTimer", "done").into_activity().await?;
+        ctx.schedule_timer(Duration::from_millis(TIMER_MS)).await;
+        let result = ctx.schedule_activity("PostTimer", "done").await?;
         Ok(result)
     };
 
@@ -345,7 +350,7 @@ async fn zero_duration_timer() {
     let (store, _td) = create_sqlite_store().await;
 
     let orch = |ctx: OrchestrationContext, _input: String| async move {
-        ctx.schedule_timer(Duration::ZERO).into_timer().await;
+        ctx.schedule_timer(Duration::ZERO).await;
         Ok("zero-timer-fired".to_string())
     };
 
@@ -379,7 +384,7 @@ async fn timer_cancellation() {
 
     let orch = |ctx: OrchestrationContext, _input: String| async move {
         // Schedule a timer and wait for it
-        ctx.schedule_timer(Duration::from_millis(100)).into_timer().await;
+        ctx.schedule_timer(Duration::from_millis(100)).await;
         Ok("timer-completed".to_string())
     };
 
@@ -424,9 +429,9 @@ async fn multiple_timers_recovery_after_crash() {
         let timer3 = ctx.schedule_timer(Duration::from_millis(TIMER_MS + 100));
 
         // Wait for all timers
-        timer1.into_timer().await;
-        timer2.into_timer().await;
-        timer3.into_timer().await;
+        timer1.await;
+        timer2.await;
+        timer3.await;
 
         Ok("all-timers-fired".to_string())
     };
@@ -462,9 +467,9 @@ async fn multiple_timers_recovery_after_crash() {
         let timer2 = ctx.schedule_timer(Duration::from_millis(TIMER_MS + 50));
         let timer3 = ctx.schedule_timer(Duration::from_millis(TIMER_MS + 100));
 
-        timer1.into_timer().await;
-        timer2.into_timer().await;
-        timer3.into_timer().await;
+        timer1.await;
+        timer2.await;
+        timer3.await;
 
         Ok("all-timers-fired".to_string())
     };
@@ -549,16 +554,14 @@ async fn timer_fires_at_correct_time_after_previous_timer() {
         let timer = ctx.schedule_timer(Duration::from_secs(1));
         let activity = ctx.schedule_activity("SlowActivity", "100"); // 100ms activity
 
-        let (winner, output) = ctx.select2(timer, activity).await;
-
-        let result = if winner == 0 {
-            // Timer won - would indicate regression
-            "timer_won".to_string()
-        } else {
-            // Activity won - correct behavior
-            match output {
-                duroxide::DurableOutput::Activity(result) => result.unwrap_or_else(|e| format!("activity_failed: {e}")),
-                _ => "unexpected_output".to_string(),
+        let result = match ctx.select2(timer, activity).await {
+            Either2::First(_) => {
+                // Timer won - would indicate regression
+                "timer_won".to_string()
+            }
+            Either2::Second(r) => {
+                // Activity won - correct behavior
+                r.unwrap_or_else(|e| format!("activity_failed: {e}"))
             }
         };
         Ok(result)

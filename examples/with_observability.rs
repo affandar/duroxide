@@ -7,6 +7,9 @@
 //! ```bash
 //! cargo run --example with_observability --features observability
 //! ```
+#![allow(clippy::unwrap_used)]
+#![allow(clippy::clone_on_ref_ptr)]
+#![allow(clippy::expect_used)]
 
 use duroxide::providers::sqlite::SqliteProvider;
 use duroxide::runtime::registry::ActivityRegistry;
@@ -57,11 +60,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let greeting_orch = |ctx: OrchestrationContext, name: String| async move {
         ctx.trace_info("Starting greeting orchestration");
 
-        let greeting = ctx.schedule_activity("Greet", name.clone()).into_activity().await?;
+        let greeting = ctx.schedule_activity("Greet", name.clone()).await?;
 
         ctx.trace_info(format!("Got greeting: {greeting}"));
 
-        let farewell = ctx.schedule_activity("Farewell", name).into_activity().await?;
+        let farewell = ctx.schedule_activity("Farewell", name).await?;
 
         ctx.trace_info("Orchestration completing");
         Ok::<_, String>(format!("{greeting} | {farewell}"))

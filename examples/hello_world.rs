@@ -3,6 +3,9 @@
 //! This example demonstrates:
 //! - Setting up a basic orchestration with activities
 //! - Using the SQLite provider for persistence
+#![allow(clippy::unwrap_used)]
+#![allow(clippy::clone_on_ref_ptr)]
+#![allow(clippy::expect_used)]
 //! - Running orchestrations with the in-process runtime
 //!
 //! Run with: `cargo run --example hello_world`
@@ -38,7 +41,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ctx.trace_info("Starting greeting orchestration");
 
         // Schedule and await the greeting activity
-        let greeting = ctx.schedule_activity("Greet", name).into_activity().await?;
+        let greeting = ctx.schedule_activity("Greet", name).await?;
 
         ctx.trace_info(format!("Greeting completed: {greeting}"));
         Ok(greeting)

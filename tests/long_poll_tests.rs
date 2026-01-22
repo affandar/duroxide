@@ -1,3 +1,7 @@
+#![allow(clippy::unwrap_used)]
+#![allow(clippy::clone_on_ref_ptr)]
+#![allow(clippy::expect_used)]
+
 use duroxide::providers::{
     ExecutionMetadata, OrchestrationItem, Provider, ProviderError, ScheduledActivityIdentifier, WorkItem,
 };
@@ -231,9 +235,7 @@ async fn test_dispatcher_uses_long_polling() {
         })
         .build();
 
-    let orch = |ctx: OrchestrationContext, _: String| async move {
-        ctx.schedule_activity("QuickTask", "").into_activity().await
-    };
+    let orch = |ctx: OrchestrationContext, _: String| async move { ctx.schedule_activity("QuickTask", "").await };
 
     let orchestrations = OrchestrationRegistry::builder().register("TestOrch", orch).build();
 

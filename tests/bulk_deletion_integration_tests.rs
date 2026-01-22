@@ -1,4 +1,7 @@
 //! Integration tests for bulk delete instances operations via Client API.
+#![allow(clippy::unwrap_used)]
+#![allow(clippy::clone_on_ref_ptr)]
+#![allow(clippy::expect_used)]
 
 use duroxide::providers::InstanceFilter;
 use duroxide::runtime::registry::ActivityRegistry;
@@ -138,13 +141,12 @@ async fn test_delete_instance_bulk_safety() {
             Ok("done".to_string())
         })
         .register("WaitOrch", |ctx: OrchestrationContext, _input: String| async move {
-            ctx.schedule_wait("never").into_event().await;
+            ctx.schedule_wait("never").await;
             Ok("done".to_string())
         })
         .register("ParentOrch", |ctx: OrchestrationContext, _input: String| async move {
             // Child ID will be bulk-del-parent::sub::2
-            let child = ctx.schedule_sub_orchestration("SimpleOrch", "".to_string());
-            child.into_sub_orchestration().await?;
+            ctx.schedule_sub_orchestration("SimpleOrch", "".to_string()).await?;
             Ok("parent done".to_string())
         })
         .build();

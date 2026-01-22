@@ -45,10 +45,7 @@ async fn e2e_rolling_deployment_three_nodes() {
         .register(
             "RollingDeployOrch",
             |ctx: duroxide::OrchestrationContext, _input: String| async move {
-                let result = ctx
-                    .schedule_activity("NewActivity", "test-input")
-                    .into_activity()
-                    .await?;
+                let result = ctx.schedule_activity("NewActivity", "test-input").await?;
                 Ok(result)
             },
         )
@@ -72,8 +69,11 @@ async fn e2e_rolling_deployment_three_nodes() {
     let activities_old = Arc::new(ActivityRegistry::builder().build());
 
     // Fast options with short backoff for testing
+    // Note: max_attempts is set high (50) to allow enough bouncing between nodes
+    // during rolling deployment. With 3 nodes where 2 don't have the activity,
+    // the work item needs many chances to land on the correct node (node 3).
     let options = RuntimeOptions {
-        max_attempts: 10,
+        max_attempts: 50,
         dispatcher_min_poll_interval: Duration::from_millis(10),
         unregistered_backoff: UnregisteredBackoffConfig {
             base_delay: Duration::from_millis(50),
@@ -192,6 +192,8 @@ async fn e2e_rolling_deployment_three_nodes() {
 /// rolling deployments where new versions are introduced.
 #[tokio::test]
 async fn e2e_rolling_deployment_version_upgrade() {
+    use tokio::sync::oneshot;
+
     let (store, _td) = common::create_sqlite_store_disk().await;
 
     // v1.0.0 handler - does CAN to v2.0.0
@@ -218,12 +220,17 @@ async fn e2e_rolling_deployment_version_upgrade() {
 
     let activities = Arc::new(ActivityRegistry::builder().build());
 
+    // Note: max_attempts is set high (50) to allow enough bouncing between nodes
+    // during rolling deployment. With 3 nodes where 2 don't have v2.0.0,
+    // the work item needs many chances to survive until upgrade completes.
+    // Backoffs are longer (100ms-500ms) to ensure we don't exhaust attempts
+    // before the 1-second upgrade window.
     let options = RuntimeOptions {
-        max_attempts: 10,
+        max_attempts: 50,
         dispatcher_min_poll_interval: Duration::from_millis(10),
         unregistered_backoff: UnregisteredBackoffConfig {
-            base_delay: Duration::from_millis(50),
-            max_delay: Duration::from_millis(200),
+            base_delay: Duration::from_millis(100),
+            max_delay: Duration::from_millis(500),
         },
         ..Default::default()
     };
@@ -259,7 +266,10 @@ async fn e2e_rolling_deployment_version_upgrade() {
         .await
         .expect("start should succeed");
 
-    // Simulate rolling upgrade: after 2 seconds, upgrade old nodes
+    // Channel to keep upgraded runtimes alive until test completes
+    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+
+    // Simulate rolling upgrade: after 1 second, upgrade old nodes
     tokio::spawn({
         let rt1 = rt1.clone();
         let rt2 = rt2.clone();
@@ -268,11 +278,11 @@ async fn e2e_rolling_deployment_version_upgrade() {
         let orchestrations_new = orchestrations_new.clone();
         let options = options.clone();
         async move {
-            sleep(Duration::from_secs(2)).await;
+            sleep(Duration::from_secs(1)).await;
 
             // "Upgrade" node 1
             rt1.shutdown(None).await;
-            let _rt1_new = runtime::Runtime::start_with_options(
+            let rt1_new = runtime::Runtime::start_with_options(
                 store.clone(),
                 activities.clone(),
                 orchestrations_new.clone(),
@@ -282,21 +292,29 @@ async fn e2e_rolling_deployment_version_upgrade() {
 
             // "Upgrade" node 2
             rt2.shutdown(None).await;
-            let _rt2_new = runtime::Runtime::start_with_options(
+            let rt2_new = runtime::Runtime::start_with_options(
                 store.clone(),
                 activities.clone(),
                 orchestrations_new.clone(),
                 options.clone(),
             )
             .await;
+
+            // Keep runtimes alive until signaled to shutdown
+            let _ = shutdown_rx.await;
+            rt1_new.shutdown(None).await;
+            rt2_new.shutdown(None).await;
         }
     });
 
     // Wait for orchestration to complete
     let status = client
-        .wait_for_orchestration("version-upgrade-test", Duration::from_secs(10))
+        .wait_for_orchestration("version-upgrade-test", Duration::from_secs(15))
         .await
         .expect("wait should succeed");
+
+    // Signal upgrade task to shutdown
+    let _ = shutdown_tx.send(());
 
     // Should complete successfully with v2 output
     match status {

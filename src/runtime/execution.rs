@@ -91,7 +91,10 @@ impl Runtime {
         );
         // Use full history (always contains only current execution)
         let current_execution_history = history_mgr.full_history();
-        let mut turn = ReplayEngine::new(instance.to_string(), execution_id, current_execution_history);
+        // Get the persisted history length for is_replaying tracking
+        let persisted_len = history_mgr.original_len();
+        let mut turn = ReplayEngine::new(instance.to_string(), execution_id, current_execution_history)
+            .with_persisted_history_len(persisted_len);
 
         // Prep completions from incoming messages
         if !messages.is_empty() {
@@ -149,7 +152,7 @@ impl Runtime {
 
                             // Enqueue TimerFired to orchestrator queue with delayed visibility
                             // Provider will use fire_at_ms for the visible_at timestamp
-                            // Note: fire_at_ms is computed in futures.rs using system time at scheduling,
+                            // Note: fire_at_ms is computed at scheduling time (wall-clock),
                             // ensuring timers fire at the correct absolute time regardless of history state.
                             orchestrator_items.push(WorkItem::TimerFired {
                                 instance: instance.to_string(),

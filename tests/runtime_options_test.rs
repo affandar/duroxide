@@ -1,4 +1,7 @@
 //! Tests for RuntimeOptions configuration
+#![allow(clippy::unwrap_used)]
+#![allow(clippy::clone_on_ref_ptr)]
+#![allow(clippy::expect_used)]
 
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self, RuntimeOptions};
@@ -19,9 +22,7 @@ async fn test_default_polling_frequency() {
         })
         .build();
 
-    let orch = |ctx: OrchestrationContext, _: String| async move {
-        ctx.schedule_activity("QuickTask", "").into_activity().await
-    };
+    let orch = |ctx: OrchestrationContext, _: String| async move { ctx.schedule_activity("QuickTask", "").await };
 
     let orchestrations = OrchestrationRegistry::builder().register("TestOrch", orch).build();
 
@@ -61,9 +62,7 @@ async fn test_custom_polling_frequency() {
         })
         .build();
 
-    let orch = |ctx: OrchestrationContext, _: String| async move {
-        ctx.schedule_activity("QuickTask", "").into_activity().await
-    };
+    let orch = |ctx: OrchestrationContext, _: String| async move { ctx.schedule_activity("QuickTask", "").await };
 
     let orchestrations = OrchestrationRegistry::builder().register("TestOrch", orch).build();
 
@@ -100,8 +99,7 @@ async fn test_fast_polling() {
         })
         .build();
 
-    let orch =
-        |ctx: OrchestrationContext, _: String| async move { ctx.schedule_activity("Task", "").into_activity().await };
+    let orch = |ctx: OrchestrationContext, _: String| async move { ctx.schedule_activity("Task", "").await };
 
     let orchestrations = OrchestrationRegistry::builder().register("FastOrch", orch).build();
 

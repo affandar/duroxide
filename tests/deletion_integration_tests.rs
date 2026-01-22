@@ -1,6 +1,9 @@
 //! Integration tests for deletion operations via Client API.
 //!
 //! These tests verify end-to-end deletion behavior with real orchestration execution.
+#![allow(clippy::unwrap_used)]
+#![allow(clippy::clone_on_ref_ptr)]
+#![allow(clippy::expect_used)]
 
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self, RuntimeOptions};
@@ -60,15 +63,11 @@ async fn test_delete_terminal_orchestrations() {
 
     let orchestrations = OrchestrationRegistry::builder()
         .register("SuccessOrch", |ctx: OrchestrationContext, _input: String| async move {
-            ctx.schedule_activity("SuccessActivity", "".to_string())
-                .into_activity()
-                .await?;
+            ctx.schedule_activity("SuccessActivity", "".to_string()).await?;
             Ok("completed".to_string())
         })
         .register("FailOrch", |ctx: OrchestrationContext, _input: String| async move {
-            ctx.schedule_activity("FailActivity", "".to_string())
-                .into_activity()
-                .await?;
+            ctx.schedule_activity("FailActivity", "".to_string()).await?;
             Ok("unreachable".to_string())
         })
         .build();
@@ -155,9 +154,7 @@ async fn test_force_delete_in_flight_work() {
         .register(
             "WaitOnActivity",
             |ctx: OrchestrationContext, _input: String| async move {
-                ctx.schedule_activity("SlowActivity", "".to_string())
-                    .into_activity()
-                    .await?;
+                ctx.schedule_activity("SlowActivity", "".to_string()).await?;
                 Ok("done".to_string())
             },
         )
@@ -166,7 +163,7 @@ async fn test_force_delete_in_flight_work() {
             Ok("done".to_string())
         })
         .register("WaitOnEvent", |ctx: OrchestrationContext, _input: String| async move {
-            ctx.schedule_wait("my-event").into_event().await;
+            ctx.schedule_wait("my-event").await;
             Ok("done".to_string())
         })
         .build();
@@ -246,10 +243,7 @@ async fn test_cascade_delete_real_sub_orchestrations() {
             // Wait for both in parallel
             let results = ctx.join(vec![child1, child2]).await;
             for r in results {
-                match r {
-                    duroxide::DurableOutput::SubOrchestration(res) => res?,
-                    _ => unreachable!(),
-                };
+                r?;
             }
 
             Ok("parent done".to_string())
@@ -320,7 +314,7 @@ async fn test_identity_reuse_after_delete() {
             Ok(input)
         })
         .register("WaitOrch", |ctx: OrchestrationContext, _input: String| async move {
-            ctx.schedule_wait("never").into_event().await;
+            ctx.schedule_wait("never").await;
             Ok("done".to_string())
         })
         .build();
@@ -390,13 +384,12 @@ async fn test_delete_error_cases() {
 
     let orchestrations = OrchestrationRegistry::builder()
         .register("WaitOrch", |ctx: OrchestrationContext, _input: String| async move {
-            ctx.schedule_wait("never").into_event().await;
+            ctx.schedule_wait("never").await;
             Ok("done".to_string())
         })
         .register("ParentOrch", |ctx: OrchestrationContext, _input: String| async move {
             // Child will have ID: error-parent::sub::2
-            let child = ctx.schedule_sub_orchestration("WaitOrch", "".to_string());
-            child.into_sub_orchestration().await?;
+            ctx.schedule_sub_orchestration("WaitOrch", "".to_string()).await?;
             Ok("done".to_string())
         })
         .build();
@@ -490,13 +483,11 @@ async fn test_dispatcher_resilience_after_delete() {
 
     let orchestrations = OrchestrationRegistry::builder()
         .register("CountOrch", |ctx: OrchestrationContext, _input: String| async move {
-            ctx.schedule_activity("CountingActivity", "".to_string())
-                .into_activity()
-                .await?;
+            ctx.schedule_activity("CountingActivity", "".to_string()).await?;
             Ok("done".to_string())
         })
         .register("WaitOrch", |ctx: OrchestrationContext, _input: String| async move {
-            ctx.schedule_wait("never").into_event().await;
+            ctx.schedule_wait("never").await;
             Ok("done".to_string())
         })
         .build();
@@ -670,17 +661,11 @@ async fn test_list_children_primitive() {
     // Create a hierarchy: parent -> child -> grandchild
     let orchestrations = OrchestrationRegistry::builder()
         .register("ParentOrch", |ctx: OrchestrationContext, _input: String| async move {
-            let _child = ctx
-                .schedule_sub_orchestration("ChildOrch", "".to_string())
-                .into_sub_orchestration()
-                .await?;
+            let _child = ctx.schedule_sub_orchestration("ChildOrch", "".to_string()).await?;
             Ok("done".to_string())
         })
         .register("ChildOrch", |ctx: OrchestrationContext, _input: String| async move {
-            let _grandchild = ctx
-                .schedule_sub_orchestration("GrandchildOrch", "".to_string())
-                .into_sub_orchestration()
-                .await?;
+            let _grandchild = ctx.schedule_sub_orchestration("GrandchildOrch", "".to_string()).await?;
             Ok("child done".to_string())
         })
         .register(
@@ -739,10 +724,7 @@ async fn test_get_parent_id_primitive() {
     // Create parent with a child
     let orchestrations = OrchestrationRegistry::builder()
         .register("ParentOrch", |ctx: OrchestrationContext, _input: String| async move {
-            let _child = ctx
-                .schedule_sub_orchestration("ChildOrch", "".to_string())
-                .into_sub_orchestration()
-                .await?;
+            let _child = ctx.schedule_sub_orchestration("ChildOrch", "".to_string()).await?;
             Ok("done".to_string())
         })
         .register("ChildOrch", |_ctx: OrchestrationContext, _input: String| async move {
@@ -813,9 +795,7 @@ async fn test_delete_orphan_race_condition_detection() {
             Ok("parent-done".to_string())
         })
         .register("ChildOrch", |ctx: OrchestrationContext, _input: String| async move {
-            ctx.schedule_activity("ParentActivity", "".to_string())
-                .into_activity()
-                .await?;
+            ctx.schedule_activity("ParentActivity", "".to_string()).await?;
             Ok("child-done".to_string())
         })
         .build();
