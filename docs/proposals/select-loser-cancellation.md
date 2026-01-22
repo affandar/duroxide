@@ -245,6 +245,103 @@ The `cancelled_activity_ids` populated by `ScheduledFuture::Drop` flows through 
 1. **Activity not yet started:** Worker won't pick it up (row deleted)
 2. **Activity already running:** Worker's next lock renewal fails (row gone), triggering cooperative cancellation via `ActivityContext::is_cancelled()`
 
+### Sub-Orchestration Cancellation Flow
+
+Sub-orchestrations use a different cancellation mechanism than activities. Instead of lock stealing, they receive a `CancelInstance` work item:
+
+```
+┌──────────────────────────────────────────────────────────────────────────┐
+│ ScheduledFuture::drop() for SubOrchestration                             │
+│   Calls ctx.mark_token_cancelled(token, ScheduleKind::SubOrchestration)  │
+└────────────────────────┬─────────────────────────────────────────────────┘
+                         │
+                         ▼
+┌──────────────────────────────────────────────────────────────────────────┐
+│ ReplayEngine                                                             │
+│   cancelled_sub_orchestrations: Vec<String>  ← child instance IDs        │
+└────────────────────────┬─────────────────────────────────────────────────┘
+                         │ turn.cancelled_sub_orchestrations()
+                         ▼
+┌──────────────────────────────────────────────────────────────────────────┐
+│ execution.rs (run_single_execution_atomic)                               │
+│   For each cancelled child, creates:                                     │
+│   WorkItem::CancelInstance { instance: child_id, reason: "parent drop" } │
+└────────────────────────┬─────────────────────────────────────────────────┘
+                         │ added to orchestrator_items
+                         ▼
+┌──────────────────────────────────────────────────────────────────────────┐
+│ Provider::ack_orchestration_item()                                       │
+│   Enqueues CancelInstance to orchestrator_queue for child instance       │
+└────────────────────────┬─────────────────────────────────────────────────┘
+                         │ child picks up work item
+                         ▼
+┌──────────────────────────────────────────────────────────────────────────┐
+│ Child Orchestration (OrchestrationDispatcher)                            │
+│   Processes CancelInstance → TurnResult::Cancelled                       │
+│   Sets status = "Cancelled", propagates to its children recursively      │
+└──────────────────────────────────────────────────────────────────────────┘
+```
+
+**Key differences from activity cancellation:**
+
+| Aspect | Activity | Sub-Orchestration |
+|--------|----------|-------------------|
+| Mechanism | Lock stealing (DELETE from worker_queue) | CancelInstance work item |
+| Propagation | Single level | Recursive (children of children) |
+| In-flight handling | Lock renewal fails | TurnResult::Cancelled on next turn |
+| State tracking | `cancelled_activity_ids: Vec<u64>` | `cancelled_sub_orchestrations: Vec<String>` |
+
+**Replay Engine additions for sub-orchestration:**
+
+```rust
+struct ReplayEngine {
+    // Existing...
+    cancelled_activity_ids: Vec<u64>,
+    
+    // New for sub-orchestrations
+    cancelled_sub_orchestrations: Vec<String>,  // child instance IDs
+}
+
+impl ReplayEngine {
+    pub fn mark_token_cancelled(&mut self, token: u64, kind: &ScheduleKind) {
+        self.cancelled_tokens.insert(token);
+        
+        if let Some(schedule_id) = self.token_to_schedule_id.get(&token) {
+            match kind {
+                ScheduleKind::Activity { .. } => {
+                    self.cancelled_activity_ids.push(*schedule_id);
+                }
+                ScheduleKind::SubOrchestration { child_instance_id } => {
+                    // Add to sub-orchestration cancellation list
+                    self.cancelled_sub_orchestrations.push(child_instance_id.clone());
+                }
+                ScheduleKind::Timer | ScheduleKind::ExternalWait { .. } => {
+                    // Virtual constructs - no external cancellation needed
+                }
+            }
+        }
+    }
+    
+    pub fn cancelled_sub_orchestrations(&self) -> &[String] {
+        &self.cancelled_sub_orchestrations
+    }
+}
+```
+
+**execution.rs changes:**
+
+```rust
+// In run_single_execution_atomic, after handling cancelled_activity_ids:
+
+// Handle dropped sub-orchestration futures
+for child_instance_id in turn.cancelled_sub_orchestrations() {
+    orchestrator_items.push(WorkItem::CancelInstance {
+        instance: child_instance_id.clone(),
+        reason: "parent dropped sub-orchestration future".to_string(),
+    });
+}
+```
+
 ### API Changes
 
 The `schedule_*` methods return `ScheduledFuture<T>` instead of `impl Future`:
@@ -277,10 +374,32 @@ impl OrchestrationContext {
 ### Phase 1: Infrastructure
 
 1. **Add ScheduleKind enum** - `src/lib.rs` or new module
+   - `Activity { name: String }`
+   - `Timer`
+   - `ExternalWait { event_name: String }`
+   - `SubOrchestration { child_instance_id: String }`
+
 2. **Add ScheduledFuture wrapper** - `src/lib.rs` or new `src/scheduled_future.rs`
+   - Token field (assigned at creation)
+   - Kind field (ScheduleKind)
+   - Context reference
+   - Inner future
+   - Completed flag (to skip cancellation on normal completion)
+
 3. **Add token tracking to ReplayEngine** - `src/runtime/replay_engine.rs`
+   - `cancelled_tokens: HashSet<u64>`
+   - `token_to_schedule_id: HashMap<u64, u64>`
+   - `cancelled_activity_ids: Vec<u64>` (existing, now populated)
+   - `cancelled_sub_orchestrations: Vec<String>` (new)
+
 4. **Add mark_token_cancelled method** - `src/runtime/replay_engine.rs`
+   - Handle Activity → add to cancelled_activity_ids
+   - Handle SubOrchestration → add to cancelled_sub_orchestrations
+   - Handle Timer/ExternalWait → no-op (virtual constructs)
+
 5. **Wire up OrchestrationContext** - `src/lib.rs`
+   - Token counter
+   - Forward cancellation calls to replay engine
 
 **Estimated effort:** 2-4 hours
 
@@ -290,14 +409,28 @@ impl OrchestrationContext {
 2. **schedule_timer** - Return `ScheduledFuture<()>`
 3. **schedule_wait** - Return `ScheduledFuture<Option<String>>`
 4. **schedule_sub_orchestration** - Return `ScheduledFuture<Result<String, String>>`
+   - Capture child_instance_id in ScheduleKind
 
 **Estimated effort:** 1-2 hours
 
-### Phase 3: Documentation
+### Phase 3: Consumption Path Updates
+
+1. **execution.rs** - `run_single_execution_atomic`
+   - Existing: iterate `cancelled_activity_ids` → ScheduledActivityIdentifier
+   - New: iterate `cancelled_sub_orchestrations` → WorkItem::CancelInstance
+
+2. **Verify sqlite.rs** - Provider already handles:
+   - Activity cancellation via DELETE from worker_queue
+   - CancelInstance enqueueing to orchestrator_queue
+
+**Estimated effort:** 1 hour
+
+### Phase 4: Documentation
 
 1. Update `ORCHESTRATION-GUIDE.md` with cancellation model
 2. Add section to `docs/activity-cancellation.md` (if exists) or create new doc
 3. Update docstrings on `select2`/`select3`
+4. Document sub-orchestration cancellation cascade behavior
 
 **Estimated effort:** 1 hour
 
@@ -307,8 +440,10 @@ impl OrchestrationContext {
 
 | Category | File |
 |----------|------|
-| Unit Tests (Token, Select, Non-Awaited, Abandoned, Edge Cases) | `tests/replay_engine_tests.rs` |
-| Integration Scenarios | `tests/scenarios/unobserved_future_cancellation.rs` |
+| Unit Tests (Token, Select, Non-Awaited, Abandoned, Explicit Drop, Edge Cases) | `tests/replay_engine_tests.rs` |
+| Sub-Orchestration Unit Tests | `tests/replay_engine_tests.rs` |
+| Integration Scenarios (Activities) | `tests/scenarios/unobserved_future_cancellation.rs` |
+| Integration Scenarios (Sub-Orchestrations) | `tests/scenarios/unobserved_future_cancellation.rs` |
 | Replay Determinism | `tests/replay_engine_tests.rs` |
 | Negative Tests | `tests/replay_engine_tests.rs` |
 
@@ -360,6 +495,19 @@ impl OrchestrationContext {
 | `explicit_drop_sub_orchestration` | `drop(ctx.schedule_sub_orchestration(...))` after poll - child cancelled |
 | `explicit_drop_external_wait` | `drop(ctx.schedule_wait(...))` after poll - wait cleaned up |
 
+#### Sub-Orchestration Cancellation Tests
+
+| Test Name | Description |
+|-----------|-------------|
+| `sub_orch_drop_before_poll` | Create sub-orch future, drop before poll - no SubOrchestrationScheduled event |
+| `sub_orch_drop_after_poll` | Create, poll, drop - CancelInstance enqueued for child |
+| `sub_orch_select_loser` | `select2(timer, sub_orch)` - timer wins, child receives CancelInstance |
+| `sub_orch_cancel_propagates_to_grandchildren` | Parent drops child future, child's children also cancelled |
+| `sub_orch_cancel_during_activity` | Child has in-flight activity when cancelled - both cancelled |
+| `sub_orch_cancel_already_completed` | Drop future after child completed - no cancel (idempotent) |
+| `sub_orch_cancel_already_failed` | Drop future after child failed - no cancel |
+| `sub_orch_multiple_children_selective_cancel` | Start 3 children, drop 2 futures - only those 2 cancelled |
+
 #### Pre-Binding Edge Cases
 
 | Test Name | Description |
@@ -390,7 +538,51 @@ async fn select_loser_activity_gets_cancel_signal() {
 async fn select_loser_sub_orchestration_cancelled() {
     // 1. Parent orchestration does select2(timer, sub_orchestration)
     // 2. Timer wins
-    // 3. Verify sub-orchestration status is "Cancelled"
+    // 3. Verify CancelInstance work item enqueued for child
+    // 4. Verify sub-orchestration status becomes "Cancelled"
+}
+```
+
+#### Scenario: Dropped Sub-Orchestration Future Cancels Child (Basic)
+
+```rust
+#[tokio::test]
+async fn dropped_sub_orch_future_cancels_child() {
+    // Setup: parent and child orchestrations
+    // 1. Parent creates sub-orchestration future, polls it (child starts)
+    // 2. Parent explicitly drops the future (or it goes out of scope)
+    // 3. Verify CancelInstance work item created for child instance
+    // 4. Run dispatchers to process the CancelInstance
+    // 5. Verify child orchestration status = "Cancelled"
+    // 6. Verify parent orchestration can complete normally
+}
+```
+
+#### Scenario: Dropped Sub-Orchestration with Grandchildren
+
+```rust
+#[tokio::test]
+async fn dropped_sub_orch_cascades_to_grandchildren() {
+    // 1. Parent starts child orchestration
+    // 2. Child starts grandchild orchestration
+    // 3. Parent drops child future (select loser or explicit drop)
+    // 4. Verify child receives CancelInstance
+    // 5. Verify grandchild also receives CancelInstance (cascade)
+    // 6. All three orchestrations end in correct terminal states
+}
+```
+
+#### Scenario: Sub-Orchestration with In-Flight Activity Cancelled
+
+```rust
+#[tokio::test]
+async fn sub_orch_cancel_stops_child_activities() {
+    // 1. Parent starts child orchestration
+    // 2. Child starts long-running activity
+    // 3. Parent drops child future
+    // 4. Verify child receives CancelInstance
+    // 5. Verify child's activity gets lock-stolen
+    // 6. Verify activity worker sees is_cancelled() = true
 }
 ```
 
@@ -600,15 +792,17 @@ Have `select2`/`select3` internally track which future lost and cancel it.
 
 ## Success Criteria
 
-1. ✅ `TurnResult::Cancelled` triggers in-flight activity cancellation
-2. ✅ Select losers appear in `cancelled_activity_ids` 
-3. ✅ Non-awaited futures don't emit actions (cancelled before binding)
-4. ✅ Abandoned futures trigger cancellation of in-flight work
-5. ✅ Activities receive cancellation signal promptly (not just at terminal state)
-6. ✅ All existing tests pass
-7. ✅ New cancellation tests pass
-8. ✅ Replay determinism preserved
-9. ✅ Documentation updated
+1. ✅ Select losers appear in `cancelled_activity_ids` 
+2. ✅ Non-awaited futures don't emit actions (cancelled before binding)
+3. ✅ Abandoned futures trigger cancellation of in-flight work
+4. ✅ Activities receive cancellation signal promptly (not just at terminal state)
+5. ✅ **Sub-orchestration futures dropped → CancelInstance enqueued**
+6. ✅ **Sub-orchestration cancellation cascades to grandchildren**
+7. ✅ **Sub-orchestration cancellation stops child's in-flight activities**
+8. ✅ All existing tests pass
+9. ✅ New cancellation tests pass
+10. ✅ Replay determinism preserved
+11. ✅ Documentation updated
 
 ## Open Questions
 
