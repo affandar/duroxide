@@ -2,6 +2,10 @@
 
 ### Active TODOs
 
+- add cancellation for unobserved futures (select losers, drops, unawaited out of scope)
+  - Related: [docs/proposals/replay-simplification-PROGRESS.md](docs/proposals/replay-simplification-PROGRESS.md)
+- implement test coverage plan
+  - Related: [docs/proposals/coverage_test_plan.md](docs/proposals/coverage_test_plan.md)
 - move away from Otel, just use standard rust metrics
 - Fetch item batch in dispatchers!!
 - Size limits 
