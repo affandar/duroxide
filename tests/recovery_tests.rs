@@ -9,7 +9,6 @@ use duroxide::providers::sqlite::SqliteProvider;
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
 use duroxide::{ActivityContext, Client, Event, OrchestrationContext, OrchestrationRegistry};
-use std::sync::Arc;
 use std::sync::Arc as StdArc;
 use std::time::Duration;
 mod common;
@@ -47,7 +46,7 @@ where
 
     let rt1 = runtime::Runtime::start_with_store(
         store1.clone(),
-        Arc::new(activity_registry.clone()),
+        activity_registry.clone(),
         orchestration_registry.clone(),
     )
     .await;
@@ -69,7 +68,7 @@ where
     let store2 = make_store_stage2();
     let rt2 = runtime::Runtime::start_with_store(
         store2.clone(),
-        Arc::new(activity_registry.clone()),
+        activity_registry.clone(),
         orchestration_registry.clone(),
     )
     .await;
@@ -254,7 +253,7 @@ async fn recovery_multiple_orchestrations_sqlite_provider() {
     let store1 = StdArc::new(SqliteProvider::new(&url1, None).await.unwrap()) as StdArc<dyn Provider>;
     let rt1 = runtime::Runtime::start_with_store(
         store1.clone(),
-        Arc::new(activity_registry.clone()),
+        activity_registry.clone(),
         orchestration_registry.clone(),
     )
     .await;
@@ -339,7 +338,7 @@ async fn recovery_multiple_orchestrations_sqlite_provider() {
     let store2_for_wait = store2.clone();
     let store2_for_client = store2.clone();
     let rt2 =
-        runtime::Runtime::start_with_store(store2.clone(), Arc::new(activity_registry), orchestration_registry).await;
+        runtime::Runtime::start_with_store(store2.clone(), activity_registry, orchestration_registry).await;
 
     // Raise external event for the WaitEvent orchestration after restart
     tokio::spawn(async move {

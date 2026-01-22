@@ -57,7 +57,7 @@ async fn activity_reliability_after_crash_before_completion_enqueue() {
     let store1 = store.clone();
     let rt1 = runtime::Runtime::start_with_store(
         store1.clone(),
-        Arc::new(activity_registry.clone()),
+        activity_registry.clone(),
         orchestration_registry.clone(),
     )
     .await;
@@ -113,7 +113,7 @@ async fn activity_reliability_after_crash_before_completion_enqueue() {
     println!("Restarting system...");
     let store2 = store.clone();
     let rt2 =
-        runtime::Runtime::start_with_store(store2.clone(), Arc::new(activity_registry), orchestration_registry).await;
+        runtime::Runtime::start_with_store(store2.clone(), activity_registry, orchestration_registry).await;
 
     // The runtime should automatically resume the orchestration and reprocess pending activities
 
@@ -238,7 +238,7 @@ async fn multiple_activities_reliability_after_crash() {
     let store1 = store.clone();
     let rt1 = runtime::Runtime::start_with_store(
         store1.clone(),
-        Arc::new(activity_registry.clone()),
+        activity_registry.clone(),
         orchestration_registry.clone(),
     )
     .await;
@@ -285,7 +285,7 @@ async fn multiple_activities_reliability_after_crash() {
     println!("Restarting...");
     let store2 = store.clone();
     let rt2 =
-        runtime::Runtime::start_with_store(store2.clone(), Arc::new(activity_registry), orchestration_registry).await;
+        runtime::Runtime::start_with_store(store2.clone(), activity_registry, orchestration_registry).await;
 
     // Wait for completion
     let client2 = duroxide::Client::new(store2.clone());
@@ -376,7 +376,7 @@ async fn worker_abandon_on_ack_failure_enables_retry() {
 
     let provider: Arc<dyn duroxide::providers::Provider> = failing_provider.clone();
     let rt =
-        runtime::Runtime::start_with_options(provider.clone(), Arc::new(activities), orchestrations, options).await;
+        runtime::Runtime::start_with_options(provider.clone(), activities, orchestrations, options).await;
     let client = Client::new(provider.clone());
 
     // Make the first ack_work_item fail (but the ack actually succeeds internally)

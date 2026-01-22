@@ -929,7 +929,7 @@ use std::sync::Arc;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let provider = Arc::new(MyCustomProvider::new().await?);
-    let activities = Arc::new(ActivityRegistry::builder().build());
+    let activities = ActivityRegistry::builder().build();
     let orchestrations = OrchestrationRegistry::builder().build();
     
     let runtime = Runtime::start_with_options(

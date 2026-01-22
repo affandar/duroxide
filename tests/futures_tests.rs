@@ -34,7 +34,7 @@ async fn select2_two_externals_first_delivery_wins() {
     let reg = OrchestrationRegistry::builder()
         .register("ABSelect2", orchestrator)
         .build();
-    let rt1 = runtime::Runtime::start_with_store(store.clone(), StdArc::new(acts), reg).await;
+    let rt1 = runtime::Runtime::start_with_store(store.clone(), acts, reg).await;
     let client = duroxide::Client::new(store.clone());
 
     client.start_orchestration("inst-ab2", "ABSelect2", "").await.unwrap();
@@ -82,7 +82,7 @@ async fn select2_two_externals_first_delivery_wins() {
     let reg2 = OrchestrationRegistry::builder()
         .register("ABSelect2", orchestrator)
         .build();
-    let rt2 = runtime::Runtime::start_with_store(store.clone(), StdArc::new(acts2), reg2).await;
+    let rt2 = runtime::Runtime::start_with_store(store.clone(), acts2, reg2).await;
 
     assert!(
         common::wait_for_history(
@@ -157,7 +157,7 @@ async fn select3_mixed_branch_order_winner() {
     let reg = OrchestrationRegistry::builder()
         .register("ATBSelect", orchestrator)
         .build();
-    let rt1 = runtime::Runtime::start_with_store(store.clone(), StdArc::new(acts), reg).await;
+    let rt1 = runtime::Runtime::start_with_store(store.clone(), acts, reg).await;
     let client = duroxide::Client::new(store.clone());
 
     client.start_orchestration("inst-atb", "ATBSelect", "").await.unwrap();
@@ -209,7 +209,7 @@ async fn select3_mixed_branch_order_winner() {
     let reg2 = OrchestrationRegistry::builder()
         .register("ATBSelect", orchestrator)
         .build();
-    let rt2 = runtime::Runtime::start_with_store(store.clone(), StdArc::new(acts2), reg2).await;
+    let rt2 = runtime::Runtime::start_with_store(store.clone(), acts2, reg2).await;
 
     assert!(
         common::wait_for_history(
@@ -288,7 +288,7 @@ async fn join_returns_schedule_order() {
     let reg = OrchestrationRegistry::builder()
         .register("JoinAB", orchestrator)
         .build();
-    let rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(acts), reg).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), acts, reg).await;
     let client = duroxide::Client::new(store.clone());
 
     client.start_orchestration("inst-join", "JoinAB", "").await.unwrap();
@@ -376,7 +376,7 @@ async fn test_select2_loser_event_consumed_during_replay() {
         )
         .build();
 
-    let rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(activities), orchestrations).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), activities, orchestrations).await;
     let client = duroxide::Client::new(store.clone());
 
     client
@@ -475,7 +475,7 @@ async fn test_select2_schedule_after_winner_returns() {
         })
         .build();
 
-    let rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(activities), orchestrations).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), activities, orchestrations).await;
     let client = duroxide::Client::new(store.clone());
 
     client
@@ -567,7 +567,7 @@ async fn simplified_futures_unawaited_completion_does_not_block() {
 
     let rt = runtime::Runtime::start_with_options(
         store.clone(),
-        StdArc::new(activity_registry),
+        activity_registry,
         orchestration_registry,
         options,
     )

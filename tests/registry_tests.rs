@@ -283,7 +283,7 @@ async fn activity_context_metadata() {
         })
         .build();
 
-    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activities), orchestrations).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), activities, orchestrations).await;
     let client = Client::new(store.clone());
     client
         .start_orchestration("registry-test-instance", "InspectOrch", "")

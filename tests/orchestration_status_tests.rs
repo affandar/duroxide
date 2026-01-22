@@ -6,7 +6,6 @@
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self, OrchestrationStatus};
 use duroxide::{ActivityContext, Client, OrchestrationContext, OrchestrationRegistry};
-use std::sync::Arc;
 use std::time::Duration;
 
 mod common;
@@ -45,7 +44,7 @@ async fn test_status_running() {
         .register("RunningOrch", orchestration)
         .build();
 
-    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activities), orchestrations).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), activities, orchestrations).await;
 
     let client = Client::new(store.clone());
     client
@@ -83,7 +82,7 @@ async fn test_status_completed() {
         .register("CompletedOrch", orchestration)
         .build();
 
-    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activities), orchestrations).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), activities, orchestrations).await;
 
     let client = Client::new(store.clone());
     client
@@ -134,7 +133,7 @@ async fn test_status_failed() {
         .register("FailedOrch", orchestration)
         .build();
 
-    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activities), orchestrations).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), activities, orchestrations).await;
 
     let client = Client::new(store.clone());
     client
@@ -204,7 +203,7 @@ async fn test_status_after_continue_as_new() {
         .register("ContinueAsNewOrch", orchestration)
         .build();
 
-    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activities), orchestrations).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), activities, orchestrations).await;
 
     let client = Client::new(store.clone());
     client
@@ -269,7 +268,7 @@ async fn test_status_cancelled() {
         .register("CancellableOrch", orchestration)
         .build();
 
-    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activities), orchestrations).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), activities, orchestrations).await;
 
     let client = Client::new(store.clone());
     client
@@ -335,7 +334,7 @@ async fn test_status_lifecycle_transitions() {
         dispatcher_min_poll_interval: Duration::from_millis(10),
         ..Default::default()
     };
-    let rt = runtime::Runtime::start_with_options(store.clone(), Arc::new(activities), orchestrations, options).await;
+    let rt = runtime::Runtime::start_with_options(store.clone(), activities, orchestrations, options).await;
 
     let client = Client::new(store.clone());
 
@@ -401,7 +400,7 @@ async fn test_status_independence() {
         .register("FailOrch", fail_orch)
         .build();
 
-    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activities), orchestrations).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), activities, orchestrations).await;
 
     let client = Client::new(store.clone());
 

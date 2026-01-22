@@ -354,7 +354,7 @@ Export all modules in `src/lib.rs`:
 //!
 //! // Load all orchestrations and activities
 //! let orchestrations = create_orchestration_registry();
-//! let activities = Arc::new(create_activity_registry());
+//! let activities = create_activity_registry();
 //!
 //! // Use with Duroxide runtime
 //! // Runtime::start_with_store(store, activities, orchestrations).await;
@@ -524,7 +524,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     // Import pre-built registries
     let orchestrations = create_orchestration_registry();
-    let activities = Arc::new(create_activity_registry());
+    let activities = create_activity_registry();
     
     let runtime = Runtime::start_with_store(store, activities, orchestrations).await;
     
@@ -561,7 +561,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .merge(my_activities::registry::create_activity_registry())
         .build();
     
-    let runtime = Runtime::start_with_store(store, Arc::new(activities), orchestrations).await;
+    let runtime = Runtime::start_with_store(store, activities, orchestrations).await;
     
     Ok(())
 }
@@ -782,7 +782,7 @@ mod tests {
     async fn test_provision_postgres_orchestration() {
         let store = Arc::new(SqliteProvider::new_in_memory().await.unwrap());
         let orchestrations = crate::registry::create_orchestration_registry();
-        let activities = Arc::new(crate::registry::create_activity_registry());
+        let activities = crate::registry::create_activity_registry();
         
         let runtime = Runtime::start_with_store(
             store.clone(),

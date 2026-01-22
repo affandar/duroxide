@@ -50,7 +50,7 @@ async fn sample_hello_world_fs() {
         .build();
 
     let rt =
-        runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+        runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestration_registry).await;
     let client = Client::new(store.clone());
     client
         .start_orchestration("inst-sample-hello-1", "HelloWorld", "World")
@@ -109,7 +109,7 @@ async fn sample_basic_control_flow_fs() {
         .build();
 
     let rt =
-        runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+        runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestration_registry).await;
     let client = Client::new(store.clone());
     client
         .start_orchestration("inst-sample-cflow-1", "ControlFlow", "")
@@ -161,7 +161,7 @@ async fn sample_loop_fs() {
         .build();
 
     let rt =
-        runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+        runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestration_registry).await;
     let client = Client::new(store.clone());
     client
         .start_orchestration("inst-sample-loop-1", "LoopOrchestration", "")
@@ -228,7 +228,7 @@ async fn sample_error_handling_fs() {
         .build();
 
     let rt =
-        runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+        runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestration_registry).await;
     let client = Client::new(store.clone());
     client
         .start_orchestration("inst-sample-err-1", "ErrorHandling", "")
@@ -289,7 +289,7 @@ async fn sample_timeout_with_timer_race_fs() {
         .build();
 
     let rt =
-        runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+        runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestration_registry).await;
     let client = Client::new(store.clone());
     client
         .start_orchestration("inst-timeout-sample", "TimeoutSample", "")
@@ -343,7 +343,7 @@ async fn sample_select2_activity_vs_external_fs() {
         .build();
 
     let rt =
-        runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+        runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestration_registry).await;
 
     // Start orchestration, then raise external after subscription is recorded
     let store_for_wait = store.clone();
@@ -417,7 +417,7 @@ async fn dtf_legacy_gabbar_greetings_fs() {
         .build();
 
     let rt =
-        runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+        runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestration_registry).await;
     let client = Client::new(store.clone());
     client
         .start_orchestration("inst-dtf-greetings", "Greetings", "")
@@ -467,7 +467,7 @@ async fn sample_system_activities_fs() {
         .build();
 
     let rt =
-        runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+        runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestration_registry).await;
     let client = Client::new(store.clone());
     client
         .start_orchestration("inst-system-acts", "SystemActivities", "")
@@ -516,7 +516,7 @@ async fn sample_status_polling_fs() {
         .build();
 
     let rt =
-        runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+        runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestration_registry).await;
     let client = Client::new(store.clone());
     client
         .start_orchestration("inst-status-sample", "StatusSample", "")
@@ -569,7 +569,7 @@ async fn sample_sub_orchestration_basic_fs() {
         .build();
 
     let rt =
-        runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+        runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestration_registry).await;
     let client = Client::new(store.clone());
     client
         .start_orchestration("inst-sub-basic", "Parent", "hi")
@@ -633,7 +633,7 @@ async fn sample_sub_orchestration_fanout_fs() {
         .build();
 
     let rt =
-        runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+        runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestration_registry).await;
     let client = Client::new(store.clone());
     client
         .start_orchestration("inst-sub-fan", "ParentFan", "")
@@ -688,7 +688,7 @@ async fn sample_sub_orchestration_chained_fs() {
         .build();
 
     let rt =
-        runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+        runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestration_registry).await;
     let client = Client::new(store.clone());
     client.start_orchestration("inst-sub-chain", "Root", "a").await.unwrap();
 
@@ -737,7 +737,7 @@ async fn sample_detached_orchestration_scheduling_fs() {
         .build();
 
     let rt =
-        runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+        runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestration_registry).await;
     let client = Client::new(store.clone());
     client
         .start_orchestration("CoordinatorRoot", "Coordinator", "")
@@ -799,7 +799,7 @@ async fn sample_continue_as_new_fs() {
     let orchestration_registry = OrchestrationRegistry::builder().register("CanSample", orch).build();
 
     let rt =
-        runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+        runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestration_registry).await;
     let client = Client::new(store.clone());
     client
         .start_orchestration("inst-sample-can", "CanSample", "0")
@@ -860,7 +860,7 @@ async fn sample_typed_activity_and_orchestration_fs() {
         .build();
 
     let rt =
-        runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+        runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestration_registry).await;
     let client = Client::new(store.clone());
     client
         .start_orchestration_typed::<AddReq>("inst-typed-add", "Adder", AddReq { a: 2, b: 3 })
@@ -893,7 +893,7 @@ async fn sample_typed_event_fs() {
         .build();
 
     let rt =
-        runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+        runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestration_registry).await;
     let store_for_wait = store.clone();
     tokio::spawn(async move {
         let sfw = store_for_wait.clone();
@@ -956,7 +956,7 @@ async fn sample_mixed_string_and_typed_typed_orch_fs() {
         .build();
 
     let rt =
-        runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+        runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestration_registry).await;
     let client = Client::new(store.clone());
     client
         .start_orchestration_typed::<AddReq>("inst-mixed-typed", "MixedTypedOrch", AddReq { a: 1, b: 2 })
@@ -1010,7 +1010,7 @@ async fn sample_mixed_string_and_typed_string_orch_fs() {
         .register("MixedStringOrch", orch)
         .build();
 
-    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orch_reg).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), activity_registry, orch_reg).await;
     let client = Client::new(store.clone());
     client
         .start_orchestration("inst-mixed-string", "MixedStringOrch", "")
@@ -1053,7 +1053,7 @@ async fn sample_versioning_start_latest_vs_exact_fs() {
         .register_versioned("Versioned", "2.0.0", v2)
         .build();
     let acts = ActivityRegistry::builder().build();
-    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(acts), reg.clone()).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), acts, reg.clone()).await;
 
     // With default policy (Latest), a new start should run v2
     let client = Client::new(store.clone());
@@ -1127,7 +1127,7 @@ async fn sample_versioning_sub_orchestration_explicit_vs_policy_fs() {
         .register_versioned("Child", "2.0.0", child_v2)
         .build();
     let acts = ActivityRegistry::builder().build();
-    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(acts), reg).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), acts, reg).await;
     let client = Client::new(store.clone());
     client
         .start_orchestration("inst-sub-vers", "ParentVers", "")
@@ -1179,7 +1179,7 @@ async fn sample_versioning_continue_as_new_upgrade_fs() {
         .register_versioned("LongRunner", "2.0.0", v2)
         .build();
     let acts = ActivityRegistry::builder().build();
-    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(acts), reg).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), acts, reg).await;
 
     // Start on v1; the first handle will resolve at the CAN boundary
     // Pin initial start to v1 explicitly to demonstrate upgrade via CAN; default policy remains Latest (v2)
@@ -1264,7 +1264,7 @@ async fn sample_cancellation_parent_cascades_to_children_fs() {
     };
     let rt = runtime::Runtime::start_with_options(
         store.clone(),
-        Arc::new(activity_registry),
+        activity_registry,
         orchestration_registry,
         options,
     )
@@ -1379,7 +1379,7 @@ async fn sample_basic_error_handling_fs() {
         .build();
 
     let rt =
-        runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+        runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestration_registry).await;
     let client = Client::new(store.clone());
 
     // Test successful case
@@ -1469,7 +1469,7 @@ async fn sample_nested_function_error_handling_fs() {
         .build();
 
     let rt =
-        runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+        runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestration_registry).await;
     let client = Client::new(store.clone());
 
     // Test successful case
@@ -1559,7 +1559,7 @@ async fn sample_error_recovery_fs() {
         .build();
 
     let rt =
-        runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+        runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestration_registry).await;
     let client = Client::new(store.clone());
 
     // Test successful case
@@ -1697,7 +1697,7 @@ async fn sample_self_pruning_eternal_orchestration() {
         .build();
 
     let rt =
-        runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestration_registry).await;
+        runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestration_registry).await;
 
     let client = Client::new(store.clone());
 

@@ -12,7 +12,6 @@
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self, RuntimeOptions};
 use duroxide::{ActivityContext, Client, OrchestrationContext, OrchestrationRegistry};
-use std::sync::Arc;
 
 mod common;
 
@@ -84,7 +83,7 @@ async fn async_block_join_with_control_flow() {
 
     let rt = runtime::Runtime::start_with_options(
         store.clone(),
-        Arc::new(activity_registry),
+        activity_registry,
         orchestration_registry,
         options,
     )
@@ -179,7 +178,7 @@ async fn async_block_join_many() {
 
     let rt = runtime::Runtime::start_with_options(
         store.clone(),
-        Arc::new(activity_registry),
+        activity_registry,
         orchestration_registry,
         options,
     )
@@ -260,7 +259,7 @@ async fn async_block_sequential() {
 
     let rt = runtime::Runtime::start_with_options(
         store.clone(),
-        Arc::new(activity_registry),
+        activity_registry,
         orchestration_registry,
         options,
     )
@@ -343,7 +342,7 @@ async fn async_block_select_racing() {
 
     let rt = runtime::Runtime::start_with_options(
         store.clone(),
-        Arc::new(activity_registry),
+        activity_registry,
         orchestration_registry,
         options,
     )
@@ -421,7 +420,7 @@ async fn async_block_vs_durable_future() {
 
     let rt = runtime::Runtime::start_with_options(
         store.clone(),
-        Arc::new(activity_registry),
+        activity_registry,
         orchestration_registry,
         options,
     )
@@ -505,7 +504,7 @@ async fn async_block_select3_with_timers() {
 
     let rt = runtime::Runtime::start_with_options(
         store.clone(),
-        Arc::new(activity_registry),
+        activity_registry,
         orchestration_registry,
         options,
     )
@@ -586,7 +585,7 @@ async fn async_block_nested_join_in_select() {
 
     let rt = runtime::Runtime::start_with_options(
         store.clone(),
-        Arc::new(activity_registry),
+        activity_registry,
         orchestration_registry,
         options,
     )
@@ -690,7 +689,7 @@ async fn async_block_suborchestration_wins_race() {
 
     let rt = runtime::Runtime::start_with_options(
         store.clone(),
-        Arc::new(activity_registry),
+        activity_registry,
         orchestration_registry,
         options,
     )
@@ -795,7 +794,7 @@ async fn async_block_suborchestration_loses_race() {
 
     let rt = runtime::Runtime::start_with_options(
         store.clone(),
-        Arc::new(activity_registry),
+        activity_registry,
         orchestration_registry,
         options,
     )
@@ -936,7 +935,7 @@ async fn async_block_multiple_suborchestrations_joined() {
 
     let rt = runtime::Runtime::start_with_options(
         store.clone(),
-        Arc::new(activity_registry),
+        activity_registry,
         orchestration_registry,
         options,
     )
@@ -1037,7 +1036,7 @@ async fn async_block_suborchestration_racing_timeout() {
 
     let rt = runtime::Runtime::start_with_options(
         store.clone(),
-        Arc::new(activity_registry),
+        activity_registry,
         orchestration_registry,
         options,
     )
@@ -1170,7 +1169,7 @@ async fn async_block_nested_suborchestration_chain() {
 
     let rt = runtime::Runtime::start_with_options(
         store.clone(),
-        Arc::new(activity_registry),
+        activity_registry,
         orchestration_registry,
         options,
     )

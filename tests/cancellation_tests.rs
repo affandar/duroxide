@@ -40,7 +40,7 @@ async fn cancel_parent_down_propagates_to_child() {
     };
     let rt = runtime::Runtime::start_with_options(
         store.clone(),
-        std::sync::Arc::new(activity_registry),
+        activity_registry,
         orchestration_registry,
         options,
     )
@@ -137,7 +137,7 @@ async fn cancel_after_completion_is_noop() {
     let activity_registry = ActivityRegistry::builder().build();
     let rt = runtime::Runtime::start_with_store(
         store.clone(),
-        std::sync::Arc::new(activity_registry),
+        activity_registry,
         orchestration_registry,
     )
     .await;
@@ -201,7 +201,7 @@ async fn cancel_child_directly_signals_parent() {
     let activity_registry = ActivityRegistry::builder().build();
     let rt = runtime::Runtime::start_with_store(
         store.clone(),
-        std::sync::Arc::new(activity_registry),
+        activity_registry,
         orchestration_registry,
     )
     .await;
@@ -271,7 +271,7 @@ async fn cancel_continue_as_new_second_exec() {
     let activity_registry = ActivityRegistry::builder().build();
     let rt = runtime::Runtime::start_with_store(
         store.clone(),
-        std::sync::Arc::new(activity_registry),
+        activity_registry,
         orchestration_registry,
     )
     .await;
@@ -356,7 +356,7 @@ async fn orchestration_completes_before_activity_finishes() {
     let orchestration_registry = OrchestrationRegistry::builder().register("QuickDone", orch).build();
     let rt = runtime::Runtime::start_with_store(
         store.clone(),
-        std::sync::Arc::new(activity_registry),
+        activity_registry,
         orchestration_registry,
     )
     .await;
@@ -409,7 +409,7 @@ async fn orchestration_fails_before_activity_finishes() {
     let orchestration_registry = OrchestrationRegistry::builder().register("QuickFail", orch).build();
     let rt = runtime::Runtime::start_with_store(
         store.clone(),
-        std::sync::Arc::new(activity_registry),
+        activity_registry,
         orchestration_registry,
     )
     .await;
@@ -492,7 +492,7 @@ async fn cancel_parent_with_multiple_children() {
     };
     let rt = runtime::Runtime::start_with_options(
         store.clone(),
-        std::sync::Arc::new(activity_registry),
+        activity_registry,
         orchestration_registry,
         options,
     )
@@ -642,7 +642,7 @@ async fn activity_receives_cancellation_signal() {
 
     let rt = runtime::Runtime::start_with_options(
         store.clone(),
-        std::sync::Arc::new(activity_registry),
+        activity_registry,
         orchestration_registry,
         options,
     )
@@ -779,7 +779,7 @@ async fn select2_loser_activity_receives_cancellation_signal() {
 
     let rt = runtime::Runtime::start_with_options(
         store.clone(),
-        std::sync::Arc::new(activity_registry),
+        activity_registry,
         orchestration_registry,
         options,
     )
@@ -884,7 +884,7 @@ async fn activity_result_dropped_when_orchestration_cancelled() {
 
     let rt = runtime::Runtime::start_with_options(
         store.clone(),
-        std::sync::Arc::new(activity_registry),
+        activity_registry,
         orchestration_registry,
         options,
     )
@@ -977,7 +977,7 @@ async fn activity_skipped_when_orchestration_terminal_at_fetch() {
 
     let rt1 = runtime::Runtime::start_with_options(
         store.clone(),
-        std::sync::Arc::new(act_registry.clone()),
+        act_registry.clone(),
         orch_registry.clone(),
         options_no_workers,
     )
@@ -1043,7 +1043,7 @@ async fn activity_skipped_when_orchestration_terminal_at_fetch() {
 
     let rt2 = runtime::Runtime::start_with_options(
         store.clone(),
-        std::sync::Arc::new(act_registry2),
+        act_registry2,
         orch_registry,
         options_with_workers,
     )
@@ -1114,7 +1114,7 @@ async fn activity_aborted_after_cancellation_grace() {
     };
 
     let rt =
-        runtime::Runtime::start_with_options(store.clone(), std::sync::Arc::new(act_registry), orch_registry, options)
+        runtime::Runtime::start_with_options(store.clone(), act_registry, orch_registry, options)
             .await;
     let client = Client::new(store.clone());
 
@@ -1163,7 +1163,7 @@ async fn cancel_nonexistent_instance_is_noop() {
     let activity_registry = ActivityRegistry::builder().build();
     let rt = runtime::Runtime::start_with_store(
         store.clone(),
-        std::sync::Arc::new(activity_registry),
+        activity_registry,
         orchestration_registry,
     )
     .await;
@@ -1199,7 +1199,7 @@ async fn multiple_cancel_calls_are_idempotent() {
     };
     let rt = runtime::Runtime::start_with_options(
         store.clone(),
-        std::sync::Arc::new(activity_registry),
+        activity_registry,
         orchestration_registry,
         options,
     )
@@ -1308,7 +1308,7 @@ async fn cancel_before_orchestration_starts() {
     };
     let rt = runtime::Runtime::start_with_options(
         store.clone(),
-        std::sync::Arc::new(activity_registry),
+        activity_registry,
         orchestration_registry,
         options,
     )

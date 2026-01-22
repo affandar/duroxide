@@ -309,7 +309,7 @@ async fn test_activity_succeeds_first_attempt() {
         })
         .build();
 
-    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activities), orchestrations).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), activities, orchestrations).await;
     let client = Client::new(store.clone());
 
     client
@@ -363,7 +363,7 @@ async fn test_activity_fails_then_succeeds() {
         })
         .build();
 
-    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activities), orchestrations).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), activities, orchestrations).await;
     let client = Client::new(store.clone());
 
     client
@@ -414,7 +414,7 @@ async fn test_activity_exhausts_all_attempts() {
         })
         .build();
 
-    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activities), orchestrations).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), activities, orchestrations).await;
     let client = Client::new(store.clone());
 
     client
@@ -464,7 +464,7 @@ async fn test_single_attempt_fails() {
         })
         .build();
 
-    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activities), orchestrations).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), activities, orchestrations).await;
     let client = Client::new(store.clone());
 
     client
@@ -528,7 +528,7 @@ async fn test_retry_with_fixed_backoff() {
         })
         .build();
 
-    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activities), orchestrations).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), activities, orchestrations).await;
     let client = Client::new(store.clone());
 
     client
@@ -594,7 +594,7 @@ async fn test_retry_with_no_backoff() {
         })
         .build();
 
-    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activities), orchestrations).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), activities, orchestrations).await;
     let client = Client::new(store.clone());
 
     client
@@ -655,7 +655,7 @@ async fn test_timeout_fires_before_success() {
         })
         .build();
 
-    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activities), orchestrations).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), activities, orchestrations).await;
     let client = Client::new(store.clone());
 
     client
@@ -703,7 +703,7 @@ async fn test_success_before_timeout() {
         })
         .build();
 
-    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activities), orchestrations).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), activities, orchestrations).await;
     let client = Client::new(store.clone());
 
     client
@@ -761,7 +761,7 @@ async fn test_timeout_exits_immediately_without_retry() {
         })
         .build();
 
-    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activities), orchestrations).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), activities, orchestrations).await;
     let client = Client::new(store.clone());
 
     client
@@ -866,7 +866,7 @@ async fn test_error_retries_but_timeout_exits() {
         })
         .build();
 
-    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activities), orchestrations).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), activities, orchestrations).await;
     let client = Client::new(store.clone());
 
     client
@@ -965,7 +965,7 @@ async fn test_typed_activity_retry_success() {
         })
         .build();
 
-    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activities), orchestrations).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), activities, orchestrations).await;
     let client = Client::new(store.clone());
 
     client
@@ -1024,7 +1024,7 @@ async fn test_history_contains_all_activity_scheduled_events() {
         })
         .build();
 
-    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activities), orchestrations).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), activities, orchestrations).await;
     let client = Client::new(store.clone());
 
     client
@@ -1084,7 +1084,7 @@ async fn test_large_max_attempts_integration() {
         })
         .build();
 
-    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activities), orchestrations).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), activities, orchestrations).await;
     let client = Client::new(store.clone());
 
     client
@@ -1141,7 +1141,7 @@ async fn test_replay_with_stale_events_in_history() {
         })
         .build();
 
-    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activities), orchestrations).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), activities, orchestrations).await;
     let client = Client::new(store.clone());
 
     client.start_orchestration("replay-1", "ReplayOrch", "").await.unwrap();
@@ -1194,7 +1194,7 @@ async fn test_timeout_history_replays_correctly() {
         })
         .build();
 
-    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activities), orchestrations).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), activities, orchestrations).await;
     let client = Client::new(store.clone());
 
     client
@@ -1268,7 +1268,7 @@ async fn test_activity_completes_after_continue_as_new() {
         })
         .build();
 
-    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activities), orchestrations).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), activities, orchestrations).await;
     let client = Client::new(store.clone());
 
     client.start_orchestration("can-stale-1", "CANOrch", "0").await.unwrap();
@@ -1341,7 +1341,7 @@ async fn test_retry_timeout_with_continue_as_new() {
         })
         .build();
 
-    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activities), orchestrations).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), activities, orchestrations).await;
     let client = Client::new(store.clone());
 
     client
@@ -1413,7 +1413,7 @@ async fn test_multiple_orchestrations_retrying() {
         })
         .build();
 
-    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activities), orchestrations).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), activities, orchestrations).await;
     let client = Client::new(store.clone());
 
     // Start both orchestrations concurrently

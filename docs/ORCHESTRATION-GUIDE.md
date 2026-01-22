@@ -55,7 +55,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     let rt = runtime::Runtime::start_with_store(
         store.clone(), 
-        Arc::new(activities), 
+        activities, 
         orchestrations
     ).await;
     
@@ -1860,7 +1860,7 @@ async fn test_full_workflow() {
     
     let rt = runtime::Runtime::start_with_store(
         store.clone(),
-        Arc::new(activities),
+        activities,
         orchestrations,
     ).await;
     

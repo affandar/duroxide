@@ -504,7 +504,7 @@ async fn timer_recovery_after_crash_before_fire() {
 
     let rt = duroxide::runtime::Runtime::start_with_store(
         store1.clone(),
-        Arc::new(activity_registry),
+        activity_registry,
         orchestration_registry,
     )
     .await;
@@ -546,7 +546,7 @@ async fn timer_recovery_after_crash_before_fire() {
 
     let rt2 = duroxide::runtime::Runtime::start_with_store(
         store1.clone(),
-        Arc::new(activity_registry2),
+        activity_registry2,
         orchestration_registry2,
     )
     .await;

@@ -91,7 +91,7 @@ impl StressTestResult {
 pub async fn run_stress_test(
     config: StressTestConfig,
     provider: Arc<dyn Provider>,
-    activities: Arc<ActivityRegistry>,
+    activities: ActivityRegistry,
     orchestrations: OrchestrationRegistry,
 ) -> Result<StressTestResult, Box<dyn std::error::Error>> {
     info!(
@@ -337,18 +337,16 @@ pub fn print_comparison_table(results: &[(String, String, StressTestResult)]) {
 }
 
 /// Create the default activity registry for stress tests
-pub fn create_default_activities(delay_ms: u64) -> Arc<ActivityRegistry> {
-    Arc::new(
-        ActivityRegistry::builder()
-            .register("ProcessTask", move |_ctx: ActivityContext, input: String| {
-                let delay = delay_ms;
-                async move {
-                    tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
-                    Ok(format!("processed: {input}"))
-                }
-            })
-            .build(),
-    )
+pub fn create_default_activities(delay_ms: u64) -> ActivityRegistry {
+    ActivityRegistry::builder()
+        .register("ProcessTask", move |_ctx: ActivityContext, input: String| {
+            let delay = delay_ms;
+            async move {
+                tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+                Ok(format!("processed: {input}"))
+            }
+        })
+        .build()
 }
 
 /// Create the default orchestration registry for stress tests

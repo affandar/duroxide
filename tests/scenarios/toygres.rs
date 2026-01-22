@@ -2,7 +2,6 @@ use duroxide::Either2;
 use duroxide::runtime;
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::{EventKind, OrchestrationContext, OrchestrationRegistry, OrchestrationStatus};
-use std::sync::Arc;
 use std::time::Duration;
 
 #[path = "../common/mod.rs"]
@@ -36,7 +35,7 @@ async fn continue_as_new_chain_5_iterations() {
 
     let activities = ActivityRegistry::builder().build();
 
-    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activities), orchestrations).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), activities, orchestrations).await;
 
     let client = duroxide::Client::new(store.clone());
 
@@ -143,7 +142,7 @@ async fn continue_as_new_chain_with_activities() {
 
     let activities = ActivityRegistry::builder().register("Echo", echo).build();
 
-    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activities), orchestrations).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), activities, orchestrations).await;
 
     let client = duroxide::Client::new(store.clone());
 
@@ -215,7 +214,7 @@ async fn concurrent_continue_as_new_chains() {
 
     let activities = ActivityRegistry::builder().build();
 
-    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activities), orchestrations).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), activities, orchestrations).await;
 
     let client = duroxide::Client::new(store.clone());
 
@@ -490,7 +489,7 @@ async fn instance_actor_pattern_stress_test() {
         .register_typed("cms-update-instance-health", update_instance_health)
         .build();
 
-    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activities), orchestrations).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), activities, orchestrations).await;
 
     let client = duroxide::Client::new(store.clone());
 
@@ -705,7 +704,7 @@ async fn timer_fires_at_correct_time_regression() {
         .register("SlowActivity", slow_activity)
         .build();
 
-    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activities), orchestrations).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), activities, orchestrations).await;
 
     let client = duroxide::Client::new(store.clone());
 

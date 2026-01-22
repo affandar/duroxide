@@ -20,7 +20,7 @@ async fn runtime_start_versioned_string_uses_explicit_version() {
         .build();
     let acts = ActivityRegistry::builder().build();
     let store = StdArc::new(SqliteProvider::new_in_memory().await.unwrap());
-    let rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(acts), reg).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), acts, reg).await;
     let client = Client::new(store.clone());
     client
         .start_orchestration_versioned("i1", "S", "1.0.0", "")
@@ -54,7 +54,7 @@ async fn runtime_start_versioned_typed_uses_explicit_version() {
         .build();
     let acts = ActivityRegistry::builder().build();
     let store = StdArc::new(SqliteProvider::new_in_memory().await.unwrap());
-    let rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(acts), reg).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), acts, reg).await;
     let client = Client::new(store.clone());
     client
         .start_orchestration_versioned_typed::<i32>("i2", "T", "1.0.0", 0)
@@ -95,7 +95,7 @@ async fn sub_orchestration_versioned_explicit_and_policy() {
         .build();
     let acts = ActivityRegistry::builder().build();
     let store = StdArc::new(SqliteProvider::new_in_memory().await.unwrap());
-    let rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(acts), reg).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), acts, reg).await;
     let client = Client::new(store.clone());
     client.start_orchestration("i3-1", "P1", "").await.unwrap();
     match client
@@ -141,7 +141,7 @@ async fn detached_versioned_uses_policy_latest() {
         .build();
     let acts = ActivityRegistry::builder().build();
     let store = StdArc::new(SqliteProvider::new_in_memory().await.unwrap());
-    let rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(acts), reg).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), acts, reg).await;
     let client = Client::new(store.clone());
     client.start_orchestration("i4", "Parent", "").await.unwrap();
 
@@ -186,7 +186,7 @@ async fn continue_as_new_versioned_typed_explicit() {
         .build();
     let store = StdArc::new(SqliteProvider::new_in_memory().await.unwrap());
     let rt =
-        runtime::Runtime::start_with_store(store.clone(), StdArc::new(ActivityRegistry::builder().build()), reg).await;
+        runtime::Runtime::start_with_store(store.clone(), ActivityRegistry::builder().build(), reg).await;
     let client = Client::new(store.clone());
     client.start_orchestration("i5", "Up", "").await.unwrap();
     // Use wait helper instead of polling
@@ -216,7 +216,7 @@ async fn start_uses_latest_version() {
 
     let activities = ActivityRegistry::builder().build();
     let store = StdArc::new(SqliteProvider::new_in_memory().await.unwrap());
-    let rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(activities), reg).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), activities, reg).await;
     let client = Client::new(store.clone());
 
     client
@@ -262,7 +262,7 @@ async fn policy_exact_pins_start() {
 
     let activities = ActivityRegistry::builder().build();
     let store = StdArc::new(SqliteProvider::new_in_memory().await.unwrap());
-    let rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(activities), reg).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), activities, reg).await;
     let client = Client::new(store.clone());
 
     client.start_orchestration("inst-vpin", "OrderFlow", "Y").await.unwrap();
@@ -300,7 +300,7 @@ async fn sub_orchestration_uses_latest_by_default_and_pinned_when_set() {
 
     let activities = ActivityRegistry::builder().build();
     let store = StdArc::new(SqliteProvider::new_in_memory().await.unwrap());
-    let rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(activities), reg.clone()).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), activities, reg.clone()).await;
     let client = Client::new(store.clone());
 
     // Default latest for child = 1.1.0
@@ -364,7 +364,7 @@ async fn parent_calls_child_upgrade_child_and_verify_latest_used() {
         .build();
     let activities = ActivityRegistry::builder().build();
     let store = StdArc::new(SqliteProvider::new_in_memory().await.unwrap());
-    let rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(activities), reg).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), activities, reg).await;
     let client = Client::new(store.clone());
 
     // Start new parent after both child versions registered => latest child (1.1.0) should be used
@@ -421,7 +421,7 @@ async fn continue_as_new_upgrades_version_deterministically() {
         .build();
     let activities = ActivityRegistry::builder().build();
     let store = StdArc::new(SqliteProvider::new_in_memory().await.unwrap());
-    let rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(activities), reg).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), activities, reg).await;
     let client = duroxide::Client::new(store.clone());
 
     client

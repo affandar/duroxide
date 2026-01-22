@@ -7,7 +7,6 @@ use duroxide::providers::InstanceFilter;
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self, RuntimeOptions};
 use duroxide::{Client, OrchestrationContext, OrchestrationRegistry};
-use std::sync::Arc;
 use std::time::Duration;
 
 mod common;
@@ -46,7 +45,7 @@ async fn test_delete_instance_bulk_retention_policies() {
 
     let _rt = runtime::Runtime::start_with_options(
         store.clone(),
-        Arc::new(ActivityRegistry::builder().build()),
+        ActivityRegistry::builder().build(),
         orchestrations,
         RuntimeOptions::default(),
     )
@@ -153,7 +152,7 @@ async fn test_delete_instance_bulk_safety() {
 
     let _rt = runtime::Runtime::start_with_options(
         store.clone(),
-        Arc::new(ActivityRegistry::builder().build()),
+        ActivityRegistry::builder().build(),
         orchestrations,
         RuntimeOptions::default(),
     )

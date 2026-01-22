@@ -68,21 +68,19 @@ async fn e2e_replay_completion_only_must_use_version_from_history() {
 
     // Activities - both "system-prune" and "system-prune-2" registered
     let prune_activity_called_clone = prune_activity_called.clone();
-    let activities = Arc::new(
-        ActivityRegistry::builder()
-            .register("system-prune", move |_ctx: duroxide::ActivityContext, input: String| {
-                let called = prune_activity_called_clone.clone();
-                async move {
-                    called.fetch_add(1, Ordering::SeqCst);
-                    Ok(format!("pruned:{input}"))
-                }
-            })
-            .register(
-                "system-prune-2",
-                |_ctx: duroxide::ActivityContext, input: String| async move { Ok(format!("pruned-v2:{input}")) },
-            )
-            .build(),
-    );
+    let activities = ActivityRegistry::builder()
+        .register("system-prune", move |_ctx: duroxide::ActivityContext, input: String| {
+            let called = prune_activity_called_clone.clone();
+            async move {
+                called.fetch_add(1, Ordering::SeqCst);
+                Ok(format!("pruned:{input}"))
+            }
+        })
+        .register(
+            "system-prune-2",
+            |_ctx: duroxide::ActivityContext, input: String| async move { Ok(format!("pruned-v2:{input}")) },
+        )
+        .build();
 
     let options = RuntimeOptions {
         dispatcher_min_poll_interval: Duration::from_millis(10),
@@ -211,18 +209,16 @@ async fn e2e_replay_completion_only_after_can_must_use_version_from_history() {
         .build();
 
     // Activities
-    let activities = Arc::new(
-        ActivityRegistry::builder()
-            .register(
-                "system-prune",
-                |_ctx: duroxide::ActivityContext, input: String| async move { Ok(format!("pruned:{input}")) },
-            )
-            .register(
-                "system-prune-2",
-                |_ctx: duroxide::ActivityContext, input: String| async move { Ok(format!("pruned-v2:{input}")) },
-            )
-            .build(),
-    );
+    let activities = ActivityRegistry::builder()
+        .register(
+            "system-prune",
+            |_ctx: duroxide::ActivityContext, input: String| async move { Ok(format!("pruned:{input}")) },
+        )
+        .register(
+            "system-prune-2",
+            |_ctx: duroxide::ActivityContext, input: String| async move { Ok(format!("pruned-v2:{input}")) },
+        )
+        .build();
 
     let options = RuntimeOptions {
         dispatcher_min_poll_interval: Duration::from_millis(10),
@@ -707,13 +703,11 @@ async fn e2e_can_input_preserved_during_completion_only_replay() {
         .register_versioned("InputTest", "2.0.0", handler_v2)
         .build();
 
-    let activities = Arc::new(
-        ActivityRegistry::builder()
-            .register("Echo", |_ctx: duroxide::ActivityContext, input: String| async move {
-                Ok(input)
-            })
-            .build(),
-    );
+    let activities = ActivityRegistry::builder()
+        .register("Echo", |_ctx: duroxide::ActivityContext, input: String| async move {
+            Ok(input)
+        })
+        .build();
 
     let options = RuntimeOptions {
         dispatcher_min_poll_interval: Duration::from_millis(10),

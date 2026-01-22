@@ -17,7 +17,6 @@ use super::core::{StressTestConfig, StressTestResult, run_stress_test};
 use super::parallel_orchestrations::ProviderStressFactory;
 use crate::runtime::registry::ActivityRegistry;
 use crate::{ActivityContext, OrchestrationContext, OrchestrationRegistry};
-use std::sync::Arc;
 
 /// Configuration for large payload stress tests
 #[derive(Debug, Clone)]
@@ -128,56 +127,54 @@ fn create_large_payload_activities(
     small_kb: usize,
     medium_kb: usize,
     large_kb: usize,
-) -> Arc<ActivityRegistry> {
-    Arc::new(
-        ActivityRegistry::builder()
-            // Small payload activity (~10KB output)
-            .register("SmallPayloadTask", move |_ctx: ActivityContext, input: String| {
-                let kb = small_kb;
-                let delay = delay_ms;
-                async move {
-                    tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
-                    let payload = generate_payload(kb);
-                    Ok(serde_json::to_string(&serde_json::json!({
-                        "input": input,
-                        "payload": payload,
-                        "size_kb": kb
-                    }))
-                    .unwrap())
-                }
-            })
-            // Medium payload activity (~50KB output)
-            .register("MediumPayloadTask", move |_ctx: ActivityContext, input: String| {
-                let kb = medium_kb;
-                let delay = delay_ms;
-                async move {
-                    tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
-                    let payload = generate_payload(kb);
-                    Ok(serde_json::to_string(&serde_json::json!({
-                        "input": input,
-                        "payload": payload,
-                        "size_kb": kb
-                    }))
-                    .unwrap())
-                }
-            })
-            // Large payload activity (~100KB output)
-            .register("LargePayloadTask", move |_ctx: ActivityContext, input: String| {
-                let kb = large_kb;
-                let delay = delay_ms;
-                async move {
-                    tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
-                    let payload = generate_payload(kb);
-                    Ok(serde_json::to_string(&serde_json::json!({
-                        "input": input,
-                        "payload": payload,
-                        "size_kb": kb
-                    }))
-                    .unwrap())
-                }
-            })
-            .build(),
-    )
+) -> ActivityRegistry {
+    ActivityRegistry::builder()
+        // Small payload activity (~10KB output)
+        .register("SmallPayloadTask", move |_ctx: ActivityContext, input: String| {
+            let kb = small_kb;
+            let delay = delay_ms;
+            async move {
+                tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+                let payload = generate_payload(kb);
+                Ok(serde_json::to_string(&serde_json::json!({
+                    "input": input,
+                    "payload": payload,
+                    "size_kb": kb
+                }))
+                .unwrap())
+            }
+        })
+        // Medium payload activity (~50KB output)
+        .register("MediumPayloadTask", move |_ctx: ActivityContext, input: String| {
+            let kb = medium_kb;
+            let delay = delay_ms;
+            async move {
+                tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+                let payload = generate_payload(kb);
+                Ok(serde_json::to_string(&serde_json::json!({
+                    "input": input,
+                    "payload": payload,
+                    "size_kb": kb
+                }))
+                .unwrap())
+            }
+        })
+        // Large payload activity (~100KB output)
+        .register("LargePayloadTask", move |_ctx: ActivityContext, input: String| {
+            let kb = large_kb;
+            let delay = delay_ms;
+            async move {
+                tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+                let payload = generate_payload(kb);
+                Ok(serde_json::to_string(&serde_json::json!({
+                    "input": input,
+                    "payload": payload,
+                    "size_kb": kb
+                }))
+                .unwrap())
+            }
+        })
+        .build()
 }
 
 /// Create orchestration registry with large payload orchestrations

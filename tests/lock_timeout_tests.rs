@@ -77,7 +77,7 @@ async fn orchestration_with_custom_timeout_completes() {
         ..Default::default()
     };
 
-    let rt = runtime::Runtime::start_with_options(store.clone(), Arc::new(acts), reg, options).await;
+    let rt = runtime::Runtime::start_with_options(store.clone(), acts, reg, options).await;
     let client = Client::new(store.clone());
 
     let inst = "inst-custom-timeout";
@@ -131,7 +131,7 @@ async fn very_short_lock_timeout_works() {
         ..Default::default()
     };
 
-    let rt = runtime::Runtime::start_with_options(store.clone(), Arc::new(acts), reg, options).await;
+    let rt = runtime::Runtime::start_with_options(store.clone(), acts, reg, options).await;
     let client = Client::new(store.clone());
 
     let inst = "inst-short-timeout";
@@ -189,7 +189,7 @@ async fn long_running_activity_with_lock_renewal() {
         ..Default::default()
     };
 
-    let rt = runtime::Runtime::start_with_options(store.clone(), Arc::new(acts), reg, options).await;
+    let rt = runtime::Runtime::start_with_options(store.clone(), acts, reg, options).await;
     let client = Client::new(store.clone());
 
     let inst = "inst-long-activity-renewal";
@@ -245,7 +245,7 @@ async fn short_activity_no_renewal_needed() {
         ..Default::default()
     };
 
-    let rt = runtime::Runtime::start_with_options(store.clone(), Arc::new(acts), reg, options).await;
+    let rt = runtime::Runtime::start_with_options(store.clone(), acts, reg, options).await;
     let client = Client::new(store.clone());
 
     let inst = "inst-quick-activity";
@@ -303,7 +303,7 @@ async fn lock_renewal_short_timeout() {
         ..Default::default()
     };
 
-    let rt = runtime::Runtime::start_with_options(store.clone(), Arc::new(acts), reg, options).await;
+    let rt = runtime::Runtime::start_with_options(store.clone(), acts, reg, options).await;
     let client = Client::new(store.clone());
 
     let inst = "inst-short-timeout-renewal";
@@ -360,7 +360,7 @@ async fn custom_renewal_buffer() {
         ..Default::default()
     };
 
-    let rt = runtime::Runtime::start_with_options(store.clone(), Arc::new(acts), reg, options).await;
+    let rt = runtime::Runtime::start_with_options(store.clone(), acts, reg, options).await;
     let client = Client::new(store.clone());
 
     let inst = "inst-custom-buffer";
@@ -425,7 +425,7 @@ async fn concurrent_activities_with_renewal() {
         ..Default::default()
     };
 
-    let rt = runtime::Runtime::start_with_options(store.clone(), Arc::new(acts), reg, options).await;
+    let rt = runtime::Runtime::start_with_options(store.clone(), acts, reg, options).await;
     let client = Client::new(store.clone());
 
     let inst = "inst-concurrent-renewal";
@@ -517,7 +517,7 @@ async fn orchestration_lock_renewal_prevents_expiration() {
         )
         .build();
 
-    let rt = runtime::Runtime::start_with_options(store.clone(), Arc::new(activities), orchestrations, options).await;
+    let rt = runtime::Runtime::start_with_options(store.clone(), activities, orchestrations, options).await;
     let client = Client::new(store.clone());
 
     // Set a 4-second processing delay (longer than 2s lock timeout)

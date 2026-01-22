@@ -4,7 +4,6 @@
 
 use duroxide::providers::Provider;
 use futures::future::{Either, select};
-use std::sync::Arc;
 use std::time::Duration;
 mod common;
 use duroxide::runtime::registry::ActivityRegistry;
@@ -33,7 +32,7 @@ async fn wait_external_completes_with(store: StdArc<dyn Provider>) {
 
     let rt = runtime::Runtime::start_with_options(
         store.clone(),
-        Arc::new(activity_registry),
+        activity_registry,
         orchestration_registry,
         fast_runtime_options(),
     )
@@ -99,7 +98,7 @@ async fn race_external_vs_timer_ordering_with(store: StdArc<dyn Provider>) {
 
     let rt = runtime::Runtime::start_with_options(
         store.clone(),
-        Arc::new(activity_registry),
+        activity_registry,
         orchestration_registry,
         fast_runtime_options(),
     )
@@ -177,7 +176,7 @@ async fn race_event_vs_timer_event_wins_with(store: StdArc<dyn Provider>) {
 
     let rt = runtime::Runtime::start_with_options(
         store.clone(),
-        Arc::new(activity_registry),
+        activity_registry,
         orchestration_registry,
         fast_runtime_options(),
     )

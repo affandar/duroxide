@@ -117,7 +117,7 @@ async fn activity_tracing_emits_all_levels() {
         })
         .build();
 
-    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activities), orchestrations).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), activities, orchestrations).await;
     let client = Client::new(store.clone());
     client
         .start_orchestration("trace-activity-instance", "TraceOrch", "")
@@ -183,7 +183,7 @@ async fn orchestration_tracing_emits_all_levels() {
         })
         .build();
 
-    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activities), orchestrations).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), activities, orchestrations).await;
     let client = Client::new(store.clone());
     client
         .start_orchestration("trace-orch-instance", "TraceOrch", "")
@@ -290,7 +290,7 @@ async fn metrics_capture_activity_and_orchestration_outcomes() {
         ..Default::default()
     };
     let rt =
-        runtime::Runtime::start_with_options(provider_trait.clone(), Arc::new(activities), orchestrations, options)
+        runtime::Runtime::start_with_options(provider_trait.clone(), activities, orchestrations, options)
             .await;
 
     let client = Client::new(provider_trait.clone());
@@ -484,7 +484,7 @@ async fn test_labeled_metrics_recording() {
         })
         .build();
 
-    let rt = runtime::Runtime::start_with_options(store.clone(), Arc::new(activities), orchestrations, options).await;
+    let rt = runtime::Runtime::start_with_options(store.clone(), activities, orchestrations, options).await;
 
     let client = Client::new(store.clone());
     client
@@ -534,7 +534,7 @@ async fn test_continue_as_new_metrics() {
         })
         .build();
 
-    let rt = runtime::Runtime::start_with_options(store.clone(), Arc::new(activities), orchestrations, options).await;
+    let rt = runtime::Runtime::start_with_options(store.clone(), activities, orchestrations, options).await;
 
     let client = Client::new(store.clone());
     client.start_orchestration("can-test", "CANOrch", "0").await.unwrap();
@@ -575,7 +575,7 @@ async fn test_activity_duration_tracking() {
         })
         .build();
 
-    let rt = runtime::Runtime::start_with_options(store.clone(), Arc::new(activities), orchestrations, options).await;
+    let rt = runtime::Runtime::start_with_options(store.clone(), activities, orchestrations, options).await;
 
     let client = Client::new(store.clone());
     client
@@ -641,7 +641,7 @@ async fn test_error_classification_metrics() {
         )
         .build();
 
-    let rt = runtime::Runtime::start_with_options(store.clone(), Arc::new(activities), orchestrations, options).await;
+    let rt = runtime::Runtime::start_with_options(store.clone(), activities, orchestrations, options).await;
 
     let client = Client::new(store.clone());
 
@@ -714,7 +714,7 @@ async fn test_active_orchestrations_gauge() {
         })
         .build();
 
-    let rt = runtime::Runtime::start_with_options(store.clone(), Arc::new(activities), orchestrations, options).await;
+    let rt = runtime::Runtime::start_with_options(store.clone(), activities, orchestrations, options).await;
     let client = Client::new(store.clone());
 
     // Start orchestration and verify it completes
@@ -783,7 +783,7 @@ async fn test_active_orchestrations_gauge_comprehensive() {
         })
         .build();
 
-    let rt = runtime::Runtime::start_with_options(store.clone(), Arc::new(activities), orchestrations, options).await;
+    let rt = runtime::Runtime::start_with_options(store.clone(), activities, orchestrations, options).await;
     let client = Client::new(store.clone());
 
     // Start multiple orchestrations to exercise the active orchestrations gauge
@@ -864,7 +864,7 @@ async fn test_separate_error_counters_exported() {
         })
         .build();
 
-    let rt = runtime::Runtime::start_with_options(store.clone(), Arc::new(activities), orchestrations, options).await;
+    let rt = runtime::Runtime::start_with_options(store.clone(), activities, orchestrations, options).await;
     let client = Client::new(store.clone());
 
     // Trigger config error
@@ -934,7 +934,7 @@ async fn test_sub_orchestration_metrics() {
         })
         .build();
 
-    let rt = runtime::Runtime::start_with_options(store.clone(), Arc::new(activities), orchestrations, options).await;
+    let rt = runtime::Runtime::start_with_options(store.clone(), activities, orchestrations, options).await;
     let client = Client::new(store.clone());
 
     // Start parent orchestration that calls sub-orchestrations
@@ -989,7 +989,7 @@ async fn test_versioned_orchestration_metrics() {
         )
         .build();
 
-    let rt = runtime::Runtime::start_with_options(store.clone(), Arc::new(activities), orchestrations, options).await;
+    let rt = runtime::Runtime::start_with_options(store.clone(), activities, orchestrations, options).await;
     let client = Client::new(store.clone());
 
     // Start orchestrations with same version (test just checks that completions are counted)
@@ -1054,7 +1054,7 @@ async fn test_provider_metrics_recorded() {
         })
         .build();
 
-    let rt = runtime::Runtime::start_with_options(store.clone(), Arc::new(activities), orchestrations, options).await;
+    let rt = runtime::Runtime::start_with_options(store.clone(), activities, orchestrations, options).await;
     let client = Client::new(store.clone());
 
     // Start orchestration to trigger provider operations
@@ -1111,7 +1111,7 @@ async fn test_provider_error_metrics() {
     };
 
     let rt =
-        runtime::Runtime::start_with_options(provider_trait.clone(), Arc::new(activities), orchestrations, options)
+        runtime::Runtime::start_with_options(provider_trait.clone(), activities, orchestrations, options)
             .await;
     let client = Client::new(provider_trait.clone());
 
@@ -1177,7 +1177,7 @@ async fn test_queue_depth_gauges_initialization() {
     let orchestrations = OrchestrationRegistry::builder().build();
 
     // Now start runtime - it should initialize gauges from provider
-    let rt = runtime::Runtime::start_with_options(store.clone(), Arc::new(activities), orchestrations, options).await;
+    let rt = runtime::Runtime::start_with_options(store.clone(), activities, orchestrations, options).await;
 
     // Give initialization a moment to complete
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -1211,7 +1211,7 @@ async fn test_queue_depth_gauges_tracking() {
         })
         .build();
 
-    let rt = runtime::Runtime::start_with_options(store.clone(), Arc::new(activities), orchestrations, options).await;
+    let rt = runtime::Runtime::start_with_options(store.clone(), activities, orchestrations, options).await;
     let client = Client::new(store.clone());
 
     // Start multiple orchestrations quickly to exercise queue depth tracking
@@ -1261,7 +1261,7 @@ async fn test_all_gauges_initialized_together() {
         })
         .build();
 
-    let rt = runtime::Runtime::start_with_options(store.clone(), Arc::new(activities), orchestrations, options).await;
+    let rt = runtime::Runtime::start_with_options(store.clone(), activities, orchestrations, options).await;
 
     let client = Client::new(store.clone());
 
@@ -1296,7 +1296,7 @@ async fn test_all_gauges_initialized_together() {
         .build();
 
     let rt2 =
-        runtime::Runtime::start_with_options(store.clone(), Arc::new(activities2), orchestrations2, options2).await;
+        runtime::Runtime::start_with_options(store.clone(), activities2, orchestrations2, options2).await;
 
     // Give initialization time to complete
     tokio::time::sleep(Duration::from_millis(200)).await;
@@ -1351,7 +1351,7 @@ async fn test_poison_message_metrics() {
     provider.inject_orchestration_poison(11);
 
     let rt =
-        runtime::Runtime::start_with_options(provider.clone(), Arc::new(activities), orchestrations, options).await;
+        runtime::Runtime::start_with_options(provider.clone(), activities, orchestrations, options).await;
     let client = Client::new(provider.clone());
 
     // Start orchestration that will be detected as poison

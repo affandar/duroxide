@@ -53,20 +53,18 @@ async fn e2e_rolling_deployment_three_nodes() {
 
     // Node 3 starts with new code (has NewActivity)
     let activity_executed_clone = activity_executed.clone();
-    let activities_new = Arc::new(
-        ActivityRegistry::builder()
-            .register("NewActivity", move |_ctx: duroxide::ActivityContext, input: String| {
-                let executed = activity_executed_clone.clone();
-                async move {
-                    executed.store(true, Ordering::SeqCst);
-                    Ok(format!("NewActivity result: {input}"))
-                }
-            })
-            .build(),
-    );
+    let activities_new = ActivityRegistry::builder()
+        .register("NewActivity", move |_ctx: duroxide::ActivityContext, input: String| {
+            let executed = activity_executed_clone.clone();
+            async move {
+                executed.store(true, Ordering::SeqCst);
+                Ok(format!("NewActivity result: {input}"))
+            }
+        })
+        .build();
 
     // Nodes 1 & 2 start with old code (NO NewActivity registered)
-    let activities_old = Arc::new(ActivityRegistry::builder().build());
+    let activities_old = ActivityRegistry::builder().build();
 
     // Fast options with short backoff for testing
     // Note: max_attempts is set high (50) to allow enough bouncing between nodes
@@ -218,7 +216,7 @@ async fn e2e_rolling_deployment_version_upgrade() {
         .register_versioned("VersionedOrch", "2.0.0", v2_handler)
         .build();
 
-    let activities = Arc::new(ActivityRegistry::builder().build());
+    let activities = ActivityRegistry::builder().build();
 
     // Note: max_attempts is set high (50) to allow enough bouncing between nodes
     // during rolling deployment. With 3 nodes where 2 don't have v2.0.0,

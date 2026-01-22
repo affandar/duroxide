@@ -249,7 +249,7 @@ async fn test_dispatcher_uses_long_polling() {
     };
 
     let rt =
-        runtime::Runtime::start_with_options(provider.clone(), Arc::new(activities), orchestrations, options).await;
+        runtime::Runtime::start_with_options(provider.clone(), activities, orchestrations, options).await;
 
     let client = Client::new(provider.clone());
 

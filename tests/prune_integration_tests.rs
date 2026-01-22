@@ -63,7 +63,7 @@ async fn test_prune_continue_as_new_chain() {
 
     let _rt = runtime::Runtime::start_with_options(
         store.clone(),
-        Arc::new(ActivityRegistry::builder().build()),
+        ActivityRegistry::builder().build(),
         orchestrations,
         fast_runtime_options(),
     )
@@ -133,7 +133,7 @@ async fn test_prune_bulk_operations() {
 
     let _rt = runtime::Runtime::start_with_options(
         store.clone(),
-        Arc::new(ActivityRegistry::builder().build()),
+        ActivityRegistry::builder().build(),
         orchestrations,
         fast_runtime_options(),
     )
@@ -214,7 +214,7 @@ async fn test_prune_safety() {
 
     let _rt = runtime::Runtime::start_with_options(
         store.clone(),
-        Arc::new(ActivityRegistry::builder().build()),
+        ActivityRegistry::builder().build(),
         orchestrations,
         fast_runtime_options(),
     )
@@ -326,7 +326,7 @@ async fn test_prune_during_active_continue_as_new() {
 
     let _rt = runtime::Runtime::start_with_options(
         store.clone(),
-        Arc::new(activities),
+        activities,
         orchestrations,
         fast_runtime_options(),
     )
@@ -444,7 +444,7 @@ async fn test_prune_bulk_includes_running_instances() {
 
     let _rt = runtime::Runtime::start_with_options(
         store.clone(),
-        Arc::new(activities),
+        activities,
         orchestrations,
         fast_runtime_options(),
     )

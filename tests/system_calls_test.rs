@@ -14,7 +14,7 @@ async fn test_new_guid() {
             .await
             .unwrap(),
     );
-    let activities = Arc::new(ActivityRegistry::builder().build());
+    let activities = ActivityRegistry::builder().build();
 
     let orchestrations = OrchestrationRegistry::builder()
         .register("TestGuid", |ctx: OrchestrationContext, _input: String| async move {
@@ -60,7 +60,7 @@ async fn test_utcnow_ms() {
             .await
             .unwrap(),
     );
-    let activities = Arc::new(ActivityRegistry::builder().build());
+    let activities = ActivityRegistry::builder().build();
 
     let orchestrations = OrchestrationRegistry::builder()
         .register("TestTime", |ctx: OrchestrationContext, _input: String| async move {
@@ -119,7 +119,7 @@ async fn test_system_calls_deterministic_replay() {
             .await
             .unwrap(),
     );
-    let activities = Arc::new(ActivityRegistry::builder().build());
+    let activities = ActivityRegistry::builder().build();
 
     let orchestrations = OrchestrationRegistry::builder()
         .register(
@@ -192,13 +192,11 @@ async fn test_system_calls_with_select() {
             .await
             .unwrap(),
     );
-    let activities = Arc::new(
-        ActivityRegistry::builder()
-            .register("QuickTask", |_ctx: ActivityContext, _: String| async move {
-                Ok("task_done".to_string())
-            })
-            .build(),
-    );
+    let activities = ActivityRegistry::builder()
+        .register("QuickTask", |_ctx: ActivityContext, _: String| async move {
+            Ok("task_done".to_string())
+        })
+        .build();
 
     let orchestrations = OrchestrationRegistry::builder()
         .register("TestSelect", |ctx: OrchestrationContext, _input: String| async move {
@@ -270,13 +268,11 @@ async fn test_system_calls_join_with_activities() {
             .await
             .unwrap(),
     );
-    let activities = Arc::new(
-        ActivityRegistry::builder()
-            .register("SlowTask", |_ctx: ActivityContext, input: String| async move {
-                Ok(format!("processed:{input}"))
-            })
-            .build(),
-    );
+    let activities = ActivityRegistry::builder()
+        .register("SlowTask", |_ctx: ActivityContext, input: String| async move {
+            Ok(format!("processed:{input}"))
+        })
+        .build();
 
     let orchestrations = OrchestrationRegistry::builder()
         .register("TestJoin", |ctx: OrchestrationContext, _input: String| async move {

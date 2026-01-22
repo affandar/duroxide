@@ -50,7 +50,7 @@ async fn single_timer_fires() {
 
     let reg = OrchestrationRegistry::builder().register("OneTimer", orch).build();
     let acts = ActivityRegistry::builder().build();
-    let rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(acts), reg).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), acts, reg).await;
     let client = duroxide::Client::new(store.clone());
 
     let start = std::time::Instant::now();
@@ -95,7 +95,7 @@ async fn multiple_timers_fire_in_order() {
 
     let reg = OrchestrationRegistry::builder().register("MultiTimer", orch).build();
     let acts = ActivityRegistry::builder().build();
-    let rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(acts), reg).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), acts, reg).await;
     let client = duroxide::Client::new(store.clone());
 
     client
@@ -138,7 +138,7 @@ async fn timer_with_activity() {
         .build();
 
     let reg = OrchestrationRegistry::builder().register("TimerActivity", orch).build();
-    let rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(activity_registry), reg).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), activity_registry, reg).await;
     let client = duroxide::Client::new(store.clone());
 
     client
@@ -202,7 +202,7 @@ async fn timer_recovery_after_crash_before_fire() {
         .register("TimerRecoveryTest", orch)
         .build();
 
-    let rt = runtime::Runtime::start_with_store(store1.clone(), StdArc::new(activity_registry), orchestration_registry)
+    let rt = runtime::Runtime::start_with_store(store1.clone(), activity_registry, orchestration_registry)
         .await;
 
     let client = duroxide::Client::new(store1.clone());
@@ -241,7 +241,7 @@ async fn timer_recovery_after_crash_before_fire() {
         .build();
 
     let rt2 =
-        runtime::Runtime::start_with_store(store1.clone(), StdArc::new(activity_registry2), orchestration_registry2)
+        runtime::Runtime::start_with_store(store1.clone(), activity_registry2, orchestration_registry2)
             .await;
 
     // Wait for orchestration to complete
@@ -285,7 +285,7 @@ async fn timer_recovery_after_crash_after_fire() {
         .register("TimerRecoveryAfterTest", orch)
         .build();
 
-    let rt = runtime::Runtime::start_with_store(store1.clone(), StdArc::new(activity_registry), orchestration_registry)
+    let rt = runtime::Runtime::start_with_store(store1.clone(), activity_registry, orchestration_registry)
         .await;
 
     let client = duroxide::Client::new(store1.clone());
@@ -320,7 +320,7 @@ async fn timer_recovery_after_crash_after_fire() {
         .build();
 
     let rt2 =
-        runtime::Runtime::start_with_store(store1.clone(), StdArc::new(activity_registry2), orchestration_registry2)
+        runtime::Runtime::start_with_store(store1.clone(), activity_registry2, orchestration_registry2)
             .await;
 
     // Wait for orchestration to complete
@@ -356,7 +356,7 @@ async fn zero_duration_timer() {
 
     let reg = OrchestrationRegistry::builder().register("ZeroTimer", orch).build();
     let acts = ActivityRegistry::builder().build();
-    let rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(acts), reg).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), acts, reg).await;
     let client = duroxide::Client::new(store.clone());
 
     client.start_orchestration("inst-zero", "ZeroTimer", "").await.unwrap();
@@ -390,7 +390,7 @@ async fn timer_cancellation() {
 
     let reg = OrchestrationRegistry::builder().register("TimerCancel", orch).build();
     let acts = ActivityRegistry::builder().build();
-    let rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(acts), reg).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), acts, reg).await;
     let client = duroxide::Client::new(store.clone());
 
     client
@@ -442,7 +442,7 @@ async fn multiple_timers_recovery_after_crash() {
 
     let rt = runtime::Runtime::start_with_store(
         store1.clone(),
-        StdArc::new(ActivityRegistry::builder().build()),
+        ActivityRegistry::builder().build(),
         orchestration_registry,
     )
     .await;
@@ -480,7 +480,7 @@ async fn multiple_timers_recovery_after_crash() {
 
     let rt2 = runtime::Runtime::start_with_store(
         store1.clone(),
-        StdArc::new(ActivityRegistry::builder().build()),
+        ActivityRegistry::builder().build(),
         orchestration_registry2,
     )
     .await;
@@ -575,7 +575,7 @@ async fn timer_fires_at_correct_time_after_previous_timer() {
         .register("SlowActivity", slow_activity)
         .build();
 
-    let rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(activities), orchestrations).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), activities, orchestrations).await;
 
     let client = duroxide::Client::new(store.clone());
 

@@ -238,7 +238,7 @@ async fn e2e_orchestration_item_poison_fails_orchestration() {
 
     let rt = runtime::Runtime::start_with_options(
         provider.clone() as Arc<dyn Provider>,
-        Arc::new(activities),
+        activities,
         orchestrations,
         fast_runtime_options(10),
     )
@@ -325,7 +325,7 @@ async fn e2e_activity_item_poison_fails_orchestration() {
 
     let rt = runtime::Runtime::start_with_options(
         provider.clone() as Arc<dyn Provider>,
-        Arc::new(activities),
+        activities,
         orchestrations,
         fast_runtime_options(10),
     )
@@ -411,7 +411,7 @@ async fn e2e_sub_orchestration_poison_fails_parent() {
 
     let rt = runtime::Runtime::start_with_options(
         provider.clone() as Arc<dyn Provider>,
-        Arc::new(activities),
+        activities,
         orchestrations,
         fast_runtime_options(10),
     )
@@ -515,7 +515,7 @@ async fn e2e_one_poisoned_activity_among_many() {
 
     let rt = runtime::Runtime::start_with_options(
         provider.clone() as Arc<dyn Provider>,
-        Arc::new(activities),
+        activities,
         orchestrations,
         fast_runtime_options(5),
     )
@@ -570,7 +570,7 @@ async fn e2e_custom_max_attempts_respected() {
 
     let rt = runtime::Runtime::start_with_options(
         provider.clone() as Arc<dyn Provider>,
-        Arc::new(activities),
+        activities,
         orchestrations,
         fast_runtime_options(3), // custom max_attempts = 3
     )
@@ -646,7 +646,7 @@ async fn e2e_activity_poisons_suborchestration_poisons_parent() {
 
     let rt = runtime::Runtime::start_with_options(
         provider.clone() as Arc<dyn Provider>,
-        Arc::new(activities),
+        activities,
         orchestrations,
         fast_runtime_options(10),
     )
@@ -735,7 +735,7 @@ async fn e2e_poison_message_creates_instance_if_missing() {
 
     let rt = runtime::Runtime::start_with_options(
         provider.clone() as Arc<dyn Provider>,
-        Arc::new(activities),
+        activities,
         orchestrations,
         fast_runtime_options(10), // max_attempts=10, so 11 triggers poison
     )

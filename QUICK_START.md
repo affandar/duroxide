@@ -70,7 +70,7 @@ let orchestrations = OrchestrationRegistry::builder()
     .register("HelloWorld", orchestration)
     .build();
 
-let rt = Runtime::start_with_store(store.clone(), Arc::new(activities), orchestrations).await;
+let rt = Runtime::start_with_store(store.clone(), activities, orchestrations).await;
 let client = Client::new(store);
 client.start_orchestration("inst-1", "HelloWorld", "World").await?; // Returns Result<(), ClientError>
 ```
@@ -169,7 +169,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Run
     let rt = runtime::Runtime::start_with_store(
-        store.clone(), Arc::new(activities), orchestrations
+        store.clone(), activities, orchestrations
     ).await;
     
     let client = Client::new(store);

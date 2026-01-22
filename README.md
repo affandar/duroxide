@@ -89,7 +89,7 @@ let orch = |ctx: OrchestrationContext, name: String| async move {
     Ok::<_, String>(res)
 };
 let orchestrations = OrchestrationRegistry::builder().register("HelloWorld", orch).build();
-let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activities), orchestrations).await;
+let rt = runtime::Runtime::start_with_store(store.clone(), activities, orchestrations).await;
 let client = Client::new(store);
 client.start_orchestration("inst-hello-1", "HelloWorld", "Rust").await?; // Returns Result<(), ClientError>
 match client.wait_for_orchestration("inst-hello-1", std::time::Duration::from_secs(5)).await? {

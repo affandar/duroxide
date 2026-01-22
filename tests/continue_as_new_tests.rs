@@ -6,7 +6,6 @@ use duroxide::EventKind;
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
 use duroxide::{ActivityContext, Event, OrchestrationContext, OrchestrationRegistry};
-use std::sync::Arc as StdArc;
 use std::time::Duration;
 mod common;
 
@@ -31,7 +30,7 @@ async fn continue_as_new_multiexec() {
     let activity_registry = ActivityRegistry::builder().build();
     let rt = runtime::Runtime::start_with_store(
         store.clone(),
-        std::sync::Arc::new(activity_registry),
+        activity_registry,
         orchestration_registry,
     )
     .await;
@@ -155,7 +154,7 @@ async fn continue_as_new_event_routes_to_latest() {
     let activity_registry = ActivityRegistry::builder().build();
     let rt = runtime::Runtime::start_with_store(
         store.clone(),
-        std::sync::Arc::new(activity_registry),
+        activity_registry,
         orchestration_registry,
     )
     .await;
@@ -269,7 +268,7 @@ async fn continue_as_new_event_drop_then_process() {
     let activity_registry = ActivityRegistry::builder().build();
     let rt = runtime::Runtime::start_with_store(
         store.clone(),
-        std::sync::Arc::new(activity_registry),
+        activity_registry,
         orchestration_registry,
     )
     .await;
@@ -368,7 +367,7 @@ async fn event_drop_then_retry_after_subscribe() {
     let activity_registry = ActivityRegistry::builder().build();
     let rt = runtime::Runtime::start_with_store(
         store.clone(),
-        std::sync::Arc::new(activity_registry),
+        activity_registry,
         orchestration_registry,
     )
     .await;
@@ -443,7 +442,7 @@ async fn old_execution_completions_are_ignored() {
     let reg = OrchestrationRegistry::builder()
         .register("ExecutionIdTest", orch)
         .build();
-    let _rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(activity_registry), reg).await;
+    let _rt = runtime::Runtime::start_with_store(store.clone(), activity_registry, reg).await;
     let client = duroxide::Client::new(store.clone());
 
     // Start the orchestration
@@ -501,7 +500,7 @@ async fn future_execution_completions_are_ignored() {
     let reg = OrchestrationRegistry::builder()
         .register("FutureExecTest", orch)
         .build();
-    let _rt = runtime::Runtime::start_with_store(store.clone(), StdArc::new(activity_registry), reg).await;
+    let _rt = runtime::Runtime::start_with_store(store.clone(), activity_registry, reg).await;
     let client = duroxide::Client::new(store.clone());
 
     // Start the orchestration
@@ -562,7 +561,7 @@ async fn continue_as_new_without_await() {
     let activity_registry = ActivityRegistry::builder().build();
     let rt = runtime::Runtime::start_with_store(
         store.clone(),
-        std::sync::Arc::new(activity_registry),
+        activity_registry,
         orchestration_registry,
     )
     .await;

@@ -41,7 +41,7 @@ async fn dispatcher_enqueues_timer_schedule_then_completes() {
     };
     let reg = OrchestrationRegistry::builder().register("OneTimer", orch).build();
     let acts = ActivityRegistry::builder().build();
-    let rt = runtime::Runtime::start_with_store(store_dyn.clone(), StdArc::new(acts), reg).await;
+    let rt = runtime::Runtime::start_with_store(store_dyn.clone(), acts, reg).await;
     let client = duroxide::Client::new(store_dyn.clone());
 
     let inst = "inst-disp-timer";
@@ -78,7 +78,7 @@ async fn dispatcher_enqueues_start_orchestration_to_orch_queue() {
         .register("Child", child)
         .register("Parent", parent)
         .build();
-    let rt = runtime::Runtime::start_with_store(store_dyn.clone(), StdArc::new(acts), reg).await;
+    let rt = runtime::Runtime::start_with_store(store_dyn.clone(), acts, reg).await;
     let client = duroxide::Client::new(store_dyn.clone());
 
     client.start_orchestration("inst-parent", "Parent", "").await.unwrap();

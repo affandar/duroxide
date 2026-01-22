@@ -44,7 +44,7 @@
 //!     .build();
 //!
 //! let rt = runtime::Runtime::start_with_store(
-//!     store.clone(), Arc::new(activities), orchestrations
+//!     store.clone(), activities, orchestrations
 //! ).await;
 //!
 //! // 5. Create a client and start an orchestration instance

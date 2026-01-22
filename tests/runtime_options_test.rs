@@ -6,7 +6,6 @@
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self, RuntimeOptions};
 use duroxide::{ActivityContext, Client, OrchestrationContext, OrchestrationRegistry};
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 mod common;
@@ -27,7 +26,7 @@ async fn test_default_polling_frequency() {
     let orchestrations = OrchestrationRegistry::builder().register("TestOrch", orch).build();
 
     // Start with default options (10ms polling)
-    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activities), orchestrations).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), activities, orchestrations).await;
 
     let client = Client::new(store.clone());
     let start_time = Instant::now();
@@ -72,7 +71,7 @@ async fn test_custom_polling_frequency() {
         ..Default::default()
     };
 
-    let rt = runtime::Runtime::start_with_options(store.clone(), Arc::new(activities), orchestrations, options).await;
+    let rt = runtime::Runtime::start_with_options(store.clone(), activities, orchestrations, options).await;
 
     let client = Client::new(store.clone());
 
@@ -109,7 +108,7 @@ async fn test_fast_polling() {
         ..Default::default()
     };
 
-    let rt = runtime::Runtime::start_with_options(store.clone(), Arc::new(activities), orchestrations, options).await;
+    let rt = runtime::Runtime::start_with_options(store.clone(), activities, orchestrations, options).await;
 
     let client = Client::new(store.clone());
     let start_time = Instant::now();

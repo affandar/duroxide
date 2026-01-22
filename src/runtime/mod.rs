@@ -659,7 +659,7 @@ impl Runtime {
     /// Requires the `sqlite` feature.
     #[cfg(feature = "sqlite")]
     pub async fn start(
-        activity_registry: Arc<registry::ActivityRegistry>,
+        activity_registry: registry::ActivityRegistry,
         orchestration_registry: OrchestrationRegistry,
     ) -> Arc<Self> {
         let history_store: Arc<dyn Provider> = Arc::new(
@@ -673,7 +673,7 @@ impl Runtime {
     /// Start a new runtime with a custom `Provider` implementation.
     pub async fn start_with_store(
         history_store: Arc<dyn Provider>,
-        activity_registry: Arc<registry::ActivityRegistry>,
+        activity_registry: registry::ActivityRegistry,
         orchestration_registry: OrchestrationRegistry,
     ) -> Arc<Self> {
         Self::start_with_options(
@@ -688,10 +688,13 @@ impl Runtime {
     /// Start a new runtime with custom options.
     pub async fn start_with_options(
         history_store: Arc<dyn Provider>,
-        activity_registry: Arc<registry::ActivityRegistry>,
+        activity_registry: registry::ActivityRegistry,
         orchestration_registry: OrchestrationRegistry,
         options: RuntimeOptions,
     ) -> Arc<Self> {
+        // Wrap activity registry in Arc for internal sharing across worker threads
+        let activity_registry = Arc::new(activity_registry);
+
         // Initialize observability (metrics + structured logging)
         let observability_handle = observability::ObservabilityHandle::init(&options.observability).ok(); // Gracefully degrade if observability fails to initialize
 

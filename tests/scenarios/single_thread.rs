@@ -40,7 +40,7 @@ async fn single_thread_basic_orchestration() {
         .register("SingleThreadOrch", orchestration)
         .build();
 
-    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestrations).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestrations).await;
 
     let client = Client::new(store.clone());
     client
@@ -91,7 +91,7 @@ async fn single_thread_sequential_activities() {
         .register("SequentialOrch", orchestration)
         .build();
 
-    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestrations).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestrations).await;
 
     let client = Client::new(store.clone());
     client
@@ -135,7 +135,7 @@ async fn single_thread_timer_handling() {
         .register("TimerOrch", orchestration)
         .build();
 
-    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestrations).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestrations).await;
 
     let client = Client::new(store.clone());
     client.start_orchestration("timer-test", "TimerOrch", "").await.unwrap();
@@ -178,7 +178,7 @@ async fn single_thread_continue_as_new() {
         .register("CounterOrch", counter)
         .build();
 
-    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestrations).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestrations).await;
 
     let client = Client::new(store.clone());
     client
@@ -224,7 +224,7 @@ async fn single_thread_concurrent_orchestrations() {
         .register("ConcurrentOrch", orchestration)
         .build();
 
-    let rt = runtime::Runtime::start_with_store(store.clone(), Arc::new(activity_registry), orchestrations).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestrations).await;
 
     let client = Client::new(store.clone());
 
@@ -286,7 +286,7 @@ async fn single_thread_single_concurrency() {
     };
 
     let rt =
-        runtime::Runtime::start_with_options(store.clone(), Arc::new(activity_registry), orchestrations, options).await;
+        runtime::Runtime::start_with_options(store.clone(), activity_registry, orchestrations, options).await;
 
     let client = Client::new(store.clone());
     client
@@ -377,7 +377,7 @@ async fn single_thread_1x1_cooperative_activity_cancellation() {
         ..Default::default()
     };
 
-    let rt = runtime::Runtime::start_with_options(store.clone(), Arc::new(activities), orchestrations, options).await;
+    let rt = runtime::Runtime::start_with_options(store.clone(), activities, orchestrations, options).await;
 
     let client = Client::new(store.clone());
 
@@ -485,7 +485,7 @@ async fn single_thread_1x1_runaway_activity_aborted() {
         ..Default::default()
     };
 
-    let rt = runtime::Runtime::start_with_options(store.clone(), Arc::new(activities), orchestrations, options).await;
+    let rt = runtime::Runtime::start_with_options(store.clone(), activities, orchestrations, options).await;
 
     let client = Client::new(store.clone());
 

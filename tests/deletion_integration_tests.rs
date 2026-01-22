@@ -74,7 +74,7 @@ async fn test_delete_terminal_orchestrations() {
 
     let _rt = runtime::Runtime::start_with_options(
         store.clone(),
-        Arc::new(activities),
+        activities,
         orchestrations,
         fast_runtime_options(),
     )
@@ -170,7 +170,7 @@ async fn test_force_delete_in_flight_work() {
 
     let _rt = runtime::Runtime::start_with_options(
         store.clone(),
-        Arc::new(activities),
+        activities,
         orchestrations,
         fast_runtime_options(),
     )
@@ -255,7 +255,7 @@ async fn test_cascade_delete_real_sub_orchestrations() {
 
     let _rt = runtime::Runtime::start_with_options(
         store.clone(),
-        Arc::new(ActivityRegistry::builder().build()),
+        ActivityRegistry::builder().build(),
         orchestrations,
         fast_runtime_options(),
     )
@@ -321,7 +321,7 @@ async fn test_identity_reuse_after_delete() {
 
     let _rt = runtime::Runtime::start_with_options(
         store.clone(),
-        Arc::new(ActivityRegistry::builder().build()),
+        ActivityRegistry::builder().build(),
         orchestrations,
         fast_runtime_options(),
     )
@@ -396,7 +396,7 @@ async fn test_delete_error_cases() {
 
     let _rt = runtime::Runtime::start_with_options(
         store.clone(),
-        Arc::new(ActivityRegistry::builder().build()),
+        ActivityRegistry::builder().build(),
         orchestrations,
         fast_runtime_options(),
     )
@@ -494,7 +494,7 @@ async fn test_dispatcher_resilience_after_delete() {
 
     let _rt = runtime::Runtime::start_with_options(
         store.clone(),
-        Arc::new(activities),
+        activities,
         orchestrations,
         fast_runtime_options(),
     )
@@ -550,7 +550,7 @@ async fn test_concurrent_delete_operations() {
 
     let _rt = runtime::Runtime::start_with_options(
         store.clone(),
-        Arc::new(ActivityRegistry::builder().build()),
+        ActivityRegistry::builder().build(),
         orchestrations,
         fast_runtime_options(),
     )
@@ -619,7 +619,7 @@ async fn test_get_instance_tree() {
 
     let _rt = runtime::Runtime::start_with_options(
         store.clone(),
-        Arc::new(ActivityRegistry::builder().build()),
+        ActivityRegistry::builder().build(),
         orchestrations,
         fast_runtime_options(),
     )
@@ -676,7 +676,7 @@ async fn test_list_children_primitive() {
 
     let _rt = runtime::Runtime::start_with_options(
         store.clone(),
-        Arc::new(ActivityRegistry::builder().build()),
+        ActivityRegistry::builder().build(),
         orchestrations,
         fast_runtime_options(),
     )
@@ -734,7 +734,7 @@ async fn test_get_parent_id_primitive() {
 
     let _rt = runtime::Runtime::start_with_options(
         store.clone(),
-        Arc::new(ActivityRegistry::builder().build()),
+        ActivityRegistry::builder().build(),
         orchestrations,
         fast_runtime_options(),
     )
@@ -805,7 +805,7 @@ async fn test_delete_orphan_race_condition_detection() {
 
     let _rt = runtime::Runtime::start_with_options(
         store.clone(),
-        Arc::new(activities),
+        activities,
         orchestrations,
         fast_runtime_options(),
     )

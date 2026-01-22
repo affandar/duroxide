@@ -5,7 +5,6 @@
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self, RuntimeOptions, UnregisteredBackoffConfig};
 use duroxide::{Client, EventKind, OrchestrationRegistry};
-use std::sync::Arc as StdArc;
 use std::time::Duration;
 mod common;
 
@@ -46,7 +45,7 @@ async fn unknown_orchestration_fails_with_poison() {
 
     let rt = runtime::Runtime::start_with_options(
         store.clone(),
-        StdArc::new(activity_registry),
+        activity_registry,
         orchestration_registry,
         options,
     )
@@ -145,7 +144,7 @@ async fn unknown_activity_fails_with_poison() {
     };
 
     let rt =
-        runtime::Runtime::start_with_options(store.clone(), StdArc::new(activity_registry), orchestrations, options)
+        runtime::Runtime::start_with_options(store.clone(), activity_registry, orchestrations, options)
             .await;
 
     let client = duroxide::Client::new(store.clone());
@@ -252,7 +251,7 @@ async fn continue_as_new_to_missing_version_fails_with_poison() {
         )
         .build();
 
-    let activities = StdArc::new(ActivityRegistry::builder().build());
+    let activities = ActivityRegistry::builder().build();
 
     let options = RuntimeOptions {
         max_attempts: 3,
@@ -304,7 +303,7 @@ async fn delete_poisoned_orchestration() {
 
     // No orchestrations registered - will poison after max_attempts
     let orchestrations = OrchestrationRegistry::builder().build();
-    let activities = StdArc::new(ActivityRegistry::builder().build());
+    let activities = ActivityRegistry::builder().build();
 
     let options = RuntimeOptions {
         max_attempts: 3, // Low so it poisons quickly

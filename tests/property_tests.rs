@@ -63,7 +63,7 @@ proptest! {
 
             let rt = runtime::Runtime::start_with_store(
                 provider.clone(),
-                Arc::new(activities),
+                activities,
                 orchestrations,
             )
             .await;
@@ -150,7 +150,7 @@ proptest! {
 
             let rt = runtime::Runtime::start_with_store(
                 provider.clone(),
-                Arc::new(activities),
+                activities,
                 orchestrations,
             )
             .await;
@@ -257,7 +257,7 @@ proptest! {
 
             let rt = runtime::Runtime::start_with_store(
                 provider.clone(),
-                Arc::new(activities),
+                activities,
                 orchestrations,
             )
             .await;
@@ -368,7 +368,7 @@ proptest! {
 
             let rt = runtime::Runtime::start_with_store(
                 provider.clone(),
-                Arc::new(activities),
+                activities,
                 orchestrations,
             )
             .await;

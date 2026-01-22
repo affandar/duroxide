@@ -63,7 +63,7 @@ async fn test_management_features_with_workflow() {
 
     let _rt = runtime::Runtime::start_with_store(
         store.clone(),
-        Arc::new(ActivityRegistry::builder().build()),
+        ActivityRegistry::builder().build(),
         orchestrations,
     )
     .await;
@@ -138,7 +138,7 @@ async fn test_instance_discovery() {
 
     let _rt = runtime::Runtime::start_with_options(
         store.clone(),
-        Arc::new(activities),
+        activities,
         orchestrations,
         fast_runtime_options(),
     )
@@ -213,7 +213,7 @@ async fn test_instance_info() {
 
     let _rt = runtime::Runtime::start_with_options(
         store.clone(),
-        Arc::new(activities),
+        activities,
         orchestrations,
         fast_runtime_options(),
     )
@@ -279,7 +279,7 @@ async fn test_execution_info() {
 
     let _rt = runtime::Runtime::start_with_options(
         store.clone(),
-        Arc::new(activities),
+        activities,
         orchestrations,
         fast_runtime_options(),
     )
@@ -359,7 +359,7 @@ async fn test_multi_execution_support() {
 
     let _rt = runtime::Runtime::start_with_store(
         store.clone(),
-        Arc::new(ActivityRegistry::builder().build()),
+        ActivityRegistry::builder().build(),
         orchestrations,
     )
     .await;
@@ -451,7 +451,7 @@ async fn test_system_metrics() {
 
     let _rt = runtime::Runtime::start_with_options(
         store.clone(),
-        Arc::new(activities),
+        activities,
         orchestrations,
         fast_runtime_options(),
     )
@@ -529,7 +529,7 @@ async fn test_queue_depths() {
 
     let _rt = runtime::Runtime::start_with_options(
         store.clone(),
-        Arc::new(activities),
+        activities,
         orchestrations,
         fast_runtime_options(),
     )
@@ -632,7 +632,7 @@ async fn test_complex_workflow_management() {
 
     let _rt = runtime::Runtime::start_with_options(
         store.clone(),
-        Arc::new(activities),
+        activities,
         orchestrations,
         fast_runtime_options(),
     )
