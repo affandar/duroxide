@@ -38,13 +38,8 @@ async fn cancel_parent_down_propagates_to_child() {
         dispatcher_min_poll_interval: Duration::from_millis(10),
         ..Default::default()
     };
-    let rt = runtime::Runtime::start_with_options(
-        store.clone(),
-        activity_registry,
-        orchestration_registry,
-        options,
-    )
-    .await;
+    let rt =
+        runtime::Runtime::start_with_options(store.clone(), activity_registry, orchestration_registry, options).await;
     let client = Client::new(store.clone());
 
     // Start parent
@@ -135,12 +130,7 @@ async fn cancel_after_completion_is_noop() {
 
     let orchestration_registry = OrchestrationRegistry::builder().register("Quick", orch).build();
     let activity_registry = ActivityRegistry::builder().build();
-    let rt = runtime::Runtime::start_with_store(
-        store.clone(),
-        activity_registry,
-        orchestration_registry,
-    )
-    .await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestration_registry).await;
     let client = Client::new(store.clone());
 
     client
@@ -199,12 +189,7 @@ async fn cancel_child_directly_signals_parent() {
         .register("ParentD", parent)
         .build();
     let activity_registry = ActivityRegistry::builder().build();
-    let rt = runtime::Runtime::start_with_store(
-        store.clone(),
-        activity_registry,
-        orchestration_registry,
-    )
-    .await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestration_registry).await;
     let client = Client::new(store.clone());
 
     client
@@ -269,12 +254,7 @@ async fn cancel_continue_as_new_second_exec() {
 
     let orchestration_registry = OrchestrationRegistry::builder().register("CanCancel", orch).build();
     let activity_registry = ActivityRegistry::builder().build();
-    let rt = runtime::Runtime::start_with_store(
-        store.clone(),
-        activity_registry,
-        orchestration_registry,
-    )
-    .await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestration_registry).await;
     let client = Client::new(store.clone());
 
     client
@@ -354,12 +334,7 @@ async fn orchestration_completes_before_activity_finishes() {
     });
     let activity_registry = ab.build();
     let orchestration_registry = OrchestrationRegistry::builder().register("QuickDone", orch).build();
-    let rt = runtime::Runtime::start_with_store(
-        store.clone(),
-        activity_registry,
-        orchestration_registry,
-    )
-    .await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestration_registry).await;
     let client = Client::new(store.clone());
 
     client
@@ -407,12 +382,7 @@ async fn orchestration_fails_before_activity_finishes() {
     });
     let activity_registry = ab.build();
     let orchestration_registry = OrchestrationRegistry::builder().register("QuickFail", orch).build();
-    let rt = runtime::Runtime::start_with_store(
-        store.clone(),
-        activity_registry,
-        orchestration_registry,
-    )
-    .await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestration_registry).await;
     let client = Client::new(store.clone());
 
     client
@@ -490,13 +460,8 @@ async fn cancel_parent_with_multiple_children() {
         dispatcher_min_poll_interval: Duration::from_millis(10),
         ..Default::default()
     };
-    let rt = runtime::Runtime::start_with_options(
-        store.clone(),
-        activity_registry,
-        orchestration_registry,
-        options,
-    )
-    .await;
+    let rt =
+        runtime::Runtime::start_with_options(store.clone(), activity_registry, orchestration_registry, options).await;
     let client = Client::new(store.clone());
 
     // Start parent
@@ -640,13 +605,8 @@ async fn activity_receives_cancellation_signal() {
         ..Default::default()
     };
 
-    let rt = runtime::Runtime::start_with_options(
-        store.clone(),
-        activity_registry,
-        orchestration_registry,
-        options,
-    )
-    .await;
+    let rt =
+        runtime::Runtime::start_with_options(store.clone(), activity_registry, orchestration_registry, options).await;
     let client = Client::new(store.clone());
 
     // Start orchestration
@@ -777,13 +737,8 @@ async fn select2_loser_activity_receives_cancellation_signal() {
         ..Default::default()
     };
 
-    let rt = runtime::Runtime::start_with_options(
-        store.clone(),
-        activity_registry,
-        orchestration_registry,
-        options,
-    )
-    .await;
+    let rt =
+        runtime::Runtime::start_with_options(store.clone(), activity_registry, orchestration_registry, options).await;
     let client = Client::new(store.clone());
 
     client
@@ -882,13 +837,8 @@ async fn activity_result_dropped_when_orchestration_cancelled() {
         ..Default::default()
     };
 
-    let rt = runtime::Runtime::start_with_options(
-        store.clone(),
-        activity_registry,
-        orchestration_registry,
-        options,
-    )
-    .await;
+    let rt =
+        runtime::Runtime::start_with_options(store.clone(), activity_registry, orchestration_registry, options).await;
     let client = Client::new(store.clone());
 
     // Start orchestration
@@ -1041,13 +991,8 @@ async fn activity_skipped_when_orchestration_terminal_at_fetch() {
     };
     let act_registry2 = ActivityRegistry::builder().register("A", activity2).build();
 
-    let rt2 = runtime::Runtime::start_with_options(
-        store.clone(),
-        act_registry2,
-        orch_registry,
-        options_with_workers,
-    )
-    .await;
+    let rt2 =
+        runtime::Runtime::start_with_options(store.clone(), act_registry2, orch_registry, options_with_workers).await;
 
     // Give workers time to fetch and skip the activity
     tokio::time::sleep(Duration::from_secs(2)).await;
@@ -1113,9 +1058,7 @@ async fn activity_aborted_after_cancellation_grace() {
         ..Default::default()
     };
 
-    let rt =
-        runtime::Runtime::start_with_options(store.clone(), act_registry, orch_registry, options)
-            .await;
+    let rt = runtime::Runtime::start_with_options(store.clone(), act_registry, orch_registry, options).await;
     let client = Client::new(store.clone());
 
     let start = std::time::Instant::now();
@@ -1161,12 +1104,7 @@ async fn cancel_nonexistent_instance_is_noop() {
         })
         .build();
     let activity_registry = ActivityRegistry::builder().build();
-    let rt = runtime::Runtime::start_with_store(
-        store.clone(),
-        activity_registry,
-        orchestration_registry,
-    )
-    .await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestration_registry).await;
     let client = Client::new(store.clone());
 
     // Cancel an instance that was never created - should succeed without error
@@ -1197,13 +1135,8 @@ async fn multiple_cancel_calls_are_idempotent() {
         dispatcher_min_poll_interval: Duration::from_millis(10),
         ..Default::default()
     };
-    let rt = runtime::Runtime::start_with_options(
-        store.clone(),
-        activity_registry,
-        orchestration_registry,
-        options,
-    )
-    .await;
+    let rt =
+        runtime::Runtime::start_with_options(store.clone(), activity_registry, orchestration_registry, options).await;
     let client = Client::new(store.clone());
 
     // Start orchestration
@@ -1306,13 +1239,8 @@ async fn cancel_before_orchestration_starts() {
         dispatcher_min_poll_interval: Duration::from_millis(10),
         ..Default::default()
     };
-    let rt = runtime::Runtime::start_with_options(
-        store.clone(),
-        activity_registry,
-        orchestration_registry,
-        options,
-    )
-    .await;
+    let rt =
+        runtime::Runtime::start_with_options(store.clone(), activity_registry, orchestration_registry, options).await;
 
     // Wait for orchestration to be cancelled
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
@@ -1384,7 +1312,7 @@ async fn cancel_before_orchestration_starts() {
 // ============================================================================
 
 /// Test that explicitly dropping an activity future triggers cancellation signal.
-/// 
+///
 /// NOTE: We use a timer between scheduling and dropping to ensure the activity
 /// has a chance to be fetched by the worker. If schedule+drop happens in the
 /// same turn, the activity is INSERT+DELETE in the same transaction (no-op).
@@ -1422,14 +1350,14 @@ async fn explicit_drop_activity_triggers_cancellation() {
     // Orchestration that schedules activity, waits a bit (dehydrates), then drops it
     let orchestration = |ctx: OrchestrationContext, _input: String| async move {
         let activity_future = ctx.schedule_activity("CancellableActivity", "input");
-        
+
         // Wait for activity to be fetched - this dehydrates the orchestration,
         // committing the ActivityScheduled event and allowing the worker to pick it up
         ctx.schedule_timer(Duration::from_millis(500)).await;
-        
+
         // Now explicitly drop - this should trigger cancellation via lock stealing
         drop(activity_future);
-        
+
         // Do something else to prove orchestration continues
         ctx.schedule_timer(Duration::from_millis(50)).await;
         Ok("completed_after_drop".to_string())
@@ -1452,13 +1380,8 @@ async fn explicit_drop_activity_triggers_cancellation() {
         ..Default::default()
     };
 
-    let rt = runtime::Runtime::start_with_options(
-        store.clone(),
-        activity_registry,
-        orchestration_registry,
-        options,
-    )
-    .await;
+    let rt =
+        runtime::Runtime::start_with_options(store.clone(), activity_registry, orchestration_registry, options).await;
     let client = Client::new(store.clone());
 
     client
@@ -1550,13 +1473,13 @@ async fn activity_out_of_scope_triggers_cancellation() {
         // Activity scheduled in a block - goes out of scope without being awaited
         {
             let _unused = ctx.schedule_activity("CancellableActivity", "input");
-            
+
             // Wait for activity to be fetched - this dehydrates and commits
             ctx.schedule_timer(Duration::from_millis(500)).await;
-            
+
             // _unused goes out of scope here without being awaited
         }
-        
+
         // Continue doing other work
         ctx.schedule_timer(Duration::from_millis(50)).await;
         Ok("completed_without_await".to_string())
@@ -1579,13 +1502,8 @@ async fn activity_out_of_scope_triggers_cancellation() {
         ..Default::default()
     };
 
-    let rt = runtime::Runtime::start_with_options(
-        store.clone(),
-        activity_registry,
-        orchestration_registry,
-        options,
-    )
-    .await;
+    let rt =
+        runtime::Runtime::start_with_options(store.clone(), activity_registry, orchestration_registry, options).await;
     let client = Client::new(store.clone());
 
     client
@@ -1657,7 +1575,7 @@ async fn select2_loser_sub_orchestration_cancelled() {
     let parent = |ctx: OrchestrationContext, _input: String| async move {
         let sub_orch = ctx.schedule_sub_orchestration("SlowChild", "input");
         let timer = ctx.schedule_timer(Duration::from_millis(100));
-        
+
         match ctx.select2(sub_orch, timer).await {
             Either2::First(result) => Ok(format!("sub_won:{}", result?)),
             Either2::Second(()) => Ok("timer_won".to_string()),
@@ -1677,13 +1595,8 @@ async fn select2_loser_sub_orchestration_cancelled() {
         ..Default::default()
     };
 
-    let rt = runtime::Runtime::start_with_options(
-        store.clone(),
-        activity_registry,
-        orchestration_registry,
-        options,
-    )
-    .await;
+    let rt =
+        runtime::Runtime::start_with_options(store.clone(), activity_registry, orchestration_registry, options).await;
     let client = Client::new(store.clone());
 
     client
@@ -1764,13 +1677,9 @@ async fn select2_loser_sub_orchestration_explicit_id_cancelled() {
     // Parent: race slow sub-orchestration (with explicit ID) against fast timer
     let parent = |ctx: OrchestrationContext, _input: String| async move {
         // Use explicit instance ID instead of auto-generated sub::N
-        let sub_orch = ctx.schedule_sub_orchestration_with_id(
-            "SlowChild",
-            "my-explicit-child-id",
-            "input",
-        );
+        let sub_orch = ctx.schedule_sub_orchestration_with_id("SlowChild", "my-explicit-child-id", "input");
         let timer = ctx.schedule_timer(Duration::from_millis(100));
-        
+
         match ctx.select2(sub_orch, timer).await {
             Either2::First(result) => Ok(format!("sub_won:{}", result?)),
             Either2::Second(()) => Ok("timer_won".to_string()),
@@ -1790,13 +1699,8 @@ async fn select2_loser_sub_orchestration_explicit_id_cancelled() {
         ..Default::default()
     };
 
-    let rt = runtime::Runtime::start_with_options(
-        store.clone(),
-        activity_registry,
-        orchestration_registry,
-        options,
-    )
-    .await;
+    let rt =
+        runtime::Runtime::start_with_options(store.clone(), activity_registry, orchestration_registry, options).await;
     let client = Client::new(store.clone());
 
     client
@@ -1882,7 +1786,7 @@ async fn explicit_drop_sub_orchestration_cancelled() {
         let sub_orch = ctx.schedule_sub_orchestration("WaitingChild", "input");
         // Explicit drop
         drop(sub_orch);
-        
+
         // Continue with other work
         ctx.schedule_timer(Duration::from_millis(50)).await;
         Ok("parent_completed_after_drop".to_string())
@@ -1901,13 +1805,8 @@ async fn explicit_drop_sub_orchestration_cancelled() {
         ..Default::default()
     };
 
-    let rt = runtime::Runtime::start_with_options(
-        store.clone(),
-        activity_registry,
-        orchestration_registry,
-        options,
-    )
-    .await;
+    let rt =
+        runtime::Runtime::start_with_options(store.clone(), activity_registry, orchestration_registry, options).await;
     let client = Client::new(store.clone());
 
     client
@@ -1989,7 +1888,7 @@ async fn sub_orchestration_out_of_scope_cancelled() {
             let _unused = ctx.schedule_sub_orchestration("WaitingChild", "input");
             // _unused goes out of scope here
         }
-        
+
         // Continue with other work
         ctx.schedule_timer(Duration::from_millis(50)).await;
         Ok("parent_completed_without_await".to_string())
@@ -2008,13 +1907,8 @@ async fn sub_orchestration_out_of_scope_cancelled() {
         ..Default::default()
     };
 
-    let rt = runtime::Runtime::start_with_options(
-        store.clone(),
-        activity_registry,
-        orchestration_registry,
-        options,
-    )
-    .await;
+    let rt =
+        runtime::Runtime::start_with_options(store.clone(), activity_registry, orchestration_registry, options).await;
     let client = Client::new(store.clone());
 
     client

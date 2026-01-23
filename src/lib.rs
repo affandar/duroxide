@@ -1483,12 +1483,11 @@ impl CtxInner {
     fn get_cancelled_activity_ids(&self) -> Vec<u64> {
         let mut ids = Vec::new();
         for &token in &self.cancelled_tokens {
-            if let Some(kind) = self.cancelled_token_kinds.get(&token) {
-                if matches!(kind, ScheduleKind::Activity { .. }) {
-                    if let Some(&schedule_id) = self.token_bindings.get(&token) {
-                        ids.push(schedule_id);
-                    }
-                }
+            if let Some(kind) = self.cancelled_token_kinds.get(&token)
+                && matches!(kind, ScheduleKind::Activity { .. })
+                && let Some(&schedule_id) = self.token_bindings.get(&token)
+            {
+                ids.push(schedule_id);
             }
         }
         ids
@@ -1498,9 +1497,7 @@ impl CtxInner {
     fn get_cancelled_sub_orchestration_ids(&self) -> Vec<String> {
         let mut ids = Vec::new();
         for &token in &self.cancelled_tokens {
-            if let Some(ScheduleKind::SubOrchestration { token: sub_token }) =
-                self.cancelled_token_kinds.get(&token)
-            {
+            if let Some(ScheduleKind::SubOrchestration { token: sub_token }) = self.cancelled_token_kinds.get(&token) {
                 // Look up the resolved instance ID from our mapping
                 if let Some(instance_id) = self.sub_orchestration_instances.get(sub_token) {
                     ids.push(instance_id.clone());
@@ -1971,7 +1968,10 @@ impl OrchestrationContext {
 
     /// Bind a sub-orchestration token to its resolved instance ID.
     pub(crate) fn bind_sub_orchestration_instance(&self, token: u64, instance_id: String) {
-        self.inner.lock().unwrap().bind_sub_orchestration_instance(token, instance_id);
+        self.inner
+            .lock()
+            .unwrap()
+            .bind_sub_orchestration_instance(token, instance_id);
     }
 
     // =========================================================================
@@ -2635,12 +2635,7 @@ impl OrchestrationContext {
         });
 
         // Wrap in DurableFuture for cancellation support
-        DurableFuture::new(
-            token,
-            ScheduleKind::Activity { name },
-            self.clone(),
-            inner_future,
-        )
+        DurableFuture::new(token, ScheduleKind::Activity { name }, self.clone(), inner_future)
     }
 
     /// Typed version of schedule_activity that serializes input and deserializes output.
@@ -2716,10 +2711,10 @@ impl OrchestrationContext {
             let inner = ctx.inner.lock().expect("Mutex should not be poisoned");
             // Only resolve once the token has been bound to a persisted schedule_id.
             // External events arriving before subscription binding are currently unsupported.
-            if let Some(bound_id) = inner.get_bound_schedule_id(token) {
-                if let Some(data) = inner.get_external_event(bound_id) {
-                    return Poll::Ready(data.clone());
-                }
+            if let Some(bound_id) = inner.get_bound_schedule_id(token)
+                && let Some(data) = inner.get_external_event(bound_id)
+            {
+                return Poll::Ready(data.clone());
             }
             Poll::Pending
         });
@@ -2863,6 +2858,10 @@ impl OrchestrationContext {
     }
 
     /// Typed version of schedule_sub_orchestration.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the sub-orchestration fails or if the output cannot be deserialized.
     pub fn schedule_sub_orchestration_typed<In: serde::Serialize, Out: serde::de::DeserializeOwned>(
         &self,
         name: impl Into<String>,

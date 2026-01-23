@@ -23,10 +23,10 @@ fn fast_runtime_options() -> RuntimeOptions {
 async fn wait_for_terminal(client: &Client, instance_id: &str, timeout: Duration) -> bool {
     let deadline = std::time::Instant::now() + timeout;
     loop {
-        if let Ok(info) = client.get_instance_info(instance_id).await {
-            if info.status == "Completed" || info.status == "Failed" {
-                return true;
-            }
+        if let Ok(info) = client.get_instance_info(instance_id).await
+            && (info.status == "Completed" || info.status == "Failed")
+        {
+            return true;
         }
         if std::time::Instant::now() > deadline {
             return false;
@@ -324,13 +324,8 @@ async fn test_prune_during_active_continue_as_new() {
         )
         .build();
 
-    let _rt = runtime::Runtime::start_with_options(
-        store.clone(),
-        activities,
-        orchestrations,
-        fast_runtime_options(),
-    )
-    .await;
+    let _rt =
+        runtime::Runtime::start_with_options(store.clone(), activities, orchestrations, fast_runtime_options()).await;
 
     // Start orchestration
     client
@@ -370,10 +365,10 @@ async fn test_prune_during_active_continue_as_new() {
     // Wait for completion
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
     loop {
-        if let Ok(info) = client.get_instance_info("prune-active").await {
-            if info.status == "Completed" {
-                break;
-            }
+        if let Ok(info) = client.get_instance_info("prune-active").await
+            && info.status == "Completed"
+        {
+            break;
         }
         if std::time::Instant::now() > deadline {
             panic!("Orchestration never completed");
@@ -442,13 +437,8 @@ async fn test_prune_bulk_includes_running_instances() {
         )
         .build();
 
-    let _rt = runtime::Runtime::start_with_options(
-        store.clone(),
-        activities,
-        orchestrations,
-        fast_runtime_options(),
-    )
-    .await;
+    let _rt =
+        runtime::Runtime::start_with_options(store.clone(), activities, orchestrations, fast_runtime_options()).await;
 
     // Start the orchestration
     client
@@ -534,10 +524,10 @@ async fn test_prune_bulk_includes_running_instances() {
     // Wait for completion
     let deadline = std::time::Instant::now() + Duration::from_secs(15);
     loop {
-        if let Ok(info) = client.get_instance_info("bulk-prune-running").await {
-            if info.status == "Completed" {
-                break;
-            }
+        if let Ok(info) = client.get_instance_info("bulk-prune-running").await
+            && info.status == "Completed"
+        {
+            break;
         }
         if std::time::Instant::now() > deadline {
             panic!("Orchestration never completed after event");

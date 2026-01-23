@@ -15,6 +15,8 @@
 #![allow(clippy::unwrap_used)]
 #![allow(clippy::clone_on_ref_ptr)]
 #![allow(clippy::expect_used)]
+// Allow duplicate module paths - scenarios share common module via #[path]
+#![allow(clippy::duplicate_mod)]
 
 #[path = "scenarios/toygres.rs"]
 mod toygres;

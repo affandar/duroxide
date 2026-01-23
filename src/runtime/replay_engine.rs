@@ -856,7 +856,7 @@ impl ReplayEngine {
         }
 
         // Collect cancellation information from context before returning Continue.
-        // 
+        //
         // SAFETY: Dehydration drops don't cause spurious cancellations because:
         // 1. We collect cancelled_tokens HERE, while the orchestration future is still alive
         // 2. TurnResult::Continue is returned, then `fut` goes out of scope
@@ -875,7 +875,8 @@ impl ReplayEngine {
 
         // Collect cancelled sub-orchestration instance IDs
         // The context now directly returns resolved instance IDs via the token→instance mapping
-        self.cancelled_sub_orchestration_ids.extend(ctx.get_cancelled_sub_orchestration_ids());
+        self.cancelled_sub_orchestration_ids
+            .extend(ctx.get_cancelled_sub_orchestration_ids());
 
         // Clear the context's cancelled tokens (avoid re-processing if called again)
         ctx.clear_cancelled_tokens();

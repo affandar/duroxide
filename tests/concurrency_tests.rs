@@ -96,8 +96,7 @@ async fn concurrent_orchestrations_different_activities_with(store: StdArc<dyn P
         .register("UpperOrchestration", o2)
         .build();
 
-    let rt =
-        runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestration_registry).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestration_registry).await;
     let client = Client::new(store.clone());
     let _ = client.start_orchestration("inst-multi-1", "AddOrchestration", "").await;
     let _ = client
@@ -273,8 +272,7 @@ async fn concurrent_orchestrations_same_activities_with(store: StdArc<dyn Provid
         .register("ProcOrchestration2", o2)
         .build();
 
-    let rt =
-        runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestration_registry).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestration_registry).await;
     let client = Client::new(store.clone());
     let _ = client
         .start_orchestration("inst-same-acts-1", "ProcOrchestration1", "")
@@ -404,8 +402,7 @@ async fn single_orchestration_with_join_test() {
         .register("ProcOrchestration1", o1)
         .build();
 
-    let rt =
-        runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestration_registry).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestration_registry).await;
     let client = Client::new(store.clone());
 
     // Start only ONE orchestration

@@ -125,11 +125,9 @@ impl Runtime {
         let cancelled_sub_orch_items: Vec<WorkItem> = turn
             .cancelled_sub_orchestration_ids()
             .iter()
-            .map(|child_instance_id| {
-                WorkItem::CancelInstance {
-                    instance: crate::build_child_instance_id(instance, child_instance_id),
-                    reason: "parent dropped sub-orchestration future".to_string(),
-                }
+            .map(|child_instance_id| WorkItem::CancelInstance {
+                instance: crate::build_child_instance_id(instance, child_instance_id),
+                reason: "parent dropped sub-orchestration future".to_string(),
             })
             .collect();
 

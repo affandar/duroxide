@@ -57,10 +57,11 @@ pub fn get_orch_processing_delay(instance: &str) -> Option<Duration> {
 
     // Check if instance matches any registered prefix
     let guard = ORCH_DELAY_INSTANCES.lock().unwrap();
-    if let Some(prefixes) = guard.as_ref() {
-        if !prefixes.is_empty() && !prefixes.iter().any(|p| instance.starts_with(p)) {
-            return None;
-        }
+    if let Some(prefixes) = guard.as_ref()
+        && !prefixes.is_empty()
+        && !prefixes.iter().any(|p| instance.starts_with(p))
+    {
+        return None;
     }
 
     Some(Duration::from_millis(ms))

@@ -502,12 +502,8 @@ async fn timer_recovery_after_crash_before_fire() {
         .register("TimerRecoveryTest", orch)
         .build();
 
-    let rt = duroxide::runtime::Runtime::start_with_store(
-        store1.clone(),
-        activity_registry,
-        orchestration_registry,
-    )
-    .await;
+    let rt =
+        duroxide::runtime::Runtime::start_with_store(store1.clone(), activity_registry, orchestration_registry).await;
 
     let client = duroxide::Client::new(store1.clone());
 
@@ -544,12 +540,8 @@ async fn timer_recovery_after_crash_before_fire() {
         .register("TimerRecoveryTest", orch2)
         .build();
 
-    let rt2 = duroxide::runtime::Runtime::start_with_store(
-        store1.clone(),
-        activity_registry2,
-        orchestration_registry2,
-    )
-    .await;
+    let rt2 =
+        duroxide::runtime::Runtime::start_with_store(store1.clone(), activity_registry2, orchestration_registry2).await;
 
     // Wait for orchestration to complete
     let status = client

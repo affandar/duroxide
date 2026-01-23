@@ -185,8 +185,7 @@ async fn continue_as_new_versioned_typed_explicit() {
         .register_versioned("Up", "2.0.0", v2)
         .build();
     let store = StdArc::new(SqliteProvider::new_in_memory().await.unwrap());
-    let rt =
-        runtime::Runtime::start_with_store(store.clone(), ActivityRegistry::builder().build(), reg).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), ActivityRegistry::builder().build(), reg).await;
     let client = Client::new(store.clone());
     client.start_orchestration("i5", "Up", "").await.unwrap();
     // Use wait helper instead of polling

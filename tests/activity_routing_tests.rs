@@ -49,8 +49,7 @@ async fn same_activity_name_and_input_routes_correctly_across_restart() {
         .build();
 
     // Runtime 1: run until the first activity completion + timer schedule appear, then shut down.
-    let rt1 =
-        runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestration_registry).await;
+    let rt1 = runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestration_registry).await;
 
     let client = Client::new(store.clone());
     client
@@ -105,8 +104,7 @@ async fn same_activity_name_and_input_routes_correctly_across_restart() {
         )
         .build();
 
-    let rt2 =
-        runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestration_registry).await;
+    let rt2 = runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestration_registry).await;
 
     match client
         .wait_for_orchestration("inst-same-activity", Duration::from_secs(10))

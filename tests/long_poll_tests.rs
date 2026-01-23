@@ -248,8 +248,7 @@ async fn test_dispatcher_uses_long_polling() {
         ..Default::default()
     };
 
-    let rt =
-        runtime::Runtime::start_with_options(provider.clone(), activities, orchestrations, options).await;
+    let rt = runtime::Runtime::start_with_options(provider.clone(), activities, orchestrations, options).await;
 
     let client = Client::new(provider.clone());
 

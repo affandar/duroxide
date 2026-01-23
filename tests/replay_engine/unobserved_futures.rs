@@ -62,8 +62,8 @@ fn select2_timer_wins_activity_cancelled() {
     // History must match handler's schedule order: activity first, then timer
     let history = vec![
         started_event(1),
-        activity_scheduled(2, "LongTask", "input"),  // Activity scheduled first
-        timer_created(3, 1000),                      // Timer scheduled second
+        activity_scheduled(2, "LongTask", "input"), // Activity scheduled first
+        timer_created(3, 1000),                     // Timer scheduled second
     ];
     let mut engine = create_engine(history);
 
@@ -122,8 +122,8 @@ impl OrchestrationHandler for Select2ActivityWinsHandler {
 fn select2_activity_wins_timer_not_cancelled() {
     let history = vec![
         started_event(1),
-        activity_scheduled(2, "FastTask", "input"),  // Activity scheduled first
-        timer_created(3, 5000),                      // Timer scheduled second
+        activity_scheduled(2, "FastTask", "input"), // Activity scheduled first
+        timer_created(3, 5000),                     // Timer scheduled second
     ];
     let mut engine = create_engine(history);
 
@@ -261,7 +261,6 @@ fn explicit_drop_activity_gets_cancelled() {
         DropActivityAfterScheduleHandler::new("DroppedTask", "input"),
     );
 
-
     assert_completed(&result, "completed_after_dropping_activity");
 
     // Activity was scheduled (check history delta)
@@ -333,10 +332,7 @@ fn explicit_drop_external_wait() {
     let history = vec![started_event(1)];
     let mut engine = create_engine(history);
 
-    let result = execute(
-        &mut engine,
-        ExplicitDropExternalWaitHandler::new("MyEvent"),
-    );
+    let result = execute(&mut engine, ExplicitDropExternalWaitHandler::new("MyEvent"));
 
     assert_completed(&result, "wait_dropped");
 
@@ -381,10 +377,7 @@ fn multiple_dropped_activities_all_cancelled() {
         "Both activities should be cancelled, got {cancelled:?}"
     );
     // Timer (event_id 4) should NOT be in cancelled list
-    assert!(
-        !cancelled.contains(&4),
-        "Timer should NOT be in cancelled list"
-    );
+    assert!(!cancelled.contains(&4), "Timer should NOT be in cancelled list");
 }
 
 // ============================================================================
@@ -507,7 +500,7 @@ fn replay_select_loser_same_cancellation() {
         started_event(1),
         activity_scheduled(2, "Task", "input"),
         timer_created(3, 1000),
-        timer_fired(4, 3, 1000),  // Timer completed in history
+        timer_fired(4, 3, 1000), // Timer completed in history
     ];
     let mut engine = create_engine(history);
 
@@ -520,10 +513,7 @@ fn replay_select_loser_same_cancellation() {
 
     // During replay, same cancellation should occur
     let cancelled = engine.cancelled_activity_ids();
-    assert!(
-        cancelled.contains(&2),
-        "Replay should still cancel the activity"
-    );
+    assert!(cancelled.contains(&2), "Replay should still cancel the activity");
 }
 
 /// Completed sub-orchestration should NOT be in cancelled list
@@ -586,7 +576,7 @@ impl OrchestrationHandler for DropActivityThenAwaitTimerHandler {
         // Schedule and immediately drop the activity
         let activity = ctx.schedule_activity("DroppedTask", "input");
         drop(activity);
-        
+
         // Now await a timer that completes - orchestration finishes this turn
         ctx.schedule_timer(Duration::from_millis(100)).await;
         Ok("done_after_drop".to_string())

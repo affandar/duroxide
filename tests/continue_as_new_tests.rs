@@ -28,12 +28,7 @@ async fn continue_as_new_multiexec() {
 
     let orchestration_registry = OrchestrationRegistry::builder().register("Counter", counter).build();
     let activity_registry = ActivityRegistry::builder().build();
-    let rt = runtime::Runtime::start_with_store(
-        store.clone(),
-        activity_registry,
-        orchestration_registry,
-    )
-    .await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestration_registry).await;
     let client = duroxide::Client::new(store.clone());
 
     // The initial start handle will resolve when the first execution continues-as-new.
@@ -152,12 +147,7 @@ async fn continue_as_new_event_routes_to_latest() {
 
     let orchestration_registry = OrchestrationRegistry::builder().register("EvtCAN", orch).build();
     let activity_registry = ActivityRegistry::builder().build();
-    let rt = runtime::Runtime::start_with_store(
-        store.clone(),
-        activity_registry,
-        orchestration_registry,
-    )
-    .await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestration_registry).await;
     let client = duroxide::Client::new(store.clone());
 
     // Raise event after the second execution subscribes
@@ -266,12 +256,7 @@ async fn continue_as_new_event_drop_then_process() {
         .register("EvtDropThenProcess", orch)
         .build();
     let activity_registry = ActivityRegistry::builder().build();
-    let rt = runtime::Runtime::start_with_store(
-        store.clone(),
-        activity_registry,
-        orchestration_registry,
-    )
-    .await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestration_registry).await;
     let client = duroxide::Client::new(store.clone());
 
     // Start orchestrator
@@ -365,12 +350,7 @@ async fn event_drop_then_retry_after_subscribe() {
 
     let orchestration_registry = OrchestrationRegistry::builder().register("EvtDropRetry", orch).build();
     let activity_registry = ActivityRegistry::builder().build();
-    let rt = runtime::Runtime::start_with_store(
-        store.clone(),
-        activity_registry,
-        orchestration_registry,
-    )
-    .await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestration_registry).await;
 
     // Send early event before subscription is recorded (instance will be active due to timer)
     let client_c1 = duroxide::Client::new(store.clone());
@@ -559,12 +539,7 @@ async fn continue_as_new_without_await() {
 
     let orchestration_registry = OrchestrationRegistry::builder().register("CANNoAwait", orch).build();
     let activity_registry = ActivityRegistry::builder().build();
-    let rt = runtime::Runtime::start_with_store(
-        store.clone(),
-        activity_registry,
-        orchestration_registry,
-    )
-    .await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestration_registry).await;
     let client = duroxide::Client::new(store.clone());
 
     client

@@ -285,8 +285,7 @@ async fn single_thread_single_concurrency() {
         ..Default::default()
     };
 
-    let rt =
-        runtime::Runtime::start_with_options(store.clone(), activity_registry, orchestrations, options).await;
+    let rt = runtime::Runtime::start_with_options(store.clone(), activity_registry, orchestrations, options).await;
 
     let client = Client::new(store.clone());
     client

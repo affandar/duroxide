@@ -45,8 +45,7 @@ async fn deterministic_replay_activity_only() {
 
     let store = SqliteProvider::new_in_memory().await.unwrap();
     let store = Arc::new(store) as Arc<dyn Provider>;
-    let rt =
-        runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestration_registry).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestration_registry).await;
     let client = duroxide::Client::new(store.clone());
     client
         .start_orchestration("inst-unit-1", "TestOrchestration", "")
@@ -87,8 +86,7 @@ async fn runtime_duplicate_orchestration_deduped_single_execution() {
 
     let store = SqliteProvider::new_in_memory().await.unwrap();
     let store = Arc::new(store) as Arc<dyn Provider>;
-    let rt =
-        runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestration_registry).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestration_registry).await;
     let inst = "dup-orch";
 
     let client = duroxide::Client::new(store.clone());
@@ -190,8 +188,7 @@ async fn orchestration_status_apis() {
 
     let store = SqliteProvider::new_in_memory().await.unwrap();
     let store = Arc::new(store) as Arc<dyn Provider>;
-    let rt =
-        runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestration_registry).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestration_registry).await;
     let client = duroxide::Client::new(store.clone());
 
     // NotFound for unknown instance
@@ -384,8 +381,7 @@ async fn orchestration_context_metadata_accessors() {
 
     let store = SqliteProvider::new_in_memory().await.unwrap();
     let store = Arc::new(store) as Arc<dyn Provider>;
-    let rt =
-        runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestration_registry).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestration_registry).await;
 
     let client = duroxide::Client::new(store.clone());
     client

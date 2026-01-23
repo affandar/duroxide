@@ -61,12 +61,8 @@ async fn test_management_features_with_workflow() {
         )
         .build();
 
-    let _rt = runtime::Runtime::start_with_store(
-        store.clone(),
-        ActivityRegistry::builder().build(),
-        orchestrations,
-    )
-    .await;
+    let _rt =
+        runtime::Runtime::start_with_store(store.clone(), ActivityRegistry::builder().build(), orchestrations).await;
 
     // Start an orchestration
     client
@@ -136,13 +132,8 @@ async fn test_instance_discovery() {
         )
         .build();
 
-    let _rt = runtime::Runtime::start_with_options(
-        store.clone(),
-        activities,
-        orchestrations,
-        fast_runtime_options(),
-    )
-    .await;
+    let _rt =
+        runtime::Runtime::start_with_options(store.clone(), activities, orchestrations, fast_runtime_options()).await;
 
     // Start multiple orchestrations
     client
@@ -211,13 +202,8 @@ async fn test_instance_info() {
         )
         .build();
 
-    let _rt = runtime::Runtime::start_with_options(
-        store.clone(),
-        activities,
-        orchestrations,
-        fast_runtime_options(),
-    )
-    .await;
+    let _rt =
+        runtime::Runtime::start_with_options(store.clone(), activities, orchestrations, fast_runtime_options()).await;
 
     // Start orchestration
     client
@@ -277,13 +263,8 @@ async fn test_execution_info() {
         )
         .build();
 
-    let _rt = runtime::Runtime::start_with_options(
-        store.clone(),
-        activities,
-        orchestrations,
-        fast_runtime_options(),
-    )
-    .await;
+    let _rt =
+        runtime::Runtime::start_with_options(store.clone(), activities, orchestrations, fast_runtime_options()).await;
 
     // Start orchestration
     client
@@ -357,12 +338,8 @@ async fn test_multi_execution_support() {
         )
         .build();
 
-    let _rt = runtime::Runtime::start_with_store(
-        store.clone(),
-        ActivityRegistry::builder().build(),
-        orchestrations,
-    )
-    .await;
+    let _rt =
+        runtime::Runtime::start_with_store(store.clone(), ActivityRegistry::builder().build(), orchestrations).await;
 
     // Start orchestration that will ContinueAsNew
     client
@@ -449,13 +426,8 @@ async fn test_system_metrics() {
         )
         .build();
 
-    let _rt = runtime::Runtime::start_with_options(
-        store.clone(),
-        activities,
-        orchestrations,
-        fast_runtime_options(),
-    )
-    .await;
+    let _rt =
+        runtime::Runtime::start_with_options(store.clone(), activities, orchestrations, fast_runtime_options()).await;
 
     // Start orchestrations with different outcomes
     client
@@ -527,13 +499,8 @@ async fn test_queue_depths() {
         )
         .build();
 
-    let _rt = runtime::Runtime::start_with_options(
-        store.clone(),
-        activities,
-        orchestrations,
-        fast_runtime_options(),
-    )
-    .await;
+    let _rt =
+        runtime::Runtime::start_with_options(store.clone(), activities, orchestrations, fast_runtime_options()).await;
 
     // Start multiple orchestrations quickly
     for i in 1..=5 {
@@ -630,13 +597,8 @@ async fn test_complex_workflow_management() {
         )
         .build();
 
-    let _rt = runtime::Runtime::start_with_options(
-        store.clone(),
-        activities,
-        orchestrations,
-        fast_runtime_options(),
-    )
-    .await;
+    let _rt =
+        runtime::Runtime::start_with_options(store.clone(), activities, orchestrations, fast_runtime_options()).await;
 
     // Start multiple order processing workflows
     let orders = vec!["order-1", "order-2", "order-3", "order-4", "order-5"];

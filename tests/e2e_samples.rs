@@ -49,8 +49,7 @@ async fn sample_hello_world_fs() {
         .register("HelloWorld", orchestration)
         .build();
 
-    let rt =
-        runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestration_registry).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestration_registry).await;
     let client = Client::new(store.clone());
     client
         .start_orchestration("inst-sample-hello-1", "HelloWorld", "World")
@@ -108,8 +107,7 @@ async fn sample_basic_control_flow_fs() {
         .register("ControlFlow", orchestration)
         .build();
 
-    let rt =
-        runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestration_registry).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestration_registry).await;
     let client = Client::new(store.clone());
     client
         .start_orchestration("inst-sample-cflow-1", "ControlFlow", "")
@@ -160,8 +158,7 @@ async fn sample_loop_fs() {
         .register("LoopOrchestration", orchestration)
         .build();
 
-    let rt =
-        runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestration_registry).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestration_registry).await;
     let client = Client::new(store.clone());
     client
         .start_orchestration("inst-sample-loop-1", "LoopOrchestration", "")
@@ -227,8 +224,7 @@ async fn sample_error_handling_fs() {
         .register("ErrorHandling", orchestration)
         .build();
 
-    let rt =
-        runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestration_registry).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestration_registry).await;
     let client = Client::new(store.clone());
     client
         .start_orchestration("inst-sample-err-1", "ErrorHandling", "")
@@ -288,8 +284,7 @@ async fn sample_timeout_with_timer_race_fs() {
         .register("TimeoutSample", orchestration)
         .build();
 
-    let rt =
-        runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestration_registry).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestration_registry).await;
     let client = Client::new(store.clone());
     client
         .start_orchestration("inst-timeout-sample", "TimeoutSample", "")
@@ -342,8 +337,7 @@ async fn sample_select2_activity_vs_external_fs() {
         .register("Select2ActVsEvt", orchestration)
         .build();
 
-    let rt =
-        runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestration_registry).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestration_registry).await;
 
     // Start orchestration, then raise external after subscription is recorded
     let store_for_wait = store.clone();
@@ -416,8 +410,7 @@ async fn dtf_legacy_gabbar_greetings_fs() {
         .register("Greetings", orchestration)
         .build();
 
-    let rt =
-        runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestration_registry).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestration_registry).await;
     let client = Client::new(store.clone());
     client
         .start_orchestration("inst-dtf-greetings", "Greetings", "")
@@ -466,8 +459,7 @@ async fn sample_system_activities_fs() {
         .register("SystemActivities", orchestration)
         .build();
 
-    let rt =
-        runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestration_registry).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestration_registry).await;
     let client = Client::new(store.clone());
     client
         .start_orchestration("inst-system-acts", "SystemActivities", "")
@@ -515,8 +507,7 @@ async fn sample_status_polling_fs() {
         .register("StatusSample", orchestration)
         .build();
 
-    let rt =
-        runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestration_registry).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestration_registry).await;
     let client = Client::new(store.clone());
     client
         .start_orchestration("inst-status-sample", "StatusSample", "")
@@ -568,8 +559,7 @@ async fn sample_sub_orchestration_basic_fs() {
         .register("Parent", parent)
         .build();
 
-    let rt =
-        runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestration_registry).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestration_registry).await;
     let client = Client::new(store.clone());
     client
         .start_orchestration("inst-sub-basic", "Parent", "hi")
@@ -632,8 +622,7 @@ async fn sample_sub_orchestration_fanout_fs() {
         .register("ParentFan", parent)
         .build();
 
-    let rt =
-        runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestration_registry).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestration_registry).await;
     let client = Client::new(store.clone());
     client
         .start_orchestration("inst-sub-fan", "ParentFan", "")
@@ -687,8 +676,7 @@ async fn sample_sub_orchestration_chained_fs() {
         .register("Root", root)
         .build();
 
-    let rt =
-        runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestration_registry).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestration_registry).await;
     let client = Client::new(store.clone());
     client.start_orchestration("inst-sub-chain", "Root", "a").await.unwrap();
 
@@ -736,8 +724,7 @@ async fn sample_detached_orchestration_scheduling_fs() {
         .register("Coordinator", coordinator)
         .build();
 
-    let rt =
-        runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestration_registry).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestration_registry).await;
     let client = Client::new(store.clone());
     client
         .start_orchestration("CoordinatorRoot", "Coordinator", "")
@@ -798,8 +785,7 @@ async fn sample_continue_as_new_fs() {
     };
     let orchestration_registry = OrchestrationRegistry::builder().register("CanSample", orch).build();
 
-    let rt =
-        runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestration_registry).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestration_registry).await;
     let client = Client::new(store.clone());
     client
         .start_orchestration("inst-sample-can", "CanSample", "0")
@@ -859,8 +845,7 @@ async fn sample_typed_activity_and_orchestration_fs() {
         .register_typed::<AddReq, AddRes, _, _>("Adder", orchestration)
         .build();
 
-    let rt =
-        runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestration_registry).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestration_registry).await;
     let client = Client::new(store.clone());
     client
         .start_orchestration_typed::<AddReq>("inst-typed-add", "Adder", AddReq { a: 2, b: 3 })
@@ -892,8 +877,7 @@ async fn sample_typed_event_fs() {
         .register_typed::<(), String, _, _>("WaitAck", orch)
         .build();
 
-    let rt =
-        runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestration_registry).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestration_registry).await;
     let store_for_wait = store.clone();
     tokio::spawn(async move {
         let sfw = store_for_wait.clone();
@@ -955,8 +939,7 @@ async fn sample_mixed_string_and_typed_typed_orch_fs() {
         .register_typed::<AddReq, String, _, _>("MixedTypedOrch", orch)
         .build();
 
-    let rt =
-        runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestration_registry).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestration_registry).await;
     let client = Client::new(store.clone());
     client
         .start_orchestration_typed::<AddReq>("inst-mixed-typed", "MixedTypedOrch", AddReq { a: 1, b: 2 })
@@ -1262,13 +1245,8 @@ async fn sample_cancellation_parent_cascades_to_children_fs() {
         dispatcher_min_poll_interval: Duration::from_millis(10),
         ..Default::default()
     };
-    let rt = runtime::Runtime::start_with_options(
-        store.clone(),
-        activity_registry,
-        orchestration_registry,
-        options,
-    )
-    .await;
+    let rt =
+        runtime::Runtime::start_with_options(store.clone(), activity_registry, orchestration_registry, options).await;
 
     // Start the parent orchestration
     let client = Client::new(store.clone());
@@ -1378,8 +1356,7 @@ async fn sample_basic_error_handling_fs() {
         .register("BasicErrorHandling", orchestration)
         .build();
 
-    let rt =
-        runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestration_registry).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestration_registry).await;
     let client = Client::new(store.clone());
 
     // Test successful case
@@ -1468,8 +1445,7 @@ async fn sample_nested_function_error_handling_fs() {
         .register("NestedErrorHandling", orchestration)
         .build();
 
-    let rt =
-        runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestration_registry).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestration_registry).await;
     let client = Client::new(store.clone());
 
     // Test successful case
@@ -1558,8 +1534,7 @@ async fn sample_error_recovery_fs() {
         .register("ErrorRecovery", orchestration)
         .build();
 
-    let rt =
-        runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestration_registry).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestration_registry).await;
     let client = Client::new(store.clone());
 
     // Test successful case
@@ -1696,8 +1671,7 @@ async fn sample_self_pruning_eternal_orchestration() {
         .register("SelfPruningOrch", orchestration)
         .build();
 
-    let rt =
-        runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestration_registry).await;
+    let rt = runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestration_registry).await;
 
     let client = Client::new(store.clone());
 

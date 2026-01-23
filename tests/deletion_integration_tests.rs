@@ -26,10 +26,10 @@ fn fast_runtime_options() -> RuntimeOptions {
 async fn wait_for_terminal(client: &Client, instance_id: &str, timeout: Duration) -> bool {
     let deadline = std::time::Instant::now() + timeout;
     loop {
-        if let Ok(info) = client.get_instance_info(instance_id).await {
-            if info.status == "Completed" || info.status == "Failed" {
-                return true;
-            }
+        if let Ok(info) = client.get_instance_info(instance_id).await
+            && (info.status == "Completed" || info.status == "Failed")
+        {
+            return true;
         }
         if std::time::Instant::now() > deadline {
             return false;
@@ -72,13 +72,8 @@ async fn test_delete_terminal_orchestrations() {
         })
         .build();
 
-    let _rt = runtime::Runtime::start_with_options(
-        store.clone(),
-        activities,
-        orchestrations,
-        fast_runtime_options(),
-    )
-    .await;
+    let _rt =
+        runtime::Runtime::start_with_options(store.clone(), activities, orchestrations, fast_runtime_options()).await;
 
     // Start and complete a successful orchestration
     client
@@ -168,13 +163,8 @@ async fn test_force_delete_in_flight_work() {
         })
         .build();
 
-    let _rt = runtime::Runtime::start_with_options(
-        store.clone(),
-        activities,
-        orchestrations,
-        fast_runtime_options(),
-    )
-    .await;
+    let _rt =
+        runtime::Runtime::start_with_options(store.clone(), activities, orchestrations, fast_runtime_options()).await;
 
     // Test 1: Force delete while waiting on activity
     client
@@ -492,13 +482,8 @@ async fn test_dispatcher_resilience_after_delete() {
         })
         .build();
 
-    let _rt = runtime::Runtime::start_with_options(
-        store.clone(),
-        activities,
-        orchestrations,
-        fast_runtime_options(),
-    )
-    .await;
+    let _rt =
+        runtime::Runtime::start_with_options(store.clone(), activities, orchestrations, fast_runtime_options()).await;
 
     // Start an orchestration that waits
     client
@@ -803,13 +788,8 @@ async fn test_delete_orphan_race_condition_detection() {
     let (store, _temp_dir) = common::create_sqlite_store_disk().await;
     let client = Client::new(store.clone());
 
-    let _rt = runtime::Runtime::start_with_options(
-        store.clone(),
-        activities,
-        orchestrations,
-        fast_runtime_options(),
-    )
-    .await;
+    let _rt =
+        runtime::Runtime::start_with_options(store.clone(), activities, orchestrations, fast_runtime_options()).await;
 
     // Start parent which spawns child
     client

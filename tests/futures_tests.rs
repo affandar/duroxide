@@ -565,13 +565,8 @@ async fn simplified_futures_unawaited_completion_does_not_block() {
         ..Default::default()
     };
 
-    let rt = runtime::Runtime::start_with_options(
-        store.clone(),
-        activity_registry,
-        orchestration_registry,
-        options,
-    )
-    .await;
+    let rt =
+        runtime::Runtime::start_with_options(store.clone(), activity_registry, orchestration_registry, options).await;
 
     let client = duroxide::Client::new(store.clone());
     client

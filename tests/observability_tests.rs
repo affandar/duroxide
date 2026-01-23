@@ -289,9 +289,7 @@ async fn metrics_capture_activity_and_orchestration_outcomes() {
         },
         ..Default::default()
     };
-    let rt =
-        runtime::Runtime::start_with_options(provider_trait.clone(), activities, orchestrations, options)
-            .await;
+    let rt = runtime::Runtime::start_with_options(provider_trait.clone(), activities, orchestrations, options).await;
 
     let client = Client::new(provider_trait.clone());
 
@@ -1110,9 +1108,7 @@ async fn test_provider_error_metrics() {
         ..Default::default()
     };
 
-    let rt =
-        runtime::Runtime::start_with_options(provider_trait.clone(), activities, orchestrations, options)
-            .await;
+    let rt = runtime::Runtime::start_with_options(provider_trait.clone(), activities, orchestrations, options).await;
     let client = Client::new(provider_trait.clone());
 
     // Trigger provider error on fetch
@@ -1295,8 +1291,7 @@ async fn test_all_gauges_initialized_together() {
         })
         .build();
 
-    let rt2 =
-        runtime::Runtime::start_with_options(store.clone(), activities2, orchestrations2, options2).await;
+    let rt2 = runtime::Runtime::start_with_options(store.clone(), activities2, orchestrations2, options2).await;
 
     // Give initialization time to complete
     tokio::time::sleep(Duration::from_millis(200)).await;
@@ -1350,8 +1345,7 @@ async fn test_poison_message_metrics() {
     // Inject poison for orchestration item (exceeds max_attempts of 10)
     provider.inject_orchestration_poison(11);
 
-    let rt =
-        runtime::Runtime::start_with_options(provider.clone(), activities, orchestrations, options).await;
+    let rt = runtime::Runtime::start_with_options(provider.clone(), activities, orchestrations, options).await;
     let client = Client::new(provider.clone());
 
     // Start orchestration that will be detected as poison

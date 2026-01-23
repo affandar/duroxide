@@ -81,13 +81,8 @@ async fn async_block_join_with_control_flow() {
         ..Default::default()
     };
 
-    let rt = runtime::Runtime::start_with_options(
-        store.clone(),
-        activity_registry,
-        orchestration_registry,
-        options,
-    )
-    .await;
+    let rt =
+        runtime::Runtime::start_with_options(store.clone(), activity_registry, orchestration_registry, options).await;
 
     let client = Client::new(store.clone());
     client
@@ -176,13 +171,8 @@ async fn async_block_join_many() {
         ..Default::default()
     };
 
-    let rt = runtime::Runtime::start_with_options(
-        store.clone(),
-        activity_registry,
-        orchestration_registry,
-        options,
-    )
-    .await;
+    let rt =
+        runtime::Runtime::start_with_options(store.clone(), activity_registry, orchestration_registry, options).await;
 
     let client = Client::new(store.clone());
     client.start_orchestration("join-many-1", "JoinMany", "").await.unwrap();
@@ -257,13 +247,8 @@ async fn async_block_sequential() {
         ..Default::default()
     };
 
-    let rt = runtime::Runtime::start_with_options(
-        store.clone(),
-        activity_registry,
-        orchestration_registry,
-        options,
-    )
-    .await;
+    let rt =
+        runtime::Runtime::start_with_options(store.clone(), activity_registry, orchestration_registry, options).await;
 
     let client = Client::new(store.clone());
     client
@@ -340,13 +325,8 @@ async fn async_block_select_racing() {
         ..Default::default()
     };
 
-    let rt = runtime::Runtime::start_with_options(
-        store.clone(),
-        activity_registry,
-        orchestration_registry,
-        options,
-    )
-    .await;
+    let rt =
+        runtime::Runtime::start_with_options(store.clone(), activity_registry, orchestration_registry, options).await;
 
     let client = Client::new(store.clone());
     client
@@ -418,13 +398,8 @@ async fn async_block_vs_durable_future() {
         ..Default::default()
     };
 
-    let rt = runtime::Runtime::start_with_options(
-        store.clone(),
-        activity_registry,
-        orchestration_registry,
-        options,
-    )
-    .await;
+    let rt =
+        runtime::Runtime::start_with_options(store.clone(), activity_registry, orchestration_registry, options).await;
 
     let client = Client::new(store.clone());
     client
@@ -502,13 +477,8 @@ async fn async_block_select3_with_timers() {
         ..Default::default()
     };
 
-    let rt = runtime::Runtime::start_with_options(
-        store.clone(),
-        activity_registry,
-        orchestration_registry,
-        options,
-    )
-    .await;
+    let rt =
+        runtime::Runtime::start_with_options(store.clone(), activity_registry, orchestration_registry, options).await;
 
     let client = Client::new(store.clone());
     client
@@ -583,13 +553,8 @@ async fn async_block_nested_join_in_select() {
         ..Default::default()
     };
 
-    let rt = runtime::Runtime::start_with_options(
-        store.clone(),
-        activity_registry,
-        orchestration_registry,
-        options,
-    )
-    .await;
+    let rt =
+        runtime::Runtime::start_with_options(store.clone(), activity_registry, orchestration_registry, options).await;
 
     let client = Client::new(store.clone());
     client
@@ -687,13 +652,8 @@ async fn async_block_suborchestration_wins_race() {
         ..Default::default()
     };
 
-    let rt = runtime::Runtime::start_with_options(
-        store.clone(),
-        activity_registry,
-        orchestration_registry,
-        options,
-    )
-    .await;
+    let rt =
+        runtime::Runtime::start_with_options(store.clone(), activity_registry, orchestration_registry, options).await;
 
     let client = Client::new(store.clone());
     client
@@ -792,13 +752,8 @@ async fn async_block_suborchestration_loses_race() {
         ..Default::default()
     };
 
-    let rt = runtime::Runtime::start_with_options(
-        store.clone(),
-        activity_registry,
-        orchestration_registry,
-        options,
-    )
-    .await;
+    let rt =
+        runtime::Runtime::start_with_options(store.clone(), activity_registry, orchestration_registry, options).await;
 
     let client = Client::new(store.clone());
     client
@@ -933,13 +888,8 @@ async fn async_block_multiple_suborchestrations_joined() {
         ..Default::default()
     };
 
-    let rt = runtime::Runtime::start_with_options(
-        store.clone(),
-        activity_registry,
-        orchestration_registry,
-        options,
-    )
-    .await;
+    let rt =
+        runtime::Runtime::start_with_options(store.clone(), activity_registry, orchestration_registry, options).await;
 
     let client = Client::new(store.clone());
     client
@@ -1034,13 +984,8 @@ async fn async_block_suborchestration_racing_timeout() {
         ..Default::default()
     };
 
-    let rt = runtime::Runtime::start_with_options(
-        store.clone(),
-        activity_registry,
-        orchestration_registry,
-        options,
-    )
-    .await;
+    let rt =
+        runtime::Runtime::start_with_options(store.clone(), activity_registry, orchestration_registry, options).await;
 
     let client = Client::new(store.clone());
     client
@@ -1167,13 +1112,8 @@ async fn async_block_nested_suborchestration_chain() {
         ..Default::default()
     };
 
-    let rt = runtime::Runtime::start_with_options(
-        store.clone(),
-        activity_registry,
-        orchestration_registry,
-        options,
-    )
-    .await;
+    let rt =
+        runtime::Runtime::start_with_options(store.clone(), activity_registry, orchestration_registry, options).await;
 
     let client = Client::new(store.clone());
     client

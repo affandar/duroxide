@@ -14,10 +14,10 @@ mod common;
 async fn wait_for_terminal(client: &Client, instance_id: &str, timeout: Duration) -> bool {
     let deadline = std::time::Instant::now() + timeout;
     loop {
-        if let Ok(info) = client.get_instance_info(instance_id).await {
-            if info.status == "Completed" || info.status == "Failed" {
-                return true;
-            }
+        if let Ok(info) = client.get_instance_info(instance_id).await
+            && (info.status == "Completed" || info.status == "Failed")
+        {
+            return true;
         }
         if std::time::Instant::now() > deadline {
             return false;

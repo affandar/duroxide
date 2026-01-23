@@ -337,8 +337,7 @@ async fn recovery_multiple_orchestrations_sqlite_provider() {
     let store2 = StdArc::new(SqliteProvider::new(&url1, None).await.unwrap()) as StdArc<dyn Provider>;
     let store2_for_wait = store2.clone();
     let store2_for_client = store2.clone();
-    let rt2 =
-        runtime::Runtime::start_with_store(store2.clone(), activity_registry, orchestration_registry).await;
+    let rt2 = runtime::Runtime::start_with_store(store2.clone(), activity_registry, orchestration_registry).await;
 
     // Raise external event for the WaitEvent orchestration after restart
     tokio::spawn(async move {

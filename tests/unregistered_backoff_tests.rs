@@ -43,13 +43,8 @@ async fn unknown_orchestration_fails_with_poison() {
         ..Default::default()
     };
 
-    let rt = runtime::Runtime::start_with_options(
-        store.clone(),
-        activity_registry,
-        orchestration_registry,
-        options,
-    )
-    .await;
+    let rt =
+        runtime::Runtime::start_with_options(store.clone(), activity_registry, orchestration_registry, options).await;
 
     let client = duroxide::Client::new(store.clone());
 
@@ -143,9 +138,7 @@ async fn unknown_activity_fails_with_poison() {
         ..Default::default()
     };
 
-    let rt =
-        runtime::Runtime::start_with_options(store.clone(), activity_registry, orchestrations, options)
-            .await;
+    let rt = runtime::Runtime::start_with_options(store.clone(), activity_registry, orchestrations, options).await;
 
     let client = duroxide::Client::new(store.clone());
     client

@@ -1,188 +1,304 @@
-# Durable Futures Internals: Token-Based Scheduling, Replay, and Completion Delivery
+# Durable Futures Internals: How Duroxide Makes Your Code Survive Crashes
 
-This document explains how Duroxide creates the illusion of *durable code*—code that survives process crashes, restarts, and machine failures—by replaying deterministic orchestration logic against a persisted event history.
+This document explains how Duroxide creates the illusion of **durable code**—code that continues executing through process crashes, restarts, and even machine failures. It's written for Rust developers who are new to the concept of durable execution.
 
-- `ctx.schedule_*()` methods return ordinary Rust `impl Future` values that can be `.await`ed directly.
-- Internally, each scheduled operation is represented by a **token** that is later **bound** to a persisted **schedule event ID**.
-- The replay engine walks history in order, binds tokens, delivers completions, and polls the orchestration future when it might make progress.
-
-This file is intentionally “guts-level”. If you want the user-facing programming model, start with `docs/ORCHESTRATION-GUIDE.md`.
+If you want the user-facing programming model, start with [ORCHESTRATION-GUIDE.md](ORCHESTRATION-GUIDE.md).
 
 ## Table of Contents
 
-1. [Core Concept: History-Based Execution](#core-concept-history-based-execution)
-2. [High-Level Architecture](#high-level-architecture)
-3. [What "Durable Futures" Mean](#what-durable-futures-mean)
-4. [Events, Actions, and IDs](#events-actions-and-ids)
-5. [Token Emission, Binding, and Result Storage](#token-emission-binding-and-result-storage)
-6. [Replay Engine Walkthrough (Turn Execution)](#replay-engine-walkthrough-turn-execution)
-7. [Operation Walkthroughs](#operation-walkthroughs)
-8. [Aggregate Futures: select/join](#aggregate-futures-selectjoin)
-9. [Rust Async Differences (Why This Works)](#rust-async-differences-why-this-works)
-10. [Nondeterminism Detection (Common Failure Modes)](#nondeterminism-detection-common-failure-modes)
+1. [What is Durable Execution?](#what-is-durable-execution)
+2. [Orchestrations: Your Durable Functions](#orchestrations-your-durable-functions)
+3. [Activities: Where the Real Work Happens](#activities-where-the-real-work-happens)
+4. [How It Works: Making Futures Durable](#how-it-works-making-futures-durable)
+5. [The Replay Engine: Heart of Durability](#the-replay-engine-heart-of-durability)
+6. [The Replay Algorithm in Detail](#the-replay-algorithm-in-detail)
+7. [Special Operations](#special-operations)
+8. [Termination and Cancellation](#termination-and-cancellation)
+9. [Nondeterminism Detection](#nondeterminism-detection)
 
 ---
 
-## Core Concept: History-Based Execution
+## What is Durable Execution?
 
-### What are we actually doing?
+Imagine you're running a multi-step workflow that takes hours or days to complete:
 
-The goal of Duroxide is to make a piece of code **durable**: it continues running through process resets, machine restarts, and crashes. That code is an *orchestration function*.
+1. Charge a customer's credit card
+2. Wait for warehouse confirmation (might take hours)
+3. Send a shipping notification
+4. Wait 30 days
+5. Send a follow-up survey
 
-We are not snapshotting memory. Instead, we provide the *illusion* of durability using:
+In traditional code, if your process crashes at step 3, you'd lose all your progress. You'd need to build complex checkpoint systems, handle partial failures, and manually resume from where you left off.
 
-1. **Futures**: familiar Rust async, but with durable semantics
-2. **Replay**: re-running the orchestration from the beginning each turn
-3. **History**: a persisted log of events, allowing replay to “fast-forward”
+**Durable execution** solves this problem: your code *continues executing* through process boundaries—crashes, restarts, deployments, even moving between machines. From the programmer's perspective, it's as if the code never stopped running.
 
-This model is used widely (AWS SWF, Azure Durable Functions, Temporal/Cadence, Durable Task Framework, etc.).
+### Why Async/Futures?
 
-### The key insight
+Rust's async/await model turns out to be a natural fit for durable execution:
 
-Orchestrations must be **deterministic**. Given the same event history, the orchestration must:
+- You already think of futures as "work that will complete eventually"
+- The syntax for waiting on long-running operations (`.await`) already exists
+- Futures naturally compose with control flow, error handling, and concurrency primitives
 
-- emit the same scheduling actions in the same order
-- observe the same completion data
-- make the same decisions
-
-Determinism is what makes replay equivalent to resuming.
-
-### The execution model
-
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                     Orchestration Lifecycle                          │
-│                                                                      │
-│   ┌──────────┐     ┌──────────┐     ┌──────────┐     ┌──────────┐  │
-│   │  Turn 1  │────▶│  Turn 2  │────▶│  Turn 3  │────▶│  Turn N  │  │
-│   │ (fresh)  │     │ (replay) │     │ (replay) │     │(complete)│  │
-│   └──────────┘     └──────────┘     └──────────┘     └──────────┘  │
-│        │                │                │                │         │
-│        ▼                ▼                ▼                ▼         │
-│   [history]        [history]        [history]        [history]      │
-│   grows            grows            grows            final          │
-└─────────────────────────────────────────────────────────────────────┘
-```
-
-Each turn:
-
-1. Load persisted history for the instance.
-2. Create a fresh orchestration future by calling the orchestration function.
-3. Walk history in order; bind schedule actions; deliver completions.
-4. Poll the orchestration when completions may have unblocked it.
-5. Persist any newly emitted schedule actions as new events; dispatch them.
-6. Drop the future. Only history persists.
-
----
-
-## High-Level Architecture
-
-The user-level API is intentionally plain:
-
-- `schedule_activity(...) -> impl Future<Output = Result<String, String>>`
-- `schedule_timer(...) -> impl Future<Output = ()>`
-- `schedule_wait(...) -> impl Future<Output = String>`
-- `schedule_sub_orchestration(...) -> impl Future<Output = Result<String, String>>`
-
-Those futures are “durable” only because the runtime replays the orchestration and feeds them completion data from history.
-
-Internally, the runtime uses a token-and-binding mechanism:
-
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                    OrchestrationContext                              │
-│  ┌───────────────────────────────────────────────────────────────┐  │
-│  │ CtxInner (Arc<Mutex<...>>)                                     │  │
-│  │                                                               │  │
-│  │ next_token: u64                                               │  │
-│  │ emitted_actions: Vec<(token, Action)>                         │  │
-│  │ token_bindings: HashMap<token, schedule_id>                   │  │
-│  │ completion_results: HashMap<token, CompletionResult>          │  │
-│  │                                                               │  │
-│  │ external_subscriptions: HashMap<schedule_id, (name, idx)>      │  │
-│  │ external_arrivals: HashMap<name, Vec<data>>                   │  │
-│  └───────────────────────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────────────────┘
-                              ▲
-                              │ bind_token(...) / deliver_result(...)
-                              │ (replay engine)
-                              │
-┌─────────────────────────────────────────────────────────────────────┐
-│                        ReplayEngine                                  │
-│  Walks history in order, matches schedule events to emitted actions, │
-│  delivers completion data, and polls orchestration when needed.      │
-└─────────────────────────────────────────────────────────────────────┘
-```
-
----
-
-## What "Durable Futures" Mean
-
-A **durable future** is a Rust `Future` whose result survives process crashes. When you write:
+Duroxide makes your futures **virtually long-running or durable**. A `.await` that takes 30 days looks exactly like one that takes 30 milliseconds:
 
 ```rust
-let result = ctx.schedule_activity("Greet", "Alice").await?;
+// This works even if the process restarts 1000 times during those 30 days!
+ctx.schedule_timer(Duration::from_days(30)).await;
 ```
 
-That `.await` might complete immediately (if we're replaying and the result is already in history) or it might block until a worker executes the activity and the result is persisted. Either way, *the code looks identical*—that's the illusion of durability.
+**The catch**: to enable this magic, your orchestration code must be **deterministic**. Given the same history of events, it must make the same decisions. This constraint is what allows Duroxide to "replay" your code and recreate its state after a restart.
 
-### The Core Problem
+---
 
-Normal Rust futures don't survive crashes. If your process dies mid-await, the future is gone. Duroxide solves this by:
+## Orchestrations: Your Durable Functions
 
-1. **Recording** what the orchestration scheduled (as events in persistent history)
-2. **Replaying** the orchestration from the beginning after a crash
-3. **Feeding** previously-recorded results back to the futures during replay
+An **orchestration** is a special async function that coordinates work. It's the durable "glue" that schedules activities, waits for events, and makes decisions.
 
-The challenge: how do we connect a future (created fresh each replay) to its persisted result?
+Here's what an orchestration looks like:
 
-### The Solution: Tokens
+```rust
+async fn order_workflow(ctx: OrchestrationContext, order_id: String) -> Result<String, String> {
+    // Schedule an activity to process payment
+    let payment = ctx.schedule_activity("ProcessPayment", &order_id).await?;
+    
+    // Schedule another activity to reserve inventory
+    let reservation = ctx.schedule_activity("ReserveInventory", &order_id).await?;
+    
+    // Return the combined result
+    Ok(format!("Order {order_id} completed: {payment}, {reservation}"))
+}
+```
 
-Each `schedule_*` call allocates an in-memory **token**—a simple incrementing integer. This token is the bridge between:
+### The schedule_*() Methods
 
-- The **future** (which polls for results keyed by token)
-- The **replay engine** (which binds tokens to persisted event IDs and delivers results)
+Inside orchestrations, you use `ctx.schedule_*()` methods to schedule work. These return ordinary Rust futures that you can `.await`:
+
+| Method | Purpose | Returns |
+|--------|---------|---------|
+| `schedule_activity(name, input)` | Execute a unit of work | `impl Future<Output = Result<String, String>>` |
+| `schedule_timer(duration)` | Wait for a duration | `impl Future<Output = ()>` |
+| `schedule_wait(event_name)` | Wait for an external event | `impl Future<Output = String>` |
+| `schedule_sub_orchestration(name, input)` | Start a child orchestration | `impl Future<Output = Result<String, String>>` |
+
+**Important**: These are the *only* async operations allowed in orchestrations. You cannot call `tokio::time::sleep()`, make HTTP requests, or do any I/O directly—those must go in activities.
+
+### Example: Control Flow and Branching
+
+Orchestrations use normal Rust control flow. Here's an example with branching:
+
+```rust
+async fn approval_workflow(ctx: OrchestrationContext, request: String) -> Result<String, String> {
+    // Get the request amount
+    let amount: u32 = ctx.schedule_activity("GetAmount", &request).await?
+        .parse()
+        .unwrap_or(0);
+    
+    if amount > 10_000 {
+        // Large amounts need manager approval
+        let approved = ctx.schedule_activity("RequestManagerApproval", &request).await?;
+        if approved == "rejected" {
+            return Err("Manager rejected the request".into());
+        }
+    }
+    
+    // Process the approved request
+    let result = ctx.schedule_activity("ProcessRequest", &request).await?;
+    Ok(result)
+}
+```
+
+### Example: Error Handling and Recovery
+
+Standard Rust error handling works as expected:
+
+```rust
+async fn resilient_workflow(ctx: OrchestrationContext, input: String) -> Result<String, String> {
+    match ctx.schedule_activity("RiskyOperation", &input).await {
+        Ok(result) => Ok(result),
+        Err(e) => {
+            // Log the failure (using replay-safe tracing)
+            ctx.trace_warn(format!("RiskyOperation failed: {e}, attempting recovery"));
+            
+            // Try a recovery activity
+            let recovered = ctx.schedule_activity("RecoveryOperation", &input).await?;
+            Ok(format!("recovered: {recovered}"))
+        }
+    }
+}
+```
+
+### Example: Long-Running Timers
+
+Timers can span arbitrary durations—even across process restarts:
+
+```rust
+async fn subscription_reminder(ctx: OrchestrationContext, user_id: String) -> Result<String, String> {
+    // Wait 30 days (survives any number of restarts!)
+    ctx.schedule_timer(Duration::from_secs(30 * 24 * 60 * 60)).await;
+    
+    // Send a reminder
+    ctx.schedule_activity("SendRenewalReminder", &user_id).await?;
+    
+    // Wait another 30 days
+    ctx.schedule_timer(Duration::from_secs(30 * 24 * 60 * 60)).await;
+    
+    // Check if they renewed
+    let status = ctx.schedule_activity("CheckSubscriptionStatus", &user_id).await?;
+    Ok(status)
+}
+```
+
+### Example: Timeout Patterns with select
+
+Use `ctx.select2()` to race operations—this is essential for timeouts:
+
+```rust
+async fn with_timeout(ctx: OrchestrationContext, input: String) -> Result<String, String> {
+    let work = ctx.schedule_activity("SlowOperation", &input);
+    let timeout = async {
+        ctx.schedule_timer(Duration::from_secs(30)).await;
+        Err::<String, String>("Operation timed out".into())
+    };
+    
+    // Race the two futures—whichever completes first wins
+    match ctx.select2(work, timeout).await {
+        Either2::First(result) => result,
+        Either2::Second(timeout_err) => timeout_err,
+    }
+}
+```
+
+**Critical**: Always use `ctx.select2()` / `ctx.join()`, never `tokio::select!` / `tokio::join!`. The context methods are deterministic; tokio's are not.
+
+---
+
+## Activities: Where the Real Work Happens
+
+**Activities** are where you do real work—I/O, API calls, database operations, anything with side effects:
+
+```rust
+let activity_registry = ActivityRegistry::builder()
+    .register("ProcessPayment", |ctx: ActivityContext, order_id: String| async move {
+        // This runs in a worker, NOT in the orchestration
+        let result = payment_api::charge(&order_id).await?;
+        Ok(format!("charged:{}", result.transaction_id))
+    })
+    .register("SendEmail", |ctx: ActivityContext, email: String| async move {
+        email_service::send(&email).await?;
+        Ok("sent".into())
+    })
+    .build();
+```
+
+### Activity Guarantees: At-Least-Once Execution
+
+Activities have **at-least-once** execution semantics. This means:
+
+- If the worker crashes mid-execution, the activity **will be retried**
+- Your activity code must handle being called multiple times for the same logical operation
+
+Design activities to be **idempotent** when possible:
+
+```rust
+// ✅ Good: Uses idempotency key
+.register("ChargeCard", |ctx: ActivityContext, input: String| async move {
+    let req: ChargeRequest = serde_json::from_str(&input)?;
+    // Use order_id as idempotency key—charging twice is safe
+    payment_api::charge_idempotent(&req.order_id, req.amount).await
+})
+
+// ⚠️ Risky: Not idempotent—could send duplicate emails
+.register("SendEmail", |ctx: ActivityContext, input: String| async move {
+    email_service::send(&input).await  // If retried, sends twice!
+})
+```
+
+### What Can Activities Do?
+
+Activities can do *anything*:
+- HTTP requests
+- Database operations
+- File I/O
+- Sleep (`tokio::time::sleep` is fine here!)
+- Call external APIs
+- Use randomness
+- Access system time
+
+The only limit is that they return `Result<String, String>`.
+
+---
+
+## How It Works: Making Futures Durable
+
+Now we get to the heart of the matter: **how does Duroxide make futures survive crashes?**
+
+The key insight: **we don't checkpoint memory.** Instead, we:
+
+1. **Record** what the orchestration scheduled (as events in persistent storage)
+2. **Replay** the orchestration from the beginning after any restart
+3. **Feed** previously-recorded results back to futures during replay
+
+The orchestration code runs *multiple times*, but it sees the same results each time—giving the illusion that it ran once, continuously.
+
+### The Event History
+
+Every orchestration instance has an **event history**—a persistent log of what happened. Here's what a simple orchestration's history might look like:
+
+```
+Event History for instance "order-123":
+─────────────────────────────────────────────────────────────────
+[1] OrchestrationStarted { name: "OrderWorkflow", input: "order-123" }
+[2] ActivityScheduled { name: "ProcessPayment", input: "order-123" }
+[3] ActivityCompleted { source_event_id: 2, result: "txn:abc123" }
+[4] ActivityScheduled { name: "ReserveInventory", input: "order-123" }
+[5] ActivityCompleted { source_event_id: 4, result: "reserved:xyz" }
+[6] OrchestrationCompleted { output: "Order complete: txn:abc123, reserved:xyz" }
+```
+
+This history is the **source of truth**. When replaying, the orchestration will:
+- See the same `ActivityCompleted` result for "ProcessPayment"
+- Make the same decisions it made before
+- Schedule the same subsequent activities
+
+### Tokens: The Bridge Between Futures and History
+
+Here's the challenge: when you call `schedule_activity()`, you get back a future. But that future is created *fresh* on every replay. How do we connect it to its persisted result?
+
+The answer: **tokens**.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                     Token Lifecycle                                  │
+│  What happens when you call schedule_activity("Greet", "Alice"):   │
 ├─────────────────────────────────────────────────────────────────────┤
 │                                                                      │
-│  1. SCHEDULE: Orchestration calls schedule_activity("Greet", "Alice")│
-│     ┌──────────────────────────────────────────────────────────┐    │
-│     │ token = 1                                                 │    │
-│     │ emitted_actions.push((1, CallActivity{name, input}))      │    │
-│     │ return poll_fn that checks completion_results[token=1]    │    │
-│     └──────────────────────────────────────────────────────────┘    │
-│                              │                                       │
-│                              ▼                                       │
-│  2. BIND: Replay engine matches action to history event             │
-│     ┌──────────────────────────────────────────────────────────┐    │
-│     │ History: ActivityScheduled { event_id: 10, ... }          │    │
-│     │ token_bindings[1] = 10                                    │    │
-│     └──────────────────────────────────────────────────────────┘    │
-│                              │                                       │
-│                              ▼                                       │
-│  3. DELIVER: Replay engine sees completion, delivers to token       │
-│     ┌──────────────────────────────────────────────────────────┐    │
-│     │ History: ActivityCompleted { source_event_id: 10, ... }   │    │
-│     │ Find token where token_bindings[token] == 10 → token=1    │    │
-│     │ completion_results[1] = ActivityOk("Hello, Alice!")       │    │
-│     └──────────────────────────────────────────────────────────┘    │
-│                              │                                       │
-│                              ▼                                       │
-│  4. RESOLVE: Future polls and finds its result                      │
-│     ┌──────────────────────────────────────────────────────────┐    │
-│     │ poll_fn checks completion_results[1] → Some(ActivityOk)   │    │
-│     │ Returns Poll::Ready(Ok("Hello, Alice!"))                  │    │
-│     └──────────────────────────────────────────────────────────┘    │
+│  1. ALLOCATE TOKEN                                                   │
+│     token = 1 (incrementing counter, in-memory only)                │
+│                                                                      │
+│  2. EMIT ACTION                                                      │
+│     emitted_actions.push((token=1, CallActivity{name, input}))      │
+│                                                                      │
+│  3. RETURN FUTURE                                                    │
+│     Return a future that polls for completion_results[token=1]       │
 │                                                                      │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-### Example: Fresh Execution vs Replay
+The **replay engine** then:
+1. Matches emitted actions to events in history
+2. **Binds** tokens to event IDs: `token_bindings[1] = event_id_10`
+3. Finds completions for those events
+4. **Delivers** results back to the token: `completion_results[1] = Ok("Hello!")`
 
-Consider this orchestration:
+When the future polls, it finds its result and resolves.
+
+---
+
+## The Replay Engine: Heart of Durability
+
+Let's trace through a concrete example to understand how replay works.
+
+### Example Orchestration
 
 ```rust
 async fn greet(ctx: OrchestrationContext, name: String) -> Result<String, String> {
@@ -191,453 +307,424 @@ async fn greet(ctx: OrchestrationContext, name: String) -> Result<String, String
 }
 ```
 
-**Turn 1 (Fresh Execution)** — No history yet:
+### Turn 1: Fresh Execution (No History Yet)
+
+The orchestration starts for the first time. The only history is `OrchestrationStarted`:
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
 │ History: [OrchestrationStarted]                                      │
 ├─────────────────────────────────────────────────────────────────────┤
+│ Open Futures Table (in-memory):                                      │
+│ ┌─────────┬───────────────────┬─────────┬────────────┐              │
+│ │ Token   │ Action            │ EventID │ Result     │              │
+│ ├─────────┼───────────────────┼─────────┼────────────┤              │
+│ │ (empty) │                   │         │            │              │
+│ └─────────┴───────────────────┴─────────┴────────────┘              │
+├─────────────────────────────────────────────────────────────────────┤
 │                                                                      │
-│ 1. Orchestration runs, calls schedule_activity("Greet", "Alice")    │
-│    → emits (token=1, CallActivity{...})                             │
-│    → returns future                                                  │
+│  STEP 1: Orchestration runs, hits schedule_activity("Greet", "Alice")│
 │                                                                      │
-│ 2. Future awaited → polls → no result for token=1 → Pending          │
+│  → Token 1 allocated                                                 │
+│  → Action emitted: (1, CallActivity{name:"Greet", input:"Alice"})    │
 │                                                                      │
-│ 3. Replay engine sees no matching history event                      │
-│    → allocates event_id=2                                            │
-│    → binds token=1 → event_id=2                                      │
-│    → persists ActivityScheduled{event_id=2}                          │
-│    → dispatches CallActivity to worker queue                         │
+│  Table now:                                                          │
+│  ┌─────────┬───────────────────────────┬─────────┬────────────┐     │
+│  │ Token   │ Action                    │ EventID │ Result     │     │
+│  ├─────────┼───────────────────────────┼─────────┼────────────┤     │
+│  │ 1       │ CallActivity{Greet,Alice} │ (none)  │ (pending)  │     │
+│  └─────────┴───────────────────────────┴─────────┴────────────┘     │
 │                                                                      │
-│ 4. Turn ends (orchestration suspended)                               │
+│  STEP 2: Future is awaited → polls → no result → returns Pending     │
+│                                                                      │
+│  STEP 3: Engine processes new action (no matching history):          │
+│    → Allocates event_id = 2                                          │
+│    → Binds: token_bindings[1] = 2                                    │
+│    → Persists: ActivityScheduled{event_id:2, name:"Greet", ...}      │
+│    → Dispatches work to worker queue                                 │
+│                                                                      │
+│  Table now:                                                          │
+│  ┌─────────┬───────────────────────────┬─────────┬────────────┐     │
+│  │ Token   │ Action                    │ EventID │ Result     │     │
+│  ├─────────┼───────────────────────────┼─────────┼────────────┤     │
+│  │ 1       │ CallActivity{Greet,Alice} │ 2       │ (pending)  │     │
+│  └─────────┴───────────────────────────┴─────────┴────────────┘     │
+│                                                                      │
+│  STEP 4: Turn ends. Future is dropped. Only history persists.        │
 │                                                                      │
 ├─────────────────────────────────────────────────────────────────────┤
-│ History after: [OrchestrationStarted, ActivityScheduled{id=2}]       │
+│ History after turn: [OrchestrationStarted, ActivityScheduled{id=2}]  │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-**Turn 2 (After Activity Completes)** — Worker executed, completion in history:
+Meanwhile, a worker picks up the activity, executes it, and records the completion.
+
+### Turn 2: Replay After Activity Completes
+
+The orchestration wakes up again. Now history includes the completion:
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
 │ History: [OrchestrationStarted,                                      │
-│           ActivityScheduled{id=2},                                   │
-│           ActivityCompleted{id=3, source=2, result="Hello!"}]        │
+│           ActivityScheduled{id=2, name:"Greet", input:"Alice"},      │
+│           ActivityCompleted{id=3, source_id=2, result:"Hello!"}]     │
+├─────────────────────────────────────────────────────────────────────┤
+│ Open Futures Table: (starts empty—new turn, new future)              │
+│ ┌─────────┬───────────────────┬─────────┬────────────┐              │
+│ │ Token   │ Action            │ EventID │ Result     │              │
+│ └─────────┴───────────────────┴─────────┴────────────┘              │
 ├─────────────────────────────────────────────────────────────────────┤
 │                                                                      │
-│ 1. Orchestration replays from beginning                              │
-│    → calls schedule_activity("Greet", "Alice")                      │
-│    → emits (token=1, CallActivity{...})                             │
+│  STEP 1: Create fresh orchestration future (replay from beginning)   │
 │                                                                      │
-│ 2. Replay engine walks history:                                      │
-│    → sees ActivityScheduled{id=2}                                    │
-│    → matches emitted action, binds token=1 → event_id=2              │
-│    → sees ActivityCompleted{source=2, result="Hello!"}               │
-│    → delivers: completion_results[1] = ActivityOk("Hello!")          │
+│  STEP 2: Poll orchestration → hits schedule_activity("Greet","Alice")│
+│    → Token 1 allocated (same as before—deterministic!)               │
+│    → Action emitted: (1, CallActivity{Greet, Alice})                 │
 │                                                                      │
-│ 3. Future awaited → polls → finds result → Ready(Ok("Hello!"))       │
+│  Table now:                                                          │
+│  ┌─────────┬───────────────────────────┬─────────┬────────────┐     │
+│  │ Token   │ Action                    │ EventID │ Result     │     │
+│  ├─────────┼───────────────────────────┼─────────┼────────────┤     │
+│  │ 1       │ CallActivity{Greet,Alice} │ (none)  │ (pending)  │     │
+│  └─────────┴───────────────────────────┴─────────┴────────────┘     │
 │                                                                      │
-│ 4. Orchestration returns Ok("Hello!"), completes                     │
+│  STEP 3: Replay engine walks history:                                │
+│                                                                      │
+│    → Sees ActivityScheduled{id=2}                                    │
+│    → Pops emitted action, validates it matches                       │
+│    → Binds: token_bindings[1] = 2                                    │
+│                                                                      │
+│  Table now:                                                          │
+│  ┌─────────┬───────────────────────────┬─────────┬────────────┐     │
+│  │ Token   │ Action                    │ EventID │ Result     │     │
+│  ├─────────┼───────────────────────────┼─────────┼────────────┤     │
+│  │ 1       │ CallActivity{Greet,Alice} │ 2       │ (pending)  │     │
+│  └─────────┴───────────────────────────┴─────────┴────────────┘     │
+│                                                                      │
+│    → Sees ActivityCompleted{source_id=2, result:"Hello!"}            │
+│    → Finds token bound to event 2 → token 1                          │
+│    → Delivers: completion_results[1] = Ok("Hello!")                  │
+│                                                                      │
+│  Table now:                                                          │
+│  ┌─────────┬───────────────────────────┬─────────┬────────────┐     │
+│  │ Token   │ Action                    │ EventID │ Result     │     │
+│  ├─────────┼───────────────────────────┼─────────┼────────────┤     │
+│  │ 1       │ CallActivity{Greet,Alice} │ 2       │ Ok("Hello!")│    │
+│  └─────────┴───────────────────────────┴─────────┴────────────┘     │
+│                                                                      │
+│  STEP 4: Poll orchestration again                                    │
+│    → Future checks completion_results[1] → finds Ok("Hello!")        │
+│    → Returns Poll::Ready(Ok("Hello!"))                               │
+│    → Orchestration returns Ok("Hello!")                              │
+│                                                                      │
+│  STEP 5: Engine records OrchestrationCompleted{output:"Hello!"}      │
 │                                                                      │
 ├─────────────────────────────────────────────────────────────────────┤
-│ History after: [..., OrchestrationCompleted{output="Hello!"}]        │
+│ History after: [..., OrchestrationCompleted{output:"Hello!"}]        │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-### Why Tokens Instead of Event IDs?
-
-The orchestration can't use event IDs directly because:
-
-1. **Fresh execution**: The event ID doesn't exist yet when `schedule_activity` is called—it's allocated *after* the turn when the engine persists the schedule event.
-
-2. **Separation of concerns**: The orchestration code shouldn't know about history mechanics. It just calls `schedule_activity` and awaits the result.
-
-Tokens are the indirection layer that makes this work. They're allocated synchronously, bound to event IDs by the replay engine, and used to route completions back to the right futures.
+The orchestration completed successfully—and it would produce the *exact same result* even if the process crashed and restarted 100 times between Turn 1 and Turn 2.
 
 ---
 
-## Events, Actions, and IDs
+## The Replay Algorithm in Detail
 
-### Events
+Here's the complete algorithm the replay engine follows:
 
-Durability comes from persisting `Event` values. Each event has an `event_id` that is monotonically increasing per instance.
-
-Two broad classes:
-
-1. **Schedule events** (begin an operation):
-   - `ActivityScheduled { name, input }`
-   - `TimerCreated { fire_at_ms }`
-   - `ExternalSubscribed { name }`
-   - `SubOrchestrationScheduled { name, instance, input, ... }`
-   - `SystemCall { op, value }` (special: schedule+result together)
-
-2. **Completion events** (finish an operation):
-   - `ActivityCompleted { source_event_id, result }`
-   - `ActivityFailed { source_event_id, details }`
-   - `TimerFired { source_event_id, ... }`
-   - `SubOrchestrationCompleted { source_event_id, result }`
-   - `SubOrchestrationFailed { source_event_id, details }`
-
-External events are special:
-
-- `ExternalEvent { name, data }`
-
-They are correlated by name + subscription index rather than `source_event_id`.
-
-### Actions
-
-`Action` values represent what the orchestration *wants to do*.
-
-- `CallActivity { scheduling_event_id, name, input }`
-- `CreateTimer { scheduling_event_id, fire_at_ms }`
-- `WaitExternal { scheduling_event_id, name }`
-- `StartSubOrchestration { scheduling_event_id, name, instance, input, version }`
-- `SystemCall { scheduling_event_id, op, value }`
-- `ContinueAsNew { input, version }`
-
-The replay engine converts (most) actions into schedule events for persistence.
-
-### Schedule IDs
-
-The durable schedule ID is simply the schedule event's `event_id`.
-
-Example linkage:
+### Turn Execution Pseudocode
 
 ```
-[10] ActivityScheduled { event_id: 10, name: "Greet", input: "Alice" }
-[11] ActivityCompleted { event_id: 11, source_event_id: 10, result: "Hello" }
+function execute_turn(instance_id, history, completion_messages):
+    
+    # 1. PREPARE: Add new completions to working history
+    working_history = history + convert_to_events(completion_messages)
+    
+    # 2. CREATE: Instantiate fresh orchestration context and future
+    ctx = new OrchestrationContext()
+    future = create_orchestration_future(ctx, input)
+    
+    # 3. REPLAY LOOP: Walk history, poll orchestration
+    must_poll = true
+    history_cursor = 0
+    
+    while history_cursor < working_history.length:
+        
+        # 3a. Poll orchestration if we might make progress
+        if must_poll:
+            must_poll = false
+            result = poll_once(future)
+            
+            if result == Ready(output):
+                return TurnResult::Completed(output)
+            if result == Ready(Err(e)):
+                return TurnResult::Failed(e)
+        
+        # 3b. Process next history event
+        event = working_history[history_cursor]
+        history_cursor += 1
+        
+        # Update is_replaying state
+        ctx.set_replaying(history_cursor <= persisted_history_length)
+        
+        match event.kind:
+            
+            # Schedule events: bind tokens to event IDs
+            ActivityScheduled | TimerCreated | ExternalSubscribed | SubOrchestrationScheduled:
+                action = ctx.pop_next_emitted_action()
+                validate_action_matches_event(action, event)
+                ctx.bind_token(action.token, event.event_id)
+            
+            # Completion events: deliver results to tokens
+            ActivityCompleted { result }:
+                token = ctx.find_token_for_event(event.source_event_id)
+                ctx.deliver_result(token, ActivityOk(result))
+                must_poll = true  # Might unblock orchestration
+            
+            ActivityFailed { details }:
+                token = ctx.find_token_for_event(event.source_event_id)
+                ctx.deliver_result(token, ActivityErr(details))
+                must_poll = true
+            
+            TimerFired:
+                token = ctx.find_token_for_event(event.source_event_id)
+                ctx.deliver_result(token, TimerComplete)
+                must_poll = true
+            
+            ExternalEvent { name, data }:
+                ctx.record_external_arrival(name, data)
+                must_poll = true  # Might satisfy a schedule_wait()
+            
+            SubOrchestrationCompleted | SubOrchestrationFailed:
+                # Similar to activities...
+                
+            OrchestrationCancelRequested:
+                ctx.mark_cancellation_requested()
+            
+            SystemCall { op, value }:
+                # System calls are schedule + complete in one event
+                action = ctx.pop_next_emitted_action()
+                ctx.bind_token(action.token, event.event_id)
+                ctx.deliver_result(action.token, SystemCallValue(value))
+                must_poll = true
+    
+    # 4. FINAL POLL: Process any remaining work
+    result = poll_once(future)
+    if result == Ready(output):
+        return TurnResult::Completed(output)
+    
+    # 5. NEW SCHEDULES: Process actions that weren't in history
+    for (token, action) in ctx.remaining_emitted_actions():
+        event_id = allocate_next_event_id()
+        ctx.bind_token(token, event_id)
+        
+        schedule_event = create_schedule_event(action, event_id)
+        persist_event(schedule_event)
+        dispatch_action(action)
+    
+    # 6. CHECK CANCELLATION: Takes precedence over normal completion
+    if ctx.is_cancellation_requested():
+        return TurnResult::Cancelled(reason)
+    
+    return TurnResult::Continue  # Orchestration is suspended, waiting for more events
 ```
 
-Here the schedule ID is `10`.
+### Key Invariants
+
+1. **Actions emitted in order**: The orchestration emits schedule actions in deterministic order. The replay engine validates they match history in the same order.
+
+2. **Binding before delivery**: A token must be bound to an event ID before a completion can be delivered to it.
+
+3. **Poll only when progress is possible**: The engine doesn't busy-poll. It sets `must_poll = true` only after delivering a completion or external event.
+
+4. **Completions keyed by token, not event ID**: Futures poll using their token, not the event ID. The engine translates via `token_bindings`.
 
 ---
 
-## Token Emission, Binding, and Result Storage
+## Special Operations
 
-This section is the key replacement for the old claim system.
+### System Calls: Synchronous Operations
 
-### 1) Emission
+Some operations complete immediately without dispatching work. These are **system calls**:
 
-Each `schedule_*()` call emits an action and returns a future.
+- `ctx.new_guid()` – Generate a deterministic UUID
+- `ctx.utcnow()` – Get the current time (replay-safe)
 
-Example:
-
-```
-ctx.schedule_activity("Greet", "Alice")
-  emits: (token=1, Action::CallActivity { scheduling_event_id: 0, ... })
-  returns: Future that polls for completion_results[token=1]
-```
-
-Actions are emitted in a Vec in order; schedule order matters.
-
-### 2) Binding
-
-When the replay engine sees a schedule event in history, it pops the next emitted action and validates it matches.
-
-If it matches, it binds token → schedule ID:
-
-```
-token_bindings[token] = schedule_event.event_id
-```
-
-Binding also happens for *new* schedules beyond history: when the engine allocates a fresh `event_id` for a newly emitted action, it binds the token to that new `event_id`.
-
-### 3) Result storage (keyed by token)
-
-Completion events refer to `source_event_id` (the schedule ID). The context stores results keyed by **token**, not schedule ID.
-
-So delivering a completion performs:
-
-1. Find the token that is bound to that schedule ID.
-2. Store `completion_results[token] = CompletionResult::...`.
-
-If a completion arrives with no known binding, the current behavior is to log a warning and drop the result.
-
-This explains why schedule binding must occur before completion delivery for a given operation.
-
-### 4) must_poll
-
-The replay engine does not busy-poll. It polls the orchestration only when progress might be possible.
-
-It sets `must_poll = true` when:
-
-- starting execution
-- delivering a completion
-- delivering an external event
-- delivering a system call value
-
----
-
-## Replay Engine Walkthrough (Turn Execution)
-
-This section describes the core loop in `src/runtime/replay_engine.rs`.
-
-### The overall shape
-
-At a high level, a turn:
-
-1. Builds a `working_history` (baseline persisted history + any new completion events preprocessed for this turn).
-2. Creates an `OrchestrationContext`.
-3. Creates a pinned orchestration future by invoking the handler.
-4. Walks `working_history` in order, repeatedly:
-   - polling the orchestration when `must_poll`
-   - binding schedule events
-   - delivering completion events
-5. After history is processed, converts any remaining emitted actions into new schedule events and pending actions.
-6. Returns `TurnResult`.
-
-### Safety: catch_unwind
-
-The engine wraps orchestration polling in `catch_unwind`. A panic is treated as a nondeterminism/configuration failure.
-
-This is a pragmatic choice: orchestrations are *replayed*; panics are often caused by “this path should never happen” assumptions that break under replay.
-
-### Replay boundary and ctx.is_replaying()
-
-The engine tracks where “persisted history” ends.
-
-- While iterating events before the replay boundary, `ctx.is_replaying()` is true.
-- Once iteration reaches the replay boundary, it flips to false.
-
-This allows orchestrations to suppress side effects during replay.
-
-### Schedule matching and binding
-
-When the engine encounters a schedule event, it:
-
-1. pops the next emitted `(token, action)`
-2. checks `action_matches_event_kind(action, event.kind)`
-3. calls `ctx.bind_token(token, event.event_id())`
-
-Matching is strict for most operations:
-
-- Activities match by `(name, input)`.
-- External subscriptions match by name.
-- Sub-orchestrations match by `(name, input)`.
-- System calls match by op.
-
-Timers are intentionally matched *by position* (timestamp is allowed to differ), because `fire_at_ms` is computed from “now”.
-
-### Completion delivery
-
-Completion events deliver to a schedule ID (`source_event_id`). The engine validates a few things before delivering:
-
-- The schedule ID must be in the “open schedules” set.
-- Some kinds check “expected kind” before accepting completions.
-
-Then it calls `ctx.deliver_result(source_id, CompletionResult::...)` and sets `must_poll = true`.
-
-### External events
-
-External events do not target a specific schedule ID.
-
-The engine appends arrivals by name, then re-polls the orchestration. `schedule_wait()` futures resolve by reading the correct arrival at a deterministic subscription index.
-
-### New schedules beyond history
-
-After history is processed, any remaining emitted actions represent new schedules requested in this turn.
-
-For each `(token, action)`:
-
-1. Allocate a fresh `event_id`.
-2. Bind token → event_id.
-3. Update the action’s `scheduling_event_id` to the new `event_id`.
-4. Convert the action to a schedule event (`history_delta`).
-5. Add the updated action to `pending_actions`.
-
-Sub-orchestrations also update/normalize instance IDs:
-
-- If an instance ID wasn’t explicitly provided, a placeholder like `sub::pending_*` is emitted.
-- The engine replaces it with a deterministic final ID `sub::{event_id}`.
-
-### Cancellation precedence
-
-The engine checks for `OrchestrationCancelRequested` and returns `TurnResult::Cancelled` before returning a normal completion.
-
----
-
-## Operation Walkthroughs
-
-This section shows end-to-end flows in the token model.
-
-### Activity
-
-Orchestration code:
+System calls appear in history as a single event that's both schedule and completion:
 
 ```rust
-let x = ctx.schedule_activity("Greet", "Alice").await?;
+let guid = ctx.new_guid();  // Returns immediately
 ```
 
-Turn 1 (fresh):
+```
+[10] SystemCall { op: "new_guid", value: "550e8400-e29b-41d4-a716-446655440000" }
+```
 
-1. Orchestration polls and emits `(token=1, CallActivity{name:"Greet", input:"Alice"})`.
-2. No completion exists, so the future is pending.
-3. After history is processed, the engine allocates `event_id=10`:
-   - binds token 1 → 10
-   - persists `ActivityScheduled{event_id:10, ...}`
-   - enqueues `CallActivity{scheduling_event_id:10, ...}`
+On replay, the engine delivers the recorded value—it doesn't generate a new GUID.
 
-Turn 2 (replay, after completion arrives):
+### continue_as_new: Preventing Unbounded History Growth
 
-1. The engine replays `ActivityScheduled{event_id:10,...}`:
-   - pops emitted action, validates it matches, binds token 1 → 10
-2. The engine sees `ActivityCompleted{source_event_id:10, result:"Hello"}`:
-   - delivers completion → stores `completion_results[token=1] = ActivityOk("Hello")`
-   - sets `must_poll=true`
-3. Polling sees `token=1` has `ActivityOk` and resolves the `.await`.
-
-### Timer
-
-Orchestration code:
+Long-running orchestrations (like actors or state machines) can accumulate huge histories. `continue_as_new()` resets the history:
 
 ```rust
-ctx.schedule_timer(Duration::from_secs(30)).await;
+async fn long_running_actor(ctx: OrchestrationContext, state: String) -> Result<String, String> {
+    let new_state = ctx.schedule_activity("ProcessBatch", &state).await?;
+    
+    // After processing, start fresh with new state
+    // This creates a new execution with empty history
+    ctx.continue_as_new(new_state).await
+}
 ```
 
-Timers compute `fire_at_ms` from `SystemTime::now()` at schedule time.
+The old execution's history ends with `OrchestrationContinuedAsNew`. A new execution starts fresh.
 
-The replay engine matches timer schedule events by position (not exact `fire_at_ms`) to avoid false nondeterminism.
+### External Events: Out-of-Band Data
 
-### External wait
-
-Orchestration code:
+External events allow outside systems to send data into a waiting orchestration:
 
 ```rust
-let payload = ctx.schedule_wait("MyEvent").await;
+// Orchestration waits for approval
+let approval = ctx.schedule_wait("approval").await;
+if approval == "approved" {
+    ctx.schedule_activity("ProcessOrder", &order_id).await?;
+}
 ```
-
-Flow:
-
-1. Scheduling emits `(token, Action::WaitExternal { name: "MyEvent" })`.
-2. The engine persists `ExternalSubscribed { event_id: S, name: "MyEvent" }` and binds token → S.
-3. The engine binds a deterministic subscription index for `(S, "MyEvent")`.
-4. Each `ExternalEvent { name:"MyEvent", data }` appends to `external_arrivals["MyEvent"]`.
-5. The waiting future resolves when arrival list contains element at its subscription index.
-
-Important current limitation (also documented in the code): external events arriving before subscription binding are currently unsupported.
-
-### Sub-orchestration
-
-Orchestration code:
 
 ```rust
-let child = ctx.schedule_sub_orchestration("Child", "input").await?;
+// External system sends the event
+client.raise_event("order-123", "approval", "approved").await;
 ```
 
-Flow:
-
-1. Scheduling emits `StartSubOrchestration` with a placeholder instance ID if none was provided.
-2. When the engine allocates a real `event_id`, it rewrites that placeholder to a deterministic `sub::{event_id}` instance ID.
-3. Completion events deliver `SubOrchOk`/`SubOrchErr` to the bound token.
-
-### System calls
-
-System calls are executed synchronously (no worker dispatch). In history they appear as `EventKind::SystemCall { op, value }`.
-
-When replay encounters a system call event, it:
-
-1. matches/binds it like a schedule event
-2. immediately delivers `CompletionResult::SystemCallValue(value)`
-3. re-polls the orchestration
+External events are matched by **name and subscription index**, not by source event ID. The first `schedule_wait("approval")` gets the first external event named "approval", the second gets the second, etc.
 
 ---
 
-## Aggregate Futures: select/join
+## Termination and Cancellation
 
-Duroxide leans on standard `futures` combinators, but orchestration determinism still matters.
+### Normal Completion
 
-### join
+An orchestration completes when it returns:
 
-`ctx.join(vec![...]).await` uses `futures::future::join_all`.
+```rust
+Ok("success".into())  // → OrchestrationCompleted { output: "success" }
+Err("failed".into())  // → OrchestrationFailed { details: ... }
+```
 
-Properties:
+### Cancellation
 
-- Deterministic given deterministic schedule order.
-- Result ordering matches the input vector order (not completion arrival order).
+Cancellation is **cooperative**. When you cancel an instance:
 
-### select
+```rust
+client.cancel_instance("order-123", "user_requested").await;
+```
 
-`ctx.select2(a, b).await` uses biased selection so poll order is stable.
+The engine:
+1. Records `OrchestrationCancelRequested { reason: "user_requested" }`
+2. On the next turn, returns `TurnResult::Cancelled` after replay
+3. Records `OrchestrationFailed { details: Cancelled { reason } }`
 
-Important:
+Orchestrations can check cancellation and clean up:
 
-- Do not use `tokio::select!` or `tokio::join!` inside orchestrations.
-- Use the context helpers so replay behavior stays deterministic.
+```rust
+if ctx.is_cancellation_requested() {
+    // Clean up resources before terminating
+    ctx.schedule_activity("Cleanup", "").await?;
+}
+```
 
-### What about loser cancellation?
+### Cascading Cancellation
 
-Each future is keyed by its own token, so:
+When a parent orchestration is cancelled, its child sub-orchestrations are also cancelled:
 
-- each future is keyed by its own token
-- completions don’t have to be consumed in global FIFO order
-- “loser” completions can arrive later without blocking progress
+```
+Parent cancelled
+    → Child 1 receives CancelInstance work item
+    → Child 2 receives CancelInstance work item
+    → Both children terminate with Cancelled status
+```
 
-They will still appear in history, but they won’t change execution if the orchestration is no longer awaiting them.
+### Activity Cancellation
+
+Activities can also respond to cancellation cooperatively:
+
+```rust
+.register("LongRunning", |ctx: ActivityContext, input: String| async move {
+    for item in items {
+        if ctx.is_cancelled() {
+            return Err("Activity cancelled".into());
+        }
+        process(item).await;
+    }
+    Ok("done".into())
+})
+```
 
 ---
 
-## Rust Async Differences (Why This Works)
+## Nondeterminism Detection
 
-Orchestrations are not normal async tasks.
+The replay engine **validates** that your orchestration is deterministic. If it detects a mismatch, the turn fails with a nondeterminism error.
 
-### No wakers
+### Schedule Mismatch
 
-Orchestration polling uses a no-op waker (`poll_once`). Futures do not wake the executor. Progress is driven by:
+If the orchestration emits a different schedule than history expects:
 
-- new history arriving
-- the replay engine delivering completions
-- the engine re-polling when it may have unblocked the future
+```rust
+// Version 1: schedules ActivityA first
+let a = ctx.schedule_activity("ActivityA", "").await?;
+let b = ctx.schedule_activity("ActivityB", "").await?;
 
-### Futures are recreated every turn
+// Version 2 (BREAKS REPLAY): schedules ActivityB first  
+let b = ctx.schedule_activity("ActivityB", "").await?;  // Error!
+let a = ctx.schedule_activity("ActivityA", "").await?;
+```
 
-Orchestrations are re-run from the beginning. Local variables “work” because they are deterministically reconstructed.
+The engine will fail with: "expected ActivityA, got ActivityB"
 
-### Side effects happen multiple times
+### Common Causes of Nondeterminism
 
-Anything you do in orchestration code will run on every replay unless guarded. Prefer:
+| Problem | Why It Breaks | Solution |
+|---------|--------------|----------|
+| `Uuid::new_v4()` | Different UUID each replay | Use `ctx.new_guid()` |
+| `SystemTime::now()` | Different time each replay | Use `ctx.utcnow()` |
+| `rand::random()` | Different value each replay | Use activities for randomness |
+| `tokio::select!` | Nondeterministic poll order | Use `ctx.select2()` |
+| Changing code | Different schedule order | Use versioning |
+| Conditional on external state | External state may change | Pass state as input |
 
-- replay-safe tracing helpers
-- `if !ctx.is_replaying()` guards
-- moving side effects into activities
+### Defensive Programming Tips
 
----
-
-## Nondeterminism Detection (Common Failure Modes)
-
-The replay engine treats mismatches as configuration errors.
-
-### Schedule mismatch
-
-If the orchestration emits a different schedule than history expects (wrong kind, wrong name/input/op), replay fails.
-
-Common causes:
-
-- changing orchestration logic without versioning
-- renaming an activity
-- changing activity input encoding
-
-### History schedule but no emitted action
-
-If history contains a schedule event but the orchestration did not emit a matching action (at that point in replay), replay fails.
-
-### Completion without open schedule
-
-If a completion references a schedule ID that is not considered “open”, replay fails.
-
-### External event ordering changes
-
-External waits are correlated by subscription index. Changing the number/order of `schedule_wait("X")` calls can rebind arrivals to different awaits.
+1. **Keep orchestrations pure**: No I/O, no randomness, no system time
+2. **Use version guards** when changing orchestration logic:
+   ```rust
+   if ctx.version() < "2.0" {
+       // Old behavior
+   } else {
+       // New behavior
+   }
+   ```
+3. **Test with replay**: Run your orchestrations twice and verify they produce the same schedule
 
 ---
 
 ## Summary
 
-Duroxide uses a token-based mechanism for durable futures:
+Duroxide makes your async code durable through a simple but powerful mechanism:
 
-- schedule_* emits `(token, Action)` and returns a `poll_fn` future
-- replay binds token → schedule event ID by matching actions to history
-- completions deliver by schedule ID but are stored by token
-- the engine polls only when it may have progressed
+1. **Record** what the orchestration schedules as events
+2. **Replay** the orchestration from the beginning after any restart
+3. **Feed** recorded results back to futures during replay
 
-This preserves Duroxide’s core durable execution model while keeping the user-facing API simple and idiomatic.
+The key abstractions:
+
+- **Tokens**: In-memory identifiers that bridge futures to persisted events
+- **Binding**: The replay engine connects tokens to event IDs by matching actions to history
+- **Delivery**: Completions are routed back to tokens, resolving the waiting futures
+
+The contract you must uphold:
+
+- **Determinism**: Given the same history, emit the same schedules in the same order
+- **Activities for side effects**: Keep orchestrations pure; do I/O in activities
+- **Use context helpers**: `ctx.select2()` not `tokio::select!`, `ctx.new_guid()` not `Uuid::new_v4()`
+
+When you follow these rules, your code genuinely survives crashes—running for days, weeks, or months as if it never stopped.
