@@ -30,6 +30,11 @@ Getting started samples
 - **Provider testing**: See `docs/provider-testing-guide.md` for testing custom providers
 - **Observability**: See `docs/observability-guide.md` for structured logging and metrics
 
+AI-assisted development
+- **AI Skills**: See `docs/skills/` for AI assistant context files
+- Copy skill files to your AI assistant's context (e.g., `.github/copilot-instructions.md` for Copilot, `.cursor/rules` for Cursor)
+- Skills provide structured context for provider implementation, orchestration authoring, and more
+
 What it is
 - Deterministic orchestration core with correlated event IDs and replay safety
 - Message-driven runtime built on Tokio, with two dispatchers:

@@ -1,97 +1,216 @@
-## Architecture and Execution Model
+# Duroxide Ecosystem Architecture
 
-Deterministic orchestration hinges on separating decision-making (user code) from side-effects (host/runtime), with all effects captured in an append-only history.
+This document describes the Duroxide ecosystem—a family of Rust crates for building durable, fault-tolerant workflows.
 
-### Components
+---
 
-- Orchestrator (user code): async function polled once per turn. It reads history and requests new work via `Action`s.
-- Runtime (in-process): executes activities and timers, routes external events, and appends resulting `Event`s. It runs two dispatchers that consume provider-backed queues (`WorkItem`) via peek-lock: OrchestrationDispatcher (orchestrator queue, including delayed `TimerFired` items) and WorkDispatcher (worker queue). Auto-resumes incomplete instances at startup.
-- Provider: persistence boundary that stores history per instance (`Provider`).
-- Workers/dispatchers: WorkDispatcher executes registered activities; timers surface as delayed `TimerFired` items in the orchestrator queue so no dedicated timer dispatcher is required. No separate ActivityWorker component.
+## What is Duroxide?
 
-### High-level data flow
+**Duroxide** is a durable execution framework for Rust. It lets you write async workflows that survive crashes, restarts, and failures. The framework handles replay, state persistence, and recovery automatically.
 
-```mermaid
-sequenceDiagram
-    participant U as User Orchestrator
-    participant R as Runtime
-    participant OD as OrchestrationDispatcher
-    participant WD as WorkDispatcher
-    participant P as Provider (persistence + queues)
+The ecosystem consists of:
 
-    U->>R: run_turn(history)
-    R->>U: poll orchestrator once
-    U-->>R: Decisions (ScheduleActivity/CreateTimer/Subscribe/Start...)
-    R->>P: append Events (schedule/subscriptions)
-    R->>WD: enqueue ActivityExecute (Worker queue)
-    R->>P: enqueue TimerFired (Orchestrator queue with visible_at delay)
-    WD->>P: enqueue ActivityCompleted/Failed (Orchestrator queue)
-    OD->>R: deliver completions to orchestrator loop
-    R->>P: append Events (completions)
-    R->>U: next run_turn with updated history
+| Project | Role | Description |
+|---------|------|-------------|
+| **duroxide** | Core Framework | Replay engine, orchestration runtime, SQLite provider |
+| **duroxide-pg** | Storage Provider | PostgreSQL provider using stored procedures |
+| **toygres** | Sample Application | PostgreSQL fleet management built on duroxide |
+
+---
+
+## Architecture Layers
+
+```
+┌───────────────────────────────────────────────────────────┐
+│                      APPLICATIONS                          │
+│                                                            │
+│                        toygres                             │
+│                    (Fleet Manager)                         │
+│                                                            │
+├───────────────────────────────────────────────────────────┤
+│                       PROVIDERS                            │
+│                                                            │
+│                      duroxide-pg                           │
+│                     (PostgreSQL)                           │
+│                                                            │
+├───────────────────────────────────────────────────────────┤
+│                     CORE FRAMEWORK                         │
+│                                                            │
+│                        duroxide                            │
+│   (Runtime, Replay Engine, SQLite Provider, Client API)   │
+│                                                            │
+└───────────────────────────────────────────────────────────┘
 ```
 
-### Event and Action model
+**Core Framework (duroxide):** The foundation. Provides the runtime, replay engine, and a bundled SQLite provider. All other projects depend on this.
 
-```mermaid
-classDiagram
-    class Event {
-      +ActivityScheduled(id, name, input)
-      +ActivityCompleted(id, result)
-      +ActivityFailed(id, error)
-      +TimerCreated(id, fire_at_ms)
-      +TimerFired(id, fire_at_ms)
-      +ExternalSubscribed(id, name)
-      +ExternalEvent(id, name, data)
-      +OrchestrationStarted(name, input)
-      +OrchestrationCompleted(output)
-      +OrchestrationFailed(error)
-      +OrchestrationChained(id, name, instance, input)
-      +SubOrchestrationScheduled(id, name, instance, input)
-      +SubOrchestrationCompleted(id, result)
-      +SubOrchestrationFailed(id, error)
-      +OrchestrationStarted(name, version, input, parent_instance?, parent_id?)
-      +OrchestrationContinuedAsNew(input)
-    }
+**Providers (duroxide-pg):** Storage backends that implement the Provider trait. Swap providers without changing application code.
 
-    class Action {
-      +CallActivity(id, name, input)
-      +CreateTimer(id, delay_ms)
-      +WaitExternal(id, name)
-      +StartOrchestrationDetached(id, name, instance, input)
-      +StartSubOrchestration(id, name, instance, input)
-      +ContinueAsNew(input)
-    }
+**Applications (toygres):** Sample applications built on duroxide. Demonstrate real-world usage patterns.
+
+---
+
+## Duroxide Core Components
+
+The core `duroxide` crate contains several key modules:
+
+```
+duroxide/
+├── Runtime
+│   ├── Orchestration Dispatcher  (processes workflow turns)
+│   ├── Worker Dispatcher         (executes activities)
+│   ├── Replay Engine             (deterministic state recovery)
+│   └── Observability             (tracing, metrics)
+│
+├── Providers
+│   ├── Provider Trait            (storage abstraction)
+│   ├── SQLite Provider           (bundled, file or in-memory)
+│   └── Provider Validation       (test harness for custom providers)
+│
+├── Client
+│   └── Orchestration Client API  (start, wait, cancel, query)
+│
+└── Futures
+    └── Durable Futures           (join, select, deterministic resolution)
 ```
 
-### Turn execution
+**Deep-dive documentation:**
 
-```mermaid
-flowchart TD
-    A[Start turn with history] --> B[Poll orchestrator once]
-    B -->|Ready| C[Output captured]
-    C --> H[Persist any new events + handle ContinueAsNew]
-    H --> Z[Stop]
-    B -->|Pending + Actions| D[Execute actions via runtime]
-    D --> E[Workers complete]
-    E --> F[Append Events]
-    F --> G[Next turn]
+| Topic | Document |
+|-------|----------|
+| Replay algorithm | [Durable Futures Internals](durable-futures-internals.md) |
+| Implementation details | [Durable Futures Internals — Implementation](durable-futures-internals.md#implementation-details-for-maintainers) |
+| Turn-based execution | [Execution Model](execution-model.md) |
+| Sub-orchestrations | [Sub-orchestrations](sub-orchestrations.md) |
+| Continue-as-new | [ContinueAsNew Semantics](continue-as-new.md) |
+| External events | [External Event Semantics](external-events.md) |
+| Provider implementation | [Provider Implementation Guide](provider-implementation-guide.md) |
+| Observability | [Observability Guide](observability-guide.md) |
+
+---
+
+## Data Flow
+
+How data flows through a duroxide application:
+
+```
+┌─────────────┐    start/wait/cancel    ┌─────────────────┐
+│   Your App  │ ─────────────────────▶  │     Client      │
+└─────────────┘                         └────────┬────────┘
+                                                 │
+                                                 ▼
+                                        ┌─────────────────┐
+                                        │    Provider     │
+                                        │  (SQLite/PG)    │
+                                        └────────┬────────┘
+                                                 │
+          ┌──────────────────────────────────────┼───────────────────────────────┐
+          │                                      │                               │
+          ▼                                      ▼                               ▼
+┌─────────────────┐                    ┌─────────────────┐              ┌───────────────┐
+│ Orchestrator    │                    │  Worker Queue   │              │ Event History │
+│ Queue           │                    │                 │              │               │
+│                 │                    │ • ActivityExec  │              │ [Event 1]     │
+│ • Start         │                    │                 │              │ [Event 2]     │
+│ • Completed     │                    │                 │              │ [Event 3]     │
+│ • TimerFired    │                    │                 │              │ ...           │
+│ • ExternalEvent │                    │                 │              │               │
+└────────┬────────┘                    └────────┬────────┘              └───────────────┘
+         │                                      │
+         ▼                                      ▼
+┌─────────────────┐                    ┌─────────────────┐
+│  Orchestration  │                    │    Worker       │
+│  Dispatcher     │                    │    Dispatcher   │
+│                 │                    │                 │
+│ • Fetch turn    │                    │ • Fetch work    │
+│ • Replay        │                    │ • Execute       │
+│ • Commit        │                    │ • Report result │
+└─────────────────┘                    └─────────────────┘
 ```
 
-### Races and correlation
+1. **Client** enqueues work (StartOrchestration) via Provider
+2. **Orchestration Dispatcher** fetches, replays, executes, commits
+3. **Worker Dispatcher** fetches activities, executes, reports completion
+4. **Provider** stores all state in Event History and manages queues
 
-- All schedule/subscribe ops allocate or adopt a correlation `id`.
-- Completions are matched by `id` and buffered in history; composition via `select`/`join` is deterministic.
-- We avoid relying on “next event in log” matching; multiple completions in one batch are safe.
+---
 
-### Multi-execution (ContinueAsNew)
+## Dependency Graph
 
-- `ContinueAsNew` ends the current execution and starts a fresh one with new input.
-- Providers persist all executions. Filesystem layout: `root/{instance}/{execution_id}.jsonl`.
-- Runtime behavior:
-  - Appends `OrchestrationContinuedAsNew` to the current execution.
-  - Calls `create_new_execution` on the provider to create the next execution with `OrchestrationStarted { name, version, input, parent_* }`.
-  - Enqueues a `StartOrchestration` work item and notifies waiters for the initial start with an empty success.
-  - External events are routed to the latest execution.
+```
+                    Applications
+                         │
+                         ▼
+                   ┌───────────┐
+                   │  toygres  │
+                   └─────┬─────┘
+                         │
+                    Providers
+                         │
+                         ▼
+                ┌─────────────────┐
+                │   duroxide-pg   │
+                └────────┬────────┘
+                         │
+                         ▼
+                ┌─────────────────┐
+                │    duroxide     │
+                │ (core framework)│
+                └─────────────────┘
+```
 
+All projects ultimately depend on the core `duroxide` crate.
 
+---
+
+## Project Details
+
+### duroxide (Core Framework)
+
+The foundation of the ecosystem. Provides:
+
+- **Replay Engine:** Deterministic state recovery from event history. See [Durable Futures Internals](durable-futures-internals.md) for details.
+- **Runtime:** Two dispatchers (orchestration + worker) with lock renewal
+- **SQLite Provider:** Bundled provider for development and embedded use
+- **Provider Trait:** Abstraction for custom storage backends
+- **Client API:** Start, wait, cancel, query orchestrations
+- **Durable Futures:** `join()`, `select()`, `select2()` with history-ordered resolution
+
+### duroxide-pg (PostgreSQL Provider)
+
+PostgreSQL implementation:
+
+- Implements Provider trait for PostgreSQL
+- Uses stored procedures for atomic operations
+- Includes `pg-stress` benchmarking tool
+- Repository: [github.com/affandar/duroxide-pg](https://github.com/affandar/duroxide-pg)
+
+### toygres (PostgreSQL Fleet Manager)
+
+Sample application demonstrating duroxide:
+
+- REST API and CLI for managing PostgreSQL instances
+- Kubernetes deployment orchestrations
+- Long-running "instance actor" pattern with health checks
+- System pruning for history cleanup
+- Repository: [github.com/affandar/toygres](https://github.com/affandar/toygres)
+
+---
+
+## Choosing a Provider
+
+| Use Case | Recommended Provider |
+|----------|---------------------|
+| Development, testing | SQLite (bundled) |
+| Embedded applications | SQLite (file-based) |
+| Production with PostgreSQL | duroxide-pg |
+| Custom storage | Implement Provider trait |
+
+---
+
+## Getting Started
+
+1. **Learn the core:** Start with `duroxide` and the [Orchestration Guide](ORCHESTRATION-GUIDE.md)
+2. **Understand internals:** Read [Durable Futures Internals](durable-futures-internals.md) for how replay works
+3. **Build a provider:** See [Provider Implementation Guide](provider-implementation-guide.md)
+4. **Study real usage:** Look at `toygres` for production patterns

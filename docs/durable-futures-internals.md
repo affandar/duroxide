@@ -15,6 +15,7 @@ If you want the user-facing programming model, start with [ORCHESTRATION-GUIDE.m
 7. [Special Operations](#special-operations)
 8. [Termination and Cancellation](#termination-and-cancellation)
 9. [Nondeterminism Detection](#nondeterminism-detection)
+10. [Implementation Details (For Maintainers)](#implementation-details-for-maintainers)
 
 ---
 
@@ -728,3 +729,94 @@ The contract you must uphold:
 - **Use context helpers**: `ctx.select2()` not `tokio::select!`, `ctx.new_guid()` not `Uuid::new_v4()`
 
 When you follow these rules, your code genuinely survives crashes—running for days, weeks, or months as if it never stopped.
+
+---
+
+## Implementation Details (For Maintainers)
+
+This section covers implementation specifics for developers modifying the replay engine.
+
+### Responsibility Boundaries
+
+The replay engine is **pure with respect to external side-effects**. It only transforms history and emits decisions. The runtime owns everything else.
+
+**ReplayEngine owns:**
+- Input assembly: combine baseline history with this-turn completion events
+- Deterministic replay: run orchestration code once with `OrchestrationContext`
+- Decision capture: collect `Action`s recorded during the poll
+- Event materialization: append new events produced during the poll
+- Nondeterminism guard: detect mismatches (completion kind, missing schedules)
+- Terminal detection: surface outcomes (Completed/Failed/Cancelled/ContinueAsNew)
+
+**Runtime owns (NOT ReplayEngine):**
+- Persisting history and actions atomically
+- Enqueuing worker/timer/orchestrator work items
+- Acknowledging queue messages
+- Version resolution and execution-id management
+
+### Turn Lifecycle (Three Phases)
+
+**Phase 1: Prep completions** (convert work items to events)
+- Validate each completion belongs to the current execution_id
+- Drop duplicates already persisted or staged this turn
+- Detect mismatches (e.g., completion kind doesn't match scheduled kind)
+- Stage converted events in `history_delta` with assigned `event_id`s
+
+**Phase 2: Execute orchestration** (replay loop)
+- Build `working_history = baseline_history + history_delta`
+- Walk through history events, polling the orchestration as needed:
+  - On schedule events: match against emitted actions, bind tokens to event IDs
+  - On completion events: deliver results to waiting futures, then re-poll
+  - On system calls: deliver result immediately, then re-poll
+- Continue until orchestration returns Ready or all history is processed
+- Final poll after all history to capture any new schedules
+
+**Phase 3: Apply results**
+- If nondeterminism flagged: return Failed with message
+- Convert remaining emitted actions to pending_actions and history_delta
+- Determine terminal state: Continue, Completed, Failed, ContinueAsNew, or Cancelled
+
+### Data Flow
+
+```
+Inputs                              Outputs
+────────────────────────────────    ────────────────────────────────
+instance: String                    history_delta: Vec<Event>
+execution_id: u64                   pending_actions: Vec<Action>
+baseline_history: Vec<Event>        TurnResult:
+completion_messages: Vec<WorkItem>    • Continue
+                                      • Completed(String)
+                                      • Failed(String)
+                                      • ContinueAsNew { input, version }
+                                      • Cancelled(String)
+```
+
+### Polling Model
+
+The replay engine polls the orchestration **multiple times per turn**:
+
+1. **Initial poll**: Start the orchestration, capture first emitted actions
+2. **After each completion delivery**: Re-poll so the orchestration can advance
+3. **Final poll**: After all history is processed, capture any remaining actions
+
+This multi-poll approach allows the orchestration to make progress through multiple `.await` points within a single turn, as long as the completions are available in history.
+
+```
+History: [Started, ActivityScheduled, ActivityCompleted, TimerScheduled, TimerFired]
+                     ↓                      ↓                    ↓            ↓
+Polls:          [poll 1]              [poll 2]             [poll 3]      [poll 4]
+                emit A1               (advances)            emit T1      (advances)
+```
+
+### Error Handling
+
+- **Nondeterminism**: Returns `Failed` with a descriptive message (e.g., "expected ActivityA, got ActivityB")
+- **Panics**: Caught and returned as `Failed("nondeterministic: ...")`
+
+### File Reference
+
+- **Implementation**: `src/runtime/replay_engine.rs`
+- **Entry points**:
+  - `ReplayEngine::new(instance, execution_id, baseline_history)`
+  - `ReplayEngine::prep_completions(messages)`
+  - `ReplayEngine::execute_orchestration(handler, input)`
