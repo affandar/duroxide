@@ -51,19 +51,28 @@ Host-visible decisions now include:
 StartSubOrchestration { id, name, instance, input }
 ```
 
-### Deterministic child instance id
+### Child instance ID
 
-- On first poll, `schedule_sub_orchestration()` allocates a correlation id `id`.
-- It records `SubOrchestrationScheduled { id, name, instance, input }` with `instance = "sub::id"` placeholder.
-- At dispatch, runtime prefixes the `instance` with the parent instance to make a globally unique deterministic id: `"{parent_instance}::sub::{id}"`.
-  - This guarantees the same child id on replays and prevents collisions across parents.
+There are two modes for child instance ID assignment:
+
+**Auto-generated (default):**
+- Use `schedule_sub_orchestration()` - no instance ID parameter
+- Runtime generates `instance = "sub::{event_id}"` and prefixes with parent: `"{parent_instance}::sub::{id}"`
+- This guarantees the same child id on replays and prevents collisions across parents
+
+**Explicit:**
+- Use `schedule_sub_orchestration_with_id("Child", "my-instance-id", input)`
+- The provided instance ID is used **exactly as provided** - no parent prefix
+- You control the full instance ID for external visibility or correlation
 
 ### Runtime flow
 
 1) Parent schedules child: pushes `SubOrchestrationScheduled` and records `StartSubOrchestration` action.
 2) Runtime dispatches `StartSubOrchestration`:
    - If parent history already has `SubOrchestrationCompleted/Failed` with same `id`, skip dispatch (idempotent).
-   - Else, derive `child_full = parent_instance::sub::id`, call `start_orchestration(child_full, name, input)` in a background task.
+   - For auto-generated IDs (starting with `sub::`): derive `child_full = "{parent_instance}::{instance}"`
+   - For explicit IDs: use the instance ID exactly as provided
+   - Call `start_orchestration(child_full, name, input)` in a background task.
    - When the child finishes, route completion back to parent via internal router messages:
      - `SubOrchCompleted { instance: parent, id, result }`
      - `SubOrchFailed { instance: parent, id, error }`

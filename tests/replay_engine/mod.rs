@@ -21,3 +21,4 @@ mod partial_completion;
 mod replay_with_completions;
 mod sequential_progress;
 mod sub_orchestration;
+mod unobserved_futures;

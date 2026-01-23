@@ -103,6 +103,11 @@ ScheduledActivityIdentifier {
 
 2. **Batch delete on ack**: In `ack_orchestration_item`, delete all entries matching
    the `cancelled_activities` list atomically within the same transaction.
+   
+   > ⚠️ **Ordering matters**: The enqueue (INSERT) of `worker_items` must happen BEFORE
+   > the delete of `cancelled_activities`. When an activity is scheduled and immediately
+   > dropped (same turn), both lists contain the same activity_id. INSERT-then-DELETE
+   > is a no-op; DELETE-then-INSERT would leave a stale activity in the queue.
 
 3. **Fail ack when entry missing**: `ack_work_item` must return a **permanent error**
    if the entry was already deleted (lock stolen).
@@ -191,6 +196,16 @@ impl Provider for MyProvider {
         // 6. Enqueue orchestrator_items to orchestrator queue (may include TimerFired with visible_at delay)
         // 7. Delete matching entries from worker_queue for cancelled_activities (lock stealing)
         // 8. Delete locked messages (release lock)
+        //
+        // ⚠️ CRITICAL ORDERING: Steps 5 and 7 may reference the SAME activity_id when an
+        // orchestration schedules an activity and immediately drops its future (e.g., in a
+        // select2 where the other branch wins, or explicit drop without await). In this case:
+        // - worker_items contains the ActivityExecute (INSERT)
+        // - cancelled_activities contains the same activity_id (DELETE)
+        //
+        // The INSERT (step 5) MUST happen BEFORE the DELETE (step 7). This makes the
+        // INSERT+DELETE pair a no-op within the transaction. If DELETE happened first,
+        // the activity would remain in the worker queue after commit.
         
         todo!("See detailed docs below")
     }

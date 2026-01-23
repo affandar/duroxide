@@ -450,6 +450,136 @@ pub type OrchestrationHandlerRef = Arc<dyn runtime::OrchestrationHandler>;
 // Heterogeneous Select Result Types
 // ============================================================================
 
+// ============================================================================
+// Schedule Kind and DurableFuture (Cancellation Support)
+// ============================================================================
+
+/// Identifies the kind of scheduled work for cancellation purposes.
+///
+/// When a `DurableFuture` is dropped without completing, the runtime uses
+/// this discriminator to determine how to cancel the underlying work:
+/// - **Activity**: Lock stealing via provider (DELETE from worker_queue)
+/// - **Timer**: No-op (virtual construct, no external state)
+/// - **ExternalWait**: No-op (virtual construct, no external state)  
+/// - **SubOrchestration**: Enqueue `CancelInstance` work item for child
+#[derive(Debug, Clone)]
+pub enum ScheduleKind {
+    /// A scheduled activity execution
+    Activity {
+        /// Activity name for debugging/logging
+        name: String,
+    },
+    /// A durable timer
+    Timer,
+    /// Waiting for an external event
+    ExternalWait {
+        /// Event name for debugging/logging
+        event_name: String,
+    },
+    /// A sub-orchestration
+    SubOrchestration {
+        /// Token for this schedule (used to look up resolved instance ID)
+        token: u64,
+    },
+}
+
+/// A wrapper around scheduled futures that supports cancellation on drop.
+///
+/// When a `DurableFuture` is dropped without completing (e.g., as a select loser,
+/// or when going out of scope without being awaited), the underlying scheduled work
+/// is cancelled:
+///
+/// - **Activities**: Lock stealing via provider (removes from worker queue)
+/// - **Sub-orchestrations**: `CancelInstance` work item enqueued for child
+/// - **Timers/External waits**: No-op (virtual constructs with no external state)
+///
+/// # Examples
+///
+/// ```rust,no_run
+/// # use duroxide::OrchestrationContext;
+/// # use std::time::Duration;
+/// # async fn example(ctx: OrchestrationContext) -> Result<String, String> {
+/// // Activity scheduled - if timer wins, activity gets cancelled
+/// let activity = ctx.schedule_activity("SlowWork", "input");
+/// let timeout = ctx.schedule_timer(Duration::from_secs(5));
+///
+/// match ctx.select2(activity, timeout).await {
+///     duroxide::Either2::First(result) => result,
+///     duroxide::Either2::Second(()) => Err("Timed out - activity cancelled".to_string()),
+/// }
+/// # }
+/// ```
+///
+/// # Drop Semantics
+///
+/// Unlike regular Rust futures which are inert on drop, `DurableFuture` has
+/// meaningful drop semantics similar to `File` (closes on drop) or `MutexGuard`
+/// (releases lock on drop). This is intentional - we want unobserved scheduled
+/// work to be cancelled rather than leaked.
+///
+/// **Note:** Using `std::mem::forget()` on a `DurableFuture` will bypass
+/// cancellation, causing the scheduled work to run but its result to be lost.
+pub struct DurableFuture<T> {
+    /// Token assigned at creation (before schedule_id is known)
+    token: u64,
+    /// What kind of schedule this represents
+    kind: ScheduleKind,
+    /// Reference to context for cancellation registration
+    ctx: OrchestrationContext,
+    /// Whether the future has completed (to skip cancellation)
+    completed: bool,
+    /// The underlying future
+    inner: std::pin::Pin<Box<dyn Future<Output = T> + Send>>,
+}
+
+impl<T> DurableFuture<T> {
+    /// Create a new `DurableFuture` wrapping an inner future.
+    fn new(
+        token: u64,
+        kind: ScheduleKind,
+        ctx: OrchestrationContext,
+        inner: impl Future<Output = T> + Send + 'static,
+    ) -> Self {
+        Self {
+            token,
+            kind,
+            ctx,
+            completed: false,
+            inner: Box::pin(inner),
+        }
+    }
+}
+
+impl<T> Future for DurableFuture<T> {
+    type Output = T;
+
+    fn poll(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> Poll<T> {
+        match self.inner.as_mut().poll(cx) {
+            Poll::Ready(value) => {
+                self.completed = true;
+                Poll::Ready(value)
+            }
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}
+
+impl<T> Drop for DurableFuture<T> {
+    fn drop(&mut self) {
+        if !self.completed {
+            // Future dropped without completing - trigger cancellation.
+            // Note: During dehydration (TurnResult::Continue), the orchestration future
+            // is dropped after collect_cancelled_from_context() has already run, so these
+            // cancellations go into a context that's about to be dropped. This is safe
+            // because the next turn creates a fresh context.
+            self.ctx.mark_token_cancelled(self.token, &self.kind);
+        }
+    }
+}
+
+// DurableFuture is Send if T is Send (inner is already Send-boxed)
+unsafe impl<T: Send> Send for DurableFuture<T> {}
+
 /// Result type for `select2` - represents which of two futures completed first.
 ///
 /// Use this when racing two futures with different output types:
@@ -586,6 +716,42 @@ pub const INITIAL_EXECUTION_ID: u64 = 1;
 /// Initial event ID for new executions.
 /// The first event (OrchestrationStarted) always has event_id = 1.
 pub const INITIAL_EVENT_ID: u64 = 1;
+
+// =============================================================================
+// Sub-orchestration instance ID conventions
+// =============================================================================
+
+/// Prefix for auto-generated sub-orchestration instance IDs.
+/// IDs starting with this prefix will have parent prefix added: `{parent}::{sub::N}`
+pub const SUB_ORCH_AUTO_PREFIX: &str = "sub::";
+
+/// Prefix for placeholder instance IDs before event ID assignment.
+/// These are replaced with `sub::{event_id}` during action processing.
+pub(crate) const SUB_ORCH_PENDING_PREFIX: &str = "sub::pending_";
+
+/// Determine if a sub-orchestration instance ID is auto-generated (needs parent prefix).
+///
+/// Auto-generated IDs start with "sub::" and will have the parent instance prefixed
+/// to create a globally unique ID: `{parent_instance}::{child_instance}`.
+///
+/// Explicit IDs (those not starting with "sub::") are used exactly as provided.
+#[inline]
+pub fn is_auto_generated_sub_orch_id(instance: &str) -> bool {
+    instance.starts_with(SUB_ORCH_AUTO_PREFIX)
+}
+
+/// Build the full child instance ID, adding parent prefix only for auto-generated IDs.
+///
+/// - Auto-generated IDs (starting with "sub::"): `{parent}::{child}` (e.g., `parent-1::sub::5`)
+/// - Explicit IDs: used exactly as provided (e.g., `my-custom-child-id`)
+#[inline]
+pub fn build_child_instance_id(parent_instance: &str, child_instance: &str) -> String {
+    if is_auto_generated_sub_orch_id(child_instance) {
+        format!("{parent_instance}::{child_instance}")
+    } else {
+        child_instance.to_string()
+    }
+}
 
 /// Structured error details for orchestration failures.
 ///
@@ -1179,6 +1345,14 @@ struct CtxInner {
     external_arrivals: std::collections::HashMap<String, Vec<String>>,
     /// Next subscription index per external event name
     external_next_index: std::collections::HashMap<String, usize>,
+    /// Sub-orchestration token -> resolved instance ID mapping
+    sub_orchestration_instances: std::collections::HashMap<u64, String>,
+
+    // === Cancellation Tracking ===
+    /// Tokens that have been cancelled (dropped without completing)
+    cancelled_tokens: std::collections::HashSet<u64>,
+    /// Cancelled token -> ScheduleKind mapping (for determining cancellation action)
+    cancelled_token_kinds: std::collections::HashMap<u64, ScheduleKind>,
 
     // Execution metadata
     execution_id: u64,
@@ -1209,6 +1383,11 @@ impl CtxInner {
             external_subscriptions: Default::default(),
             external_arrivals: Default::default(),
             external_next_index: Default::default(),
+            sub_orchestration_instances: Default::default(),
+
+            // Cancellation tracking
+            cancelled_tokens: Default::default(),
+            cancelled_token_kinds: Default::default(),
 
             // Execution metadata
             execution_id,
@@ -1290,6 +1469,57 @@ impl CtxInner {
         let (name, subscription_index) = self.external_subscriptions.get(&schedule_id)?;
         let arrivals = self.external_arrivals.get(name)?;
         arrivals.get(*subscription_index)
+    }
+
+    // === Cancellation Helpers ===
+
+    /// Mark a token as cancelled (called by DurableFuture::drop).
+    fn mark_token_cancelled(&mut self, token: u64, kind: ScheduleKind) {
+        self.cancelled_tokens.insert(token);
+        self.cancelled_token_kinds.insert(token, kind);
+    }
+
+    /// Get cancelled activity schedule_ids (tokens that were bound and then dropped).
+    fn get_cancelled_activity_ids(&self) -> Vec<u64> {
+        let mut ids = Vec::new();
+        for &token in &self.cancelled_tokens {
+            if let Some(kind) = self.cancelled_token_kinds.get(&token) {
+                if matches!(kind, ScheduleKind::Activity { .. }) {
+                    if let Some(&schedule_id) = self.token_bindings.get(&token) {
+                        ids.push(schedule_id);
+                    }
+                }
+            }
+        }
+        ids
+    }
+
+    /// Get cancelled sub-orchestration instance IDs.
+    fn get_cancelled_sub_orchestration_ids(&self) -> Vec<String> {
+        let mut ids = Vec::new();
+        for &token in &self.cancelled_tokens {
+            if let Some(ScheduleKind::SubOrchestration { token: sub_token }) =
+                self.cancelled_token_kinds.get(&token)
+            {
+                // Look up the resolved instance ID from our mapping
+                if let Some(instance_id) = self.sub_orchestration_instances.get(sub_token) {
+                    ids.push(instance_id.clone());
+                }
+                // If not in mapping, the action wasn't bound yet - nothing to cancel
+            }
+        }
+        ids
+    }
+
+    /// Bind a sub-orchestration token to its resolved instance ID.
+    fn bind_sub_orchestration_instance(&mut self, token: u64, instance_id: String) {
+        self.sub_orchestration_instances.insert(token, instance_id);
+    }
+
+    /// Clear cancelled tokens (called after turn completion to avoid re-processing).
+    fn clear_cancelled_tokens(&mut self) {
+        self.cancelled_tokens.clear();
+        self.cancelled_token_kinds.clear();
     }
 
     // Note: deterministic GUID generation was removed from public API.
@@ -1713,6 +1943,35 @@ impl OrchestrationContext {
     #[doc(hidden)]
     pub fn deliver_external_event(&self, name: String, data: String) {
         self.inner.lock().unwrap().deliver_external_event(name, data);
+    }
+
+    // =========================================================================
+    // Cancellation Support (DurableFuture integration)
+    // =========================================================================
+
+    /// Mark a token as cancelled (called by DurableFuture::drop).
+    pub(crate) fn mark_token_cancelled(&self, token: u64, kind: &ScheduleKind) {
+        self.inner.lock().unwrap().mark_token_cancelled(token, kind.clone());
+    }
+
+    /// Get cancelled activity schedule_ids for this turn.
+    pub(crate) fn get_cancelled_activity_ids(&self) -> Vec<u64> {
+        self.inner.lock().unwrap().get_cancelled_activity_ids()
+    }
+
+    /// Get cancelled sub-orchestration instance IDs for this turn.
+    pub(crate) fn get_cancelled_sub_orchestration_ids(&self) -> Vec<String> {
+        self.inner.lock().unwrap().get_cancelled_sub_orchestration_ids()
+    }
+
+    /// Clear cancelled tokens after processing (called by replay engine).
+    pub(crate) fn clear_cancelled_tokens(&self) {
+        self.inner.lock().unwrap().clear_cancelled_tokens();
+    }
+
+    /// Bind a sub-orchestration token to its resolved instance ID.
+    pub(crate) fn bind_sub_orchestration_instance(&self, token: u64, instance_id: String) {
+        self.inner.lock().unwrap().bind_sub_orchestration_instance(token, instance_id);
     }
 
     // =========================================================================
@@ -2321,13 +2580,14 @@ impl OrchestrationContext {
 
 impl OrchestrationContext {
     // =========================================================================
-    // Core scheduling methods - work with any Future type
+    // Core scheduling methods - return DurableFuture with cancellation support
     // =========================================================================
 
-    /// Schedule an activity and return a simple future.
+    /// Schedule an activity and return a cancellation-aware future.
     ///
-    /// It returns a regular `impl Future` that can be used with standard combinators
-    /// like `futures::join_all` and `futures::select_biased!`.
+    /// Returns a [`DurableFuture`] that supports cancellation on drop. If the future
+    /// is dropped without completing (e.g., as a select loser), the activity will be
+    /// cancelled via lock stealing.
     ///
     /// # Example
     ///
@@ -2345,7 +2605,7 @@ impl OrchestrationContext {
         &self,
         name: impl Into<String>,
         input: impl Into<String>,
-    ) -> impl Future<Output = Result<String, String>> {
+    ) -> DurableFuture<Result<String, String>> {
         let name: String = name.into();
         let input: String = input.into();
 
@@ -2359,9 +2619,9 @@ impl OrchestrationContext {
         });
         drop(inner);
 
-        // Return a future that polls for the result
+        // Create the inner polling future
         let ctx = self.clone();
-        std::future::poll_fn(move |_cx| {
+        let inner_future = std::future::poll_fn(move |_cx| {
             let inner = ctx.inner.lock().expect("Mutex should not be poisoned");
             if let Some(result) = inner.get_result(token) {
                 match result {
@@ -2372,7 +2632,15 @@ impl OrchestrationContext {
             } else {
                 Poll::Pending
             }
-        })
+        });
+
+        // Wrap in DurableFuture for cancellation support
+        DurableFuture::new(
+            token,
+            ScheduleKind::Activity { name },
+            self.clone(),
+            inner_future,
+        )
     }
 
     /// Typed version of schedule_activity that serializes input and deserializes output.
@@ -2393,8 +2661,12 @@ impl OrchestrationContext {
         }
     }
 
-    /// Schedule a timer and return a simple future.
-    pub fn schedule_timer(&self, delay: std::time::Duration) -> impl Future<Output = ()> {
+    /// Schedule a timer and return a cancellation-aware future.
+    ///
+    /// Timers are virtual constructs - dropping the future is a no-op since there's
+    /// no external state to cancel. However, wrapping in `DurableFuture` maintains
+    /// API consistency.
+    pub fn schedule_timer(&self, delay: std::time::Duration) -> DurableFuture<()> {
         let delay_ms = delay.as_millis() as u64;
 
         let mut inner = self.inner.lock().expect("Mutex should not be poisoned");
@@ -2408,7 +2680,7 @@ impl OrchestrationContext {
         drop(inner);
 
         let ctx = self.clone();
-        std::future::poll_fn(move |_cx| {
+        let inner_future = std::future::poll_fn(move |_cx| {
             let inner = ctx.inner.lock().expect("Mutex should not be poisoned");
             if let Some(result) = inner.get_result(token) {
                 match result {
@@ -2418,11 +2690,17 @@ impl OrchestrationContext {
             } else {
                 Poll::Pending
             }
-        })
+        });
+
+        DurableFuture::new(token, ScheduleKind::Timer, self.clone(), inner_future)
     }
 
-    /// Subscribe to an external event and return a simple future.
-    pub fn schedule_wait(&self, name: impl Into<String>) -> impl Future<Output = String> {
+    /// Subscribe to an external event and return a cancellation-aware future.
+    ///
+    /// External waits are virtual constructs - dropping the future is a no-op since
+    /// there's no external state to cancel. However, wrapping in `DurableFuture`
+    /// maintains API consistency.
+    pub fn schedule_wait(&self, name: impl Into<String>) -> DurableFuture<String> {
         let name: String = name.into();
 
         let mut inner = self.inner.lock().expect("Mutex should not be poisoned");
@@ -2434,7 +2712,7 @@ impl OrchestrationContext {
         drop(inner);
 
         let ctx = self.clone();
-        std::future::poll_fn(move |_cx| {
+        let inner_future = std::future::poll_fn(move |_cx| {
             let inner = ctx.inner.lock().expect("Mutex should not be poisoned");
             // Only resolve once the token has been bound to a persisted schedule_id.
             // External events arriving before subscription binding are currently unsupported.
@@ -2444,7 +2722,14 @@ impl OrchestrationContext {
                 }
             }
             Poll::Pending
-        })
+        });
+
+        DurableFuture::new(
+            token,
+            ScheduleKind::ExternalWait { event_name: name },
+            self.clone(),
+            inner_future,
+        )
     }
 
     /// Typed version of schedule_wait.
@@ -2459,35 +2744,35 @@ impl OrchestrationContext {
         }
     }
 
-    /// Schedule a sub-orchestration and return a future.
+    /// Schedule a sub-orchestration and return a cancellation-aware future.
     ///
-    /// The child instance ID is auto-generated from the event ID.
+    /// The child instance ID is auto-generated from the event ID with a parent prefix.
     ///
-    /// # Panics
-    ///
-    /// Panics if called when not in simplified replay mode.
+    /// Returns a [`DurableFuture`] that supports cancellation on drop. If the future
+    /// is dropped without completing, a `CancelInstance` work item will be enqueued
+    /// for the child orchestration.
     pub fn schedule_sub_orchestration(
         &self,
         name: impl Into<String>,
         input: impl Into<String>,
-    ) -> impl Future<Output = Result<String, String>> {
-        self.schedule_sub_orchestration_with_id(name, None::<String>, input)
+    ) -> DurableFuture<Result<String, String>> {
+        self.schedule_sub_orchestration_versioned_with_id_internal(name, None, None, input)
     }
 
-    /// Schedule a sub-orchestration with an explicit instance ID (simplified mode only).
+    /// Schedule a sub-orchestration with an explicit instance ID.
     ///
-    /// If `instance` is `Some`, that exact value is used as the child instance ID.
-    /// If `instance` is `None`, the instance ID is auto-generated from the event ID (e.g., `sub::5`).
+    /// The provided `instance` value is used exactly as the child instance ID,
+    /// without any parent prefix. Use this when you need to control the exact
+    /// instance ID for the sub-orchestration.
     ///
-    /// This is useful for tests that need to know the exact child instance ID without
-    /// guessing based on event sequence.
+    /// For auto-generated instance IDs, use [`schedule_sub_orchestration`] instead.
     pub fn schedule_sub_orchestration_with_id(
         &self,
         name: impl Into<String>,
-        instance: Option<impl Into<String>>,
+        instance: impl Into<String>,
         input: impl Into<String>,
-    ) -> impl Future<Output = Result<String, String>> {
-        self.schedule_sub_orchestration_versioned_with_id(name, None, instance, input)
+    ) -> DurableFuture<Result<String, String>> {
+        self.schedule_sub_orchestration_versioned_with_id_internal(name, None, Some(instance.into()), input)
     }
 
     /// Schedule a versioned sub-orchestration.
@@ -2499,37 +2784,62 @@ impl OrchestrationContext {
         name: impl Into<String>,
         version: Option<String>,
         input: impl Into<String>,
-    ) -> impl Future<Output = Result<String, String>> {
-        self.schedule_sub_orchestration_versioned_with_id(name, version, None::<String>, input)
+    ) -> DurableFuture<Result<String, String>> {
+        self.schedule_sub_orchestration_versioned_with_id_internal(name, version, None, input)
     }
 
     /// Schedule a versioned sub-orchestration with an explicit instance ID.
+    ///
+    /// The provided `instance` value is used exactly as the child instance ID,
+    /// without any parent prefix.
+    ///
+    /// Returns a [`DurableFuture`] that supports cancellation on drop. If the future
+    /// is dropped without completing, a `CancelInstance` work item will be enqueued
+    /// for the child orchestration.
     pub fn schedule_sub_orchestration_versioned_with_id(
         &self,
         name: impl Into<String>,
         version: Option<String>,
-        instance: Option<impl Into<String>>,
+        instance: impl Into<String>,
         input: impl Into<String>,
-    ) -> impl Future<Output = Result<String, String>> {
+    ) -> DurableFuture<Result<String, String>> {
+        self.schedule_sub_orchestration_versioned_with_id_internal(name, version, Some(instance.into()), input)
+    }
+
+    /// Internal implementation for sub-orchestration scheduling.
+    ///
+    /// If `instance` is `Some`, it's an explicit ID (no parent prefix).
+    /// If `instance` is `None`, auto-generate from event ID (with parent prefix).
+    fn schedule_sub_orchestration_versioned_with_id_internal(
+        &self,
+        name: impl Into<String>,
+        version: Option<String>,
+        instance: Option<String>,
+        input: impl Into<String>,
+    ) -> DurableFuture<Result<String, String>> {
         let name: String = name.into();
-        let instance: Option<String> = instance.map(|s| s.into());
         let input: String = input.into();
 
         let mut inner = self.inner.lock().expect("Mutex should not be poisoned");
 
-        // Use explicit instance if provided, otherwise use placeholder that will be replaced
-        let placeholder_instance = instance.unwrap_or_else(|| format!("sub::pending_{}", inner.next_token + 1));
+        // For explicit instance IDs, use them as-is (no parent prefix will be added).
+        // For auto-generated, use placeholder that will be replaced with SUB_ORCH_AUTO_PREFIX + event_id
+        // and parent prefix will be added.
+        let action_instance = match &instance {
+            Some(explicit_id) => explicit_id.clone(),
+            None => format!("{}{}", SUB_ORCH_PENDING_PREFIX, inner.next_token + 1),
+        };
         let token = inner.emit_action(Action::StartSubOrchestration {
             scheduling_event_id: 0,
             name: name.clone(),
             version,
-            instance: placeholder_instance,
+            instance: action_instance.clone(),
             input: input.clone(),
         });
         drop(inner);
 
         let ctx = self.clone();
-        std::future::poll_fn(move |_cx| {
+        let inner_future = std::future::poll_fn(move |_cx| {
             let inner = ctx.inner.lock().expect("Mutex should not be poisoned");
             if let Some(result) = inner.get_result(token) {
                 match result {
@@ -2540,7 +2850,16 @@ impl OrchestrationContext {
             } else {
                 Poll::Pending
             }
-        })
+        });
+
+        // For cancellation, we store the token. The consumption path will look up
+        // the resolved instance ID from the sub_orchestration_instances mapping.
+        DurableFuture::new(
+            token,
+            ScheduleKind::SubOrchestration { token },
+            self.clone(),
+            inner_future,
+        )
     }
 
     /// Typed version of schedule_sub_orchestration.
@@ -2549,7 +2868,12 @@ impl OrchestrationContext {
         name: impl Into<String>,
         input: &In,
     ) -> impl Future<Output = Result<Out, String>> {
-        self.schedule_sub_orchestration_with_id_typed(name, None::<String>, input)
+        let payload = crate::_typed_codec::Json::encode(input).expect("encode");
+        let fut = self.schedule_sub_orchestration(name, payload);
+        async move {
+            let s = fut.await?;
+            crate::_typed_codec::Json::decode::<Out>(&s)
+        }
     }
 
     /// Typed version of schedule_sub_orchestration_with_id.
@@ -2560,7 +2884,7 @@ impl OrchestrationContext {
     pub fn schedule_sub_orchestration_with_id_typed<In: serde::Serialize, Out: serde::de::DeserializeOwned>(
         &self,
         name: impl Into<String>,
-        instance: Option<impl Into<String>>,
+        instance: impl Into<String>,
         input: &In,
     ) -> impl Future<Output = Result<Out, String>> {
         let payload = crate::_typed_codec::Json::encode(input).expect("encode");

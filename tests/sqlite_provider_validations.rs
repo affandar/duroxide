@@ -105,6 +105,7 @@ mod tests {
         test_renew_returns_missing_when_instance_deleted,
         test_renew_returns_running_when_orchestration_active,
         test_renew_returns_terminal_when_orchestration_completed,
+        test_same_activity_in_worker_items_and_cancelled_is_noop,
         test_sub_orchestration_instance_creation,
         test_timer_delayed_visibility,
         test_worker_ack_atomicity,
@@ -529,6 +530,11 @@ mod tests {
     #[tokio::test]
     async fn test_sqlite_batch_cancellation_deletes_multiple_activities() {
         test_batch_cancellation_deletes_multiple_activities(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_same_activity_in_worker_items_and_cancelled_is_noop() {
+        test_same_activity_in_worker_items_and_cancelled_is_noop(&SqliteTestFactory).await;
     }
 
     // Deletion tests

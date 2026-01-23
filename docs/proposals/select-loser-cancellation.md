@@ -6,7 +6,7 @@
 
 ## Problem Statement
 
-When a `ScheduledFuture` is dropped without completing, the underlying scheduled work should be cancelled. This applies to three scenarios:
+When a `DurableFuture` is dropped without completing, the underlying scheduled work should be cancelled. This applies to three scenarios:
 
 ### Scenario 1: Select Losers
 
@@ -98,11 +98,11 @@ Activities are only cancelled when the orchestration reaches a **terminal state*
 
 This is wasteful - a long-running activity that was abandoned will continue consuming resources.
 
-## Proposed Solution: ScheduledFuture Wrapper Type
+## Proposed Solution: DurableFuture Wrapper Type
 
 ### Design Overview
 
-Wrap all `schedule_*` return types in a `ScheduledFuture<T>` that:
+Wrap all `schedule_*` return types in a `DurableFuture<T>` that:
 1. Carries a **token** (known at creation) before `schedule_id` is assigned
 2. Implements `Drop` to mark the token as cancelled
 3. The replay engine handles cancelled tokens at bind time
@@ -126,7 +126,7 @@ pub enum ScheduleKind {
 }
 
 /// Wrapper for all scheduled futures with cancellation support
-pub struct ScheduledFuture<T> {
+pub struct DurableFuture<T> {
     /// Token assigned at creation (before schedule_id is known)
     token: u64,
     /// What kind of schedule this represents
@@ -137,7 +137,7 @@ pub struct ScheduledFuture<T> {
     inner: Pin<Box<dyn Future<Output = T> + Send>>,
 }
 
-impl<T> Future for ScheduledFuture<T> {
+impl<T> Future for DurableFuture<T> {
     type Output = T;
     
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<T> {
@@ -145,7 +145,7 @@ impl<T> Future for ScheduledFuture<T> {
     }
 }
 
-impl<T> Drop for ScheduledFuture<T> {
+impl<T> Drop for DurableFuture<T> {
     fn drop(&mut self) {
         // Only cancel if future wasn't completed
         if !self.completed {
@@ -169,7 +169,7 @@ struct ReplayEngine {
 }
 
 impl ReplayEngine {
-    /// Called by ScheduledFuture::drop()
+    /// Called by DurableFuture::drop()
     pub fn mark_token_cancelled(&mut self, token: u64, kind: &ScheduleKind) {
         self.cancelled_tokens.insert(token);
         
@@ -202,11 +202,11 @@ impl ReplayEngine {
 
 ### Cancellation Consumption Flow
 
-The `cancelled_activity_ids` populated by `ScheduledFuture::Drop` flows through the system to trigger **lock stealing** at the provider level:
+The `cancelled_activity_ids` populated by `DurableFuture::Drop` flows through the system to trigger **lock stealing** at the provider level:
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
-│ ScheduledFuture::drop()                                                  │
+│ DurableFuture::drop()                                                  │
 │   Calls ctx.mark_token_cancelled(token, kind)                            │
 └────────────────────────┬─────────────────────────────────────────────────┘
                          │
@@ -251,7 +251,7 @@ Sub-orchestrations use a different cancellation mechanism than activities. Inste
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
-│ ScheduledFuture::drop() for SubOrchestration                             │
+│ DurableFuture::drop() for SubOrchestration                             │
 │   Calls ctx.mark_token_cancelled(token, ScheduleKind::SubOrchestration)  │
 └────────────────────────┬─────────────────────────────────────────────────┘
                          │
@@ -344,19 +344,19 @@ for child_instance_id in turn.cancelled_sub_orchestrations() {
 
 ### API Changes
 
-The `schedule_*` methods return `ScheduledFuture<T>` instead of `impl Future`:
+The `schedule_*` methods return `DurableFuture<T>` instead of `impl Future`:
 
 ```rust
 impl OrchestrationContext {
-    /// Schedule an activity - returns ScheduledFuture for cancellation support
+    /// Schedule an activity - returns DurableFuture for cancellation support
     pub fn schedule_activity<I: Serialize>(
         &self,
         name: &str,
         input: I,
-    ) -> ScheduledFuture<Result<String, String>> {
+    ) -> DurableFuture<Result<String, String>> {
         let token = self.next_token();
         let inner = self.schedule_activity_inner(name, input);
-        ScheduledFuture {
+        DurableFuture {
             token,
             kind: ScheduleKind::Activity { name: name.to_string() },
             ctx: self.clone(),
@@ -379,7 +379,7 @@ impl OrchestrationContext {
    - `ExternalWait { event_name: String }`
    - `SubOrchestration { child_instance_id: String }`
 
-2. **Add ScheduledFuture wrapper** - `src/lib.rs` or new `src/scheduled_future.rs`
+2. **Add DurableFuture wrapper** - `src/lib.rs` or new `src/scheduled_future.rs`
    - Token field (assigned at creation)
    - Kind field (ScheduleKind)
    - Context reference
@@ -405,10 +405,10 @@ impl OrchestrationContext {
 
 ### Phase 2: Update schedule_* methods
 
-1. **schedule_activity** - Return `ScheduledFuture<Result<String, String>>`
-2. **schedule_timer** - Return `ScheduledFuture<()>`
-3. **schedule_wait** - Return `ScheduledFuture<Option<String>>`
-4. **schedule_sub_orchestration** - Return `ScheduledFuture<Result<String, String>>`
+1. **schedule_activity** - Return `DurableFuture<Result<String, String>>`
+2. **schedule_timer** - Return `DurableFuture<()>`
+3. **schedule_wait** - Return `DurableFuture<Option<String>>`
+4. **schedule_sub_orchestration** - Return `DurableFuture<Result<String, String>>`
    - Capture child_instance_id in ScheduleKind
 
 **Estimated effort:** 1-2 hours
@@ -453,8 +453,8 @@ impl OrchestrationContext {
 
 | Test Name | Description |
 |-----------|-------------|
-| `token_cancelled_before_binding` | Drop ScheduledFuture before first poll - verify no action emitted |
-| `token_cancelled_after_binding` | Drop ScheduledFuture after poll - verify schedule_id in cancelled list |
+| `token_cancelled_before_binding` | Drop DurableFuture before first poll - verify no action emitted |
+| `token_cancelled_after_binding` | Drop DurableFuture after poll - verify schedule_id in cancelled list |
 | `token_not_cancelled_on_completion` | Let future complete normally - verify NOT in cancelled list |
 | `multiple_tokens_partial_cancel` | Create 3 futures, cancel 2 - verify correct ones in list |
 
@@ -637,7 +637,7 @@ async fn rapid_select_drops_no_leak() {
 | `cancel_timer_no_provider_call` | Cancelled timer doesn't call provider (timers are virtual) |
 | `double_drop_idempotent` | Somehow dropping twice (shouldn't happen) is safe |
 
-## Ergonomics Evaluation: ScheduledFuture vs Regular Rust Futures
+## Ergonomics Evaluation: DurableFuture vs Regular Rust Futures
 
 ### What Matches Regular Future Expectations ✅
 
@@ -648,11 +648,11 @@ async fn rapid_select_drops_no_leak() {
 | Can store in variables | `let fut = ctx.schedule_activity(...)` | ✅ |
 | Can pass to combinators | Works with `select2`, `join`, etc. | ✅ |
 | Can wrap in async block | `async { fut.await }` | ✅ |
-| Can collect in Vec | `Vec<ScheduledFuture<T>>` | ✅ |
+| Can collect in Vec | `Vec<DurableFuture<T>>` | ✅ |
 
 ### What Differs From Regular Futures ⚠️
 
-| Aspect | Regular Future | ScheduledFuture | Impact |
+| Aspect | Regular Future | DurableFuture | Impact |
 |--------|----------------|-----------------|--------|
 | **Drop semantics** | No-op (memory cleanup) | Triggers cancellation | Semantic side effect |
 | **Post-poll drop** | Inert | Cancels running work | Unexpected for Rust devs |
@@ -665,14 +665,14 @@ async fn rapid_select_drops_no_leak() {
 
 #### 1. Drop With Side Effects
 
-Regular Rust futures are inert on drop - dropping just frees memory. `ScheduledFuture` has a "meaningful destructor" that triggers external state changes (cancellation).
+Regular Rust futures are inert on drop - dropping just frees memory. `DurableFuture` has a "meaningful destructor" that triggers external state changes (cancellation).
 
 ```rust
 // Regular future: nothing happens externally
 let fut = async { do_something().await };
 drop(fut); // Just memory freed
 
-// ScheduledFuture: external side effect
+// DurableFuture: external side effect
 let fut = ctx.schedule_activity("Task", input);
 drop(fut); // Cancellation triggered!
 ```
@@ -687,11 +687,11 @@ std::mem::forget(fut); // Drop never runs, no cancellation!
 // Activity runs but result is never observed
 ```
 
-**Mitigation:** This is a known Rust pattern limitation. Same issue exists with `MutexGuard`, file handles, etc. Document that `forget()` on ScheduledFuture causes resource leaks.
+**Mitigation:** This is a known Rust pattern limitation. Same issue exists with `MutexGuard`, file handles, etc. Document that `forget()` on DurableFuture causes resource leaks.
 
 #### 3. No Clone
 
-Regular futures sometimes implement `Clone` (e.g., `futures::future::Shared`). `ScheduledFuture` cannot - cloning would create two owners of the same cancellation token.
+Regular futures sometimes implement `Clone` (e.g., `futures::future::Shared`). `DurableFuture` cannot - cloning would create two owners of the same cancellation token.
 
 ```rust
 // This won't compile (good!)
@@ -699,7 +699,7 @@ let fut1 = ctx.schedule_activity("Task", input);
 let fut2 = fut1.clone(); // Error: Clone not implemented
 ```
 
-**Mitigation:** This matches most async patterns. Users who need shared futures can wrap in `Arc<Mutex<Option<ScheduledFuture<T>>>>` or use a channel.
+**Mitigation:** This matches most async patterns. Users who need shared futures can wrap in `Arc<Mutex<Option<DurableFuture<T>>>>` or use a channel.
 
 #### 4. Collection Drop Semantics
 
@@ -722,7 +722,7 @@ drop(futures);
 | `tokio::sync::OwnedMutexGuard` | Releases lock | Similar - external effect |
 | `std::fs::File` | Closes file | Similar - external effect |
 | `async_std::task::JoinHandle` | Detaches task | Different - we cancel |
-| `ScheduledFuture` | Cancels work | Novel for futures |
+| `DurableFuture` | Cancels work | Novel for futures |
 
 ### Recommendation
 
@@ -742,10 +742,10 @@ The semantic differences are **acceptable and intentional**:
 
 ### Risk 1: API Change Compatibility
 
-**Impact:** `schedule_*` return type changes from `impl Future` to `ScheduledFuture<T>`
+**Impact:** `schedule_*` return type changes from `impl Future` to `DurableFuture<T>`
 
 **Mitigation:** 
-- `ScheduledFuture<T>` implements `Future<Output = T>`, so `.await` works identically
+- `DurableFuture<T>` implements `Future<Output = T>`, so `.await` works identically
 - **Existing tests require no changes** - all `.await` patterns work unchanged
 - Async block wrapping (`async { ctx.schedule_activity(...).await }`) still works
 - Only breaks code that explicitly annotates `impl Future` type (rare/unlikely)

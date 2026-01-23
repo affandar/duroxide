@@ -430,6 +430,7 @@ use duroxide::provider_validations::{
     test_renew_fails_when_entry_deleted,
     test_cancelling_nonexistent_activities_is_idempotent,
     test_batch_cancellation_deletes_multiple_activities,
+    test_same_activity_in_worker_items_and_cancelled_is_noop,
     // ... import other tests as needed
 };
 use std::sync::Arc;
@@ -566,7 +567,7 @@ The validation test suite includes **92+ individual test functions** organized i
    - `ignore_attempt_never_goes_negative` - Attempt count never goes below 0
    - `max_attempt_count_across_message_batch` - MAX attempt_count returned for batched messages
 
-11. **Cancellation Support Tests (14 tests)**
+11. **Cancellation Support Tests (15 tests)**
     - `test_fetch_returns_running_state_for_active_orchestration` - Fetching activity for running orchestration proceeds normally
     - `test_fetch_returns_terminal_state_when_orchestration_completed` - Fetching activity for completed orchestration
     - `test_fetch_returns_terminal_state_when_orchestration_failed` - Fetching activity for failed orchestration
@@ -576,12 +577,13 @@ The validation test suite includes **92+ individual test functions** organized i
     - `test_renew_returns_terminal_when_orchestration_completed` - Lock renewal for completed orchestration
     - `test_renew_returns_missing_when_instance_deleted` - Lock renewal when instance deleted
     - `test_ack_work_item_none_deletes_without_enqueue` - ack_work_item(None) deletes item without enqueueing completion
-    - **Lock-Stealing Tests (5 tests):**
+    - **Lock-Stealing Tests (6 tests):**
     - `test_cancelled_activities_deleted_from_worker_queue` - `cancelled_activities` in `ack_orchestration_item` deletes matching worker entries
     - `test_ack_work_item_fails_when_entry_deleted` - `ack_work_item` returns permanent error when entry was deleted (lock stolen)
     - `test_renew_fails_when_entry_deleted` - `renew_work_item_lock` fails when entry was deleted (lock stolen)
     - `test_cancelling_nonexistent_activities_is_idempotent` - Cancelling activities that don't exist is silently ignored
     - `test_batch_cancellation_deletes_multiple_activities` - Multiple activities can be cancelled in a single `ack_orchestration_item`
+    - `test_same_activity_in_worker_items_and_cancelled_is_noop` - Activity in both `worker_items` and `cancelled_activities` results in no-op (INSERT then DELETE)
 
 12. **Deletion Tests (13 tests)** - `duroxide::provider_validations::deletion`
     - `test_delete_terminal_instances` - Delete completed/failed instances

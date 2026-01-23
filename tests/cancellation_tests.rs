@@ -1378,3 +1378,702 @@ async fn cancel_before_orchestration_starts() {
 
     rt.shutdown(None).await;
 }
+
+// ============================================================================
+// Explicit Drop and Out-of-Scope Activity Cancellation Tests
+// ============================================================================
+
+/// Test that explicitly dropping an activity future triggers cancellation signal.
+/// 
+/// NOTE: We use a timer between scheduling and dropping to ensure the activity
+/// has a chance to be fetched by the worker. If schedule+drop happens in the
+/// same turn, the activity is INSERT+DELETE in the same transaction (no-op).
+#[tokio::test]
+async fn explicit_drop_activity_triggers_cancellation() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let (store, _td) = common::create_sqlite_store_disk().await;
+
+    let activity_started = Arc::new(AtomicBool::new(false));
+    let saw_cancellation = Arc::new(AtomicBool::new(false));
+    let activity_started_clone = Arc::clone(&activity_started);
+    let saw_cancellation_clone = Arc::clone(&saw_cancellation);
+
+    // Activity that waits for cancellation
+    let cancellable_activity = move |ctx: ActivityContext, _input: String| {
+        let activity_started = Arc::clone(&activity_started_clone);
+        let saw_cancellation = Arc::clone(&saw_cancellation_clone);
+        async move {
+            activity_started.store(true, Ordering::SeqCst);
+
+            tokio::select! {
+                _ = ctx.cancelled() => {
+                    saw_cancellation.store(true, Ordering::SeqCst);
+                    Ok("cancelled".to_string())
+                }
+                _ = tokio::time::sleep(Duration::from_secs(30)) => {
+                    Ok("timeout".to_string())
+                }
+            }
+        }
+    };
+
+    // Orchestration that schedules activity, waits a bit (dehydrates), then drops it
+    let orchestration = |ctx: OrchestrationContext, _input: String| async move {
+        let activity_future = ctx.schedule_activity("CancellableActivity", "input");
+        
+        // Wait for activity to be fetched - this dehydrates the orchestration,
+        // committing the ActivityScheduled event and allowing the worker to pick it up
+        ctx.schedule_timer(Duration::from_millis(500)).await;
+        
+        // Now explicitly drop - this should trigger cancellation via lock stealing
+        drop(activity_future);
+        
+        // Do something else to prove orchestration continues
+        ctx.schedule_timer(Duration::from_millis(50)).await;
+        Ok("completed_after_drop".to_string())
+    };
+
+    let orchestration_registry = OrchestrationRegistry::builder()
+        .register("ExplicitDropActivity", orchestration)
+        .build();
+    let activity_registry = ActivityRegistry::builder()
+        .register("CancellableActivity", cancellable_activity)
+        .build();
+
+    let options = runtime::RuntimeOptions {
+        dispatcher_min_poll_interval: Duration::from_millis(10),
+        orchestration_concurrency: 1,
+        worker_concurrency: 1,
+        worker_lock_timeout: Duration::from_secs(2),
+        worker_lock_renewal_buffer: Duration::from_millis(500),
+        activity_cancellation_grace_period: Duration::from_secs(2),
+        ..Default::default()
+    };
+
+    let rt = runtime::Runtime::start_with_options(
+        store.clone(),
+        activity_registry,
+        orchestration_registry,
+        options,
+    )
+    .await;
+    let client = Client::new(store.clone());
+
+    client
+        .start_orchestration("inst-explicit-drop-activity", "ExplicitDropActivity", "")
+        .await
+        .unwrap();
+
+    // Wait for activity to start
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        if activity_started.load(Ordering::SeqCst) {
+            break;
+        }
+        if std::time::Instant::now() > deadline {
+            panic!("Activity did not start in time");
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+
+    // Wait for cancellation signal
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        if saw_cancellation.load(Ordering::SeqCst) {
+            break;
+        }
+        if std::time::Instant::now() > deadline {
+            panic!("Explicitly dropped activity did not receive cancellation signal");
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    assert!(
+        saw_cancellation.load(Ordering::SeqCst),
+        "Activity should have received cancellation signal after explicit drop"
+    );
+
+    // Orchestration should complete successfully
+    match client
+        .wait_for_orchestration("inst-explicit-drop-activity", Duration::from_secs(10))
+        .await
+        .unwrap()
+    {
+        runtime::OrchestrationStatus::Completed { output } => {
+            assert_eq!(output, "completed_after_drop");
+        }
+        other => panic!("Expected Completed, got {:?}", other),
+    }
+
+    rt.shutdown(None).await;
+}
+
+/// Test that activity going out of scope (not awaited) triggers cancellation.
+///
+/// NOTE: We use a timer between scheduling and the end of scope to ensure the
+/// activity has a chance to be fetched. If schedule+drop happens in the same
+/// turn, the activity is INSERT+DELETE in the same transaction (no-op).
+#[tokio::test]
+async fn activity_out_of_scope_triggers_cancellation() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let (store, _td) = common::create_sqlite_store_disk().await;
+
+    let activity_started = Arc::new(AtomicBool::new(false));
+    let saw_cancellation = Arc::new(AtomicBool::new(false));
+    let activity_started_clone = Arc::clone(&activity_started);
+    let saw_cancellation_clone = Arc::clone(&saw_cancellation);
+
+    let cancellable_activity = move |ctx: ActivityContext, _input: String| {
+        let activity_started = Arc::clone(&activity_started_clone);
+        let saw_cancellation = Arc::clone(&saw_cancellation_clone);
+        async move {
+            activity_started.store(true, Ordering::SeqCst);
+
+            tokio::select! {
+                _ = ctx.cancelled() => {
+                    saw_cancellation.store(true, Ordering::SeqCst);
+                    Ok("cancelled".to_string())
+                }
+                _ = tokio::time::sleep(Duration::from_secs(30)) => {
+                    Ok("timeout".to_string())
+                }
+            }
+        }
+    };
+
+    // Orchestration where activity future goes out of scope in a block
+    let orchestration = |ctx: OrchestrationContext, _input: String| async move {
+        // Activity scheduled in a block - goes out of scope without being awaited
+        {
+            let _unused = ctx.schedule_activity("CancellableActivity", "input");
+            
+            // Wait for activity to be fetched - this dehydrates and commits
+            ctx.schedule_timer(Duration::from_millis(500)).await;
+            
+            // _unused goes out of scope here without being awaited
+        }
+        
+        // Continue doing other work
+        ctx.schedule_timer(Duration::from_millis(50)).await;
+        Ok("completed_without_await".to_string())
+    };
+
+    let orchestration_registry = OrchestrationRegistry::builder()
+        .register("OutOfScopeActivity", orchestration)
+        .build();
+    let activity_registry = ActivityRegistry::builder()
+        .register("CancellableActivity", cancellable_activity)
+        .build();
+
+    let options = runtime::RuntimeOptions {
+        dispatcher_min_poll_interval: Duration::from_millis(10),
+        orchestration_concurrency: 1,
+        worker_concurrency: 1,
+        worker_lock_timeout: Duration::from_secs(2),
+        worker_lock_renewal_buffer: Duration::from_millis(500),
+        activity_cancellation_grace_period: Duration::from_secs(2),
+        ..Default::default()
+    };
+
+    let rt = runtime::Runtime::start_with_options(
+        store.clone(),
+        activity_registry,
+        orchestration_registry,
+        options,
+    )
+    .await;
+    let client = Client::new(store.clone());
+
+    client
+        .start_orchestration("inst-out-of-scope-activity", "OutOfScopeActivity", "")
+        .await
+        .unwrap();
+
+    // Wait for activity to start
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        if activity_started.load(Ordering::SeqCst) {
+            break;
+        }
+        if std::time::Instant::now() > deadline {
+            panic!("Activity did not start in time");
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+
+    // Wait for cancellation signal
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        if saw_cancellation.load(Ordering::SeqCst) {
+            break;
+        }
+        if std::time::Instant::now() > deadline {
+            panic!("Out-of-scope activity did not receive cancellation signal");
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    assert!(
+        saw_cancellation.load(Ordering::SeqCst),
+        "Activity should have received cancellation signal when going out of scope"
+    );
+
+    // Orchestration should complete successfully
+    match client
+        .wait_for_orchestration("inst-out-of-scope-activity", Duration::from_secs(10))
+        .await
+        .unwrap()
+    {
+        runtime::OrchestrationStatus::Completed { output } => {
+            assert_eq!(output, "completed_without_await");
+        }
+        other => panic!("Expected Completed, got {:?}", other),
+    }
+
+    rt.shutdown(None).await;
+}
+
+// ============================================================================
+// Sub-Orchestration Cancellation Tests
+// ============================================================================
+
+/// Test that select2 loser sub-orchestration receives cancellation and terminates
+#[tokio::test]
+async fn select2_loser_sub_orchestration_cancelled() {
+    let (store, _td) = common::create_sqlite_store_disk().await;
+
+    // Slow child orchestration that waits for an external event
+    let slow_child = |ctx: OrchestrationContext, _input: String| async move {
+        // Wait for event that will never come (unless cancelled)
+        ctx.schedule_wait("NeverComes").await;
+        Ok("child_completed".to_string())
+    };
+
+    // Parent: race slow sub-orchestration against fast timer
+    let parent = |ctx: OrchestrationContext, _input: String| async move {
+        let sub_orch = ctx.schedule_sub_orchestration("SlowChild", "input");
+        let timer = ctx.schedule_timer(Duration::from_millis(100));
+        
+        match ctx.select2(sub_orch, timer).await {
+            Either2::First(result) => Ok(format!("sub_won:{}", result?)),
+            Either2::Second(()) => Ok("timer_won".to_string()),
+        }
+    };
+
+    let orchestration_registry = OrchestrationRegistry::builder()
+        .register("SlowChild", slow_child)
+        .register("SelectSubOrchParent", parent)
+        .build();
+    let activity_registry = ActivityRegistry::builder().build();
+
+    let options = runtime::RuntimeOptions {
+        dispatcher_min_poll_interval: Duration::from_millis(10),
+        orchestration_concurrency: 2,
+        worker_concurrency: 1,
+        ..Default::default()
+    };
+
+    let rt = runtime::Runtime::start_with_options(
+        store.clone(),
+        activity_registry,
+        orchestration_registry,
+        options,
+    )
+    .await;
+    let client = Client::new(store.clone());
+
+    client
+        .start_orchestration("inst-select2-suborg-cancel", "SelectSubOrchParent", "")
+        .await
+        .unwrap();
+
+    // Wait for parent to complete
+    match client
+        .wait_for_orchestration("inst-select2-suborg-cancel", Duration::from_secs(10))
+        .await
+        .unwrap()
+    {
+        runtime::OrchestrationStatus::Completed { output } => {
+            assert_eq!(output, "timer_won", "Timer should win the race");
+        }
+        other => panic!("Expected parent Completed, got {:?}", other),
+    }
+
+    // Find the child instance ID from parent's history
+    let parent_hist = store.read("inst-select2-suborg-cancel").await.unwrap();
+    let child_instance = parent_hist.iter().find_map(|e| match &e.kind {
+        EventKind::SubOrchestrationScheduled { instance, .. } => Some(instance.clone()),
+        _ => None,
+    });
+
+    let child_id = child_instance.expect("Child should have been scheduled");
+    let full_child_id = format!("inst-select2-suborg-cancel::{child_id}");
+
+    // Wait for child to be cancelled
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let child_status = client.get_orchestration_status(&full_child_id).await.unwrap();
+        match child_status {
+            runtime::OrchestrationStatus::Failed { details } => {
+                // Child should be cancelled
+                assert!(
+                    matches!(
+                        &details,
+                        duroxide::ErrorDetails::Application {
+                            kind: duroxide::AppErrorKind::Cancelled { .. },
+                            ..
+                        }
+                    ),
+                    "Child should be cancelled, got: {}",
+                    details.display_message()
+                );
+                break;
+            }
+            runtime::OrchestrationStatus::Completed { output } => {
+                panic!("Child should NOT complete - it was a select2 loser. Got: {output}");
+            }
+            runtime::OrchestrationStatus::Running | runtime::OrchestrationStatus::NotFound => {
+                // Still waiting for cancellation to propagate
+                if std::time::Instant::now() > deadline {
+                    panic!("Timeout waiting for child sub-orchestration to be cancelled");
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        }
+    }
+
+    rt.shutdown(None).await;
+}
+
+/// Test that select2 loser sub-orchestration with explicit instance ID is cancelled.
+/// Uses `schedule_sub_orchestration_with_id` to specify an explicit child instance ID.
+#[tokio::test]
+async fn select2_loser_sub_orchestration_explicit_id_cancelled() {
+    let (store, _td) = common::create_sqlite_store_disk().await;
+
+    // Slow child orchestration that waits for an external event
+    let slow_child = |ctx: OrchestrationContext, _input: String| async move {
+        ctx.schedule_wait("NeverComes").await;
+        Ok("child_completed".to_string())
+    };
+
+    // Parent: race slow sub-orchestration (with explicit ID) against fast timer
+    let parent = |ctx: OrchestrationContext, _input: String| async move {
+        // Use explicit instance ID instead of auto-generated sub::N
+        let sub_orch = ctx.schedule_sub_orchestration_with_id(
+            "SlowChild",
+            "my-explicit-child-id",
+            "input",
+        );
+        let timer = ctx.schedule_timer(Duration::from_millis(100));
+        
+        match ctx.select2(sub_orch, timer).await {
+            Either2::First(result) => Ok(format!("sub_won:{}", result?)),
+            Either2::Second(()) => Ok("timer_won".to_string()),
+        }
+    };
+
+    let orchestration_registry = OrchestrationRegistry::builder()
+        .register("SlowChild", slow_child)
+        .register("SelectExplicitIdParent", parent)
+        .build();
+    let activity_registry = ActivityRegistry::builder().build();
+
+    let options = runtime::RuntimeOptions {
+        dispatcher_min_poll_interval: Duration::from_millis(10),
+        orchestration_concurrency: 2,
+        worker_concurrency: 1,
+        ..Default::default()
+    };
+
+    let rt = runtime::Runtime::start_with_options(
+        store.clone(),
+        activity_registry,
+        orchestration_registry,
+        options,
+    )
+    .await;
+    let client = Client::new(store.clone());
+
+    client
+        .start_orchestration("inst-select2-explicit-id", "SelectExplicitIdParent", "")
+        .await
+        .unwrap();
+
+    // Wait for parent to complete
+    match client
+        .wait_for_orchestration("inst-select2-explicit-id", Duration::from_secs(10))
+        .await
+        .unwrap()
+    {
+        runtime::OrchestrationStatus::Completed { output } => {
+            assert_eq!(output, "timer_won", "Timer should win the race");
+        }
+        other => panic!("Expected parent Completed, got {:?}", other),
+    }
+
+    // Verify the child was scheduled with our explicit instance ID
+    let parent_hist = store.read("inst-select2-explicit-id").await.unwrap();
+    let child_instance = parent_hist.iter().find_map(|e| match &e.kind {
+        EventKind::SubOrchestrationScheduled { instance, .. } => Some(instance.clone()),
+        _ => None,
+    });
+
+    assert_eq!(
+        child_instance.as_deref(),
+        Some("my-explicit-child-id"),
+        "Child should have been scheduled with explicit instance ID"
+    );
+
+    // Explicit instance ID is used exactly as provided - no parent prefix
+    let full_child_id = "my-explicit-child-id";
+
+    // Wait for child to be cancelled
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let child_status = client.get_orchestration_status(full_child_id).await.unwrap();
+        match child_status {
+            runtime::OrchestrationStatus::Failed { details } => {
+                assert!(
+                    matches!(
+                        &details,
+                        duroxide::ErrorDetails::Application {
+                            kind: duroxide::AppErrorKind::Cancelled { .. },
+                            ..
+                        }
+                    ),
+                    "Child with explicit ID should be cancelled, got: {}",
+                    details.display_message()
+                );
+                break;
+            }
+            runtime::OrchestrationStatus::Completed { output } => {
+                panic!("Child with explicit ID should NOT complete - it was a select2 loser. Got: {output}");
+            }
+            runtime::OrchestrationStatus::Running | runtime::OrchestrationStatus::NotFound => {
+                if std::time::Instant::now() > deadline {
+                    panic!("Timeout waiting for child sub-orchestration with explicit ID to be cancelled");
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        }
+    }
+
+    rt.shutdown(None).await;
+}
+
+/// Test that explicitly dropping a sub-orchestration future triggers cancellation
+#[tokio::test]
+async fn explicit_drop_sub_orchestration_cancelled() {
+    let (store, _td) = common::create_sqlite_store_disk().await;
+
+    // Child that waits indefinitely
+    let waiting_child = |ctx: OrchestrationContext, _input: String| async move {
+        ctx.schedule_wait("NeverComes").await;
+        Ok("child_completed".to_string())
+    };
+
+    // Parent that explicitly drops sub-orchestration future
+    let parent = |ctx: OrchestrationContext, _input: String| async move {
+        let sub_orch = ctx.schedule_sub_orchestration("WaitingChild", "input");
+        // Explicit drop
+        drop(sub_orch);
+        
+        // Continue with other work
+        ctx.schedule_timer(Duration::from_millis(50)).await;
+        Ok("parent_completed_after_drop".to_string())
+    };
+
+    let orchestration_registry = OrchestrationRegistry::builder()
+        .register("WaitingChild", waiting_child)
+        .register("DropSubOrchParent", parent)
+        .build();
+    let activity_registry = ActivityRegistry::builder().build();
+
+    let options = runtime::RuntimeOptions {
+        dispatcher_min_poll_interval: Duration::from_millis(10),
+        orchestration_concurrency: 2,
+        worker_concurrency: 1,
+        ..Default::default()
+    };
+
+    let rt = runtime::Runtime::start_with_options(
+        store.clone(),
+        activity_registry,
+        orchestration_registry,
+        options,
+    )
+    .await;
+    let client = Client::new(store.clone());
+
+    client
+        .start_orchestration("inst-drop-suborg", "DropSubOrchParent", "")
+        .await
+        .unwrap();
+
+    // Wait for parent to complete
+    match client
+        .wait_for_orchestration("inst-drop-suborg", Duration::from_secs(10))
+        .await
+        .unwrap()
+    {
+        runtime::OrchestrationStatus::Completed { output } => {
+            assert_eq!(output, "parent_completed_after_drop");
+        }
+        other => panic!("Expected parent Completed, got {:?}", other),
+    }
+
+    // Find child instance
+    let parent_hist = store.read("inst-drop-suborg").await.unwrap();
+    let child_instance = parent_hist.iter().find_map(|e| match &e.kind {
+        EventKind::SubOrchestrationScheduled { instance, .. } => Some(instance.clone()),
+        _ => None,
+    });
+
+    let child_id = child_instance.expect("Child should have been scheduled");
+    let full_child_id = format!("inst-drop-suborg::{child_id}");
+
+    // Wait for child to be cancelled
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let child_status = client.get_orchestration_status(&full_child_id).await.unwrap();
+        match child_status {
+            runtime::OrchestrationStatus::Failed { details } => {
+                assert!(
+                    matches!(
+                        &details,
+                        duroxide::ErrorDetails::Application {
+                            kind: duroxide::AppErrorKind::Cancelled { .. },
+                            ..
+                        }
+                    ),
+                    "Child should be cancelled after explicit drop, got: {}",
+                    details.display_message()
+                );
+                break;
+            }
+            runtime::OrchestrationStatus::Completed { output } => {
+                panic!("Child should NOT complete after being dropped. Got: {output}");
+            }
+            runtime::OrchestrationStatus::Running | runtime::OrchestrationStatus::NotFound => {
+                if std::time::Instant::now() > deadline {
+                    panic!("Timeout waiting for dropped child sub-orchestration to be cancelled");
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        }
+    }
+
+    rt.shutdown(None).await;
+}
+
+/// Test that sub-orchestration going out of scope (not awaited) triggers cancellation
+#[tokio::test]
+async fn sub_orchestration_out_of_scope_cancelled() {
+    let (store, _td) = common::create_sqlite_store_disk().await;
+
+    // Child that waits indefinitely
+    let waiting_child = |ctx: OrchestrationContext, _input: String| async move {
+        ctx.schedule_wait("NeverComes").await;
+        Ok("child_completed".to_string())
+    };
+
+    // Parent where sub-orchestration goes out of scope in a block
+    let parent = |ctx: OrchestrationContext, _input: String| async move {
+        // Sub-orchestration scheduled in a block
+        {
+            let _unused = ctx.schedule_sub_orchestration("WaitingChild", "input");
+            // _unused goes out of scope here
+        }
+        
+        // Continue with other work
+        ctx.schedule_timer(Duration::from_millis(50)).await;
+        Ok("parent_completed_without_await".to_string())
+    };
+
+    let orchestration_registry = OrchestrationRegistry::builder()
+        .register("WaitingChild", waiting_child)
+        .register("OutOfScopeSubOrchParent", parent)
+        .build();
+    let activity_registry = ActivityRegistry::builder().build();
+
+    let options = runtime::RuntimeOptions {
+        dispatcher_min_poll_interval: Duration::from_millis(10),
+        orchestration_concurrency: 2,
+        worker_concurrency: 1,
+        ..Default::default()
+    };
+
+    let rt = runtime::Runtime::start_with_options(
+        store.clone(),
+        activity_registry,
+        orchestration_registry,
+        options,
+    )
+    .await;
+    let client = Client::new(store.clone());
+
+    client
+        .start_orchestration("inst-scope-suborg", "OutOfScopeSubOrchParent", "")
+        .await
+        .unwrap();
+
+    // Wait for parent to complete
+    match client
+        .wait_for_orchestration("inst-scope-suborg", Duration::from_secs(10))
+        .await
+        .unwrap()
+    {
+        runtime::OrchestrationStatus::Completed { output } => {
+            assert_eq!(output, "parent_completed_without_await");
+        }
+        other => panic!("Expected parent Completed, got {:?}", other),
+    }
+
+    // Find child instance
+    let parent_hist = store.read("inst-scope-suborg").await.unwrap();
+    let child_instance = parent_hist.iter().find_map(|e| match &e.kind {
+        EventKind::SubOrchestrationScheduled { instance, .. } => Some(instance.clone()),
+        _ => None,
+    });
+
+    let child_id = child_instance.expect("Child should have been scheduled");
+    let full_child_id = format!("inst-scope-suborg::{child_id}");
+
+    // Wait for child to be cancelled
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let child_status = client.get_orchestration_status(&full_child_id).await.unwrap();
+        match child_status {
+            runtime::OrchestrationStatus::Failed { details } => {
+                assert!(
+                    matches!(
+                        &details,
+                        duroxide::ErrorDetails::Application {
+                            kind: duroxide::AppErrorKind::Cancelled { .. },
+                            ..
+                        }
+                    ),
+                    "Child should be cancelled when going out of scope, got: {}",
+                    details.display_message()
+                );
+                break;
+            }
+            runtime::OrchestrationStatus::Completed { output } => {
+                panic!("Child should NOT complete when it went out of scope. Got: {output}");
+            }
+            runtime::OrchestrationStatus::Running | runtime::OrchestrationStatus::NotFound => {
+                if std::time::Instant::now() > deadline {
+                    panic!("Timeout waiting for out-of-scope child sub-orchestration to be cancelled");
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        }
+    }
+
+    rt.shutdown(None).await;
+}

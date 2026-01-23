@@ -290,7 +290,7 @@ fn many_sequential_activities() {
         async fn invoke(&self, ctx: OrchestrationContext, _input: String) -> Result<String, String> {
             let mut results = Vec::new();
             for i in 0..10 {
-                let r = ctx.schedule_activity(&format!("Act{i}"), &format!("input{i}")).await?;
+                let r = ctx.schedule_activity(format!("Act{i}"), format!("input{i}")).await?;
                 results.push(r);
             }
             Ok(results.join(","))

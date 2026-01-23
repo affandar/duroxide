@@ -210,6 +210,7 @@ pub use crate::provider_validation::cancellation::{
     test_fetch_returns_terminal_state_when_orchestration_failed, test_renew_fails_when_entry_deleted,
     test_renew_returns_missing_when_instance_deleted, test_renew_returns_running_when_orchestration_active,
     test_renew_returns_terminal_when_orchestration_completed,
+    test_same_activity_in_worker_items_and_cancelled_is_noop,
 };
 
 #[cfg(feature = "provider-test")]

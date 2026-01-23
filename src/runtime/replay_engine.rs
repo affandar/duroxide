@@ -43,6 +43,11 @@ pub struct ReplayEngine {
     /// ActivityScheduled event_ids for activity losers of select/select2.
     /// These should be cancelled via provider lock stealing.
     pub(crate) cancelled_activity_ids: Vec<u64>,
+
+    /// Sub-orchestration instance IDs for sub-orch losers of select/select2.
+    /// These should be cancelled via CancelInstance work items.
+    pub(crate) cancelled_sub_orchestration_ids: Vec<String>,
+
     /// Current history at start of run
     pub(crate) baseline_history: Vec<Event>,
     /// Next event_id for new events added this run
@@ -68,6 +73,7 @@ impl ReplayEngine {
             history_delta: Vec::new(),
             pending_actions: Vec::new(),
             cancelled_activity_ids: Vec::new(),
+            cancelled_sub_orchestration_ids: Vec::new(),
             baseline_history,
             next_event_id,
             abort_error: None,
@@ -584,7 +590,7 @@ impl ReplayEngine {
 
                 // Schedule events
                 EventKind::ActivityScheduled { name, input: inp } => {
-                    if let Some(result) = self.match_and_bind_schedule(
+                    if let Err(result) = self.match_and_bind_schedule(
                         &ctx,
                         &mut emitted_actions,
                         &mut open_schedules,
@@ -600,7 +606,7 @@ impl ReplayEngine {
                 }
 
                 EventKind::TimerCreated { fire_at_ms } => {
-                    if let Some(result) = self.match_and_bind_schedule(
+                    if let Err(result) = self.match_and_bind_schedule(
                         &ctx,
                         &mut emitted_actions,
                         &mut open_schedules,
@@ -615,7 +621,7 @@ impl ReplayEngine {
                 }
 
                 EventKind::ExternalSubscribed { name } => {
-                    if let Some(result) = self.match_and_bind_schedule(
+                    if let Err(result) = self.match_and_bind_schedule(
                         &ctx,
                         &mut emitted_actions,
                         &mut open_schedules,
@@ -638,7 +644,7 @@ impl ReplayEngine {
                     input: inp,
                     ..
                 } => {
-                    if let Some(result) = self.match_and_bind_schedule(
+                    match self.match_and_bind_schedule(
                         &ctx,
                         &mut emitted_actions,
                         &mut open_schedules,
@@ -650,12 +656,16 @@ impl ReplayEngine {
                             input: inp.clone(),
                         },
                     ) {
-                        return result;
+                        Ok(token) => {
+                            // Bind the resolved instance ID to the token for cancellation lookup
+                            ctx.bind_sub_orchestration_instance(token, instance.clone());
+                        }
+                        Err(result) => return result,
                     }
                 }
 
                 EventKind::SystemCall { op, value } => {
-                    if let Some(result) = self.match_and_bind_schedule(
+                    if let Err(result) = self.match_and_bind_schedule(
                         &ctx,
                         &mut emitted_actions,
                         &mut open_schedules,
@@ -792,6 +802,11 @@ impl ReplayEngine {
             // (the action originally has the token as scheduling_event_id)
             let updated_action = update_action_event_id(action, event_id);
 
+            // For sub-orchestrations, bind the resolved instance ID for cancellation lookup
+            if let crate::Action::StartSubOrchestration { instance, .. } = &updated_action {
+                ctx.bind_sub_orchestration_instance(token, instance.clone());
+            }
+
             // Convert action to event
             if let Some(event) = action_to_event(&updated_action, &self.instance, self.execution_id, event_id) {
                 self.history_delta.push(event);
@@ -827,6 +842,9 @@ impl ReplayEngine {
 
         // Return result
         if let Some(output) = output_opt {
+            // Collect cancellation information from context before returning
+            self.collect_cancelled_from_context(&ctx);
+
             return match output {
                 Ok(result) => TurnResult::Completed(result),
                 Err(error) => TurnResult::Failed(crate::ErrorDetails::Application {
@@ -837,10 +855,34 @@ impl ReplayEngine {
             };
         }
 
+        // Collect cancellation information from context before returning Continue.
+        // 
+        // SAFETY: Dehydration drops don't cause spurious cancellations because:
+        // 1. We collect cancelled_tokens HERE, while the orchestration future is still alive
+        // 2. TurnResult::Continue is returned, then `fut` goes out of scope
+        // 3. DurableFuture::drop() calls mark_token_cancelled() on a ctx that's about to be dropped
+        // 4. Next turn creates a fresh OrchestrationContext with empty cancelled_tokens
+        // So dehydration drops write to a dying context that no one will read.
+        self.collect_cancelled_from_context(&ctx);
+
         TurnResult::Continue
     }
 
-    /// Helper to match and bind schedule events
+    /// Collect cancelled activity/sub-orchestration IDs from OrchestrationContext
+    fn collect_cancelled_from_context(&mut self, ctx: &OrchestrationContext) {
+        // Collect cancelled activity IDs (already schedule_ids via token binding)
+        self.cancelled_activity_ids.extend(ctx.get_cancelled_activity_ids());
+
+        // Collect cancelled sub-orchestration instance IDs
+        // The context now directly returns resolved instance IDs via the token→instance mapping
+        self.cancelled_sub_orchestration_ids.extend(ctx.get_cancelled_sub_orchestration_ids());
+
+        // Clear the context's cancelled tokens (avoid re-processing if called again)
+        ctx.clear_cancelled_tokens();
+    }
+
+    /// Helper to match and bind schedule events.
+    /// Returns `Ok(token)` on success, `Err(TurnResult)` on failure.
     fn match_and_bind_schedule(
         &self,
         ctx: &OrchestrationContext,
@@ -849,11 +891,11 @@ impl ReplayEngine {
         schedule_kinds: &mut std::collections::HashMap<u64, ActionKind>,
         event: &Event,
         expected_kind: ActionKind,
-    ) -> Option<TurnResult> {
+    ) -> Result<u64, TurnResult> {
         let (token, action) = match emitted_actions.pop_front() {
             Some(a) => a,
             None => {
-                return Some(TurnResult::Failed(nondeterminism_error(
+                return Err(TurnResult::Failed(nondeterminism_error(
                     "history schedule but no emitted action",
                 )));
             }
@@ -861,7 +903,7 @@ impl ReplayEngine {
 
         // Validate action matches event
         if !action_matches_event_kind(&action, &event.kind) {
-            return Some(TurnResult::Failed(nondeterminism_error(&format!(
+            return Err(TurnResult::Failed(nondeterminism_error(&format!(
                 "schedule mismatch: action={:?} vs event={:?}",
                 action, event.kind
             ))));
@@ -872,7 +914,7 @@ impl ReplayEngine {
         open_schedules.insert(event.event_id());
         schedule_kinds.insert(event.event_id(), expected_kind);
 
-        None
+        Ok(token)
     }
 }
 
@@ -888,6 +930,10 @@ impl ReplayEngine {
 
     pub fn cancelled_activity_ids(&self) -> &[u64] {
         &self.cancelled_activity_ids
+    }
+
+    pub fn cancelled_sub_orchestration_ids(&self) -> &[String] {
+        &self.cancelled_sub_orchestration_ids
     }
 
     /// Check if this run made any progress (added history)
@@ -984,9 +1030,9 @@ fn action_to_event(action: &Action, instance: &str, execution_id: u64, event_id:
     Some(Event::with_event_id(event_id, instance, execution_id, None, kind))
 }
 
-/// Update an action's scheduling_event_id to the correct event_id
+/// Update an action's scheduling_event_id to the correct event_id.
 /// Also generates the actual sub-orchestration instance ID from the event_id
-/// (unless an explicit instance ID was provided, indicated by not starting with "sub::pending_")
+/// (unless an explicit instance ID was provided, indicated by not starting with SUB_ORCH_PENDING_PREFIX).
 fn update_action_event_id(action: Action, event_id: u64) -> Action {
     match action {
         Action::CallActivity { name, input, .. } => Action::CallActivity {
@@ -1009,10 +1055,10 @@ fn update_action_event_id(action: Action, event_id: u64) -> Action {
             version,
             ..
         } => {
-            // If instance starts with "sub::pending_", it's a placeholder that needs to be replaced
-            // Otherwise, it's an explicit instance ID provided by the user
-            let final_instance = if instance.starts_with("sub::pending_") {
-                format!("sub::{event_id}")
+            // If instance starts with the pending prefix, it's a placeholder that needs to be replaced.
+            // Otherwise, it's an explicit instance ID provided by the user.
+            let final_instance = if instance.starts_with(crate::SUB_ORCH_PENDING_PREFIX) {
+                format!("{}{event_id}", crate::SUB_ORCH_AUTO_PREFIX)
             } else {
                 instance
             };

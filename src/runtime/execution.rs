@@ -119,6 +119,20 @@ impl Runtime {
             });
         }
 
+        // Select/select2 losers: collect sub-orchestration cancellations.
+        // These will be added to orchestrator_items after the match block
+        // (to avoid borrow conflict with enqueue_detached_from_pending closure).
+        let cancelled_sub_orch_items: Vec<WorkItem> = turn
+            .cancelled_sub_orchestration_ids()
+            .iter()
+            .map(|child_instance_id| {
+                WorkItem::CancelInstance {
+                    instance: crate::build_child_instance_id(instance, child_instance_id),
+                    reason: "parent dropped sub-orchestration future".to_string(),
+                }
+            })
+            .collect();
+
         // Collect history delta from turn
         history_mgr.extend(turn.history_delta().to_vec());
 
@@ -168,8 +182,7 @@ impl Runtime {
                             instance: sub_instance,
                             input,
                         } => {
-                            // Construct the full child instance name with parent prefix
-                            let child_full = format!("{instance}::{sub_instance}");
+                            let child_full = crate::build_child_instance_id(instance, sub_instance);
                             orchestrator_items.push(WorkItem::StartOrchestration {
                                 instance: child_full,
                                 orchestration: name.clone(),
@@ -306,6 +319,9 @@ impl Runtime {
             }
         };
 
+        // Now add cancelled sub-orchestration items (deferred to avoid borrow conflict)
+        orchestrator_items.extend(cancelled_sub_orch_items);
+
         debug!(
             instance,
             "run_single_execution_atomic complete: history_delta={}, worker={}, orch={}",
@@ -351,9 +367,8 @@ impl Runtime {
         let mut cancel_items = Vec::new();
         for (id, child_suffix) in scheduled_children {
             if !completed_ids.contains(&id) {
-                let child_full = format!("{instance}::{child_suffix}");
                 cancel_items.push(WorkItem::CancelInstance {
-                    instance: child_full,
+                    instance: crate::build_child_instance_id(instance, &child_suffix),
                     reason: "parent canceled".to_string(),
                 });
             }

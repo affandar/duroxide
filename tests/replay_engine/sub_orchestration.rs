@@ -84,7 +84,7 @@ fn explicit_instance_preserved() {
     impl OrchestrationHandler for ExplicitInstanceHandler {
         async fn invoke(&self, ctx: OrchestrationContext, _input: String) -> Result<String, String> {
             let result = ctx
-                .schedule_sub_orchestration_with_id("Child", Some("my-custom-instance"), "child-input")
+                .schedule_sub_orchestration_with_id("Child", "my-custom-instance", "child-input")
                 .await?;
             Ok(result)
         }
@@ -149,6 +149,12 @@ fn multiple_sub_orchs_unique_ids() {
 
     assert_eq!(instances.len(), 2);
     assert_ne!(instances[0], instances[1], "Instance IDs should be unique");
-    assert!(instances[0].starts_with("sub::"), "Should have sub:: prefix");
-    assert!(instances[1].starts_with("sub::"), "Should have sub:: prefix");
+    assert!(
+        instances[0].starts_with(duroxide::SUB_ORCH_AUTO_PREFIX),
+        "Should have auto-generated prefix"
+    );
+    assert!(
+        instances[1].starts_with(duroxide::SUB_ORCH_AUTO_PREFIX),
+        "Should have auto-generated prefix"
+    );
 }

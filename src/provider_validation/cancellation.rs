@@ -1069,3 +1069,121 @@ pub async fn test_batch_cancellation_deletes_multiple_activities<F: ProviderFact
 
     tracing::info!("✓ Test passed: batch cancellation deletes multiple activities atomically");
 }
+
+/// Test: Same Activity In worker_items And cancelled_activities Is No-Op
+/// Goal: Verify that when an activity is both scheduled (INSERT) and cancelled (DELETE)
+/// in the same `ack_orchestration_item` call, the net result is the activity NOT being
+/// in the worker queue. This happens when an orchestration schedules an activity and
+/// immediately drops its future (e.g., select2 loser, or explicit drop without await).
+///
+/// CRITICAL ORDERING: Providers MUST process worker_items (INSERT) BEFORE
+/// cancelled_activities (DELETE). If DELETE happened first, the INSERT would succeed
+/// and leave a stale activity in the queue.
+pub async fn test_same_activity_in_worker_items_and_cancelled_is_noop<F: ProviderFactory>(factory: &F) {
+    tracing::info!("→ Testing cancellation: same activity in worker_items and cancelled_activities is no-op");
+    let provider = factory.create_provider().await;
+
+    // 1. Create an orchestration
+    provider
+        .enqueue_for_orchestrator(start_item("inst-schedule-then-cancel"), None)
+        .await
+        .unwrap();
+
+    let (_item, token, _) = provider
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+        .await
+        .unwrap()
+        .unwrap();
+
+    let metadata = ExecutionMetadata {
+        orchestration_name: Some("TestOrch".to_string()),
+        status: Some("Running".to_string()),
+        ..Default::default()
+    };
+
+    // 2. Activity that will be both scheduled AND cancelled in the same call
+    // This simulates: schedule_activity() -> immediately drop the future
+    let activity_id = 2u64; // event_id 2 (after OrchestrationStarted at id 1)
+    let scheduled_activity = WorkItem::ActivityExecute {
+        instance: "inst-schedule-then-cancel".to_string(),
+        execution_id: 1,
+        id: activity_id,
+        name: "DroppedActivity".to_string(),
+        input: "{}".to_string(),
+    };
+
+    let cancelled_activity = ScheduledActivityIdentifier {
+        instance: "inst-schedule-then-cancel".to_string(),
+        execution_id: 1,
+        activity_id,
+    };
+
+    // 3. Also schedule a "normal" activity that should remain in the queue
+    let normal_activity = WorkItem::ActivityExecute {
+        instance: "inst-schedule-then-cancel".to_string(),
+        execution_id: 1,
+        id: 3, // Different id
+        name: "NormalActivity".to_string(),
+        input: "{}".to_string(),
+    };
+
+    // 4. Ack with the activity in BOTH worker_items and cancelled_activities
+    // Provider must INSERT first, then DELETE - net result is activity NOT in queue
+    provider
+        .ack_orchestration_item(
+            &token,
+            1,
+            vec![Event::with_event_id(
+                1,
+                "inst-schedule-then-cancel".to_string(),
+                1,
+                None,
+                EventKind::OrchestrationStarted {
+                    name: "TestOrch".to_string(),
+                    version: "1.0".to_string(),
+                    input: "{}".to_string(),
+                    parent_instance: None,
+                    parent_id: None,
+                },
+            )],
+            vec![scheduled_activity, normal_activity], // Both activities scheduled
+            vec![],
+            metadata,
+            vec![cancelled_activity], // But activity_id=2 is also cancelled
+        )
+        .await
+        .expect("ack_orchestration_item should succeed");
+
+    // 5. Verify only the normal activity (id=3) is in the worker queue
+    let (remaining_item, remaining_token, _) = provider
+        .fetch_work_item(Duration::from_secs(30), Duration::ZERO)
+        .await
+        .unwrap()
+        .expect("Should have the normal activity in queue");
+
+    match &remaining_item {
+        WorkItem::ActivityExecute { id, name, .. } => {
+            assert_eq!(
+                *id, 3,
+                "Only the normal activity (id=3) should remain; the scheduled-then-cancelled activity (id=2) should be gone"
+            );
+            assert_eq!(name, "NormalActivity");
+        }
+        _ => panic!("Expected ActivityExecute, got {remaining_item:?}"),
+    }
+
+    // Clean up
+    provider.ack_work_item(&remaining_token, None).await.unwrap();
+
+    // 6. Verify no more activities in queue
+    let no_more = provider
+        .fetch_work_item(Duration::from_millis(100), Duration::ZERO)
+        .await
+        .unwrap();
+    assert!(
+        no_more.is_none(),
+        "Should have no more activities; the schedule-then-cancel activity should NOT be in queue"
+    );
+
+    tracing::info!("✓ Test passed: same activity in worker_items and cancelled_activities is no-op");
+}
