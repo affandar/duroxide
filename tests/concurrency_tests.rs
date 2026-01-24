@@ -329,12 +329,12 @@ async fn concurrent_orchestrations_same_activities_with(store: StdArc<dyn Provid
             .iter()
             .any(|e| matches!(&e.kind, EventKind::ActivityCompleted { result, .. } if e.source_event_id == Some(2) && result == "11"))
     );
-    // Note: system calls now use 1 event instead of 2 (ActivityScheduled + ActivityCompleted)
-    // So event IDs shifted: new_guid is event 2 (SystemCall), Proc activity is event 3 (scheduled), 4 (completed)
+    // new_guid is now a regular activity: ActivityScheduled (event 2) + ActivityCompleted (event 3)
+    // Proc activity is event 4 (scheduled), 5 (completed)
     assert!(
         hist2
             .iter()
-            .any(|e| matches!(&e.kind, EventKind::ActivityCompleted { result, .. } if e.source_event_id == Some(3) && result == "21"))
+            .any(|e| matches!(&e.kind, EventKind::ActivityCompleted { result, .. } if e.source_event_id == Some(4) && result == "21"))
     );
     assert!(
         hist1

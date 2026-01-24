@@ -1,5 +1,7 @@
 # Proposal: System Calls as Real Activities
 
+**Status:** Implemented
+
 ## Summary
 
 Replace the bespoke "system call" mechanism (`ctx.new_guid()`, `ctx.utc_now()`) with regular activities using reserved names. System calls become normal activities that go through the worker queue, using the existing `ActivityScheduled` + `ActivityCompleted` event flow.

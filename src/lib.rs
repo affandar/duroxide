@@ -668,9 +668,13 @@ impl<T> Either3<T, T, T> {
     }
 }
 
-// System call operation constants
-pub(crate) const SYSCALL_OP_GUID: &str = "guid";
-pub(crate) const SYSCALL_OP_UTCNOW_MS: &str = "utcnow_ms";
+// Reserved prefix for built-in system activities.
+// User-registered activities cannot use names starting with this prefix.
+pub(crate) const SYSCALL_ACTIVITY_PREFIX: &str = "__duroxide_syscall:";
+
+// Built-in system activity names (constructed from prefix)
+pub(crate) const SYSCALL_ACTIVITY_NEW_GUID: &str = "__duroxide_syscall:new_guid";
+pub(crate) const SYSCALL_ACTIVITY_UTC_NOW_MS: &str = "__duroxide_syscall:utc_now_ms";
 
 use crate::_typed_codec::Codec;
 // LogLevel is now defined locally in this file
@@ -1022,15 +1026,7 @@ pub enum EventKind {
     /// Cancellation has been requested for the orchestration (terminal will follow deterministically).
     #[serde(rename = "OrchestrationCancelRequested")]
     OrchestrationCancelRequested { reason: String },
-
-    /// System call executed synchronously during orchestration turn (single event for schedule+completion).
-    #[serde(rename = "SystemCall")]
-    SystemCall { op: String, value: String },
 }
-
-// Event type name for SystemCall (used by providers for persistence)
-#[allow(dead_code)] // Used by sqlite provider when sqlite feature is enabled
-pub(crate) const EVENT_TYPE_SYSTEM_CALL: &str = "SystemCall";
 
 impl Event {
     /// Create a new event with common fields populated and a specific event_id.
@@ -1290,13 +1286,6 @@ pub enum Action {
     /// Continue the current orchestration as a new execution with new input (terminal for current execution).
     /// Optional version string selects the target orchestration version for the new execution.
     ContinueAsNew { input: String, version: Option<String> },
-
-    /// System call executed synchronously (no worker dispatch needed).
-    SystemCall {
-        scheduling_event_id: u64,
-        op: String,
-        value: String,
-    },
 }
 
 /// Result delivered to a durable future upon completion.
@@ -1318,8 +1307,6 @@ pub enum CompletionResult {
     SubOrchErr(String),
     /// External event data (NOTE: External events delivered via get_external_event, not CompletionResult)
     ExternalData(String),
-    /// System call value
-    SystemCallValue(String),
 }
 
 #[derive(Debug)]
@@ -2249,56 +2236,35 @@ impl OrchestrationContext {
         }
     }
 
-    /// Schedule a system call operation (internal helper).
-    /// System calls compute a value that is stored in the action for fresh execution,
-    /// but on replay the historical value from history is used instead.
-    fn schedule_system_call(&self, op: &str) -> impl Future<Output = Result<String, String>> {
-        let mut inner = self.inner.lock().expect("Mutex should not be poisoned");
-
-        // Compute value (used for fresh execution, ignored during replay)
-        let computed_value = match op {
-            SYSCALL_OP_GUID => generate_guid(),
-            SYSCALL_OP_UTCNOW_MS => inner.now_ms().to_string(),
-            _ => String::new(),
-        };
-
-        let token = inner.emit_action(Action::SystemCall {
-            scheduling_event_id: 0, // Will be assigned by replay engine
-            op: op.to_string(),
-            value: computed_value, // Stored in action for fresh execution
-        });
-
-        // Don't insert into completion_results here - let replay engine deliver it.
-        // This ensures replay uses the historical value, not a newly computed one.
-        drop(inner);
-
-        // Polling future - waits for replay engine to deliver result
-        let ctx = self.clone();
-        std::future::poll_fn(move |_cx| {
-            let inner = ctx.inner.lock().expect("Mutex should not be poisoned");
-            if let Some(result) = inner.get_result(token) {
-                match result {
-                    CompletionResult::SystemCallValue(s) => std::task::Poll::Ready(Ok(s.clone())),
-                    _ => std::task::Poll::Pending,
-                }
-            } else {
-                std::task::Poll::Pending
-            }
-        })
-    }
-
     /// Generate a new deterministic GUID.
-    /// Returns a future that resolves to a String GUID.
+    ///
+    /// This schedules a built-in activity that generates a unique identifier.
+    /// The GUID is deterministic across replays (the same value is returned
+    /// when the orchestration replays).
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use duroxide::OrchestrationContext;
+    /// # async fn example(ctx: OrchestrationContext) -> Result<(), String> {
+    /// let guid = ctx.new_guid().await?;
+    /// println!("Generated GUID: {}", guid);
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn new_guid(&self) -> impl Future<Output = Result<String, String>> {
-        self.schedule_system_call(SYSCALL_OP_GUID)
+        self.schedule_activity(SYSCALL_ACTIVITY_NEW_GUID, "")
     }
 
     /// Get the current UTC time.
-    /// Returns a future that resolves to a SystemTime.
+    ///
+    /// This schedules a built-in activity that returns the current time.
+    /// The time is deterministic across replays (the same value is returned
+    /// when the orchestration replays).
     ///
     /// # Errors
     ///
-    /// Returns an error if the system call fails or if the time value cannot be parsed.
+    /// Returns an error if the activity fails or if the time value cannot be parsed.
     ///
     /// # Example
     ///
@@ -2306,13 +2272,13 @@ impl OrchestrationContext {
     /// # use duroxide::OrchestrationContext;
     /// # use std::time::{SystemTime, Duration};
     /// # async fn example(ctx: OrchestrationContext) -> Result<(), String> {
-    /// let now = ctx.utcnow().await?;
+    /// let now = ctx.utc_now().await?;
     /// let deadline = now + Duration::from_secs(3600); // 1 hour from now
     /// # Ok(())
     /// # }
     /// ```
-    pub fn utcnow(&self) -> impl Future<Output = Result<SystemTime, String>> {
-        let fut = self.schedule_system_call(SYSCALL_OP_UTCNOW_MS);
+    pub fn utc_now(&self) -> impl Future<Output = Result<SystemTime, String>> {
+        let fut = self.schedule_activity(SYSCALL_ACTIVITY_UTC_NOW_MS, "");
         async move {
             let s = fut.await?;
             let ms = s.parse::<u64>().map_err(|e| e.to_string())?;
@@ -2375,7 +2341,7 @@ impl OrchestrationContext {
 /// Generate a deterministic GUID for use in orchestrations.
 ///
 /// Uses timestamp + thread-local counter for uniqueness.
-fn generate_guid() -> String {
+pub(crate) fn generate_guid() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     let timestamp = SystemTime::now()

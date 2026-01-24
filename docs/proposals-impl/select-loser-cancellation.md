@@ -1,8 +1,8 @@
 # Unobserved Future Cancellation Implementation Plan
 
-**Status:** Draft  
+**Status:** Implemented  
 **Created:** 2025-01-22  
-**Related:** [replay-simplification-PROGRESS.md](../replay-simplification-PROGRESS.md)
+**Related:** [replay-simplification.md](replay-simplification.md)
 
 ## Problem Statement
 

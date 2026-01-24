@@ -1,6 +1,6 @@
 # Replay Simplification – Rolling Progress
 
-**Spec:** [proposals/replay-simplification.md](replay-simplification.md)  
+**Spec:** [proposals-impl/replay-simplification.md](../proposals-impl/replay-simplification.md)  
 **Checkpoint commit:** `555c5751653ac770a94d3962f743b7a2d7f6ad58` (revert here if approach fails)
 
 ---

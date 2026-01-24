@@ -329,7 +329,11 @@ async fn safe_orchestration(ctx: OrchestrationContext, count: i32) -> Result<Str
     let id = ctx.new_guid().await?;
     
     // ✅ Deterministic timestamps
-    let now_ms = ctx.utcnow_ms().await?;
+    let now = ctx.utc_now().await?;
+    let now_ms = now
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| e.to_string())?
+        .as_millis() as u64;
     
     Ok("done".to_string())
 }
@@ -364,8 +368,8 @@ async fn safe_version(ctx: OrchestrationContext, _input: String) -> Result<Strin
     // ✅ Random → Use ctx.new_guid() or activity
     let id = ctx.new_guid().await?;
     
-    // ✅ Time → Use ctx.utcnow_ms()
-    let now = ctx.utcnow_ms().await?;
+    // ✅ Time → Use ctx.utc_now()
+    let now = ctx.utc_now().await?;
     
     // ✅ I/O → Use activities
     let file_contents = ctx.schedule_activity("ReadFile", "data.txt").await?;
@@ -570,11 +574,15 @@ ctx.trace_error("Payment failed");
 async fn new_guid(&self) -> Result<String, String>
 
 // Get deterministic UTC timestamp
-async fn utcnow_ms(&self) -> Result<u64, String>
+async fn utc_now(&self) -> Result<std::time::SystemTime, String>
 
 // Usage:
 let correlation_id = ctx.new_guid().await?;
-let created_at = ctx.utcnow_ms().await?;
+let created_at = ctx.utc_now().await?;
+let created_at_ms = created_at
+    .duration_since(std::time::UNIX_EPOCH)
+    .map_err(|e| e.to_string())?
+    .as_millis() as u64;
 ```
 
 ---
@@ -2242,7 +2250,7 @@ async fn fast_updates(ctx: OrchestrationContext, items_json: String) -> Result<(
 | `join(vec)` | `Vec<T>` | Wait for all |
 | `continue_as_new(input)` | `impl Future` (never resolves) | Reset history, keep running |
 | `new_guid()` | `impl Future<Output = Result<String, String>>` | Correlation IDs |
-| `utcnow_ms()` | `impl Future<Output = Result<u64, String>>` | Timestamps |
+| `utc_now()` | `impl Future<Output = Result<u64, String>>` | Timestamps |
 | `trace_info/warn/error(msg)` | `()` | Logging |
 
 ---

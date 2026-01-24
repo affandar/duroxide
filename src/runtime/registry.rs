@@ -414,12 +414,30 @@ impl ActivityRegistryBuilder {
         ActivityRegistry::builder_from(reg)
     }
 
+    /// Check if activity name uses a reserved prefix
+    fn check_reserved_prefix(&mut self, name: &str) -> bool {
+        if name.starts_with(crate::SYSCALL_ACTIVITY_PREFIX) {
+            self.errors.push(format!(
+                "activity name '{}' uses reserved prefix '{}'",
+                name,
+                crate::SYSCALL_ACTIVITY_PREFIX
+            ));
+            true
+        } else {
+            false
+        }
+    }
+
     pub fn register<F, Fut>(mut self, name: impl Into<String>, f: F) -> Self
     where
         F: Fn(crate::ActivityContext, String) -> Fut + Send + Sync + 'static,
         Fut: std::future::Future<Output = Result<String, String>> + Send + 'static,
     {
         let name = name.into();
+        // Check reserved prefix first
+        if self.check_reserved_prefix(&name) {
+            return self;
+        }
         if self.check_duplicate(&name, &DEFAULT_VERSION, "activity") {
             return self;
         }
@@ -449,6 +467,10 @@ impl ActivityRegistryBuilder {
             }
         };
         let name = name.into();
+        // Check reserved prefix first
+        if self.check_reserved_prefix(&name) {
+            return self;
+        }
         if self.check_duplicate(&name, &DEFAULT_VERSION, "activity") {
             return self;
         }
@@ -457,6 +479,26 @@ impl ActivityRegistryBuilder {
             .or_default()
             .insert(DEFAULT_VERSION, Arc::new(FnActivity(wrapper)));
         // Set policy to Latest (hardcoded for activities)
+        self.policy.insert(name, VersionPolicy::Latest);
+        self
+    }
+
+    /// Register a built-in activity (bypasses reserved prefix check).
+    /// Used internally to register system activities like new_guid and utc_now_ms.
+    pub(crate) fn register_builtin<F, Fut>(mut self, name: impl Into<String>, f: F) -> Self
+    where
+        F: Fn(crate::ActivityContext, String) -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = Result<String, String>> + Send + 'static,
+    {
+        let name = name.into();
+        // No reserved prefix check for builtins
+        if self.check_duplicate(&name, &DEFAULT_VERSION, "activity") {
+            return self;
+        }
+        self.map
+            .entry(name.clone())
+            .or_default()
+            .insert(DEFAULT_VERSION, Arc::new(FnActivity(f)));
         self.policy.insert(name, VersionPolicy::Latest);
         self
     }

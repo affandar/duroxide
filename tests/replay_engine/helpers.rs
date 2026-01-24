@@ -179,20 +179,6 @@ pub fn sub_orch_failed(event_id: u64, source_id: u64, message: &str) -> Event {
     )
 }
 
-/// Create a SystemCall event
-pub fn system_call(event_id: u64, op: &str, value: &str) -> Event {
-    Event::with_event_id(
-        event_id,
-        TEST_INSTANCE,
-        TEST_EXECUTION_ID,
-        None,
-        EventKind::SystemCall {
-            op: op.to_string(),
-            value: value.to_string(),
-        },
-    )
-}
-
 /// Create an OrchestrationCompleted event
 pub fn orchestration_completed(event_id: u64, output: &str) -> Event {
     Event::with_event_id(
@@ -690,23 +676,6 @@ impl OrchestrationHandler for CountingHandler {
     async fn invoke(&self, _ctx: OrchestrationContext, _input: String) -> Result<String, String> {
         self.count.fetch_add(1, Ordering::SeqCst);
         self.result.clone()
-    }
-}
-
-/// A mock handler that uses ctx.new_guid() (system call)
-pub struct SystemCallHandler;
-
-impl SystemCallHandler {
-    pub fn new() -> Arc<Self> {
-        Arc::new(Self)
-    }
-}
-
-#[async_trait]
-impl OrchestrationHandler for SystemCallHandler {
-    async fn invoke(&self, ctx: OrchestrationContext, _input: String) -> Result<String, String> {
-        let guid = ctx.new_guid().await?;
-        Ok(guid)
     }
 }
 

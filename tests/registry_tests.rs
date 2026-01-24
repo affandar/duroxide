@@ -8,6 +8,7 @@ use duroxide::runtime;
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::{ActivityContext, Client, OrchestrationContext, OrchestrationRegistry, OrchestrationStatus};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 // Helper orchestrations
 async fn orch1(_ctx: OrchestrationContext, input: String) -> Result<String, String> {
@@ -210,6 +211,89 @@ fn test_activity_registry_merge_duplicate_errors() {
         .build_result();
     assert!(result.is_err());
     assert!(result.err().unwrap().contains("duplicate activity in merge"));
+}
+
+// ---------------------------------------------------------------------------
+// Registry Validation: Reserved Prefix / Builtins
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_reserved_prefix_rejected() {
+    let result = ActivityRegistry::builder()
+        .register("__duroxide_syscall:evil", |_: ActivityContext, _: String| async {
+            Ok("evil".to_string())
+        })
+        .build_result();
+
+    match result {
+        Ok(_) => panic!("Should fail to register reserved prefix"),
+        Err(err) => {
+            assert!(
+                err.contains("uses reserved prefix"),
+                "Error should mention reserved prefix: {err}"
+            );
+            assert!(
+                err.contains("__duroxide_syscall:"),
+                "Error should mention the prefix: {err}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn test_builtins_exist_with_empty_registry() {
+    let store = Arc::new(SqliteProvider::new_in_memory().await.unwrap());
+
+    // Empty registry - builtins should be injected automatically
+    let activities = ActivityRegistry::builder().build();
+
+    let orchestrations = OrchestrationRegistry::builder()
+        .register("TestBuiltins", |ctx: OrchestrationContext, _: String| async move {
+            let _guid = ctx.new_guid().await?;
+            let _time = ctx.utc_now().await?;
+            Ok("ok".to_string())
+        })
+        .build();
+
+    let _rt = runtime::Runtime::start_with_store(store.clone(), activities, orchestrations).await;
+    let client = Client::new(store);
+
+    client
+        .start_orchestration("test-builtins", "TestBuiltins", "")
+        .await
+        .unwrap();
+    let status = client
+        .wait_for_orchestration("test-builtins", Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    match status {
+        OrchestrationStatus::Completed { output } => assert_eq!(output, "ok"),
+        other => panic!("Expected Completed, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn test_user_cannot_override_builtins() {
+    let result = ActivityRegistry::builder()
+        .register("__duroxide_syscall:new_guid", |_: ActivityContext, _: String| async {
+            Ok("".into())
+        })
+        .build_result();
+
+    match result {
+        Ok(_) => panic!("Should fail to register reserved builtin name"),
+        Err(err) => {
+            assert!(
+                err.contains("uses reserved prefix"),
+                "Error should mention reserved prefix: {err}"
+            );
+            assert!(
+                err.contains("__duroxide_syscall:"),
+                "Error should mention the prefix: {err}"
+            );
+        }
+    }
 }
 
 #[tokio::test]

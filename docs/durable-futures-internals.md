@@ -544,24 +544,29 @@ function execute_turn(instance_id, history, completion_messages):
 
 ## Special Operations
 
-### System Calls: Synchronous Operations
+### System Activities: Replay-Safe Time and IDs
 
-Some operations complete immediately without dispatching work. These are **system calls**:
+Some operations are provided as **built-in activities** (under reserved names) so they follow the same
+`ActivityScheduled` + `ActivityCompleted` event flow as user activities. This ensures replay determinism
+without special-case logic in the replay engine.
 
 - `ctx.new_guid()` – Generate a deterministic UUID
-- `ctx.utcnow()` – Get the current time (replay-safe)
+- `ctx.utc_now()` – Get the current time (replay-safe)
 
-System calls appear in history as a single event that's both schedule and completion:
+Example usage:
 
 ```rust
-let guid = ctx.new_guid();  // Returns immediately
+let guid = ctx.new_guid().await?;
 ```
 
+In history, these appear as normal activity events (with a reserved activity name):
+
 ```
-[10] SystemCall { op: "new_guid", value: "550e8400-e29b-41d4-a716-446655440000" }
+[10] ActivityScheduled { name: "__duroxide_syscall:new_guid", input: "" }
+[11] ActivityCompleted { source_event_id: 10, result: "550e8400-e29b-41d4-a716-446655440000" }
 ```
 
-On replay, the engine delivers the recorded value—it doesn't generate a new GUID.
+On replay, the engine re-delivers the recorded completion value, so the orchestration observes the same GUID/time.
 
 ### continue_as_new: Preventing Unbounded History Growth
 
@@ -687,7 +692,7 @@ The engine will fail with: "expected ActivityA, got ActivityB"
 | Problem | Why It Breaks | Solution |
 |---------|--------------|----------|
 | `Uuid::new_v4()` | Different UUID each replay | Use `ctx.new_guid()` |
-| `SystemTime::now()` | Different time each replay | Use `ctx.utcnow()` |
+| `SystemTime::now()` | Different time each replay | Use `ctx.utc_now()` |
 | `rand::random()` | Different value each replay | Use activities for randomness |
 | `tokio::select!` | Nondeterministic poll order | Use `ctx.select2()` |
 | Changing code | Different schedule order | Use versioning |

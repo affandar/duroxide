@@ -1,5 +1,7 @@
 # Event Schema Redesign: Common Fields + Kind Enum [IMPLEMENTED]
 
+**Status:** Implemented
+
 ## Problem with Current Schema
 
 Every Event variant repeats the same fields:

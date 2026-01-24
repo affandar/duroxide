@@ -3,7 +3,7 @@
 **Status:** Draft  
 **Author:** AI Assistant  
 **Created:** 2026-01-12  
-**Related:** [Activity Cancellation](activity-cancellation.md), [Durable Futures Internals](../docs/durable-futures-internals.md)
+**Related:** [Activity Cancellation](../proposals-impl/activity-cancellation.md), [Durable Futures Internals](../docs/durable-futures-internals.md)
 
 ---
 
@@ -644,6 +644,6 @@ Event 6: ActivityCompleted (for 2)         <- Fast activity completes first!
 ## References
 
 - [Durable Futures Internals](../docs/durable-futures-internals.md)
-- [Activity Cancellation Proposal](activity-cancellation.md)
+- [Activity Cancellation Proposal](../proposals-impl/activity-cancellation.md)
 - [Sub-Orchestrations](../docs/sub-orchestrations.md)
 - [Tokio select! macro](https://docs.rs/tokio/latest/tokio/macro.select.html)

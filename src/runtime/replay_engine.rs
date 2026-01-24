@@ -664,22 +664,6 @@ impl ReplayEngine {
                     }
                 }
 
-                EventKind::SystemCall { op, value } => {
-                    if let Err(result) = self.match_and_bind_schedule(
-                        &ctx,
-                        &mut emitted_actions,
-                        &mut open_schedules,
-                        &mut schedule_kinds,
-                        event,
-                        ActionKind::System { op: op.clone() },
-                    ) {
-                        return result;
-                    }
-                    // Deliver system call result immediately
-                    ctx.deliver_result(event.event_id(), CompletionResult::SystemCallValue(value.clone()));
-                    must_poll = true;
-                }
-
                 // Completion events
                 EventKind::ActivityCompleted { result } => {
                     if let Some(source_id) = event.source_event_id {
@@ -788,69 +772,24 @@ impl ReplayEngine {
             }
         }
 
-        // Process emitted actions and handle system calls with re-polling.
-        // System calls complete immediately, so we need to:
-        // 1. Process emitted actions (including delivering system call results)
-        // 2. Poll again if any system calls were delivered
-        // 3. Repeat until no more system calls are emitted
-        loop {
-            if emitted_actions.is_empty() {
-                break;
+        // Convert emitted actions to pending_actions AND history_delta
+        for (token, action) in emitted_actions {
+            let event_id = self.next_event_id;
+            self.next_event_id += 1;
+
+            ctx.bind_token(token, event_id);
+
+            let updated_action = update_action_event_id(action, event_id);
+
+            if let crate::Action::StartSubOrchestration { instance, .. } = &updated_action {
+                ctx.bind_sub_orchestration_instance(token, instance.clone());
             }
 
-            let mut delivered_system_call = false;
-
-            // Convert emitted actions to pending_actions AND history_delta
-            for (token, action) in emitted_actions.drain(..) {
-                let event_id = self.next_event_id;
-                self.next_event_id += 1;
-
-                ctx.bind_token(token, event_id);
-
-                let updated_action = update_action_event_id(action, event_id);
-
-                if let crate::Action::StartSubOrchestration { instance, .. } = &updated_action {
-                    ctx.bind_sub_orchestration_instance(token, instance.clone());
-                }
-
-                // For system calls, deliver the computed value immediately
-                if let crate::Action::SystemCall { value, .. } = &updated_action {
-                    ctx.deliver_result(event_id, CompletionResult::SystemCallValue(value.clone()));
-                    delivered_system_call = true;
-                }
-
-                if let Some(event) = action_to_event(&updated_action, &self.instance, self.execution_id, event_id) {
-                    self.history_delta.push(event);
-                }
-
-                self.pending_actions.push(updated_action);
+            if let Some(event) = action_to_event(&updated_action, &self.instance, self.execution_id, event_id) {
+                self.history_delta.push(event);
             }
 
-            // If we delivered system call results, poll again to let orchestration continue
-            if delivered_system_call && output_opt.is_none() {
-                let poll_result = catch_unwind(AssertUnwindSafe(|| poll_once(fut.as_mut())));
-
-                match poll_result {
-                    Ok(Poll::Ready(result)) => {
-                        output_opt = Some(result);
-                        emitted_actions.extend(ctx.drain_emitted_actions());
-                        break;
-                    }
-                    Ok(Poll::Pending) => {
-                        emitted_actions.extend(ctx.drain_emitted_actions());
-                    }
-                    Err(panic_payload) => {
-                        let msg = extract_panic_message(panic_payload);
-                        return TurnResult::Failed(crate::ErrorDetails::Configuration {
-                            kind: crate::ConfigErrorKind::Nondeterminism,
-                            resource: String::new(),
-                            message: Some(msg),
-                        });
-                    }
-                }
-            } else {
-                break;
-            }
+            self.pending_actions.push(updated_action);
         }
 
         // Check for cancellation first - if cancelled, return immediately
@@ -1009,9 +948,6 @@ enum ActionKind {
         instance: String,
         input: String,
     },
-    System {
-        op: String,
-    },
 }
 
 /// Create a nondeterminism error
@@ -1054,10 +990,6 @@ fn action_to_event(action: &Action, instance: &str, execution_id: u64, event_id:
             name: name.clone(),
             instance: sub_instance.clone(),
             input: input.clone(),
-        },
-        Action::SystemCall { op, value, .. } => EventKind::SystemCall {
-            op: op.clone(),
-            value: value.clone(),
         },
         // These don't become schedule events
         Action::ContinueAsNew { .. } | Action::StartOrchestrationDetached { .. } => {
@@ -1108,11 +1040,6 @@ fn update_action_event_id(action: Action, event_id: u64) -> Action {
                 version,
             }
         }
-        Action::SystemCall { op, value, .. } => Action::SystemCall {
-            scheduling_event_id: event_id,
-            op,
-            value,
-        },
         // These don't have scheduling_event_id
         Action::ContinueAsNew { .. } | Action::StartOrchestrationDetached { .. } => action,
     }
@@ -1152,8 +1079,6 @@ fn action_matches_event_kind(action: &Action, event_kind: &EventKind) -> bool {
                 name: en, input: ei, ..
             },
         ) => name == en && input == ei,
-
-        (Action::SystemCall { op, .. }, EventKind::SystemCall { op: eop, .. }) => op == eop,
 
         _ => false,
     }

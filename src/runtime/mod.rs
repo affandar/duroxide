@@ -14,6 +14,34 @@ use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tracing::warn;
 
+// ============================================================================
+// Built-in System Activities
+// ============================================================================
+
+/// Inject built-in system activities into the activity registry.
+/// This adds the new_guid and utc_now_ms activities that are used by
+/// `OrchestrationContext::new_guid()` and `OrchestrationContext::utc_now()`.
+fn inject_builtin_activities(user_registry: registry::ActivityRegistry) -> registry::ActivityRegistry {
+    registry::ActivityRegistry::builder_from(&user_registry)
+        .register_builtin(
+            crate::SYSCALL_ACTIVITY_NEW_GUID,
+            |_ctx: crate::ActivityContext, _input: String| async move { Ok(crate::generate_guid()) },
+        )
+        .register_builtin(
+            crate::SYSCALL_ACTIVITY_UTC_NOW_MS,
+            |_ctx: crate::ActivityContext, _input: String| async move {
+                use std::time::{SystemTime, UNIX_EPOCH};
+                let ms = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map(|d| d.as_millis() as u64)
+                    .unwrap_or(0);
+                Ok(ms.to_string())
+            },
+        )
+        .build_result()
+        .expect("builtin syscall activity registration should never fail")
+}
+
 /// Configuration for exponential backoff when encountering unregistered orchestrations/activities.
 ///
 /// During rolling deployments, work items for unregistered handlers are abandoned
@@ -692,6 +720,9 @@ impl Runtime {
         orchestration_registry: OrchestrationRegistry,
         options: RuntimeOptions,
     ) -> Arc<Self> {
+        // Inject built-in system activities (new_guid, utc_now_ms)
+        let activity_registry = inject_builtin_activities(activity_registry);
+
         // Wrap activity registry in Arc for internal sharing across worker threads
         let activity_registry = Arc::new(activity_registry);
 

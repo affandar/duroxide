@@ -1,6 +1,7 @@
 # Proposal: Replay Simplification (Commands/Events Model)
 
 **Date:** 2026-01-19
+**Status:** Implemented
 
 ## Summary
 This proposal simplifies Duroxide replay by moving to a **commands (actions) vs. events (history)** model.

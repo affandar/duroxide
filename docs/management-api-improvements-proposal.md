@@ -2,7 +2,7 @@
 
 > **Status**: Proposed  
 > **Issue**: [#10](https://github.com/affandar/duroxide/issues/10)  
-> **Related**: [Core Improvements Roadmap](../proposals/core-improvements-roadmap.md#3-management-api-improvements)
+> **Related**: [Core Improvements Roadmap](proposals/core-improvements-roadmap.md#3-management-api-improvements)
 
 ## Overview
 

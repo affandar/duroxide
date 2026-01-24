@@ -164,31 +164,6 @@ fn multiple_external_events_same_name() {
     assert_completed(&result, "first-data");
 }
 
-/// System call in fresh execution - should complete with a generated GUID.
-///
-/// Orchestration code:
-/// ```ignore
-/// async fn invoke(&self, ctx: OrchestrationContext, _input: String) -> Result<String, String> {
-///     let guid = ctx.new_guid().await?;
-///     Ok(guid)
-/// }
-/// ```
-#[test]
-fn system_call_fresh_execution() {
-    let history = vec![started_event(1)]; // OrchestrationStarted
-    let mut engine = create_engine(history);
-    let result = execute(&mut engine, SystemCallHandler::new());
-
-    // System calls complete immediately - they're synchronous
-    match &result {
-        duroxide::runtime::replay_engine::TurnResult::Completed(guid) => {
-            // Should be a valid GUID format
-            assert!(guid.contains('-'), "Should be a GUID format: {guid}");
-        }
-        _ => panic!("Expected Completed, got {result:?}"),
-    }
-}
-
 /// made_progress is true after prep_completions adds events.
 ///
 /// Tests the engine's progress tracking - useful for polling loops.

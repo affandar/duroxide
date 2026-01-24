@@ -684,9 +684,9 @@ async fn test_instance_id_idempotence() {
     );
 
     let orchestration = |ctx: OrchestrationContext, _input: String| async move {
-        // Use ctx.utcnow() to get a runtime-generated timestamp that would differ
+        // Use ctx.utc_now() to get a runtime-generated timestamp that would differ
         // if the orchestration re-executed
-        let start = ctx.utcnow().await?;
+        let start = ctx.utc_now().await?;
         let start_ms = start.duration_since(std::time::UNIX_EPOCH).unwrap().as_millis();
         let a = ctx.schedule_activity("A", "1").await.unwrap();
         ctx.schedule_timer(Duration::from_millis(50)).await;

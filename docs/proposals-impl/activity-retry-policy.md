@@ -1,5 +1,7 @@
 # Activity Retry Policy [IMPLEMENTED]
 
+**Status:** Implemented
+
 ## Summary
 
 Add orchestration-level helper methods that wrap existing `schedule_activity` calls with configurable retry logic and optional per-attempt timeout. Retries are implemented entirely in orchestration code using existing primitives (loops + timers + select), keeping history deterministic and requiring no worker/provider changes.

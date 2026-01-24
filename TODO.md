@@ -130,17 +130,17 @@
 - Docs review for duroxide, duroxide-pg.
 - **[BLOCKER] Event Schema Redesign: Common Fields + Timestamps**
   - Current Issue: `duroxide_orchestration_duration_seconds` only measures final turn duration (40ms), not total orchestration lifetime (could be hours/days)
-  - Proposed Solution: Restructure Event from flat enum to struct + EventKind enum (see `proposals/event-schema-redesign.md`)
+  - Proposed Solution: Restructure Event from flat enum to struct + EventKind enum (see `docs/proposals-impl/event-schema-redesign.md`)
   - Common fields: `event_id`, `instance_id`, `execution_id`, `timestamp_ms`, `duroxide_version` (crate semver)
   - Event-specific fields: `kind: EventKind` enum
   - Impact: Large refactor (~40 event creation sites, ~140+ match sites), but no DB schema changes (JSON is flexible)
   - Benefits: Accurate duration metrics, self-contained events, cleaner API, easy to add common fields, forward compatible
   - Complexity: High - Touches many files, but serde provides backward compat via `#[serde(default)]`
   - Related: WorkItem should get same treatment (also persisted as JSON in queues)
-  - Design Doc: `proposals/event-schema-redesign.md`, `docs/event-schema-evolution.md`
+  - Design Doc: `docs/proposals-impl/event-schema-redesign.md`, `docs/event-schema-evolution.md`
 - **[FIXED] Select2 Loser Completions Block FIFO Ordering**
 - **Activity Retry Policy** - Implement built-in activity retry logic
-  - Design doc: `proposals/activity-retry-policy.md`
+  - Design doc: `docs/proposals-impl/activity-retry-policy.md`
 - Fix up the stress tests, make them more usable by providers
 - Do a pass on registries for interface consistency
 - Disable infra logs by default

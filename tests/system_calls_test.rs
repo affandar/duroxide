@@ -56,7 +56,7 @@ async fn test_new_guid() {
 }
 
 #[tokio::test]
-async fn test_utcnow_ms() {
+async fn test_utc_now_ms() {
     let store = Arc::new(
         duroxide::providers::sqlite::SqliteProvider::new_in_memory()
             .await
@@ -66,12 +66,12 @@ async fn test_utcnow_ms() {
 
     let orchestrations = OrchestrationRegistry::builder()
         .register("TestTime", |ctx: OrchestrationContext, _input: String| async move {
-            let time1 = ctx.utcnow().await?;
+            let time1 = ctx.utc_now().await?;
 
             // Add a small timer to ensure time progresses
             ctx.schedule_timer(Duration::from_millis(100)).await;
 
-            let time2 = ctx.utcnow().await?;
+            let time2 = ctx.utc_now().await?;
 
             // Convert to milliseconds for validation
             let t1 = time1
@@ -128,7 +128,7 @@ async fn test_system_calls_deterministic_replay() {
             "TestDeterminism",
             |ctx: OrchestrationContext, _input: String| async move {
                 let guid = ctx.new_guid().await?;
-                let time = ctx.utcnow().await?;
+                let time = ctx.utc_now().await?;
 
                 // Use values in some computation
                 let time_ms = time
@@ -219,7 +219,7 @@ async fn test_system_calls_with_select() {
             };
 
             // Get another system call to verify they work throughout the orchestration
-            let time = ctx.utcnow().await?;
+            let time = ctx.utc_now().await?;
 
             // Verify both system calls returned valid values
             assert!(guid.len() == 36, "GUID should be valid");
@@ -280,7 +280,7 @@ async fn test_system_calls_join_with_activities() {
         .register("TestJoin", |ctx: OrchestrationContext, _input: String| async move {
             // Test 1: Call system calls and activity separately since they have different return types
             let guid = ctx.new_guid().await?;
-            let time = ctx.utcnow().await?;
+            let time = ctx.utc_now().await?;
             let activity_result = ctx.schedule_activity("SlowTask", "data1").await?;
 
             // Validate the values
@@ -340,29 +340,30 @@ async fn test_system_calls_join_with_activities() {
     rt.shutdown(None).await;
 }
 
-/// Test: Verify that utcnow() used as activity input replays correctly.
+/// Test: Verify that utc_now() used as activity input replays correctly.
 ///
-/// This test verifies system call replay works correctly:
-/// 1. First turn: utcnow returns T1, waits for external event
+/// This test verifies replay correctness:
+/// 1. First turn: utc_now returns T1, waits for external event
 /// 2. External event triggers second turn (replay)
-/// 3. On replay, utcnow should return the SAME value T1 from history
+/// 3. On replay, utc_now should return the SAME value T1 from history
 /// 4. Activity is scheduled with T1 as input - should match history
 #[tokio::test]
-async fn test_utcnow_as_activity_input_causes_nondeterminism() {
+async fn test_utc_now_as_activity_input_replays_correctly() {
     let (store, _td) = common::create_sqlite_store_disk().await;
 
     let activities = ActivityRegistry::builder()
-        .register("ProcessWithTimestamp", |_ctx: ActivityContext, input: String| async move {
-            Ok(format!("processed:{}", input))
-        })
+        .register(
+            "ProcessWithTimestamp",
+            |_ctx: ActivityContext, input: String| async move { Ok(format!("processed:{}", input)) },
+        )
         .build();
 
     let orchestrations = OrchestrationRegistry::builder()
         .register(
-            "TestUtcnowNondeterminism",
+            "TestUtcNowReplayAsInput",
             |ctx: OrchestrationContext, _input: String| async move {
                 // Get a timestamp
-                let time = ctx.utcnow().await?;
+                let time = ctx.utc_now().await?;
                 let time_ms = time
                     .duration_since(std::time::UNIX_EPOCH)
                     .map_err(|e| e.to_string())?
@@ -372,8 +373,10 @@ async fn test_utcnow_as_activity_input_causes_nondeterminism() {
                 let _ = ctx.schedule_wait("continue").await;
 
                 // Use timestamp as input to an activity
-                // On replay, utcnow must return the same value or this will cause nondeterminism
-                let result = ctx.schedule_activity("ProcessWithTimestamp", time_ms.to_string()).await?;
+                // On replay, utc_now must return the same value or this will cause nondeterminism
+                let result = ctx
+                    .schedule_activity("ProcessWithTimestamp", time_ms.to_string())
+                    .await?;
 
                 Ok(result)
             },
@@ -384,12 +387,12 @@ async fn test_utcnow_as_activity_input_causes_nondeterminism() {
     let client = duroxide::Client::new(store.clone());
 
     client
-        .start_orchestration("test-utcnow-nondet", "TestUtcnowNondeterminism", "")
+        .start_orchestration("test-utcnow-replay", "TestUtcNowReplayAsInput", "")
         .await
         .unwrap();
 
     // Wait for the external subscription to be registered
-    let subscribed = common::wait_for_subscription(store.clone(), "test-utcnow-nondet", "continue", 2000).await;
+    let subscribed = common::wait_for_subscription(store.clone(), "test-utcnow-replay", "continue", 2000).await;
     assert!(subscribed, "Orchestration should subscribe to 'continue' event");
 
     // Wait a bit so wall-clock time advances
@@ -397,12 +400,12 @@ async fn test_utcnow_as_activity_input_causes_nondeterminism() {
 
     // Send the external event - this triggers replay of the orchestration
     client
-        .raise_event("test-utcnow-nondet", "continue", "go")
+        .raise_event("test-utcnow-replay", "continue", "go")
         .await
         .unwrap();
 
     let status = client
-        .wait_for_orchestration("test-utcnow-nondet", Duration::from_secs(10))
+        .wait_for_orchestration("test-utcnow-replay", Duration::from_secs(10))
         .await
         .unwrap();
 
@@ -424,9 +427,9 @@ async fn test_utcnow_as_activity_input_causes_nondeterminism() {
 
 /// Test: Verify that new_guid() used as activity input replays correctly.
 ///
-/// Similar to utcnow test - new_guid must return the same value on replay.
+/// Similar to utc_now test - new_guid must return the same value on replay.
 #[tokio::test]
-async fn test_new_guid_as_activity_input_causes_nondeterminism() {
+async fn test_new_guid_as_activity_input_replays_correctly() {
     let (store, _td) = common::create_sqlite_store_disk().await;
 
     let activities = ActivityRegistry::builder()
@@ -458,22 +461,19 @@ async fn test_new_guid_as_activity_input_causes_nondeterminism() {
     let client = duroxide::Client::new(store.clone());
 
     client
-        .start_orchestration("test-guid-nondet", "TestGuidNondeterminism", "")
+        .start_orchestration("test-guid-replay", "TestGuidNondeterminism", "")
         .await
         .unwrap();
 
     // Wait for the external subscription to be registered
-    let subscribed = common::wait_for_subscription(store.clone(), "test-guid-nondet", "continue", 2000).await;
+    let subscribed = common::wait_for_subscription(store.clone(), "test-guid-replay", "continue", 2000).await;
     assert!(subscribed, "Orchestration should subscribe to 'continue' event");
 
     // Send the external event - this triggers replay
-    client
-        .raise_event("test-guid-nondet", "continue", "go")
-        .await
-        .unwrap();
+    client.raise_event("test-guid-replay", "continue", "go").await.unwrap();
 
     let status = client
-        .wait_for_orchestration("test-guid-nondet", Duration::from_secs(10))
+        .wait_for_orchestration("test-guid-replay", Duration::from_secs(10))
         .await
         .unwrap();
 
@@ -488,6 +488,211 @@ async fn test_new_guid_as_activity_input_causes_nondeterminism() {
         other => {
             panic!("Unexpected status: {other:?}");
         }
+    }
+
+    rt.shutdown(None).await;
+}
+
+#[tokio::test]
+async fn test_activity_then_syscall_ordering() {
+    let store = Arc::new(
+        duroxide::providers::sqlite::SqliteProvider::new_in_memory()
+            .await
+            .unwrap(),
+    );
+
+    let activities = ActivityRegistry::builder()
+        .register("A", |_ctx: ActivityContext, _input: String| async move {
+            Ok("a".to_string())
+        })
+        .register("B", |_ctx: ActivityContext, input: String| async move {
+            Ok(format!("b:{input}"))
+        })
+        .build();
+
+    let orchestrations = OrchestrationRegistry::builder()
+        .register("Ordering", |ctx: OrchestrationContext, _input: String| async move {
+            let _ = ctx.schedule_activity("A", "").await?;
+            let guid = ctx.new_guid().await?;
+            let _ = ctx.schedule_activity("B", guid).await?;
+            Ok("ok".to_string())
+        })
+        .build();
+
+    let rt = runtime::Runtime::start_with_store(store.clone(), activities, orchestrations).await;
+    let client = duroxide::Client::new(store.clone());
+
+    client
+        .start_orchestration("test-ordering-1", "Ordering", "")
+        .await
+        .unwrap();
+    let status = client
+        .wait_for_orchestration("test-ordering-1", Duration::from_secs(5))
+        .await
+        .unwrap();
+    assert!(matches!(
+        status,
+        duroxide::runtime::OrchestrationStatus::Completed { .. }
+    ));
+
+    let history = client.read_execution_history("test-ordering-1", 1).await.unwrap();
+    let scheduled_names: Vec<String> = history
+        .iter()
+        .filter_map(|e| match &e.kind {
+            duroxide::EventKind::ActivityScheduled { name, .. } => Some(name.clone()),
+            _ => None,
+        })
+        .collect();
+
+    // Ordering should be stable: A, syscall(new_guid), B
+    assert_eq!(scheduled_names.len(), 3);
+    assert_eq!(scheduled_names[0], "A");
+    assert_eq!(scheduled_names[1], "__duroxide_syscall:new_guid");
+    assert_eq!(scheduled_names[2], "B");
+
+    rt.shutdown(None).await;
+}
+
+#[tokio::test]
+async fn test_multiple_syscalls_same_type() {
+    let store = Arc::new(
+        duroxide::providers::sqlite::SqliteProvider::new_in_memory()
+            .await
+            .unwrap(),
+    );
+    let activities = ActivityRegistry::builder().build();
+
+    let orchestrations = OrchestrationRegistry::builder()
+        .register("TwoGuids", |ctx: OrchestrationContext, _input: String| async move {
+            let g1 = ctx.new_guid().await?;
+            let g2 = ctx.new_guid().await?;
+            assert_ne!(g1, g2);
+            Ok(format!("{g1},{g2}"))
+        })
+        .build();
+
+    let rt = runtime::Runtime::start_with_store(store.clone(), activities.clone(), orchestrations.clone()).await;
+    let client = duroxide::Client::new(store.clone());
+    client
+        .start_orchestration("test-two-guids", "TwoGuids", "")
+        .await
+        .unwrap();
+    let status1 = client
+        .wait_for_orchestration("test-two-guids", Duration::from_secs(5))
+        .await
+        .unwrap();
+    let output1 = match status1 {
+        duroxide::runtime::OrchestrationStatus::Completed { output } => output,
+        other => panic!("Unexpected status: {other:?}"),
+    };
+    rt.shutdown(None).await;
+
+    // Restart runtime and ensure replay is stable
+    let rt2 = runtime::Runtime::start_with_store(store.clone(), activities, orchestrations).await;
+    let status2 = client
+        .wait_for_orchestration("test-two-guids", Duration::from_secs(5))
+        .await
+        .unwrap();
+    let output2 = match status2 {
+        duroxide::runtime::OrchestrationStatus::Completed { output } => output,
+        other => panic!("Unexpected status: {other:?}"),
+    };
+    assert_eq!(output1, output2);
+    rt2.shutdown(None).await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn test_syscalls_work_in_single_thread_mode() {
+    let store = Arc::new(
+        duroxide::providers::sqlite::SqliteProvider::new_in_memory()
+            .await
+            .unwrap(),
+    );
+    let activities = ActivityRegistry::builder().build();
+
+    let orchestrations = OrchestrationRegistry::builder()
+        .register(
+            "SingleThreadSyscalls",
+            |ctx: OrchestrationContext, _input: String| async move {
+                for _ in 0..3 {
+                    let _ = ctx.new_guid().await?;
+                    let _ = ctx.utc_now().await?;
+                }
+                Ok("ok".to_string())
+            },
+        )
+        .build();
+
+    let options = runtime::RuntimeOptions {
+        orchestration_concurrency: 1,
+        worker_concurrency: 1,
+        ..Default::default()
+    };
+
+    let rt = runtime::Runtime::start_with_options(store.clone(), activities, orchestrations, options).await;
+    let client = duroxide::Client::new(store.clone());
+    client
+        .start_orchestration("test-single-thread-syscalls", "SingleThreadSyscalls", "")
+        .await
+        .unwrap();
+    let status = client
+        .wait_for_orchestration("test-single-thread-syscalls", Duration::from_secs(5))
+        .await
+        .unwrap();
+    assert!(matches!(
+        status,
+        duroxide::runtime::OrchestrationStatus::Completed { .. }
+    ));
+    rt.shutdown(None).await;
+}
+
+#[tokio::test]
+async fn test_cancellation_with_pending_syscall() {
+    let (store, _td) = common::create_sqlite_store_disk().await;
+    let activities = ActivityRegistry::builder().build();
+
+    let orchestrations = OrchestrationRegistry::builder()
+        .register(
+            "CancelSyscall",
+            |ctx: OrchestrationContext, _input: String| async move {
+                // Ensure syscall activity is exercised before cancellation.
+                let _ = ctx.utc_now().await?;
+                // Then wait so we can cancel deterministically.
+                let _ = ctx.schedule_wait("hold").await;
+                Ok("done".to_string())
+            },
+        )
+        .build();
+
+    let rt = runtime::Runtime::start_with_store(store.clone(), activities, orchestrations).await;
+    let client = duroxide::Client::new(store.clone());
+    client
+        .start_orchestration("test-cancel-syscall", "CancelSyscall", "")
+        .await
+        .unwrap();
+
+    let subscribed = common::wait_for_subscription(store.clone(), "test-cancel-syscall", "hold", 2000).await;
+    assert!(subscribed, "Orchestration should subscribe to 'hold' event");
+
+    client
+        .cancel_instance("test-cancel-syscall", "test cancellation")
+        .await
+        .unwrap();
+
+    let status = client
+        .wait_for_orchestration("test-cancel-syscall", Duration::from_secs(10))
+        .await
+        .unwrap();
+
+    match status {
+        duroxide::runtime::OrchestrationStatus::Failed { details } => match details {
+            duroxide::ErrorDetails::Application {
+                kind: duroxide::AppErrorKind::Cancelled { .. },
+                ..
+            } => {}
+            other => panic!("Expected cancelled application error, got: {other:?}"),
+        },
+        other => panic!("Expected Failed cancellation status, got: {other:?}"),
     }
 
     rt.shutdown(None).await;

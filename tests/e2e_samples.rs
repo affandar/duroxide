@@ -434,7 +434,7 @@ async fn dtf_legacy_gabbar_greetings_fs() {
 /// System activities: use built-in activities to get wall-clock time and a new GUID.
 ///
 /// Highlights:
-/// - Call `ctx.utcnow()` and `ctx.new_guid()`
+/// - Call `ctx.utc_now()` and `ctx.new_guid()`
 /// - Log and validate basic formatting of results
 #[tokio::test]
 async fn sample_system_activities_fs() {
@@ -443,7 +443,7 @@ async fn sample_system_activities_fs() {
     let activity_registry = ActivityRegistry::builder().build();
 
     let orchestration = |ctx: OrchestrationContext, _input: String| async move {
-        let now = ctx.utcnow().await?;
+        let now = ctx.utc_now().await?;
         let guid = ctx.new_guid().await?;
 
         // Convert SystemTime to milliseconds for display

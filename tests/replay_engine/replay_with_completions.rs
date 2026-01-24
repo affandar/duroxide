@@ -118,33 +118,3 @@ fn sub_orch_completed_in_history() {
 
     assert_completed(&result, "child-result");
 }
-
-/// System call in history - computes value fresh (doesn't replay stored value).
-///
-/// Orchestration code:
-/// ```ignore
-/// async fn invoke(&self, ctx: OrchestrationContext, _input: String) -> Result<String, String> {
-///     let guid = ctx.new_guid().await?;
-///     Ok(guid)
-/// }
-/// ```
-///
-/// System calls must replay their historical value to ensure determinism.
-/// The value is recorded in history and replayed on subsequent turns.
-#[test]
-fn system_call_in_history() {
-    let history = vec![
-        started_event(1),                          // OrchestrationStarted
-        system_call(2, "guid", "test-guid-12345"), // new_guid() - stored value
-    ];
-    let mut engine = create_engine(history);
-    let result = execute(&mut engine, SystemCallHandler::new());
-
-    // System call should return the HISTORICAL value for deterministic replay
-    match &result {
-        duroxide::runtime::replay_engine::TurnResult::Completed(guid) => {
-            assert_eq!(guid, "test-guid-12345", "Should replay historical GUID, not generate new one");
-        }
-        _ => panic!("Expected Completed, got {result:?}"),
-    }
-}
