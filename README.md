@@ -8,8 +8,8 @@
 
 A lightweight and embeddable durable execution runtime for Rust. Inspired by the [Durable Task Framework](https://github.com/Azure/durabletask) and [Temporal](https://temporal.io/).
 
-> **[Latest Release: v0.1.11](https://crates.io/crates/duroxide/0.1.11)** — Fix WorkItemReader version extraction during completion-only replay (issue #49).
-> See [CHANGELOG.md](CHANGELOG.md#0111---2026-01-07) for release notes.
+> **[Latest Release: v0.1.12](https://crates.io/crates/duroxide/0.1.12)** — Major replay engine refactor with DurableFuture, unobserved future cancellation, and documentation overhaul.
+> See [CHANGELOG.md](CHANGELOG.md#0112---2026-01-23) for release notes.
 
 What you can build with this
 - Function chaining: model a multi-step process as sequential awaits where each step depends on prior results.

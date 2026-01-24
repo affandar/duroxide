@@ -5,6 +5,53 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.12] - 2026-01-23
+
+**Release:** <https://crates.io/crates/duroxide/0.1.12>
+
+### Added
+
+- **Unobserved Future Cancellation** - Futures that are scheduled but never awaited are now properly cancelled
+  - New `DurableFuture` implementation with proper drop semantics
+  - Cancellation events recorded in history for deterministic replay
+  - Comprehensive test coverage in `tests/replay_engine/unobserved_futures.rs`
+
+- **AI Skills System** - New `docs/skills/` folder for AI coding assistant context
+  - Installation instructions for VS Code Copilot, Claude Code, and Cursor
+  - `duroxide-provider-implementation` skill for provider developers
+
+- **Provider Validation** - New cancellation validation tests
+  - `test_activity_cancellation_via_lock_stealing`
+  - Additional lock stealing edge case tests
+
+### Changed
+
+- **Major Documentation Refactor**
+  - Rewrote `provider-implementation-guide.md` with better structure and pedagogy
+  - Rewrote `architecture.md` with cleaner ASCII diagrams (removed mermaid)
+  - Merged `replay-engine.md` into `durable-futures-internals.md`
+  - Added long-polling vs short-polling explanation
+  - Added Performance Considerations and ProviderAdmin sections
+
+- **Simplified ActivityRegistry API** - Now takes value instead of Arc
+
+- **Improved Dispatcher Backoff Logic** - Better stale activity handling
+
+### Fixed
+
+- **Polling Model Documentation** - Corrected to multi-poll (not single-poll) model
+
+### Code Statistics (vs v0.1.11)
+
+| Area | Files | Insertions | Deletions | Net |
+|------|-------|------------|-----------|-----|
+| Core (src/) | 15 | +2,355 | -1,999 | +356 |
+| Tests (tests/) | 63 | +7,616 | -3,353 | +4,263 |
+| Docs (docs/) | 43 | +17,477 | -4,004 | +13,473 |
+| **Total** | 134 | +17,459 | -9,536 | **+7,923** |
+
+---
+
 ## [0.1.11] - 2026-01-07
 
 **Release:** <https://crates.io/crates/duroxide/0.1.11>
