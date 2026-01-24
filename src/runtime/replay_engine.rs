@@ -788,32 +788,69 @@ impl ReplayEngine {
             }
         }
 
-        // Convert remaining emitted actions to pending_actions AND history_delta
-        // These are new schedules beyond what's in history
-        for (token, action) in emitted_actions {
-            // Generate event_id for new schedule
-            let event_id = self.next_event_id;
-            self.next_event_id += 1;
-
-            // Bind token to new event_id
-            ctx.bind_token(token, event_id);
-
-            // Update the action's scheduling_event_id to match the persisted event_id
-            // (the action originally has the token as scheduling_event_id)
-            let updated_action = update_action_event_id(action, event_id);
-
-            // For sub-orchestrations, bind the resolved instance ID for cancellation lookup
-            if let crate::Action::StartSubOrchestration { instance, .. } = &updated_action {
-                ctx.bind_sub_orchestration_instance(token, instance.clone());
+        // Process emitted actions and handle system calls with re-polling.
+        // System calls complete immediately, so we need to:
+        // 1. Process emitted actions (including delivering system call results)
+        // 2. Poll again if any system calls were delivered
+        // 3. Repeat until no more system calls are emitted
+        loop {
+            if emitted_actions.is_empty() {
+                break;
             }
 
-            // Convert action to event
-            if let Some(event) = action_to_event(&updated_action, &self.instance, self.execution_id, event_id) {
-                self.history_delta.push(event);
+            let mut delivered_system_call = false;
+
+            // Convert emitted actions to pending_actions AND history_delta
+            for (token, action) in emitted_actions.drain(..) {
+                let event_id = self.next_event_id;
+                self.next_event_id += 1;
+
+                ctx.bind_token(token, event_id);
+
+                let updated_action = update_action_event_id(action, event_id);
+
+                if let crate::Action::StartSubOrchestration { instance, .. } = &updated_action {
+                    ctx.bind_sub_orchestration_instance(token, instance.clone());
+                }
+
+                // For system calls, deliver the computed value immediately
+                if let crate::Action::SystemCall { value, .. } = &updated_action {
+                    ctx.deliver_result(event_id, CompletionResult::SystemCallValue(value.clone()));
+                    delivered_system_call = true;
+                }
+
+                if let Some(event) = action_to_event(&updated_action, &self.instance, self.execution_id, event_id) {
+                    self.history_delta.push(event);
+                }
+
+                self.pending_actions.push(updated_action);
             }
 
-            // Add to pending_actions
-            self.pending_actions.push(updated_action);
+            // If we delivered system call results, poll again to let orchestration continue
+            if delivered_system_call && output_opt.is_none() {
+                let poll_result = catch_unwind(AssertUnwindSafe(|| poll_once(fut.as_mut())));
+
+                match poll_result {
+                    Ok(Poll::Ready(result)) => {
+                        output_opt = Some(result);
+                        emitted_actions.extend(ctx.drain_emitted_actions());
+                        break;
+                    }
+                    Ok(Poll::Pending) => {
+                        emitted_actions.extend(ctx.drain_emitted_actions());
+                    }
+                    Err(panic_payload) => {
+                        let msg = extract_panic_message(panic_payload);
+                        return TurnResult::Failed(crate::ErrorDetails::Configuration {
+                            kind: crate::ConfigErrorKind::Nondeterminism,
+                            resource: String::new(),
+                            message: Some(msg),
+                        });
+                    }
+                }
+            } else {
+                break;
+            }
         }
 
         // Check for cancellation first - if cancelled, return immediately

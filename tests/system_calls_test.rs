@@ -2,6 +2,8 @@
 #![allow(clippy::clone_on_ref_ptr)]
 #![allow(clippy::expect_used)]
 
+mod common;
+
 use duroxide::runtime::{self, registry::ActivityRegistry};
 use duroxide::{ActivityContext, OrchestrationContext, OrchestrationRegistry};
 use std::sync::Arc;
@@ -333,6 +335,159 @@ async fn test_system_calls_join_with_activities() {
         assert!(output.contains("winner:"), "Should have winner");
     } else {
         panic!("Orchestration did not complete successfully: {status:?}");
+    }
+
+    rt.shutdown(None).await;
+}
+
+/// Test: Verify that utcnow() used as activity input replays correctly.
+///
+/// This test verifies system call replay works correctly:
+/// 1. First turn: utcnow returns T1, waits for external event
+/// 2. External event triggers second turn (replay)
+/// 3. On replay, utcnow should return the SAME value T1 from history
+/// 4. Activity is scheduled with T1 as input - should match history
+#[tokio::test]
+async fn test_utcnow_as_activity_input_causes_nondeterminism() {
+    let (store, _td) = common::create_sqlite_store_disk().await;
+
+    let activities = ActivityRegistry::builder()
+        .register("ProcessWithTimestamp", |_ctx: ActivityContext, input: String| async move {
+            Ok(format!("processed:{}", input))
+        })
+        .build();
+
+    let orchestrations = OrchestrationRegistry::builder()
+        .register(
+            "TestUtcnowNondeterminism",
+            |ctx: OrchestrationContext, _input: String| async move {
+                // Get a timestamp
+                let time = ctx.utcnow().await?;
+                let time_ms = time
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_err(|e| e.to_string())?
+                    .as_millis() as u64;
+
+                // Wait for external event - this forces a turn boundary
+                let _ = ctx.schedule_wait("continue").await;
+
+                // Use timestamp as input to an activity
+                // On replay, utcnow must return the same value or this will cause nondeterminism
+                let result = ctx.schedule_activity("ProcessWithTimestamp", time_ms.to_string()).await?;
+
+                Ok(result)
+            },
+        )
+        .build();
+
+    let rt = runtime::Runtime::start_with_store(store.clone(), activities.clone(), orchestrations.clone()).await;
+    let client = duroxide::Client::new(store.clone());
+
+    client
+        .start_orchestration("test-utcnow-nondet", "TestUtcnowNondeterminism", "")
+        .await
+        .unwrap();
+
+    // Wait for the external subscription to be registered
+    let subscribed = common::wait_for_subscription(store.clone(), "test-utcnow-nondet", "continue", 2000).await;
+    assert!(subscribed, "Orchestration should subscribe to 'continue' event");
+
+    // Wait a bit so wall-clock time advances
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // Send the external event - this triggers replay of the orchestration
+    client
+        .raise_event("test-utcnow-nondet", "continue", "go")
+        .await
+        .unwrap();
+
+    let status = client
+        .wait_for_orchestration("test-utcnow-nondet", Duration::from_secs(10))
+        .await
+        .unwrap();
+
+    match status {
+        duroxide::runtime::OrchestrationStatus::Completed { output } => {
+            println!("Orchestration completed: {}", output);
+            assert!(output.starts_with("processed:"), "Should have processed the timestamp");
+        }
+        duroxide::runtime::OrchestrationStatus::Failed { details } => {
+            panic!("Orchestration failed: {}", details.display_message());
+        }
+        other => {
+            panic!("Unexpected status: {other:?}");
+        }
+    }
+
+    rt.shutdown(None).await;
+}
+
+/// Test: Verify that new_guid() used as activity input replays correctly.
+///
+/// Similar to utcnow test - new_guid must return the same value on replay.
+#[tokio::test]
+async fn test_new_guid_as_activity_input_causes_nondeterminism() {
+    let (store, _td) = common::create_sqlite_store_disk().await;
+
+    let activities = ActivityRegistry::builder()
+        .register("ProcessWithId", |_ctx: ActivityContext, input: String| async move {
+            Ok(format!("processed:{}", input))
+        })
+        .build();
+
+    let orchestrations = OrchestrationRegistry::builder()
+        .register(
+            "TestGuidNondeterminism",
+            |ctx: OrchestrationContext, _input: String| async move {
+                // Get a GUID
+                let guid = ctx.new_guid().await?;
+
+                // Wait for external event - this forces a turn boundary
+                let _ = ctx.schedule_wait("continue").await;
+
+                // Use guid as input to an activity
+                // On replay, new_guid must return the same value or this will cause nondeterminism
+                let result = ctx.schedule_activity("ProcessWithId", guid).await?;
+
+                Ok(result)
+            },
+        )
+        .build();
+
+    let rt = runtime::Runtime::start_with_store(store.clone(), activities.clone(), orchestrations.clone()).await;
+    let client = duroxide::Client::new(store.clone());
+
+    client
+        .start_orchestration("test-guid-nondet", "TestGuidNondeterminism", "")
+        .await
+        .unwrap();
+
+    // Wait for the external subscription to be registered
+    let subscribed = common::wait_for_subscription(store.clone(), "test-guid-nondet", "continue", 2000).await;
+    assert!(subscribed, "Orchestration should subscribe to 'continue' event");
+
+    // Send the external event - this triggers replay
+    client
+        .raise_event("test-guid-nondet", "continue", "go")
+        .await
+        .unwrap();
+
+    let status = client
+        .wait_for_orchestration("test-guid-nondet", Duration::from_secs(10))
+        .await
+        .unwrap();
+
+    match status {
+        duroxide::runtime::OrchestrationStatus::Completed { output } => {
+            println!("Orchestration completed: {}", output);
+            assert!(output.starts_with("processed:"), "Should have processed the guid");
+        }
+        duroxide::runtime::OrchestrationStatus::Failed { details } => {
+            panic!("Orchestration failed: {}", details.display_message());
+        }
+        other => {
+            panic!("Unexpected status: {other:?}");
+        }
     }
 
     rt.shutdown(None).await;

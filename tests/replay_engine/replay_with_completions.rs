@@ -129,24 +129,21 @@ fn sub_orch_completed_in_history() {
 /// }
 /// ```
 ///
-/// Note: System calls compute their value synchronously at emit time.
-/// The history value is stored for audit, but replay generates a new GUID.
+/// System calls must replay their historical value to ensure determinism.
+/// The value is recorded in history and replayed on subsequent turns.
 #[test]
 fn system_call_in_history() {
     let history = vec![
-        started_event(1),                              // OrchestrationStarted
-        system_call(2, "new_guid", "test-guid-12345"), // new_guid() - stored value
+        started_event(1),                          // OrchestrationStarted
+        system_call(2, "guid", "test-guid-12345"), // new_guid() - stored value
     ];
     let mut engine = create_engine(history);
     let result = execute(&mut engine, SystemCallHandler::new());
 
-    // System call completes but with a NEW GUID, not the history one
-    // This is the actual behavior - system calls are synchronous and compute
-    // their value at emit time
+    // System call should return the HISTORICAL value for deterministic replay
     match &result {
         duroxide::runtime::replay_engine::TurnResult::Completed(guid) => {
-            assert!(guid.contains('-'), "Should be a GUID format: {guid}");
-            // The GUID will be different from history because it's computed fresh
+            assert_eq!(guid, "test-guid-12345", "Should replay historical GUID, not generate new one");
         }
         _ => panic!("Expected Completed, got {result:?}"),
     }

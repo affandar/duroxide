@@ -2250,11 +2250,12 @@ impl OrchestrationContext {
     }
 
     /// Schedule a system call operation (internal helper).
-    /// System calls are computed synchronously and don't need external resolution.
+    /// System calls compute a value that is stored in the action for fresh execution,
+    /// but on replay the historical value from history is used instead.
     fn schedule_system_call(&self, op: &str) -> impl Future<Output = Result<String, String>> {
         let mut inner = self.inner.lock().expect("Mutex should not be poisoned");
 
-        // Compute value immediately (system calls are synchronous)
+        // Compute value (used for fresh execution, ignored during replay)
         let computed_value = match op {
             SYSCALL_OP_GUID => generate_guid(),
             SYSCALL_OP_UTCNOW_MS => inner.now_ms().to_string(),
@@ -2264,17 +2265,26 @@ impl OrchestrationContext {
         let token = inner.emit_action(Action::SystemCall {
             scheduling_event_id: 0, // Will be assigned by replay engine
             op: op.to_string(),
-            value: computed_value.clone(),
+            value: computed_value, // Stored in action for fresh execution
         });
 
-        // For system calls, deliver result immediately (they're synchronous)
-        inner
-            .completion_results
-            .insert(token, CompletionResult::SystemCallValue(computed_value.clone()));
+        // Don't insert into completion_results here - let replay engine deliver it.
+        // This ensures replay uses the historical value, not a newly computed one.
         drop(inner);
 
-        // Return a future that immediately resolves
-        std::future::ready(Ok(computed_value))
+        // Polling future - waits for replay engine to deliver result
+        let ctx = self.clone();
+        std::future::poll_fn(move |_cx| {
+            let inner = ctx.inner.lock().expect("Mutex should not be poisoned");
+            if let Some(result) = inner.get_result(token) {
+                match result {
+                    CompletionResult::SystemCallValue(s) => std::task::Poll::Ready(Ok(s.clone())),
+                    _ => std::task::Poll::Pending,
+                }
+            } else {
+                std::task::Poll::Pending
+            }
+        })
     }
 
     /// Generate a new deterministic GUID.
