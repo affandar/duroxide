@@ -19,6 +19,15 @@ Use this prompt when preparing a crates.io release. Run it end-to-end and paste 
    - Update `CHANGELOG.md` with date and highlights.
    - If workspace members exist, sync versions across crates.
 
+   2a) **Link implemented proposals**
+       - Check if this release implements any proposal from `docs/proposals/` or `docs/proposals-impl/`
+       - If yes, add a **Proposal:** line after the release link in the changelog entry:
+         ```
+         **Proposal:** [Proposal Title](https://github.com/affandar/duroxide/blob/main/docs/proposals-impl/proposal-name.md)
+         ```
+       - Multiple proposals can be listed on separate lines
+       - This helps users understand the design rationale behind major changes
+
 3) **Dependency audit**
    - `cargo update -p <dep>` for targeted bumps if needed.
    - `cargo deny check` (if configured) or `cargo audit`.

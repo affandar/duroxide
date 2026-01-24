@@ -5,6 +5,46 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.13] - 2026-01-24
+
+**Release:** <https://crates.io/crates/duroxide/0.1.13>
+
+**Proposal:** [System Calls as Real Activities](https://github.com/affandar/duroxide/blob/main/docs/proposals-impl/system-calls-as-activities.md)
+
+### Changed
+
+- **System Calls Reimplemented as Regular Activities** - `ctx.new_guid()` and `ctx.utc_now()` now use normal activity infrastructure
+  - Simplifies replay engine by removing special-case SystemCall handling
+  - Fixes determinism bugs where syscalls returned fresh values on replay
+  - Reserved activity prefix `__duroxide_syscall:` prevents user collisions
+  - Builtin activities injected automatically at runtime startup
+
+- **API Rename: `utcnow()` → `utc_now()`** - Consistent with Rust naming conventions
+
+### Added
+
+- **Reserved Activity Prefix Validation** - `ActivityRegistry` rejects names starting with `__duroxide_syscall:`
+- **Comprehensive Syscall Tests** - Replay determinism, ordering, single-thread mode, cancellation
+
+### Removed
+
+- `SystemCall` variants from `Action`, `EventKind`, `CompletionResult`
+- SystemCall handling from replay engine (no more re-poll loop)
+- `EVENT_TYPE_SYSTEM_CALL` from sqlite provider
+
+### Documentation
+
+- Updated ORCHESTRATION-GUIDE and durable-futures-internals for new syscall semantics
+- Reorganized proposals: moved 11 implemented proposals to `docs/proposals-impl/`
+- Updated merge prompt to require squash-only merges
+
+### Breaking Changes
+
+- `utcnow()` renamed to `utc_now()` - update all call sites
+- Histories containing `SystemCall` events will not replay (pre-1.0, acceptable)
+
+---
+
 ## [0.1.12] - 2026-01-23
 
 **Release:** <https://crates.io/crates/duroxide/0.1.12>
