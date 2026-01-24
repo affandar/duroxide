@@ -40,22 +40,27 @@ Use this prompt when preparing a crates.io release. Run it end-to-end and paste 
    - `cargo test --doc`
    - Optional: `cargo test --features provider-test`
 
-5) **Artifacts**
+5) **Update README.md** ⚠️ CRITICAL - This is what crates.io displays!
+   - Update the "Latest Release" line near the top:
+     ```
+     > **[Latest Release: vX.Y.Z](https://crates.io/crates/duroxide/X.Y.Z)** — Brief description of key changes.
+     > See [CHANGELOG.md](CHANGELOG.md#0XYZ---YYYY-MM-DD) for release notes.
+     ```
+   - Match the description to CHANGELOG highlights
+   - Update the anchor link format: `#0XYZ---YYYY-MM-DD` (version with dots removed, dashes between date parts)
+   - If a major proposal was implemented, add a link: `[Proposal](docs/proposals-impl/proposal-name.md)`
+   - **Verify the link works locally before committing**
+
+6) **Artifacts**
    - `cargo package --locked` (verifies package can be built)
    - Inspect `cargo package --list` for unwanted files.
 
-   5a) **Update README.md latest release badge/link**
-       - Update the "Latest Release" link/version to the new tag (e.g., `v0.1.11`)
-       - Update the brief description to match the changelog highlights
-       - Update the CHANGELOG anchor link (e.g., `#0111---2026-01-07`)
-       - **This is critical** — README.md is published to crates.io main page
-
-6) **Tag & publish**
+7) **Tag & publish**
    - Tag: `git tag vX.Y.Z && git push origin vX.Y.Z`
    - Publish: `cargo publish --locked`
    - If publish fails, yank tag or release as needed.
 
-7) **Post-publish**
+8) **Post-publish**
    - Create GitHub release notes (link to changelog).
    - Announce or update docs/examples if needed.
 
