@@ -664,6 +664,38 @@ impl ReplayEngine {
                     }
                 }
 
+                EventKind::OrchestrationChained {
+                    name,
+                    instance,
+                    input: inp,
+                } => {
+                    // Fire-and-forget: consume the action but don't open a schedule entry
+                    // (there's no completion event to wait for)
+                    let (token, action) = match emitted_actions.pop_front() {
+                        Some(a) => a,
+                        None => {
+                            return TurnResult::Failed(nondeterminism_error(
+                                "history OrchestrationChained but no emitted action",
+                            ));
+                        }
+                    };
+
+                    // Validate action matches event
+                    if !action_matches_event_kind(&action, &event.kind) {
+                        return TurnResult::Failed(nondeterminism_error(&format!(
+                            "schedule mismatch: action={:?} vs event={:?}",
+                            action, event.kind
+                        )));
+                    }
+
+                    // Bind token to schedule_id (needed for deterministic event_id assignment)
+                    ctx.bind_token(token, event.event_id());
+                    // Note: we don't add to open_schedules or schedule_kinds since fire-and-forget
+                    // has no completion event
+
+                    let _ = (name, instance, inp); // Suppress unused warnings
+                }
+
                 // Completion events
                 EventKind::ActivityCompleted { result } => {
                     if let Some(source_id) = event.source_event_id {
@@ -738,8 +770,7 @@ impl ReplayEngine {
                 // These should have been filtered out above
                 EventKind::OrchestrationCompleted { .. }
                 | EventKind::OrchestrationFailed { .. }
-                | EventKind::OrchestrationContinuedAsNew { .. }
-                | EventKind::OrchestrationChained { .. } => {
+                | EventKind::OrchestrationContinuedAsNew { .. } => {
                     // Should not reach here due to terminal check above
                 }
             }
@@ -991,8 +1022,15 @@ fn action_to_event(action: &Action, instance: &str, execution_id: u64, event_id:
             instance: sub_instance.clone(),
             input: input.clone(),
         },
-        // These don't become schedule events
-        Action::ContinueAsNew { .. } | Action::StartOrchestrationDetached { .. } => {
+        Action::StartOrchestrationDetached {
+            name, instance, input, ..
+        } => EventKind::OrchestrationChained {
+            name: name.clone(),
+            instance: instance.clone(),
+            input: input.clone(),
+        },
+        // ContinueAsNew doesn't become a schedule event - it has its own terminal event
+        Action::ContinueAsNew { .. } => {
             return None;
         }
     };
@@ -1040,8 +1078,21 @@ fn update_action_event_id(action: Action, event_id: u64) -> Action {
                 version,
             }
         }
-        // These don't have scheduling_event_id
-        Action::ContinueAsNew { .. } | Action::StartOrchestrationDetached { .. } => action,
+        Action::StartOrchestrationDetached {
+            name,
+            version,
+            instance,
+            input,
+            ..
+        } => Action::StartOrchestrationDetached {
+            scheduling_event_id: event_id,
+            name,
+            version,
+            instance,
+            input,
+        },
+        // ContinueAsNew doesn't have scheduling_event_id
+        Action::ContinueAsNew { .. } => action,
     }
 }
 
@@ -1079,6 +1130,17 @@ fn action_matches_event_kind(action: &Action, event_kind: &EventKind) -> bool {
                 name: en, input: ei, ..
             },
         ) => name == en && input == ei,
+
+        (
+            Action::StartOrchestrationDetached {
+                name, instance, input, ..
+            },
+            EventKind::OrchestrationChained {
+                name: en,
+                instance: ei,
+                input: inp,
+            },
+        ) => name == en && instance == ei && input == inp,
 
         _ => false,
     }

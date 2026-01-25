@@ -5,7 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.1.13] - 2026-01-24
+## [0.1.14] - 2026-01-24
+
+**Release:** <https://crates.io/crates/duroxide/0.1.14>
+
+### Fixed
+
+- **Fire-and-Forget Orchestrations Now Record History Events** - `ctx.schedule_orchestration()` (detached/chained orchestrations) now correctly creates `OrchestrationChained` events in history
+  - Previously, these fire-and-forget calls were not recorded, breaking determinism detection on replay
+  - If an orchestration scheduled a detached orchestration followed by an activity, replay would fail with nondeterminism error
+  - Added proper action-to-event conversion and event matching in replay engine
+
+### Added
+
+- **Action-to-Event Recording Tests** - New test module `tests/replay_engine/action_to_event.rs` verifying all scheduling actions create corresponding history events
+- **E2E Test for Detached + Activity Pattern** - `sample_detached_then_activity_fs` validates the fix end-to-end
+
+---
+
+## [0.1.13] - 2026-01-24 [YANKED]
 
 **Release:** <https://crates.io/crates/duroxide/0.1.13>
 

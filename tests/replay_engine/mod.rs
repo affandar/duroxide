@@ -6,6 +6,7 @@
 
 mod helpers;
 
+mod action_to_event;
 mod cancellation;
 mod completion_messages;
 mod composition;

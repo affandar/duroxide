@@ -764,6 +764,79 @@ async fn sample_detached_orchestration_scheduling_fs() {
     rt.shutdown(None).await;
 }
 
+/// Detached orchestration followed by activity: tests that fire-and-forget scheduling
+/// is correctly recorded in history for determinism on replay.
+///
+/// This test will fail with nondeterminism if OrchestrationChained events are not recorded,
+/// because on replay the engine will try to match StartOrchestrationDetached action against
+/// ActivityScheduled event.
+///
+/// Highlights:
+/// - Fire-and-forget with `ctx.schedule_orchestration()` followed by awaited activity
+/// - Verifies both the parent and child orchestrations complete correctly
+#[tokio::test]
+async fn sample_detached_then_activity_fs() {
+    use duroxide::OrchestrationStatus;
+    let (store, _temp_dir) = common::create_sqlite_store_disk().await;
+
+    let activity_registry = ActivityRegistry::builder()
+        .register("Echo", |_ctx: ActivityContext, input: String| async move { Ok(input) })
+        .build();
+
+    let child = |ctx: OrchestrationContext, input: String| async move {
+        ctx.schedule_timer(Duration::from_millis(5)).await;
+        Ok(format!("child-{input}"))
+    };
+    let parent = |ctx: OrchestrationContext, _input: String| async move {
+        // Fire-and-forget: schedule detached orchestration
+        ctx.schedule_orchestration("Child", "detached-child", "payload");
+        // Then await an activity - this requires OrchestrationChained to be recorded
+        // for replay to work correctly
+        let result = ctx.schedule_activity("Echo", "hello").await?;
+        Ok(result)
+    };
+
+    let orchestration_registry = OrchestrationRegistry::builder()
+        .register("Child", child)
+        .register("Parent", parent)
+        .build();
+
+    let rt = runtime::Runtime::start_with_store(store.clone(), activity_registry, orchestration_registry).await;
+    let client = Client::new(store.clone());
+    client
+        .start_orchestration("ParentInstance", "Parent", "")
+        .await
+        .unwrap();
+
+    // Parent should complete with Echo result
+    match client
+        .wait_for_orchestration("ParentInstance", std::time::Duration::from_secs(5))
+        .await
+        .unwrap()
+    {
+        OrchestrationStatus::Completed { output } => assert_eq!(output, "hello"),
+        OrchestrationStatus::Failed { details } => {
+            panic!("parent orchestration failed: {}", details.display_message())
+        }
+        _ => panic!("unexpected orchestration status"),
+    }
+
+    // Child should also complete
+    match client
+        .wait_for_orchestration("detached-child", std::time::Duration::from_secs(5))
+        .await
+        .unwrap()
+    {
+        OrchestrationStatus::Completed { output } => assert_eq!(output, "child-payload"),
+        OrchestrationStatus::Failed { details } => {
+            panic!("child orchestration failed: {}", details.display_message())
+        }
+        _ => panic!("unexpected child status"),
+    }
+
+    rt.shutdown(None).await;
+}
+
 /// ContinueAsNew sample: roll over input across executions until a condition is met.
 ///
 /// Highlights:
