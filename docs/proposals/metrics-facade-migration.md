@@ -8,6 +8,10 @@
 
 Replace direct OpenTelemetry metrics instrumentation with the `metrics` facade crate, allowing users to choose their own metrics backend (OTel, Prometheus, StatsD, or none).
 
+This migration makes OpenTelemetry a *consumer choice* for metrics export rather than a duroxide dependency.
+
+Follow-up (separate, optional) work: remove OpenTelemetry entirely from duroxide (including tracing/log export) and rely on standard Rust observability libraries (`tracing`, `tracing-subscriber`, and the `metrics` facade). When users want OTLP/collector export, they can add it in their application via `tracing-opentelemetry` / `opentelemetry-*` without duroxide carrying those dependencies.
+
 ## Motivation
 
 ### Current State
@@ -109,17 +113,31 @@ impl MetricsProvider {
     }
 }
 
-// After: 5 lines
-pub fn record_orchestration_completion(name: &str, version: &str, status: &str, duration: f64) {
-    counter!("duroxide_orch_completions_total", 
-        "orchestration_name" => name.to_string(),
-        "version" => version.to_string(),
-        "status" => status.to_string()
-    ).increment(1);
-    
-    histogram!("duroxide_orch_duration_seconds",
-        "orchestration_name" => name.to_string()
-    ).record(duration);
+// After: small, allocation-free label recording
+// Note: Metric names/labels should match `docs/metrics-specification.md`.
+pub fn record_orchestration_completion(
+    orchestration_name: &str,
+    version: &str,
+    status: &str,
+    final_turn_count: &str,
+    duration_seconds: f64,
+) {
+    counter!(
+        "duroxide_orchestration_completions_total",
+        "orchestration_name" => orchestration_name,
+        "version" => version,
+        "status" => status,
+        "final_turn_count" => final_turn_count,
+    )
+    .increment(1);
+
+    histogram!(
+        "duroxide_orchestration_duration_seconds",
+        "orchestration_name" => orchestration_name,
+        "version" => version,
+        "status" => status,
+    )
+    .record(duration_seconds);
 }
 ```
 
@@ -131,23 +149,38 @@ let snapshot = rt.metrics_snapshot().expect("metrics available");
 assert_eq!(snapshot.orch_completions, 1);
 assert_eq!(snapshot.activity_success, 1);
 
-// After: Use DebuggingRecorder
+// After: Install DebuggingRecorder once per test *process*, then assert on deltas.
+// `metrics::set_global_recorder(...)` can only be called once.
+use std::sync::OnceLock;
 use metrics_util::debugging::{DebuggingRecorder, Snapshotter};
 
-let recorder = DebuggingRecorder::new();
-let snapshotter = recorder.snapshotter();
-metrics::set_global_recorder(recorder).unwrap();
+static SNAPSHOTTER: OnceLock<Snapshotter> = OnceLock::new();
+
+fn snapshotter() -> &'static Snapshotter {
+    SNAPSHOTTER.get_or_init(|| {
+        let recorder = DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+        metrics::set_global_recorder(recorder)
+            .expect("global metrics recorder already installed");
+        snapshotter
+    })
+}
+
+let before = snapshotter().snapshot();
 
 // ... run test ...
 
-let snapshot = snapshotter.snapshot();
-let counter = snapshot.into_hashmap()
-    .get(&CompositeKey::new("duroxide_orch_completions_total", labels))
-    .unwrap();
-assert_eq!(counter.value(), 1);
+let after = snapshotter().snapshot();
+// Assert on (after - before) rather than absolute values.
 ```
 
-#### Observable Gauges → Polled Gauges
+#### Gauges: Transition-set vs Polled
+
+OpenTelemetry's observable gauges (callbacks at scrape-time) don't have a direct equivalent in the `metrics` facade.
+For duroxide, split gauges into two categories:
+
+1) **Stateful gauges** (set when state changes)
+2) **Polled gauges** (best-effort background polling)
 
 ```rust
 // Before: OTel callback (value captured at scrape time)
@@ -157,14 +190,27 @@ meter.i64_observable_gauge("duroxide_queue_depth")
     })
     .build();
 
-// After: Background task polls and sets
-async fn queue_depth_reporter(store: Arc<dyn Provider>) {
+// After (stateful gauge): update on transitions (no background task)
+fn set_active_orchestrations(active: i64) {
+    gauge!("duroxide_active_orchestrations").set(active as f64);
+}
+
+// After (polled gauges): background task polls provider and sets queue depths
+// - Default poll interval: 30s
+// - Lenient: errors are ignored (optionally logged at debug)
+// - Disabled when running on a single-threaded Tokio runtime to avoid background churn
+async fn queue_depth_reporter(store: Arc<dyn Provider>, poll_interval: Duration) {
     loop {
-        if let Ok(depths) = store.get_queue_depths().await {
-            gauge!("duroxide_orchestrator_queue_depth").set(depths.orch as f64);
-            gauge!("duroxide_worker_queue_depth").set(depths.worker as f64);
+        match store.get_queue_depths().await {
+            Ok(depths) => {
+                gauge!("duroxide_orchestrator_queue_depth").set(depths.orch as f64);
+                gauge!("duroxide_worker_queue_depth").set(depths.worker as f64);
+            }
+            Err(_err) => {
+                // Best-effort: queue depth is auxiliary and should not impact runtime correctness.
+            }
         }
-        tokio::time::sleep(Duration::from_secs(5)).await;
+        tokio::time::sleep(poll_interval).await;
     }
 }
 ```
@@ -185,6 +231,13 @@ async fn queue_depth_reporter(store: Arc<dyn Provider>) {
 - `ObservabilityConfig` - still controls logging (tracing)
 - `ObservabilityHandle` - still manages logging lifecycle
 - All metric names and labels - unchanged semantics
+
+### OpenTelemetry Dependency
+
+With the facade approach, duroxide does **not** need OpenTelemetry *for metrics*.
+OpenTelemetry becomes one possible **consumer-side exporter** (via `metrics-exporter-opentelemetry`) rather than a duroxide dependency.
+
+If duroxide also removes OpenTelemetry for tracing/logging, the runtime can still provide structured logs and spans via `tracing` + `tracing-subscriber`. Users that want OTLP/collector export can opt into it in their application (e.g., with `tracing-opentelemetry` + `opentelemetry-otlp`).
 
 ### Dependencies
 
@@ -242,16 +295,27 @@ assert_eq!(snapshot.orch_completions, 1);
 
 **After:**
 ```rust
-use metrics_util::debugging::DebuggingRecorder;
+use std::sync::OnceLock;
+use metrics_util::debugging::{DebuggingRecorder, Snapshotter};
 
-// In test setup
-let recorder = DebuggingRecorder::new();
-let snapshotter = recorder.snapshotter();
-metrics::set_global_recorder(recorder).unwrap();
+static SNAPSHOTTER: OnceLock<Snapshotter> = OnceLock::new();
 
-// After test
-let snapshot = snapshotter.snapshot();
-// Use snapshot.into_hashmap() to inspect values
+fn snapshotter() -> &'static Snapshotter {
+    SNAPSHOTTER.get_or_init(|| {
+        let recorder = DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+        metrics::set_global_recorder(recorder)
+            .expect("global metrics recorder already installed");
+        snapshotter
+    })
+}
+
+let before = snapshotter().snapshot();
+
+// ... run test ...
+
+let after = snapshotter().snapshot();
+// Assert on (after - before) deltas.
 ```
 
 ## Tradeoffs
@@ -271,7 +335,7 @@ let snapshot = snapshotter.snapshot();
 
 | Tradeoff | Mitigation |
 |----------|------------|
-| Observable gauges | Use polled gauges (5s interval) |
+| Callback-based observable gauges | Use transition-set gauges for in-process state; use best-effort polling for provider-derived gauges (30s default) |
 | `metrics-exporter-opentelemetry` limitations | Document unsupported features |
 | Breaking API change | Major version bump, migration guide |
 
@@ -295,6 +359,11 @@ duroxide doesn't use these features, so this is acceptable.
 3. Call both old OTel and new facade in parallel
 4. Add `DebuggingRecorder` test utilities
 
+Optional (in this phase): Add a small internal helper to start pollers for provider-derived gauges:
+- Default poll interval: 30 seconds
+- Best-effort error handling
+- Disabled when running on a single-threaded Tokio runtime
+
 ### Phase 2: Migrate tests
 
 1. Update `observability_tests.rs` to use `DebuggingRecorder`
@@ -317,15 +386,54 @@ duroxide doesn't use these features, so this is acceptable.
 3. Add examples for Prometheus and OTel backends
 4. Update `examples/with_observability.rs`
 
+### Phase 5 (Optional): Remove OpenTelemetry entirely from duroxide
+
+Goal: duroxide ships *zero* OpenTelemetry dependencies. The library remains fully observable via standard Rust crates:
+- Tracing/logging: `tracing`, `tracing-subscriber`
+- Metrics: `metrics` facade (exporters installed by the user if desired)
+
+Planned steps:
+
+1. **Cargo cleanup**
+    - Remove `opentelemetry`, `opentelemetry_sdk`, and `opentelemetry-otlp` dependencies.
+    - Remove (or repurpose) the `observability` feature flag; if it remains, it should gate only `tracing-subscriber` formatting choices (not OTLP export).
+
+2. **Public API cleanup (breaking)**
+    - Remove `ObservabilityConfig` fields that exist purely for OTLP/collector export (e.g., `*_export_endpoint`, export interval knobs).
+    - Keep only configuration relevant to log formatting and filtering (e.g., `log_format`, `log_level`, and a stable set of correlation fields).
+    - Ensure `RuntimeOptions` still has a straightforward “enable structured logging” story with no exporter dependencies.
+
+3. **Runtime implementation changes**
+    - Replace OTLP/OTel initialization with plain `tracing-subscriber` setup.
+    - Preserve existing correlation fields and log format options.
+    - Do not attempt to install global subscriber/formatter in a way that breaks embedding; provide a documented approach and make initialization idempotent.
+
+4. **Docs/examples update**
+    - Remove claims like “OpenTelemetry metrics/logging built-in”.
+    - Document two recommended production patterns:
+      1) stdout JSON logs + external collection (Loki/Elastic/CloudWatch)
+      2) (Optional, consumer-side) OTLP export via `tracing-opentelemetry` in the application.
+
+5. **Tests update**
+    - Ensure tests validate structured logging configuration does not require OTLP/OTel.
+    - Ensure metrics tests rely on the `metrics` facade test recorder pattern (install-once + delta assertions).
+
+6. **Versioning**
+    - Treat this as a breaking change (major version bump) since it removes public config fields and changes the built-in exporter story.
+
 ## Open Questions
 
-1. **Keep `observability` feature flag?** The `metrics` crate is lightweight; could always include it.
+1. **Always include `metrics`?** Yes.
+    - Pros: avoids feature-matrix complexity; keeps metric callsites unconditional; metrics become a stable part of the public behavior.
+    - Cons: adds a small dependency and a tiny no-op fast-path cost even if the user never installs a recorder.
 
-2. **Tracing integration?** Keep direct `tracing` or also facade via `tracing-subscriber`?
+2. **Tracing/logging integration?** Keep direct `tracing` + `tracing-subscriber` (no facade needed).
 
-3. **Queue depth polling interval?** 5 seconds? Configurable?
+3. **Queue depth polling interval?** Default to 30 seconds.
 
-4. **Test helper utilities?** Provide `duroxide::testing::install_test_metrics()` helper?
+4. **Single-thread behavior?** Disable pollers when running on a single-threaded Tokio runtime (rather than keying off 1x1 concurrency settings).
+
+5. **Test helper utilities?** Yes: provide `duroxide::testing::install_test_metrics()` (install-once + snapshot + delta helpers).
 
 ## References
 
