@@ -1,16 +1,17 @@
 # Duroxide Metrics Specification
 
-**Version:** 1.1  
-**Last Updated:** 2025-12-13  
-**Status:** Current Implementation
+**Version:** 2.0  
+**Last Updated:** 2026-01-25  
+**Status:** Current Implementation (metrics facade)
 
-This document provides a complete reference of all metrics emitted by duroxide, organized by functional area with detailed label specifications and bucket configurations.
+This document provides a complete reference of all metrics emitted by duroxide via the `metrics` facade crate, organized by functional area with detailed label specifications.
 
 ---
 
 ## Summary Table
 
-| Metric Name | Type | Category | Labels | Test Coverage | OTel Export | Notes |
+| Metric Name | Type | Category | Labels | Test Coverage | Export Status | Notes |
+|------------|------|----------|--------|---------------|---------------|-------|
 |------------|------|----------|--------|---------------|-------------|-------|
 | **Orchestration Lifecycle** |
 | `duroxide_orchestration_starts_total` | Counter | Orchestration | `orchestration_name`, `version`, `initiated_by` | ✅ `test_labeled_metrics_recording` | ✅ Code Review | Recorded in `orchestration.rs:136` with all labels |
@@ -52,24 +53,24 @@ This document provides a complete reference of all metrics emitted by duroxide, 
 
 **Test Location:** All tests are in `tests/observability_tests.rs`
 
-**OTel Export Status:**
-- **✅ Code Review** - Metric is properly wired to OTel API with correct labels/buckets (verified by code audit)
+**Export Status:**
+- **✅ Emitted** - Metric is properly emitted via `metrics` facade with correct labels (verified by code audit)
 - **⚠️ Defined** - Method exists but not called from runtime (will always be 0)
 - **❌ Not Called** - Method defined but never invoked (metric won't appear in exports)
-- **❌ Not Wired** - Instrument created but never used
+- **❌ Not Wired** - Recording method exists but never used
 
-Tests validate atomic counters (that metrics are recorded) but do not validate full OpenTelemetry export format. OTel export status is determined by code audit to verify metrics are properly wired to the OpenTelemetry API.
+Tests validate atomic counters (that metrics are recorded). Actual export depends on the recorder installed by the application (Prometheus, OpenTelemetry, etc.).
 
 **Known Issues:**
 - **Activity retry_attempt label always "0"** - The `retry_attempt` label on `duroxide_activity_executions_total` is always "0" because duroxide does not implement built-in activity retry logic. Activities fail immediately without retry. Users must implement retry in orchestration code. Future enhancement: Add `schedule_activity_with_retry()` or retry policy configuration.
 - **Sub-orchestration metrics require complex implementation** - `duroxide_suborchestration_calls_total` and `duroxide_suborchestration_duration_seconds` are defined but not wired up. Implementation is complex because: (1) Parent orchestration name is in parent execution context, (2) Child orchestration name must be extracted from `SubOrchestrationScheduled` event by looking up `parent_id` in history, (3) Duration calculation requires event timestamps or turn-based approximation, (4) Metrics must be recorded when `SubOrchCompleted`/`SubOrchFailed` work items are processed in `replay_engine.rs`. Sub-orchestrations currently appear as regular orchestrations in metrics (counted in `duroxide_orchestration_starts_total`, etc.) but parent-child relationship is not tracked.
 - **Client metrics not instrumented** - All 4 client metrics have instruments created but are never recorded from `Client` methods.
 
-**OTel Export Validation:**
+**Export Validation:**
 - Tests validate that metrics are recorded (via atomic counters)
-- Code review confirms most metrics use OTel API with proper labels
-- Automated validation of OTel export format (labels, buckets) is not implemented
-- For full validation, manually export to Prometheus and verify metric structure
+- Code review confirms metrics use the `metrics` facade with proper labels
+- Actual export format depends on user-installed recorder (Prometheus, OpenTelemetry, etc.)
+- For full validation, install a recorder and verify metric structure in your monitoring system
 
 ---
 
@@ -767,7 +768,7 @@ let options = RuntimeOptions {
 
 ## Test Coverage
 
-All implemented metrics are validated in `tests/observability_tests.rs`. The test suite validates that metrics are recorded correctly but does **not** test full OpenTelemetry export with labels and histograms.
+All implemented metrics are validated in `tests/observability_tests.rs`. The test suite validates that metrics are recorded correctly via atomic counters.
 
 ### What Is Tested
 
@@ -777,7 +778,7 @@ All implemented metrics are validated in `tests/observability_tests.rs`. The tes
 - Gauges increment/decrement properly
 - All metric code paths are exercised
 
-**❌ Not Validated (Would Require Full OTel Export):**
+**❌ Not Validated (Would Require Full Export):**
 - Label correctness (e.g., `orchestration_name="MyOrch"`)
 - Histogram bucket distributions
 - Multi-dimensional aggregations
@@ -811,35 +812,35 @@ All implemented metrics are validated in `tests/observability_tests.rs`. The tes
 
 ```bash
 # Run all metrics tests
-cargo test --features observability --test observability_tests
+cargo nt -E 'test(/observability/)'
 
 # Run with output
-cargo test --features observability --test observability_tests -- --nocapture
+cargo test --test observability_tests -- --nocapture
 
 # Run specific test
-cargo test --features observability test_sub_orchestration_metrics -- --nocapture
+cargo test test_sub_orchestration_metrics -- --nocapture
 ```
 
 ### Test Architecture
 
-**Approach:** Tests use `ManualReader` (in-memory) by setting `metrics_export_endpoint: None`. This captures metrics internally without requiring external infrastructure.
+**Approach:** Tests use `MetricsProvider` with no external recorder. Metrics are emitted via the `metrics` facade (no-op if no recorder) and tracked internally via atomic counters.
 
-**Validation Method:** Tests read atomic counters via `runtime.metrics_snapshot()` to verify metrics were recorded. These atomic counters are maintained alongside the OpenTelemetry metrics.
+**Validation Method:** Tests read atomic counters via `runtime.metrics_snapshot()` to verify metrics were recorded.
 
-**Limitation:** This validates that metric recording code paths work but doesn't test the full OTel pipeline (labels, histogram buckets, export format).
+**Limitation:** This validates that metric recording code paths work but doesn't test the full export pipeline (labels, histogram buckets, export format). To validate export, install a real recorder (Prometheus, DebuggingRecorder, etc.).
 
-### Future: Full OTel Integration Tests
+### Future: Full Export Integration Tests
 
-To validate labels and histogram buckets, a full OTel integration test would need to:
+To validate labels and histogram buckets, a full integration test would need to:
 
-1. Export to a real OTel collector or use a test exporter
-2. Call `meter_provider.force_flush()` to flush metrics
-3. Read back exported data and verify:
+1. Install a `DebuggingRecorder` or export to a real collector
+2. Call snapshot methods to capture exported data
+3. Verify:
    - Label values are correct
-   - Histogram buckets match specification
+   - Histogram bucket distributions
    - Metric names follow Prometheus conventions
 
-This is currently **not implemented** due to complexity and external dependencies.
+This is currently **not implemented** but is simpler with the `metrics` facade than with direct OTel.
 
 ---
 

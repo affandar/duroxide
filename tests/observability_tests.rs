@@ -85,11 +85,7 @@ fn field(event: &RecordedEvent, key: &str) -> Option<String> {
 
 fn metrics_observability_config(label: &str) -> ObservabilityConfig {
     ObservabilityConfig {
-        metrics_enabled: true,
-        metrics_export_endpoint: None,
-        metrics_export_interval_ms: 1000,
         log_format: LogFormat::Compact,
-        log_export_endpoint: None,
         log_level: "error".to_string(),
         service_name: format!("duroxide-observability-test-{label}"),
         service_version: Some("test".to_string()),
@@ -376,6 +372,10 @@ async fn metrics_capture_activity_and_orchestration_outcomes() {
     rt.clone().shutdown(None).await;
 
     // Note: Metrics accumulate across test runs, so use >= instead of ==
+    assert!(
+        snapshot.orch_starts >= 5,
+        "expected at least five orchestration starts (2 success + 3 failures)"
+    );
     assert!(
         snapshot.activity_success >= 1,
         "expected at least one successful activity"

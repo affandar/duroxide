@@ -227,7 +227,8 @@ impl Runtime {
                     None,
                     EventKind::OrchestrationCompleted { output: output.clone() },
                 ));
-                self.record_orchestration_completion();
+                // Note: Orchestration completion metrics are recorded via record_orchestration_completion_with_labels
+                // which is called earlier with full context (name, version, duration, etc.)
 
                 // Notify parent if this is a sub-orchestration
                 if let Some((parent_instance, parent_id)) = parent_link {

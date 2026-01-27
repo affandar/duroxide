@@ -3,9 +3,20 @@
 //! This example shows how to configure structured logging and metrics
 //! for production observability.
 //!
+//! Metrics are emitted via the `metrics` facade. To export them, install a
+//! recorder before starting the runtime:
+//!
+//! ```rust,ignore
+//! // Prometheus:
+//! metrics_exporter_prometheus::PrometheusBuilder::new().install()?;
+//!
+//! // Or OpenTelemetry:
+//! metrics_exporter_opentelemetry::Recorder::builder("app").install_global()?;
+//! ```
+//!
 //! Run with:
 //! ```bash
-//! cargo run --example with_observability --features observability
+//! cargo run --example with_observability
 //! ```
 #![allow(clippy::unwrap_used)]
 #![allow(clippy::clone_on_ref_ptr)]
@@ -20,12 +31,9 @@ use std::sync::Arc;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Configure observability with compact logging format
+    // Metrics are always available via the `metrics` facade
     let observability = ObservabilityConfig {
-        metrics_enabled: false,        // Enable if you have an OTLP collector running
-        metrics_export_endpoint: None, // Some("http://localhost:4317".to_string()),
-        metrics_export_interval_ms: 10000,
         log_format: LogFormat::Compact,
-        log_export_endpoint: None,
         log_level: "info".to_string(),
         service_name: "duroxide-example".to_string(),
         service_version: Some("1.0.0".to_string()),

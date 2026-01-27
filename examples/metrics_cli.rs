@@ -3,13 +3,13 @@
 //! This CLI tool demonstrates how to consume and display duroxide metrics
 //! and logs in real-time.
 //!
+//! Run with:
+//! ```bash
+//! cargo run --example metrics_cli
+//! ```
 #![allow(clippy::unwrap_used)]
 #![allow(clippy::clone_on_ref_ptr)]
 #![allow(clippy::expect_used)]
-//! Run with:
-//! ```bash
-//! cargo run --example metrics_cli --features observability
-//! ```
 
 use duroxide::providers::sqlite::SqliteProvider;
 use duroxide::runtime::registry::ActivityRegistry;
@@ -25,13 +25,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("└─────────────────────────────────────────────┘\n");
 
     // Configure observability
+    // Metrics are always available via the `metrics` facade - install a recorder
+    // before starting the runtime if you want to export them.
     let observability = ObservabilityConfig {
-        metrics_enabled: false, // Set to true and provide endpoint for full metrics
         log_format: LogFormat::Compact,
         log_level: "info".to_string(),
         service_name: "duroxide-dashboard".to_string(),
         service_version: Some("1.0.0".to_string()),
-        ..Default::default()
     };
 
     let options = RuntimeOptions {
@@ -161,9 +161,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("  • Provider operation latencies");
         println!("  • Error breakdowns by type");
 
-        println!("\n💡 Enable metrics by setting:");
-        println!("   observability.metrics_enabled = true");
-        println!("   observability.metrics_export_endpoint = Some(\"http://localhost:4317\")");
+        println!("\n💡 To export metrics, install a recorder before starting the runtime:");
+        println!("   metrics_exporter_prometheus::PrometheusBuilder::new().install()?");
+        println!("   // or: metrics_exporter_opentelemetry::Recorder::builder(\"app\").install_global()?");
     } else {
         println!("\n📊 Management features not available for this provider");
     }

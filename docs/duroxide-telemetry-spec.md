@@ -6,21 +6,21 @@
 
 ## Executive Summary
 
-Current duroxide observability provides basic counters but lacks the granular labels and dimensions needed for production operations. This specification defines the telemetry requirements for running duroxide-based applications at scale.
+Current duroxide observability provides multi-dimensional metrics via the `metrics` facade crate, allowing users to choose their preferred exporter (Prometheus, OpenTelemetry, etc.).
 
 **Current State:**
-- ✅ Basic metrics exported via OpenTelemetry
-- ✅ Integration with Prometheus/Grafana
-- ❌ Missing critical labels (orchestration_name, activity_name, outcome)
-- ❌ No duration histograms with percentiles
-- ❌ Limited error classification visibility
+- ✅ Metrics via `metrics` facade (user chooses exporter)
+- ✅ Integration with Prometheus/Grafana (via user-installed recorder)
+- ✅ Rich labels (orchestration_name, activity_name, outcome, etc.)
+- ✅ Duration histograms with percentiles
+- ✅ Error classification visibility
 
-**Desired State:**
+**Implementation Notes:**
 - Multi-dimensional metrics with rich labels
 - Percentile-based latency tracking
 - Fine-grained error attribution
 - Queue depth and processing rate visibility
-- Resource utilization metrics
+- See `docs/metrics-specification.md` for complete metric reference
 
 ---
 

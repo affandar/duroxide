@@ -201,7 +201,7 @@ Observability
 - Default logs show only orchestration/activity traces at configured level; runtime internals at warn+
 - Override with `RUST_LOG` for additional targets (e.g., `RUST_LOG=duroxide::runtime=debug`)
 - All logs include `instance_id`, `execution_id`, `orchestration_name`, `activity_name` for correlation
-- Optional OpenTelemetry metrics via `observability` feature flag
+- Metrics via `metrics` facade - install your preferred exporter (Prometheus, OpenTelemetry, etc.) or leave uninstalled for zero-cost no-ops
 - Run `cargo run --example with_observability` to see structured logging in action
 - Run `cargo run --example metrics_cli` to see observability dashboard
 - See `docs/observability-guide.md` for complete guide

@@ -6,7 +6,7 @@ This guide covers how to enable and use observability features in duroxide for p
 
 Duroxide provides production-grade observability through:
 - **Structured Logging**: Correlated logs with instance_id, execution_id, orchestration_name, and more
-- **OpenTelemetry Metrics**: Counters, histograms, and gauges for performance monitoring
+- **Metrics Facade**: Counters, histograms, and gauges via the `metrics` crate - install your preferred exporter
 - **Log Analytics Integration**: Ready-to-use patterns for Elasticsearch, Loki, CloudWatch, and Azure Monitor
 
 ## Quick Start
@@ -153,18 +153,20 @@ async fn process_order(ctx: OrchestrationContext, order: String) -> Result<Strin
 - Only logged on first execution (not during replay)
 - Creates SystemCall events in history for determinism
 
-## Metrics (with observability feature)
+## Metrics
 
-Enable OpenTelemetry metrics for production monitoring:
+Duroxide emits metrics via the [`metrics`](https://crates.io/crates/metrics) facade crate. To export metrics, install a recorder before starting the runtime:
 
 ```rust
-ObservabilityConfig {
-    metrics_enabled: true,
-    metrics_export_endpoint: Some("http://localhost:4317".to_string()),
-    metrics_export_interval_ms: 10000,
-    service_name: "my-duroxide-app".to_string(),
-    ..Default::default()
-}
+// Option 1: Prometheus (direct scraping)
+metrics_exporter_prometheus::PrometheusBuilder::new()
+    .with_http_listener(([0, 0, 0, 0], 9090))
+    .install()?;
+
+// Option 2: OpenTelemetry (via metrics-exporter-opentelemetry)
+// metrics_exporter_opentelemetry::Recorder::builder("my-service").install_global()?;
+
+// Option 3: None - metrics become zero-cost no-ops (default)
 ```
 
 ### Available Metrics
@@ -457,12 +459,12 @@ These indicate scheduling order mismatches that need code fixes.
 
 ## Performance Impact
 
-### With Metrics Disabled (default)
-- Zero overhead from metrics collection
+### Without a Metrics Recorder (default)
+- Zero overhead from metrics collection (no-op fast path)
 - Minimal logging overhead (only structured field extraction)
-- Recommended for most use cases
+- Recommended for development and when metrics export is not needed
 
-### With Metrics Enabled
+### With a Metrics Recorder Installed
 - ~2-5% overhead for metrics collection
 - Lock-free atomic operations
 - Background export (no blocking)
@@ -481,7 +483,8 @@ Override configuration via environment variables:
 # Logging level
 RUST_LOG=info,duroxide=debug
 
-# OpenTelemetry (if using OTLP)
+# OpenTelemetry (if using OTLP exporter in your application)
+# These are consumed by opentelemetry crates, not duroxide directly
 OTEL_EXPORTER_OTLP_ENDPOINT=http://collector:4317
 OTEL_SERVICE_NAME=duroxide-worker
 OTEL_SERVICE_VERSION=1.0.0

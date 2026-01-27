@@ -1,7 +1,8 @@
 # Proposal: Migrate to `metrics` Facade Crate
 
-**Status:** Draft  
+**Status:** Implemented  
 **Created:** 2025-12-20  
+**Implemented:** 2026-01-25  
 **Author:** duroxide team
 
 ## Summary
@@ -10,7 +11,7 @@ Replace direct OpenTelemetry metrics instrumentation with the `metrics` facade c
 
 This migration makes OpenTelemetry a *consumer choice* for metrics export rather than a duroxide dependency.
 
-Follow-up (separate, optional) work: remove OpenTelemetry entirely from duroxide (including tracing/log export) and rely on standard Rust observability libraries (`tracing`, `tracing-subscriber`, and the `metrics` facade). When users want OTLP/collector export, they can add it in their application via `tracing-opentelemetry` / `opentelemetry-*` without duroxide carrying those dependencies.
+OpenTelemetry has been fully removed from duroxide (including tracing/log export). The library now relies entirely on standard Rust observability libraries (`tracing`, `tracing-subscriber`, and the `metrics` facade). When users want OTLP/collector export, they can add it in their application via `tracing-opentelemetry` / `opentelemetry-*` / `metrics-exporter-opentelemetry` without duroxide carrying those dependencies.
 
 ## Motivation
 
@@ -69,20 +70,77 @@ duroxide runtime
             └── OTLP Exporter (hardcoded)
 ```
 
-**After (proposed):**
+**After (implemented):**
 
 ```
-duroxide runtime
-    │
-    └── metrics! macro calls
-            │
-            └── Global Recorder (user-installed, or no-op)
-                    │
-                    ├── OTel exporter (user's choice)
-                    ├── Prometheus exporter (user's choice)
-                    ├── DebuggingRecorder (tests)
-                    └── None (zero-cost no-ops)
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              User Application                                │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  Optional: Install a metrics recorder before starting runtime               │
+│                                                                             │
+│  // Prometheus                                                              │
+│  metrics_exporter_prometheus::PrometheusBuilder::new().install()?;         │
+│                                                                             │
+│  // Or OpenTelemetry                                                        │
+│  metrics_exporter_opentelemetry::Recorder::builder("app").install_global()?;│
+│                                                                             │
+│  // Or nothing → metrics are zero-cost no-ops                               │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           duroxide Runtime                                   │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │                      MetricsProvider                                 │   │
+│  ├─────────────────────────────────────────────────────────────────────┤   │
+│  │                                                                     │   │
+│  │   record_orchestration_completion(...)  ──┬──▶  counter!(...)       │   │
+│  │   record_activity_execution(...)         │     histogram!(...)     │───┼──▶ Global Recorder
+│  │   record_provider_operation(...)         │     gauge!(...)         │   │    (if installed)
+│  │   etc.                                   │                         │   │
+│  │                                          │                         │   │
+│  │                                          ▼                         │   │
+│  │                              ┌─────────────────────┐               │   │
+│  │                              │  Atomic Counters    │               │   │
+│  │                              │  (11 AtomicU64)     │◀──────────────┼───┼── MetricsSnapshot
+│  │                              │                     │               │   │   (for tests)
+│  │                              │  orch_completions   │               │   │
+│  │                              │  orch_failures      │               │   │
+│  │                              │  activity_success   │               │   │
+│  │                              │  ...                │               │   │
+│  │                              └─────────────────────┘               │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │                      Logging (tracing)                               │   │
+│  ├─────────────────────────────────────────────────────────────────────┤   │
+│  │   tracing::info!(...) ──▶ tracing-subscriber ──▶ stdout             │   │
+│  │   ctx.trace_info(...)     (Compact/Pretty/JSON)                     │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
+
+### Dual-Path Metrics Recording
+
+Each metric recording method writes to **two destinations**:
+
+| Path | Purpose | Consumer |
+|------|---------|----------|
+| `counter!()` / `histogram!()` / `gauge!()` | Production metrics export | User-installed recorder (Prometheus, OTel, etc.) |
+| `AtomicU64` counters | Test assertions | `runtime.metrics_snapshot()` in tests |
+
+**Why both exist:**
+
+1. **Global recorder limitation**: The `metrics` facade supports only one global recorder per process. Tests run in parallel, create many runtimes, and need isolated assertions.
+
+2. **Test isolation**: Each `MetricsProvider` instance has its own atomic counters, so tests can assert on metrics without interference from other tests.
+
+3. **Minimal overhead**: 11 atomics × 8 bytes = 88 bytes per runtime. The cost is negligible.
+
+**Future simplification**: If tests are migrated to use `DebuggingRecorder` with delta-based assertions (snapshot before/after), the atomic counters could be removed.
 
 ### Code Changes
 

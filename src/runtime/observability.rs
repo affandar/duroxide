@@ -1,17 +1,34 @@
 //! Observability infrastructure for metrics and structured logging.
 //!
-//! This module provides OpenTelemetry-based metrics and structured logging
-//! for production observability. It can be enabled via the `observability` feature flag.
+//! This module provides metrics via the `metrics` facade crate and structured logging
+//! via `tracing`/`tracing-subscriber`. Users choose their own metrics backend by
+//! installing a global recorder before starting the runtime.
+//!
+//! # Metrics Backend Options
+//!
+//! ```rust,ignore
+//! // Option 1: Prometheus (direct scraping)
+//! metrics_exporter_prometheus::PrometheusBuilder::new()
+//!     .with_http_listener(([0, 0, 0, 0], 9090))
+//!     .install()?;
+//!
+//! // Option 2: OpenTelemetry (via metrics-exporter-opentelemetry)
+//! // metrics_exporter_opentelemetry::Recorder::builder("my-service").install_global()?;
+//!
+//! // Option 3: None - metrics become zero-cost no-ops
+//! ```
 
 // Observability uses Mutex locks - poison indicates a panic and should propagate
 #![allow(clippy::expect_used)]
 #![allow(clippy::unwrap_used)]
 #![allow(clippy::clone_on_ref_ptr)]
 
+use metrics::{counter, gauge, histogram};
 use std::sync::{
     Arc,
-    atomic::{AtomicU64, Ordering},
+    atomic::{AtomicI64, AtomicU64, Ordering},
 };
+use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
 /// Log format options for structured logging
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -27,8 +44,8 @@ pub enum LogFormat {
 
 /// Observability configuration for metrics and logging.
 ///
-/// Controls structured logging and OpenTelemetry metrics collection.
-/// Requires the `observability` feature flag for full functionality.
+/// Controls structured logging format and level. Metrics are always available
+/// via the `metrics` facade - users install their preferred exporter.
 ///
 /// # Example
 ///
@@ -41,10 +58,8 @@ pub enum LogFormat {
 ///     ..Default::default()
 /// };
 ///
-/// // Production: Metrics + JSON logs to OTLP collector
+/// // Production: JSON logs (metrics via user-installed exporter)
 /// let config = ObservabilityConfig {
-///     metrics_enabled: true,
-///     metrics_export_endpoint: Some("http://localhost:4317".to_string()),
 ///     log_format: LogFormat::Json,
 ///     service_name: "my-app".to_string(),
 ///     ..Default::default()
@@ -66,24 +81,14 @@ pub enum LogFormat {
 /// - [Observability Guide](../../docs/observability-guide.md) - Full documentation
 #[derive(Debug, Clone)]
 pub struct ObservabilityConfig {
-    // Metrics configuration
-    /// Enable OpenTelemetry metrics collection
-    pub metrics_enabled: bool,
-    /// OTLP/gRPC endpoint for metrics export (e.g., "http://localhost:4317")
-    pub metrics_export_endpoint: Option<String>,
-    /// Metrics export interval in milliseconds
-    pub metrics_export_interval_ms: u64,
-
     // Structured logging configuration
     /// Log output format
     pub log_format: LogFormat,
-    /// OTLP/gRPC endpoint for trace/log export
-    pub log_export_endpoint: Option<String>,
     /// Log level filter (e.g., "info", "debug")
     pub log_level: String,
 
     // Common configuration
-    /// Service name for OpenTelemetry
+    /// Service name for identification in logs/metrics
     pub service_name: String,
     /// Optional service version
     pub service_version: Option<String>,
@@ -92,11 +97,7 @@ pub struct ObservabilityConfig {
 impl Default for ObservabilityConfig {
     fn default() -> Self {
         Self {
-            metrics_enabled: false,
-            metrics_export_endpoint: None,
-            metrics_export_interval_ms: 60000,
             log_format: LogFormat::Pretty,
-            log_export_endpoint: None,
             log_level: "info".to_string(),
             service_name: "duroxide".to_string(),
             service_version: None,
@@ -111,6 +112,7 @@ fn default_filter_expression(level: &str) -> String {
 /// Snapshot of key observability metrics counters for tests and diagnostics.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct MetricsSnapshot {
+    pub orch_starts: u64,
     pub orch_completions: u64,
     pub orch_failures: u64,
     pub orch_application_errors: u64,
@@ -122,963 +124,548 @@ pub struct MetricsSnapshot {
     pub activity_infra_errors: u64,
     pub activity_config_errors: u64,
     pub activity_poison: u64,
+    pub orch_dispatcher_items_fetched: u64,
+    pub worker_dispatcher_items_fetched: u64,
+    pub orch_continue_as_new: u64,
+    pub suborchestration_calls: u64,
+    pub provider_errors: u64,
 }
 
-#[cfg(feature = "observability")]
-mod otel_impl {
-    use super::*;
-    use opentelemetry::KeyValue;
-    use opentelemetry::metrics::{Counter, Histogram, MeterProvider as _};
-    use opentelemetry_otlp::WithExportConfig;
-    use opentelemetry_sdk::Resource;
-    use opentelemetry_sdk::metrics::{ManualReader, PeriodicReader, SdkMeterProvider};
-    use std::time::Duration;
-    use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
-
-    /// OpenTelemetry metrics provider with all instrumentation
-    pub struct MetricsProvider {
-        meter_provider: SdkMeterProvider,
-
-        // Dispatcher metrics
-        pub orch_dispatcher_items_fetched: Counter<u64>,
-        pub orch_dispatcher_processing_duration: Histogram<u64>,
-        pub worker_dispatcher_items_fetched: Counter<u64>,
-        pub worker_dispatcher_execution_duration: Histogram<u64>,
-
-        // Orchestration execution metrics (with labels)
-        pub orch_starts_total: Counter<u64>,
-        pub orch_completions_total: Counter<u64>,
-        pub orch_failures_total: Counter<u64>,
-        pub orch_duration_seconds: Histogram<f64>,
-        pub orch_history_size_events: Histogram<u64>,
-        pub orch_turns: Histogram<u64>,
-        pub orch_infrastructure_errors_total: Counter<u64>,
-        pub orch_configuration_errors_total: Counter<u64>,
-
-        // Continue-as-new metrics
-        pub orch_continue_as_new_total: Counter<u64>,
-
-        // Sub-orchestration metrics
-        pub suborchestration_calls_total: Counter<u64>,
-        pub suborchestration_duration_seconds: Histogram<f64>,
-
-        // Provider metrics
-        pub provider_operation_duration_seconds: Histogram<f64>,
-        pub provider_errors_total: Counter<u64>,
-
-        // Activity metrics (with labels)
-        pub activity_executions_total: Counter<u64>,
-        pub activity_duration_seconds: Histogram<f64>,
-        pub activity_infrastructure_errors_total: Counter<u64>,
-        pub activity_configuration_errors_total: Counter<u64>,
-
-        // Client metrics
-        pub client_orch_starts_total: Counter<u64>,
-        pub client_events_raised_total: Counter<u64>,
-        pub client_cancellations_total: Counter<u64>,
-        pub client_wait_duration_seconds: Histogram<f64>,
-
-        // Test-observable counters
-        orch_completions_atomic: AtomicU64,
-        orch_failures_atomic: AtomicU64,
-        orch_application_errors_atomic: AtomicU64,
-        orch_infrastructure_errors_atomic: AtomicU64,
-        orch_configuration_errors_atomic: AtomicU64,
-        orch_poison_atomic: AtomicU64,
-        activity_success_atomic: AtomicU64,
-        activity_app_errors_atomic: AtomicU64,
-        activity_infra_errors_atomic: AtomicU64,
-        activity_config_errors_atomic: AtomicU64,
-        activity_poison_atomic: AtomicU64,
-
-        // Queue depth tracking (updated by background task)
-        orch_queue_depth_atomic: Arc<AtomicU64>,
-        worker_queue_depth_atomic: Arc<AtomicU64>,
-
-        // Active orchestrations tracking (for gauge metrics)
-        active_orchestrations_atomic: Arc<std::sync::atomic::AtomicI64>,
-    }
-
-    impl MetricsProvider {
-        /// Initialize OpenTelemetry metrics with OTLP export
-        ///
-        /// # Errors
-        ///
-        /// Returns an error if OpenTelemetry initialization fails.
-        pub fn new(config: &ObservabilityConfig) -> Result<Self, String> {
-            let resource = Resource::new(vec![
-                KeyValue::new("service.name", config.service_name.clone()),
-                KeyValue::new(
-                    "service.version",
-                    config.service_version.clone().unwrap_or_else(|| "unknown".to_string()),
-                ),
-            ]);
-
-            let meter_provider = if let Some(ref endpoint) = config.metrics_export_endpoint {
-                let exporter = opentelemetry_otlp::MetricExporter::builder()
-                    .with_tonic()
-                    .with_endpoint(endpoint)
-                    .build()
-                    .map_err(|e| format!("Failed to create metrics exporter: {e}"))?;
-
-                let reader = PeriodicReader::builder(exporter, opentelemetry_sdk::runtime::Tokio)
-                    .with_interval(Duration::from_millis(config.metrics_export_interval_ms))
-                    .build();
-
-                SdkMeterProvider::builder()
-                    .with_reader(reader)
-                    .with_resource(resource)
-                    .build()
-            } else {
-                let reader = ManualReader::builder().build();
-                SdkMeterProvider::builder()
-                    .with_reader(reader)
-                    .with_resource(resource)
-                    .build()
-            };
-
-            let meter = meter_provider.meter("duroxide");
-
-            // Create all metrics instruments with Prometheus-compliant names and buckets
-
-            // Dispatcher metrics (internal, keep millisecond precision)
-            let orch_dispatcher_items_fetched = meter
-                .u64_counter("duroxide.orchestration.dispatcher.items_fetched")
-                .with_description("Items fetched by orchestration dispatcher")
-                .build();
-
-            let orch_dispatcher_processing_duration = meter
-                .u64_histogram("duroxide.orchestration.dispatcher.processing_duration_ms")
-                .with_description("Time to process an orchestration item")
-                .build();
-
-            let worker_dispatcher_items_fetched = meter
-                .u64_counter("duroxide.worker.dispatcher.items_fetched")
-                .with_description("Activities fetched by worker dispatcher")
-                .build();
-
-            let worker_dispatcher_execution_duration = meter
-                .u64_histogram("duroxide.worker.dispatcher.execution_duration_ms")
-                .with_description("Activity execution duration")
-                .build();
-
-            // Orchestration lifecycle metrics (Prometheus-compliant with labels)
-            let orch_starts_total = meter
-                .u64_counter("duroxide_orchestration_starts_total")
-                .with_description("Total orchestrations started")
-                .build();
-
-            let orch_completions_total = meter
-                .u64_counter("duroxide_orchestration_completions_total")
-                .with_description("Orchestrations that completed (successfully or failed)")
-                .build();
-
-            let orch_failures_total = meter
-                .u64_counter("duroxide_orchestration_failures_total")
-                .with_description("Orchestration failures with detailed error classification")
-                .build();
-
-            let orch_duration_seconds = meter
-                .f64_histogram("duroxide_orchestration_duration_seconds")
-                .with_description("End-to-end orchestration execution time")
-                .with_boundaries(vec![
-                    0.1, 0.5, 1.0, 2.0, 5.0, 10.0, 30.0, 60.0, 300.0, 600.0, 1800.0, 3600.0,
-                ])
-                .build();
-
-            let orch_history_size_events = meter
-                .u64_histogram("duroxide_orchestration_history_size")
-                .with_description("History event count at orchestration completion")
-                .with_boundaries(vec![10.0, 50.0, 100.0, 500.0, 1000.0, 5000.0, 10000.0])
-                .build();
-
-            let orch_turns = meter
-                .u64_histogram("duroxide_orchestration_turns")
-                .with_description("Number of turns to orchestration completion")
-                .with_boundaries(vec![1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 100.0, 200.0, 500.0])
-                .build();
-
-            let orch_infrastructure_errors_total = meter
-                .u64_counter("duroxide_orchestration_infrastructure_errors_total")
-                .with_description("Infrastructure-level orchestration errors")
-                .build();
-
-            let orch_configuration_errors_total = meter
-                .u64_counter("duroxide_orchestration_configuration_errors_total")
-                .with_description("Configuration-level orchestration errors (unregistered, nondeterminism)")
-                .build();
-
-            let orch_continue_as_new_total = meter
-                .u64_counter("duroxide_orchestration_continue_as_new_total")
-                .with_description("Continue-as-new operations performed")
-                .build();
-
-            // Sub-orchestration metrics
-            let suborchestration_calls_total = meter
-                .u64_counter("duroxide_suborchestration_calls_total")
-                .with_description("Sub-orchestration invocations")
-                .build();
-
-            let suborchestration_duration_seconds = meter
-                .f64_histogram("duroxide_suborchestration_duration_seconds")
-                .with_description("Sub-orchestration execution time")
-                .with_boundaries(vec![0.1, 0.5, 1.0, 5.0, 10.0, 30.0, 60.0, 300.0, 600.0])
-                .build();
-
-            // Provider metrics (Prometheus-compliant)
-            let provider_operation_duration_seconds = meter
-                .f64_histogram("duroxide_provider_operation_duration_seconds")
-                .with_description("Database operation latency")
-                .with_boundaries(vec![0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0, 2.0, 5.0])
-                .build();
-
-            let provider_errors_total = meter
-                .u64_counter("duroxide_provider_errors_total")
-                .with_description("Provider/storage layer errors")
-                .build();
-
-            // Activity metrics (Prometheus-compliant with labels)
-            let activity_executions_total = meter
-                .u64_counter("duroxide_activity_executions_total")
-                .with_description("Activity execution attempts")
-                .build();
-
-            let activity_duration_seconds = meter
-                .f64_histogram("duroxide_activity_duration_seconds")
-                .with_description("Activity execution time (wall clock)")
-                .with_boundaries(vec![
-                    0.01, 0.05, 0.1, 0.5, 1.0, 2.0, 5.0, 10.0, 30.0, 60.0, 120.0, 300.0,
-                ])
-                .build();
-
-            let activity_infrastructure_errors_total = meter
-                .u64_counter("duroxide_activity_infrastructure_errors_total")
-                .with_description("Infrastructure-level activity errors")
-                .build();
-
-            let activity_configuration_errors_total = meter
-                .u64_counter("duroxide_activity_configuration_errors_total")
-                .with_description("Configuration-level activity errors (unregistered)")
-                .build();
-
-            // Client metrics (Prometheus-compliant)
-            let client_orch_starts_total = meter
-                .u64_counter("duroxide_client_orchestration_starts_total")
-                .with_description("Orchestration starts via client")
-                .build();
-
-            let client_events_raised_total = meter
-                .u64_counter("duroxide_client_external_events_raised_total")
-                .with_description("External events raised via client")
-                .build();
-
-            let client_cancellations_total = meter
-                .u64_counter("duroxide_client_cancellations_total")
-                .with_description("Orchestration cancellations via client")
-                .build();
-
-            let client_wait_duration_seconds = meter
-                .f64_histogram("duroxide_client_wait_duration_seconds")
-                .with_description("Client wait operation duration")
-                .with_boundaries(vec![0.1, 0.5, 1.0, 2.0, 5.0, 10.0, 30.0, 60.0, 120.0])
-                .build();
-
-            // Observable gauge for active orchestrations
-            let active_orch_atomic_clone = Arc::new(std::sync::atomic::AtomicI64::new(0));
-            let active_orch_for_callback = active_orch_atomic_clone.clone();
-            meter
-                .i64_observable_gauge("duroxide_active_orchestrations")
-                .with_description("Currently active orchestration instances")
-                .with_callback(move |observer| {
-                    let count = active_orch_for_callback.load(Ordering::Relaxed);
-                    observer.observe(
-                        count,
-                        &[
-                            KeyValue::new("state", "all"), // Can add state labels later
-                        ],
-                    );
-                })
-                .build();
-
-            // Observable gauges for queue depths
-            let orch_queue_atomic_clone = Arc::new(AtomicU64::new(0));
-            let orch_queue_for_callback = orch_queue_atomic_clone.clone();
-            meter
-                .i64_observable_gauge("duroxide_orchestrator_queue_depth")
-                .with_description("Current orchestrator queue depth (unlocked items)")
-                .with_callback(move |observer| {
-                    let depth = orch_queue_for_callback.load(Ordering::Relaxed);
-                    observer.observe(depth as i64, &[]);
-                })
-                .build();
-
-            let worker_queue_atomic_clone = Arc::new(AtomicU64::new(0));
-            let worker_queue_for_callback = worker_queue_atomic_clone.clone();
-            meter
-                .i64_observable_gauge("duroxide_worker_queue_depth")
-                .with_description("Current worker queue depth (unlocked items)")
-                .with_callback(move |observer| {
-                    let depth = worker_queue_for_callback.load(Ordering::Relaxed);
-                    observer.observe(depth as i64, &[]);
-                })
-                .build();
-
-            Ok(Self {
-                meter_provider,
-                orch_dispatcher_items_fetched,
-                orch_dispatcher_processing_duration,
-                worker_dispatcher_items_fetched,
-                worker_dispatcher_execution_duration,
-                orch_starts_total,
-                orch_completions_total,
-                orch_failures_total,
-                orch_duration_seconds,
-                orch_history_size_events,
-                orch_turns,
-                orch_infrastructure_errors_total,
-                orch_configuration_errors_total,
-                orch_continue_as_new_total,
-                suborchestration_calls_total,
-                suborchestration_duration_seconds,
-                provider_operation_duration_seconds,
-                provider_errors_total,
-                activity_executions_total,
-                activity_duration_seconds,
-                activity_infrastructure_errors_total,
-                activity_configuration_errors_total,
-                client_orch_starts_total,
-                client_events_raised_total,
-                client_cancellations_total,
-                client_wait_duration_seconds,
-                orch_completions_atomic: AtomicU64::new(0),
-                orch_failures_atomic: AtomicU64::new(0),
-                orch_application_errors_atomic: AtomicU64::new(0),
-                orch_infrastructure_errors_atomic: AtomicU64::new(0),
-                orch_configuration_errors_atomic: AtomicU64::new(0),
-                orch_poison_atomic: AtomicU64::new(0),
-                activity_success_atomic: AtomicU64::new(0),
-                activity_app_errors_atomic: AtomicU64::new(0),
-                activity_infra_errors_atomic: AtomicU64::new(0),
-                activity_config_errors_atomic: AtomicU64::new(0),
-                activity_poison_atomic: AtomicU64::new(0),
-                orch_queue_depth_atomic: orch_queue_atomic_clone,
-                worker_queue_depth_atomic: worker_queue_atomic_clone,
-                active_orchestrations_atomic: active_orch_atomic_clone,
-            })
-        }
-
-        /// Get the OpenTelemetry meter provider
-        pub fn meter_provider(&self) -> &SdkMeterProvider {
-            &self.meter_provider
-        }
-
-        /// Shutdown the metrics provider gracefully
-        ///
-        /// # Errors
-        ///
-        /// Returns an error if shutdown fails.
-        pub async fn shutdown(self) -> Result<(), String> {
-            self.meter_provider
-                .shutdown()
-                .map_err(|e| format!("Failed to shutdown metrics provider: {e}"))
-        }
-
-        // Orchestration lifecycle methods with labels
-        #[inline]
-        pub fn record_orchestration_start(&self, orchestration_name: &str, version: &str, initiated_by: &str) {
-            self.orch_starts_total.add(
-                1,
-                &[
-                    KeyValue::new("orchestration_name", orchestration_name.to_string()),
-                    KeyValue::new("version", version.to_string()),
-                    KeyValue::new("initiated_by", initiated_by.to_string()),
-                ],
-            );
-        }
-
-        #[inline]
-        pub fn record_orchestration_completion(
-            &self,
-            orchestration_name: &str,
-            version: &str,
-            status: &str,
-            duration_seconds: f64,
-            turn_count: u64,
-            history_events: u64,
-        ) {
-            let turn_bucket = match turn_count {
-                1..=5 => "1-5",
-                6..=10 => "6-10",
-                11..=50 => "11-50",
-                _ => "50+",
-            };
-
-            self.orch_completions_total.add(
-                1,
-                &[
-                    KeyValue::new("orchestration_name", orchestration_name.to_string()),
-                    KeyValue::new("version", version.to_string()),
-                    KeyValue::new("status", status.to_string()),
-                    KeyValue::new("final_turn_count", turn_bucket.to_string()),
-                ],
-            );
-
-            self.orch_duration_seconds.record(
-                duration_seconds,
-                &[
-                    KeyValue::new("orchestration_name", orchestration_name.to_string()),
-                    KeyValue::new("version", version.to_string()),
-                    KeyValue::new("status", status.to_string()),
-                ],
-            );
-
-            self.orch_turns.record(
-                turn_count,
-                &[KeyValue::new("orchestration_name", orchestration_name.to_string())],
-            );
-
-            self.orch_history_size_events.record(
-                history_events,
-                &[KeyValue::new("orchestration_name", orchestration_name.to_string())],
-            );
-
-            self.orch_completions_atomic.fetch_add(1, Ordering::Relaxed);
-        }
-
-        #[inline]
-        pub fn record_orchestration_failure(
-            &self,
-            orchestration_name: &str,
-            version: &str,
-            error_type: &str,
-            error_category: &str,
-        ) {
-            self.orch_failures_total.add(
-                1,
-                &[
-                    KeyValue::new("orchestration_name", orchestration_name.to_string()),
-                    KeyValue::new("version", version.to_string()),
-                    KeyValue::new("error_type", error_type.to_string()),
-                    KeyValue::new("error_category", error_category.to_string()),
-                ],
-            );
-
-            self.orch_failures_atomic.fetch_add(1, Ordering::Relaxed);
-
-            match error_type {
-                "app_error" => self.orch_application_errors_atomic.fetch_add(1, Ordering::Relaxed),
-                "infrastructure_error" => {
-                    self.orch_infrastructure_errors_atomic.fetch_add(1, Ordering::Relaxed);
-                    // Also record to separate infrastructure errors counter
-                    self.orch_infrastructure_errors_total.add(
-                        1,
-                        &[
-                            KeyValue::new("orchestration_name", orchestration_name.to_string()),
-                            KeyValue::new("error_category", error_category.to_string()),
-                        ],
-                    );
-                    0
-                }
-                "config_error" => {
-                    self.orch_configuration_errors_atomic.fetch_add(1, Ordering::Relaxed);
-                    // Also record to separate configuration errors counter
-                    self.orch_configuration_errors_total.add(
-                        1,
-                        &[
-                            KeyValue::new("orchestration_name", orchestration_name.to_string()),
-                            KeyValue::new("error_category", error_category.to_string()),
-                        ],
-                    );
-                    0
-                }
-                _ => 0,
-            };
-        }
-
-        #[inline]
-        pub fn record_orchestration_application_error(&self) {
-            self.orch_failures_atomic.fetch_add(1, Ordering::Relaxed);
-            self.orch_application_errors_atomic.fetch_add(1, Ordering::Relaxed);
-        }
-
-        #[inline]
-        pub fn record_orchestration_infrastructure_error(&self) {
-            self.orch_failures_atomic.fetch_add(1, Ordering::Relaxed);
-            self.orch_infrastructure_errors_atomic.fetch_add(1, Ordering::Relaxed);
-        }
-
-        #[inline]
-        pub fn record_orchestration_configuration_error(&self) {
-            self.orch_failures_atomic.fetch_add(1, Ordering::Relaxed);
-            self.orch_configuration_errors_atomic.fetch_add(1, Ordering::Relaxed);
-        }
-
-        #[inline]
-        pub fn record_continue_as_new(&self, orchestration_name: &str, execution_id: u64) {
-            self.orch_continue_as_new_total.add(
-                1,
-                &[
-                    KeyValue::new("orchestration_name", orchestration_name.to_string()),
-                    KeyValue::new("execution_id", execution_id.to_string()),
-                ],
-            );
-        }
-
-        // Activity execution methods with labels
-        #[inline]
-        pub fn record_activity_execution(
-            &self,
-            activity_name: &str,
-            outcome: &str,
-            duration_seconds: f64,
-            retry_attempt: u32,
-        ) {
-            let retry_label = match retry_attempt {
-                0 => "0",
-                1 => "1",
-                2 => "2",
-                _ => "3+",
-            };
-
-            self.activity_executions_total.add(
-                1,
-                &[
-                    KeyValue::new("activity_name", activity_name.to_string()),
-                    KeyValue::new("outcome", outcome.to_string()),
-                    KeyValue::new("retry_attempt", retry_label.to_string()),
-                ],
-            );
-
-            self.activity_duration_seconds.record(
-                duration_seconds,
-                &[
-                    KeyValue::new("activity_name", activity_name.to_string()),
-                    KeyValue::new("outcome", outcome.to_string()),
-                ],
-            );
-
-            match outcome {
-                "success" => self.activity_success_atomic.fetch_add(1, Ordering::Relaxed),
-                "app_error" => self.activity_app_errors_atomic.fetch_add(1, Ordering::Relaxed),
-                "infra_error" => {
-                    self.activity_infra_errors_atomic.fetch_add(1, Ordering::Relaxed);
-                    self.activity_infrastructure_errors_total
-                        .add(1, &[KeyValue::new("activity_name", activity_name.to_string())]);
-                    0
-                }
-                "config_error" => {
-                    self.activity_infra_errors_atomic.fetch_add(1, Ordering::Relaxed);
-                    self.activity_configuration_errors_total
-                        .add(1, &[KeyValue::new("activity_name", activity_name.to_string())]);
-                    0
-                }
-                _ => 0,
-            };
-        }
-
-        #[inline]
-        pub fn record_activity_success(&self) {
-            self.activity_success_atomic.fetch_add(1, Ordering::Relaxed);
-        }
-
-        #[inline]
-        pub fn record_activity_app_error(&self) {
-            self.activity_app_errors_atomic.fetch_add(1, Ordering::Relaxed);
-        }
-
-        #[inline]
-        pub fn record_activity_infra_error(&self) {
-            self.activity_infra_errors_atomic.fetch_add(1, Ordering::Relaxed);
-        }
-
-        #[inline]
-        pub fn record_activity_config_error(&self) {
-            self.activity_config_errors_atomic.fetch_add(1, Ordering::Relaxed);
-        }
-
-        #[inline]
-        pub fn record_orchestration_poison(&self) {
-            self.orch_poison_atomic.fetch_add(1, Ordering::Relaxed);
-        }
-
-        #[inline]
-        pub fn record_activity_poison(&self) {
-            self.activity_poison_atomic.fetch_add(1, Ordering::Relaxed);
-        }
-
-        // Sub-orchestration methods
-        #[inline]
-        pub fn record_suborchestration_call(
-            &self,
-            parent_orchestration: &str,
-            child_orchestration: &str,
-            outcome: &str,
-        ) {
-            self.suborchestration_calls_total.add(
-                1,
-                &[
-                    KeyValue::new("parent_orchestration", parent_orchestration.to_string()),
-                    KeyValue::new("child_orchestration", child_orchestration.to_string()),
-                    KeyValue::new("outcome", outcome.to_string()),
-                ],
-            );
-        }
-
-        #[inline]
-        pub fn record_suborchestration_duration(
-            &self,
-            parent_orchestration: &str,
-            child_orchestration: &str,
-            duration_seconds: f64,
-            outcome: &str,
-        ) {
-            self.suborchestration_duration_seconds.record(
-                duration_seconds,
-                &[
-                    KeyValue::new("parent_orchestration", parent_orchestration.to_string()),
-                    KeyValue::new("child_orchestration", child_orchestration.to_string()),
-                    KeyValue::new("outcome", outcome.to_string()),
-                ],
-            );
-        }
-
-        // Provider operation methods
-        #[inline]
-        pub fn record_provider_operation(&self, operation: &str, duration_seconds: f64, status: &str) {
-            self.provider_operation_duration_seconds.record(
-                duration_seconds,
-                &[
-                    KeyValue::new("operation", operation.to_string()),
-                    KeyValue::new("status", status.to_string()),
-                ],
-            );
-        }
-
-        #[inline]
-        pub fn record_provider_error(&self, operation: &str, error_type: &str) {
-            self.provider_errors_total.add(
-                1,
-                &[
-                    KeyValue::new("operation", operation.to_string()),
-                    KeyValue::new("error_type", error_type.to_string()),
-                ],
-            );
-        }
-
-        // Queue depth management
-        #[inline]
-        pub fn update_queue_depths(&self, orch_depth: u64, worker_depth: u64) {
-            self.orch_queue_depth_atomic.store(orch_depth, Ordering::Relaxed);
-            self.worker_queue_depth_atomic.store(worker_depth, Ordering::Relaxed);
-        }
-
-        #[inline]
-        pub fn get_queue_depths(&self) -> (u64, u64) {
-            (
-                self.orch_queue_depth_atomic.load(Ordering::Relaxed),
-                self.worker_queue_depth_atomic.load(Ordering::Relaxed),
-            )
-        }
-
-        // Active orchestrations tracking
-        #[inline]
-        pub fn increment_active_orchestrations(&self) {
-            self.active_orchestrations_atomic.fetch_add(1, Ordering::Relaxed);
-        }
-
-        #[inline]
-        pub fn decrement_active_orchestrations(&self) {
-            self.active_orchestrations_atomic.fetch_sub(1, Ordering::Relaxed);
-        }
-
-        #[inline]
-        pub fn set_active_orchestrations(&self, count: i64) {
-            self.active_orchestrations_atomic.store(count, Ordering::Relaxed);
-        }
-
-        #[inline]
-        pub fn get_active_orchestrations(&self) -> i64 {
-            self.active_orchestrations_atomic.load(Ordering::Relaxed)
-        }
-
-        pub fn snapshot(&self) -> MetricsSnapshot {
-            MetricsSnapshot {
-                orch_completions: self.orch_completions_atomic.load(Ordering::Relaxed),
-                orch_failures: self.orch_failures_atomic.load(Ordering::Relaxed),
-                orch_application_errors: self.orch_application_errors_atomic.load(Ordering::Relaxed),
-                orch_infrastructure_errors: self.orch_infrastructure_errors_atomic.load(Ordering::Relaxed),
-                orch_configuration_errors: self.orch_configuration_errors_atomic.load(Ordering::Relaxed),
-                orch_poison: self.orch_poison_atomic.load(Ordering::Relaxed),
-                activity_success: self.activity_success_atomic.load(Ordering::Relaxed),
-                activity_app_errors: self.activity_app_errors_atomic.load(Ordering::Relaxed),
-                activity_infra_errors: self.activity_infra_errors_atomic.load(Ordering::Relaxed),
-                activity_config_errors: self.activity_config_errors_atomic.load(Ordering::Relaxed),
-                activity_poison: self.activity_poison_atomic.load(Ordering::Relaxed),
-            }
-        }
-    }
-
-    /// Initialize logging subsystem
+/// Metrics provider using the `metrics` facade crate.
+///
+/// Emits metrics via `counter!`, `gauge!`, `histogram!` macros.
+/// If no global recorder is installed, these are zero-cost no-ops.
+/// Atomic counters are maintained for test snapshot assertions.
+pub struct MetricsProvider {
+    // Atomic counters for test snapshot assertions (mirrors facade metrics)
+    orch_starts_atomic: AtomicU64,
+    orch_completions_atomic: AtomicU64,
+    orch_failures_atomic: AtomicU64,
+    orch_application_errors_atomic: AtomicU64,
+    orch_infrastructure_errors_atomic: AtomicU64,
+    orch_configuration_errors_atomic: AtomicU64,
+    orch_poison_atomic: AtomicU64,
+    activity_success_atomic: AtomicU64,
+    activity_app_errors_atomic: AtomicU64,
+    activity_infra_errors_atomic: AtomicU64,
+    activity_config_errors_atomic: AtomicU64,
+    activity_poison_atomic: AtomicU64,
+
+    // Dispatcher counters
+    orch_dispatcher_items_fetched_atomic: AtomicU64,
+    worker_dispatcher_items_fetched_atomic: AtomicU64,
+
+    // Other counters
+    orch_continue_as_new_atomic: AtomicU64,
+    suborchestration_calls_atomic: AtomicU64,
+    provider_errors_atomic: AtomicU64,
+
+    // Queue depth tracking (updated by background task or direct calls)
+    orch_queue_depth_atomic: Arc<AtomicU64>,
+    worker_queue_depth_atomic: Arc<AtomicU64>,
+
+    // Active orchestrations tracking (for gauge metrics)
+    active_orchestrations_atomic: Arc<AtomicI64>,
+}
+
+impl MetricsProvider {
+    /// Create a new metrics provider.
     ///
     /// # Errors
     ///
-    /// Returns an error if logging initialization fails.
-    pub fn init_logging(config: &ObservabilityConfig) -> Result<(), String> {
-        let env_filter = EnvFilter::try_from_default_env()
-            .unwrap_or_else(|_| EnvFilter::new(default_filter_expression(&config.log_level)));
-
-        match config.log_format {
-            LogFormat::Json => {
-                tracing_subscriber::registry()
-                    .with(env_filter)
-                    .with(tracing_subscriber::fmt::layer().json())
-                    .try_init()
-                    .map_err(|e| format!("Failed to initialize JSON logging: {e}"))?;
-            }
-            LogFormat::Pretty => {
-                tracing_subscriber::registry()
-                    .with(env_filter)
-                    .with(tracing_subscriber::fmt::layer())
-                    .try_init()
-                    .map_err(|e| format!("Failed to initialize pretty logging: {e}"))?;
-            }
-            LogFormat::Compact => {
-                // Custom compact format: timestamp level module [instance_id] message
-                tracing_subscriber::registry()
-                    .with(env_filter)
-                    .with(tracing_subscriber::fmt::layer().compact())
-                    .try_init()
-                    .map_err(|e| format!("Failed to initialize compact logging: {e}"))?;
-            }
-        }
-
-        Ok(())
-    }
-}
-
-#[cfg(not(feature = "observability"))]
-mod stub_impl {
-    use super::*;
-
-    /// Stub metrics provider when observability feature is disabled
-    pub struct MetricsProvider {
-        orch_completions_atomic: AtomicU64,
-        orch_failures_atomic: AtomicU64,
-        orch_application_errors_atomic: AtomicU64,
-        orch_infrastructure_errors_atomic: AtomicU64,
-        orch_configuration_errors_atomic: AtomicU64,
-        orch_poison_atomic: AtomicU64,
-        activity_success_atomic: AtomicU64,
-        activity_app_errors_atomic: AtomicU64,
-        activity_infra_errors_atomic: AtomicU64,
-        activity_config_errors_atomic: AtomicU64,
-        activity_poison_atomic: AtomicU64,
-        orch_queue_depth_atomic: Arc<AtomicU64>,
-        worker_queue_depth_atomic: Arc<AtomicU64>,
-        active_orchestrations_atomic: Arc<std::sync::atomic::AtomicI64>,
+    /// Currently infallible, but returns Result for API compatibility.
+    pub fn new(_config: &ObservabilityConfig) -> Result<Self, String> {
+        Ok(Self {
+            orch_starts_atomic: AtomicU64::new(0),
+            orch_completions_atomic: AtomicU64::new(0),
+            orch_failures_atomic: AtomicU64::new(0),
+            orch_application_errors_atomic: AtomicU64::new(0),
+            orch_infrastructure_errors_atomic: AtomicU64::new(0),
+            orch_configuration_errors_atomic: AtomicU64::new(0),
+            orch_poison_atomic: AtomicU64::new(0),
+            activity_success_atomic: AtomicU64::new(0),
+            activity_app_errors_atomic: AtomicU64::new(0),
+            activity_infra_errors_atomic: AtomicU64::new(0),
+            activity_config_errors_atomic: AtomicU64::new(0),
+            activity_poison_atomic: AtomicU64::new(0),
+            orch_dispatcher_items_fetched_atomic: AtomicU64::new(0),
+            worker_dispatcher_items_fetched_atomic: AtomicU64::new(0),
+            orch_continue_as_new_atomic: AtomicU64::new(0),
+            suborchestration_calls_atomic: AtomicU64::new(0),
+            provider_errors_atomic: AtomicU64::new(0),
+            orch_queue_depth_atomic: Arc::new(AtomicU64::new(0)),
+            worker_queue_depth_atomic: Arc::new(AtomicU64::new(0)),
+            active_orchestrations_atomic: Arc::new(AtomicI64::new(0)),
+        })
     }
 
-    impl MetricsProvider {
-        pub fn new(_config: &ObservabilityConfig) -> Result<Self, String> {
-            Ok(Self {
-                orch_completions_atomic: AtomicU64::new(0),
-                orch_failures_atomic: AtomicU64::new(0),
-                orch_application_errors_atomic: AtomicU64::new(0),
-                orch_infrastructure_errors_atomic: AtomicU64::new(0),
-                orch_configuration_errors_atomic: AtomicU64::new(0),
-                orch_poison_atomic: AtomicU64::new(0),
-                activity_success_atomic: AtomicU64::new(0),
-                activity_app_errors_atomic: AtomicU64::new(0),
-                activity_infra_errors_atomic: AtomicU64::new(0),
-                activity_config_errors_atomic: AtomicU64::new(0),
-                activity_poison_atomic: AtomicU64::new(0),
-                orch_queue_depth_atomic: Arc::new(AtomicU64::new(0)),
-                worker_queue_depth_atomic: Arc::new(AtomicU64::new(0)),
-                active_orchestrations_atomic: Arc::new(std::sync::atomic::AtomicI64::new(0)),
-            })
-        }
-
-        pub async fn shutdown(self) -> Result<(), String> {
-            Ok(())
-        }
-
-        // Stub implementations with same signatures as real provider
-        #[inline]
-        pub fn record_orchestration_start(&self, _: &str, _: &str, _: &str) {}
-
-        #[inline]
-        pub fn record_orchestration_completion(&self, _: &str, _: &str, _: &str, _: f64, _: u64, _: u64) {
-            self.orch_completions_atomic.fetch_add(1, Ordering::Relaxed);
-        }
-
-        #[inline]
-        pub fn record_orchestration_failure(&self, _: &str, _: &str, error_type: &str, _: &str) {
-            self.orch_failures_atomic.fetch_add(1, Ordering::Relaxed);
-            match error_type {
-                "app_error" => self.orch_application_errors_atomic.fetch_add(1, Ordering::Relaxed),
-                "infrastructure_error" => self.orch_infrastructure_errors_atomic.fetch_add(1, Ordering::Relaxed),
-                "config_error" => self.orch_configuration_errors_atomic.fetch_add(1, Ordering::Relaxed),
-                _ => 0,
-            };
-        }
-
-        #[inline]
-        pub fn record_orchestration_application_error(&self) {
-            self.orch_failures_atomic.fetch_add(1, Ordering::Relaxed);
-            self.orch_application_errors_atomic.fetch_add(1, Ordering::Relaxed);
-        }
-
-        #[inline]
-        pub fn record_orchestration_infrastructure_error(&self) {
-            self.orch_failures_atomic.fetch_add(1, Ordering::Relaxed);
-            self.orch_infrastructure_errors_atomic.fetch_add(1, Ordering::Relaxed);
-        }
-
-        #[inline]
-        pub fn record_orchestration_configuration_error(&self) {
-            self.orch_failures_atomic.fetch_add(1, Ordering::Relaxed);
-            self.orch_configuration_errors_atomic.fetch_add(1, Ordering::Relaxed);
-        }
-
-        #[inline]
-        pub fn record_continue_as_new(&self, _: &str, _: u64) {}
-
-        #[inline]
-        pub fn record_activity_execution(&self, _: &str, outcome: &str, _: f64, _: u32) {
-            match outcome {
-                "success" => self.activity_success_atomic.fetch_add(1, Ordering::Relaxed),
-                "app_error" => self.activity_app_errors_atomic.fetch_add(1, Ordering::Relaxed),
-                _ => self.activity_infra_errors_atomic.fetch_add(1, Ordering::Relaxed),
-            };
-        }
-
-        #[inline]
-        pub fn record_activity_success(&self) {
-            self.activity_success_atomic.fetch_add(1, Ordering::Relaxed);
-        }
-
-        #[inline]
-        pub fn record_activity_app_error(&self) {
-            self.activity_app_errors_atomic.fetch_add(1, Ordering::Relaxed);
-        }
-
-        #[inline]
-        pub fn record_activity_infra_error(&self) {
-            self.activity_infra_errors_atomic.fetch_add(1, Ordering::Relaxed);
-        }
-
-        #[inline]
-        pub fn record_activity_config_error(&self) {
-            self.activity_config_errors_atomic.fetch_add(1, Ordering::Relaxed);
-        }
-
-        #[inline]
-        pub fn record_orchestration_poison(&self) {
-            self.orch_poison_atomic.fetch_add(1, Ordering::Relaxed);
-        }
-
-        #[inline]
-        pub fn record_activity_poison(&self) {
-            self.activity_poison_atomic.fetch_add(1, Ordering::Relaxed);
-        }
-
-        #[inline]
-        pub fn record_suborchestration_call(&self, _: &str, _: &str, _: &str) {}
-
-        #[inline]
-        pub fn record_suborchestration_duration(&self, _: &str, _: &str, _: f64, _: &str) {}
-
-        #[inline]
-        pub fn record_provider_operation(&self, _: &str, _: f64, _: &str) {}
-
-        #[inline]
-        pub fn record_provider_error(&self, _: &str, _: &str) {}
-
-        #[inline]
-        pub fn update_queue_depths(&self, orch_depth: u64, worker_depth: u64) {
-            self.orch_queue_depth_atomic.store(orch_depth, Ordering::Relaxed);
-            self.worker_queue_depth_atomic.store(worker_depth, Ordering::Relaxed);
-        }
-
-        #[inline]
-        pub fn get_queue_depths(&self) -> (u64, u64) {
-            (
-                self.orch_queue_depth_atomic.load(Ordering::Relaxed),
-                self.worker_queue_depth_atomic.load(Ordering::Relaxed),
-            )
-        }
-
-        // Active orchestrations tracking (stub - same signature as real)
-        #[inline]
-        pub fn increment_active_orchestrations(&self) {
-            self.active_orchestrations_atomic.fetch_add(1, Ordering::Relaxed);
-        }
-
-        #[inline]
-        pub fn decrement_active_orchestrations(&self) {
-            self.active_orchestrations_atomic.fetch_sub(1, Ordering::Relaxed);
-        }
-
-        #[inline]
-        pub fn set_active_orchestrations(&self, count: i64) {
-            self.active_orchestrations_atomic.store(count, Ordering::Relaxed);
-        }
-
-        #[inline]
-        pub fn get_active_orchestrations(&self) -> i64 {
-            self.active_orchestrations_atomic.load(Ordering::Relaxed)
-        }
-
-        pub fn snapshot(&self) -> MetricsSnapshot {
-            MetricsSnapshot {
-                orch_completions: self.orch_completions_atomic.load(Ordering::Relaxed),
-                orch_failures: self.orch_failures_atomic.load(Ordering::Relaxed),
-                orch_application_errors: self.orch_application_errors_atomic.load(Ordering::Relaxed),
-                orch_infrastructure_errors: self.orch_infrastructure_errors_atomic.load(Ordering::Relaxed),
-                orch_configuration_errors: self.orch_configuration_errors_atomic.load(Ordering::Relaxed),
-                orch_poison: self.orch_poison_atomic.load(Ordering::Relaxed),
-                activity_success: self.activity_success_atomic.load(Ordering::Relaxed),
-                activity_app_errors: self.activity_app_errors_atomic.load(Ordering::Relaxed),
-                activity_infra_errors: self.activity_infra_errors_atomic.load(Ordering::Relaxed),
-                activity_config_errors: self.activity_config_errors_atomic.load(Ordering::Relaxed),
-                activity_poison: self.activity_poison_atomic.load(Ordering::Relaxed),
-            }
-        }
-    }
-
-    /// Stub logging initialization when observability feature is disabled
+    /// Shutdown the metrics provider gracefully.
+    ///
+    /// With the facade approach, there's nothing to shutdown - the global recorder
+    /// (if any) is managed by the application.
     ///
     /// # Errors
     ///
-    /// Returns an error if logging initialization fails.
-    pub fn init_logging(config: &ObservabilityConfig) -> Result<(), String> {
-        // Fall back to basic tracing subscriber
-        let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
-            .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(default_filter_expression(&config.log_level)));
-
-        tracing_subscriber::fmt()
-            .with_env_filter(env_filter)
-            .try_init()
-            .map_err(|e| format!("Failed to initialize logging: {e}"))?;
-
+    /// Currently infallible, but returns Result for API compatibility.
+    pub async fn shutdown(self) -> Result<(), String> {
         Ok(())
+    }
+
+    // ========================================================================
+    // Orchestration lifecycle methods
+    // ========================================================================
+
+    #[inline]
+    pub fn record_orchestration_start(&self, orchestration_name: &str, version: &str, initiated_by: &str) {
+        counter!(
+            "duroxide_orchestration_starts_total",
+            "orchestration_name" => orchestration_name.to_string(),
+            "version" => version.to_string(),
+            "initiated_by" => initiated_by.to_string(),
+        )
+        .increment(1);
+
+        self.orch_starts_atomic.fetch_add(1, Ordering::Relaxed);
+    }
+
+    #[inline]
+    pub fn record_orchestration_completion(
+        &self,
+        orchestration_name: &str,
+        version: &str,
+        status: &str,
+        duration_seconds: f64,
+        turn_count: u64,
+        history_events: u64,
+    ) {
+        let turn_bucket = match turn_count {
+            1..=5 => "1-5",
+            6..=10 => "6-10",
+            11..=50 => "11-50",
+            _ => "50+",
+        };
+
+        counter!(
+            "duroxide_orchestration_completions_total",
+            "orchestration_name" => orchestration_name.to_string(),
+            "version" => version.to_string(),
+            "status" => status.to_string(),
+            "final_turn_count" => turn_bucket.to_string(),
+        )
+        .increment(1);
+
+        histogram!(
+            "duroxide_orchestration_duration_seconds",
+            "orchestration_name" => orchestration_name.to_string(),
+            "version" => version.to_string(),
+            "status" => status.to_string(),
+        )
+        .record(duration_seconds);
+
+        histogram!(
+            "duroxide_orchestration_turns",
+            "orchestration_name" => orchestration_name.to_string(),
+        )
+        .record(turn_count as f64);
+
+        histogram!(
+            "duroxide_orchestration_history_size",
+            "orchestration_name" => orchestration_name.to_string(),
+        )
+        .record(history_events as f64);
+
+        self.orch_completions_atomic.fetch_add(1, Ordering::Relaxed);
+    }
+
+    #[inline]
+    pub fn record_orchestration_failure(
+        &self,
+        orchestration_name: &str,
+        version: &str,
+        error_type: &str,
+        error_category: &str,
+    ) {
+        counter!(
+            "duroxide_orchestration_failures_total",
+            "orchestration_name" => orchestration_name.to_string(),
+            "version" => version.to_string(),
+            "error_type" => error_type.to_string(),
+            "error_category" => error_category.to_string(),
+        )
+        .increment(1);
+
+        self.orch_failures_atomic.fetch_add(1, Ordering::Relaxed);
+
+        match error_type {
+            "app_error" => {
+                self.orch_application_errors_atomic.fetch_add(1, Ordering::Relaxed);
+            }
+            "infrastructure_error" => {
+                self.orch_infrastructure_errors_atomic.fetch_add(1, Ordering::Relaxed);
+                counter!(
+                    "duroxide_orchestration_infrastructure_errors_total",
+                    "orchestration_name" => orchestration_name.to_string(),
+                    "error_category" => error_category.to_string(),
+                )
+                .increment(1);
+            }
+            "config_error" => {
+                self.orch_configuration_errors_atomic.fetch_add(1, Ordering::Relaxed);
+                counter!(
+                    "duroxide_orchestration_configuration_errors_total",
+                    "orchestration_name" => orchestration_name.to_string(),
+                    "error_category" => error_category.to_string(),
+                )
+                .increment(1);
+            }
+            _ => {}
+        }
+    }
+
+    #[inline]
+    pub fn record_orchestration_application_error(&self) {
+        counter!("duroxide_orchestration_failures_total", "error_type" => "app_error").increment(1);
+        self.orch_failures_atomic.fetch_add(1, Ordering::Relaxed);
+        self.orch_application_errors_atomic.fetch_add(1, Ordering::Relaxed);
+    }
+
+    #[inline]
+    pub fn record_orchestration_infrastructure_error(&self) {
+        counter!("duroxide_orchestration_failures_total", "error_type" => "infrastructure_error").increment(1);
+        counter!("duroxide_orchestration_infrastructure_errors_total").increment(1);
+        self.orch_failures_atomic.fetch_add(1, Ordering::Relaxed);
+        self.orch_infrastructure_errors_atomic.fetch_add(1, Ordering::Relaxed);
+    }
+
+    #[inline]
+    pub fn record_orchestration_configuration_error(&self) {
+        counter!("duroxide_orchestration_failures_total", "error_type" => "config_error").increment(1);
+        counter!("duroxide_orchestration_configuration_errors_total").increment(1);
+        self.orch_failures_atomic.fetch_add(1, Ordering::Relaxed);
+        self.orch_configuration_errors_atomic.fetch_add(1, Ordering::Relaxed);
+    }
+
+    #[inline]
+    pub fn record_continue_as_new(&self, orchestration_name: &str, execution_id: u64) {
+        counter!(
+            "duroxide_orchestration_continue_as_new_total",
+            "orchestration_name" => orchestration_name.to_string(),
+            "execution_id" => execution_id.to_string(),
+        )
+        .increment(1);
+
+        self.orch_continue_as_new_atomic.fetch_add(1, Ordering::Relaxed);
+    }
+
+    // ========================================================================
+    // Activity execution methods
+    // ========================================================================
+
+    #[inline]
+    pub fn record_activity_execution(
+        &self,
+        activity_name: &str,
+        outcome: &str,
+        duration_seconds: f64,
+        retry_attempt: u32,
+    ) {
+        let retry_label = match retry_attempt {
+            0 => "0",
+            1 => "1",
+            2 => "2",
+            _ => "3+",
+        };
+
+        counter!(
+            "duroxide_activity_executions_total",
+            "activity_name" => activity_name.to_string(),
+            "outcome" => outcome.to_string(),
+            "retry_attempt" => retry_label.to_string(),
+        )
+        .increment(1);
+
+        histogram!(
+            "duroxide_activity_duration_seconds",
+            "activity_name" => activity_name.to_string(),
+            "outcome" => outcome.to_string(),
+        )
+        .record(duration_seconds);
+
+        match outcome {
+            "success" => {
+                self.activity_success_atomic.fetch_add(1, Ordering::Relaxed);
+            }
+            "app_error" => {
+                self.activity_app_errors_atomic.fetch_add(1, Ordering::Relaxed);
+            }
+            "infra_error" => {
+                self.activity_infra_errors_atomic.fetch_add(1, Ordering::Relaxed);
+                counter!(
+                    "duroxide_activity_infrastructure_errors_total",
+                    "activity_name" => activity_name.to_string(),
+                )
+                .increment(1);
+            }
+            "config_error" => {
+                self.activity_config_errors_atomic.fetch_add(1, Ordering::Relaxed);
+                counter!(
+                    "duroxide_activity_configuration_errors_total",
+                    "activity_name" => activity_name.to_string(),
+                )
+                .increment(1);
+            }
+            _ => {}
+        }
+    }
+
+    #[inline]
+    pub fn record_activity_success(&self) {
+        counter!("duroxide_activity_executions_total", "outcome" => "success").increment(1);
+        self.activity_success_atomic.fetch_add(1, Ordering::Relaxed);
+    }
+
+    #[inline]
+    pub fn record_activity_app_error(&self) {
+        counter!("duroxide_activity_executions_total", "outcome" => "app_error").increment(1);
+        self.activity_app_errors_atomic.fetch_add(1, Ordering::Relaxed);
+    }
+
+    #[inline]
+    pub fn record_activity_infra_error(&self) {
+        counter!("duroxide_activity_executions_total", "outcome" => "infra_error").increment(1);
+        counter!("duroxide_activity_infrastructure_errors_total").increment(1);
+        self.activity_infra_errors_atomic.fetch_add(1, Ordering::Relaxed);
+    }
+
+    #[inline]
+    pub fn record_activity_config_error(&self) {
+        counter!("duroxide_activity_executions_total", "outcome" => "config_error").increment(1);
+        counter!("duroxide_activity_configuration_errors_total").increment(1);
+        self.activity_config_errors_atomic.fetch_add(1, Ordering::Relaxed);
+    }
+
+    #[inline]
+    pub fn record_orchestration_poison(&self) {
+        self.orch_poison_atomic.fetch_add(1, Ordering::Relaxed);
+        counter!("duroxide_orchestration_poison_total").increment(1);
+    }
+
+    #[inline]
+    pub fn record_activity_poison(&self) {
+        self.activity_poison_atomic.fetch_add(1, Ordering::Relaxed);
+        counter!("duroxide_activity_poison_total").increment(1);
+    }
+
+    // ========================================================================
+    // Sub-orchestration methods
+    // ========================================================================
+
+    #[inline]
+    pub fn record_suborchestration_call(&self, parent_orchestration: &str, child_orchestration: &str, outcome: &str) {
+        counter!(
+            "duroxide_suborchestration_calls_total",
+            "parent_orchestration" => parent_orchestration.to_string(),
+            "child_orchestration" => child_orchestration.to_string(),
+            "outcome" => outcome.to_string(),
+        )
+        .increment(1);
+
+        self.suborchestration_calls_atomic.fetch_add(1, Ordering::Relaxed);
+    }
+
+    #[inline]
+    pub fn record_suborchestration_duration(
+        &self,
+        parent_orchestration: &str,
+        child_orchestration: &str,
+        duration_seconds: f64,
+        outcome: &str,
+    ) {
+        histogram!(
+            "duroxide_suborchestration_duration_seconds",
+            "parent_orchestration" => parent_orchestration.to_string(),
+            "child_orchestration" => child_orchestration.to_string(),
+            "outcome" => outcome.to_string(),
+        )
+        .record(duration_seconds);
+    }
+
+    // ========================================================================
+    // Provider operation methods
+    // ========================================================================
+
+    #[inline]
+    pub fn record_provider_operation(&self, operation: &str, duration_seconds: f64, status: &str) {
+        histogram!(
+            "duroxide_provider_operation_duration_seconds",
+            "operation" => operation.to_string(),
+            "status" => status.to_string(),
+        )
+        .record(duration_seconds);
+    }
+
+    #[inline]
+    pub fn record_provider_error(&self, operation: &str, error_type: &str) {
+        counter!(
+            "duroxide_provider_errors_total",
+            "operation" => operation.to_string(),
+            "error_type" => error_type.to_string(),
+        )
+        .increment(1);
+
+        self.provider_errors_atomic.fetch_add(1, Ordering::Relaxed);
+    }
+
+    // ========================================================================
+    // Dispatcher metrics
+    // ========================================================================
+
+    #[inline]
+    pub fn record_orch_dispatcher_items_fetched(&self, count: u64) {
+        counter!("duroxide_orchestration_dispatcher_items_fetched").increment(count);
+        self.orch_dispatcher_items_fetched_atomic
+            .fetch_add(count, Ordering::Relaxed);
+    }
+
+    #[inline]
+    pub fn record_orch_dispatcher_processing_duration(&self, duration_ms: u64) {
+        histogram!("duroxide_orchestration_dispatcher_processing_duration_ms").record(duration_ms as f64);
+    }
+
+    #[inline]
+    pub fn record_worker_dispatcher_items_fetched(&self, count: u64) {
+        counter!("duroxide_worker_dispatcher_items_fetched").increment(count);
+        self.worker_dispatcher_items_fetched_atomic
+            .fetch_add(count, Ordering::Relaxed);
+    }
+
+    #[inline]
+    pub fn record_worker_dispatcher_execution_duration(&self, duration_ms: u64) {
+        histogram!("duroxide_worker_dispatcher_execution_duration_ms").record(duration_ms as f64);
+    }
+
+    // ========================================================================
+    // Queue depth management (stateful gauges)
+    // ========================================================================
+
+    #[inline]
+    pub fn update_queue_depths(&self, orch_depth: u64, worker_depth: u64) {
+        self.orch_queue_depth_atomic.store(orch_depth, Ordering::Relaxed);
+        self.worker_queue_depth_atomic.store(worker_depth, Ordering::Relaxed);
+
+        // Update gauges
+        gauge!("duroxide_orchestrator_queue_depth").set(orch_depth as f64);
+        gauge!("duroxide_worker_queue_depth").set(worker_depth as f64);
+    }
+
+    #[inline]
+    pub fn get_queue_depths(&self) -> (u64, u64) {
+        (
+            self.orch_queue_depth_atomic.load(Ordering::Relaxed),
+            self.worker_queue_depth_atomic.load(Ordering::Relaxed),
+        )
+    }
+
+    // ========================================================================
+    // Active orchestrations tracking (stateful gauge)
+    // ========================================================================
+
+    #[inline]
+    pub fn increment_active_orchestrations(&self) {
+        let count = self.active_orchestrations_atomic.fetch_add(1, Ordering::Relaxed) + 1;
+        gauge!("duroxide_active_orchestrations").set(count as f64);
+    }
+
+    #[inline]
+    pub fn decrement_active_orchestrations(&self) {
+        let count = self.active_orchestrations_atomic.fetch_sub(1, Ordering::Relaxed) - 1;
+        gauge!("duroxide_active_orchestrations").set(count as f64);
+    }
+
+    #[inline]
+    pub fn set_active_orchestrations(&self, count: i64) {
+        self.active_orchestrations_atomic.store(count, Ordering::Relaxed);
+        gauge!("duroxide_active_orchestrations").set(count as f64);
+    }
+
+    #[inline]
+    pub fn get_active_orchestrations(&self) -> i64 {
+        self.active_orchestrations_atomic.load(Ordering::Relaxed)
+    }
+
+    // ========================================================================
+    // Snapshot for testing
+    // ========================================================================
+
+    pub fn snapshot(&self) -> MetricsSnapshot {
+        MetricsSnapshot {
+            orch_starts: self.orch_starts_atomic.load(Ordering::Relaxed),
+            orch_completions: self.orch_completions_atomic.load(Ordering::Relaxed),
+            orch_failures: self.orch_failures_atomic.load(Ordering::Relaxed),
+            orch_application_errors: self.orch_application_errors_atomic.load(Ordering::Relaxed),
+            orch_infrastructure_errors: self.orch_infrastructure_errors_atomic.load(Ordering::Relaxed),
+            orch_configuration_errors: self.orch_configuration_errors_atomic.load(Ordering::Relaxed),
+            orch_poison: self.orch_poison_atomic.load(Ordering::Relaxed),
+            activity_success: self.activity_success_atomic.load(Ordering::Relaxed),
+            activity_app_errors: self.activity_app_errors_atomic.load(Ordering::Relaxed),
+            activity_infra_errors: self.activity_infra_errors_atomic.load(Ordering::Relaxed),
+            activity_config_errors: self.activity_config_errors_atomic.load(Ordering::Relaxed),
+            activity_poison: self.activity_poison_atomic.load(Ordering::Relaxed),
+            orch_dispatcher_items_fetched: self.orch_dispatcher_items_fetched_atomic.load(Ordering::Relaxed),
+            worker_dispatcher_items_fetched: self.worker_dispatcher_items_fetched_atomic.load(Ordering::Relaxed),
+            orch_continue_as_new: self.orch_continue_as_new_atomic.load(Ordering::Relaxed),
+            suborchestration_calls: self.suborchestration_calls_atomic.load(Ordering::Relaxed),
+            provider_errors: self.provider_errors_atomic.load(Ordering::Relaxed),
+        }
     }
 }
 
-#[cfg(feature = "observability")]
-pub use otel_impl::*;
+/// Initialize logging subsystem
+///
+/// # Errors
+///
+/// Returns an error if logging initialization fails.
+pub fn init_logging(config: &ObservabilityConfig) -> Result<(), String> {
+    let env_filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new(default_filter_expression(&config.log_level)));
 
-#[cfg(not(feature = "observability"))]
-pub use stub_impl::*;
+    match config.log_format {
+        LogFormat::Json => {
+            tracing_subscriber::registry()
+                .with(env_filter)
+                .with(tracing_subscriber::fmt::layer().json())
+                .try_init()
+                .map_err(|e| format!("Failed to initialize JSON logging: {e}"))?;
+        }
+        LogFormat::Pretty => {
+            tracing_subscriber::registry()
+                .with(env_filter)
+                .with(tracing_subscriber::fmt::layer())
+                .try_init()
+                .map_err(|e| format!("Failed to initialize pretty logging: {e}"))?;
+        }
+        LogFormat::Compact => {
+            tracing_subscriber::registry()
+                .with(env_filter)
+                .with(tracing_subscriber::fmt::layer().compact())
+                .try_init()
+                .map_err(|e| format!("Failed to initialize compact logging: {e}"))?;
+        }
+    }
+
+    Ok(())
+}
 
 /// Observability handle that manages metrics and logging lifecycle
 pub struct ObservabilityHandle {
-    #[allow(dead_code)]
-    metrics_provider: Option<Arc<MetricsProvider>>,
+    metrics_provider: Arc<MetricsProvider>,
 }
 
 impl ObservabilityHandle {
     /// Initialize observability with the given configuration
+    ///
+    /// Metrics are always available via the `metrics` facade. If no global recorder
+    /// is installed by the application, metric calls are zero-cost no-ops.
     ///
     /// # Errors
     ///
@@ -1089,19 +676,16 @@ impl ObservabilityHandle {
             eprintln!("duroxide: logging already initialized (this is normal if running multiple runtimes or tests)");
         }
 
-        // Initialize metrics if enabled
-        let metrics_provider = if config.metrics_enabled {
-            Some(Arc::new(MetricsProvider::new(config)?))
-        } else {
-            None
-        };
+        // Always create metrics provider (facade is zero-cost if no recorder installed)
+        let metrics_provider = Arc::new(MetricsProvider::new(config)?);
 
         Ok(Self { metrics_provider })
     }
 
-    /// Get the metrics provider if available
-    pub fn metrics_provider(&self) -> Option<&Arc<MetricsProvider>> {
-        self.metrics_provider.as_ref()
+    /// Get the metrics provider
+    #[inline]
+    pub fn metrics_provider(&self) -> &Arc<MetricsProvider> {
+        &self.metrics_provider
     }
 
     /// Shutdown observability gracefully
@@ -1110,86 +694,15 @@ impl ObservabilityHandle {
     ///
     /// Returns an error if shutdown fails.
     pub async fn shutdown(self) -> Result<(), String> {
-        if let Some(provider) = self.metrics_provider {
-            // Take ownership out of Arc if we're the last reference
-            if let Ok(provider) = Arc::try_unwrap(provider) {
-                provider.shutdown().await?;
-            }
+        // Take ownership out of Arc if we're the last reference
+        if let Ok(provider) = Arc::try_unwrap(self.metrics_provider) {
+            provider.shutdown().await?;
         }
         Ok(())
     }
 
-    // Legacy methods for backward compatibility (atomic counters only, no labels)
-    #[inline]
-    pub fn record_orchestration_completion(&self) {
-        // Just update atomic counter for backward compatibility
-        // New code should use Runtime methods that call label-aware versions
-    }
-
-    #[inline]
-    pub fn record_orchestration_application_error(&self) {
-        if let Some(provider) = &self.metrics_provider {
-            provider.record_orchestration_application_error();
-        }
-    }
-
-    #[inline]
-    pub fn record_orchestration_infrastructure_error(&self) {
-        if let Some(provider) = &self.metrics_provider {
-            provider.record_orchestration_infrastructure_error();
-        }
-    }
-
-    #[inline]
-    pub fn record_orchestration_configuration_error(&self) {
-        if let Some(provider) = &self.metrics_provider {
-            provider.record_orchestration_configuration_error();
-        }
-    }
-
-    #[inline]
-    pub fn record_activity_success(&self) {
-        if let Some(provider) = &self.metrics_provider {
-            provider.record_activity_success();
-        }
-    }
-
-    #[inline]
-    pub fn record_activity_app_error(&self) {
-        if let Some(provider) = &self.metrics_provider {
-            provider.record_activity_app_error();
-        }
-    }
-
-    #[inline]
-    pub fn record_activity_infra_error(&self) {
-        if let Some(provider) = &self.metrics_provider {
-            provider.record_activity_infra_error();
-        }
-    }
-
-    #[inline]
-    pub fn record_activity_config_error(&self) {
-        if let Some(provider) = &self.metrics_provider {
-            provider.record_activity_config_error();
-        }
-    }
-
-    #[inline]
-    pub fn record_orchestration_poison(&self) {
-        if let Some(provider) = &self.metrics_provider {
-            provider.record_orchestration_poison();
-        }
-    }
-
-    #[inline]
-    pub fn record_activity_poison(&self) {
-        if let Some(provider) = &self.metrics_provider {
-            provider.record_activity_poison();
-        }
-    }
-
-    pub fn metrics_snapshot(&self) -> Option<MetricsSnapshot> {
-        self.metrics_provider.as_ref().map(|p| p.snapshot())
+    /// Get a snapshot of metrics for testing
+    pub fn metrics_snapshot(&self) -> MetricsSnapshot {
+        self.metrics_provider.snapshot()
     }
 }

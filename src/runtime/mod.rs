@@ -393,8 +393,7 @@ impl Runtime {
     fn metrics_provider(&self) -> Option<&observability::MetricsProvider> {
         self.observability_handle
             .as_ref()
-            .and_then(|h| h.metrics_provider())
-            .map(|arc| arc.as_ref())
+            .map(|h| h.metrics_provider().as_ref())
     }
 
     // New label-aware metric recording methods
@@ -468,74 +467,68 @@ impl Runtime {
         }
     }
 
-    // Legacy methods for backward compatibility (used by simple internal counters)
-    #[inline]
-    fn record_orchestration_completion(&self) {
-        if let Some(handle) = &self.observability_handle {
-            handle.record_orchestration_completion();
-        }
-    }
-
+    // Simple metric recording methods (used by execution.rs and worker.rs)
+    // These call MetricsProvider methods which emit both counter!() and atomic increments
     #[inline]
     fn record_orchestration_application_error(&self) {
-        if let Some(handle) = &self.observability_handle {
-            handle.record_orchestration_application_error();
+        if let Some(provider) = self.metrics_provider() {
+            provider.record_orchestration_application_error();
         }
     }
 
     #[inline]
     fn record_orchestration_infrastructure_error(&self) {
-        if let Some(handle) = &self.observability_handle {
-            handle.record_orchestration_infrastructure_error();
+        if let Some(provider) = self.metrics_provider() {
+            provider.record_orchestration_infrastructure_error();
         }
     }
 
     #[inline]
     fn record_orchestration_configuration_error(&self) {
-        if let Some(handle) = &self.observability_handle {
-            handle.record_orchestration_configuration_error();
+        if let Some(provider) = self.metrics_provider() {
+            provider.record_orchestration_configuration_error();
         }
     }
 
     #[inline]
     fn record_activity_success(&self) {
-        if let Some(handle) = &self.observability_handle {
-            handle.record_activity_success();
+        if let Some(provider) = self.metrics_provider() {
+            provider.record_activity_success();
         }
     }
 
     #[inline]
     fn record_activity_app_error(&self) {
-        if let Some(handle) = &self.observability_handle {
-            handle.record_activity_app_error();
+        if let Some(provider) = self.metrics_provider() {
+            provider.record_activity_app_error();
         }
     }
 
     #[inline]
     fn record_activity_infra_error(&self) {
-        if let Some(handle) = &self.observability_handle {
-            handle.record_activity_infra_error();
+        if let Some(provider) = self.metrics_provider() {
+            provider.record_activity_infra_error();
         }
     }
 
     #[inline]
     fn record_orchestration_poison(&self) {
-        if let Some(handle) = &self.observability_handle {
-            handle.record_orchestration_poison();
+        if let Some(provider) = self.metrics_provider() {
+            provider.record_orchestration_poison();
         }
     }
 
     #[inline]
     fn record_activity_poison(&self) {
-        if let Some(handle) = &self.observability_handle {
-            handle.record_activity_poison();
+        if let Some(provider) = self.metrics_provider() {
+            provider.record_activity_poison();
         }
     }
 
     pub fn metrics_snapshot(&self) -> Option<observability::MetricsSnapshot> {
         self.observability_handle
             .as_ref()
-            .and_then(|handle| handle.metrics_snapshot())
+            .map(|handle| handle.metrics_snapshot())
     }
 
     /// Initialize all gauges that need to sync with persistent state on startup.
@@ -555,7 +548,7 @@ impl Runtime {
 
             let (system_result, queue_result) = tokio::join!(system_metrics_future, queue_depths_future);
 
-            if let Some(provider) = self.observability_handle.as_ref().and_then(|h| h.metrics_provider()) {
+            if let Some(provider) = self.observability_handle.as_ref().map(|h| h.metrics_provider()) {
                 // Initialize active orchestrations gauge
                 if let Ok(metrics) = system_result {
                     let active_count = metrics.running_instances as i64;
@@ -740,14 +733,11 @@ impl Runtime {
 
         // Wrap provider with metrics instrumentation if metrics are enabled
         let history_store: Arc<dyn Provider> = if let Some(ref handle) = observability_handle {
-            if let Some(metrics) = handle.metrics_provider() {
-                Arc::new(crate::providers::instrumented::InstrumentedProvider::new(
-                    history_store,
-                    Some(metrics.clone()),
-                ))
-            } else {
-                history_store
-            }
+            let metrics = handle.metrics_provider();
+            Arc::new(crate::providers::instrumented::InstrumentedProvider::new(
+                history_store,
+                Some(metrics.clone()),
+            ))
         } else {
             history_store
         };
