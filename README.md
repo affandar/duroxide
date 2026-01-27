@@ -4,14 +4,14 @@
 [![Crates.io](https://img.shields.io/crates/v/duroxide.svg)](https://crates.io/crates/duroxide)
 [![Documentation](https://docs.rs/duroxide/badge.svg)](https://docs.rs/duroxide)
 
-> Notice: Experimental, not intended for production use yet
+> Notice: This is an alpha version
 
 A lightweight and embeddable durable execution runtime for Rust. Inspired by the [Durable Task Framework](https://github.com/Azure/durabletask) and [Temporal](https://temporal.io/).
 
 > **[Latest Release: v0.1.14](https://crates.io/crates/duroxide/0.1.14)** — Bug fix: fire-and-forget orchestrations (`schedule_orchestration`) now correctly record history events for determinism.
 > See [CHANGELOG.md](CHANGELOG.md#0114---2026-01-24) for release notes.
 
-What you can build with this
+### What you can build with this
 - Function chaining: model a multi-step process as sequential awaits where each step depends on prior results.
 - Fan-out/fan-in: schedule many activities in parallel and deterministically aggregate results.
 - Human interaction (external events): wait for out-of-band approvals, callbacks, or webhooks and then resume.
@@ -22,7 +22,7 @@ What you can build with this
 
 These patterns are enabled by deterministic replay, correlation IDs, durable timers, and external event handling.
 
-Getting started samples
+### Getting started samples
 - **Start here**: See `docs/ORCHESTRATION-GUIDE.md` for complete guide to writing workflows
 - **Quick start**: Run `cargo run --example hello_world` to see Duroxide in action
 - **Advanced patterns**: Check `tests/e2e_samples.rs` for comprehensive usage patterns
@@ -30,12 +30,12 @@ Getting started samples
 - **Provider testing**: See `docs/provider-testing-guide.md` for testing custom providers
 - **Observability**: See `docs/observability-guide.md` for structured logging and metrics
 
-AI-assisted development
+### AI-assisted development
 - **AI Skills**: See `docs/skills/` for AI assistant context files
 - Copy skill files to your AI assistant's context (e.g., `.github/copilot-instructions.md` for Copilot, `.cursor/rules` for Cursor)
 - Skills provide structured context for provider implementation, orchestration authoring, and more
 
-What it is
+### What it is
 - Deterministic orchestration core with correlated event IDs and replay safety
 - Message-driven runtime built on Tokio, with two dispatchers:
   - OrchestrationDispatcher (orchestrator queue) - processes workflow turns and durable timers
@@ -43,7 +43,7 @@ What it is
 - Storage-agnostic via `Provider` trait (SQLite provider with in-memory and file-based modes)
 - Configurable polling frequency, lock timeouts, and automatic lock renewal for long-running activities
 
-How it works (brief)
+### How it works (brief)
 - The orchestrator runs turn-by-turn. Each turn it is polled once, may schedule actions, then the runtime waits for completions.
 - Every operation has a correlation id. Scheduling is recorded as history events (e.g., `ActivityScheduled`) and completions are matched by id (e.g., `ActivityCompleted`).
 - The runtime appends new events and advances turns; work is routed through provider-backed queues (Orchestrator and Worker) using peek-lock semantics. Timers are handled via orchestrator queue with delayed visibility.
@@ -51,20 +51,20 @@ How it works (brief)
 - Logging is replay-safe via `tracing` and the `ctx.trace_*` helpers (implemented as a deterministic system activity). We do not persist trace events in history.
 - Providers enforce a history cap (default 1024; tests use a smaller cap). If an append would exceed the cap, they return an error; the runtime fails the run to preserve determinism (no truncation).
 
-Key types
+### Key types
 - `OrchestrationContext`: schedules work (`schedule_activity`, `schedule_timer`, `schedule_wait`, `schedule_sub_orchestration`, `schedule_orchestration`) and exposes deterministic `select2/select/join`, `trace_*`, `continue_as_new`.
 - `Event`/`Action`: immutable history entries and host-side actions, including `ContinueAsNew`.
 - `Provider`: persistence + queues abstraction with atomic operations and lock renewal (`SqliteProvider` with in-memory and file-based modes).
 - `RuntimeOptions`: configure concurrency, lock timeouts, and lock renewal buffer for long-running activities.
 - `OrchestrationRegistry` / `ActivityRegistry`: register orchestrations/activities in-memory.
 
-Project layout
+### Project layout
 - `src/lib.rs` — orchestration primitives and single-turn executor
 - `src/runtime/` — runtime, registries, workers, and polling engine
 - `src/providers/` — SQLite history store with transactional support
 - `tests/` — unit and e2e tests (see `e2e_samples.rs` to learn by example)
 
-Install (when published)
+### Install (when published)
 ```toml
 [dependencies]
 duroxide = { version = "0.1", features = ["sqlite"] }  # With bundled SQLite provider
@@ -72,7 +72,7 @@ duroxide = { version = "0.1", features = ["sqlite"] }  # With bundled SQLite pro
 duroxide = "0.1"  # Core only, bring your own Provider implementation
 ```
 
-Hello world (activities + runtime)
+### Hello world (activities + runtime)
 
 > **Note**: This example uses the bundled SQLite provider. Enable the `sqlite` feature in your `Cargo.toml`.
 ```rust
@@ -107,7 +107,7 @@ rt.shutdown(None).await;  // Graceful shutdown with 1s timeout
 # }
 ```
 
-Parallel fan-out
+### Parallel fan-out
 ```rust
 async fn fanout(ctx: OrchestrationContext) -> Vec<String> {
     let f1 = ctx.schedule_activity("Greetings", "Gabbar");
@@ -123,7 +123,7 @@ async fn fanout(ctx: OrchestrationContext) -> Vec<String> {
 }
 ```
 
-Control flow + timers + externals
+### Control flow + timers + externals
 ```rust
 use duroxide::Either2;
 async fn control(ctx: OrchestrationContext) -> String {
@@ -139,7 +139,7 @@ async fn control(ctx: OrchestrationContext) -> String {
 }
 ```
 
-Error handling (Result<String, String>)
+### Error handling (Result<String, String>)
 ```rust
 async fn comp_sample(ctx: OrchestrationContext) -> String {
     match ctx.schedule_activity("Fragile", "bad").await {
@@ -152,17 +152,17 @@ async fn comp_sample(ctx: OrchestrationContext) -> String {
 }
 ```
 
-ContinueAsNew and multi-execution
+### ContinueAsNew and multi-execution
 - Use `ctx.continue_as_new(new_input)` to end the current execution and immediately start a fresh execution with the provided input.
 - Providers keep all executions' histories in the SQLite database with full ACID transactional support.
 - The initial `start_orchestration` handle resolves with an empty success when `ContinueAsNew` occurs; the latest execution can be observed via status APIs.
 
-Status and control-plane
+### Status and control-plane
 - `Client::get_orchestration_status(instance)` -> `Result<OrchestrationStatus, ClientError>` where `OrchestrationStatus` is Running | Completed { output } | Failed { details: ErrorDetails } | NotFound
 - `Client::wait_for_orchestration(instance, timeout)` -> Wait for completion with timeout, returns `Result<OrchestrationStatus, ClientError>`
 - SQLite provider exposes execution-aware methods (`list_executions`, `read_with_execution`, etc.) for diagnostics.
 
-Instance management (deletion and pruning)
+### Instance management (deletion and pruning)
 - `Client::delete_instance(instance, force)` -> Delete instance and all sub-orchestrations (cascade). Use `force=true` for running instances.
 - `Client::delete_instance_bulk(filter)` -> Bulk delete with filtering by IDs, age, and limits.
 - `Client::prune_executions(instance, options)` -> Delete old executions while preserving current. Safe for running workflows.
@@ -170,18 +170,18 @@ Instance management (deletion and pruning)
 - `Client::get_instance_tree(instance)` -> Preview cascade deletion impact before deleting.
 - **Safety**: Current execution is NEVER pruned. Running instances require `force=true` to delete.
 
-Error classification
+### Error classification
 - **Infrastructure** errors: Provider failures, data corruption (retryable by runtime, abort turn)
 - **Configuration** errors: Unregistered orchestrations/activities, nondeterminism (require deployment fix, abort turn)
 - **Application** errors: Business logic failures (handled by orchestration code, propagate normally)
 - Use `ErrorDetails::category()` for metrics, `is_retryable()` for retry logic, `display_message()` for logging
 
-Local development
+### Local development
 - Build: `cargo build`
 - Test everything: `cargo test --all -- --nocapture`
 - Run a specific test: `cargo test --test e2e_samples sample_dtf_legacy_gabbar_greetings -- --nocapture`
 
-Stress testing
+### Stress testing
 - Run all stress tests: `./run-stress-tests.sh` (parallel orchestrations + large payload)
 - Run specific test: `./run-stress-tests.sh --parallel-only` or `./run-stress-tests.sh --large-payload`
 - Custom duration: `./run-stress-tests.sh 60` (runs for 60 seconds)
@@ -189,14 +189,14 @@ Stress testing
 - Result tracking: `./run-stress-tests.sh --track` (saves to `stress-test-results.md`)
 - See `docs/provider-testing-guide.md` for comprehensive stress testing guide
 
-Runtime Configuration
+### Runtime Configuration
 - Configure lock timeouts, concurrency, and polling via `RuntimeOptions`
 - Worker lock renewal automatically enabled for long-running activities (no configuration needed)
 - Example: `RuntimeOptions { worker_lock_timeout: Duration::from_secs(300), worker_lock_renewal_buffer: Duration::from_secs(30), ... }`
 - Lock renewal happens at `(timeout - buffer)` for timeouts ≥15s, or `0.5 * timeout` for shorter timeouts
 - See API docs for `RuntimeOptions` for complete configuration options
 
-Observability
+### Observability
 - Enable structured logging: `RuntimeOptions { observability: ObservabilityConfig { log_format: LogFormat::Compact, ... }, ... }`
 - Default logs show only orchestration/activity traces at configured level; runtime internals at warn+
 - Override with `RUST_LOG` for additional targets (e.g., `RUST_LOG=duroxide::runtime=debug`)
@@ -206,7 +206,7 @@ Observability
 - Run `cargo run --example metrics_cli` to see observability dashboard
 - See `docs/observability-guide.md` for complete guide
 
-Notes
+### Notes
 - Import as `duroxide` in Rust source.
 - Timers are real time (Tokio sleep). External events are via `Runtime::raise_event`.
 - Unknown-instance messages are logged and dropped. Providers persist history only (queues are in-memory runtime components).
