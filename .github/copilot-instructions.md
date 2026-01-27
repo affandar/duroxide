@@ -2,6 +2,10 @@
 
 A durable execution runtime for Rust. Key docs: `docs/ORCHESTRATION-GUIDE.md`, `docs/provider-implementation-guide.md`.
 
+## ⚠️ CRITICAL: Git Operations
+
+**NEVER commit or push without explicit user permission.** Always ask before running `git commit` or `git push`.
+
 ## ⚠️ CRITICAL: Test Execution
 
 **ALWAYS use nextest for running tests.** This is mandatory - nextest provides faster execution and better output.
