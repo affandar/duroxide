@@ -94,38 +94,46 @@ duroxide/
 How data flows through a duroxide application:
 
 ```
-┌─────────────┐    start/wait/cancel    ┌─────────────────┐
-│   Your App  │ ─────────────────────▶  │     Client      │
-└─────────────┘                         └────────┬────────┘
-                                                 │
-                                                 ▼
-                                        ┌─────────────────┐
-                                        │    Provider     │
-                                        │  (SQLite/PG)    │
-                                        └────────┬────────┘
-                                                 │
-          ┌──────────────────────────────────────┼───────────────────────────────┐
-          │                                      │                               │
-          ▼                                      ▼                               ▼
-┌─────────────────┐                    ┌─────────────────┐              ┌───────────────┐
-│ Orchestrator    │                    │  Worker Queue   │              │ Event History │
-│ Queue           │                    │                 │              │               │
-│                 │                    │ • ActivityExec  │              │ [Event 1]     │
-│ • Start         │                    │                 │              │ [Event 2]     │
-│ • Completed     │                    │                 │              │ [Event 3]     │
-│ • TimerFired    │                    │                 │              │ ...           │
-│ • ExternalEvent │                    │                 │              │               │
-└────────┬────────┘                    └────────┬────────┘              └───────────────┘
-         │                                      │
-         ▼                                      ▼
-┌─────────────────┐                    ┌─────────────────┐
-│  Orchestration  │                    │    Worker       │
-│  Dispatcher     │                    │    Dispatcher   │
-│                 │                    │                 │
-│ • Fetch turn    │                    │ • Fetch work    │
-│ • Replay        │                    │ • Execute       │
-│ • Commit        │                    │ • Report result │
-└─────────────────┘                    └─────────────────┘
+┌───────────────────────────────────────────────────────────────────────────────┐
+│                                  Your App                                     │
+│                                                                               │
+│  • Registers orchestrations and activities                                    │
+│  • Uses Client API to start/wait/cancel                                       │
+└───────────────────┬───────────────────────────────────┬───────────────────────┘
+                    │                                   │
+                    │ start/wait/cancel                 │ register functions
+                    ▼                                   ▼
+           ┌─────────────────┐                 ┌─────────────────┐
+           │     Client      │                 │     Runtime     │
+           └────────┬────────┘                 └────────┬────────┘
+                    │                                   │
+                    │                    ┌──────────────┴──────────────┐
+                    │                    │                             │
+                    │                    ▼                             ▼
+                    │           ┌─────────────────┐           ┌─────────────────┐
+                    │           │  Orchestration  │           │    Worker       │
+                    │           │  Dispatcher     │           │    Dispatcher   │
+                    │           │                 │           │                 │
+                    │           │ • Fetch turn    │           │ • Fetch work    │
+                    │           │ • Replay        │           │ • Execute       │
+                    │           │ • Commit        │           │ • Report result │
+                    │           └────────┬────────┘           └────────┬────────┘
+                    │                    │                             │
+                    │                    │ fetch/ack                   │ fetch/ack
+                    │                    │                             │
+                    ▼                    ▼                             ▼
+           ┌────────────────────────────────────────────────────────────────────┐
+           │                          Provider                                  │
+           │                        (SQLite/PG)                                 │
+           ├────────────────────┬───────────────────────┬───────────────────────┤
+           │  Orchestrator      │    Worker Queue       │    Event History      │
+           │  Queue             │                       │                       │
+           │                    │    • ActivityExec     │    [Event 1]          │
+           │  • Start           │                       │    [Event 2]          │
+           │  • Completed       │                       │    [Event 3]          │
+           │  • TimerFired      │                       │    ...                │
+           │  • ExternalEvent   │                       │                       │
+           └────────────────────┴───────────────────────┴───────────────────────┘
 ```
 
 1. **Client** enqueues work (StartOrchestration) via Provider

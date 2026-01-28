@@ -665,4 +665,206 @@ mod tests {
     async fn test_sqlite_delete_instance_bulk_cascades_to_children() {
         test_delete_instance_bulk_cascades_to_children(&SqliteTestFactory).await;
     }
+
+    // ========================================================================
+    // Coverage improvement tests (moved from coverage_improvement_tests.rs)
+    // ========================================================================
+
+    use duroxide::providers::{ExecutionMetadata, WorkItem};
+    use duroxide::{Event, EventKind};
+
+    // Helper function to create a start orchestration work item
+    fn create_start_item(instance: &str) -> WorkItem {
+        WorkItem::StartOrchestration {
+            instance: instance.to_string(),
+            orchestration: "Test".to_string(),
+            input: "{}".to_string(),
+            version: None,
+            parent_instance: None,
+            parent_id: None,
+            execution_id: 1,
+        }
+    }
+
+    /// Test: SQLite provider handles concurrent ack with wrong token
+    #[tokio::test]
+    async fn test_sqlite_ack_wrong_token() {
+        let provider = SqliteTestFactory.create_provider().await;
+
+        // Enqueue item
+        let item = create_start_item("wrong-token-test");
+        provider.enqueue_for_orchestrator(item, None).await.unwrap();
+
+        // Fetch to get valid lock
+        let (_, valid_token, _) = provider
+            .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+            .await
+            .unwrap()
+            .unwrap();
+
+        // Try to ack with wrong token
+        let result = provider
+            .ack_orchestration_item(
+                "wrong-token",
+                1,
+                vec![],
+                vec![],
+                vec![],
+                ExecutionMetadata::default(),
+                vec![],
+            )
+            .await;
+
+        assert!(result.is_err(), "Ack with wrong token should fail");
+
+        // Original token should still work after wrong token attempt
+        let result = provider
+            .ack_orchestration_item(
+                &valid_token,
+                1,
+                vec![Event::with_event_id(
+                    1,
+                    "wrong-token-test".to_string(),
+                    1,
+                    None,
+                    EventKind::OrchestrationStarted {
+                        name: "Test".to_string(),
+                        version: "1.0.0".to_string(),
+                        input: "{}".to_string(),
+                        parent_instance: None,
+                        parent_id: None,
+                    },
+                )],
+                vec![],
+                vec![],
+                ExecutionMetadata {
+                    orchestration_name: Some("Test".to_string()),
+                    orchestration_version: Some("1.0.0".to_string()),
+                    ..Default::default()
+                },
+                vec![],
+            )
+            .await;
+
+        assert!(result.is_ok(), "Valid token should still work");
+    }
+
+    /// Test: SQLite provider handles duplicate event ID rejection
+    #[tokio::test]
+    async fn test_sqlite_duplicate_event_rejection_coverage() {
+        let provider = SqliteTestFactory.create_provider().await;
+
+        // Enqueue and fetch
+        let item = create_start_item("dup-event-test");
+        provider.enqueue_for_orchestrator(item, None).await.unwrap();
+
+        let (_, lock_token, _) = provider
+            .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+            .await
+            .unwrap()
+            .unwrap();
+
+        // Ack with event
+        let event = Event::with_event_id(
+            1,
+            "dup-event-test".to_string(),
+            1,
+            None,
+            EventKind::OrchestrationStarted {
+                name: "Test".to_string(),
+                version: "1.0.0".to_string(),
+                input: "{}".to_string(),
+                parent_instance: None,
+                parent_id: None,
+            },
+        );
+
+        provider
+            .ack_orchestration_item(
+                &lock_token,
+                1,
+                vec![event.clone()],
+                vec![],
+                vec![],
+                ExecutionMetadata {
+                    orchestration_name: Some("Test".to_string()),
+                    orchestration_version: Some("1.0.0".to_string()),
+                    ..Default::default()
+                },
+                vec![],
+            )
+            .await
+            .unwrap();
+
+        // Try to append same event again
+        let result = provider.append_with_execution("dup-event-test", 1, vec![event]).await;
+
+        // Should fail due to duplicate
+        assert!(result.is_err(), "Duplicate event should be rejected");
+    }
+
+    /// Test: SQLite provider handles renew after lock expiration
+    #[tokio::test]
+    async fn test_sqlite_renew_after_expiration() {
+        let provider = SqliteTestFactory.create_provider().await;
+
+        // Enqueue item
+        let item = create_start_item("renew-expired-test");
+        provider.enqueue_for_orchestrator(item.clone(), None).await.unwrap();
+
+        // Fetch with very short lock timeout
+        let (_, lock_token, _) = provider
+            .fetch_orchestration_item(Duration::from_millis(50), Duration::ZERO)
+            .await
+            .unwrap()
+            .unwrap();
+
+        // Wait for lock to expire
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        // Try to renew expired lock
+        let result = provider
+            .renew_orchestration_item_lock(&lock_token, Duration::from_secs(30))
+            .await;
+
+        // Should fail (lock expired)
+        assert!(result.is_err(), "Renewing expired lock should fail");
+    }
+
+    /// Test: SQLite provider worker queue FIFO ordering
+    #[tokio::test]
+    async fn test_sqlite_worker_fifo_ordering_coverage() {
+        let provider = SqliteTestFactory.create_provider().await;
+
+        // Enqueue multiple activity items
+        for i in 0..5 {
+            let item = WorkItem::ActivityExecute {
+                instance: format!("fifo-test-{i}"),
+                execution_id: 1,
+                id: i as u64,
+                name: "TestActivity".to_string(),
+                input: format!("{{\"order\": {i}}}"),
+            };
+            provider.enqueue_for_worker(item).await.unwrap();
+        }
+
+        // Fetch and verify order
+        for i in 0..5 {
+            let (item, token, _) = provider
+                .fetch_work_item(Duration::from_secs(30), Duration::ZERO)
+                .await
+                .unwrap()
+                .unwrap();
+
+            // WorkItem is an enum, extract the instance
+            let instance = match &item {
+                WorkItem::ActivityExecute { instance, .. } => instance.clone(),
+                _ => panic!("Expected ActivityExecute"),
+            };
+            assert_eq!(instance, format!("fifo-test-{i}"), "Items should be FIFO ordered");
+
+            // Ack to allow next fetch
+            provider.ack_work_item(&token, None).await.unwrap();
+        }
+    }
 }

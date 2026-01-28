@@ -910,3 +910,139 @@ async fn test_execution_output_captured_on_continue_as_new() {
     assert_eq!(executions.len(), 1);
     assert_eq!(executions[0], 1);
 }
+
+// ============================================================================
+// Instrumented Provider Tests (moved from coverage_improvement_tests.rs)
+// ============================================================================
+
+/// Test: InstrumentedProvider preserves semantics and records metrics
+#[tokio::test]
+async fn test_instrumented_provider_semantic_equivalence() {
+    use duroxide::providers::instrumented::InstrumentedProvider;
+    use duroxide::runtime::observability::{MetricsProvider, ObservabilityConfig};
+
+    // Create base provider
+    let base_provider = Arc::new(SqliteProvider::new_in_memory().await.unwrap());
+
+    // Create metrics provider
+    let config = ObservabilityConfig::default();
+    let metrics = Arc::new(MetricsProvider::new(&config).unwrap());
+
+    // Wrap with instrumentation
+    let instrumented: Arc<dyn Provider> = Arc::new(InstrumentedProvider::new(base_provider.clone(), Some(metrics.clone())));
+
+    // Create start item
+    let start_item = WorkItem::StartOrchestration {
+        instance: "instrumented-test".to_string(),
+        orchestration: "Test".to_string(),
+        input: "{}".to_string(),
+        version: None,
+        parent_instance: None,
+        parent_id: None,
+        execution_id: 1,
+    };
+
+    // Enqueue
+    instrumented.enqueue_for_orchestrator(start_item.clone(), None).await.unwrap();
+
+    // Fetch
+    let result = instrumented
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+        .await
+        .unwrap();
+    assert!(result.is_some(), "Should fetch the enqueued item");
+
+    let (item, lock_token, attempt_count) = result.unwrap();
+    assert_eq!(item.instance, "instrumented-test");
+    assert_eq!(attempt_count, 1);
+
+    // Ack with history
+    let events = vec![Event::with_event_id(
+        1,
+        "instrumented-test".to_string(),
+        1,
+        None,
+        EventKind::OrchestrationStarted {
+            name: "TestOrch".to_string(),
+            version: "1.0.0".to_string(),
+            input: "test".to_string(),
+            parent_instance: None,
+            parent_id: None,
+        },
+    )];
+
+    instrumented
+        .ack_orchestration_item(
+            &lock_token,
+            1,
+            events,
+            vec![],
+            vec![],
+            ExecutionMetadata {
+                status: Some("Completed".to_string()),
+                orchestration_name: Some("TestOrch".to_string()),
+                orchestration_version: Some("1.0.0".to_string()),
+                ..Default::default()
+            },
+            vec![],
+        )
+        .await
+        .unwrap();
+
+    // Verify history was persisted (semantic equivalence)
+    let history = instrumented.read("instrumented-test").await.unwrap();
+    assert!(!history.is_empty(), "History should be persisted");
+
+    // Verify metrics were recorded
+    let snapshot = metrics.snapshot();
+    // The instrumented provider records operations, so provider error count should be 0 on success
+    assert_eq!(snapshot.provider_errors, 0, "No provider errors expected");
+}
+
+/// Test: InstrumentedProvider error path instrumentation
+#[tokio::test]
+async fn test_instrumented_provider_error_paths() {
+    use duroxide::providers::instrumented::InstrumentedProvider;
+    use duroxide::runtime::observability::{MetricsProvider, ObservabilityConfig};
+
+    let base_provider = Arc::new(SqliteProvider::new_in_memory().await.unwrap());
+    let config = ObservabilityConfig::default();
+    let metrics = Arc::new(MetricsProvider::new(&config).unwrap());
+    let instrumented: Arc<dyn Provider> = Arc::new(InstrumentedProvider::new(base_provider.clone(), Some(metrics.clone())));
+
+    // Try to ack with invalid lock token (should fail)
+    let result = instrumented
+        .ack_orchestration_item(
+            "invalid-lock-token",
+            1,
+            vec![],
+            vec![],
+            vec![],
+            ExecutionMetadata::default(),
+            vec![],
+        )
+        .await;
+
+    assert!(result.is_err(), "Ack with invalid token should fail");
+
+    // Verify error was recorded
+    let snapshot = metrics.snapshot();
+    assert!(snapshot.provider_errors >= 1, "Provider error should be recorded");
+}
+
+/// Test: InstrumentedProvider passes through management capability
+#[tokio::test]
+async fn test_instrumented_provider_management_passthrough() {
+    use duroxide::providers::instrumented::InstrumentedProvider;
+
+    let base_provider = Arc::new(SqliteProvider::new_in_memory().await.unwrap());
+    let instrumented: Arc<dyn Provider> = Arc::new(InstrumentedProvider::new(base_provider.clone(), None));
+
+    // Management capability should pass through
+    let mgmt = instrumented.as_management_capability();
+    assert!(mgmt.is_some(), "Management capability should be available through instrumented provider");
+
+    // Should be able to call management methods
+    let instances = mgmt.unwrap().list_instances().await.unwrap();
+    assert!(instances.is_empty(), "Should return empty list for fresh provider");
+}
