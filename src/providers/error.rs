@@ -117,3 +117,97 @@ impl From<&str> for ProviderError {
         s.to_string().into()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Test: ProviderError retryable vs permanent classification
+    #[test]
+    fn test_provider_error_classification() {
+        // Test retryable error
+        let retryable = ProviderError::retryable("fetch_orchestration_item", "Database is busy");
+        assert!(retryable.is_retryable(), "Retryable error should be retryable");
+        assert_eq!(retryable.operation, "fetch_orchestration_item");
+        assert!(retryable.message.contains("busy"));
+
+        // Test permanent error
+        let permanent = ProviderError::permanent("ack_orchestration_item", "Duplicate event detected");
+        assert!(!permanent.is_retryable(), "Permanent error should not be retryable");
+        assert_eq!(permanent.operation, "ack_orchestration_item");
+        assert!(permanent.message.contains("Duplicate"));
+
+        // Test Display trait
+        let display = format!("{permanent}");
+        assert!(display.contains("ack_orchestration_item"));
+        assert!(display.contains("Duplicate"));
+
+        // Test Error trait
+        let _err: Box<dyn std::error::Error> = Box::new(permanent.clone());
+    }
+
+    /// Test: ProviderError conversion from String (backward compatibility)
+    #[test]
+    fn test_provider_error_from_string() {
+        // String errors should be retryable by default (conservative approach)
+        let from_string: ProviderError = "Some error message".into();
+        assert!(
+            from_string.is_retryable(),
+            "String errors should be retryable by default"
+        );
+        assert_eq!(from_string.operation, "unknown");
+        assert_eq!(from_string.message, "Some error message");
+
+        // From owned String
+        let from_owned: ProviderError = String::from("Another error").into();
+        assert!(from_owned.is_retryable());
+        assert_eq!(from_owned.message, "Another error");
+    }
+
+    /// Test: ProviderError to_infrastructure_error conversion
+    #[test]
+    fn test_provider_error_to_infrastructure() {
+        let retryable = ProviderError::retryable("read", "Connection timeout");
+        let infra = retryable.to_infrastructure_error();
+
+        match infra {
+            crate::ErrorDetails::Infrastructure {
+                operation,
+                message,
+                retryable,
+            } => {
+                assert_eq!(operation, "read");
+                assert!(message.contains("timeout"));
+                assert!(retryable);
+            }
+            _ => panic!("Expected Infrastructure error"),
+        }
+
+        let permanent = ProviderError::permanent("write", "Data corruption");
+        let infra = permanent.to_infrastructure_error();
+
+        match infra {
+            crate::ErrorDetails::Infrastructure {
+                operation,
+                message,
+                retryable,
+            } => {
+                assert_eq!(operation, "write");
+                assert!(message.contains("corruption"));
+                assert!(!retryable);
+            }
+            _ => panic!("Expected Infrastructure error"),
+        }
+    }
+
+    /// Test: ProviderError equality
+    #[test]
+    fn test_provider_error_equality() {
+        let err1 = ProviderError::retryable("op", "msg");
+        let err2 = ProviderError::retryable("op", "msg");
+        let err3 = ProviderError::permanent("op", "msg");
+
+        assert_eq!(err1, err2);
+        assert_ne!(err1, err3); // Different retryable flag
+    }
+}

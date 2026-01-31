@@ -1392,3 +1392,285 @@ async fn test_poison_message_metrics() {
         snapshot.activity_poison
     );
 }
+
+// ============================================================================
+// Coverage improvement tests (moved from coverage_improvement_tests.rs)
+// ============================================================================
+
+/// Test: MetricsProvider records all outcome types
+#[tokio::test]
+async fn test_metrics_outcome_matrix() {
+    use duroxide::runtime::observability::{MetricsProvider, ObservabilityConfig};
+
+    let config = ObservabilityConfig::default();
+    let metrics = MetricsProvider::new(&config).unwrap();
+
+    // Record orchestration start
+    metrics.record_orchestration_start("TestOrch", "1.0.0", "client");
+    assert_eq!(metrics.snapshot().orch_starts, 1);
+
+    // Record orchestration completion (success)
+    metrics.record_orchestration_completion("TestOrch", "1.0.0", "completed", 1.5, 3, 10);
+    assert_eq!(metrics.snapshot().orch_completions, 1);
+
+    // Record orchestration failure (app error)
+    metrics.record_orchestration_failure("TestOrch", "1.0.0", "app_error", "user_error");
+    assert_eq!(metrics.snapshot().orch_failures, 1);
+    assert_eq!(metrics.snapshot().orch_application_errors, 1);
+
+    // Record orchestration failure (infrastructure error)
+    metrics.record_orchestration_failure("TestOrch", "1.0.0", "infrastructure_error", "db_down");
+    assert_eq!(metrics.snapshot().orch_failures, 2);
+    assert_eq!(metrics.snapshot().orch_infrastructure_errors, 1);
+
+    // Record orchestration failure (config error)
+    metrics.record_orchestration_failure("TestOrch", "1.0.0", "config_error", "missing_setting");
+    assert_eq!(metrics.snapshot().orch_failures, 3);
+    assert_eq!(metrics.snapshot().orch_configuration_errors, 1);
+
+    // Record continue-as-new
+    metrics.record_continue_as_new("TestOrch", 1);
+    assert_eq!(metrics.snapshot().orch_continue_as_new, 1);
+}
+
+/// Test: MetricsProvider activity outcome types
+#[tokio::test]
+async fn test_metrics_activity_outcomes() {
+    use duroxide::runtime::observability::{MetricsProvider, ObservabilityConfig};
+
+    let config = ObservabilityConfig::default();
+    let metrics = MetricsProvider::new(&config).unwrap();
+
+    // Success
+    metrics.record_activity_execution("TestActivity", "success", 0.5, 0);
+    assert_eq!(metrics.snapshot().activity_success, 1);
+
+    // App error
+    metrics.record_activity_execution("TestActivity", "app_error", 0.1, 1);
+    assert_eq!(metrics.snapshot().activity_app_errors, 1);
+
+    // Infrastructure error
+    metrics.record_activity_execution("TestActivity", "infra_error", 0.2, 2);
+    assert_eq!(metrics.snapshot().activity_infra_errors, 1);
+
+    // Config error
+    metrics.record_activity_execution("TestActivity", "config_error", 0.3, 0);
+    assert_eq!(metrics.snapshot().activity_config_errors, 1);
+}
+
+/// Test: MetricsProvider poison message tracking
+#[tokio::test]
+async fn test_metrics_poison_messages() {
+    use duroxide::runtime::observability::{MetricsProvider, ObservabilityConfig};
+
+    let config = ObservabilityConfig::default();
+    let metrics = MetricsProvider::new(&config).unwrap();
+
+    // Record orchestration poison
+    metrics.record_orchestration_poison();
+    metrics.record_orchestration_poison();
+    assert_eq!(metrics.snapshot().orch_poison, 2);
+
+    // Record activity poison
+    metrics.record_activity_poison();
+    assert_eq!(metrics.snapshot().activity_poison, 1);
+}
+
+/// Test: MetricsProvider dispatcher metrics
+#[tokio::test]
+async fn test_metrics_dispatcher() {
+    use duroxide::runtime::observability::{MetricsProvider, ObservabilityConfig};
+
+    let config = ObservabilityConfig::default();
+    let metrics = MetricsProvider::new(&config).unwrap();
+
+    // Record dispatcher items fetched
+    metrics.record_orch_dispatcher_items_fetched(5);
+    metrics.record_orch_dispatcher_items_fetched(3);
+    assert_eq!(metrics.snapshot().orch_dispatcher_items_fetched, 8);
+
+    metrics.record_worker_dispatcher_items_fetched(10);
+    assert_eq!(metrics.snapshot().worker_dispatcher_items_fetched, 10);
+
+    // Record processing duration (just verify no panic)
+    metrics.record_orch_dispatcher_processing_duration(100);
+    metrics.record_worker_dispatcher_execution_duration(50);
+}
+
+/// Test: MetricsProvider sub-orchestration tracking
+#[tokio::test]
+async fn test_metrics_suborchestration() {
+    use duroxide::runtime::observability::{MetricsProvider, ObservabilityConfig};
+
+    let config = ObservabilityConfig::default();
+    let metrics = MetricsProvider::new(&config).unwrap();
+
+    // Record sub-orchestration call
+    metrics.record_suborchestration_call("Parent", "Child", "success");
+    metrics.record_suborchestration_call("Parent", "Child", "failure");
+    assert_eq!(metrics.snapshot().suborchestration_calls, 2);
+
+    // Record duration (just verify no panic)
+    metrics.record_suborchestration_duration("Parent", "Child", 2.5, "success");
+}
+
+/// Test: MetricsProvider queue depth tracking
+#[tokio::test]
+async fn test_metrics_queue_depths() {
+    use duroxide::runtime::observability::{MetricsProvider, ObservabilityConfig};
+
+    let config = ObservabilityConfig::default();
+    let metrics = MetricsProvider::new(&config).unwrap();
+
+    // Initial depths should be zero
+    let (orch, worker) = metrics.get_queue_depths();
+    assert_eq!(orch, 0);
+    assert_eq!(worker, 0);
+
+    // Update depths
+    metrics.update_queue_depths(10, 5);
+    let (orch, worker) = metrics.get_queue_depths();
+    assert_eq!(orch, 10);
+    assert_eq!(worker, 5);
+
+    // Update again
+    metrics.update_queue_depths(0, 0);
+    let (orch, worker) = metrics.get_queue_depths();
+    assert_eq!(orch, 0);
+    assert_eq!(worker, 0);
+}
+
+/// Test: MetricsProvider active orchestrations gauge
+#[tokio::test]
+async fn test_metrics_active_orchestrations() {
+    use duroxide::runtime::observability::{MetricsProvider, ObservabilityConfig};
+
+    let config = ObservabilityConfig::default();
+    let metrics = MetricsProvider::new(&config).unwrap();
+
+    // Initial should be zero
+    assert_eq!(metrics.get_active_orchestrations(), 0);
+
+    // Increment
+    metrics.increment_active_orchestrations();
+    metrics.increment_active_orchestrations();
+    assert_eq!(metrics.get_active_orchestrations(), 2);
+
+    // Decrement
+    metrics.decrement_active_orchestrations();
+    assert_eq!(metrics.get_active_orchestrations(), 1);
+
+    // Set directly
+    metrics.set_active_orchestrations(100);
+    assert_eq!(metrics.get_active_orchestrations(), 100);
+}
+
+/// Test: MetricsProvider provider error tracking
+#[tokio::test]
+async fn test_metrics_provider_errors() {
+    use duroxide::runtime::observability::{MetricsProvider, ObservabilityConfig};
+
+    let config = ObservabilityConfig::default();
+    let metrics = MetricsProvider::new(&config).unwrap();
+
+    // Record provider operation (success)
+    metrics.record_provider_operation("fetch", 0.05, "success");
+
+    // Record provider errors
+    metrics.record_provider_error("fetch", "deadlock");
+    metrics.record_provider_error("ack", "timeout");
+    metrics.record_provider_error("read", "connection");
+    metrics.record_provider_error("write", "other");
+    assert_eq!(metrics.snapshot().provider_errors, 4);
+}
+
+/// Test: MetricsProvider error type shortcuts
+#[tokio::test]
+async fn test_metrics_error_shortcuts() {
+    use duroxide::runtime::observability::{MetricsProvider, ObservabilityConfig};
+
+    let config = ObservabilityConfig::default();
+    let metrics = MetricsProvider::new(&config).unwrap();
+
+    // Orchestration error shortcuts
+    metrics.record_orchestration_application_error();
+    assert_eq!(metrics.snapshot().orch_application_errors, 1);
+    assert_eq!(metrics.snapshot().orch_failures, 1);
+
+    metrics.record_orchestration_infrastructure_error();
+    assert_eq!(metrics.snapshot().orch_infrastructure_errors, 1);
+    assert_eq!(metrics.snapshot().orch_failures, 2);
+
+    metrics.record_orchestration_configuration_error();
+    assert_eq!(metrics.snapshot().orch_configuration_errors, 1);
+    assert_eq!(metrics.snapshot().orch_failures, 3);
+
+    // Activity error shortcuts
+    metrics.record_activity_success();
+    assert_eq!(metrics.snapshot().activity_success, 1);
+
+    metrics.record_activity_app_error();
+    assert_eq!(metrics.snapshot().activity_app_errors, 1);
+
+    metrics.record_activity_infra_error();
+    assert_eq!(metrics.snapshot().activity_infra_errors, 1);
+
+    metrics.record_activity_config_error();
+    assert_eq!(metrics.snapshot().activity_config_errors, 1);
+}
+
+/// Test: ObservabilityHandle lifecycle
+#[tokio::test]
+async fn test_observability_handle_lifecycle() {
+    use duroxide::runtime::observability::{ObservabilityConfig, ObservabilityHandle};
+
+    let config = ObservabilityConfig::default();
+
+    // Init should succeed
+    let handle = ObservabilityHandle::init(&config).unwrap();
+
+    // Should be able to get metrics provider
+    let metrics = handle.metrics_provider();
+    metrics.record_orchestration_start("Test", "1.0", "test");
+
+    // Snapshot should work
+    let snapshot = handle.metrics_snapshot();
+    assert_eq!(snapshot.orch_starts, 1);
+
+    // Shutdown should succeed
+    handle.shutdown().await.unwrap();
+}
+
+/// Test: ObservabilityConfig default values
+#[tokio::test]
+async fn test_observability_config_defaults() {
+    let config = ObservabilityConfig::default();
+    assert_eq!(config.log_format, LogFormat::Pretty);
+    assert_eq!(config.log_level, "info");
+    assert_eq!(config.service_name, "duroxide");
+    assert!(config.service_version.is_none());
+}
+
+/// Test: LogFormat variants
+#[tokio::test]
+async fn test_log_format_variants() {
+    // Test all variants exist and are comparable
+    let json = LogFormat::Json;
+    let pretty = LogFormat::Pretty;
+    let compact = LogFormat::Compact;
+
+    assert_ne!(json, pretty);
+    assert_ne!(pretty, compact);
+    assert_ne!(json, compact);
+
+    // Test Default
+    let default = LogFormat::default();
+    assert_eq!(default, LogFormat::Compact);
+
+    // Test Clone and Debug
+    let cloned = json.clone();
+    assert_eq!(cloned, LogFormat::Json);
+
+    let debug = format!("{:?}", pretty);
+    assert!(debug.contains("Pretty"));
+}

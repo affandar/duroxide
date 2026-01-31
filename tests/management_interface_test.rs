@@ -684,3 +684,268 @@ async fn test_complex_workflow_management() {
     assert_eq!(queues.worker_queue, 0);
     assert_eq!(queues.timer_queue, 0);
 }
+
+// ============================================================================
+// Coverage improvement tests (moved from coverage_improvement_tests.rs)
+// ============================================================================
+
+/// Test: Management API with unknown instance ID returns appropriate errors
+#[tokio::test]
+async fn test_management_unknown_instance_errors() {
+    use duroxide::Event;
+    use duroxide::providers::management::{ExecutionInfo, InstanceInfo};
+    use duroxide::providers::{Provider, ProviderError};
+
+    let store = Arc::new(SqliteProvider::new_in_memory().await.unwrap());
+    let mgmt = store.as_management_capability().unwrap();
+
+    // get_instance_info should return error for unknown instance
+    let result: Result<InstanceInfo, ProviderError> = mgmt.get_instance_info("unknown-instance").await;
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert!(
+        err.message.contains("not found"),
+        "Expected 'not found' error, got: {err}"
+    );
+
+    // get_execution_info should return error for unknown instance
+    let result: Result<ExecutionInfo, ProviderError> = mgmt.get_execution_info("unknown-instance", 1).await;
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert!(
+        err.message.contains("not found"),
+        "Expected 'not found' error, got: {err}"
+    );
+
+    // list_executions should return empty for unknown instance
+    let result: Result<Vec<u64>, ProviderError> = mgmt.list_executions("unknown-instance").await;
+    assert!(result.is_ok());
+    assert!(result.unwrap().is_empty());
+
+    // read_history_with_execution_id should return empty for unknown instance
+    let result: Result<Vec<Event>, ProviderError> = mgmt.read_history_with_execution_id("unknown-instance", 1).await;
+    assert!(result.is_ok());
+    assert!(result.unwrap().is_empty());
+
+    // latest_execution_id returns Ok(1) for unknown instance (per design, default to exec 1)
+    let result: Result<u64, ProviderError> = mgmt.latest_execution_id("unknown-instance").await;
+    assert!(result.is_ok());
+    assert_eq!(result.unwrap(), 1);
+}
+
+/// Test: Management API read_execution for specific execution
+#[tokio::test]
+async fn test_management_read_execution_specific() {
+    let (store, _temp_dir) = common::create_sqlite_store_disk().await;
+    let client = Client::new(store.clone());
+    let mgmt = store.as_management_capability().unwrap();
+
+    let orchestrations = OrchestrationRegistry::builder()
+        .register(
+            "ContinueTest",
+            |ctx: OrchestrationContext, count_str: String| async move {
+                let count: u32 = count_str.parse().unwrap_or(0);
+                if count < 2 {
+                    ctx.continue_as_new((count + 1).to_string()).await
+                } else {
+                    Ok(format!("Final: {count}"))
+                }
+            },
+        )
+        .build();
+
+    let _rt =
+        runtime::Runtime::start_with_store(store.clone(), ActivityRegistry::builder().build(), orchestrations).await;
+
+    client
+        .start_orchestration("read-exec-test", "ContinueTest", "0")
+        .await
+        .unwrap();
+
+    // Wait for completion
+    client
+        .wait_for_orchestration("read-exec-test", Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    // Read each execution's history separately
+    let executions = mgmt.list_executions("read-exec-test").await.unwrap();
+    assert!(executions.len() >= 2, "Should have at least 2 executions");
+
+    for exec_id in &executions {
+        let history = mgmt
+            .read_history_with_execution_id("read-exec-test", *exec_id)
+            .await
+            .unwrap();
+        assert!(!history.is_empty(), "Execution {exec_id} should have history");
+
+        // First event should be OrchestrationStarted
+        let first_event = &history[0];
+        assert!(
+            matches!(&first_event.kind, duroxide::EventKind::OrchestrationStarted { .. }),
+            "First event should be OrchestrationStarted"
+        );
+    }
+
+    // Verify latest_execution_id
+    let latest = mgmt.latest_execution_id("read-exec-test").await.unwrap();
+    assert_eq!(latest, *executions.last().unwrap());
+}
+
+/// Test: Management API get_instance_tree with hierarchy
+#[tokio::test]
+async fn test_management_get_instance_tree() {
+    let (store, _temp_dir) = common::create_sqlite_store_disk().await;
+    let client = Client::new(store.clone());
+    let mgmt = store.as_management_capability().unwrap();
+
+    let activities = ActivityRegistry::builder()
+        .register("SimpleActivity", |_ctx: ActivityContext, input: String| async move {
+            Ok(format!("Processed: {input}"))
+        })
+        .build();
+
+    let orchestrations = OrchestrationRegistry::builder()
+        .register("Parent", |ctx: OrchestrationContext, _input: String| async move {
+            // Spawn child sub-orchestrations
+            let child1 = ctx.schedule_sub_orchestration_with_id("Child", "child-1", "input1".to_string());
+            let child2 = ctx.schedule_sub_orchestration_with_id("Child", "child-2", "input2".to_string());
+            let results = ctx.join(vec![child1, child2]).await;
+            Ok(format!("Children: {:?}", results))
+        })
+        .register("Child", |ctx: OrchestrationContext, input: String| async move {
+            let result = ctx.schedule_activity("SimpleActivity", input).await?;
+            Ok(result)
+        })
+        .build();
+
+    let _rt = runtime::Runtime::start_with_options(
+        store.clone(),
+        activities,
+        orchestrations,
+        RuntimeOptions {
+            dispatcher_min_poll_interval: Duration::from_millis(50),
+            ..Default::default()
+        },
+    )
+    .await;
+
+    client.start_orchestration("parent-1", "Parent", "start").await.unwrap();
+
+    // Wait for completion
+    client
+        .wait_for_orchestration("parent-1", Duration::from_secs(10))
+        .await
+        .unwrap();
+
+    // Get instance tree
+    let tree = mgmt.get_instance_tree("parent-1").await.unwrap();
+    assert_eq!(tree.root_id, "parent-1");
+    assert!(
+        tree.size() >= 3,
+        "Tree should have parent + 2 children, got: {}",
+        tree.size()
+    );
+    assert!(tree.all_ids.contains(&"parent-1".to_string()));
+    assert!(tree.all_ids.contains(&"child-1".to_string()));
+    assert!(tree.all_ids.contains(&"child-2".to_string()));
+    assert!(!tree.is_root_only());
+}
+
+/// Test: Management list_instances_by_status with all status types
+#[tokio::test]
+async fn test_management_all_status_types() {
+    let (store, _temp_dir) = common::create_sqlite_store_disk().await;
+    let client = Client::new(store.clone());
+    let mgmt = store.as_management_capability().unwrap();
+
+    let activities = ActivityRegistry::builder()
+        .register(
+            "OkActivity",
+            |_ctx: ActivityContext, input: String| async move { Ok(input) },
+        )
+        .register("FailActivity", |_ctx: ActivityContext, _: String| async move {
+            Err("Intentional failure".to_string())
+        })
+        .build();
+
+    let orchestrations = OrchestrationRegistry::builder()
+        .register("Completed", |ctx: OrchestrationContext, input: String| async move {
+            ctx.schedule_activity("OkActivity", input).await
+        })
+        .register("Failed", |ctx: OrchestrationContext, input: String| async move {
+            ctx.schedule_activity("FailActivity", input).await
+        })
+        .register(
+            "ContinuedAsNew",
+            |ctx: OrchestrationContext, input: String| async move {
+                let count: u32 = input.parse().unwrap_or(0);
+                if count < 1 {
+                    ctx.continue_as_new((count + 1).to_string()).await
+                } else {
+                    Ok("done".to_string())
+                }
+            },
+        )
+        .register("Running", |ctx: OrchestrationContext, _: String| async move {
+            // Wait for external event that never comes
+            let _event = ctx.schedule_wait("NeverComes").await;
+            Ok("done".to_string())
+        })
+        .build();
+
+    let _rt = runtime::Runtime::start_with_options(
+        store.clone(),
+        activities,
+        orchestrations,
+        RuntimeOptions {
+            dispatcher_min_poll_interval: Duration::from_millis(50),
+            ..Default::default()
+        },
+    )
+    .await;
+
+    // Start orchestrations of each type
+    client
+        .start_orchestration("inst-completed", "Completed", "test")
+        .await
+        .unwrap();
+    client
+        .start_orchestration("inst-failed", "Failed", "test")
+        .await
+        .unwrap();
+    client
+        .start_orchestration("inst-continued", "ContinuedAsNew", "0")
+        .await
+        .unwrap();
+    client
+        .start_orchestration("inst-running", "Running", "test")
+        .await
+        .unwrap();
+
+    // Wait for terminal ones to complete
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    // Test each status filter
+    let completed = mgmt.list_instances_by_status("Completed").await.unwrap();
+    assert!(
+        completed.contains(&"inst-completed".to_string()) || completed.contains(&"inst-continued".to_string()),
+        "Should have completed instances"
+    );
+
+    let failed = mgmt.list_instances_by_status("Failed").await.unwrap();
+    assert!(
+        failed.contains(&"inst-failed".to_string()),
+        "Should have failed instances"
+    );
+
+    let running = mgmt.list_instances_by_status("Running").await.unwrap();
+    assert!(
+        running.contains(&"inst-running".to_string()),
+        "Should have running instances"
+    );
+
+    // Test unknown status returns empty
+    let unknown = mgmt.list_instances_by_status("UnknownStatus").await.unwrap();
+    assert!(unknown.is_empty(), "Unknown status should return empty list");
+}

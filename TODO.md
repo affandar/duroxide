@@ -2,12 +2,7 @@
 
 ### Active TODOs
 
-- add cancellation for unobserved futures (select losers, drops, unawaited out of scope)
-  - Related: [docs/proposals/replay-simplification-PROGRESS.md](docs/proposals/replay-simplification-PROGRESS.md)
-- implement test coverage plan
-  - Related: [docs/proposals/coverage_test_plan.md](docs/proposals/coverage_test_plan.md)
-- move away from Otel, just use standard rust metrics
-- Fetch item batch in dispatchers!!
+- Fetch item batch in dispatchers
 - Size limits 
 - RaiseEvent pub/sub
 - **Rename "Turn" terminology to "ReplayEngine"** - rename `turn` variable to `replay_engine`, `TurnResult` to `ReplayResult`, etc. in `src/runtime/execution.rs` and related files.
@@ -118,6 +113,11 @@
 
 ## DONE
 
+- implement test coverage plan
+  - Related: [docs/proposals/coverage_test_plan.md](docs/proposals/coverage_test_plan.md)
+- move away from Otel, just use standard rust metrics
+- add cancellation for unobserved futures (select losers, drops, unawaited out of scope)
+  - Related: [docs/proposals/replay-simplification-PROGRESS.md](docs/proposals/replay-simplification-PROGRESS.md)
 - **Security: SQL Injection Audit** - Review sqlite.rs for SQL injection vulnerabilities
   - Dynamic SQL with string formatting (e.g., `format!("... IN ({})...")`) needs parameterization
   - Affected areas: `delete_instances_atomic`, `purge_instances`, anywhere using dynamic placeholders
