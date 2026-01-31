@@ -929,7 +929,8 @@ async fn test_instrumented_provider_semantic_equivalence() {
     let metrics = Arc::new(MetricsProvider::new(&config).unwrap());
 
     // Wrap with instrumentation
-    let instrumented: Arc<dyn Provider> = Arc::new(InstrumentedProvider::new(base_provider.clone(), Some(metrics.clone())));
+    let instrumented: Arc<dyn Provider> =
+        Arc::new(InstrumentedProvider::new(base_provider.clone(), Some(metrics.clone())));
 
     // Create start item
     let start_item = WorkItem::StartOrchestration {
@@ -943,7 +944,10 @@ async fn test_instrumented_provider_semantic_equivalence() {
     };
 
     // Enqueue
-    instrumented.enqueue_for_orchestrator(start_item.clone(), None).await.unwrap();
+    instrumented
+        .enqueue_for_orchestrator(start_item.clone(), None)
+        .await
+        .unwrap();
 
     // Fetch
     let result = instrumented
@@ -1008,7 +1012,8 @@ async fn test_instrumented_provider_error_paths() {
     let base_provider = Arc::new(SqliteProvider::new_in_memory().await.unwrap());
     let config = ObservabilityConfig::default();
     let metrics = Arc::new(MetricsProvider::new(&config).unwrap());
-    let instrumented: Arc<dyn Provider> = Arc::new(InstrumentedProvider::new(base_provider.clone(), Some(metrics.clone())));
+    let instrumented: Arc<dyn Provider> =
+        Arc::new(InstrumentedProvider::new(base_provider.clone(), Some(metrics.clone())));
 
     // Try to ack with invalid lock token (should fail)
     let result = instrumented
@@ -1040,7 +1045,10 @@ async fn test_instrumented_provider_management_passthrough() {
 
     // Management capability should pass through
     let mgmt = instrumented.as_management_capability();
-    assert!(mgmt.is_some(), "Management capability should be available through instrumented provider");
+    assert!(
+        mgmt.is_some(),
+        "Management capability should be available through instrumented provider"
+    );
 
     // Should be able to call management methods
     let instances = mgmt.unwrap().list_instances().await.unwrap();

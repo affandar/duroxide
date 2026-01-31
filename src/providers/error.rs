@@ -151,7 +151,10 @@ mod tests {
     fn test_provider_error_from_string() {
         // String errors should be retryable by default (conservative approach)
         let from_string: ProviderError = "Some error message".into();
-        assert!(from_string.is_retryable(), "String errors should be retryable by default");
+        assert!(
+            from_string.is_retryable(),
+            "String errors should be retryable by default"
+        );
         assert_eq!(from_string.operation, "unknown");
         assert_eq!(from_string.message, "Some error message");
 

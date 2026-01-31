@@ -692,9 +692,9 @@ async fn test_complex_workflow_management() {
 /// Test: Management API with unknown instance ID returns appropriate errors
 #[tokio::test]
 async fn test_management_unknown_instance_errors() {
-    use duroxide::providers::{Provider, ProviderError};
-    use duroxide::providers::management::{InstanceInfo, ExecutionInfo};
     use duroxide::Event;
+    use duroxide::providers::management::{ExecutionInfo, InstanceInfo};
+    use duroxide::providers::{Provider, ProviderError};
 
     let store = Arc::new(SqliteProvider::new_in_memory().await.unwrap());
     let mgmt = store.as_management_capability().unwrap();
@@ -703,13 +703,19 @@ async fn test_management_unknown_instance_errors() {
     let result: Result<InstanceInfo, ProviderError> = mgmt.get_instance_info("unknown-instance").await;
     assert!(result.is_err());
     let err = result.unwrap_err();
-    assert!(err.message.contains("not found"), "Expected 'not found' error, got: {err}");
+    assert!(
+        err.message.contains("not found"),
+        "Expected 'not found' error, got: {err}"
+    );
 
     // get_execution_info should return error for unknown instance
     let result: Result<ExecutionInfo, ProviderError> = mgmt.get_execution_info("unknown-instance", 1).await;
     assert!(result.is_err());
     let err = result.unwrap_err();
-    assert!(err.message.contains("not found"), "Expected 'not found' error, got: {err}");
+    assert!(
+        err.message.contains("not found"),
+        "Expected 'not found' error, got: {err}"
+    );
 
     // list_executions should return empty for unknown instance
     let result: Result<Vec<u64>, ProviderError> = mgmt.list_executions("unknown-instance").await;
@@ -748,8 +754,8 @@ async fn test_management_read_execution_specific() {
         )
         .build();
 
-    let _rt = runtime::Runtime::start_with_store(store.clone(), ActivityRegistry::builder().build(), orchestrations)
-        .await;
+    let _rt =
+        runtime::Runtime::start_with_store(store.clone(), ActivityRegistry::builder().build(), orchestrations).await;
 
     client
         .start_orchestration("read-exec-test", "ContinueTest", "0")
@@ -767,7 +773,10 @@ async fn test_management_read_execution_specific() {
     assert!(executions.len() >= 2, "Should have at least 2 executions");
 
     for exec_id in &executions {
-        let history = mgmt.read_history_with_execution_id("read-exec-test", *exec_id).await.unwrap();
+        let history = mgmt
+            .read_history_with_execution_id("read-exec-test", *exec_id)
+            .await
+            .unwrap();
         assert!(!history.is_empty(), "Execution {exec_id} should have history");
 
         // First event should be OrchestrationStarted
@@ -832,7 +841,11 @@ async fn test_management_get_instance_tree() {
     // Get instance tree
     let tree = mgmt.get_instance_tree("parent-1").await.unwrap();
     assert_eq!(tree.root_id, "parent-1");
-    assert!(tree.size() >= 3, "Tree should have parent + 2 children, got: {}", tree.size());
+    assert!(
+        tree.size() >= 3,
+        "Tree should have parent + 2 children, got: {}",
+        tree.size()
+    );
     assert!(tree.all_ids.contains(&"parent-1".to_string()));
     assert!(tree.all_ids.contains(&"child-1".to_string()));
     assert!(tree.all_ids.contains(&"child-2".to_string()));
@@ -847,7 +860,10 @@ async fn test_management_all_status_types() {
     let mgmt = store.as_management_capability().unwrap();
 
     let activities = ActivityRegistry::builder()
-        .register("OkActivity", |_ctx: ActivityContext, input: String| async move { Ok(input) })
+        .register(
+            "OkActivity",
+            |_ctx: ActivityContext, input: String| async move { Ok(input) },
+        )
         .register("FailActivity", |_ctx: ActivityContext, _: String| async move {
             Err("Intentional failure".to_string())
         })
@@ -860,14 +876,17 @@ async fn test_management_all_status_types() {
         .register("Failed", |ctx: OrchestrationContext, input: String| async move {
             ctx.schedule_activity("FailActivity", input).await
         })
-        .register("ContinuedAsNew", |ctx: OrchestrationContext, input: String| async move {
-            let count: u32 = input.parse().unwrap_or(0);
-            if count < 1 {
-                ctx.continue_as_new((count + 1).to_string()).await
-            } else {
-                Ok("done".to_string())
-            }
-        })
+        .register(
+            "ContinuedAsNew",
+            |ctx: OrchestrationContext, input: String| async move {
+                let count: u32 = input.parse().unwrap_or(0);
+                if count < 1 {
+                    ctx.continue_as_new((count + 1).to_string()).await
+                } else {
+                    Ok("done".to_string())
+                }
+            },
+        )
         .register("Running", |ctx: OrchestrationContext, _: String| async move {
             // Wait for external event that never comes
             let _event = ctx.schedule_wait("NeverComes").await;
@@ -887,10 +906,22 @@ async fn test_management_all_status_types() {
     .await;
 
     // Start orchestrations of each type
-    client.start_orchestration("inst-completed", "Completed", "test").await.unwrap();
-    client.start_orchestration("inst-failed", "Failed", "test").await.unwrap();
-    client.start_orchestration("inst-continued", "ContinuedAsNew", "0").await.unwrap();
-    client.start_orchestration("inst-running", "Running", "test").await.unwrap();
+    client
+        .start_orchestration("inst-completed", "Completed", "test")
+        .await
+        .unwrap();
+    client
+        .start_orchestration("inst-failed", "Failed", "test")
+        .await
+        .unwrap();
+    client
+        .start_orchestration("inst-continued", "ContinuedAsNew", "0")
+        .await
+        .unwrap();
+    client
+        .start_orchestration("inst-running", "Running", "test")
+        .await
+        .unwrap();
 
     // Wait for terminal ones to complete
     tokio::time::sleep(Duration::from_secs(2)).await;
@@ -903,13 +934,18 @@ async fn test_management_all_status_types() {
     );
 
     let failed = mgmt.list_instances_by_status("Failed").await.unwrap();
-    assert!(failed.contains(&"inst-failed".to_string()), "Should have failed instances");
+    assert!(
+        failed.contains(&"inst-failed".to_string()),
+        "Should have failed instances"
+    );
 
     let running = mgmt.list_instances_by_status("Running").await.unwrap();
-    assert!(running.contains(&"inst-running".to_string()), "Should have running instances");
+    assert!(
+        running.contains(&"inst-running".to_string()),
+        "Should have running instances"
+    );
 
     // Test unknown status returns empty
     let unknown = mgmt.list_instances_by_status("UnknownStatus").await.unwrap();
     assert!(unknown.is_empty(), "Unknown status should return empty list");
 }
-
