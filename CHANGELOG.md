@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.15] - 2026-01-30
+
+**Release:** <https://crates.io/crates/duroxide/0.1.15>
+
+### Changed
+
+- **Simplified Metrics Facade** - Internal observability uses consistent atomic counters with a cleaner facade pattern
+
+### Added
+
+- **Code Coverage Improvements** - Test coverage improved to 91.9% with better organization
+  - New provider validation tests for error handling, management interface, and observability
+  - Removed duplicate tests that overlapped with provider validation suite
+- **Code Coverage Guide** - New `docs/code-coverage-guide.md` with llvm-cov setup instructions
+- **Copilot Skill for Coverage** - AI assistant skill for code coverage workflows
+
+### Fixed
+
+- **README Markdown Formatting** - Fixed section heading syntax for better rendering
+
+---
+
 ## [0.1.14] - 2026-01-24
 
 **Release:** <https://crates.io/crates/duroxide/0.1.14>
