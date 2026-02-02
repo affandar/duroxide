@@ -722,6 +722,9 @@ impl ReplayEngine {
                     }
                 }
 
+                // Cancellation requests are breadcrumbs only; they do not resolve schedules.
+                EventKind::ActivityCancelRequested { .. } => {}
+
                 EventKind::TimerFired { .. } => {
                     if let Some(source_id) = event.source_event_id {
                         if !open_schedules.contains(&source_id) {
@@ -751,6 +754,9 @@ impl ReplayEngine {
                         must_poll = true;
                     }
                 }
+
+                // Cancellation requests are breadcrumbs only; they do not resolve schedules.
+                EventKind::SubOrchestrationCancelRequested { .. } => {}
 
                 EventKind::ExternalEvent { name, data } => {
                     ctx.inner
@@ -850,7 +856,9 @@ impl ReplayEngine {
         // Return result
         if let Some(output) = output_opt {
             // Collect cancellation information from context before returning
-            self.collect_cancelled_from_context(&ctx);
+            if let Err(r) = self.collect_cancelled_from_context(&ctx) {
+                return r;
+            }
 
             return match output {
                 Ok(result) => TurnResult::Completed(result),
@@ -870,23 +878,329 @@ impl ReplayEngine {
         // 3. DurableFuture::drop() calls mark_token_cancelled() on a ctx that's about to be dropped
         // 4. Next turn creates a fresh OrchestrationContext with empty cancelled_tokens
         // So dehydration drops write to a dying context that no one will read.
-        self.collect_cancelled_from_context(&ctx);
+        if let Err(r) = self.collect_cancelled_from_context(&ctx) {
+            return r;
+        }
 
         TurnResult::Continue
     }
 
-    /// Collect cancelled activity/sub-orchestration IDs from OrchestrationContext
-    fn collect_cancelled_from_context(&mut self, ctx: &OrchestrationContext) {
-        // Collect cancelled activity IDs (already schedule_ids via token binding)
-        self.cancelled_activity_ids.extend(ctx.get_cancelled_activity_ids());
+    /// Collect dropped-future cancellation decisions from the `OrchestrationContext` and reconcile
+    /// them against persisted history.
+    ///
+    /// This function exists because *dropped* durable futures are a real, durable side-effect in
+    /// Duroxide:
+    ///
+    /// - `ctx.schedule_activity(...)` / `ctx.schedule_sub_orchestration(...)` immediately emit a
+    ///   schedule action (durable).
+    /// - If the returned future is later **dropped** (e.g. it loses a `select2`), we must request
+    ///   cancellation of that already-scheduled work.
+    ///
+    /// There are two outputs:
+    ///
+    /// 1) **Provider side-channel** cancellation signals (used to actually cancel work):
+    ///    - `self.cancelled_activity_ids` (lock-stealing activity cancellation)
+    ///    - `self.cancelled_sub_orchestration_ids` (enqueue `CancelInstance`)
+    ///
+    /// 2) **History breadcrumbs** for replay determinism + observability:
+    ///    - `EventKind::ActivityCancelRequested { reason: "dropped_future" }`
+    ///    - `EventKind::SubOrchestrationCancelRequested { reason: "dropped_future" }`
+    ///
+    /// The core problem: when replaying, the runtime must ensure the orchestration makes the
+    /// *same* cancellation decisions for schedules that are already in persisted history.
+    ///
+    /// ---------------------------------------------------------------------------
+    /// Algorithm (high level)
+    /// ---------------------------------------------------------------------------
+    ///
+    /// We compute three pieces of information:
+    ///
+    /// - **Persisted schedules**: schedule IDs that exist in the replayed (persisted) segment.
+    /// - **Persisted dropped-future cancel-requests**: the authoritative record of previously
+    ///   decided dropped-future cancellations.
+    /// - **Context cancellations**: what the current *code* dropped this turn.
+    ///
+    /// Then we compare the persisted cancel-requests against the code’s cancellations, but only
+    /// for schedule IDs that are in the replayed segment.
+    ///
+    /// Pseudocode of the reconciliation:
+    ///
+    /// ```rust
+    /// // 1) Authoritative record from persisted history
+    /// let baseline_cancelled = { source_event_id of *CancelRequested(reason="dropped_future") };
+    ///
+    /// // 2) Which schedule IDs are actually part of the replayed segment
+    /// let baseline_schedules = { event_id of *Scheduled events in persisted history };
+    ///
+    /// // 3) What this run’s code dropped (can include new schedules created this turn)
+    /// let ctx_cancelled_all = ctx.get_cancelled_*();
+    ///
+    /// // 4) Restrict to the replayed segment to avoid false positives
+    /// let ctx_cancelled_in_replayed_segment = ctx_cancelled_all ∩ baseline_schedules;
+    ///
+    /// // 5) If we already have a persisted record of dropped-future cancellations, enforce it
+    /// if baseline_cancelled is non-empty {
+    ///     assert_eq!(baseline_cancelled, ctx_cancelled_in_replayed_segment);
+    /// }
+    /// ```
+    ///
+    /// ---------------------------------------------------------------------------
+    /// Why do we intersect with persisted schedules?
+    /// ---------------------------------------------------------------------------
+    ///
+    /// `ctx.get_cancelled_activity_ids()` / `ctx.get_cancelled_sub_orchestration_cancellations()`
+    /// report **everything dropped by code in this turn**, including:
+    ///
+    /// - Drops of futures for schedules created in the replayed (persisted) segment
+    /// - Drops of futures for schedules created **this turn** (not yet persisted)
+    ///
+    /// Only the first category is meaningful for replay determinism checks.
+    ///
+    /// Without the intersection, we would get false nondeterminism failures whenever replay is
+    /// happening *and* the current turn also schedules & drops a new future.
+    ///
+    /// ---------------------------------------------------------------------------
+    /// Why is the enforcement gated on “baseline cancel-requests is non-empty”?
+    /// ---------------------------------------------------------------------------
+    ///
+    /// The first turn that *introduces* a `dropped_future` cancellation request cannot possibly
+    /// have that event in persisted history yet.
+    ///
+    /// Example:
+    ///
+    /// ```rust
+    /// // Turn 1 persisted:
+    /// //   ActivityScheduled(id=2)
+    /// //   TimerCreated(id=3)
+    /// // Turn 2 (current): TimerFired arrives, code does select2(timer wins) and drops activity
+    /// //   -> we need to emit ActivityCancelRequested(id=2, reason="dropped_future") now
+    /// ```
+    ///
+    /// On that “introduction” turn:
+    /// - `baseline_dropped_future_cancel_requests_*` is empty (not persisted yet)
+    /// - `ctx_cancelled_*_in_replayed_segment` contains the dropped schedule
+    ///
+    /// If we enforced equality unconditionally, we’d incorrectly treat every normal first-time
+    /// dropped-future cancellation as nondeterminism.
+    ///
+    /// Once the cancel-request breadcrumb is persisted, subsequent replays can enforce it.
+    ///
+    /// ---------------------------------------------------------------------------
+    /// What kinds of issues does this catch?
+    /// ---------------------------------------------------------------------------
+    ///
+    /// (A) **Removed drop** (code no longer drops a future that history says was dropped)
+    ///
+    /// - Persisted history has `*CancelRequested(reason="dropped_future", source_event_id=X)`
+    /// - Current code no longer drops that future during replay
+    /// - Result: set mismatch → nondeterminism
+    ///
+    /// This is the most common “why did this suddenly start failing?” scenario during refactors.
+    ///
+    /// (B) **Added drop** for a schedule in the replayed segment
+    ///
+    /// - If the baseline already contains at least one persisted dropped-future cancel-request
+    ///   (anywhere), the enforcement gate is “on” and extra cancellations in the replayed segment
+    ///   will be detected as nondeterminism.
+    /// - If the baseline contains *zero* dropped-future cancel-requests, adding a drop is treated
+    ///   as an “introduction” turn and will not be rejected until the breadcrumb is persisted.
+    ///
+    /// ---------------------------------------------------------------------------
+    /// What kinds of issues does this NOT catch?
+    /// ---------------------------------------------------------------------------
+    ///
+    /// (1) **Timing/order changes** for a drop within the same turn
+    ///
+    /// The check is set-based (membership), not order-based. If you move a `drop(fut)` to happen
+    /// later (e.g., after awaiting something else) but it still happens by the end of the turn,
+    /// the same schedule ID will appear in `ctx_cancelled_*` and the sets will still match.
+    ///
+    /// (2) **Non-"dropped_future" cancellation reasons**
+    ///
+    /// We only reconcile the `reason == "dropped_future"` stream here. Terminal cleanup
+    /// cancellations (e.g. orchestration failed/completed/continued-as-new) are produced outside
+    /// the replay engine and may legitimately vary in when/how they’re emitted.
+    ///
+    /// ---------------------------------------------------------------------------
+    /// Side-channel emission policy (important for debugging “why didn’t it cancel again?”)
+    /// ---------------------------------------------------------------------------
+    ///
+    /// We only emit provider side-channel cancellations when we also record a NEW cancellation
+    /// request event in history_delta. If the cancellation-request breadcrumb already exists in
+    /// persisted history, replay drops do NOT re-send the side-channel every turn.
+    ///
+    /// This prevents redundant provider operations and makes replay idempotent.
+    fn collect_cancelled_from_context(&mut self, ctx: &OrchestrationContext) -> Result<(), TurnResult> {
+        // Collect cancellation decisions from the context.
+        //
+        // NOTE: We only emit provider side-channel cancellations when we also record a NEW
+        // cancellation-request event this turn. If the cancellation-request is already present
+        // in persisted history, re-sending the side-channel on every replay turn is redundant.
+        let cancelled_activities = ctx.get_cancelled_activity_ids();
+        let cancelled_sub_orchs = ctx.get_cancelled_sub_orchestration_cancellations();
 
-        // Collect cancelled sub-orchestration instance IDs
-        // The context now directly returns resolved instance IDs via the token→instance mapping
-        self.cancelled_sub_orchestration_ids
-            .extend(ctx.get_cancelled_sub_orchestration_ids());
+        // If we're replaying, enforce that dropped-future cancellation decisions match persisted history.
+        //
+        // We only validate the "dropped_future" reason stream, since other cancellation-request events
+        // (e.g., terminal cleanup) may be emitted outside the replay engine.
+        if self.persisted_history_len > 0 {
+            let baseline_dropped_future_cancel_requests_activity: HashSet<u64> = self.baseline_history
+                [..self.persisted_history_len]
+                .iter()
+                .filter_map(|e| {
+                    if let EventKind::ActivityCancelRequested { reason } = &e.kind
+                        && reason == "dropped_future"
+                    {
+                        e.source_event_id
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            let baseline_dropped_future_cancel_requests_sub_orch: HashSet<u64> = self.baseline_history
+                [..self.persisted_history_len]
+                .iter()
+                .filter_map(|e| {
+                    if let EventKind::SubOrchestrationCancelRequested { reason } = &e.kind
+                        && reason == "dropped_future"
+                    {
+                        e.source_event_id
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            // Only compare cancellation decisions for schedules that are part of the persisted
+            // history segment. This avoids false positives when the current turn produces NEW
+            // cancellation decisions for schedules created this turn (not yet persisted).
+            let baseline_persisted_activity_schedules: HashSet<u64> = self.baseline_history[..self.persisted_history_len]
+                .iter()
+                .filter_map(|e| match &e.kind {
+                    EventKind::ActivityScheduled { .. } => Some(e.event_id()),
+                    _ => None,
+                })
+                .collect();
+
+            let baseline_persisted_sub_orch_schedules: HashSet<u64> =
+                self.baseline_history[..self.persisted_history_len]
+                .iter()
+                .filter_map(|e| match &e.kind {
+                    EventKind::SubOrchestrationScheduled { .. } => Some(e.event_id()),
+                    _ => None,
+                })
+                .collect();
+
+            let ctx_cancelled_activity_schedules_all: HashSet<u64> = cancelled_activities.iter().copied().collect();
+            let ctx_cancelled_sub_orch_schedules_all: HashSet<u64> =
+                cancelled_sub_orchs.iter().map(|(id, _)| *id).collect();
+
+            // Only compare cancellation decisions for schedules that are part of the persisted
+            // history segment. This avoids false positives when the current turn produces NEW
+            // cancellation decisions for schedules created this turn (not yet persisted).
+            let ctx_cancelled_activity_schedules_in_replayed_segment: HashSet<u64> =
+                ctx_cancelled_activity_schedules_all
+                    .intersection(&baseline_persisted_activity_schedules)
+                    .copied()
+                    .collect();
+            let ctx_cancelled_sub_orch_schedules_in_replayed_segment: HashSet<u64> =
+                ctx_cancelled_sub_orch_schedules_all
+                    .intersection(&baseline_persisted_sub_orch_schedules)
+                .copied()
+                .collect();
+
+            // Only enforce when the persisted history already includes cancellation-request events.
+            // On the first execution of a turn that introduces cancellation-request events, the
+            // persisted history will not yet contain them.
+            if !baseline_dropped_future_cancel_requests_activity.is_empty()
+                || !baseline_dropped_future_cancel_requests_sub_orch.is_empty()
+            {
+                if baseline_dropped_future_cancel_requests_activity
+                    != ctx_cancelled_activity_schedules_in_replayed_segment
+                {
+                    return Err(TurnResult::Failed(nondeterminism_error(&format!(
+                        "cancellation mismatch (activities): baseline_dropped_future_cancel_requests={baseline_dropped_future_cancel_requests_activity:?} ctx_cancelled_in_replayed_segment={ctx_cancelled_activity_schedules_in_replayed_segment:?}"
+                    ))));
+                }
+
+                if baseline_dropped_future_cancel_requests_sub_orch
+                    != ctx_cancelled_sub_orch_schedules_in_replayed_segment
+                {
+                    return Err(TurnResult::Failed(nondeterminism_error(&format!(
+                        "cancellation mismatch (sub-orchestrations): baseline_dropped_future_cancel_requests={baseline_dropped_future_cancel_requests_sub_orch:?} ctx_cancelled_in_replayed_segment={ctx_cancelled_sub_orch_schedules_in_replayed_segment:?}"
+                    ))));
+                }
+            }
+        }
+
+        // Emit history events recording cancellation decisions (requested-only), and emit the
+        // provider side-channel ONLY when the cancellation-request is new.
+        //
+        // These are best-effort: a completion may still arrive after a cancellation request.
+        // We avoid emitting duplicates if a cancellation request already exists.
+        let mut already_cancelled_activity: HashSet<u64> = HashSet::new();
+        let mut already_cancelled_sub_orch: HashSet<u64> = HashSet::new();
+        for e in self.baseline_history.iter().chain(self.history_delta.iter()) {
+            match &e.kind {
+                EventKind::ActivityCancelRequested { .. } => {
+                    if let Some(src) = e.source_event_id {
+                        already_cancelled_activity.insert(src);
+                    }
+                }
+                EventKind::SubOrchestrationCancelRequested { .. } => {
+                    if let Some(src) = e.source_event_id {
+                        already_cancelled_sub_orch.insert(src);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        for schedule_id in cancelled_activities {
+            if already_cancelled_activity.insert(schedule_id) {
+                // Side-channel: provider lock-stealing (only once per cancellation-request).
+                self.cancelled_activity_ids.push(schedule_id);
+
+                // History breadcrumb: replay determinism + audit trail.
+                let event_id = self.next_event_id;
+                self.next_event_id += 1;
+                self.history_delta.push(Event::with_event_id(
+                    event_id,
+                    self.instance.clone(),
+                    self.execution_id,
+                    Some(schedule_id),
+                    EventKind::ActivityCancelRequested {
+                        reason: "dropped_future".to_string(),
+                    },
+                ));
+            }
+        }
+
+        for (schedule_id, child_instance_id) in cancelled_sub_orchs {
+            if already_cancelled_sub_orch.insert(schedule_id) {
+                // Side-channel: enqueue CancelInstance (only once per cancellation-request).
+                self.cancelled_sub_orchestration_ids.push(child_instance_id);
+
+                // History breadcrumb: replay determinism + audit trail.
+                let event_id = self.next_event_id;
+                self.next_event_id += 1;
+                self.history_delta.push(Event::with_event_id(
+                    event_id,
+                    self.instance.clone(),
+                    self.execution_id,
+                    Some(schedule_id),
+                    EventKind::SubOrchestrationCancelRequested {
+                        reason: "dropped_future".to_string(),
+                    },
+                ));
+            }
+        }
 
         // Clear the context's cancelled tokens (avoid re-processing if called again)
         ctx.clear_cancelled_tokens();
+
+        Ok(())
     }
 
     /// Helper to match and bind schedule events.

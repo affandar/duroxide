@@ -2,14 +2,8 @@
 
 ### Active TODOs
 
-- Fetch item batch in dispatchers
 - Size limits 
 - RaiseEvent pub/sub
-- **Rename "Turn" terminology to "ReplayEngine"** - rename `turn` variable to `replay_engine`, `TurnResult` to `ReplayResult`, etc. in `src/runtime/execution.rs` and related files.
-- **Provider validation test for orphan activities** (issue #37)
-  - Test scenario: instance deleted while activities in worker queue (without `CancelInstance`)
-  - Blocked: Provider trait needs `delete_instance` or `archive_instance` method first
-  - Related: `proposals/activity-cancellation-queue-flag.md`
 - **Nested Select2 Support** - Enable `select2(select2(a, b), c)` composition
   - Currently `select2` only accepts `DurableFuture`, not `SelectFuture`
   - Options: (1) Add trait for select2 args that both types implement, (2) Add `SelectFuture::into_selectable()` wrapper
@@ -23,6 +17,10 @@
   - Also consider: `InstanceInfo`, `ExecutionInfo`, `QueueDepths`, `SystemMetrics`
   - Benefit: Cleaner separation, users don't conceptually depend on "providers" module
   - Complexity: Low - just move definitions and update imports
+
+- **Provider/runtime boundary leaks**
+  - Capture and address cases where providers must understand runtime semantics (WorkItem routing, identity extraction, metadata reconstruction, event indexing, cancellation coupling)
+  - See: docs/proposals/provider-runtime-boundary-issues.md
 
 - **Cancel unobserved sub-orchestrations** (orphan cleanup)
   - Cancel sub-orchestrations when we have a confirmed unobserved DurableFuture
@@ -48,7 +46,6 @@
   - Would enable retry metrics, custom business metrics from orchestration code
   - Must be deterministic (recorded as SystemCall events for replay)
   - Complexity: Medium - extend SystemCall machinery, wire to MetricsProvider
-- Full e2e Otel test
 - Wire up suborchestration metrics, requires some linkage of names between suborch -> parent in the replayengine
 - move stress tests to cargo standard "bench"
 - separate execution loops for orchestrations and activities, communicate through channels
@@ -113,6 +110,11 @@
 
 ## DONE
 
+- **Rename "Turn" terminology to "ReplayEngine"** - rename `turn` variable to `replay_engine`, `TurnResult` to `ReplayResult`, etc. in `src/runtime/execution.rs` and related files.
+- **Provider validation test for orphan activities** (issue #37)
+  - Test scenario: instance deleted while activities in worker queue (without `CancelInstance`)
+  - Blocked: Provider trait needs `delete_instance` or `archive_instance` method first
+  - Related: `proposals/activity-cancellation-queue-flag.md`
 - implement test coverage plan
   - Related: [docs/proposals/coverage_test_plan.md](docs/proposals/coverage_test_plan.md)
 - move away from Otel, just use standard rust metrics
@@ -210,6 +212,8 @@
 
 ## POSTPONED
 
+- Full e2e Otel test
+- Fetch item batch in dispatchers
 - RaiseEvent should target any Wait for Event, even if it was to come in the future.
 - Add a Cancelled OrchestrationStatus
 - clients should be able to query registered activities and orchestrations

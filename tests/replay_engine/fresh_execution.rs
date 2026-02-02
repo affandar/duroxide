@@ -194,5 +194,22 @@ fn multiple_schedules_no_await() {
 
     assert_completed(&result, "done");
     assert_eq!(engine.pending_actions().len(), 3, "Three pending actions expected");
-    assert_eq!(engine.history_delta().len(), 3, "Three history delta events expected");
+
+    // The three schedules will be recorded in history.
+    // Note: because the orchestration returns immediately without awaiting the futures,
+    // those futures are dropped at end-of-turn and the replay engine records
+    // ActivityCancelRequested events as deterministic breadcrumbs.
+    let scheduled = engine
+        .history_delta()
+        .iter()
+        .filter(|e| matches!(&e.kind, duroxide::EventKind::ActivityScheduled { .. }))
+        .count();
+    assert_eq!(scheduled, 3, "Three ActivityScheduled events expected");
+
+    let cancel_requested = engine
+        .history_delta()
+        .iter()
+        .filter(|e| matches!(&e.kind, duroxide::EventKind::ActivityCancelRequested { .. }))
+        .count();
+    assert_eq!(cancel_requested, 3, "Three ActivityCancelRequested events expected");
 }

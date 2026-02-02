@@ -25,9 +25,24 @@ fn sequential_allocation() {
 
     assert_completed(&result, "done");
 
-    // Should have allocated IDs 2, 3, 4
+    // The three schedules should be allocated IDs 2, 3, 4.
+    // Note: the unawaited futures are dropped at end-of-turn, which also emits
+    // ActivityCancelRequested events (and consumes additional event IDs).
+    let scheduled_ids: Vec<u64> = engine
+        .history_delta()
+        .iter()
+        .filter(|e| matches!(&e.kind, duroxide::EventKind::ActivityScheduled { .. }))
+        .map(|e| e.event_id())
+        .collect();
+    assert_eq!(scheduled_ids, vec![2, 3, 4], "Scheduled event IDs should start at 2");
+
+    // Regardless of event type, allocation should be contiguous starting at 2.
     let ids = delta_event_ids(&engine);
-    assert_eq!(ids, vec![2, 3, 4], "Event IDs should be sequential starting from 2");
+    assert_eq!(ids.first().copied(), Some(2), "First delta event ID should be 2");
+    assert!(
+        ids.windows(2).all(|w| w[1] == w[0] + 1),
+        "Event IDs should be sequential starting from 2, got {ids:?}"
+    );
 }
 
 /// Allocation after replay continues from max event_id.

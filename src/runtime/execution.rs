@@ -298,11 +298,28 @@ impl Runtime {
                 };
                 history_mgr.append_failed(details.clone());
 
-                // Propagate cancellation to children
-                let cancel_work_items = self
-                    .get_child_cancellation_work_items(instance, history_mgr.full_history_iter())
-                    .await;
-                orchestrator_items.extend(cancel_work_items);
+                // Propagate cancellation to children.
+                // Also record SubOrchestrationCancelRequested events in the *parent* history
+                // for observability/debugging.
+                let child_cancellations = Self::get_child_cancellation_targets(history_mgr.full_history_iter());
+
+                for (schedule_id, child_suffix) in child_cancellations {
+                    let next_id = history_mgr.next_event_id();
+                    history_mgr.append(Event::with_event_id(
+                        next_id,
+                        instance,
+                        execution_id,
+                        Some(schedule_id),
+                        EventKind::SubOrchestrationCancelRequested {
+                            reason: "orchestration_terminal_failed".to_string(),
+                        },
+                    ));
+
+                    orchestrator_items.push(WorkItem::CancelInstance {
+                        instance: crate::build_child_instance_id(instance, &child_suffix),
+                        reason: "parent canceled".to_string(),
+                    });
+                }
 
                 // Notify parent if this is a sub-orchestration
                 if let Some((parent_instance, parent_id)) = parent_link {
@@ -337,19 +354,18 @@ impl Runtime {
         )
     }
 
-    /// Get work items to cancel child sub-orchestrations
-    async fn get_child_cancellation_work_items(
-        &self,
-        instance: &str,
-        history: impl Iterator<Item = &Event>,
-    ) -> Vec<WorkItem> {
+    /// Get cancellation targets for child sub-orchestrations.
+    ///
+    /// Returns `(scheduling_event_id, child_instance_suffix)` for children that were scheduled
+    /// but have not yet completed/failed.
+    fn get_child_cancellation_targets<'a>(history: impl Iterator<Item = &'a Event>) -> Vec<(u64, String)> {
         // Single-pass collection of scheduled children and completed IDs
-        let (scheduled_children, completed_ids) = history.fold(
-            (Vec::new(), std::collections::HashSet::new()),
+        let (scheduled_children, completed_ids): (Vec<(u64, String)>, std::collections::HashSet<u64>) = history.fold(
+            (Vec::new(), std::collections::HashSet::<u64>::new()),
             |(mut scheduled, mut completed), e| {
                 match &e.kind {
                     EventKind::SubOrchestrationScheduled { instance: child, .. } => {
-                        scheduled.push((e.event_id, child.clone()));
+                        scheduled.push((e.event_id(), child.clone()));
                     }
                     EventKind::SubOrchestrationCompleted { .. } | EventKind::SubOrchestrationFailed { .. } => {
                         if let Some(source_id) = e.source_event_id {
@@ -362,16 +378,10 @@ impl Runtime {
             },
         );
 
-        // Create cancel work items for uncompleted children
-        let mut cancel_items = Vec::new();
-        for (id, child_suffix) in scheduled_children {
-            if !completed_ids.contains(&id) {
-                cancel_items.push(WorkItem::CancelInstance {
-                    instance: crate::build_child_instance_id(instance, &child_suffix),
-                    reason: "parent canceled".to_string(),
-                });
-            }
-        }
-        cancel_items
+        // Return cancellation targets for uncompleted children
+        scheduled_children
+            .into_iter()
+            .filter(|(id, _child_suffix)| !completed_ids.contains(id))
+            .collect()
     }
 }

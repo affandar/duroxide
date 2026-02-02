@@ -979,6 +979,11 @@ pub enum EventKind {
     #[serde(rename = "ActivityFailed")]
     ActivityFailed { details: ErrorDetails },
 
+    /// Cancellation was requested for an activity (best-effort; completion may still arrive).
+    /// Correlates to the ActivityScheduled event via Event.source_event_id.
+    #[serde(rename = "ActivityCancelRequested")]
+    ActivityCancelRequested { reason: String },
+
     /// Timer was created and will logically fire at `fire_at_ms`.
     #[serde(rename = "TimerCreated")]
     TimerCreated { fire_at_ms: u64 },
@@ -1018,6 +1023,11 @@ pub enum EventKind {
     /// Sub-orchestration failed and returned error details to the parent.
     #[serde(rename = "SubOrchestrationFailed")]
     SubOrchestrationFailed { details: ErrorDetails },
+
+    /// Cancellation was requested for a sub-orchestration (best-effort; completion may still arrive).
+    /// Correlates to the SubOrchestrationScheduled event via Event.source_event_id.
+    #[serde(rename = "SubOrchestrationCancelRequested")]
+    SubOrchestrationCancelRequested { reason: String },
 
     /// Orchestration continued as new with fresh input (terminal for this execution).
     #[serde(rename = "OrchestrationContinuedAsNew")]
@@ -1480,19 +1490,24 @@ impl CtxInner {
         ids
     }
 
-    /// Get cancelled sub-orchestration instance IDs.
-    fn get_cancelled_sub_orchestration_ids(&self) -> Vec<String> {
-        let mut ids = Vec::new();
+    /// Get cancelled sub-orchestration cancellations.
+    ///
+    /// Returns `(scheduling_event_id, child_instance_id)` for sub-orchestration futures that were
+    /// bound (schedule_id assigned) and then dropped.
+    fn get_cancelled_sub_orchestration_cancellations(&self) -> Vec<(u64, String)> {
+        let mut cancels = Vec::new();
         for &token in &self.cancelled_tokens {
-            if let Some(ScheduleKind::SubOrchestration { token: sub_token }) = self.cancelled_token_kinds.get(&token) {
+            if let Some(ScheduleKind::SubOrchestration { token: sub_token }) = self.cancelled_token_kinds.get(&token)
+                && let Some(&schedule_id) = self.token_bindings.get(&token)
+            {
                 // Look up the resolved instance ID from our mapping
                 if let Some(instance_id) = self.sub_orchestration_instances.get(sub_token) {
-                    ids.push(instance_id.clone());
+                    cancels.push((schedule_id, instance_id.clone()));
                 }
                 // If not in mapping, the action wasn't bound yet - nothing to cancel
             }
         }
-        ids
+        cancels
     }
 
     /// Bind a sub-orchestration token to its resolved instance ID.
@@ -1943,9 +1958,12 @@ impl OrchestrationContext {
         self.inner.lock().unwrap().get_cancelled_activity_ids()
     }
 
-    /// Get cancelled sub-orchestration instance IDs for this turn.
-    pub(crate) fn get_cancelled_sub_orchestration_ids(&self) -> Vec<String> {
-        self.inner.lock().unwrap().get_cancelled_sub_orchestration_ids()
+    /// Get cancelled sub-orchestration cancellations for this turn.
+    pub(crate) fn get_cancelled_sub_orchestration_cancellations(&self) -> Vec<(u64, String)> {
+        self.inner
+            .lock()
+            .unwrap()
+            .get_cancelled_sub_orchestration_cancellations()
     }
 
     /// Clear cancelled tokens after processing (called by replay engine).

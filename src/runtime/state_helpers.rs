@@ -320,9 +320,33 @@ impl HistoryManager {
             })
             .collect();
 
-        // In-flight = scheduled - completed
+        // Collect all activity cancellation request source_event_ids.
+        // These are best-effort, but once recorded they reflect a deterministic cancellation decision.
+        //
+        // IMPORTANT: This scans the *full history* (persisted history + this turn's delta).
+        // That means an ActivityCancelRequested appended in the current turn (not yet persisted)
+        // will exclude the activity from the "in-flight" set.
+        //
+        // This is intentional and safe:
+        // - Terminal cancellation and select-loser cancellation are applied in the same provider
+        //   ack that persists this turn's delta, so the cancel-request event and the cancellation
+        //   side-effect are committed (or retried) together.
+        // - Excluding them here prevents double-canceling the same activity within a single turn.
+        let cancel_requested: std::collections::HashSet<u64> = self
+            .full_history_iter()
+            .filter_map(|e| {
+                if matches!(&e.kind, EventKind::ActivityCancelRequested { .. }) {
+                    e.source_event_id
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        // In-flight = scheduled - completed - cancel_requested
         scheduled
             .difference(&completed)
+            .filter(|id| !cancel_requested.contains(id))
             .map(|&activity_id| ScheduledActivityIdentifier {
                 instance: instance.to_string(),
                 execution_id,

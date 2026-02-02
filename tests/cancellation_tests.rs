@@ -5,10 +5,17 @@
 use duroxide::Client;
 use duroxide::Either2;
 use duroxide::EventKind;
+use async_trait::async_trait;
+use duroxide::providers::error::ProviderError;
+use duroxide::providers::{
+    ExecutionMetadata, OrchestrationItem, Provider, ProviderAdmin, ScheduledActivityIdentifier, WorkItem,
+};
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
 use duroxide::{ActivityContext, OrchestrationContext, OrchestrationRegistry};
 mod common;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 #[tokio::test]
@@ -790,6 +797,26 @@ async fn select2_loser_activity_receives_cancellation_signal() {
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
+
+    // Persisted history should include an ActivityCancelRequested correlated to the scheduled loser.
+    let hist = store.read("inst-select2-loser-cancel").await.unwrap_or_default();
+    let scheduled_id = hist.iter().find_map(|e| {
+        if let EventKind::ActivityScheduled { name, .. } = &e.kind
+            && name == "LongActivity"
+        {
+            Some(e.event_id())
+        } else {
+            None
+        }
+    });
+    let scheduled_id = scheduled_id.expect("Expected LongActivity to be scheduled");
+    assert!(
+        hist.iter().any(|e| {
+            matches!(&e.kind, EventKind::ActivityCancelRequested { reason } if reason == "dropped_future")
+                && e.source_event_id == Some(scheduled_id)
+        }),
+        "Expected ActivityCancelRequested(source_event_id={scheduled_id}, reason=dropped_future) in persisted history"
+    );
 
     rt.shutdown(None).await;
 }
@@ -1866,6 +1893,412 @@ async fn explicit_drop_sub_orchestration_cancelled() {
             }
         }
     }
+
+    rt.shutdown(None).await;
+}
+
+// ============================================================================
+// Combined CancelInstance (User + Dropped Future) Test
+// ============================================================================
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum CancelInstanceEnqueueSource {
+    EnqueueForOrchestrator,
+    AckOrchestrationItem,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RecordedCancelInstance {
+    instance: String,
+    reason: String,
+    source: CancelInstanceEnqueueSource,
+}
+
+/// Provider wrapper that records all enqueued `WorkItem::CancelInstance` items.
+///
+/// We record both:
+/// - `enqueue_for_orchestrator` (e.g., user calls `Client::cancel_instance`)
+/// - `ack_orchestration_item` orchestrator_items (runtime enqueues cancellations like dropped-future sub-orch cancels)
+struct RecordingProvider {
+    inner: Arc<dyn Provider>,
+    cancel_instances: Mutex<Vec<RecordedCancelInstance>>,
+    /// If false, we will defer processing of the child instance by abandoning the lock.
+    /// This makes the test deterministic: we can ensure multiple CancelInstance messages are
+    /// present in the SAME fetched turn for the child.
+    allow_child_fetch: AtomicBool,
+    /// For each time the child instance is fetched for a turn, record the CancelInstance reasons
+    /// present in that fetched message batch.
+    child_cancel_reasons_by_fetch: Mutex<Vec<Vec<String>>>,
+}
+
+impl RecordingProvider {
+    fn new(inner: Arc<dyn Provider>) -> Self {
+        Self {
+            inner,
+            cancel_instances: Mutex::new(Vec::new()),
+            allow_child_fetch: AtomicBool::new(false),
+            child_cancel_reasons_by_fetch: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn cancel_instance_records(&self) -> Vec<RecordedCancelInstance> {
+        self.cancel_instances
+            .lock()
+            .expect("Mutex should not be poisoned")
+            .clone()
+    }
+
+    fn record_cancel_instance(&self, instance: &str, reason: &str, source: CancelInstanceEnqueueSource) {
+        self.cancel_instances
+            .lock()
+            .expect("Mutex should not be poisoned")
+            .push(RecordedCancelInstance {
+                instance: instance.to_string(),
+                reason: reason.to_string(),
+                source,
+            });
+    }
+
+    fn allow_child_fetch(&self) {
+        self.allow_child_fetch.store(true, Ordering::SeqCst);
+    }
+
+    fn child_cancel_reasons_by_fetch(&self) -> Vec<Vec<String>> {
+        self.child_cancel_reasons_by_fetch
+            .lock()
+            .expect("Mutex should not be poisoned")
+            .clone()
+    }
+}
+
+#[async_trait]
+impl Provider for RecordingProvider {
+    async fn fetch_orchestration_item(
+        &self,
+        lock_timeout: Duration,
+        poll_timeout: Duration,
+    ) -> Result<Option<(OrchestrationItem, String, u32)>, ProviderError> {
+        let result = self
+            .inner
+            .fetch_orchestration_item(lock_timeout, poll_timeout)
+            .await?;
+
+        if let Some((item, lock_token, attempt_count)) = result {
+            if item.instance == "combo-child"
+                && !self.allow_child_fetch.load(Ordering::SeqCst)
+            {
+                // Defer processing the child instance until the test is ready.
+                // This allows both CancelInstance messages to accumulate and then be delivered
+                // together in a single fetched turn.
+                self.inner
+                    .abandon_orchestration_item(&lock_token, Some(Duration::from_millis(25)), true)
+                    .await?;
+                return Ok(None);
+            }
+
+            if item.instance == "combo-child" {
+                let reasons: Vec<String> = item
+                    .messages
+                    .iter()
+                    .filter_map(|m| match m {
+                        WorkItem::CancelInstance { reason, .. } => Some(reason.clone()),
+                        _ => None,
+                    })
+                    .collect();
+                self.child_cancel_reasons_by_fetch
+                    .lock()
+                    .expect("Mutex should not be poisoned")
+                    .push(reasons);
+            }
+
+            return Ok(Some((item, lock_token, attempt_count)));
+        }
+
+        Ok(None)
+    }
+
+    async fn fetch_work_item(
+        &self,
+        lock_timeout: Duration,
+        poll_timeout: Duration,
+    ) -> Result<Option<(WorkItem, String, u32)>, ProviderError> {
+        self.inner.fetch_work_item(lock_timeout, poll_timeout).await
+    }
+
+    async fn ack_orchestration_item(
+        &self,
+        lock_token: &str,
+        execution_id: u64,
+        history_delta: Vec<duroxide::Event>,
+        worker_items: Vec<WorkItem>,
+        orchestrator_items: Vec<WorkItem>,
+        metadata: ExecutionMetadata,
+        cancelled_activities: Vec<ScheduledActivityIdentifier>,
+    ) -> Result<(), ProviderError> {
+        for item in &orchestrator_items {
+            if let WorkItem::CancelInstance { instance, reason } = item {
+                self.record_cancel_instance(instance, reason, CancelInstanceEnqueueSource::AckOrchestrationItem);
+            }
+        }
+
+        self.inner
+            .ack_orchestration_item(
+                lock_token,
+                execution_id,
+                history_delta,
+                worker_items,
+                orchestrator_items,
+                metadata,
+                cancelled_activities,
+            )
+            .await
+    }
+
+    async fn abandon_orchestration_item(
+        &self,
+        lock_token: &str,
+        delay: Option<Duration>,
+        ignore_attempt: bool,
+    ) -> Result<(), ProviderError> {
+        self.inner
+            .abandon_orchestration_item(lock_token, delay, ignore_attempt)
+            .await
+    }
+
+    async fn ack_work_item(&self, token: &str, completion: Option<WorkItem>) -> Result<(), ProviderError> {
+        self.inner.ack_work_item(token, completion).await
+    }
+
+    async fn renew_work_item_lock(&self, token: &str, extension: Duration) -> Result<(), ProviderError> {
+        self.inner.renew_work_item_lock(token, extension).await
+    }
+
+    async fn abandon_work_item(
+        &self,
+        token: &str,
+        delay: Option<Duration>,
+        ignore_attempt: bool,
+    ) -> Result<(), ProviderError> {
+        self.inner.abandon_work_item(token, delay, ignore_attempt).await
+    }
+
+    async fn renew_orchestration_item_lock(&self, token: &str, extend_for: Duration) -> Result<(), ProviderError> {
+        self.inner.renew_orchestration_item_lock(token, extend_for).await
+    }
+
+    async fn enqueue_for_orchestrator(&self, item: WorkItem, delay: Option<Duration>) -> Result<(), ProviderError> {
+        if let WorkItem::CancelInstance { instance, reason } = &item {
+            self.record_cancel_instance(instance, reason, CancelInstanceEnqueueSource::EnqueueForOrchestrator);
+        }
+        self.inner.enqueue_for_orchestrator(item, delay).await
+    }
+
+    async fn enqueue_for_worker(&self, item: WorkItem) -> Result<(), ProviderError> {
+        self.inner.enqueue_for_worker(item).await
+    }
+
+    async fn read(&self, instance: &str) -> Result<Vec<duroxide::Event>, ProviderError> {
+        self.inner.read(instance).await
+    }
+
+    async fn read_with_execution(&self, instance: &str, execution_id: u64) -> Result<Vec<duroxide::Event>, ProviderError> {
+        self.inner.read_with_execution(instance, execution_id).await
+    }
+
+    async fn append_with_execution(
+        &self,
+        instance: &str,
+        execution_id: u64,
+        new_events: Vec<duroxide::Event>,
+    ) -> Result<(), ProviderError> {
+        self.inner
+            .append_with_execution(instance, execution_id, new_events)
+            .await
+    }
+
+    fn as_management_capability(&self) -> Option<&dyn ProviderAdmin> {
+        self.inner.as_management_capability()
+    }
+}
+
+/// Ensure a child sub-orchestration can receive CancelInstance from BOTH:
+/// - user calling `Client::cancel_instance(child_id, ...)`
+/// - parent dropping the sub-orchestration future (runtime enqueues CancelInstance)
+#[tokio::test]
+async fn user_cancel_instance_and_dropped_future_both_enqueue_cancelinstance_for_child() {
+    let (inner_store, _td) = common::create_sqlite_store_disk().await;
+    let recording_store = Arc::new(RecordingProvider::new(inner_store));
+    let store: Arc<dyn Provider> = recording_store.clone();
+
+    // Child that blocks forever unless cancelled.
+    let child = |ctx: OrchestrationContext, _input: String| async move {
+        ctx.schedule_wait("NeverComes").await;
+        Ok("child_completed".to_string())
+    };
+
+    // Parent schedules the child with an explicit instance ID and immediately drops the future.
+    // Dropping should trigger the runtime cancellation path that enqueues WorkItem::CancelInstance.
+    let parent = |ctx: OrchestrationContext, _input: String| async move {
+        let sub_orch = ctx.schedule_sub_orchestration_with_id("ComboChild", "combo-child", "input");
+        drop(sub_orch);
+        ctx.schedule_timer(Duration::from_millis(50)).await;
+        Ok("parent_done".to_string())
+    };
+
+    let orchestration_registry = OrchestrationRegistry::builder()
+        .register("ComboChild", child)
+        .register("ComboParent", parent)
+        .build();
+    let activity_registry = ActivityRegistry::builder().build();
+
+    let options = runtime::RuntimeOptions {
+        dispatcher_min_poll_interval: Duration::from_millis(10),
+        orchestration_concurrency: 2,
+        worker_concurrency: 1,
+        ..Default::default()
+    };
+
+    let rt =
+        runtime::Runtime::start_with_options(store.clone(), activity_registry, orchestration_registry, options).await;
+    let client = Client::new(store.clone());
+
+    // Kick off the parent, which will schedule+drop the child and enqueue a cancellation.
+    // We will also enqueue a user cancellation, and then only allow the child to be processed
+    // once BOTH cancellation messages are present.
+
+    client
+        .start_orchestration("inst-combo-cancel", "ComboParent", "")
+        .await
+        .unwrap();
+
+    // User independently requests cancellation of the same child instance.
+    client
+        .cancel_instance("combo-child", "user_cancel")
+        .await
+        .unwrap();
+
+    // Wait until BOTH CancelInstance enqueues have been observed by the provider wrapper.
+    // This makes the test deterministic and ensures they can be delivered in the same child turn.
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let records = recording_store.cancel_instance_records();
+        let saw_user_cancel = records.iter().any(|r| {
+            r.instance == "combo-child"
+                && r.reason == "user_cancel"
+                && r.source == CancelInstanceEnqueueSource::EnqueueForOrchestrator
+        });
+        let saw_drop_cancel = records.iter().any(|r| {
+            r.instance == "combo-child"
+                && r.reason == "parent dropped sub-orchestration future"
+                && r.source == CancelInstanceEnqueueSource::AckOrchestrationItem
+        });
+
+        if saw_user_cancel && saw_drop_cancel {
+            break;
+        }
+
+        if std::time::Instant::now() > deadline {
+            panic!("Timed out waiting for both CancelInstance enqueues. records={records:?}");
+        }
+
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+
+    // Now allow the child instance to be fetched/processed.
+    recording_store.allow_child_fetch();
+
+    // Parent should still complete normally.
+    match client
+        .wait_for_orchestration("inst-combo-cancel", Duration::from_secs(10))
+        .await
+        .unwrap()
+    {
+        runtime::OrchestrationStatus::Completed { output } => assert_eq!(output, "parent_done"),
+        other => panic!("Expected parent Completed, got {:?}", other),
+    }
+
+    // Child should end up cancelled.
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let child_status = client.get_orchestration_status("combo-child").await.unwrap();
+        match child_status {
+            runtime::OrchestrationStatus::Failed { details } => {
+                assert!(
+                    matches!(
+                        &details,
+                        duroxide::ErrorDetails::Application {
+                            kind: duroxide::AppErrorKind::Cancelled { .. },
+                            ..
+                        }
+                    ),
+                    "Child should be cancelled, got: {}",
+                    details.display_message()
+                );
+                break;
+            }
+            runtime::OrchestrationStatus::Completed { output } => {
+                panic!("Child should NOT complete (it was cancelled). Got: {output}");
+            }
+            runtime::OrchestrationStatus::Running | runtime::OrchestrationStatus::NotFound => {
+                if std::time::Instant::now() > deadline {
+                    panic!("Timeout waiting for child to be cancelled");
+                }
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+        }
+    }
+
+    // Assert BOTH cancellation sources enqueued CancelInstance for the child.
+    let records = recording_store.cancel_instance_records();
+    assert!(
+        records.iter().any(|r| {
+            r.instance == "combo-child"
+                && r.reason == "user_cancel"
+                && r.source == CancelInstanceEnqueueSource::EnqueueForOrchestrator
+        }),
+        "Expected user CancelInstance enqueue for combo-child, got records={records:?}"
+    );
+    assert!(
+        records.iter().any(|r| {
+            r.instance == "combo-child"
+                && r.reason == "parent dropped sub-orchestration future"
+                && r.source == CancelInstanceEnqueueSource::AckOrchestrationItem
+        }),
+        "Expected dropped-future CancelInstance enqueue for combo-child, got records={records:?}"
+    );
+
+    // Confirm they landed in the SAME child orchestration turn (same fetched message batch).
+    let child_fetches = recording_store.child_cancel_reasons_by_fetch();
+    assert!(
+        !child_fetches.is_empty(),
+        "Expected at least one fetched child turn batch, got child_fetches={child_fetches:?}"
+    );
+    let first_batch = &child_fetches[0];
+    assert!(
+        first_batch.iter().any(|r| r == "user_cancel"),
+        "Expected user_cancel in first child batch, got first_batch={first_batch:?}"
+    );
+    assert!(
+        first_batch
+            .iter()
+            .any(|r| r == "parent dropped sub-orchestration future"),
+        "Expected dropped-future reason in first child batch, got first_batch={first_batch:?}"
+    );
+
+    // Sanity: parent history should include the dropped-future breadcrumb.
+    let parent_hist = store.read("inst-combo-cancel").await.unwrap_or_default();
+    let scheduled_id = parent_hist.iter().find_map(|e| match &e.kind {
+        EventKind::SubOrchestrationScheduled { instance, .. } if instance == "combo-child" => Some(e.event_id()),
+        _ => None,
+    });
+    let scheduled_id = scheduled_id.expect("Expected sub-orchestration to be scheduled");
+    assert!(
+        parent_hist.iter().any(|e| {
+            matches!(&e.kind, EventKind::SubOrchestrationCancelRequested { reason } if reason == "dropped_future")
+                && e.source_event_id == Some(scheduled_id)
+        }),
+        "Expected SubOrchestrationCancelRequested(reason=dropped_future, source_event_id={scheduled_id}) in parent history"
+    );
 
     rt.shutdown(None).await;
 }

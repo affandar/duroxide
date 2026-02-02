@@ -493,6 +493,7 @@ impl SqliteProvider {
                 EventKind::ActivityScheduled { .. } => "ActivityScheduled",
                 EventKind::ActivityCompleted { .. } => "ActivityCompleted",
                 EventKind::ActivityFailed { .. } => "ActivityFailed",
+                EventKind::ActivityCancelRequested { .. } => "ActivityCancelRequested",
                 EventKind::TimerCreated { .. } => "TimerCreated",
                 EventKind::TimerFired { .. } => "TimerFired",
                 EventKind::ExternalSubscribed { .. } => "ExternalSubscribed",
@@ -500,6 +501,7 @@ impl SqliteProvider {
                 EventKind::SubOrchestrationScheduled { .. } => "SubOrchestrationScheduled",
                 EventKind::SubOrchestrationCompleted { .. } => "SubOrchestrationCompleted",
                 EventKind::SubOrchestrationFailed { .. } => "SubOrchestrationFailed",
+                EventKind::SubOrchestrationCancelRequested { .. } => "SubOrchestrationCancelRequested",
                 EventKind::OrchestrationCancelRequested { .. } => "OrchestrationCancelRequested",
                 EventKind::OrchestrationChained { .. } => "OrchestrationChained",
             };

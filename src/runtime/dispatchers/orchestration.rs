@@ -385,11 +385,13 @@ impl Runtime {
             (vec![], vec![], vec![], execution_id_to_use)
         };
 
-        // Atomically commit all changes
-        let history_delta = history_mgr.delta();
+        // Snapshot current history delta (used for metadata + logging below).
+        // NOTE: We may append additional events (e.g., cancellation requests) later in this method.
+        let history_delta_snapshot = history_mgr.delta().to_vec();
 
         // Compute execution metadata from history_delta (runtime responsibility)
-        let metadata = Runtime::compute_execution_metadata(history_delta, &orchestrator_items, item.execution_id);
+        let metadata =
+            Runtime::compute_execution_metadata(&history_delta_snapshot, &orchestrator_items, item.execution_id);
 
         // Calculate metrics
         let duration_seconds = start_time.elapsed().as_secs_f64();
@@ -434,7 +436,7 @@ impl Runtime {
                 }
                 "Failed" => {
                     // Extract error type from history_delta to determine log level
-                    let (error_type, error_category) = history_delta
+                    let (error_type, error_category) = history_delta_snapshot
                         .iter()
                         .find_map(|event| {
                             if let EventKind::OrchestrationFailed { details } = &event.kind {
@@ -568,6 +570,29 @@ impl Runtime {
                         "Cancelling in-flight activities"
                     );
                 }
+
+                // Record cancellation decisions in history for terminal lock-stealing cancellations.
+                // Avoid duplicates: compute_inflight_activities already excludes activities with an
+                // existing ActivityCancelRequested.
+                let reason = match metadata.status.as_deref() {
+                    Some("Completed") => "orchestration_terminal_completed",
+                    Some("Failed") => "orchestration_terminal_failed",
+                    Some("ContinuedAsNew") => "orchestration_terminal_continued_as_new",
+                    _ => "orchestration_terminal_failed",
+                };
+                for a in &inflight {
+                    let event_id = history_mgr.next_event_id();
+                    history_mgr.append(Event::with_event_id(
+                        event_id,
+                        instance,
+                        execution_id_for_ack,
+                        Some(a.activity_id),
+                        EventKind::ActivityCancelRequested {
+                            reason: reason.to_string(),
+                        },
+                    ));
+                }
+
                 cancelled_activities.extend(inflight);
             }
             _ => {}
@@ -585,7 +610,7 @@ impl Runtime {
             .ack_orchestration_with_changes(
                 lock_token,
                 execution_id_for_ack,
-                history_delta.to_vec(),
+                history_mgr.delta().to_vec(),
                 worker_items,
                 orchestrator_items,
                 metadata,

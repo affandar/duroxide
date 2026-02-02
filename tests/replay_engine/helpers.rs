@@ -235,6 +235,32 @@ pub fn cancel_requested(event_id: u64, reason: &str) -> Event {
     )
 }
 
+/// Create an ActivityCancelRequested event
+pub fn activity_cancel_requested(event_id: u64, source_id: u64, reason: &str) -> Event {
+    Event::with_event_id(
+        event_id,
+        TEST_INSTANCE,
+        TEST_EXECUTION_ID,
+        Some(source_id),
+        EventKind::ActivityCancelRequested {
+            reason: reason.to_string(),
+        },
+    )
+}
+
+/// Create a SubOrchestrationCancelRequested event
+pub fn sub_orch_cancel_requested(event_id: u64, source_id: u64, reason: &str) -> Event {
+    Event::with_event_id(
+        event_id,
+        TEST_INSTANCE,
+        TEST_EXECUTION_ID,
+        Some(source_id),
+        EventKind::SubOrchestrationCancelRequested {
+            reason: reason.to_string(),
+        },
+    )
+}
+
 // ============================================================================
 // WorkItem Builders (Completion Messages)
 // ============================================================================
