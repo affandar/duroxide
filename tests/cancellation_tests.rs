@@ -2,10 +2,10 @@
 #![allow(clippy::clone_on_ref_ptr)]
 #![allow(clippy::expect_used)]
 
+use async_trait::async_trait;
 use duroxide::Client;
 use duroxide::Either2;
 use duroxide::EventKind;
-use async_trait::async_trait;
 use duroxide::providers::error::ProviderError;
 use duroxide::providers::{
     ExecutionMetadata, OrchestrationItem, Provider, ProviderAdmin, ScheduledActivityIdentifier, WorkItem,
@@ -1978,15 +1978,10 @@ impl Provider for RecordingProvider {
         lock_timeout: Duration,
         poll_timeout: Duration,
     ) -> Result<Option<(OrchestrationItem, String, u32)>, ProviderError> {
-        let result = self
-            .inner
-            .fetch_orchestration_item(lock_timeout, poll_timeout)
-            .await?;
+        let result = self.inner.fetch_orchestration_item(lock_timeout, poll_timeout).await?;
 
         if let Some((item, lock_token, attempt_count)) = result {
-            if item.instance == "combo-child"
-                && !self.allow_child_fetch.load(Ordering::SeqCst)
-            {
+            if item.instance == "combo-child" && !self.allow_child_fetch.load(Ordering::SeqCst) {
                 // Defer processing the child instance until the test is ready.
                 // This allows both CancelInstance messages to accumulate and then be delivered
                 // together in a single fetched turn.
@@ -2101,7 +2096,11 @@ impl Provider for RecordingProvider {
         self.inner.read(instance).await
     }
 
-    async fn read_with_execution(&self, instance: &str, execution_id: u64) -> Result<Vec<duroxide::Event>, ProviderError> {
+    async fn read_with_execution(
+        &self,
+        instance: &str,
+        execution_id: u64,
+    ) -> Result<Vec<duroxide::Event>, ProviderError> {
         self.inner.read_with_execution(instance, execution_id).await
     }
 
@@ -2172,10 +2171,7 @@ async fn user_cancel_instance_and_dropped_future_both_enqueue_cancelinstance_for
         .unwrap();
 
     // User independently requests cancellation of the same child instance.
-    client
-        .cancel_instance("combo-child", "user_cancel")
-        .await
-        .unwrap();
+    client.cancel_instance("combo-child", "user_cancel").await.unwrap();
 
     // Wait until BOTH CancelInstance enqueues have been observed by the provider wrapper.
     // This makes the test deterministic and ensures they can be delivered in the same child turn.

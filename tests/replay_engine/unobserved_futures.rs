@@ -95,13 +95,7 @@ pub struct Select2TimerWinsThenDropNewActivityHandler {
 }
 
 impl Select2TimerWinsThenDropNewActivityHandler {
-    pub fn new(
-        name: &str,
-        input: &str,
-        duration: Duration,
-        extra_name: &str,
-        extra_input: &str,
-    ) -> Arc<Self> {
+    pub fn new(name: &str, input: &str, duration: Duration, extra_name: &str, extra_input: &str) -> Arc<Self> {
         Arc::new(Self {
             activity_name: name.to_string(),
             activity_input: input.to_string(),
@@ -857,9 +851,9 @@ fn cross_turn_sub_orch_cancellation_emits_both_signals() {
     let cancel_events: Vec<_> = engine
         .history_delta()
         .iter()
-        .filter(|e| {
-            matches!(&e.kind, EventKind::SubOrchestrationCancelRequested { reason } if reason == "dropped_future")
-        })
+        .filter(
+            |e| matches!(&e.kind, EventKind::SubOrchestrationCancelRequested { reason } if reason == "dropped_future"),
+        )
         .collect();
 
     assert_eq!(
@@ -941,7 +935,9 @@ fn replay_does_not_reemit_sub_orch_cancellation_side_channel_when_already_in_his
     let cancel_events: Vec<_> = engine
         .history_delta()
         .iter()
-        .filter(|e| matches!(&e.kind, EventKind::SubOrchestrationCancelRequested { reason } if reason == "dropped_future"))
+        .filter(
+            |e| matches!(&e.kind, EventKind::SubOrchestrationCancelRequested { reason } if reason == "dropped_future"),
+        )
         .collect();
     assert!(
         cancel_events.is_empty(),
@@ -967,13 +963,7 @@ fn replay_allows_new_cancellations_in_current_turn_even_when_prior_cancellations
 
     let result = execute(
         &mut engine,
-        Select2TimerWinsThenDropNewActivityHandler::new(
-            "Task",
-            "input",
-            Duration::from_millis(1000),
-            "Extra",
-            "x",
-        ),
+        Select2TimerWinsThenDropNewActivityHandler::new("Task", "input", Duration::from_millis(1000), "Extra", "x"),
     );
     assert_completed(&result, "timer_won_plus_extra_drop");
 

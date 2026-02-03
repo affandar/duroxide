@@ -708,6 +708,7 @@ impl ReplayEngine {
                             ));
                         }
                         ctx.deliver_result(source_id, CompletionResult::ActivityOk(result.clone()));
+                        open_schedules.remove(&source_id);
                         must_poll = true;
                     }
                 }
@@ -718,6 +719,7 @@ impl ReplayEngine {
                             return TurnResult::Failed(nondeterminism_error("completion without open schedule"));
                         }
                         ctx.deliver_result(source_id, CompletionResult::ActivityErr(details.display_message()));
+                        open_schedules.remove(&source_id);
                         must_poll = true;
                     }
                 }
@@ -731,6 +733,7 @@ impl ReplayEngine {
                             return TurnResult::Failed(nondeterminism_error("completion without open schedule"));
                         }
                         ctx.deliver_result(source_id, CompletionResult::TimerFired);
+                        open_schedules.remove(&source_id);
                         must_poll = true;
                     }
                 }
@@ -741,6 +744,7 @@ impl ReplayEngine {
                             return TurnResult::Failed(nondeterminism_error("completion without open schedule"));
                         }
                         ctx.deliver_result(source_id, CompletionResult::SubOrchOk(result.clone()));
+                        open_schedules.remove(&source_id);
                         must_poll = true;
                     }
                 }
@@ -751,6 +755,7 @@ impl ReplayEngine {
                             return TurnResult::Failed(nondeterminism_error("completion without open schedule"));
                         }
                         ctx.deliver_result(source_id, CompletionResult::SubOrchErr(details.display_message()));
+                        open_schedules.remove(&source_id);
                         must_poll = true;
                     }
                 }
@@ -925,7 +930,7 @@ impl ReplayEngine {
     ///
     /// Pseudocode of the reconciliation:
     ///
-    /// ```rust
+    /// ```text
     /// // 1) Authoritative record from persisted history
     /// let baseline_cancelled = { source_event_id of *CancelRequested(reason="dropped_future") };
     ///
@@ -968,7 +973,7 @@ impl ReplayEngine {
     ///
     /// Example:
     ///
-    /// ```rust
+    /// ```text
     /// // Turn 1 persisted:
     /// //   ActivityScheduled(id=2)
     /// //   TimerCreated(id=3)
@@ -1075,7 +1080,8 @@ impl ReplayEngine {
             // Only compare cancellation decisions for schedules that are part of the persisted
             // history segment. This avoids false positives when the current turn produces NEW
             // cancellation decisions for schedules created this turn (not yet persisted).
-            let baseline_persisted_activity_schedules: HashSet<u64> = self.baseline_history[..self.persisted_history_len]
+            let baseline_persisted_activity_schedules: HashSet<u64> = self.baseline_history
+                [..self.persisted_history_len]
                 .iter()
                 .filter_map(|e| match &e.kind {
                     EventKind::ActivityScheduled { .. } => Some(e.event_id()),
@@ -1083,8 +1089,8 @@ impl ReplayEngine {
                 })
                 .collect();
 
-            let baseline_persisted_sub_orch_schedules: HashSet<u64> =
-                self.baseline_history[..self.persisted_history_len]
+            let baseline_persisted_sub_orch_schedules: HashSet<u64> = self.baseline_history
+                [..self.persisted_history_len]
                 .iter()
                 .filter_map(|e| match &e.kind {
                     EventKind::SubOrchestrationScheduled { .. } => Some(e.event_id()),
@@ -1107,8 +1113,8 @@ impl ReplayEngine {
             let ctx_cancelled_sub_orch_schedules_in_replayed_segment: HashSet<u64> =
                 ctx_cancelled_sub_orch_schedules_all
                     .intersection(&baseline_persisted_sub_orch_schedules)
-                .copied()
-                .collect();
+                    .copied()
+                    .collect();
 
             // Only enforce when the persisted history already includes cancellation-request events.
             // On the first execution of a turn that introduces cancellation-request events, the

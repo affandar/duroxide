@@ -261,6 +261,21 @@ pub fn sub_orch_cancel_requested(event_id: u64, source_id: u64, reason: &str) ->
     )
 }
 
+/// Create an OrchestrationChained event (fire-and-forget sub-orchestration start)
+pub fn orchestration_chained(event_id: u64, name: &str, instance: &str, input: &str) -> Event {
+    Event::with_event_id(
+        event_id,
+        TEST_INSTANCE,
+        TEST_EXECUTION_ID,
+        None,
+        EventKind::OrchestrationChained {
+            name: name.to_string(),
+            instance: instance.to_string(),
+            input: input.to_string(),
+        },
+    )
+}
+
 // ============================================================================
 // WorkItem Builders (Completion Messages)
 // ============================================================================
@@ -524,6 +539,46 @@ impl OrchestrationHandler for SubOrchThenContinueAsNewHandler {
     }
 }
 
+/// A mock handler that starts a detached orchestration then schedules an activity (which suspends).
+/// This is used to test OrchestrationChained nondeterminism - the handler suspends so the
+/// OrchestrationChained event is processed during replay.
+pub struct DetachedThenActivityHandler {
+    orch_name: String,
+    orch_instance: String,
+    orch_input: String,
+    activity_name: String,
+    activity_input: String,
+}
+
+impl DetachedThenActivityHandler {
+    pub fn new(
+        orch_name: &str,
+        orch_instance: &str,
+        orch_input: &str,
+        activity_name: &str,
+        activity_input: &str,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            orch_name: orch_name.to_string(),
+            orch_instance: orch_instance.to_string(),
+            orch_input: orch_input.to_string(),
+            activity_name: activity_name.to_string(),
+            activity_input: activity_input.to_string(),
+        })
+    }
+}
+
+#[async_trait]
+impl OrchestrationHandler for DetachedThenActivityHandler {
+    async fn invoke(&self, ctx: OrchestrationContext, _input: String) -> Result<String, String> {
+        // Start detached orchestration (fire-and-forget)
+        ctx.schedule_orchestration(&self.orch_name, &self.orch_instance, &self.orch_input);
+        // Schedule activity which will suspend the orchestration
+        let result = ctx.schedule_activity(&self.activity_name, &self.activity_input).await?;
+        Ok(result)
+    }
+}
+
 /// A mock handler that schedules multiple activities but returns immediately
 pub struct MultiScheduleNoAwaitHandler {
     activities: Vec<(String, String)>,
@@ -568,6 +623,55 @@ impl OrchestrationHandler for TwoActivitiesHandler {
     async fn invoke(&self, ctx: OrchestrationContext, _input: String) -> Result<String, String> {
         let r1 = ctx.schedule_activity(&self.first.0, &self.first.1).await?;
         let r2 = ctx.schedule_activity(&self.second.0, &self.second.1).await?;
+        Ok(format!("{r1},{r2}"))
+    }
+}
+
+/// A mock handler that schedules two timers sequentially
+pub struct TwoTimersHandler {
+    first: Duration,
+    second: Duration,
+}
+
+impl TwoTimersHandler {
+    pub fn new(first: Duration, second: Duration) -> Arc<Self> {
+        Arc::new(Self { first, second })
+    }
+}
+
+#[async_trait]
+impl OrchestrationHandler for TwoTimersHandler {
+    async fn invoke(&self, ctx: OrchestrationContext, _input: String) -> Result<String, String> {
+        ctx.schedule_timer(self.first).await;
+        ctx.schedule_timer(self.second).await;
+        Ok("done".to_string())
+    }
+}
+
+/// A mock handler that schedules a sub-orchestration then an activity
+pub struct SubOrchThenActivityHandler {
+    sub_name: String,
+    sub_input: String,
+    activity_name: String,
+    activity_input: String,
+}
+
+impl SubOrchThenActivityHandler {
+    pub fn new(sub_name: &str, sub_input: &str, activity_name: &str, activity_input: &str) -> Arc<Self> {
+        Arc::new(Self {
+            sub_name: sub_name.to_string(),
+            sub_input: sub_input.to_string(),
+            activity_name: activity_name.to_string(),
+            activity_input: activity_input.to_string(),
+        })
+    }
+}
+
+#[async_trait]
+impl OrchestrationHandler for SubOrchThenActivityHandler {
+    async fn invoke(&self, ctx: OrchestrationContext, _input: String) -> Result<String, String> {
+        let r1 = ctx.schedule_sub_orchestration(&self.sub_name, &self.sub_input).await?;
+        let r2 = ctx.schedule_activity(&self.activity_name, &self.activity_input).await?;
         Ok(format!("{r1},{r2}"))
     }
 }
