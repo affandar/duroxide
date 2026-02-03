@@ -5,6 +5,41 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.16] - 2026-02-02
+
+**Release:** <https://crates.io/crates/duroxide/0.1.16>
+
+**Proposal:** [Persist Cancellation Decisions in History](https://github.com/affandar/duroxide/blob/main/docs/proposals-impl/history-cancellation-events.md)
+
+### Added
+
+- **Cancellation History Events** - Record cancellation decisions as durable history breadcrumbs
+  - New `ActivityCancelRequested` and `SubOrchestrationCancelRequested` event kinds
+  - Dropped futures (select losers, terminal cleanup) now recorded in history
+  - Enables observability: history answers "was this cancelled?"
+  - Enables replay determinism: detect when cancellation decisions differ on replay
+  - Idempotent: side-channel cancellations only emitted once per decision
+
+- **Nondeterminism Tests for Completion Validation** - 12 new tests covering:
+  - Completion kind mismatches (timer/activity/sub-orchestration cross-checks)
+  - Duplicate completion detection for closed schedules
+  - OrchestrationChained mismatch validation
+
+### Fixed
+
+- **Duplicate Completion Detection** - Fixed oversight where `open_schedules.remove()` was never called after delivering completions in replay engine
+  - Previously, duplicate completions in history were silently accepted
+  - Now properly triggers nondeterminism error on duplicate completions
+
+### Changed
+
+- **Housekeeping** - Moved implemented/rejected proposals to `docs/proposals-impl/`:
+  - `metrics-facade-migration.md` (implemented)
+  - `replay-simplification-PROGRESS.md` (completed)
+  - `activity-cancellation-queue-flag.md` (rejected/superseded by lock-stealing)
+
+---
+
 ## [0.1.15] - 2026-01-30
 
 **Release:** <https://crates.io/crates/duroxide/0.1.15>
