@@ -192,88 +192,11 @@ Filtering introduces a new risk: if *no* node in the cluster declares compatibil
 then **no one will ever fetch it** via filtered queries, so runtime-side `attempt_count`-based poison
 termination could be delayed.
 
-There are two complementary strategies, layered for safety:
-
-### Layer 1: Runtime-side abandon on incompatible fetch
-
-When a runtime fetches with `filter=None` (e.g., drain mode enabled — see `RuntimeOptions` below),
-the runtime-side compatibility check (see above) abandons incompatible items. Each abandon increments
-`attempt_count`, so the existing max-attempts poison logic handles termination naturally.
-
-This means stuck items are **not permanently stuck** as long as at least one runtime node runs with
-`disable_version_filtering: true`. The item will bounce through abandon cycles until max attempts
-is reached, then be terminated with a clear `Configuration` error.
-
-### Layer 2: Operator uses drain mode to clear stuck items
-
-If all runtime nodes use the default (filtering enabled) and some executions are pinned to a version
-that no node supports, those items will sit in the queue indefinitely — no node will ever fetch them.
-
-The operator's remedy is to start a runtime node (or reconfigure an existing one) with
-`disable_version_filtering: true`. This node will:
-
-1. Fetch **all** items regardless of pinned version.
-2. The runtime-side compatibility check abandons incompatible items (incrementing `attempt_count`).
-3. After `max_attempts` abandons, the poison path terminates the orchestration with a `Configuration`
-   error clearly stating the version mismatch.
-4. Compatible items are processed normally.
-
-This is the recommended operational procedure for draining unsupported orchestration versions.
-The drain node can be temporary — once stuck items are cleared, reconfigure back to the default.
-
-### Not recommended: Provider-level deadletter policy
-
-Provider keeps track of "blocked by capability" duration/counters per instance and eventually:
-
-- Moves the item to a deadletter store, OR
-- Marks the execution Failed with a Poison/Configuration error.
-
-This pushes too much policy into the provider and is harder to keep consistent across providers.
+The operator's remedy is to temporarily widen the `supported_replay_versions` range on one or more
+runtime nodes (see below). Items with unknown event types will fail at deserialization and be
+poisoned via the max-attempts path.
 
 ## RuntimeOptions changes
-
-### `disable_version_filtering: bool` (default: `false`)
-
-```rust
-pub struct RuntimeOptions {
-    // ... existing fields ...
-
-    /// Disable replay-engine version filtering on the orchestration dispatcher.
-    ///
-    /// When `false` (the default), the orchestration dispatcher passes a capability filter
-    /// to the provider so it only returns executions whose pinned `duroxide_version` is
-    /// within this runtime's supported replay-engine range (by default: `>=0.0.0` up to
-    /// and including the current build version). This ensures work is routed to compatible
-    /// nodes in mixed-version clusters.
-    ///
-    /// When `true`, the dispatcher passes `filter=None` to the provider, which disables
-    /// provider-level version filtering entirely. The runtime will fetch **all** pending
-    /// orchestration items regardless of their pinned version. Incompatible items are still
-    /// handled safely: the runtime-side compatibility check abandons them immediately
-    /// (incrementing `attempt_count`), and once `max_attempts` is exceeded, the orchestration
-    /// is terminated with a `Configuration` error.
-    ///
-    /// **Use this option to drain stuck orchestrations** that are pinned to a version no
-    /// running node supports. Start a temporary runtime with `disable_version_filtering: true`
-    /// to let the abandon → poison cycle clear those items. Once drained, revert to `false`.
-    ///
-    /// This option does NOT bypass the runtime-side compatibility check — it only disables
-    /// the provider-level filter. Incompatible items are never replayed; they are always
-    /// abandoned.
-    ///
-    /// Default: `false`
-    pub disable_version_filtering: bool,
-}
-
-impl Default for RuntimeOptions {
-    fn default() -> Self {
-        Self {
-            // ... existing defaults ...
-            disable_version_filtering: false,
-        }
-    }
-}
-```
 
 ### `supported_replay_versions: Option<SemverRange>` (optional override)
 
@@ -281,39 +204,33 @@ impl Default for RuntimeOptions {
 pub struct RuntimeOptions {
     // ... existing fields ...
 
-    /// Override the replay-engine version range advertised to the provider.
+    /// Override the replay-engine version range used for capability filtering.
     ///
-    /// By default, the runtime advertises `>=0.0.0, <=CURRENT_BUILD_VERSION`, meaning it
+    /// By default, the runtime uses `>=0.0.0, <=CURRENT_BUILD_VERSION`, meaning it
     /// can replay any execution pinned at or below its own semver. This is correct for
     /// most deployments since replay engines are backward-compatible.
     ///
-    /// Set this to narrow the range for advanced scenarios:
-    /// - Clusters where different nodes should handle different version ranges.
-    /// - Testing version-routing behavior.
-    /// - Temporarily restricting a node to only process a specific version band.
-    ///
-    /// Has no effect when `disable_version_filtering` is `true`.
+    /// Set this to change the range for advanced scenarios:
+    /// - Narrowing: Restrict a node to only process a specific version band.
+    /// - Widening to drain stuck items: Set a wide range like `>=0.0.0, <=99.0.0`
+    ///   to fetch orchestrations pinned at any version. Items with unknown event types
+    ///   will fail at deserialization and be poisoned via the max-attempts path.
+    /// - Testing: Simulate version-routing behavior in tests.
     ///
     /// Default: `None` (uses `>=0.0.0, <=CURRENT_BUILD_VERSION`)
     pub supported_replay_versions: Option<SemverRange>,
 }
 ```
 
-### Dispatcher behavior summary
-
-| `disable_version_filtering` | Provider filter | Runtime-side check | Behavior |
-|-----------------------------|-----------------|--------------------|-----------|
-| `false` (default) | `Some(supported_range)` | Active | Normal: only compatible items fetched and processed |
-| `true` | `None` | Active | Drain mode: all items fetched; incompatible ones abandoned → poison cycle |
-
 ## Rolling upgrades (desired behavior)
 
-- Old nodes declare older `supported_pinned_versions` (up to their build version).
+- Old nodes declare older supported ranges (up to their build version).
 - New nodes declare newer/wider ranges (up to their newer build version).
 - Provider naturally routes items to the correct nodes based on capabilities.
 - No bouncing/abandon loops required for compatibility.
 - If after a full upgrade some executions remain pinned to an unsupported old version,
-  an operator can temporarily enable drain mode to clear them.
+  an operator can temporarily widen `supported_replay_versions` to clear them (see
+  "Draining stuck orchestrations" in the versioning guide).
 
 ## Worked example: rolling upgrade with new event types
 
@@ -567,21 +484,28 @@ If after a full upgrade to v2.0.0, some orchestrations are still pinned at, say,
 (`>=0.0.0, <=2.0.0`) includes v0.8.0.
 
 If a future v3.0.0 intentionally **drops** replay compatibility for v0.x histories (breaking
-change), those v0.8.0-pinned executions would become unfetchable. The operator would then:
+change), those v0.8.0-pinned executions would become unfetchable. The operator would then
+use the wide-range drain procedure (test #29): set `supported_replay_versions` to a wide
+range like `[>=0.0.0, <=99.0.0]` on one node. The provider fetches old-version items and
+attempts to deserialize their history. Unknown event types cause deserialization to fail at
+the provider level with a permanent error — the items never reach the replay engine. Each
+fetch cycle increments `attempt_count`, and the items remain in the queue permanently
+erroring on every fetch. Compatible items are processed normally.
 
-1. Set `disable_version_filtering: true` on one node.
-2. The node fetches v0.8.0-pinned items, the runtime-side check abandons them, attempt_count
-   rises, and eventually they are terminated with a `Configuration` error clearly stating:
-   `"Execution pinned at v0.8.0, runtime supports >=1.0.0..<=3.0.0"`.
-3. Disable drain mode once the items are cleared.
+> **Beyond phase 1:** A dedicated `disable_version_filtering: true` RuntimeOptions flag
+> could simplify this UX, but the wide-range approach already covers the same use case.
+> Additionally, a built-in replay-engine compatibility check (separate from the configurable
+> `supported_replay_versions` range) could catch semantic incompatibilities where history
+> deserializes successfully but replay behavior differs across versions. Currently, drain
+> relies entirely on serde deserialization failures for unknown `EventKind` variants.
 
 ## Observability
 
-- Provider should expose counters for:
-   - “items filtered out due to unsupported pinned version”
-   - (future) “items filtered out due to unsupported orchestration handler/version”
-   - (future) “worker items filtered out due to unknown activity handler”
-- Runtime should log capability declarations at startup.
+- Runtime should log capability declarations at startup. (implemented)
+- **Beyond phase 1:**
+   - Provider should expose counters for "items filtered out due to unsupported pinned version"
+   - (future) "items filtered out due to unsupported orchestration handler/version"
+   - (future) "worker items filtered out due to unknown activity handler"
 
 ## Test plan (phase 1)
 
@@ -687,11 +611,12 @@ End-to-end scenario tests using real `Runtime` + `Client` + SQLite provider.
       with a `Configuration` error whose message includes the pinned version and supported range.
     - Assert final execution status is `Failed`.
 
-15. **`runtime_abandon_uses_no_delay`**
+15. **`runtime_abandon_uses_short_delay`**
     - Insert an incompatible instance.
     - Start runtime, observe the abandon call.
-    - Assert the item becomes immediately visible again (no delay applied), so the next
-      fetch cycle picks it up without waiting.
+    - Assert the item is abandoned with a short delay (1 second) to prevent tight spin loops.
+    - Assert the item becomes visible again after the delay, and subsequent fetches
+      continue the abandon cycle toward max_attempts.
 
 #### D. Rolling deployment scenario tests (`tests/scenarios/capability_filtering.rs`)
 
@@ -734,7 +659,7 @@ End-to-end scenario tests using real `Runtime` + `Client` + SQLite provider.
 #### F. Edge cases and error handling
 
 22. **`filter_with_empty_supported_versions_returns_nothing`**
-    - Fetch with `filter = Some(DispatcherCapabilityFilter { supported_pinned_versions: vec![] })`.
+    - Fetch with `filter = Some(DispatcherCapabilityFilter { supported_duroxide_versions: vec![] })`.
     - Assert `Ok(None)` — empty range means "supports nothing".
 
 23. **`concurrent_filtered_fetch_no_double_lock`**
@@ -747,101 +672,105 @@ End-to-end scenario tests using real `Runtime` + `Client` + SQLite provider.
     - Sub-orchestration starts as a new instance+execution with its own `OrchestrationStarted`.
     - Assert sub-orchestration's pinned version is set independently (from its own event, not inherited from parent).
 
-25. **`activity_completion_routed_to_correct_orchestration_regardless_of_filter`**
-    - An activity completes and enqueues a completion message to the orchestrator queue.
-    - The orchestration's pinned version is outside the activity runtime's supported range.
-    - Assert the completion message is still deliverable to a runtime that *does* support the
-      orchestration's pinned version.
-    - Validates that activity completions (orchestrator queue items) are not lost due to filtering.
+25. **`activity_completion_after_continue_as_new_is_discarded`**
+    - Execution 1 (pinned v1.0.0) schedules an activity.
+    - Execution 1 does ContinueAsNew → Execution 2 starts (pinned v2.0.0).
+    - Two sub-cases:
+      a. **Activity cancelled by ContinueAsNew (common case):** The ContinueAsNew ack includes
+         the activity in `cancelled_activities`, deleting its worker queue entry via lock stealing.
+         The worker's next `ack_work_item` or `renew_work_item_lock` call returns a permanent error
+         ("lock not found"). Assert: no `ActivityCompleted` message reaches the orchestrator queue.
+      b. **Activity raced and completed before ContinueAsNew:** The `ActivityCompleted` work item
+         reaches the orchestrator queue with `execution_id: 1`. When the runtime fetches and
+         processes it, `is_completion_for_current_execution` returns `false` (current is 2).
+         The completion is discarded with a "ignoring completion from previous execution" warning.
+         Assert: the completion does NOT produce an event in execution 2's history.
+    - In both sub-cases, the capability filter routes correctly: the orchestrator queue item
+      is fetched by a v2-compatible runtime (based on execution 2's pinned version), and the
+      stale completion is harmlessly discarded. No work is lost or misrouted.
 
-#### G. Drain mode (`disable_version_filtering`) tests
+#### F2. Additional provider contract validation tests
 
-26. **`drain_mode_disabled_by_default`**
-    - Create a `RuntimeOptions::default()`.
-    - Assert `disable_version_filtering == false`.
+These tests validate specific implementation ordering and edge cases identified during code review.
 
-27. **`drain_mode_passes_filter_none_to_provider`**
-    - Start a runtime with `disable_version_filtering: true`.
-    - Assert the orchestration dispatcher calls `fetch_orchestration_item` with `filter=None`.
-    - Confirms the option actually disables provider-level filtering.
+43. **`fetch_filter_applied_before_history_deserialization`**
+    - Seed an execution pinned at `99.0.0` with valid (but version-specific) history events.
+    - Fetch with filter `[>=1.0.0, <=2.0.0]` (excludes `99.0.0`).
+    - Assert `Ok(None)` — the provider must not attempt to load or deserialize history
+      for this execution. If the provider incorrectly loads history before filtering,
+      this test would still pass but test #39 (corrupted history variant) would catch it.
 
-28. **`drain_mode_still_abandons_incompatible_items`**
-    - Start a runtime with `disable_version_filtering: true`.
-    - Insert an instance pinned at a version outside the runtime's supported replay range.
-    - Assert the item is fetched (not filtered by provider) but abandoned by the runtime-side check.
-    - Confirms drain mode does NOT bypass the runtime-side compatibility check.
+44. **`fetch_single_range_only_uses_first_range`**
+    - Seed two instances: `A` pinned at `1.0.0`, `B` pinned at `3.0.0`.
+    - Fetch with filter `{ supported_duroxide_versions: [>=1.0.0..<=1.5.0, >=3.0.0..<=3.5.0] }`.
+    - Assert only `A` is returned (phase 1: only first range is used).
+    - Document this as a known phase-1 limitation.
 
-29. **`drain_mode_processes_compatible_items_normally`**
-    - Start a runtime with `disable_version_filtering: true`.
-    - Start an orchestration with a compatible pinned version.
-    - Assert the orchestration completes normally (drain mode doesn't break normal processing).
+45. **`ack_stores_pinned_version_via_metadata_update`**
+    - Create an execution without a pinned version (pre-migration simulation).
+    - Ack with `ExecutionMetadata { pinned_duroxide_version: Some(1.2.3), .. }`.
+    - Fetch with filter matching `1.2.3` → assert item is returned.
+    - Confirms the UPDATE path for backfilling pinned version on existing executions.
 
-30. **`drain_mode_clears_stuck_items_via_poison_cycle`**
-    - Insert 3 instances pinned at an unsupported version.
-    - Start a runtime with `disable_version_filtering: true, max_attempts: 3`.
-    - Assert all 3 instances are terminated with `Configuration` errors after the abandon → poison cycle.
-    - This is the primary drain-mode use case.
+46. **`provider_updates_pinned_version_when_told`**
+    - Create an execution with pinned version `1.0.0`.
+    - Ack again with `pinned_duroxide_version: Some(2.0.0)`.
+    - Fetch with filter matching `2.0.0` → returned (provider updated unconditionally).
+    - Fetch with filter matching only `1.0.0` → `None` (version was overwritten).
+    - The provider is dumb storage — write-once semantics are enforced by a `debug_assert`
+      in the runtime's orchestration dispatcher, not by the provider.
 
-31. **`drain_mode_mixed_compatible_and_incompatible`**
-    - Insert 2 compatible and 2 incompatible instances.
-    - Start a runtime with `disable_version_filtering: true`.
-    - Assert compatible instances complete normally.
-    - Assert incompatible instances are abandoned → eventually poisoned.
-    - Validates that drain mode handles a mixed queue correctly.
+#### G. Version range and routing tests
 
-32. **`default_supported_range_includes_current_and_older_versions`**
+26. **`default_supported_range_includes_current_and_older_versions`**
     - Start a runtime with default options (no `supported_replay_versions` override).
     - Insert instances pinned at `0.0.1`, `0.5.0`, and `CURRENT_BUILD_VERSION`.
     - Assert all three are processed successfully (default range is `>=0.0.0, <=CURRENT`).
 
-33. **`default_supported_range_excludes_future_versions`**
+27. **`default_supported_range_excludes_future_versions`**
     - Start a runtime with default options.
     - Insert an instance pinned at a version higher than the current build (e.g., `99.0.0`).
     - Assert the runtime abandons it (future versions are not supported).
 
-34. **`custom_supported_replay_versions_narrows_range`**
-    - Start a runtime with `supported_replay_versions: Some([>=1.0.0, <2.0.0])`.
+28. **`custom_supported_replay_versions_narrows_range`**
+    - Start a runtime with `supported_replay_versions: Some([>=1.0.0, <=1.9.999])`.
     - Insert instances pinned at `0.9.0`, `1.5.0`, and `2.0.0`.
     - Assert only `1.5.0` is processed; the others are abandoned.
 
-35. **`supported_replay_versions_ignored_when_drain_mode_enabled`**
-    - Start a runtime with `disable_version_filtering: true` and `supported_replay_versions: Some([>=1.0.0, <2.0.0])`.
-    - Assert provider receives `filter=None` (not the custom range).
-    - The runtime-side check still uses the custom range for abandon decisions.
+29. **`wide_supported_range_drains_stuck_items_via_deserialization_error`**
+    - Insert instances pinned at an unsupported future version (e.g., `99.0.0`) with
+      history containing unknown event types.
+    - Start a runtime with `supported_replay_versions: Some([>=0.0.0, <=99.0.0])`
+      and `max_attempts: 3`.
+    - The runtime fetches the items (wide range includes `99.0.0`), attempts replay,
+      hits deserialization errors (unknown event types), and the poison path terminates
+      them with clear error messages.
+    - This is the recommended operational procedure for draining stuck orchestrations.
 
 #### H. Observability tests
 
-36. **`runtime_logs_warning_on_incompatible_abandon`**
+30. **`runtime_logs_warning_on_incompatible_abandon`**
     - Fetch an incompatible item, trigger runtime-side abandon.
     - Assert a warning log is emitted containing: instance ID, pinned version, supported range.
 
-37. **`runtime_logs_capability_declaration_at_startup`**
-    - Start a runtime with an explicit `supported_pinned_versions` config.
+31. **`runtime_logs_capability_declaration_at_startup`**
+    - Start a runtime with an explicit `supported_replay_versions` config.
     - Assert an info-level log at startup lists the supported version ranges.
-
-38. **`runtime_logs_drain_mode_warning_at_startup`**
-    - Start a runtime with `disable_version_filtering: true`.
-    - Assert a warning log at startup indicating drain mode is active, with guidance that
-      this should be temporary.
 
 #### I. Provider deserialization contract tests (`src/provider_validation/capability_filtering.rs`)
 
 These are provider validation tests that enforce the two deserialization contract requirements.
 All providers MUST pass these.
 
-39. **`fetch_filter_skips_execution_with_corrupted_history`**
+39. **`fetch_corrupted_history_filtered_vs_unfiltered`**
     - Seed an execution with deliberately undeserializable event data in its history.
     - Set the execution's pinned version to one that the filter excludes.
-    - Fetch with the excluding filter.
-    - Assert `Ok(None)` — no error raised, no deserialization attempted.
-    - **Validates:** Requirement 1 — filter is applied before history loading.
-
-40. **`fetch_filter_none_with_corrupted_history_returns_permanent_error`**
-    - Seed an execution with deliberately undeserializable event data in its history
-      (but a valid `OrchestrationStarted` as event_id=1 so the instance row is valid).
-    - Fetch with `filter=None`.
-    - Assert the fetch returns `Err(ProviderError)` where `e.is_retryable() == false` (permanent).
-    - **Validates:** Requirement 2 — deserialization errors produce permanent errors, not silent drops.
+    - **Part A (filtered):** Fetch with the excluding filter.
+      Assert `Ok(None)` — no error raised, no deserialization attempted.
+      **Validates:** Requirement 1 — filter is applied before history loading.
+    - **Part B (unfiltered):** Fetch with `filter=None`.
+      Assert the fetch returns `Err(ProviderError)` where `e.is_retryable() == false` (permanent).
+      **Validates:** Requirement 2 — deserialization errors produce permanent errors, not silent drops.
 
 41. **`fetch_deserialization_error_increments_attempt_count`**
     - Seed an execution with deliberately undeserializable history events.

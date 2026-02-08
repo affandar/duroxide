@@ -359,7 +359,7 @@ async fn create_completed_instance_with_parent(
 
     provider.enqueue_for_orchestrator(start_item, None).await.unwrap();
     let (_item, lock_token, _) = provider
-        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
         .await
         .unwrap()
         .unwrap();
@@ -388,6 +388,7 @@ async fn create_completed_instance_with_parent(
                 orchestration_name: Some("TestOrch".to_string()),
                 orchestration_version: Some("1.0.0".to_string()),
                 parent_instance_id,
+                pinned_duroxide_version: None,
             },
             vec![],
         )

@@ -436,6 +436,9 @@ pub use providers::{
     ExecutionInfo, InstanceInfo, ProviderAdmin, QueueDepths, ScheduledActivityIdentifier, SystemMetrics,
 };
 
+// Re-export capability filtering types
+pub use providers::{DispatcherCapabilityFilter, SemverRange, SemverVersion};
+
 // Re-export deletion/pruning types for Client API users
 pub use providers::{DeleteInstanceResult, InstanceFilter, InstanceTree, PruneOptions, PruneResult};
 
@@ -834,6 +837,7 @@ pub enum ConfigErrorKind {
 pub enum AppErrorKind {
     ActivityFailed,
     OrchestrationFailed,
+    Panicked,
     Cancelled { reason: String },
 }
 
@@ -876,6 +880,7 @@ impl ErrorDetails {
             },
             ErrorDetails::Application { kind, message, .. } => match kind {
                 AppErrorKind::Cancelled { reason } => format!("canceled: {reason}"),
+                AppErrorKind::Panicked => format!("orchestration panicked: {message}"),
                 _ => message.clone(),
             },
             ErrorDetails::Poison {

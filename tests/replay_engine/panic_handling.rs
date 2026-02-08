@@ -18,7 +18,7 @@ fn panic_string() {
     let mut engine = create_engine(history);
     let result = execute(&mut engine, PanicHandler::new("oops something went wrong"));
 
-    assert_nondeterminism(&result);
+    assert_panicked(&result);
     assert_failed_with_message(&result, "oops something went wrong");
 }
 
@@ -49,7 +49,7 @@ fn panic_other() {
     let mut engine = create_engine(history);
     let result = execute(&mut engine, Arc::new(PanicIntHandler));
 
-    assert_nondeterminism(&result);
+    assert_panicked(&result);
     // Non-string panics get a generic message
     assert_failed_with_message(&result, "42");
 }
@@ -88,6 +88,6 @@ fn panic_during_await() {
     let mut engine = create_engine(history);
     let result = execute(&mut engine, Arc::new(PanicAfterScheduleHandler));
 
-    assert_nondeterminism(&result);
+    assert_panicked(&result);
     assert_failed_with_message(&result, "panic after activity");
 }

@@ -14,6 +14,28 @@
 mod tests {
     use duroxide::provider_validations::{
         ProviderFactory,
+        // Capability filtering tests
+        capability_filtering::{
+            test_ack_stores_pinned_version_via_metadata_update,
+            test_concurrent_filtered_fetch_no_double_lock,
+            test_continue_as_new_execution_gets_own_pinned_version,
+            test_fetch_corrupted_history_filtered_vs_unfiltered,
+            test_fetch_deserialization_error_eventually_reaches_poison,
+            test_fetch_deserialization_error_increments_attempt_count,
+            test_fetch_filter_applied_before_history_deserialization,
+            test_fetch_filter_boundary_versions,
+            test_fetch_filter_does_not_lock_skipped_instances,
+            test_fetch_filter_null_pinned_version_always_compatible,
+            test_fetch_filter_skips_incompatible_selects_compatible,
+            test_fetch_single_range_only_uses_first_range,
+            test_fetch_with_compatible_filter_returns_item,
+            test_fetch_with_filter_none_returns_any_item,
+            test_fetch_with_incompatible_filter_skips_item,
+            test_filter_with_empty_supported_versions_returns_nothing,
+            test_pinned_version_immutable_across_ack_cycles,
+            test_pinned_version_stored_via_ack_metadata,
+            test_provider_updates_pinned_version_when_told,
+        },
         // Bulk deletion tests
         bulk_deletion::{
             test_delete_instance_bulk_cascades_to_children, test_delete_instance_bulk_completed_before_filter,
@@ -664,5 +686,107 @@ mod tests {
     #[tokio::test]
     async fn test_sqlite_delete_instance_bulk_cascades_to_children() {
         test_delete_instance_bulk_cascades_to_children(&SqliteTestFactory).await;
+    }
+
+    // Capability filtering tests
+    #[tokio::test]
+    async fn test_sqlite_fetch_with_filter_none_returns_any_item() {
+        test_fetch_with_filter_none_returns_any_item(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_fetch_with_compatible_filter_returns_item() {
+        test_fetch_with_compatible_filter_returns_item(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_fetch_with_incompatible_filter_skips_item() {
+        test_fetch_with_incompatible_filter_skips_item(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_fetch_filter_skips_incompatible_selects_compatible() {
+        test_fetch_filter_skips_incompatible_selects_compatible(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_fetch_filter_does_not_lock_skipped_instances() {
+        test_fetch_filter_does_not_lock_skipped_instances(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_fetch_filter_null_pinned_version_always_compatible() {
+        test_fetch_filter_null_pinned_version_always_compatible(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_fetch_filter_boundary_versions() {
+        test_fetch_filter_boundary_versions(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_pinned_version_stored_via_ack_metadata() {
+        test_pinned_version_stored_via_ack_metadata(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_pinned_version_immutable_across_ack_cycles() {
+        test_pinned_version_immutable_across_ack_cycles(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_continue_as_new_execution_gets_own_pinned_version() {
+        test_continue_as_new_execution_gets_own_pinned_version(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_filter_with_empty_supported_versions_returns_nothing() {
+        test_filter_with_empty_supported_versions_returns_nothing(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_concurrent_filtered_fetch_no_double_lock() {
+        test_concurrent_filtered_fetch_no_double_lock(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_ack_stores_pinned_version_via_metadata_update() {
+        test_ack_stores_pinned_version_via_metadata_update(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_provider_updates_pinned_version_when_told() {
+        test_provider_updates_pinned_version_when_told(&SqliteTestFactory).await;
+    }
+
+    // Category I: Deserialization contract tests (require SqliteProvider for SQL injection)
+    #[tokio::test]
+    async fn test_sqlite_fetch_corrupted_history_filtered_vs_unfiltered() {
+        let sqlite = Arc::new(SqliteProvider::new_in_memory().await.unwrap());
+        test_fetch_corrupted_history_filtered_vs_unfiltered(&*sqlite, &*sqlite).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_fetch_deserialization_error_increments_attempt_count() {
+        let sqlite = Arc::new(SqliteProvider::new_in_memory().await.unwrap());
+        test_fetch_deserialization_error_increments_attempt_count(&*sqlite, &*sqlite).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_fetch_deserialization_error_eventually_reaches_poison() {
+        let sqlite = Arc::new(SqliteProvider::new_in_memory().await.unwrap());
+        test_fetch_deserialization_error_eventually_reaches_poison(&*sqlite, &*sqlite).await;
+    }
+
+    // Category F2: Additional edge cases
+    #[tokio::test]
+    async fn test_sqlite_fetch_filter_applied_before_history_deserialization() {
+        let sqlite = Arc::new(SqliteProvider::new_in_memory().await.unwrap());
+        test_fetch_filter_applied_before_history_deserialization(&*sqlite, &*sqlite).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_fetch_single_range_only_uses_first_range() {
+        test_fetch_single_range_only_uses_first_range(&SqliteTestFactory).await;
     }
 }

@@ -527,10 +527,10 @@ impl ReplayEngine {
             Ok(f) => f,
             Err(panic_payload) => {
                 let msg = extract_panic_message(panic_payload);
-                return TurnResult::Failed(crate::ErrorDetails::Configuration {
-                    kind: crate::ConfigErrorKind::Nondeterminism,
-                    resource: String::new(),
-                    message: Some(msg),
+                return TurnResult::Failed(crate::ErrorDetails::Application {
+                    kind: crate::AppErrorKind::Panicked,
+                    message: msg,
+                    retryable: false,
                 });
             }
         };
@@ -573,10 +573,10 @@ impl ReplayEngine {
                     }
                     Err(panic_payload) => {
                         let msg = extract_panic_message(panic_payload);
-                        return TurnResult::Failed(crate::ErrorDetails::Configuration {
-                            kind: crate::ConfigErrorKind::Nondeterminism,
-                            resource: String::new(),
-                            message: Some(msg),
+                        return TurnResult::Failed(crate::ErrorDetails::Application {
+                            kind: crate::AppErrorKind::Panicked,
+                            message: msg,
+                            retryable: false,
                         });
                     }
                 }
@@ -805,10 +805,10 @@ impl ReplayEngine {
                 }
                 Err(panic_payload) => {
                     let msg = extract_panic_message(panic_payload);
-                    return TurnResult::Failed(crate::ErrorDetails::Configuration {
-                        kind: crate::ConfigErrorKind::Nondeterminism,
-                        resource: String::new(),
-                        message: Some(msg),
+                    return TurnResult::Failed(crate::ErrorDetails::Application {
+                        kind: crate::AppErrorKind::Panicked,
+                        message: msg,
+                        retryable: false,
                     });
                 }
             }

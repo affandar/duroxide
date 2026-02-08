@@ -286,6 +286,57 @@ ctx.continue_as_new_versioned("1.0.0", input).await
 
 ---
 
+## Draining Stuck Orchestrations (Version Mismatch)
+
+After a major upgrade, some orchestrations may be pinned to an old duroxide version that no
+running node supports. These items sit in the queue indefinitely because the capability filter
+excludes them.
+
+To clear them, temporarily widen `supported_replay_versions` on one or more nodes:
+
+```rust
+let runtime = Runtime::builder()
+    .with_provider(provider)
+    .with_options(RuntimeOptions {
+        // Widen range to include all possible pinned versions
+        supported_replay_versions: Some(SemverRange::new(
+            SemverVersion::new(0, 0, 0),
+            SemverVersion::new(99, 0, 0),
+        )),
+        max_attempts: 5,
+        ..Default::default()
+    })
+    .build()
+    .await?;
+```
+
+**What happens:**
+1. The wide range causes the provider filter to pass for all items, regardless of pinned version.
+2. The provider fetches the item and attempts to deserialize its history. If the history
+   contains unknown event types (from a newer duroxide version), deserialization fails at the
+   provider level with a permanent error. The item never reaches the runtime's replay engine.
+3. Each fetch cycle increments the item's `attempt_count`. The item remains in the queue with
+   repeated permanent errors, effectively preventing it from being processed.
+4. Items whose history deserializes successfully are processed normally by the replay engine.
+
+**After draining:** Revert `supported_replay_versions` to `None` (the default) or the
+appropriate range for your cluster.
+
+> **Note:** This approach is safe because items with truly incompatible history fail at
+> provider-level deserialization — they never reach the replay engine and are never silently
+> replayed with incorrect semantics. The items remain in the queue with escalating
+> `attempt_count` but are functionally drained (permanently erroring on every fetch).
+
+> **Current limitation:** The drain mechanism relies entirely on serde deserialization
+> failures for unknown `EventKind` variants. There is no runtime-level replay engine version
+> check — the `supported_replay_versions` range controls only which items are fetched, not
+> whether the replay engine can actually process them. If a future version introduces
+> semantic changes without adding new event types (i.e., history still deserializes but
+> replay behavior differs), the wide-range approach would not catch this. A built-in
+> replay-engine compatibility check may be added in a future phase.
+
+---
+
 ## See Also
 
 - [Migration Guide](migration-guide.md) - For major version migrations

@@ -35,7 +35,7 @@ pub async fn orchestration_attempt_count_starts_at_one(factory: &dyn ProviderFac
 
     // Fetch the item
     let (_item, lock_token, attempt_count) = provider
-        .fetch_orchestration_item(lock_timeout, Duration::ZERO)
+        .fetch_orchestration_item(lock_timeout, Duration::ZERO, None)
         .await
         .expect("fetch should succeed")
         .expect("item should be present");
@@ -84,7 +84,7 @@ pub async fn orchestration_attempt_count_increments_on_refetch(factory: &dyn Pro
 
     // First fetch - attempt_count = 1
     let (_item1, lock_token1, attempt_count1) = provider
-        .fetch_orchestration_item(lock_timeout, Duration::ZERO)
+        .fetch_orchestration_item(lock_timeout, Duration::ZERO, None)
         .await
         .expect("fetch should succeed")
         .expect("item should be present");
@@ -98,7 +98,7 @@ pub async fn orchestration_attempt_count_increments_on_refetch(factory: &dyn Pro
 
     // Second fetch - attempt_count = 2
     let (_item2, lock_token2, attempt_count2) = provider
-        .fetch_orchestration_item(lock_timeout, Duration::ZERO)
+        .fetch_orchestration_item(lock_timeout, Duration::ZERO, None)
         .await
         .expect("fetch should succeed")
         .expect("item should be present");
@@ -112,7 +112,7 @@ pub async fn orchestration_attempt_count_increments_on_refetch(factory: &dyn Pro
 
     // Third fetch - attempt_count = 3
     let (_item3, lock_token3, attempt_count3) = provider
-        .fetch_orchestration_item(lock_timeout, Duration::ZERO)
+        .fetch_orchestration_item(lock_timeout, Duration::ZERO, None)
         .await
         .expect("fetch should succeed")
         .expect("item should be present");
@@ -419,7 +419,7 @@ pub async fn abandon_orchestration_item_ignore_attempt_decrements(factory: &dyn 
 
     // First fetch - attempt_count = 1
     let (_item1, token1, attempt1) = provider
-        .fetch_orchestration_item(lock_timeout, Duration::ZERO)
+        .fetch_orchestration_item(lock_timeout, Duration::ZERO, None)
         .await
         .expect("fetch should succeed")
         .expect("item should be present");
@@ -433,7 +433,7 @@ pub async fn abandon_orchestration_item_ignore_attempt_decrements(factory: &dyn 
 
     // Second fetch - attempt_count = 2
     let (_item2, token2, attempt2) = provider
-        .fetch_orchestration_item(lock_timeout, Duration::ZERO)
+        .fetch_orchestration_item(lock_timeout, Duration::ZERO, None)
         .await
         .expect("fetch should succeed")
         .expect("item should be present");
@@ -447,7 +447,7 @@ pub async fn abandon_orchestration_item_ignore_attempt_decrements(factory: &dyn 
 
     // Third fetch - attempt_count = 2 (1 stored + 1 from new fetch)
     let (_item3, token3, attempt3) = provider
-        .fetch_orchestration_item(lock_timeout, Duration::ZERO)
+        .fetch_orchestration_item(lock_timeout, Duration::ZERO, None)
         .await
         .expect("fetch should succeed")
         .expect("item should be present");
@@ -576,7 +576,7 @@ pub async fn max_attempt_count_across_message_batch(factory: &dyn ProviderFactor
 
     // First fetch - attempt_count = 1 for the start message
     let (_item1, lock_token1, attempt1) = provider
-        .fetch_orchestration_item(lock_timeout, Duration::ZERO)
+        .fetch_orchestration_item(lock_timeout, Duration::ZERO, None)
         .await
         .expect("fetch should succeed")
         .expect("item should be present");
@@ -591,7 +591,7 @@ pub async fn max_attempt_count_across_message_batch(factory: &dyn ProviderFactor
 
     // Second fetch - attempt_count = 2 for the start message
     let (_item2, lock_token2, attempt2) = provider
-        .fetch_orchestration_item(lock_timeout, Duration::ZERO)
+        .fetch_orchestration_item(lock_timeout, Duration::ZERO, None)
         .await
         .expect("fetch should succeed")
         .expect("item should be present");
@@ -623,7 +623,7 @@ pub async fn max_attempt_count_across_message_batch(factory: &dyn ProviderFactor
     // - Activity completion: attempt_count = 1 (first time being fetched)
     // The returned attempt_count should be MAX(3, 1) = 3
     let (item3, lock_token3, attempt3) = provider
-        .fetch_orchestration_item(lock_timeout, Duration::ZERO)
+        .fetch_orchestration_item(lock_timeout, Duration::ZERO, None)
         .await
         .expect("fetch should succeed")
         .expect("item should be present");

@@ -123,12 +123,39 @@ impl Runtime {
         let concurrency = self.options.orchestration_concurrency;
         let shutdown = self.shutdown_flag.clone();
 
+        // Build the capability filter once for all workers (immutable for this runtime's lifetime).
+        let capability_filter = if let Some(ref custom_range) = self.options.supported_replay_versions {
+            crate::providers::DispatcherCapabilityFilter {
+                supported_duroxide_versions: vec![custom_range.clone()],
+            }
+        } else {
+            crate::providers::DispatcherCapabilityFilter::default_for_current_build()
+        };
+        tracing::info!(
+            target: "duroxide::runtime",
+            supported_range = %format!("{}", capability_filter.supported_duroxide_versions.iter()
+                .map(|r| format!(">={}, <={}", r.min, r.max))
+                .collect::<Vec<_>>()
+                .join(" | ")),
+            "Orchestration dispatcher capability filter configured"
+        );
+
+        // The runtime-side supported range is the same as the filter range.
+        // Used for defense-in-depth checks after fetch (validates the provider's filtering).
+        let runtime_supported_range = if let Some(ref custom_range) = self.options.supported_replay_versions {
+            custom_range.clone()
+        } else {
+            crate::providers::SemverRange::default_for_current_build()
+        };
+
         tokio::spawn(async move {
             let mut worker_handles = Vec::new();
 
             for worker_idx in 0..concurrency {
                 let rt = Arc::clone(&self);
                 let shutdown = Arc::clone(&shutdown);
+                let cap_filter = Some(capability_filter.clone());
+                let supported_range = runtime_supported_range.clone();
                 // Generate unique worker ID: orch-{index}-{runtime_id}
                 let worker_id = format!("orch-{worker_idx}-{}", rt.runtime_id);
                 let handle = tokio::spawn(async move {
@@ -148,12 +175,57 @@ impl Runtime {
 
                         match rt
                             .history_store
-                            .fetch_orchestration_item(rt.options.orchestrator_lock_timeout, poll_timeout)
+                            .fetch_orchestration_item(
+                                rt.options.orchestrator_lock_timeout,
+                                poll_timeout,
+                                cap_filter.as_ref(),
+                            )
                             .await
                         {
                             Ok(Some((item, lock_token, attempt_count))) => {
                                 // Reset error counter on success
                                 consecutive_retryable_errors = 0;
+
+                                // Runtime-side compatibility check (defense-in-depth).
+                                // Even if the provider filter missed this item (bug, provider ignoring filter),
+                                // we validate the pinned version before attempting replay.
+                                // The pinned version is extracted from the OrchestrationStarted event
+                                // (always event_id=1, always a known event type on any version).
+                                let pinned_version = item.history.iter().find_map(|e| {
+                                    if matches!(&e.kind, crate::EventKind::OrchestrationStarted { .. }) {
+                                        crate::providers::SemverVersion::parse(&e.duroxide_version)
+                                    } else {
+                                        None
+                                    }
+                                });
+
+                                if let Some(pinned) = pinned_version
+                                    && !supported_range.contains(pinned)
+                                {
+                                    tracing::warn!(
+                                        target: "duroxide::runtime",
+                                        instance = %item.instance,
+                                        pinned_version = %pinned,
+                                        supported_range = %format!(">={}, <={}", supported_range.min, supported_range.max),
+                                        attempt_count = attempt_count,
+                                        "Execution pinned at incompatible version, abandoning (runtime-side check)"
+                                    );
+                                    // Abandon with a short delay to prevent tight spin loops when
+                                    // a single runtime encounters incompatible items. The item still
+                                    // reaches max_attempts quickly (e.g., 10 × 1s = 10s) while
+                                    // avoiding CPU burn and starvation of compatible work items.
+                                    let _ = rt
+                                        .history_store
+                                        .abandon_orchestration_item(
+                                            &lock_token,
+                                            Some(Duration::from_secs(1)),
+                                            false,
+                                        )
+                                        .await;
+                                    continue;
+                                }
+                                // pinned_version == None means no history yet (brand new instance)
+                                // — always compatible, proceed normally.
 
                                 // Spawn lock renewal task for this orchestration
                                 let renewal_handle = spawn_orchestration_lock_renewal_task(
@@ -775,6 +847,21 @@ impl Runtime {
         metadata: ExecutionMetadata,
         cancelled_activities: Vec<ScheduledActivityIdentifier>,
     ) -> Result<(), ProviderError> {
+        // Invariant: pinned_duroxide_version may only be set on the first turn of an
+        // execution, when OrchestrationStarted is in the history delta. The provider
+        // stores it unconditionally — the runtime is responsible for never sending it
+        // on subsequent turns. This assertion catches bugs in compute_execution_metadata
+        // or manual metadata construction.
+        debug_assert!(
+            metadata.pinned_duroxide_version.is_none()
+                || history_delta.iter().any(|e| matches!(&e.kind, crate::EventKind::OrchestrationStarted { .. })),
+            "pinned_duroxide_version must only be set when OrchestrationStarted is in the history delta \
+             (first turn of an execution). Setting it on subsequent turns would corrupt the execution's \
+             version routing. pinned={:?}, delta_events={:?}",
+            metadata.pinned_duroxide_version,
+            history_delta.iter().map(|e| std::mem::discriminant(&e.kind)).collect::<Vec<_>>()
+        );
+
         let mut attempts: u32 = 0;
         let max_attempts: u32 = 5;
 
@@ -919,6 +1006,7 @@ impl Runtime {
             orchestration_name: Some(item.orchestration_name.clone()),
             orchestration_version: Some(item.version.clone()),
             parent_instance_id: parent_link.as_ref().map(|(pi, _)| pi.clone()),
+            pinned_duroxide_version: None, // Poison path — version already set at creation
         };
 
         // If this is a sub-orchestration, notify parent of failure

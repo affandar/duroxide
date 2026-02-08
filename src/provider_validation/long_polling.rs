@@ -19,7 +19,7 @@ pub async fn test_short_poll_returns_immediately(provider: &dyn Provider) {
 
     let start = Instant::now();
     let result = provider
-        .fetch_orchestration_item(lock_timeout, poll_timeout)
+        .fetch_orchestration_item(lock_timeout, poll_timeout, None)
         .await
         .expect("Fetch failed");
     let elapsed = start.elapsed();
@@ -47,7 +47,7 @@ pub async fn test_long_poll_waits_for_timeout(provider: &dyn Provider) {
 
     let start = Instant::now();
     let result = provider
-        .fetch_orchestration_item(lock_timeout, poll_timeout)
+        .fetch_orchestration_item(lock_timeout, poll_timeout, None)
         .await
         .expect("Fetch failed");
     let elapsed = start.elapsed();
@@ -76,7 +76,7 @@ pub async fn test_fetch_respects_timeout_upper_bound(provider: &dyn Provider) {
 
     let start = Instant::now();
     let result = provider
-        .fetch_orchestration_item(lock_timeout, poll_timeout)
+        .fetch_orchestration_item(lock_timeout, poll_timeout, None)
         .await
         .expect("Fetch failed");
     let elapsed = start.elapsed();

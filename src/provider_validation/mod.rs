@@ -10,6 +10,8 @@ pub mod bulk_deletion;
 #[cfg(feature = "provider-test")]
 pub mod cancellation;
 #[cfg(feature = "provider-test")]
+pub mod capability_filtering;
+#[cfg(feature = "provider-test")]
 pub mod deletion;
 #[cfg(feature = "provider-test")]
 pub mod error_handling;
@@ -68,7 +70,7 @@ pub(crate) async fn create_instance(provider: &dyn crate::providers::Provider, i
         .map_err(|e| e.to_string())?;
 
     let (_item, lock_token, _attempt_count) = provider
-        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
         .await
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "Failed to fetch orchestration item".to_string())?;

@@ -440,8 +440,9 @@ impl Provider for MyProvider {
         &self,
         lock_timeout: Duration,
         poll_timeout: Duration,
+        filter: Option<&DispatcherCapabilityFilter>,
     ) -> Result<Option<(OrchestrationItem, String, u32)>, ProviderError> {
-        todo!("Fetch turn with instance lock")
+        todo!("Fetch turn with instance lock, applying capability filter")
     }
     
     async fn ack_orchestration_item(
@@ -821,12 +822,39 @@ Use database transactions to ensure atomicity.
 
 This is the most complex method. It must:
 
-1. Find an instance with pending work
+1. Find an instance with pending work (applying capability filter if provided)
 2. Acquire an instance-level lock (prevent concurrent processing)
 3. Tag all visible messages with the lock token
 4. Load instance metadata
 5. Load event history for current execution
 6. Return everything together
+
+#### Capability Filtering Contract
+
+`fetch_orchestration_item` accepts an optional `DispatcherCapabilityFilter`. When provided, the provider **MUST** apply the filter before acquiring the lock or loading history. The correct implementation order is:
+
+1. Find a candidate instance from the queue.
+2. Check the execution's `duroxide_version_major/minor/patch` against the filter. **Skip if incompatible.**
+3. Only then acquire the instance lock.
+4. Only then load and deserialize history.
+
+This ordering is critical — it ensures the provider never loads or deserializes history events from an incompatible execution (which may contain unknown event types from a newer duroxide version).
+
+When `filter` is `None`, behaviour is unchanged (legacy/drain mode).
+
+#### History Deserialization Contract
+
+Even with filtering, a provider may encounter undeserializable history events in edge cases (e.g., `filter=None`, corrupted data, bugs). The contract:
+
+1. **MUST NOT** silently drop events that fail to deserialize. Silent dropping leads to incomplete history and confusing nondeterminism errors.
+2. **MUST** return `ProviderError::permanent(...)` when history deserialization fails. The `attempt_count` must have been incremented before the error is returned so the existing max-attempts poison machinery can terminate the orchestration.
+
+The required implementation pattern:
+1. Acquire instance lock and increment `attempt_count` (commit atomically).
+2. Load history events.
+3. If any event fails to deserialize → return `ProviderError::permanent("Failed to deserialize event at position N: {error}")`.
+4. On the next fetch cycle, the item is fetched again with a higher `attempt_count`.
+5. Once `attempt_count > max_attempts`, the runtime poisons the orchestration with a clear error.
 
 **Pseudocode:**
 ```
@@ -1554,8 +1582,18 @@ The validation suite tests:
 - Lock expiration
 - Concurrent access
 - Error handling
+- **Capability filtering** — version-based fetch filtering, NULL compatibility, boundary versions, ContinueAsNew isolation
+- **Deserialization contract** — corrupted history handling, attempt_count increment, poison path
 
-See `tests/sqlite_provider_validations.rs` for examples.
+The capability filtering tests (`provider_validations::capability_filtering`) validate:
+- Filter-before-lock ordering (incompatible items never locked)
+- NULL pinned version treated as always compatible
+- Boundary version correctness at range edges
+- ContinueAsNew creates independent pinned versions (not inherited)
+- Deserialization errors produce permanent errors with incremented attempt_count
+- Filter applied before history deserialization (corrupted history + excluded version = no error)
+
+See `tests/sqlite_provider_validations.rs` for examples of wiring these tests for a specific provider.
 
 ---
 
@@ -1674,10 +1712,15 @@ Before considering your provider complete:
 - [ ] `fetch_orchestration_item()` acquires instance-level lock
 - [ ] `fetch_orchestration_item()` tags all visible messages
 - [ ] `fetch_orchestration_item()` loads correct history
+- [ ] `fetch_orchestration_item()` applies capability filter BEFORE acquiring lock and loading history
+- [ ] `fetch_orchestration_item()` returns `Ok(None)` for incompatible items (not an error)
+- [ ] `fetch_orchestration_item()` treats NULL pinned version as always compatible
+- [ ] `fetch_orchestration_item()` returns `ProviderError::permanent` on history deserialization failure (not silent drop)
 - [ ] `ack_orchestration_item()` is fully atomic
 - [ ] `ack_orchestration_item()` validates lock before committing
 - [ ] `ack_orchestration_item()` handles cancelled_activities correctly
 - [ ] `ack_orchestration_item()` enqueues before cancelling (ordering)
+- [ ] `ack_orchestration_item()` stores `pinned_duroxide_version` unconditionally from `ExecutionMetadata` when provided (no write-once guard — the runtime enforces this invariant)
 
 ### Concurrency
 - [ ] Lock acquisition is atomic (no check-then-set)

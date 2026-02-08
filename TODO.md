@@ -2,6 +2,7 @@
 
 ### Active TODOs
 
+- **Poison on deserialization failure** — Currently, when `fetch_orchestration_item` hits a deserialization error (e.g. unknown `EventKind` from a newer duroxide version), the provider returns a permanent error and the runtime logs-and-continues indefinitely. The item's `attempt_count` increments each cycle but it never reaches the poison termination path because it never enters the dispatcher. Need to wire up poison termination for items that repeatedly fail deserialization. See `sqlite.rs` `read_history_in_tx` error path and `orchestration.rs` permanent error handler.
 - Size limits 
 - RaiseEvent pub/sub
 - **Nested Select2 Support** - Enable `select2(select2(a, b), c)` composition

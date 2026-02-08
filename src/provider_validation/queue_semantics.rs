@@ -122,7 +122,7 @@ pub async fn test_worker_ack_atomicity<F: ProviderFactory>(factory: &F) {
         .await
         .unwrap();
     let (_item, lock_token, _attempt_count) = provider
-        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
         .await
         .unwrap()
         .unwrap();
@@ -196,7 +196,7 @@ pub async fn test_worker_ack_atomicity<F: ProviderFactory>(factory: &F) {
 
     // 2. Orchestrator queue has completion item
     let (orchestration_item, _lock_token, _attempt_count) = provider
-        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
         .await
         .unwrap()
         .unwrap();
@@ -221,7 +221,7 @@ pub async fn test_timer_delayed_visibility<F: ProviderFactory>(factory: &F) {
         .await
         .unwrap();
     let (_item, lock_token, _attempt_count) = provider
-        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
         .await
         .unwrap()
         .unwrap();
@@ -269,7 +269,7 @@ pub async fn test_timer_delayed_visibility<F: ProviderFactory>(factory: &F) {
     // Fetch orchestration item immediately → should return None (timer not visible yet)
     assert!(
         provider
-            .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+            .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
             .await
             .unwrap()
             .is_none()
@@ -280,7 +280,7 @@ pub async fn test_timer_delayed_visibility<F: ProviderFactory>(factory: &F) {
 
     // Fetch again → should return TimerFired when visible_at <= now
     let (item2, _lock_token2, _attempt_count2) = provider
-        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
         .await
         .unwrap()
         .unwrap();

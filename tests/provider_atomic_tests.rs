@@ -60,7 +60,7 @@ async fn test_ignore_work_after_terminal_event() {
 
     // Fetch orchestration item - runtime would bail and just ack
     let (item, lock_token, _attempt_count) = store
-        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
         .await
         .unwrap()
         .unwrap();
@@ -84,7 +84,7 @@ async fn test_ignore_work_after_terminal_event() {
     // Queue should now be empty
     assert!(
         store
-            .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+            .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
             .await
             .unwrap()
             .is_none()
@@ -125,7 +125,7 @@ async fn test_fetch_orchestration_item_new_instance() {
 
     // Fetch orchestration item
     let (item, _lock_token, _attempt_count) = store
-        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
         .await
         .unwrap()
         .unwrap();
@@ -196,7 +196,7 @@ async fn test_fetch_orchestration_item_existing_instance() {
 
     // Fetch orchestration item
     let (item, _lock_token, _attempt_count) = store
-        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
         .await
         .unwrap()
         .unwrap();
@@ -223,7 +223,7 @@ async fn test_fetch_orchestration_item_no_work() {
 
     // No work items
     let item = store
-        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
         .await
         .unwrap();
     assert!(item.is_none());
@@ -256,7 +256,7 @@ async fn test_ack_orchestration_item_atomic() {
 
     // Fetch and get lock token
     let (_item, lock_token, _attempt_count) = store
-        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
         .await
         .unwrap()
         .unwrap();
@@ -327,7 +327,7 @@ async fn test_ack_orchestration_item_atomic() {
     // Verify orchestrator queue is empty (item was acked)
     assert!(
         store
-            .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+            .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
             .await
             .unwrap()
             .is_none()
@@ -386,7 +386,7 @@ async fn test_abandon_orchestration_item() {
 
     // Fetch and get lock token
     let (_item, lock_token, _attempt_count) = store
-        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
         .await
         .unwrap()
         .unwrap();
@@ -399,7 +399,7 @@ async fn test_abandon_orchestration_item() {
 
     // Verify item is back in queue
     let (item2, _lock_token2, _attempt_count2) = store
-        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
         .await
         .unwrap()
         .unwrap();
@@ -438,7 +438,7 @@ async fn test_abandon_orchestration_item_with_delay() {
     // Fetch and get lock token
     let lock_timeout = Duration::from_secs(30);
     let (_item, lock_token, _attempt_count) = store
-        .fetch_orchestration_item(lock_timeout, Duration::ZERO)
+        .fetch_orchestration_item(lock_timeout, Duration::ZERO, None)
         .await
         .unwrap()
         .unwrap();
@@ -451,7 +451,7 @@ async fn test_abandon_orchestration_item_with_delay() {
     // Should not be visible immediately
     assert!(
         store
-            .fetch_orchestration_item(lock_timeout, Duration::ZERO)
+            .fetch_orchestration_item(lock_timeout, Duration::ZERO, None)
             .await
             .unwrap()
             .is_none()
@@ -459,7 +459,7 @@ async fn test_abandon_orchestration_item_with_delay() {
     // After delay, it should be visible
     tokio::time::sleep(std::time::Duration::from_millis(600)).await;
     let (item2, _lock_token2, _attempt_count2) = store
-        .fetch_orchestration_item(lock_timeout, Duration::ZERO)
+        .fetch_orchestration_item(lock_timeout, Duration::ZERO, None)
         .await
         .unwrap()
         .unwrap();
@@ -504,7 +504,7 @@ async fn test_in_memory_provider_atomic_operations() {
 
     // Test fetch
     let (item, lock_token, _attempt_count) = store
-        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
         .await
         .unwrap()
         .unwrap();
@@ -559,7 +559,7 @@ async fn test_in_memory_provider_atomic_operations() {
         .unwrap();
 
     let (_item2, lock_token2, _attempt_count2) = store
-        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
         .await
         .unwrap()
         .unwrap();
@@ -571,7 +571,7 @@ async fn test_in_memory_provider_atomic_operations() {
 
     // Should be available again
     let (item3, _lock_token3, _attempt_count3) = store
-        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
         .await
         .unwrap()
         .unwrap();

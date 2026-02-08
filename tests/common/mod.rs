@@ -3,6 +3,7 @@
 #![allow(clippy::expect_used)]
 
 pub mod fault_injection;
+pub mod tracing_capture;
 
 use duroxide::providers::sqlite::SqliteProvider;
 use duroxide::providers::{ExecutionMetadata, Provider, WorkItem};
@@ -124,7 +125,7 @@ pub async fn test_create_execution(
 
     // Fetch to get lock token
     let (_item, lock_token, _attempt_count) = provider
-        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
         .await
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "Failed to fetch orchestration item".to_string())?;

@@ -173,7 +173,7 @@ pub async fn test_delete_cleans_queues_and_locks<F: ProviderFactory>(factory: &F
 
     // Fetch and ack to create the instance
     let (_item, lock_token, _) = provider
-        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
         .await
         .unwrap()
         .unwrap();
@@ -231,7 +231,7 @@ pub async fn test_delete_cleans_queues_and_locks<F: ProviderFactory>(factory: &F
         .await
         .unwrap();
     let (item, lock_token, _) = provider
-        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
         .await
         .unwrap()
         .unwrap();
@@ -394,7 +394,7 @@ pub async fn test_force_delete_prevents_ack_recreation<F: ProviderFactory>(facto
         .await
         .unwrap();
     let (_item, lock_token, _) = provider
-        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
         .await
         .unwrap()
         .unwrap();
@@ -443,7 +443,7 @@ pub async fn test_force_delete_prevents_ack_recreation<F: ProviderFactory>(facto
         .unwrap();
 
     let (_item2, lock_token2, _) = provider
-        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
         .await
         .unwrap()
         .unwrap();
@@ -519,7 +519,7 @@ async fn create_completed_instance_with_parent(
 
     provider.enqueue_for_orchestrator(start_item, None).await.unwrap();
     let (_item, lock_token, _) = provider
-        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
         .await
         .unwrap()
         .unwrap();
@@ -548,6 +548,7 @@ async fn create_completed_instance_with_parent(
                 orchestration_name: Some("TestOrch".to_string()),
                 orchestration_version: Some("1.0.0".to_string()),
                 parent_instance_id: parent_id.map(|s| s.to_string()),
+                pinned_duroxide_version: None,
             },
             vec![],
         )
@@ -562,7 +563,7 @@ async fn create_failed_instance(provider: &dyn crate::providers::Provider, insta
         .await
         .unwrap();
     let (_item, lock_token, _) = provider
-        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
         .await
         .unwrap()
         .unwrap();
@@ -604,7 +605,7 @@ async fn create_cancelled_instance(provider: &dyn crate::providers::Provider, in
         .await
         .unwrap();
     let (_item, lock_token, _) = provider
-        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
         .await
         .unwrap()
         .unwrap();
@@ -965,7 +966,7 @@ pub async fn test_stale_activity_after_delete_recreate<F: ProviderFactory>(facto
         .unwrap();
 
     let (_item, orch_lock, _) = provider
-        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
         .await
         .unwrap()
         .unwrap();
@@ -1042,7 +1043,7 @@ pub async fn test_stale_activity_after_delete_recreate<F: ProviderFactory>(facto
         .unwrap();
 
     let (_item2, orch_lock2, _) = provider
-        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
         .await
         .unwrap()
         .unwrap();
@@ -1117,7 +1118,7 @@ pub async fn test_stale_activity_after_delete_recreate<F: ProviderFactory>(facto
         .unwrap();
 
     let (item, lock_token, _) = provider
-        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
         .await
         .unwrap()
         .unwrap();
@@ -1172,10 +1173,11 @@ async fn create_child_instance(provider: &dyn crate::providers::Provider, instan
         orchestration_name: Some("ChildOrch".to_string()),
         orchestration_version: Some("1.0.0".to_string()),
         parent_instance_id: Some(parent_id.to_string()),
+        pinned_duroxide_version: None,
     };
 
     let (_item, lock_token, _attempt_count) = provider
-        .fetch_orchestration_item(Duration::from_secs(5), Duration::ZERO)
+        .fetch_orchestration_item(Duration::from_secs(5), Duration::ZERO, None)
         .await
         .unwrap()
         .unwrap();

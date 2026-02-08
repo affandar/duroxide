@@ -6,82 +6,16 @@
 mod common;
 
 use common::fault_injection::FailingProvider;
+use common::tracing_capture::CapturedEvent;
 use duroxide::providers::sqlite::SqliteProvider;
 use duroxide::providers::{Provider, WorkItem};
 use duroxide::runtime;
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{LogFormat, ObservabilityConfig, RuntimeOptions, UnregisteredBackoffConfig};
 use duroxide::{ActivityContext, Client, OrchestrationContext, OrchestrationRegistry, OrchestrationStatus};
-use std::collections::BTreeMap;
-use std::fmt;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
-use tracing::field::{Field, Visit};
-use tracing::{Dispatch, Event as TracingEvent, Level, Subscriber, dispatcher};
-use tracing_subscriber::filter::LevelFilter;
-use tracing_subscriber::layer::{Context as LayerContext, Layer};
-use tracing_subscriber::prelude::*;
-
-#[derive(Debug, Clone)]
-struct RecordedEvent {
-    level: Level,
-    target: String,
-    fields: BTreeMap<String, String>,
-}
-
-struct RecordingLayer {
-    events: Arc<Mutex<Vec<RecordedEvent>>>,
-}
-
-struct FieldVisitor<'a> {
-    fields: &'a mut BTreeMap<String, String>,
-}
-
-impl<'a> Visit for FieldVisitor<'a> {
-    fn record_str(&mut self, field: &Field, value: &str) {
-        self.fields.insert(field.name().to_string(), value.to_string());
-    }
-
-    fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {
-        self.fields.insert(field.name().to_string(), format!("{value:?}"));
-    }
-}
-
-impl<S> Layer<S> for RecordingLayer
-where
-    S: Subscriber,
-{
-    fn on_event(&self, event: &TracingEvent<'_>, _ctx: LayerContext<'_, S>) {
-        let mut fields = BTreeMap::new();
-        event.record(&mut FieldVisitor { fields: &mut fields });
-        let meta = event.metadata();
-        self.events.lock().unwrap().push(RecordedEvent {
-            level: *meta.level(),
-            target: meta.target().to_string(),
-            fields,
-        });
-    }
-}
-
-fn install_tracing() -> (Arc<Mutex<Vec<RecordedEvent>>>, tracing::dispatcher::DefaultGuard) {
-    let recorded_events = Arc::new(Mutex::new(Vec::new()));
-    let collector = tracing_subscriber::registry()
-        .with(RecordingLayer {
-            events: recorded_events.clone(),
-        })
-        .with(LevelFilter::TRACE);
-    let dispatcher = Dispatch::new(collector);
-    let guard = dispatcher::set_default(&dispatcher);
-    (recorded_events, guard)
-}
-
-fn normalize(value: &str) -> String {
-    value.trim_matches('"').to_string()
-}
-
-fn field(event: &RecordedEvent, key: &str) -> Option<String> {
-    event.fields.get(key).map(|v| normalize(v))
-}
+use tracing::Level;
 
 fn metrics_observability_config(label: &str) -> ObservabilityConfig {
     ObservabilityConfig {
@@ -94,7 +28,7 @@ fn metrics_observability_config(label: &str) -> ObservabilityConfig {
 
 #[tokio::test(flavor = "current_thread")]
 async fn activity_tracing_emits_all_levels() {
-    let (recorded_events, _guard) = install_tracing();
+    let (recorded_events, _guard) = common::tracing_capture::install_tracing_capture();
 
     let store = Arc::new(SqliteProvider::new_in_memory().await.unwrap());
     let activities = ActivityRegistry::builder()
@@ -134,17 +68,17 @@ async fn activity_tracing_emits_all_levels() {
     rt.shutdown(None).await;
 
     let events = recorded_events.lock().unwrap();
-    let activity_events: Vec<&RecordedEvent> = events
+    let activity_events: Vec<&CapturedEvent> = events
         .iter()
         .filter(|event| event.target == "duroxide::activity")
         .collect();
     assert!(activity_events.len() >= 4, "expected activity traces, found none");
 
-    let find_event = |level: Level, message: &str| -> &RecordedEvent {
+    let find_event = |level: Level, message: &str| -> &CapturedEvent {
         activity_events
             .iter()
             .copied()
-            .find(|event| event.level == level && field(event, "message").as_deref() == Some(message))
+            .find(|event| event.level == level && event.field("message").as_deref() == Some(message))
             .unwrap_or_else(|| panic!("missing {level:?} event with message '{message}'"))
     };
 
@@ -154,17 +88,17 @@ async fn activity_tracing_emits_all_levels() {
     find_event(Level::DEBUG, "activity debug");
 
     for event in activity_events {
-        assert_eq!(field(event, "instance_id").as_deref(), Some("trace-activity-instance"));
-        assert_eq!(field(event, "execution_id").as_deref(), Some("1"));
-        assert_eq!(field(event, "orchestration_name").as_deref(), Some("TraceOrch"));
-        assert_eq!(field(event, "activity_name").as_deref(), Some("TraceActivity"));
+        assert_eq!(event.field("instance_id").as_deref(), Some("trace-activity-instance"));
+        assert_eq!(event.field("execution_id").as_deref(), Some("1"));
+        assert_eq!(event.field("orchestration_name").as_deref(), Some("TraceOrch"));
+        assert_eq!(event.field("activity_name").as_deref(), Some("TraceActivity"));
         assert!(event.fields.contains_key("activity_id"));
     }
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn orchestration_tracing_emits_all_levels() {
-    let (recorded_events, _guard) = install_tracing();
+    let (recorded_events, _guard) = common::tracing_capture::install_tracing_capture();
 
     let store = Arc::new(SqliteProvider::new_in_memory().await.unwrap());
     let activities = ActivityRegistry::builder().build();
@@ -200,7 +134,7 @@ async fn orchestration_tracing_emits_all_levels() {
     rt.shutdown(None).await;
 
     let events = recorded_events.lock().unwrap();
-    let orchestration_events: Vec<&RecordedEvent> = events
+    let orchestration_events: Vec<&CapturedEvent> = events
         .iter()
         .filter(|event| event.target == "duroxide::orchestration")
         .collect();
@@ -209,11 +143,11 @@ async fn orchestration_tracing_emits_all_levels() {
         "expected orchestration traces, found none"
     );
 
-    let find_event = |level: Level, message: &str| -> &RecordedEvent {
+    let find_event = |level: Level, message: &str| -> &CapturedEvent {
         orchestration_events
             .iter()
             .copied()
-            .find(|event| event.level == level && field(event, "message").as_deref() == Some(message))
+            .find(|event| event.level == level && event.field("message").as_deref() == Some(message))
             .unwrap_or_else(|| panic!("missing {level:?} event with message '{message}'"))
     };
 
@@ -223,9 +157,9 @@ async fn orchestration_tracing_emits_all_levels() {
     find_event(Level::DEBUG, "orch debug");
 
     for event in orchestration_events {
-        assert_eq!(field(event, "instance_id").as_deref(), Some("trace-orch-instance"));
-        assert_eq!(field(event, "execution_id").as_deref(), Some("1"));
-        assert_eq!(field(event, "orchestration_name").as_deref(), Some("TraceOrch"));
+        assert_eq!(event.field("instance_id").as_deref(), Some("trace-orch-instance"));
+        assert_eq!(event.field("execution_id").as_deref(), Some("1"));
+        assert_eq!(event.field("orchestration_name").as_deref(), Some("TraceOrch"));
         assert!(event.fields.contains_key("orchestration_version"));
         assert!(!event.fields.contains_key("activity_name"));
     }
@@ -443,7 +377,7 @@ async fn test_fetch_orchestration_item_fault_injection() {
 
     // Attempt to fetch - should return error
     let result = provider_trait
-        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
         .await;
     assert!(result.is_err());
     let err = result.unwrap_err();
@@ -452,7 +386,7 @@ async fn test_fetch_orchestration_item_fault_injection() {
 
     // Disable fault injection - should succeed now
     let result = provider_trait
-        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
         .await;
     assert!(result.is_ok());
     let item = result.unwrap();

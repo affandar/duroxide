@@ -5,6 +5,110 @@ use std::time::Duration;
 pub mod error;
 pub use error::ProviderError;
 
+/// Parsed semver version as three numeric components.
+///
+/// Used to represent the duroxide crate version pinned to an execution,
+/// and to express version ranges for capability filtering.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct SemverVersion {
+    pub major: u16,
+    pub minor: u16,
+    pub patch: u16,
+}
+
+impl SemverVersion {
+    pub const fn new(major: u16, minor: u16, patch: u16) -> Self {
+        Self { major, minor, patch }
+    }
+
+    /// Parse a semver string like "1.2.3" into components.
+    /// Returns `None` if the string is not a valid 3-part semver.
+    pub fn parse(s: &str) -> Option<Self> {
+        let parts: Vec<&str> = s.split('.').collect();
+        if parts.len() != 3 {
+            return None;
+        }
+        Some(Self {
+            major: parts[0].parse().ok()?,
+            minor: parts[1].parse().ok()?,
+            patch: parts[2].parse().ok()?,
+        })
+    }
+
+    /// Returns the current build version of the duroxide crate.
+    pub fn current_build() -> Self {
+        Self::parse(env!("CARGO_PKG_VERSION")).expect("CARGO_PKG_VERSION must be valid semver")
+    }
+}
+
+impl std::fmt::Display for SemverVersion {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}.{}.{}", self.major, self.minor, self.patch)
+    }
+}
+
+/// An inclusive version range: [min, max].
+///
+/// Both bounds are inclusive. For example, `SemverRange { min: (0,0,0), max: (1,5,0) }`
+/// matches any version `v` where `0.0.0 <= v <= 1.5.0`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SemverRange {
+    pub min: SemverVersion,
+    pub max: SemverVersion,
+}
+
+impl SemverRange {
+    pub fn new(min: SemverVersion, max: SemverVersion) -> Self {
+        Self { min, max }
+    }
+
+    /// Check if a version falls within this range (inclusive on both ends).
+    pub fn contains(&self, version: SemverVersion) -> bool {
+        version >= self.min && version <= self.max
+    }
+
+    /// Default range: `>=0.0.0, <=CURRENT_BUILD_VERSION`.
+    ///
+    /// This means the runtime can replay any execution pinned at or below its own
+    /// build version. Replay engines are backward-compatible.
+    pub fn default_for_current_build() -> Self {
+        Self {
+            min: SemverVersion::new(0, 0, 0),
+            max: SemverVersion::current_build(),
+        }
+    }
+}
+
+/// Capability filter passed by the orchestration dispatcher to the provider.
+///
+/// The provider uses this to return only orchestration items whose pinned
+/// `duroxide_version` falls within one of the supported ranges.
+///
+/// If no filter is supplied (`None`), the provider returns any available item
+/// (legacy behavior, useful for admin tooling).
+#[derive(Debug, Clone)]
+pub struct DispatcherCapabilityFilter {
+    /// Supported duroxide version ranges. An execution is compatible if its
+    /// pinned duroxide version falls within ANY of these ranges.
+    ///
+    /// Phase 1 typically has a single range: `[>=0.0.0, <=CURRENT_BUILD_VERSION]`.
+    pub supported_duroxide_versions: Vec<SemverRange>,
+}
+
+impl DispatcherCapabilityFilter {
+    /// Check if a pinned version is compatible with this filter.
+    pub fn is_compatible(&self, version: SemverVersion) -> bool {
+        self.supported_duroxide_versions.iter().any(|r| r.contains(version))
+    }
+
+    /// Build the default filter for the current build version.
+    pub fn default_for_current_build() -> Self {
+        Self {
+            supported_duroxide_versions: vec![SemverRange::default_for_current_build()],
+        }
+    }
+}
+
 /// Identity of an activity for cancellation purposes.
 ///
 /// Used by the runtime to specify which activities should be cancelled
@@ -148,6 +252,22 @@ pub struct ExecutionMetadata {
     pub orchestration_version: Option<String>,
     /// Parent instance ID (for sub-orchestrations, used for cascading delete)
     pub parent_instance_id: Option<String>,
+    /// Pinned duroxide version for this execution (set from OrchestrationStarted event).
+    ///
+    /// The provider stores this as three integer columns (`duroxide_version_major`,
+    /// `duroxide_version_minor`, `duroxide_version_patch`) on the executions table for
+    /// efficient capability filtering.
+    ///
+    /// - `Some(v)`: Store `v` as the execution's pinned version. The provider should
+    ///   update the columns unconditionally when provided.
+    /// - `None`: No version update requested. The provider should not modify the
+    ///   existing stored value.
+    ///
+    /// The **runtime** guarantees this is only set on the first turn of a new execution
+    /// (when `OrchestrationStarted` is in the history delta), enforced by a `debug_assert`
+    /// in the orchestration dispatcher. The provider does not need to enforce write-once
+    /// semantics — it simply stores what it's told.
+    pub pinned_duroxide_version: Option<SemverVersion>,
 }
 
 /// Provider-backed work queue items the runtime consumes continually.
@@ -952,6 +1072,7 @@ pub trait Provider: Any + Send + Sync {
         &self,
         lock_timeout: Duration,
         poll_timeout: Duration,
+        filter: Option<&DispatcherCapabilityFilter>,
     ) -> Result<Option<(OrchestrationItem, String, u32)>, ProviderError>;
 
     /// Acknowledge successful orchestration processing atomically.

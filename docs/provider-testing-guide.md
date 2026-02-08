@@ -479,7 +479,7 @@ async fn test_my_provider_worker_queue_fifo_ordering() {
 
 ### What the Tests Validate
 
-The validation test suite includes **92+ individual test functions** organized into 13 categories:
+The validation test suite includes **112+ individual test functions** organized into 15 categories:
 
 1. **Atomicity Tests (4 tests)**
    - `test_atomicity_failure_rollback` - All-or-nothing commit semantics, rollback on failure
@@ -611,6 +611,28 @@ The validation test suite includes **92+ individual test functions** organized i
     - `test_delete_instance_bulk_safety_and_limits` - Respect limit and safety constraints
     - `test_delete_instance_bulk_cascades_to_children` - Bulk delete cascades to sub-orchestrations
 
+15. **Capability Filtering Tests (20 tests)** - `duroxide::provider_validations::capability_filtering`
+    - `test_fetch_with_filter_none_returns_any_item` - Legacy behavior: filter=None returns any item
+    - `test_fetch_with_compatible_filter_returns_item` - Compatible filter returns matching item
+    - `test_fetch_with_incompatible_filter_skips_item` - Incompatible filter returns Ok(None)
+    - `test_fetch_filter_skips_incompatible_selects_compatible` - Mixed versions: only compatible returned
+    - `test_fetch_filter_does_not_lock_skipped_instances` - Skipped items not locked (fetchable by compatible runtime)
+    - `test_fetch_filter_null_pinned_version_always_compatible` - NULL pinned version = always compatible (pre-migration data)
+    - `test_fetch_filter_boundary_versions` - Boundary correctness at range edges (inclusive min/max)
+    - `test_pinned_version_stored_via_ack_metadata` - Pinned version stored from ExecutionMetadata on ack
+    - `test_pinned_version_immutable_across_ack_cycles` - Pinned version persists across ack cycles
+    - `test_continue_as_new_execution_gets_own_pinned_version` - ContinueAsNew execution gets independent pinned version
+    - `test_continue_as_new_does_not_inherit_previous_pinned_version` - New execution version not inherited from previous
+    - `test_filter_with_empty_supported_versions_returns_nothing` - Empty filter = supports nothing → Ok(None)
+    - `test_concurrent_filtered_fetch_no_double_lock` - Filtering doesn't break instance-lock exclusivity
+    - `test_ack_stores_pinned_version_via_metadata_update` - Backfill path: ack writes pinned version on existing execution
+    - `test_provider_updates_pinned_version_when_told` - Provider overwrites pinned version unconditionally (dumb storage)
+    - `test_fetch_single_range_only_uses_first_range` - Phase 1 limitation: multi-range only uses first range
+    - `test_fetch_corrupted_history_filtered_vs_unfiltered` - Filter excludes corrupted item = no error; unfiltered = permanent error *(SQLite-specific)*
+    - `test_fetch_deserialization_error_increments_attempt_count` - Attempt count increments across deserialization error cycles *(SQLite-specific)*
+    - `test_fetch_deserialization_error_eventually_reaches_poison` - Corrupted history reaches max attempts via poison path *(SQLite-specific)*
+    - `test_fetch_filter_applied_before_history_deserialization` - Filter applied before history loading (corrupted + excluded = Ok(None)) *(SQLite-specific)*
+
 ### Running Individual Test Functions
 
 Each validation test should be run individually. This provides:
@@ -648,7 +670,7 @@ async fn test_my_provider_worker_queue_fifo_ordering() {
 }
 ```
 
-**Available test functions:** See `duroxide::provider_validations` module documentation for the complete list of all 62 test functions, or refer to `tests/sqlite_provider_validations.rs` for a complete example using all tests.
+**Available test functions:** See `duroxide::provider_validations` module documentation for the complete list of all test functions, or refer to `tests/sqlite_provider_validations.rs` for a complete example using all tests.
 
 ### Creating a Test Provider Factory
 

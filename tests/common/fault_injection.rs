@@ -10,7 +10,8 @@ use async_trait::async_trait;
 use duroxide::providers::error::ProviderError;
 use duroxide::providers::sqlite::SqliteProvider;
 use duroxide::providers::{
-    ExecutionMetadata, OrchestrationItem, Provider, ProviderAdmin, ScheduledActivityIdentifier, WorkItem,
+    DispatcherCapabilityFilter, ExecutionMetadata, OrchestrationItem, Provider, ProviderAdmin,
+    ScheduledActivityIdentifier, WorkItem,
 };
 use duroxide::{Event, EventKind};
 use std::sync::Arc;
@@ -114,8 +115,9 @@ impl Provider for PoisonInjectingProvider {
         &self,
         lock_timeout: Duration,
         poll_timeout: Duration,
+        filter: Option<&DispatcherCapabilityFilter>,
     ) -> Result<Option<(OrchestrationItem, String, u32)>, ProviderError> {
-        let result = self.inner.fetch_orchestration_item(lock_timeout, poll_timeout).await?;
+        let result = self.inner.fetch_orchestration_item(lock_timeout, poll_timeout, filter).await?;
 
         if let Some((item, lock_token, real_attempt_count)) = result {
             // Check if we need to skip this fetch
@@ -254,6 +256,116 @@ impl Provider for PoisonInjectingProvider {
     }
 }
 
+/// A provider wrapper that bypasses the capability filter on fetch_orchestration_item.
+///
+/// This allows testing the runtime's defense-in-depth check by making the
+/// provider return items that should have been filtered out. The runtime-side
+/// check (in orchestration.rs) should catch and abandon these items.
+pub struct FilterBypassProvider {
+    inner: Arc<dyn Provider + Send + Sync>,
+}
+
+impl FilterBypassProvider {
+    pub fn new(inner: Arc<dyn Provider + Send + Sync>) -> Self {
+        Self { inner }
+    }
+}
+
+#[async_trait]
+impl Provider for FilterBypassProvider {
+    async fn fetch_orchestration_item(
+        &self,
+        lock_timeout: Duration,
+        poll_timeout: Duration,
+        _filter: Option<&DispatcherCapabilityFilter>,
+    ) -> Result<Option<(OrchestrationItem, String, u32)>, ProviderError> {
+        // Bypass: always fetch with filter=None, ignoring whatever the runtime passed
+        self.inner.fetch_orchestration_item(lock_timeout, poll_timeout, None).await
+    }
+
+    async fn fetch_work_item(
+        &self,
+        lock_timeout: Duration,
+        poll_timeout: Duration,
+    ) -> Result<Option<(WorkItem, String, u32)>, ProviderError> {
+        self.inner.fetch_work_item(lock_timeout, poll_timeout).await
+    }
+
+    async fn ack_orchestration_item(
+        &self,
+        lock_token: &str,
+        execution_id: u64,
+        history_delta: Vec<Event>,
+        worker_items: Vec<WorkItem>,
+        orchestrator_items: Vec<WorkItem>,
+        metadata: ExecutionMetadata,
+        cancelled_activities: Vec<ScheduledActivityIdentifier>,
+    ) -> Result<(), ProviderError> {
+        self.inner
+            .ack_orchestration_item(lock_token, execution_id, history_delta, worker_items, orchestrator_items, metadata, cancelled_activities)
+            .await
+    }
+
+    async fn abandon_orchestration_item(
+        &self,
+        lock_token: &str,
+        delay: Option<Duration>,
+        ignore_attempt: bool,
+    ) -> Result<(), ProviderError> {
+        self.inner.abandon_orchestration_item(lock_token, delay, ignore_attempt).await
+    }
+
+    async fn ack_work_item(&self, token: &str, completion: Option<WorkItem>) -> Result<(), ProviderError> {
+        self.inner.ack_work_item(token, completion).await
+    }
+
+    async fn renew_work_item_lock(&self, token: &str, extension: Duration) -> Result<(), ProviderError> {
+        self.inner.renew_work_item_lock(token, extension).await
+    }
+
+    async fn abandon_work_item(
+        &self,
+        token: &str,
+        delay: Option<Duration>,
+        ignore_attempt: bool,
+    ) -> Result<(), ProviderError> {
+        self.inner.abandon_work_item(token, delay, ignore_attempt).await
+    }
+
+    async fn renew_orchestration_item_lock(&self, token: &str, extend_for: Duration) -> Result<(), ProviderError> {
+        self.inner.renew_orchestration_item_lock(token, extend_for).await
+    }
+
+    async fn enqueue_for_orchestrator(&self, item: WorkItem, delay: Option<Duration>) -> Result<(), ProviderError> {
+        self.inner.enqueue_for_orchestrator(item, delay).await
+    }
+
+    async fn enqueue_for_worker(&self, item: WorkItem) -> Result<(), ProviderError> {
+        self.inner.enqueue_for_worker(item).await
+    }
+
+    async fn read(&self, instance: &str) -> Result<Vec<Event>, ProviderError> {
+        self.inner.read(instance).await
+    }
+
+    async fn read_with_execution(&self, instance: &str, execution_id: u64) -> Result<Vec<Event>, ProviderError> {
+        self.inner.read_with_execution(instance, execution_id).await
+    }
+
+    async fn append_with_execution(
+        &self,
+        instance: &str,
+        execution_id: u64,
+        new_events: Vec<Event>,
+    ) -> Result<(), ProviderError> {
+        self.inner.append_with_execution(instance, execution_id, new_events).await
+    }
+
+    fn as_management_capability(&self) -> Option<&dyn ProviderAdmin> {
+        self.inner.as_management_capability()
+    }
+}
+
 /// A provider wrapper that can inject transient failures for testing
 /// error handling and retry logic.
 pub struct FailingProvider {
@@ -316,6 +428,7 @@ impl Provider for FailingProvider {
         &self,
         lock_timeout: Duration,
         poll_timeout: Duration,
+        filter: Option<&DispatcherCapabilityFilter>,
     ) -> Result<Option<(OrchestrationItem, String, u32)>, ProviderError> {
         if self.fail_next_fetch_orchestration_item.swap(false, Ordering::SeqCst) {
             Err(ProviderError::retryable(
@@ -323,7 +436,7 @@ impl Provider for FailingProvider {
                 "simulated transient infrastructure failure",
             ))
         } else {
-            self.inner.fetch_orchestration_item(lock_timeout, poll_timeout).await
+            self.inner.fetch_orchestration_item(lock_timeout, poll_timeout, filter).await
         }
     }
 

@@ -28,7 +28,7 @@ pub async fn test_execution_isolation<F: ProviderFactory>(factory: &F) {
         .await
         .unwrap();
     let (_item1, lock_token1, _attempt_count1) = provider
-        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
         .await
         .unwrap()
         .unwrap();
@@ -84,7 +84,7 @@ pub async fn test_execution_isolation<F: ProviderFactory>(factory: &F) {
         .await
         .unwrap();
     let (_item2, lock_token2, _attempt_count2) = provider
-        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
         .await
         .unwrap()
         .unwrap();
@@ -157,7 +157,7 @@ pub async fn test_latest_execution_detection<F: ProviderFactory>(factory: &F) {
         .await
         .unwrap();
     let (_item1, lock_token1, _attempt_count1) = provider
-        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
         .await
         .unwrap()
         .unwrap();
@@ -189,7 +189,7 @@ pub async fn test_latest_execution_detection<F: ProviderFactory>(factory: &F) {
         .await
         .unwrap();
     let (_item2, lock_token2, _attempt_count2) = provider
-        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
         .await
         .unwrap()
         .unwrap();
@@ -247,7 +247,7 @@ pub async fn test_execution_id_sequencing<F: ProviderFactory>(factory: &F) {
         .await
         .unwrap();
     let (item1, lock_token1, _attempt_count1) = provider
-        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
         .await
         .unwrap()
         .unwrap();
@@ -289,7 +289,7 @@ pub async fn test_execution_id_sequencing<F: ProviderFactory>(factory: &F) {
         .await
         .unwrap();
     let (_item2, lock_token2, _attempt_count2) = provider
-        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
         .await
         .unwrap()
         .unwrap();
@@ -330,7 +330,7 @@ pub async fn test_execution_id_sequencing<F: ProviderFactory>(factory: &F) {
         .await
         .unwrap();
     let (item3, _lock_token3, _attempt_count3) = provider
-        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
         .await
         .unwrap()
         .unwrap();
@@ -350,7 +350,7 @@ pub async fn test_continue_as_new_creates_new_execution<F: ProviderFactory>(fact
         .await
         .unwrap();
     let (_item1, lock_token1, _attempt_count1) = provider
-        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
         .await
         .unwrap()
         .unwrap();
@@ -394,7 +394,7 @@ pub async fn test_continue_as_new_creates_new_execution<F: ProviderFactory>(fact
         .unwrap();
 
     let (_item2, lock_token2, _attempt_count2) = provider
-        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
         .await
         .unwrap()
         .unwrap();
@@ -427,7 +427,7 @@ pub async fn test_continue_as_new_creates_new_execution<F: ProviderFactory>(fact
 
     // Now the instance should have current_execution_id = 2
     let result = provider
-        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
         .await
         .unwrap();
     if let Some((item, _lock_token, _attempt_count)) = result {
@@ -449,7 +449,7 @@ pub async fn test_execution_history_persistence<F: ProviderFactory>(factory: &F)
             .await
             .unwrap();
         let (_item, lock_token, _attempt_count) = provider
-            .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+            .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
             .await
             .unwrap()
             .unwrap();

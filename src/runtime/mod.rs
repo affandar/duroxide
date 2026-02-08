@@ -245,6 +245,23 @@ pub struct RuntimeOptions {
     ///
     /// Default: 10 seconds
     pub activity_cancellation_grace_period: Duration,
+
+    /// Override the replay-engine version range used for capability filtering.
+    ///
+    /// By default, the runtime uses `>=0.0.0, <=CURRENT_BUILD_VERSION`, meaning it
+    /// can replay any execution pinned at or below its own semver. This is correct for
+    /// most deployments since replay engines are backward-compatible.
+    ///
+    /// Set this to change the range for advanced scenarios:
+    /// - **Narrowing:** Restrict a node to only process a specific version band
+    ///   (e.g., `>=1.0.0, <=1.9.999` in a mixed-version cluster).
+    /// - **Widening to drain stuck items:** Set a wide range like `>=0.0.0, <=99.0.0`
+    ///   to fetch orchestrations pinned at any version. Items with unknown event types
+    ///   will fail at provider-level deserialization (never reaching the replay engine)
+    ///   and remain in the queue with escalating `attempt_count`.
+    ///
+    /// Default: `None` (uses `>=0.0.0, <=CURRENT_BUILD_VERSION`)
+    pub supported_replay_versions: Option<crate::providers::SemverRange>,
 }
 
 impl Default for RuntimeOptions {
@@ -262,6 +279,7 @@ impl Default for RuntimeOptions {
             unregistered_backoff: UnregisteredBackoffConfig::default(),
             max_attempts: 10,
             activity_cancellation_grace_period: Duration::from_secs(10),
+            supported_replay_versions: None,
         }
     }
 }
@@ -598,6 +616,10 @@ impl Runtime {
                     metadata.orchestration_version = Some(version.clone());
                     // Capture parent instance for sub-orchestration tracking (cascading delete)
                     metadata.parent_instance_id = parent_instance.clone();
+                    // Extract pinned duroxide version from the event's duroxide_version field.
+                    // This is the version of the runtime that created this execution.
+                    // The provider stores it for capability-filtered fetching.
+                    metadata.pinned_duroxide_version = crate::providers::SemverVersion::parse(&event.duroxide_version);
                 }
                 EventKind::OrchestrationCompleted { output } => {
                     metadata.status = Some("Completed".to_string());

@@ -17,7 +17,7 @@ pub async fn test_fetch_returns_running_state_for_active_orchestration<F: Provid
 
     // Ack start to create instance
     let (_item, token, _) = provider
-        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
         .await
         .unwrap()
         .unwrap();
@@ -90,7 +90,7 @@ pub async fn test_fetch_returns_terminal_state_when_orchestration_completed<F: P
         .await
         .unwrap();
     let (_item, token, _) = provider
-        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
         .await
         .unwrap()
         .unwrap();
@@ -175,7 +175,7 @@ pub async fn test_fetch_returns_terminal_state_when_orchestration_failed<F: Prov
         .await
         .unwrap();
     let (_item, token, _) = provider
-        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
         .await
         .unwrap()
         .unwrap();
@@ -263,7 +263,7 @@ pub async fn test_fetch_returns_terminal_state_when_orchestration_continued_as_n
         .await
         .unwrap();
     let (_item, token, _) = provider
-        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
         .await
         .unwrap()
         .unwrap();
@@ -382,7 +382,7 @@ pub async fn test_renew_returns_running_when_orchestration_active<F: ProviderFac
         .await
         .unwrap();
     let (_item, token, _) = provider
-        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
         .await
         .unwrap()
         .unwrap();
@@ -454,7 +454,7 @@ pub async fn test_renew_returns_terminal_when_orchestration_completed<F: Provide
         .await
         .unwrap();
     let (_item, token, _) = provider
-        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
         .await
         .unwrap()
         .unwrap();
@@ -523,7 +523,7 @@ pub async fn test_renew_returns_terminal_when_orchestration_completed<F: Provide
         .unwrap();
 
     let (_item2, token2, _) = provider
-        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
         .await
         .unwrap()
         .unwrap();
@@ -642,7 +642,7 @@ pub async fn test_ack_work_item_none_deletes_without_enqueue<F: ProviderFactory>
 
     // Let's try to fetch orchestration item. If a completion was enqueued, it would be visible.
     let orch_result = provider
-        .fetch_orchestration_item(Duration::from_millis(100), Duration::ZERO)
+        .fetch_orchestration_item(Duration::from_millis(100), Duration::ZERO, None)
         .await
         .unwrap();
     assert!(orch_result.is_none(), "Orchestrator queue should be empty");
@@ -670,7 +670,7 @@ pub async fn test_cancelled_activities_deleted_from_worker_queue<F: ProviderFact
         .unwrap();
 
     let (_item, token, _) = provider
-        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
         .await
         .unwrap()
         .unwrap();
@@ -753,7 +753,7 @@ pub async fn test_cancelled_activities_deleted_from_worker_queue<F: ProviderFact
         .unwrap();
 
     let (_item2, token2, _) = provider
-        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
         .await
         .unwrap()
         .unwrap();
@@ -906,7 +906,7 @@ pub async fn test_cancelling_nonexistent_activities_is_idempotent<F: ProviderFac
         .unwrap();
 
     let (_item, token, _) = provider
-        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
         .await
         .unwrap()
         .unwrap();
@@ -970,7 +970,7 @@ pub async fn test_batch_cancellation_deletes_multiple_activities<F: ProviderFact
         .unwrap();
 
     let (_item, token, _) = provider
-        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
         .await
         .unwrap()
         .unwrap();
@@ -1031,7 +1031,7 @@ pub async fn test_batch_cancellation_deletes_multiple_activities<F: ProviderFact
         .unwrap();
 
     let (_item2, token2, _) = provider
-        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
         .await
         .unwrap()
         .unwrap();
@@ -1090,7 +1090,7 @@ pub async fn test_same_activity_in_worker_items_and_cancelled_is_noop<F: Provide
         .unwrap();
 
     let (_item, token, _) = provider
-        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
         .await
         .unwrap()
         .unwrap();

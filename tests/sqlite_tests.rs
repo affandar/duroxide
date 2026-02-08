@@ -63,7 +63,7 @@ async fn test_sqlite_provider_basic() {
 
     // 2. Fetch orchestration item
     let (item, lock_token, _attempt_count) = store
-        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
         .await
         .expect("Should have work")
         .expect("Should have item");
@@ -145,7 +145,7 @@ async fn test_execution_status_completed() {
 
     // Fetch and ack with completion
     let (_item, lock_token, _attempt_count) = store
-        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
         .await
         .unwrap()
         .unwrap();
@@ -214,7 +214,7 @@ async fn test_execution_status_failed() {
 
     // Fetch and ack with failure
     let (_item, lock_token, _attempt_count) = store
-        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
         .await
         .unwrap()
         .unwrap();
@@ -430,7 +430,7 @@ async fn test_sqlite_file_concurrent_access() {
     // Fetch and ack all orchestration items to create instances
     let mut acked_count = 0;
     while let Some((item, lock_token, _attempt_count)) = store
-        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
         .await
         .unwrap()
     {
@@ -585,7 +585,7 @@ async fn test_sqlite_provider_transactional() {
         .expect("Failed to enqueue");
 
     let (_item, lock_token, _attempt_count) = store
-        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
         .await
         .expect("Should have work")
         .expect("Should have item");
@@ -732,7 +732,7 @@ async fn test_sqlite_provider_timer_queue() {
         .expect("Failed to enqueue");
 
     let (_item, lock_token, _attempt_count) = store
-        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
         .await
         .expect("Should have work")
         .expect("Should have item");
@@ -787,7 +787,7 @@ async fn test_execution_status_running() {
 
     // Fetch and process
     let (_item, lock_token, _attempt_count) = store
-        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
         .await
         .unwrap()
         .unwrap();
@@ -860,7 +860,7 @@ async fn test_execution_output_captured_on_continue_as_new() {
 
     // Fetch and process
     let (_item, lock_token, _attempt_count) = store
-        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
         .await
         .unwrap()
         .unwrap();
@@ -951,7 +951,7 @@ async fn test_instrumented_provider_semantic_equivalence() {
 
     // Fetch
     let result = instrumented
-        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
         .await
         .unwrap();
     assert!(result.is_some(), "Should fetch the enqueued item");
