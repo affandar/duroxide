@@ -896,6 +896,17 @@ pub fn assert_nondeterminism(result: &TurnResult) {
     }
 }
 
+/// Assert the result is TurnResult::Failed with AppErrorKind::Panicked
+pub fn assert_panicked(result: &TurnResult) {
+    match result {
+        TurnResult::Failed(ErrorDetails::Application {
+            kind: duroxide::AppErrorKind::Panicked,
+            ..
+        }) => {}
+        _ => panic!("Expected TurnResult::Failed(Panicked), got {result:?}"),
+    }
+}
+
 /// Assert the result is TurnResult::Failed with expected message substring
 pub fn assert_failed_with_message(result: &TurnResult, expected_substr: &str) {
     match result {

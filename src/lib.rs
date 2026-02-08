@@ -436,6 +436,9 @@ pub use providers::{
     ExecutionInfo, InstanceInfo, ProviderAdmin, QueueDepths, ScheduledActivityIdentifier, SystemMetrics,
 };
 
+// Re-export capability filtering types
+pub use providers::{DispatcherCapabilityFilter, SemverRange, current_build_version};
+
 // Re-export deletion/pruning types for Client API users
 pub use providers::{DeleteInstanceResult, InstanceFilter, InstanceTree, PruneOptions, PruneResult};
 
@@ -821,6 +824,12 @@ pub enum PoisonMessageType {
         activity_name: String,
         activity_id: u64,
     },
+    /// History deserialization failure (e.g., unknown event types from a newer duroxide version)
+    FailedDeserialization {
+        instance: String,
+        execution_id: u64,
+        error: String,
+    },
 }
 
 /// Configuration error kinds.
@@ -834,6 +843,7 @@ pub enum ConfigErrorKind {
 pub enum AppErrorKind {
     ActivityFailed,
     OrchestrationFailed,
+    Panicked,
     Cancelled { reason: String },
 }
 
@@ -876,6 +886,7 @@ impl ErrorDetails {
             },
             ErrorDetails::Application { kind, message, .. } => match kind {
                 AppErrorKind::Cancelled { reason } => format!("canceled: {reason}"),
+                AppErrorKind::Panicked => format!("orchestration panicked: {message}"),
                 _ => message.clone(),
             },
             ErrorDetails::Poison {
@@ -894,6 +905,11 @@ impl ErrorDetails {
                 } => {
                     format!(
                         "poison: activity {activity_name}#{activity_id} exceeded {attempt_count} attempts (max {max_attempts})"
+                    )
+                }
+                PoisonMessageType::FailedDeserialization { instance, error, .. } => {
+                    format!(
+                        "poison: orchestration {instance} history deserialization failed after {attempt_count} attempts (max {max_attempts}): {error}"
                     )
                 }
             },
@@ -1036,6 +1052,18 @@ pub enum EventKind {
     /// Cancellation has been requested for the orchestration (terminal will follow deterministically).
     #[serde(rename = "OrchestrationCancelRequested")]
     OrchestrationCancelRequested { reason: String },
+
+    /// V2 subscription: includes a topic filter for pub/sub matching.
+    /// Feature-gated for replay engine extensibility verification.
+    #[cfg(feature = "replay-version-test")]
+    #[serde(rename = "ExternalSubscribed2")]
+    ExternalSubscribed2 { name: String, topic: String },
+
+    /// V2 event: includes the actual topic it was published on.
+    /// Feature-gated for replay engine extensibility verification.
+    #[cfg(feature = "replay-version-test")]
+    #[serde(rename = "ExternalEvent2")]
+    ExternalEvent2 { name: String, topic: String, data: String },
 }
 
 impl Event {
@@ -1296,6 +1324,15 @@ pub enum Action {
     /// Continue the current orchestration as a new execution with new input (terminal for current execution).
     /// Optional version string selects the target orchestration version for the new execution.
     ContinueAsNew { input: String, version: Option<String> },
+
+    /// V2: Subscribe to an external event with topic-based pub/sub matching.
+    /// Feature-gated for replay engine extensibility verification.
+    #[cfg(feature = "replay-version-test")]
+    WaitExternal2 {
+        scheduling_event_id: u64,
+        name: String,
+        topic: String,
+    },
 }
 
 /// Result delivered to a durable future upon completion.
@@ -1342,6 +1379,18 @@ struct CtxInner {
     external_arrivals: std::collections::HashMap<String, Vec<String>>,
     /// Next subscription index per external event name
     external_next_index: std::collections::HashMap<String, usize>,
+
+    // === V2 External Event State (feature-gated) ===
+    /// V2 external subscriptions: schedule_id -> (name, topic, subscription_index)
+    #[cfg(feature = "replay-version-test")]
+    external2_subscriptions: std::collections::HashMap<u64, (String, String, usize)>,
+    /// V2 external arrivals: (name, topic) -> list of payloads in arrival order
+    #[cfg(feature = "replay-version-test")]
+    external2_arrivals: std::collections::HashMap<(String, String), Vec<String>>,
+    /// Next subscription index per (name, topic) pair
+    #[cfg(feature = "replay-version-test")]
+    external2_next_index: std::collections::HashMap<(String, String), usize>,
+
     /// Sub-orchestration token -> resolved instance ID mapping
     sub_orchestration_instances: std::collections::HashMap<u64, String>,
 
@@ -1380,6 +1429,12 @@ impl CtxInner {
             external_subscriptions: Default::default(),
             external_arrivals: Default::default(),
             external_next_index: Default::default(),
+            #[cfg(feature = "replay-version-test")]
+            external2_subscriptions: Default::default(),
+            #[cfg(feature = "replay-version-test")]
+            external2_arrivals: Default::default(),
+            #[cfg(feature = "replay-version-test")]
+            external2_next_index: Default::default(),
             sub_orchestration_instances: Default::default(),
 
             // Cancellation tracking
@@ -1465,6 +1520,31 @@ impl CtxInner {
     fn get_external_event(&self, schedule_id: u64) -> Option<&String> {
         let (name, subscription_index) = self.external_subscriptions.get(&schedule_id)?;
         let arrivals = self.external_arrivals.get(name)?;
+        arrivals.get(*subscription_index)
+    }
+
+    /// V2: Bind an external subscription with topic to a deterministic index.
+    #[cfg(feature = "replay-version-test")]
+    fn bind_external_subscription2(&mut self, schedule_id: u64, name: &str, topic: &str) {
+        let key = (name.to_string(), topic.to_string());
+        let idx = self.external2_next_index.entry(key.clone()).or_insert(0);
+        let subscription_index = *idx;
+        *idx += 1;
+        self.external2_subscriptions
+            .insert(schedule_id, (name.to_string(), topic.to_string(), subscription_index));
+    }
+
+    /// V2: Deliver an external event with topic (appends to arrival list for (name, topic)).
+    #[cfg(feature = "replay-version-test")]
+    fn deliver_external_event2(&mut self, name: String, topic: String, data: String) {
+        self.external2_arrivals.entry((name, topic)).or_default().push(data);
+    }
+
+    /// V2: Get external event data for a topic-based subscription (by schedule_id).
+    #[cfg(feature = "replay-version-test")]
+    fn get_external_event2(&self, schedule_id: u64) -> Option<&String> {
+        let (name, topic, subscription_index) = self.external2_subscriptions.get(&schedule_id)?;
+        let arrivals = self.external2_arrivals.get(&(name.clone(), topic.clone()))?;
         arrivals.get(*subscription_index)
     }
 
@@ -2731,6 +2811,43 @@ impl OrchestrationContext {
             let s = fut.await;
             crate::_typed_codec::Json::decode::<T>(&s).expect("decode")
         }
+    }
+
+    /// V2: Subscribe to an external event with topic-based pub/sub matching.
+    ///
+    /// Same semantics as `schedule_wait`, but matches on both `name` AND `topic`.
+    /// Feature-gated for replay engine extensibility verification.
+    #[cfg(feature = "replay-version-test")]
+    pub fn schedule_wait2(&self, name: impl Into<String>, topic: impl Into<String>) -> DurableFuture<String> {
+        let name: String = name.into();
+        let topic: String = topic.into();
+
+        let mut inner = self.inner.lock().expect("Mutex should not be poisoned");
+
+        let token = inner.emit_action(Action::WaitExternal2 {
+            scheduling_event_id: 0,
+            name: name.clone(),
+            topic: topic.clone(),
+        });
+        drop(inner);
+
+        let ctx = self.clone();
+        let inner_future = std::future::poll_fn(move |_cx| {
+            let inner = ctx.inner.lock().expect("Mutex should not be poisoned");
+            if let Some(bound_id) = inner.get_bound_schedule_id(token)
+                && let Some(data) = inner.get_external_event2(bound_id)
+            {
+                return Poll::Ready(data.clone());
+            }
+            Poll::Pending
+        });
+
+        DurableFuture::new(
+            token,
+            ScheduleKind::ExternalWait { event_name: name },
+            self.clone(),
+            inner_future,
+        )
     }
 
     /// Schedule a sub-orchestration and return a cancellation-aware future.

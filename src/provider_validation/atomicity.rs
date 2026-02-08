@@ -16,7 +16,7 @@ pub async fn test_atomicity_failure_rollback<F: ProviderFactory>(factory: &F) {
         .await
         .unwrap();
     let (_item, lock_token, _attempt_count) = provider
-        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
         .await
         .unwrap()
         .unwrap();
@@ -57,7 +57,7 @@ pub async fn test_atomicity_failure_rollback<F: ProviderFactory>(factory: &F) {
         .await
         .unwrap();
     let (_item2, lock_token2, _attempt_count2) = provider
-        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
         .await
         .unwrap()
         .unwrap();
@@ -100,7 +100,7 @@ pub async fn test_atomicity_failure_rollback<F: ProviderFactory>(factory: &F) {
     // Lock should still be held, preventing another fetch
     assert!(
         provider
-            .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+            .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
             .await
             .unwrap()
             .is_none()
@@ -120,7 +120,7 @@ pub async fn test_multi_operation_atomic_ack<F: ProviderFactory>(factory: &F) {
         .await
         .unwrap();
     let (_item, lock_token, _attempt_count) = provider
-        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
         .await
         .unwrap()
         .unwrap();
@@ -256,7 +256,7 @@ pub async fn test_multi_operation_atomic_ack<F: ProviderFactory>(factory: &F) {
 
     // 3. Orchestrator queue should have 2 items
     let (item1, _lock_token1, _attempt_count1) = provider
-        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
         .await
         .unwrap()
         .unwrap();
@@ -279,7 +279,7 @@ pub async fn test_lock_released_only_on_successful_ack<F: ProviderFactory>(facto
         .await
         .unwrap();
     let (_item, _lock_token, _attempt_count) = provider
-        .fetch_orchestration_item(lock_timeout, Duration::ZERO)
+        .fetch_orchestration_item(lock_timeout, Duration::ZERO, None)
         .await
         .unwrap()
         .unwrap();
@@ -287,7 +287,7 @@ pub async fn test_lock_released_only_on_successful_ack<F: ProviderFactory>(facto
     // Verify lock is held (can't fetch again)
     assert!(
         provider
-            .fetch_orchestration_item(lock_timeout, Duration::ZERO)
+            .fetch_orchestration_item(lock_timeout, Duration::ZERO, None)
             .await
             .unwrap()
             .is_none()
@@ -324,7 +324,7 @@ pub async fn test_lock_released_only_on_successful_ack<F: ProviderFactory>(facto
     // Lock should still be held
     assert!(
         provider
-            .fetch_orchestration_item(lock_timeout, Duration::ZERO)
+            .fetch_orchestration_item(lock_timeout, Duration::ZERO, None)
             .await
             .unwrap()
             .is_none()
@@ -335,7 +335,7 @@ pub async fn test_lock_released_only_on_successful_ack<F: ProviderFactory>(facto
 
     // Now should be able to fetch again
     let (item2, _lock_token2, _attempt_count2) = provider
-        .fetch_orchestration_item(lock_timeout, Duration::ZERO)
+        .fetch_orchestration_item(lock_timeout, Duration::ZERO, None)
         .await
         .unwrap()
         .unwrap();
@@ -355,7 +355,7 @@ pub async fn test_concurrent_ack_prevention<F: ProviderFactory>(factory: &F) {
         .await
         .unwrap();
     let (_item, lock_token, _attempt_count) = provider
-        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
         .await
         .unwrap()
         .unwrap();

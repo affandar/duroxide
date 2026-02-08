@@ -123,12 +123,39 @@ impl Runtime {
         let concurrency = self.options.orchestration_concurrency;
         let shutdown = self.shutdown_flag.clone();
 
+        // Build the capability filter once for all workers (immutable for this runtime's lifetime).
+        let capability_filter = if let Some(ref custom_range) = self.options.supported_replay_versions {
+            crate::providers::DispatcherCapabilityFilter {
+                supported_duroxide_versions: vec![custom_range.clone()],
+            }
+        } else {
+            crate::providers::DispatcherCapabilityFilter::default_for_current_build()
+        };
+        tracing::info!(
+            target: "duroxide::runtime",
+            supported_range = %format!("{}", capability_filter.supported_duroxide_versions.iter()
+                .map(|r| format!(">={}, <={}", r.min, r.max))
+                .collect::<Vec<_>>()
+                .join(" | ")),
+            "Orchestration dispatcher capability filter configured"
+        );
+
+        // The runtime-side supported range is the same as the filter range.
+        // Used for defense-in-depth checks after fetch (validates the provider's filtering).
+        let runtime_supported_range = if let Some(ref custom_range) = self.options.supported_replay_versions {
+            custom_range.clone()
+        } else {
+            crate::providers::SemverRange::default_for_current_build()
+        };
+
         tokio::spawn(async move {
             let mut worker_handles = Vec::new();
 
             for worker_idx in 0..concurrency {
                 let rt = Arc::clone(&self);
                 let shutdown = Arc::clone(&shutdown);
+                let cap_filter = Some(capability_filter.clone());
+                let supported_range = runtime_supported_range.clone();
                 // Generate unique worker ID: orch-{index}-{runtime_id}
                 let worker_id = format!("orch-{worker_idx}-{}", rt.runtime_id);
                 let handle = tokio::spawn(async move {
@@ -148,12 +175,53 @@ impl Runtime {
 
                         match rt
                             .history_store
-                            .fetch_orchestration_item(rt.options.orchestrator_lock_timeout, poll_timeout)
+                            .fetch_orchestration_item(
+                                rt.options.orchestrator_lock_timeout,
+                                poll_timeout,
+                                cap_filter.as_ref(),
+                            )
                             .await
                         {
                             Ok(Some((item, lock_token, attempt_count))) => {
                                 // Reset error counter on success
                                 consecutive_retryable_errors = 0;
+
+                                // Runtime-side compatibility check (defense-in-depth).
+                                // Even if the provider filter missed this item (bug, provider ignoring filter),
+                                // we validate the pinned version before attempting replay.
+                                // The pinned version is extracted from the OrchestrationStarted event
+                                // (always event_id=1, always a known event type on any version).
+                                let pinned_version = item.history.iter().find_map(|e| {
+                                    if matches!(&e.kind, crate::EventKind::OrchestrationStarted { .. }) {
+                                        semver::Version::parse(&e.duroxide_version).ok()
+                                    } else {
+                                        None
+                                    }
+                                });
+
+                                if let Some(pinned) = pinned_version
+                                    && !supported_range.contains(&pinned)
+                                {
+                                    tracing::warn!(
+                                        target: "duroxide::runtime",
+                                        instance = %item.instance,
+                                        pinned_version = %pinned,
+                                        supported_range = %format!(">={}, <={}", supported_range.min, supported_range.max),
+                                        attempt_count = attempt_count,
+                                        "Execution pinned at incompatible version, abandoning (runtime-side check)"
+                                    );
+                                    // Abandon with a short delay to prevent tight spin loops when
+                                    // a single runtime encounters incompatible items. The item still
+                                    // reaches max_attempts quickly (e.g., 10 × 1s = 10s) while
+                                    // avoiding CPU burn and starvation of compatible work items.
+                                    let _ = rt
+                                        .history_store
+                                        .abandon_orchestration_item(&lock_token, Some(Duration::from_secs(1)), false)
+                                        .await;
+                                    continue;
+                                }
+                                // pinned_version == None means no history yet (brand new instance)
+                                // — always compatible, proceed normally.
 
                                 // Spawn lock renewal task for this orchestration
                                 let renewal_handle = spawn_orchestration_lock_renewal_task(
@@ -249,7 +317,11 @@ impl Runtime {
         // EXECUTION: builds deltas and commits via ack_orchestration_item
         let instance = &item.instance;
 
-        // Check for poison message - message has been fetched too many times
+        // Check for poison message - message has been fetched too many times.
+        // This handles both normal poison (repeated processing failures) and corrupted
+        // history poison (history_error items that exhausted their attempts via the
+        // abandon-with-backoff cycle below). The fail_orchestration_as_poison method
+        // inspects item.history_error to choose the appropriate termination strategy.
         if attempt_count > self.options.max_attempts {
             warn!(
                 instance = %instance,
@@ -259,6 +331,33 @@ impl Runtime {
             );
 
             self.fail_orchestration_as_poison(&item, lock_token, attempt_count)
+                .await;
+            return;
+        }
+
+        // Check for corrupted history — provider successfully fetched and locked the item
+        // but could not deserialize its history events (e.g., unknown EventKind from a
+        // newer duroxide version). Abandon without resetting attempt_count (ignore_attempt=false)
+        // so the count keeps growing. Once attempt_count exceeds max_attempts (checked above),
+        // the poison path terminates it.
+        if let Some(ref error) = item.history_error {
+            // Fixed 1s backoff gives another node (which may run a newer duroxide
+            // version capable of deserialising these events) a window to pick it up,
+            // without the exponential growth that would slow down the poison path.
+            let backoff = Duration::from_secs(1);
+            let remaining = self.options.max_attempts.saturating_sub(attempt_count);
+            warn!(
+                instance = %instance,
+                error = %error,
+                attempt = attempt_count,
+                max_attempts = self.options.max_attempts,
+                "History deserialization failed, abandoning with 1s backoff ({}/{}, {} remaining)",
+                attempt_count, self.options.max_attempts, remaining,
+            );
+            // ignore_attempt = false: keep the incremented attempt_count so we eventually reach poison
+            let _ = self
+                .history_store
+                .abandon_orchestration_item(lock_token, Some(backoff), false)
                 .await;
             return;
         }
@@ -775,6 +874,26 @@ impl Runtime {
         metadata: ExecutionMetadata,
         cancelled_activities: Vec<ScheduledActivityIdentifier>,
     ) -> Result<(), ProviderError> {
+        // Invariant: pinned_duroxide_version may only be set on the first turn of an
+        // execution, when OrchestrationStarted is in the history delta. The provider
+        // stores it unconditionally — the runtime is responsible for never sending it
+        // on subsequent turns. This assertion catches bugs in compute_execution_metadata
+        // or manual metadata construction.
+        debug_assert!(
+            metadata.pinned_duroxide_version.is_none()
+                || history_delta
+                    .iter()
+                    .any(|e| matches!(&e.kind, crate::EventKind::OrchestrationStarted { .. })),
+            "pinned_duroxide_version must only be set when OrchestrationStarted is in the history delta \
+             (first turn of an execution). Setting it on subsequent turns would corrupt the execution's \
+             version routing. pinned={:?}, delta_events={:?}",
+            metadata.pinned_duroxide_version,
+            history_delta
+                .iter()
+                .map(|e| std::mem::discriminant(&e.kind))
+                .collect::<Vec<_>>()
+        );
+
         let mut attempts: u32 = 0;
         let max_attempts: u32 = 5;
 
@@ -845,6 +964,63 @@ impl Runtime {
             },
             message: serde_json::to_string(&item.messages).unwrap_or_default(),
         };
+
+        // --- Corrupted history poison path ---
+        // If history_error is set, history in the DB is undeserializable (e.g., unknown
+        // EventKind from a newer duroxide version). We cannot read existing events to
+        // determine the next event_id, so we use a well-known sentinel (99999) for the
+        // OrchestrationFailed event.
+        //
+        // IMPORTANT: The ack below MUST succeed despite corrupted history rows in the DB.
+        // This relies on the provider's ack path being append-only — it only INSERTs new
+        // event rows and UPDATEs execution metadata, never re-reads or re-serializes
+        // existing history. A provider that does read-all → deserialize → re-serialize
+        // during ack would fail here. This contract is validated by
+        // test_ack_appends_event_to_corrupted_history (provider validation #45).
+        if let Some(ref deser_error) = item.history_error {
+            let error = crate::ErrorDetails::Poison {
+                attempt_count,
+                max_attempts: self.options.max_attempts,
+                message_type: crate::PoisonMessageType::FailedDeserialization {
+                    instance: item.instance.clone(),
+                    execution_id: item.execution_id,
+                    error: deser_error.clone(),
+                },
+                message: deser_error.clone(),
+            };
+
+            let failed_event = Event::with_event_id(
+                99999,
+                &item.instance,
+                item.execution_id,
+                None,
+                EventKind::OrchestrationFailed { details: error.clone() },
+            );
+
+            let metadata = ExecutionMetadata {
+                status: Some("Failed".to_string()),
+                output: Some(error.display_message()),
+                orchestration_name: Some(item.orchestration_name.clone()),
+                orchestration_version: Some(item.version.clone()),
+                parent_instance_id: None,
+                pinned_duroxide_version: None,
+            };
+
+            let _ = self
+                .ack_orchestration_with_changes(
+                    lock_token,
+                    item.execution_id,
+                    vec![failed_event],
+                    vec![],
+                    vec![],
+                    metadata,
+                    vec![],
+                )
+                .await;
+
+            self.record_orchestration_poison();
+            return;
+        }
 
         // Create failure event and commit
         let mut history_mgr = HistoryManager::from_history(&item.history);
@@ -919,6 +1095,7 @@ impl Runtime {
             orchestration_name: Some(item.orchestration_name.clone()),
             orchestration_version: Some(item.version.clone()),
             parent_instance_id: parent_link.as_ref().map(|(pi, _)| pi.clone()),
+            pinned_duroxide_version: None, // Poison path — version already set at creation
         };
 
         // If this is a sub-orchestration, notify parent of failure

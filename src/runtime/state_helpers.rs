@@ -416,6 +416,10 @@ impl WorkItemReader {
                 | WorkItem::CancelInstance { .. } => {
                     completion_messages.push(work_item.clone());
                 }
+                #[cfg(feature = "replay-version-test")]
+                WorkItem::ExternalRaised2 { .. } => {
+                    completion_messages.push(work_item.clone());
+                }
                 // ActivityExecute shouldn't appear in orchestrator queue
                 WorkItem::ActivityExecute { .. } => {}
             }

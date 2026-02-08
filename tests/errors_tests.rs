@@ -764,3 +764,60 @@ async fn test_instance_id_idempotence() {
 
     rt.shutdown(None).await;
 }
+
+/// E2e test: orchestration code that panics is caught by the runtime and
+/// the orchestration is marked as Failed with the panic message.
+#[tokio::test]
+async fn orchestration_panic_is_caught_and_fails_with_message() {
+    let (store, _td) = common::create_sqlite_store_disk().await;
+
+    let orchestrations = OrchestrationRegistry::builder()
+        .register("PanicOrch", |_ctx: OrchestrationContext, _input: String| async move {
+            panic!("something went terribly wrong");
+            #[allow(unreachable_code)]
+            Ok("unreachable".to_string())
+        })
+        .build();
+    let activities = ActivityRegistry::builder().build();
+
+    let rt = runtime::Runtime::start_with_store(store.clone(), activities, orchestrations).await;
+    let client = duroxide::Client::new(store.clone());
+
+    client
+        .start_orchestration("panic-inst", "PanicOrch", "{}")
+        .await
+        .unwrap();
+
+    let status = client
+        .wait_for_orchestration("panic-inst", Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    match status {
+        duroxide::OrchestrationStatus::Failed { details } => {
+            let msg = details.display_message();
+            assert!(
+                msg.contains("something went terribly wrong"),
+                "Failed message should contain the panic string, got: {msg}"
+            );
+            assert!(
+                msg.starts_with("orchestration panicked:"),
+                "Failed message should start with 'orchestration panicked:', got: {msg}"
+            );
+            assert!(
+                matches!(
+                    &details,
+                    duroxide::ErrorDetails::Application {
+                        kind: duroxide::AppErrorKind::Panicked,
+                        retryable: false,
+                        ..
+                    }
+                ),
+                "Expected Application(Panicked) error, got: {details:?}"
+            );
+        }
+        other => panic!("Expected Failed status from panicking orchestration, got: {other:?}"),
+    }
+
+    rt.shutdown(None).await;
+}

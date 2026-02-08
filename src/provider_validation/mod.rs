@@ -10,6 +10,8 @@ pub mod bulk_deletion;
 #[cfg(feature = "provider-test")]
 pub mod cancellation;
 #[cfg(feature = "provider-test")]
+pub mod capability_filtering;
+#[cfg(feature = "provider-test")]
 pub mod deletion;
 #[cfg(feature = "provider-test")]
 pub mod error_handling;
@@ -68,7 +70,7 @@ pub(crate) async fn create_instance(provider: &dyn crate::providers::Provider, i
         .map_err(|e| e.to_string())?;
 
     let (_item, lock_token, _attempt_count) = provider
-        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
         .await
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "Failed to fetch orchestration item".to_string())?;
@@ -146,5 +148,31 @@ pub trait ProviderFactory: Sync + Send {
     /// Default lock timeout to use in tests
     fn lock_timeout(&self) -> Duration {
         Duration::from_secs(5)
+    }
+
+    /// Corrupt an instance's history so it cannot be deserialized.
+    ///
+    /// This replaces all stored history event data for the given instance with
+    /// content that will fail deserialization (e.g., invalid JSON or an unknown
+    /// event variant). Used by the deserialization contract tests (Category I)
+    /// to verify that the provider returns `history_error` on fetch and that
+    /// ack remains append-only (doesn't re-read corrupted rows).
+    ///
+    /// The default implementation panics — providers that support the
+    /// deserialization contract tests must override this.
+    async fn corrupt_instance_history(&self, _instance: &str) {
+        panic!("corrupt_instance_history not implemented for this provider factory");
+    }
+
+    /// Return the maximum `attempt_count` across all orchestrator queue messages
+    /// for the given instance.
+    ///
+    /// Used by the deserialization contract tests to verify that `attempt_count`
+    /// increments on each fetch cycle (even when history can't be deserialized).
+    ///
+    /// The default implementation panics — providers that support the
+    /// deserialization contract tests must override this.
+    async fn get_max_attempt_count(&self, _instance: &str) -> u32 {
+        panic!("get_max_attempt_count not implemented for this provider factory");
     }
 }

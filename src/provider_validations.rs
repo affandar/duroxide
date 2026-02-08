@@ -235,3 +235,21 @@ pub mod bulk_deletion {
         test_delete_instance_bulk_filter_combinations, test_delete_instance_bulk_safety_and_limits,
     };
 }
+
+#[cfg(feature = "provider-test")]
+pub mod capability_filtering {
+    pub use crate::provider_validation::capability_filtering::{
+        test_ack_appends_event_to_corrupted_history, test_ack_stores_pinned_version_via_metadata_update,
+        test_concurrent_filtered_fetch_no_double_lock, test_continue_as_new_execution_gets_own_pinned_version,
+        test_fetch_corrupted_history_filtered_vs_unfiltered,
+        test_fetch_deserialization_error_eventually_reaches_poison,
+        test_fetch_deserialization_error_increments_attempt_count,
+        test_fetch_filter_applied_before_history_deserialization, test_fetch_filter_boundary_versions,
+        test_fetch_filter_does_not_lock_skipped_instances, test_fetch_filter_null_pinned_version_always_compatible,
+        test_fetch_filter_skips_incompatible_selects_compatible, test_fetch_single_range_only_uses_first_range,
+        test_fetch_with_compatible_filter_returns_item, test_fetch_with_filter_none_returns_any_item,
+        test_fetch_with_incompatible_filter_skips_item, test_filter_with_empty_supported_versions_returns_nothing,
+        test_pinned_version_immutable_across_ack_cycles, test_pinned_version_stored_via_ack_metadata,
+        test_provider_updates_pinned_version_when_told,
+    };
+}

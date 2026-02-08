@@ -5,6 +5,73 @@ use std::time::Duration;
 pub mod error;
 pub use error::ProviderError;
 
+/// Returns the current build version of the duroxide crate.
+pub fn current_build_version() -> semver::Version {
+    semver::Version::parse(env!("CARGO_PKG_VERSION")).expect("CARGO_PKG_VERSION must be valid semver")
+}
+
+/// An inclusive version range: [min, max].
+///
+/// Both bounds are inclusive. For example, `SemverRange { min: (0,0,0), max: (1,5,0) }`
+/// matches any version `v` where `0.0.0 <= v <= 1.5.0`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SemverRange {
+    pub min: semver::Version,
+    pub max: semver::Version,
+}
+
+impl SemverRange {
+    pub fn new(min: semver::Version, max: semver::Version) -> Self {
+        Self { min, max }
+    }
+
+    /// Check if a version falls within this range (inclusive on both ends).
+    pub fn contains(&self, version: &semver::Version) -> bool {
+        version >= &self.min && version <= &self.max
+    }
+
+    /// Default range: `>=0.0.0, <=CURRENT_BUILD_VERSION`.
+    ///
+    /// This means the runtime can replay any execution pinned at or below its own
+    /// build version. Replay engines are backward-compatible.
+    pub fn default_for_current_build() -> Self {
+        Self {
+            min: semver::Version::new(0, 0, 0),
+            max: current_build_version(),
+        }
+    }
+}
+
+/// Capability filter passed by the orchestration dispatcher to the provider.
+///
+/// The provider uses this to return only orchestration items whose pinned
+/// `duroxide_version` falls within one of the supported ranges.
+///
+/// If no filter is supplied (`None`), the provider returns any available item
+/// (legacy behavior, useful for admin tooling).
+#[derive(Debug, Clone)]
+pub struct DispatcherCapabilityFilter {
+    /// Supported duroxide version ranges. An execution is compatible if its
+    /// pinned duroxide version falls within ANY of these ranges.
+    ///
+    /// Phase 1 typically has a single range: `[>=0.0.0, <=CURRENT_BUILD_VERSION]`.
+    pub supported_duroxide_versions: Vec<SemverRange>,
+}
+
+impl DispatcherCapabilityFilter {
+    /// Check if a pinned version is compatible with this filter.
+    pub fn is_compatible(&self, version: &semver::Version) -> bool {
+        self.supported_duroxide_versions.iter().any(|r| r.contains(version))
+    }
+
+    /// Build the default filter for the current build version.
+    pub fn default_for_current_build() -> Self {
+        Self {
+            supported_duroxide_versions: vec![SemverRange::default_for_current_build()],
+        }
+    }
+}
+
 /// Identity of an activity for cancellation purposes.
 ///
 /// Used by the runtime to specify which activities should be cancelled
@@ -34,6 +101,7 @@ pub struct ScheduledActivityIdentifier {
 /// * `history` - Complete event history for the current execution (ordered by event_id)
 /// * `messages` - Batch of WorkItems to process (may include Start, completions, external events)
 /// * `lock_token` - Unique token that must be used to ack or abandon this batch
+/// * `history_error` - If set, history deserialization failed; `history` may be empty or partial
 ///
 /// # Implementation Notes
 ///
@@ -42,6 +110,9 @@ pub struct ScheduledActivityIdentifier {
 /// - The `lock_token` must be unique and prevent concurrent processing of the same instance
 /// - All messages in the batch should belong to the same instance
 /// - The lock should expire after a timeout (e.g., 30s) to handle worker crashes
+/// - If history deserialization fails, set `history_error` with the error message and return
+///   `Ok(Some(...))` instead of `Err(...)`. This allows the runtime to reach the poison check
+///   and terminate the orchestration after `max_attempts`.
 ///
 /// # Example from SQLite Provider
 ///
@@ -83,6 +154,15 @@ pub struct OrchestrationItem {
     pub version: String,
     pub history: Vec<Event>,
     pub messages: Vec<WorkItem>,
+    /// If set, history deserialization failed. `history` may be empty or partial.
+    ///
+    /// The runtime treats this as a terminal error: it abandons the item with backoff,
+    /// and once `attempt_count > max_attempts`, poisons the orchestration.
+    ///
+    /// Providers SHOULD return `Ok(Some(...))` with this field set instead of
+    /// `Err(ProviderError::permanent(...))` when deserialization fails after acquiring
+    /// a lock. This ensures the lock lifecycle stays clean (Ok = lock held, Err = no lock).
+    pub history_error: Option<String>,
 }
 
 /// Execution metadata computed by the runtime to be persisted by the provider.
@@ -148,6 +228,22 @@ pub struct ExecutionMetadata {
     pub orchestration_version: Option<String>,
     /// Parent instance ID (for sub-orchestrations, used for cascading delete)
     pub parent_instance_id: Option<String>,
+    /// Pinned duroxide version for this execution (set from OrchestrationStarted event).
+    ///
+    /// The provider stores this as three integer columns (`duroxide_version_major`,
+    /// `duroxide_version_minor`, `duroxide_version_patch`) on the executions table for
+    /// efficient capability filtering.
+    ///
+    /// - `Some(v)`: Store `v` as the execution's pinned version. The provider should
+    ///   update the columns unconditionally when provided.
+    /// - `None`: No version update requested. The provider should not modify the
+    ///   existing stored value.
+    ///
+    /// The **runtime** guarantees this is only set on the first turn of a new execution
+    /// (when `OrchestrationStarted` is in the history delta), enforced by a `debug_assert`
+    /// in the orchestration dispatcher. The provider does not need to enforce write-once
+    /// semantics — it simply stores what it's told.
+    pub pinned_duroxide_version: Option<semver::Version>,
 }
 
 /// Provider-backed work queue items the runtime consumes continually.
@@ -284,6 +380,18 @@ pub enum WorkItem {
         orchestration: String,
         input: String,
         version: Option<String>,
+    },
+
+    /// V2: External event with topic-based pub/sub matching (goes to orchestrator queue).
+    ///
+    /// Matched by `name` AND `topic` to ExternalSubscribed2 events.
+    /// Feature-gated for replay engine extensibility verification.
+    #[cfg(feature = "replay-version-test")]
+    ExternalRaised2 {
+        instance: String,
+        name: String,
+        topic: String,
+        data: String,
     },
 }
 
@@ -952,6 +1060,7 @@ pub trait Provider: Any + Send + Sync {
         &self,
         lock_timeout: Duration,
         poll_timeout: Duration,
+        filter: Option<&DispatcherCapabilityFilter>,
     ) -> Result<Option<(OrchestrationItem, String, u32)>, ProviderError>;
 
     /// Acknowledge successful orchestration processing atomically.

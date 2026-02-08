@@ -3,10 +3,12 @@
 #![allow(clippy::expect_used)]
 
 pub mod fault_injection;
+#[allow(dead_code)]
+pub mod tracing_capture;
 
 use duroxide::providers::sqlite::SqliteProvider;
 use duroxide::providers::{ExecutionMetadata, Provider, WorkItem};
-use duroxide::{Event, EventKind};
+use duroxide::{Event, EventKind, INITIAL_EVENT_ID, INITIAL_EXECUTION_ID};
 use std::sync::Arc as StdArc;
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
@@ -124,7 +126,7 @@ pub async fn test_create_execution(
 
     // Fetch to get lock token
     let (_item, lock_token, _attempt_count) = provider
-        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
         .await
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "Failed to fetch orchestration item".to_string())?;
@@ -163,4 +165,139 @@ pub async fn test_create_execution(
         .map_err(|e| e.to_string())?;
 
     Ok(execution_id)
+}
+
+/// Seed an orchestrator turn by enqueueing a trigger, fetching it, and acking with a history delta.
+///
+/// This is the fundamental building block for constructing test history via provider APIs.
+/// Each call simulates one complete orchestrator turn: enqueue work item → fetch → ack.
+///
+/// Handles the race condition where fetch may return a different instance's item by
+/// looping and abandoning non-matching items.
+///
+/// # Arguments
+/// * `provider` - Provider to operate on
+/// * `trigger` - Work item to enqueue (e.g., StartOrchestration, ExternalRaised)
+/// * `execution_id` - Execution ID for the ack
+/// * `events` - History delta events to append
+/// * `orchestrator_items` - Follow-up work items to enqueue atomically with the ack
+/// * `metadata` - Execution metadata (orchestration name/version, pinned_duroxide_version)
+#[allow(dead_code)]
+pub async fn seed_history_turn(
+    provider: &dyn Provider,
+    trigger: WorkItem,
+    execution_id: u64,
+    events: Vec<Event>,
+    orchestrator_items: Vec<WorkItem>,
+    metadata: ExecutionMetadata,
+) {
+    provider.enqueue_for_orchestrator(trigger, None).await.unwrap();
+
+    let lock_token;
+    let mut abandoned_tokens = Vec::new();
+    let expected_instance = events.first().map(|e| e.instance_id.clone()).unwrap_or_default();
+    loop {
+        let (item, token, _) = provider
+            .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
+            .await
+            .unwrap()
+            .expect("should have work available");
+        if item.instance == expected_instance {
+            lock_token = token;
+            break;
+        }
+        abandoned_tokens.push(token);
+    }
+
+    provider
+        .ack_orchestration_item(
+            &lock_token,
+            execution_id,
+            events,
+            vec![], // no worker items
+            orchestrator_items,
+            metadata,
+            vec![], // no cancelled activities
+        )
+        .await
+        .unwrap();
+
+    for token in abandoned_tokens {
+        let _ = provider.abandon_orchestration_item(&token, None, true).await;
+    }
+}
+
+/// Seed an instance with a single OrchestrationStarted event stamped with a specific
+/// pinned duroxide version. Enqueues a follow-up ExternalRaised so the item remains fetchable.
+///
+/// This is the standard way to create a test instance that appears to have been
+/// created by a specific duroxide version (for capability filtering tests).
+#[allow(dead_code)]
+pub async fn seed_instance_with_pinned_version(
+    provider: &dyn Provider,
+    instance: &str,
+    orchestration: &str,
+    pinned_version: semver::Version,
+) {
+    let version_str = pinned_version.to_string();
+    let mut started_event = Event::with_event_id(
+        INITIAL_EVENT_ID,
+        instance,
+        INITIAL_EXECUTION_ID,
+        None,
+        EventKind::OrchestrationStarted {
+            name: orchestration.to_string(),
+            version: "1.0.0".to_string(),
+            input: "{}".to_string(),
+            parent_instance: None,
+            parent_id: None,
+        },
+    );
+    started_event.duroxide_version = version_str;
+
+    seed_history_turn(
+        provider,
+        WorkItem::StartOrchestration {
+            instance: instance.to_string(),
+            orchestration: orchestration.to_string(),
+            input: "{}".to_string(),
+            version: Some("1.0.0".to_string()),
+            parent_instance: None,
+            parent_id: None,
+            execution_id: INITIAL_EXECUTION_ID,
+        },
+        INITIAL_EXECUTION_ID,
+        vec![started_event],
+        vec![WorkItem::ExternalRaised {
+            instance: instance.to_string(),
+            name: "ping".to_string(),
+            data: "{}".to_string(),
+        }],
+        ExecutionMetadata {
+            orchestration_name: Some(orchestration.to_string()),
+            orchestration_version: Some("1.0.0".to_string()),
+            pinned_duroxide_version: Some(pinned_version),
+            ..Default::default()
+        },
+    )
+    .await;
+}
+
+/// Create an event stamped with a specific duroxide version.
+///
+/// Convenience wrapper around `Event::with_event_id` that overrides the
+/// `duroxide_version` field. Useful for seeding history that appears to
+/// have been written by an older runtime.
+#[allow(dead_code)]
+pub fn make_versioned_event(
+    event_id: u64,
+    instance: &str,
+    execution_id: u64,
+    source_event_id: Option<u64>,
+    kind: EventKind,
+    duroxide_version: &str,
+) -> Event {
+    let mut event = Event::with_event_id(event_id, instance, execution_id, source_event_id, kind);
+    event.duroxide_version = duroxide_version.to_string();
+    event
 }

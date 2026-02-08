@@ -440,8 +440,9 @@ impl Provider for MyProvider {
         &self,
         lock_timeout: Duration,
         poll_timeout: Duration,
+        filter: Option<&DispatcherCapabilityFilter>,
     ) -> Result<Option<(OrchestrationItem, String, u32)>, ProviderError> {
-        todo!("Fetch turn with instance lock")
+        todo!("Fetch turn with instance lock, applying capability filter")
     }
     
     async fn ack_orchestration_item(
@@ -821,12 +822,43 @@ Use database transactions to ensure atomicity.
 
 This is the most complex method. It must:
 
-1. Find an instance with pending work
+1. Find an instance with pending work (applying capability filter if provided)
 2. Acquire an instance-level lock (prevent concurrent processing)
 3. Tag all visible messages with the lock token
 4. Load instance metadata
 5. Load event history for current execution
 6. Return everything together
+
+#### Capability Filtering Contract
+
+`fetch_orchestration_item` accepts an optional `DispatcherCapabilityFilter`. When provided, the provider **MUST** apply the filter before acquiring the lock or loading history. The correct implementation order is:
+
+1. Find a candidate instance from the queue.
+2. Check the execution's `duroxide_version_major/minor/patch` against the filter. **Skip if incompatible.**
+3. Only then acquire the instance lock.
+4. Only then load and deserialize history.
+
+This ordering is critical — it ensures the provider never loads or deserializes history events from an incompatible execution (which may contain unknown event types from a newer duroxide version).
+
+When `filter` is `None`, behaviour is unchanged (legacy/drain mode).
+
+#### History Deserialization Contract
+
+Even with filtering, a provider may encounter undeserializable history events in edge cases (e.g., `filter=None`, corrupted data, bugs). The contract:
+
+1. **MUST NOT** silently drop events that fail to deserialize. Silent dropping leads to incomplete history and confusing nondeterminism errors.
+2. **MUST** return `Ok(Some(OrchestrationItem { history_error: Some("..."), history: vec![], ... }))` when history deserialization fails. The `attempt_count` must have been incremented before the item is returned so the existing max-attempts poison machinery can terminate the orchestration.
+3. **MUST NOT** return `Err(...)` while holding a lock. The lock lifecycle rule is: `Ok(Some(...))` = lock held (caller must ack or abandon), `Err(...)` = no lock held.
+
+The required implementation pattern:
+1. Acquire instance lock and increment `attempt_count` (commit atomically).
+2. Load history events.
+3. If any event fails to deserialize → set `history_error` with the error message, `history` to empty, and return `Ok(Some(...))`.
+4. The runtime receives the item, sees `history_error`, and abandons with backoff (1s linear).
+5. On the next fetch cycle, the item is fetched again with a higher `attempt_count`.
+6. Once `attempt_count > max_attempts`, the runtime poisons the orchestration by acking with a new `OrchestrationFailed` event (at sentinel `event_id=99999`) and metadata `status="Failed"`.
+
+**Critical ack constraint for corrupted history:** When the runtime terminates a corrupted-history item via the poison path, it acks with a new event appended to the history table. The provider's `ack_orchestration_item()` **MUST** be append-only — it must INSERT new event rows and UPDATE execution metadata without reading, deserializing, or re-serializing existing history rows. A provider that re-reads all history during ack would fail because the corrupted rows cannot be deserialized. This contract is validated by `test_ack_appends_event_to_corrupted_history`.
 
 **Pseudocode:**
 ```
@@ -895,6 +927,7 @@ RETURN OrchestrationItem {
     version: orchestration_version,
     history: deserialize(history),
     messages: deserialize(messages),
+    history_error: None,  -- set to Some(error_msg) if deserialization fails
 }
 ```
 
@@ -931,7 +964,9 @@ SET current_execution_id = MAX(current_execution_id, excluded.current_execution_
     status = excluded.status,
     output = excluded.output
 
--- Step 3: Append events to history
+-- Step 3: Append events to history (APPEND-ONLY — never read/deserialize existing rows)
+-- This constraint is critical: the runtime may ack with new events even when existing
+-- history rows contain undeserializable data (corrupted-history poison termination).
 FOR event IN history_delta:
     INSERT INTO history (instance_id, execution_id, event_id, event_data)
     VALUES (instance, execution_id, event.event_id, serialize(event))
@@ -1554,8 +1589,23 @@ The validation suite tests:
 - Lock expiration
 - Concurrent access
 - Error handling
+- **Capability filtering** — version-based fetch filtering, NULL compatibility, boundary versions, ContinueAsNew isolation
+- **Deserialization contract** — corrupted history handling, attempt_count increment, history_error field, poison path, ack append-only contract
 
-See `tests/sqlite_provider_validations.rs` for examples.
+The capability filtering tests (`provider_validations::capability_filtering`) validate:
+- Filter-before-lock ordering (incompatible items never locked)
+- NULL pinned version treated as always compatible
+- Boundary version correctness at range edges
+- ContinueAsNew creates independent pinned versions (not inherited)
+- Deserialization errors return `Ok(Some(...))` with `history_error` set and incremented `attempt_count`
+- Ack appends events to corrupted history without re-serializing existing rows (append-only)
+
+The deserialization contract tests require implementing two optional `ProviderFactory` methods:
+- `corrupt_instance_history(instance)` — inject undeserializable event data for testing
+- `get_max_attempt_count(instance)` — query max attempt_count from the queue for verification
+- Filter applied before history deserialization (corrupted history + excluded version = no error)
+
+See `tests/sqlite_provider_validations.rs` for examples of wiring these tests for a specific provider.
 
 ---
 
@@ -1674,10 +1724,16 @@ Before considering your provider complete:
 - [ ] `fetch_orchestration_item()` acquires instance-level lock
 - [ ] `fetch_orchestration_item()` tags all visible messages
 - [ ] `fetch_orchestration_item()` loads correct history
+- [ ] `fetch_orchestration_item()` applies capability filter BEFORE acquiring lock and loading history
+- [ ] `fetch_orchestration_item()` returns `Ok(None)` for incompatible items (not an error)
+- [ ] `fetch_orchestration_item()` treats NULL pinned version as always compatible
+- [ ] `fetch_orchestration_item()` returns `Ok(Some(...))` with `history_error` set on history deserialization failure (not `Err` — lock is held)
 - [ ] `ack_orchestration_item()` is fully atomic
 - [ ] `ack_orchestration_item()` validates lock before committing
 - [ ] `ack_orchestration_item()` handles cancelled_activities correctly
 - [ ] `ack_orchestration_item()` enqueues before cancelling (ordering)
+- [ ] `ack_orchestration_item()` stores `pinned_duroxide_version` unconditionally from `ExecutionMetadata` when provided (no write-once guard — the runtime enforces this invariant)
+- [ ] `ack_orchestration_item()` is append-only for history — INSERTs new events without reading/deserializing existing rows (required for corrupted-history poison termination)
 
 ### Concurrency
 - [ ] Lock acquisition is atomic (no check-then-set)

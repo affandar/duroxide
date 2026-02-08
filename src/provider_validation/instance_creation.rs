@@ -17,7 +17,7 @@ pub async fn test_instance_creation_via_metadata<F: ProviderFactory>(factory: &F
 
     // Fetch work item - instance doesn't exist yet, should extract from work item
     let (item, lock_token, _attempt_count) = provider
-        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
         .await
         .unwrap()
         .unwrap();
@@ -66,7 +66,7 @@ pub async fn test_instance_creation_via_metadata<F: ProviderFactory>(factory: &F
         .await
         .unwrap();
     let (item2, lock_token2, _attempt_count2) = provider
-        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
         .await
         .unwrap()
         .unwrap();
@@ -111,7 +111,7 @@ pub async fn test_no_instance_creation_on_enqueue<F: ProviderFactory>(factory: &
 
     // Fetch should work even though instance doesn't exist
     let result = provider
-        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
         .await
         .unwrap();
     assert!(
@@ -175,7 +175,7 @@ pub async fn test_null_version_handling<F: ProviderFactory>(factory: &F) {
 
     // Fetch work item - should handle None version
     let (item, lock_token, _attempt_count) = provider
-        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
         .await
         .unwrap()
         .unwrap();
@@ -219,7 +219,7 @@ pub async fn test_null_version_handling<F: ProviderFactory>(factory: &F) {
         .await
         .unwrap();
     let (item2, lock_token2, _attempt_count2) = provider
-        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
         .await
         .unwrap()
         .unwrap();
@@ -254,7 +254,7 @@ pub async fn test_sub_orchestration_instance_creation<F: ProviderFactory>(factor
         .await
         .unwrap();
     let (_parent_item, parent_lock_token, _attempt_count) = provider
-        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
         .await
         .unwrap()
         .unwrap();
@@ -298,7 +298,7 @@ pub async fn test_sub_orchestration_instance_creation<F: ProviderFactory>(factor
     // Child instance should NOT exist yet (not created on enqueue)
     // Fetch child work item - should work without instance existing
     let (child_item, child_lock_token, _attempt_count) = provider
-        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
         .await
         .unwrap()
         .unwrap();
@@ -352,7 +352,7 @@ pub async fn test_sub_orchestration_instance_creation<F: ProviderFactory>(factor
         .await
         .unwrap();
     let (child_item2, child_lock_token2, _attempt_count2) = provider
-        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
         .await
         .unwrap()
         .unwrap();

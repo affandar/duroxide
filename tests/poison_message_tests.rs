@@ -49,7 +49,7 @@ async fn orchestration_attempt_count_increments_on_abandon() {
 
     // First fetch - attempt_count should be 1
     let (_item1, lock_token1, attempt_count1) = provider
-        .fetch_orchestration_item(lock_timeout, Duration::ZERO)
+        .fetch_orchestration_item(lock_timeout, Duration::ZERO, None)
         .await
         .expect("fetch should succeed")
         .expect("item should be present");
@@ -62,7 +62,7 @@ async fn orchestration_attempt_count_increments_on_abandon() {
         .expect("abandon should succeed");
 
     let (_item2, lock_token2, attempt_count2) = provider
-        .fetch_orchestration_item(lock_timeout, Duration::ZERO)
+        .fetch_orchestration_item(lock_timeout, Duration::ZERO, None)
         .await
         .expect("fetch should succeed")
         .expect("item should be present");
@@ -75,7 +75,7 @@ async fn orchestration_attempt_count_increments_on_abandon() {
         .expect("abandon should succeed");
 
     let (_item3, _lock_token3, attempt_count3) = provider
-        .fetch_orchestration_item(lock_timeout, Duration::ZERO)
+        .fetch_orchestration_item(lock_timeout, Duration::ZERO, None)
         .await
         .expect("fetch should succeed")
         .expect("item should be present");

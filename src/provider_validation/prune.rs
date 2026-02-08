@@ -245,7 +245,7 @@ async fn create_multi_execution_instance(
         provider.enqueue_for_orchestrator(work_item, None).await.unwrap();
 
         let (_item, lock_token, _) = provider
-            .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+            .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
             .await
             .unwrap()
             .unwrap();

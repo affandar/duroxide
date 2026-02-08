@@ -19,6 +19,21 @@ mod tests {
             test_delete_instance_bulk_cascades_to_children, test_delete_instance_bulk_completed_before_filter,
             test_delete_instance_bulk_filter_combinations, test_delete_instance_bulk_safety_and_limits,
         },
+        // Capability filtering tests
+        capability_filtering::{
+            test_ack_appends_event_to_corrupted_history, test_ack_stores_pinned_version_via_metadata_update,
+            test_concurrent_filtered_fetch_no_double_lock, test_continue_as_new_execution_gets_own_pinned_version,
+            test_fetch_corrupted_history_filtered_vs_unfiltered,
+            test_fetch_deserialization_error_eventually_reaches_poison,
+            test_fetch_deserialization_error_increments_attempt_count,
+            test_fetch_filter_applied_before_history_deserialization, test_fetch_filter_boundary_versions,
+            test_fetch_filter_does_not_lock_skipped_instances, test_fetch_filter_null_pinned_version_always_compatible,
+            test_fetch_filter_skips_incompatible_selects_compatible, test_fetch_single_range_only_uses_first_range,
+            test_fetch_with_compatible_filter_returns_item, test_fetch_with_filter_none_returns_any_item,
+            test_fetch_with_incompatible_filter_skips_item, test_filter_with_empty_supported_versions_returns_nothing,
+            test_pinned_version_immutable_across_ack_cycles, test_pinned_version_stored_via_ack_metadata,
+            test_provider_updates_pinned_version_when_told,
+        },
         // Deletion tests
         deletion::{
             test_cascade_delete_hierarchy, test_delete_cleans_queues_and_locks, test_delete_get_instance_tree,
@@ -128,17 +143,62 @@ mod tests {
 
     const TEST_LOCK_TIMEOUT: Duration = Duration::from_millis(1000);
 
+    /// Standard test factory — each `create_provider()` call gets a fresh in-memory DB.
+    /// Used by the vast majority of tests that don't need direct DB manipulation.
     struct SqliteTestFactory;
 
     #[async_trait::async_trait]
     impl ProviderFactory for SqliteTestFactory {
         async fn create_provider(&self) -> Arc<dyn Provider> {
-            // Lock timeout is now configured via RuntimeOptions, not SqliteOptions
             Arc::new(SqliteProvider::new_in_memory().await.unwrap())
         }
 
         fn lock_timeout(&self) -> Duration {
             TEST_LOCK_TIMEOUT
+        }
+    }
+
+    /// Factory backed by a single shared provider. Required for tests that use
+    /// `corrupt_instance_history()` or `get_max_attempt_count()`, because those
+    /// need direct SQL access to the same DB that `create_provider()` returns.
+    struct SharedSqliteTestFactory {
+        provider: Arc<SqliteProvider>,
+    }
+
+    impl SharedSqliteTestFactory {
+        async fn new() -> Self {
+            Self {
+                provider: Arc::new(SqliteProvider::new_in_memory().await.unwrap()),
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl ProviderFactory for SharedSqliteTestFactory {
+        async fn create_provider(&self) -> Arc<dyn Provider> {
+            self.provider.clone()
+        }
+
+        fn lock_timeout(&self) -> Duration {
+            TEST_LOCK_TIMEOUT
+        }
+
+        async fn corrupt_instance_history(&self, instance: &str) {
+            sqlx::query("UPDATE history SET event_data = 'NOT_VALID_JSON{{{' WHERE instance_id = ?")
+                .bind(instance)
+                .execute(self.provider.get_pool())
+                .await
+                .expect("Failed to corrupt history");
+        }
+
+        async fn get_max_attempt_count(&self, instance: &str) -> u32 {
+            let count: i64 =
+                sqlx::query_scalar("SELECT MAX(attempt_count) FROM orchestrator_queue WHERE instance_id = ?")
+                    .bind(instance)
+                    .fetch_one(self.provider.get_pool())
+                    .await
+                    .expect("Failed to query attempt_count");
+            count as u32
         }
     }
 
@@ -664,5 +724,108 @@ mod tests {
     #[tokio::test]
     async fn test_sqlite_delete_instance_bulk_cascades_to_children() {
         test_delete_instance_bulk_cascades_to_children(&SqliteTestFactory).await;
+    }
+
+    // Capability filtering tests
+    #[tokio::test]
+    async fn test_sqlite_fetch_with_filter_none_returns_any_item() {
+        test_fetch_with_filter_none_returns_any_item(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_fetch_with_compatible_filter_returns_item() {
+        test_fetch_with_compatible_filter_returns_item(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_fetch_with_incompatible_filter_skips_item() {
+        test_fetch_with_incompatible_filter_skips_item(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_fetch_filter_skips_incompatible_selects_compatible() {
+        test_fetch_filter_skips_incompatible_selects_compatible(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_fetch_filter_does_not_lock_skipped_instances() {
+        test_fetch_filter_does_not_lock_skipped_instances(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_fetch_filter_null_pinned_version_always_compatible() {
+        test_fetch_filter_null_pinned_version_always_compatible(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_fetch_filter_boundary_versions() {
+        test_fetch_filter_boundary_versions(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_pinned_version_stored_via_ack_metadata() {
+        test_pinned_version_stored_via_ack_metadata(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_pinned_version_immutable_across_ack_cycles() {
+        test_pinned_version_immutable_across_ack_cycles(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_continue_as_new_execution_gets_own_pinned_version() {
+        test_continue_as_new_execution_gets_own_pinned_version(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_filter_with_empty_supported_versions_returns_nothing() {
+        test_filter_with_empty_supported_versions_returns_nothing(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_concurrent_filtered_fetch_no_double_lock() {
+        test_concurrent_filtered_fetch_no_double_lock(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_ack_stores_pinned_version_via_metadata_update() {
+        test_ack_stores_pinned_version_via_metadata_update(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_provider_updates_pinned_version_when_told() {
+        test_provider_updates_pinned_version_when_told(&SqliteTestFactory).await;
+    }
+
+    // Category I: Deserialization contract tests (provider-agnostic via ProviderFactory)
+    #[tokio::test]
+    async fn test_sqlite_fetch_corrupted_history_filtered_vs_unfiltered() {
+        test_fetch_corrupted_history_filtered_vs_unfiltered(&SharedSqliteTestFactory::new().await).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_fetch_deserialization_error_increments_attempt_count() {
+        test_fetch_deserialization_error_increments_attempt_count(&SharedSqliteTestFactory::new().await).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_fetch_deserialization_error_eventually_reaches_poison() {
+        test_fetch_deserialization_error_eventually_reaches_poison(&SharedSqliteTestFactory::new().await).await;
+    }
+
+    // Category F2: Additional edge cases
+    #[tokio::test]
+    async fn test_sqlite_fetch_filter_applied_before_history_deserialization() {
+        test_fetch_filter_applied_before_history_deserialization(&SharedSqliteTestFactory::new().await).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_fetch_single_range_only_uses_first_range() {
+        test_fetch_single_range_only_uses_first_range(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_ack_appends_event_to_corrupted_history() {
+        test_ack_appends_event_to_corrupted_history(&SharedSqliteTestFactory::new().await).await;
     }
 }

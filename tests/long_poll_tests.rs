@@ -3,7 +3,8 @@
 #![allow(clippy::expect_used)]
 
 use duroxide::providers::{
-    ExecutionMetadata, OrchestrationItem, Provider, ProviderError, ScheduledActivityIdentifier, WorkItem,
+    DispatcherCapabilityFilter, ExecutionMetadata, OrchestrationItem, Provider, ProviderError,
+    ScheduledActivityIdentifier, WorkItem,
 };
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self, RuntimeOptions};
@@ -57,9 +58,10 @@ impl Provider for LongPollingSqliteProvider {
         &self,
         lock_timeout: Duration,
         poll_timeout: Duration,
+        _filter: Option<&DispatcherCapabilityFilter>,
     ) -> Result<Option<(OrchestrationItem, String, u32)>, ProviderError> {
         self.poll_until(poll_timeout, || {
-            self.inner.fetch_orchestration_item(lock_timeout, Duration::ZERO)
+            self.inner.fetch_orchestration_item(lock_timeout, Duration::ZERO, None)
         })
         .await
     }
@@ -173,7 +175,7 @@ async fn test_long_poll_waits_for_timeout() {
 
     // Fetch with timeout
     let result = provider
-        .fetch_orchestration_item(Duration::from_secs(5), timeout)
+        .fetch_orchestration_item(Duration::from_secs(5), timeout, None)
         .await
         .unwrap();
 
@@ -206,7 +208,7 @@ async fn test_long_poll_returns_early_on_work() {
 
     // Fetch should block but return when work arrives
     let result = provider
-        .fetch_orchestration_item(Duration::from_secs(5), timeout)
+        .fetch_orchestration_item(Duration::from_secs(5), timeout, None)
         .await
         .unwrap();
 

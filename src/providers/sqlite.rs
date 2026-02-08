@@ -8,8 +8,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tracing::debug;
 
 use super::{
-    DeleteInstanceResult, ExecutionInfo, InstanceFilter, InstanceInfo, OrchestrationItem, Provider, ProviderAdmin,
-    ProviderError, PruneOptions, PruneResult, QueueDepths, ScheduledActivityIdentifier, SystemMetrics, WorkItem,
+    DeleteInstanceResult, DispatcherCapabilityFilter, ExecutionInfo, InstanceFilter, InstanceInfo, OrchestrationItem,
+    Provider, ProviderAdmin, ProviderError, PruneOptions, PruneResult, QueueDepths, ScheduledActivityIdentifier,
+    SystemMetrics, WorkItem,
 };
 use crate::{Event, EventKind};
 
@@ -71,6 +72,8 @@ impl SqliteProvider {
             | WorkItem::ExternalRaised { instance, .. }
             | WorkItem::CancelInstance { instance, .. }
             | WorkItem::ContinueAsNew { instance, .. } => instance,
+            #[cfg(feature = "replay-version-test")]
+            WorkItem::ExternalRaised2 { instance, .. } => instance,
             WorkItem::SubOrchCompleted { parent_instance, .. } | WorkItem::SubOrchFailed { parent_instance, .. } => {
                 parent_instance
             }
@@ -288,6 +291,9 @@ impl SqliteProvider {
                 execution_id INTEGER NOT NULL,
                 status TEXT NOT NULL DEFAULT 'Running',
                 output TEXT,
+                duroxide_version_major INTEGER,
+                duroxide_version_minor INTEGER,
+                duroxide_version_patch INTEGER,
                 started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 completed_at TIMESTAMP,
                 PRIMARY KEY (instance_id, execution_id)
@@ -457,11 +463,18 @@ impl SqliteProvider {
         .await?;
 
         let mut events = Vec::new();
-        for row in rows {
+        for (idx, row) in rows.iter().enumerate() {
             let event_data: String = row.try_get("event_data")?;
-            if let Ok(event) = serde_json::from_str::<Event>(&event_data) {
-                events.push(event);
-            }
+            let event: Event = serde_json::from_str::<Event>(&event_data).map_err(|e| {
+                // Deserialization failures must NOT be silently dropped.
+                // Unknown event types (e.g., from a newer duroxide version) produce a hard error
+                // so the caller can surface it properly and the poison path can eventually terminate
+                // the orchestration. See provider-capability-filtering.md requirement 2.
+                sqlx::Error::Protocol(format!(
+                    "Failed to deserialize history event at position {idx} for instance '{instance}' execution {execution_id}: {e}"
+                ))
+            })?;
+            events.push(event);
         }
 
         Ok(events)
@@ -504,6 +517,10 @@ impl SqliteProvider {
                 EventKind::SubOrchestrationCancelRequested { .. } => "SubOrchestrationCancelRequested",
                 EventKind::OrchestrationCancelRequested { .. } => "OrchestrationCancelRequested",
                 EventKind::OrchestrationChained { .. } => "OrchestrationChained",
+                #[cfg(feature = "replay-version-test")]
+                EventKind::ExternalSubscribed2 { .. } => "ExternalSubscribed2",
+                #[cfg(feature = "replay-version-test")]
+                EventKind::ExternalEvent2 { .. } => "ExternalEvent2",
             };
 
             let event_data = serde_json::to_string(&event)
@@ -547,6 +564,7 @@ impl Provider for SqliteProvider {
         &self,
         lock_timeout: Duration,
         _poll_timeout: Duration,
+        filter: Option<&DispatcherCapabilityFilter>,
     ) -> Result<Option<(OrchestrationItem, String, u32)>, ProviderError> {
         let mut tx = self
             .pool
@@ -555,23 +573,79 @@ impl Provider for SqliteProvider {
             .map_err(|e| Self::sqlx_to_provider_error("fetch_orchestration_item", e))?;
         let now_ms = Self::now_millis();
 
-        // Find an instance that has visible messages AND is not locked (or lock expired)
-        // Join orchestrator_queue with instance_locks to check lock status
-        let row = sqlx::query(
-            r#"
-            SELECT q.instance_id
-            FROM orchestrator_queue q
-            LEFT JOIN instance_locks il ON q.instance_id = il.instance_id
-            WHERE q.visible_at <= ?1
-              AND (il.instance_id IS NULL OR il.locked_until <= ?1)
-            ORDER BY q.id
-            LIMIT 1
-            "#,
-        )
-        .bind(now_ms)
-        .fetch_optional(&mut *tx)
-        .await
-        .map_err(|e| Self::sqlx_to_provider_error("fetch_orchestration_item", e))?;
+        // Implementation ordering (capability filtering contract):
+        //   1. Select candidate instance (with version filter applied via SQL)
+        //   2. Acquire instance lock
+        //   3. Load and deserialize history (via read_history_in_tx)
+        //
+        // History deserialization intentionally happens AFTER filtering. The capability
+        // filter excludes incompatible executions at the SQL level so the provider never
+        // loads or deserializes history events from an incompatible execution.
+
+        // Find an instance that has visible messages AND is not locked (or lock expired).
+        // When a capability filter is provided, also join instances+executions to filter
+        // on the execution's pinned duroxide version before acquiring the lock.
+        let row = if let Some(cap_filter) = filter {
+            // Phase 1: single range only. Multi-range would need an OR chain in the query.
+            let range = match cap_filter.supported_duroxide_versions.first() {
+                Some(r) => r,
+                None => {
+                    // Empty supported_duroxide_versions = "supports nothing" → no candidate.
+                    tx.commit()
+                        .await
+                        .map_err(|e| Self::sqlx_to_provider_error("fetch_orchestration_item", e))?;
+                    return Ok(None);
+                }
+            };
+
+            // Packed integer comparison: major * 1_000_000 + minor * 1_000 + patch.
+            // Works as long as minor and patch are < 1000, which is true in practice.
+            let min_packed =
+                range.min.major as i64 * 1_000_000 + range.min.minor as i64 * 1_000 + range.min.patch as i64;
+            let max_packed =
+                range.max.major as i64 * 1_000_000 + range.max.minor as i64 * 1_000 + range.max.patch as i64;
+
+            sqlx::query(
+                r#"
+                SELECT q.instance_id
+                FROM orchestrator_queue q
+                LEFT JOIN instance_locks il ON q.instance_id = il.instance_id
+                LEFT JOIN instances i ON q.instance_id = i.instance_id
+                LEFT JOIN executions e ON i.instance_id = e.instance_id AND i.current_execution_id = e.execution_id
+                WHERE q.visible_at <= ?1
+                  AND (il.instance_id IS NULL OR il.locked_until <= ?1)
+                  AND (
+                    e.duroxide_version_major IS NULL
+                    OR (e.duroxide_version_major * 1000000 + e.duroxide_version_minor * 1000 + e.duroxide_version_patch) BETWEEN ?2 AND ?3
+                  )
+                ORDER BY q.id
+                LIMIT 1
+                "#,
+            )
+            .bind(now_ms)
+            .bind(min_packed)
+            .bind(max_packed)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(|e| Self::sqlx_to_provider_error("fetch_orchestration_item", e))?
+        } else {
+            // No filter — legacy behavior, return any available instance
+            sqlx::query(
+                r#"
+                SELECT q.instance_id
+                FROM orchestrator_queue q
+                LEFT JOIN instance_locks il ON q.instance_id = il.instance_id
+                WHERE q.visible_at <= ?1
+                  AND (il.instance_id IS NULL OR il.locked_until <= ?1)
+                ORDER BY q.id
+                LIMIT 1
+                "#,
+            )
+            .bind(now_ms)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(|e| Self::sqlx_to_provider_error("fetch_orchestration_item", e))?
+        };
 
         if row.is_none() {
             // Check if there are any messages at all
@@ -729,27 +803,61 @@ impl Provider for SqliteProvider {
             })?;
 
             // Normal case: always read history for current execution; runtime decides CAN semantics
-            let hist = self
+            let hist_result = self
                 .read_history_in_tx(&mut tx, &instance_id, Some(exec_id as u64))
-                .await
-                .map_err(|e| {
-                    ProviderError::permanent("fetch_orchestration_item", format!("Failed to read history: {e}"))
-                })?;
+                .await;
 
-            // If version is NULL in database, use "unknown"
-            // If instance exists but version is NULL, there shouldn't be an OrchestrationStarted event
-            // in history (version should have been set when instance was created via metadata)
-            let version = version.unwrap_or_else(|| {
-                debug_assert!(
-                    !hist
-                        .iter()
-                        .any(|e| matches!(&e.kind, EventKind::OrchestrationStarted { .. })),
-                    "Instance exists with NULL version but history contains OrchestrationStarted event"
-                );
-                "unknown".to_string()
-            });
+            match hist_result {
+                Ok(hist) => {
+                    // If version is NULL in database, use "unknown"
+                    // If instance exists but version is NULL, there shouldn't be an OrchestrationStarted event
+                    // in history (version should have been set when instance was created via metadata)
+                    let version = version.unwrap_or_else(|| {
+                        debug_assert!(
+                            !hist
+                                .iter()
+                                .any(|e| matches!(&e.kind, EventKind::OrchestrationStarted { .. })),
+                            "Instance exists with NULL version but history contains OrchestrationStarted event"
+                        );
+                        "unknown".to_string()
+                    });
 
-            (name, version, exec_id as u64, hist)
+                    (name, version, exec_id as u64, hist)
+                }
+                Err(e) => {
+                    // History deserialization failed. Return Ok(Some(...)) with
+                    // history_error set so the runtime can reach its poison check.
+                    // The lock is held (committed below) and attempt_count was
+                    // already incremented, so the normal max_attempts cycle works.
+                    let error_msg = format!("Failed to deserialize history: {e}");
+                    tracing::warn!(
+                        target = "duroxide::providers::sqlite",
+                        instance = %instance_id,
+                        error = %error_msg,
+                        "History deserialization failed, returning item with history_error"
+                    );
+
+                    let version = version.unwrap_or_else(|| "unknown".to_string());
+
+                    tx.commit()
+                        .await
+                        .map_err(|ce| Self::sqlx_to_provider_error("fetch_orchestration_item", ce))?;
+
+                    return Ok(Some((
+                        OrchestrationItem {
+                            instance: instance_id,
+                            orchestration_name: name,
+                            execution_id: exec_id as u64,
+                            version,
+                            history: vec![],
+                            messages: work_items,
+                            history_error: Some(error_msg),
+                        },
+                        lock_token,
+                        max_attempt_count,
+                    )));
+                }
+            }
         } else {
             // Fallback: try to derive from history (e.g., ActivityCompleted arriving before we see instance row)
             let hist = self
@@ -814,6 +922,7 @@ impl Provider for SqliteProvider {
                 version: orchestration_version,
                 messages: work_items,
                 history,
+                history_error: None,
             },
             lock_token,
             max_attempt_count,
@@ -901,7 +1010,10 @@ impl Provider for SqliteProvider {
             .map_err(|e| Self::sqlx_to_provider_error("list_instances", e))?;
         }
 
-        // Create execution record if it doesn't exist (idempotent)
+        // Create execution record if it doesn't exist (idempotent).
+        // INSERT OR IGNORE is correct here: the execution may already exist from a previous
+        // ack cycle (e.g., second turn of the same execution). We only need to ensure the
+        // row exists; we never want to overwrite an existing execution's status.
         sqlx::query(
             r#"
             INSERT OR IGNORE INTO executions (instance_id, execution_id, status)
@@ -912,7 +1024,29 @@ impl Provider for SqliteProvider {
         .bind(execution_id as i64)
         .execute(&mut *tx)
         .await
-        .map_err(|e| Self::sqlx_to_provider_error("list_instances", e))?;
+        .map_err(|e| Self::sqlx_to_provider_error("ack_orchestration_item", e))?;
+
+        // If pinned duroxide version is provided, store it on the execution row.
+        // The provider unconditionally updates when told — the runtime is responsible
+        // for only setting this on the first turn (enforced via debug_assert in the
+        // orchestration dispatcher).
+        if let Some(pinned) = &metadata.pinned_duroxide_version {
+            sqlx::query(
+                r#"
+                UPDATE executions
+                SET duroxide_version_major = ?, duroxide_version_minor = ?, duroxide_version_patch = ?
+                WHERE instance_id = ? AND execution_id = ?
+                "#,
+            )
+            .bind(pinned.major as i64)
+            .bind(pinned.minor as i64)
+            .bind(pinned.patch as i64)
+            .bind(&instance_id)
+            .bind(execution_id as i64)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| Self::sqlx_to_provider_error("ack_orchestration_item", e))?;
+        }
 
         // Update instances.current_execution_id if this is a newer execution
         sqlx::query(
@@ -941,33 +1075,36 @@ impl Provider for SqliteProvider {
                 .map_err(|e| {
                     ProviderError::permanent("ack_orchestration_item", format!("Failed to append history: {e}"))
                 })?;
+        }
 
-            // Update execution status and output from pre-computed metadata (no event inspection!)
-            if let Some(status) = &metadata.status {
-                let now_ms = Self::now_millis();
-                sqlx::query(
-                    r#"
-                    UPDATE executions 
-                    SET status = ?, output = ?, completed_at = ?
-                    WHERE instance_id = ? AND execution_id = ?
-                    "#,
-                )
-                .bind(status)
-                .bind(&metadata.output)
-                .bind(now_ms)
-                .bind(&instance_id)
-                .bind(execution_id as i64)
-                .execute(&mut *tx)
-                .await
-                .map_err(|e| Self::sqlx_to_provider_error("list_instances", e))?;
+        // Update execution status and output from pre-computed metadata (no event inspection!)
+        // This runs regardless of whether there's a history delta — needed for cases like
+        // poison termination of items with corrupted history (history_error) where we can't
+        // write history events but still need to mark the execution as Failed.
+        if let Some(status) = &metadata.status {
+            let now_ms = Self::now_millis();
+            sqlx::query(
+                r#"
+                UPDATE executions 
+                SET status = ?, output = ?, completed_at = ?
+                WHERE instance_id = ? AND execution_id = ?
+                "#,
+            )
+            .bind(status)
+            .bind(&metadata.output)
+            .bind(now_ms)
+            .bind(&instance_id)
+            .bind(execution_id as i64)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| Self::sqlx_to_provider_error("ack_orchestration_item", e))?;
 
-                debug!(
-                    instance = %instance_id,
-                    execution_id = %execution_id,
-                    status = %status,
-                    "Updated execution status and output from metadata"
-                );
-            }
+            debug!(
+                instance = %instance_id,
+                execution_id = %execution_id,
+                status = %status,
+                "Updated execution status and output from metadata"
+            );
         }
 
         // Enqueue worker items with identity columns for cancellation support
@@ -1053,6 +1190,8 @@ impl Provider for SqliteProvider {
                 | WorkItem::ExternalRaised { instance, .. }
                 | WorkItem::CancelInstance { instance, .. }
                 | WorkItem::ContinueAsNew { instance, .. } => instance,
+                #[cfg(feature = "replay-version-test")]
+                WorkItem::ExternalRaised2 { instance, .. } => instance,
                 WorkItem::SubOrchCompleted { parent_instance, .. }
                 | WorkItem::SubOrchFailed { parent_instance, .. } => parent_instance,
                 _ => continue,
@@ -2473,7 +2612,7 @@ mod tests {
             .await?;
 
         let (_item, lock_token, _attempt_count) = provider
-            .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+            .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
             .await?
             .ok_or_else(|| "Failed to fetch orchestration item".to_string())?;
 
@@ -2536,7 +2675,7 @@ mod tests {
 
         // Fetch it
         let (orch_item, lock_token, _attempt_count) = store
-            .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+            .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
             .await
             .expect("fetch should succeed")
             .expect("item should be present");
@@ -2575,7 +2714,7 @@ mod tests {
         // Verify no more work
         assert!(
             store
-                .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+                .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
                 .await
                 .unwrap()
                 .is_none()
@@ -2605,7 +2744,7 @@ mod tests {
         store.enqueue_for_orchestrator(start, None).await.unwrap();
 
         let (_orch_item, lock_token, _attempt_count) = store
-            .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO)
+            .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
             .await
             .unwrap()
             .unwrap();
@@ -2753,7 +2892,7 @@ mod tests {
 
         // Fetch but don't ack (with short timeout)
         let (_orch_item, lock_token, _attempt_count) = store
-            .fetch_orchestration_item(short_lock_timeout, Duration::ZERO)
+            .fetch_orchestration_item(short_lock_timeout, Duration::ZERO, None)
             .await
             .unwrap()
             .unwrap();
@@ -2761,7 +2900,7 @@ mod tests {
         // Should not be available immediately
         assert!(
             store
-                .fetch_orchestration_item(short_lock_timeout, Duration::ZERO)
+                .fetch_orchestration_item(short_lock_timeout, Duration::ZERO, None)
                 .await
                 .unwrap()
                 .is_none()
@@ -2772,7 +2911,7 @@ mod tests {
 
         // Should be available again
         let redelivered = store
-            .fetch_orchestration_item(short_lock_timeout, Duration::ZERO)
+            .fetch_orchestration_item(short_lock_timeout, Duration::ZERO, None)
             .await
             .unwrap();
         if redelivered.is_none() {
@@ -2908,7 +3047,7 @@ mod tests {
 
         // Fetch and lock it
         let (_orch_item, lock_token, _attempt_count) = store
-            .fetch_orchestration_item(lock_timeout, Duration::ZERO)
+            .fetch_orchestration_item(lock_timeout, Duration::ZERO, None)
             .await
             .unwrap()
             .unwrap();
@@ -2916,7 +3055,7 @@ mod tests {
         // Verify it's locked (can't fetch again)
         assert!(
             store
-                .fetch_orchestration_item(lock_timeout, Duration::ZERO)
+                .fetch_orchestration_item(lock_timeout, Duration::ZERO, None)
                 .await
                 .unwrap()
                 .is_none()
@@ -2930,7 +3069,7 @@ mod tests {
 
         // Should be able to fetch again
         let (orch_item2, lock_token2, _attempt_count2) = store
-            .fetch_orchestration_item(lock_timeout, Duration::ZERO)
+            .fetch_orchestration_item(lock_timeout, Duration::ZERO, None)
             .await
             .unwrap()
             .unwrap();
@@ -3042,7 +3181,7 @@ mod tests {
         // Should not be visible immediately
         assert!(
             store
-                .fetch_orchestration_item(lock_timeout, Duration::ZERO)
+                .fetch_orchestration_item(lock_timeout, Duration::ZERO, None)
                 .await
                 .unwrap()
                 .is_none()
@@ -3053,7 +3192,7 @@ mod tests {
 
         // Should be visible now
         let (item, lock_token, _attempt_count) = store
-            .fetch_orchestration_item(lock_timeout, Duration::ZERO)
+            .fetch_orchestration_item(lock_timeout, Duration::ZERO, None)
             .await
             .unwrap()
             .unwrap();
@@ -3091,7 +3230,7 @@ mod tests {
 
         store.enqueue_for_orchestrator(start_item, None).await.unwrap();
         let (_orch_item, lock_token2, _attempt_count2) = store
-            .fetch_orchestration_item(lock_timeout, Duration::ZERO)
+            .fetch_orchestration_item(lock_timeout, Duration::ZERO, None)
             .await
             .unwrap()
             .unwrap();
@@ -3132,7 +3271,7 @@ mod tests {
         // TimerFired should not be visible immediately
         assert!(
             store
-                .fetch_orchestration_item(lock_timeout, Duration::ZERO)
+                .fetch_orchestration_item(lock_timeout, Duration::ZERO, None)
                 .await
                 .unwrap()
                 .is_none()
@@ -3143,7 +3282,7 @@ mod tests {
 
         // TimerFired should be visible now
         let (timer_item, _lock_token, _attempt_count) = store
-            .fetch_orchestration_item(lock_timeout, Duration::ZERO)
+            .fetch_orchestration_item(lock_timeout, Duration::ZERO, None)
             .await
             .unwrap()
             .unwrap();
@@ -3172,7 +3311,7 @@ mod tests {
 
         // Fetch and lock it
         let (_orch_item, lock_token, _attempt_count) = store
-            .fetch_orchestration_item(lock_timeout, Duration::ZERO)
+            .fetch_orchestration_item(lock_timeout, Duration::ZERO, None)
             .await
             .unwrap()
             .unwrap();
@@ -3186,7 +3325,7 @@ mod tests {
         // Should not be visible immediately
         assert!(
             store
-                .fetch_orchestration_item(lock_timeout, Duration::ZERO)
+                .fetch_orchestration_item(lock_timeout, Duration::ZERO, None)
                 .await
                 .unwrap()
                 .is_none()
@@ -3197,7 +3336,7 @@ mod tests {
 
         // Should be visible again
         let (item2, _lock_token2, _attempt_count2) = store
-            .fetch_orchestration_item(lock_timeout, Duration::ZERO)
+            .fetch_orchestration_item(lock_timeout, Duration::ZERO, None)
             .await
             .unwrap()
             .unwrap();
@@ -3222,7 +3361,7 @@ mod tests {
         };
         store.enqueue_for_orchestrator(start_item, None).await.unwrap();
         let (_orch_item, lock_token, _attempt_count) = store
-            .fetch_orchestration_item(lock_timeout, Duration::ZERO)
+            .fetch_orchestration_item(lock_timeout, Duration::ZERO, None)
             .await
             .unwrap()
             .unwrap();
@@ -3274,7 +3413,7 @@ mod tests {
         // Should not dequeue immediately (future visible_at)
         assert!(
             store
-                .fetch_orchestration_item(lock_timeout, Duration::ZERO)
+                .fetch_orchestration_item(lock_timeout, Duration::ZERO, None)
                 .await
                 .unwrap()
                 .is_none()
@@ -3292,7 +3431,7 @@ mod tests {
 
         // Should dequeue the past timer
         let (item, _lock_token2, _attempt_count2) = store
-            .fetch_orchestration_item(lock_timeout, Duration::ZERO)
+            .fetch_orchestration_item(lock_timeout, Duration::ZERO, None)
             .await
             .unwrap()
             .unwrap();
@@ -3427,7 +3566,7 @@ mod tests {
 
         // First fetch: attempt_count should be 1
         let (_item1, lock_token1, attempt1) = store
-            .fetch_orchestration_item(lock_timeout, Duration::ZERO)
+            .fetch_orchestration_item(lock_timeout, Duration::ZERO, None)
             .await
             .unwrap()
             .unwrap();
@@ -3441,7 +3580,7 @@ mod tests {
 
         // Second fetch: attempt_count should be 2
         let (_item2, lock_token2, attempt2) = store
-            .fetch_orchestration_item(lock_timeout, Duration::ZERO)
+            .fetch_orchestration_item(lock_timeout, Duration::ZERO, None)
             .await
             .unwrap()
             .unwrap();
@@ -3455,7 +3594,7 @@ mod tests {
 
         // Third fetch: attempt_count should be 2 (1 + 1 from new fetch)
         let (_item3, _lock_token3, attempt3) = store
-            .fetch_orchestration_item(lock_timeout, Duration::ZERO)
+            .fetch_orchestration_item(lock_timeout, Duration::ZERO, None)
             .await
             .unwrap()
             .unwrap();
@@ -3527,7 +3666,7 @@ mod tests {
 
         // Fetch and lock it
         let (_orch_item, lock_token, _attempt_count) = store
-            .fetch_orchestration_item(lock_timeout, Duration::ZERO)
+            .fetch_orchestration_item(lock_timeout, Duration::ZERO, None)
             .await
             .unwrap()
             .unwrap();
@@ -3541,7 +3680,7 @@ mod tests {
         // Lock should still be valid (can't fetch again)
         assert!(
             store
-                .fetch_orchestration_item(lock_timeout, Duration::ZERO)
+                .fetch_orchestration_item(lock_timeout, Duration::ZERO, None)
                 .await
                 .unwrap()
                 .is_none()

@@ -237,6 +237,34 @@ let orchestrations = OrchestrationRegistry::builder()
     .build();
 ```
 
+## Draining Stuck Orchestrations After Upgrade
+
+If after a full upgrade some orchestrations remain pinned to an old duroxide version that no
+running node supports, they will sit in the queue indefinitely. To clear them, temporarily
+widen `supported_replay_versions` in `RuntimeOptions`:
+
+```rust
+RuntimeOptions {
+    supported_replay_versions: Some(SemverRange::new(
+        semver::Version::new(0, 0, 0),
+        semver::Version::new(99, 0, 0),
+    )),
+    max_attempts: 5,
+    ..Default::default()
+}
+```
+
+The wide range causes the provider filter to pass for all items. When the provider fetches
+an item whose history contains unknown event types (from a newer duroxide version),
+deserialization fails at the provider level, returning a permanent error. Each fetch cycle
+increments the item's `attempt_count`. The item remains in the queue but is effectively
+drained — it never reaches the runtime's replay engine because the provider cannot
+deserialize its history. Compatible items whose history deserializes successfully are
+processed normally. Revert to the default after draining.
+
+See [Versioning Best Practices](versioning-best-practices.md#draining-stuck-orchestrations-version-mismatch)
+for details.
+
 ## Future Compatibility
 
 To make future migrations easier:

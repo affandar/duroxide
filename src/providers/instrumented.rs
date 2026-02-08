@@ -5,7 +5,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use super::{
-    ExecutionMetadata, OrchestrationItem, Provider, ProviderAdmin, ProviderError, ScheduledActivityIdentifier, WorkItem,
+    DispatcherCapabilityFilter, ExecutionMetadata, OrchestrationItem, Provider, ProviderAdmin, ProviderError,
+    ScheduledActivityIdentifier, WorkItem,
 };
 use crate::Event;
 use crate::runtime::observability::MetricsProvider;
@@ -85,9 +86,13 @@ impl Provider for InstrumentedProvider {
         &self,
         lock_timeout: Duration,
         poll_timeout: Duration,
+        filter: Option<&DispatcherCapabilityFilter>,
     ) -> Result<Option<(OrchestrationItem, String, u32)>, ProviderError> {
         let start = std::time::Instant::now();
-        let result = self.inner.fetch_orchestration_item(lock_timeout, poll_timeout).await;
+        let result = self
+            .inner
+            .fetch_orchestration_item(lock_timeout, poll_timeout, filter)
+            .await;
         let duration = start.elapsed();
 
         self.record_operation(

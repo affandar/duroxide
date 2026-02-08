@@ -389,6 +389,35 @@ impl Client {
             .map_err(ClientError::from)
     }
 
+    /// V2: Raise an external event with topic-based pub/sub matching.
+    ///
+    /// Same as `raise_event`, but includes a `topic` for pub/sub matching.
+    /// The orchestration must have called `ctx.schedule_wait2(name, topic)` to receive the event.
+    /// Feature-gated for replay engine extensibility verification.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ClientError`] if the provider fails to enqueue the event.
+    #[cfg(feature = "replay-version-test")]
+    pub async fn raise_event2(
+        &self,
+        instance: impl Into<String>,
+        event_name: impl Into<String>,
+        topic: impl Into<String>,
+        data: impl Into<String>,
+    ) -> Result<(), ClientError> {
+        let item = WorkItem::ExternalRaised2 {
+            instance: instance.into(),
+            name: event_name.into(),
+            topic: topic.into(),
+            data: data.into(),
+        };
+        self.store
+            .enqueue_for_orchestrator(item, None)
+            .await
+            .map_err(ClientError::from)
+    }
+
     /// Request cancellation of an orchestration instance.
     ///
     /// # Purpose
