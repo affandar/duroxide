@@ -371,6 +371,8 @@ pub fn kind_of(msg: &WorkItem) -> &'static str {
         WorkItem::ActivityFailed { .. } => "ActivityFailed",
         WorkItem::TimerFired { .. } => "TimerFired",
         WorkItem::ExternalRaised { .. } => "ExternalRaised",
+        #[cfg(feature = "replay-version-test")]
+        WorkItem::ExternalRaised2 { .. } => "ExternalRaised2",
         WorkItem::SubOrchCompleted { .. } => "SubOrchCompleted",
         WorkItem::SubOrchFailed { .. } => "SubOrchFailed",
         WorkItem::CancelInstance { .. } => "CancelInstance",

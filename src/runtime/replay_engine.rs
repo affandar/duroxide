@@ -149,6 +149,10 @@ impl ReplayEngine {
                 WorkItem::ExternalRaised { name, data, .. } => self.history_delta.iter().any(
                     |e| matches!(&e.kind, EventKind::ExternalEvent { name: n, data: d } if n == name && d == data),
                 ),
+                #[cfg(feature = "replay-version-test")]
+                WorkItem::ExternalRaised2 { name, topic, data, .. } => self.history_delta.iter().any(
+                    |e| matches!(&e.kind, EventKind::ExternalEvent2 { name: n, topic: t, data: d } if n == name && t == topic && d == data),
+                ),
                 WorkItem::CancelInstance { .. } => false,
                 _ => false, // Non-completion work items
             };
@@ -236,6 +240,8 @@ impl ReplayEngine {
                     }
                 }
                 WorkItem::ExternalRaised { .. } | WorkItem::CancelInstance { .. } => {}
+                #[cfg(feature = "replay-version-test")]
+                WorkItem::ExternalRaised2 { .. } => {}
                 _ => {} // Non-completion work items
             }
             if let Some(err) = nd_err {
@@ -305,6 +311,24 @@ impl ReplayEngine {
                         ))
                     } else {
                         warn!(instance = %self.instance, event_name=%name, "dropping ExternalByName with no matching subscription in history");
+                        None
+                    }
+                }
+                #[cfg(feature = "replay-version-test")]
+                WorkItem::ExternalRaised2 { name, topic, data, .. } => {
+                    // Only materialize ExternalEvent2 if a subscription exists with matching name AND topic
+                    let subscribed = self.baseline_history.iter().any(
+                        |e| matches!(&e.kind, EventKind::ExternalSubscribed2 { name: n, topic: t } if n == &name && t == &topic),
+                    );
+                    if subscribed {
+                        Some(Event::new(
+                            &self.instance,
+                            self.execution_id,
+                            None,
+                            EventKind::ExternalEvent2 { name, topic, data },
+                        ))
+                    } else {
+                        warn!(instance = %self.instance, event_name=%name, topic=%topic, "dropping ExternalRaised2 with no matching subscription in history");
                         None
                     }
                 }
@@ -403,6 +427,8 @@ impl ReplayEngine {
                 parent_execution_id, ..
             } => *parent_execution_id == current_execution_id,
             WorkItem::ExternalRaised { .. } => true, // External events don't have execution IDs
+            #[cfg(feature = "replay-version-test")]
+            WorkItem::ExternalRaised2 { .. } => true, // V2 external events don't have execution IDs either
             WorkItem::CancelInstance { .. } => true, // Cancellation applies to current execution
             _ => false,                              // Non-completion work items (shouldn't reach here)
         }
@@ -428,6 +454,11 @@ impl ReplayEngine {
             WorkItem::ExternalRaised { name, data, .. } => self.baseline_history.iter().any(|e| {
                 matches!(&e.kind, EventKind::ExternalEvent { name: hist_name, data: hist_data }
                         if hist_name == name && hist_data == data)
+            }),
+            #[cfg(feature = "replay-version-test")]
+            WorkItem::ExternalRaised2 { name, topic, data, .. } => self.baseline_history.iter().any(|e| {
+                matches!(&e.kind, EventKind::ExternalEvent2 { name: n, topic: t, data: d }
+                        if n == name && t == topic && d == data)
             }),
             _ => false,
         }
@@ -638,6 +669,28 @@ impl ReplayEngine {
                         .bind_external_subscription(event.event_id(), name);
                 }
 
+                #[cfg(feature = "replay-version-test")]
+                EventKind::ExternalSubscribed2 { name, topic } => {
+                    if let Err(result) = self.match_and_bind_schedule(
+                        &ctx,
+                        &mut emitted_actions,
+                        &mut open_schedules,
+                        &mut schedule_kinds,
+                        event,
+                        ActionKind::External2 {
+                            name: name.clone(),
+                            topic: topic.clone(),
+                        },
+                    ) {
+                        return result;
+                    }
+                    // Bind v2 external subscription index
+                    ctx.inner
+                        .lock()
+                        .expect("Mutex should not be poisoned")
+                        .bind_external_subscription2(event.event_id(), name, topic);
+                }
+
                 EventKind::SubOrchestrationScheduled {
                     name,
                     instance,
@@ -768,6 +821,15 @@ impl ReplayEngine {
                         .lock()
                         .expect("Mutex should not be poisoned")
                         .deliver_external_event(name.clone(), data.clone());
+                    must_poll = true;
+                }
+
+                #[cfg(feature = "replay-version-test")]
+                EventKind::ExternalEvent2 { name, topic, data } => {
+                    ctx.inner
+                        .lock()
+                        .expect("Mutex should not be poisoned")
+                        .deliver_external_event2(name.clone(), topic.clone(), data.clone());
                     must_poll = true;
                 }
 
@@ -1294,6 +1356,11 @@ enum ActionKind {
     External {
         name: String,
     },
+    #[cfg(feature = "replay-version-test")]
+    External2 {
+        name: String,
+        topic: String,
+    },
     SubOrch {
         name: String,
         instance: String,
@@ -1332,6 +1399,11 @@ fn action_to_event(action: &Action, instance: &str, execution_id: u64, event_id:
             fire_at_ms: *fire_at_ms,
         },
         Action::WaitExternal { name, .. } => EventKind::ExternalSubscribed { name: name.clone() },
+        #[cfg(feature = "replay-version-test")]
+        Action::WaitExternal2 { name, topic, .. } => EventKind::ExternalSubscribed2 {
+            name: name.clone(),
+            topic: topic.clone(),
+        },
         Action::StartSubOrchestration {
             name,
             instance: sub_instance,
@@ -1375,6 +1447,12 @@ fn update_action_event_id(action: Action, event_id: u64) -> Action {
         Action::WaitExternal { name, .. } => Action::WaitExternal {
             scheduling_event_id: event_id,
             name,
+        },
+        #[cfg(feature = "replay-version-test")]
+        Action::WaitExternal2 { name, topic, .. } => Action::WaitExternal2 {
+            scheduling_event_id: event_id,
+            name,
+            topic,
         },
         Action::StartSubOrchestration {
             name,
@@ -1443,6 +1521,12 @@ fn action_matches_event_kind(action: &Action, event_kind: &EventKind) -> bool {
         }
 
         (Action::WaitExternal { name, .. }, EventKind::ExternalSubscribed { name: en }) => name == en,
+
+        #[cfg(feature = "replay-version-test")]
+        (
+            Action::WaitExternal2 { name, topic, .. },
+            EventKind::ExternalSubscribed2 { name: en, topic: et },
+        ) => name == en && topic == et,
 
         (
             Action::StartSubOrchestration { name, input, .. },

@@ -405,6 +405,17 @@ pub enum WorkItem {
         input: String,
         version: Option<String>,
     },
+
+    /// V2: External event with topic-based pub/sub matching (goes to orchestrator queue)
+    /// - Matched by `name` AND `topic` to ExternalSubscribed2 events
+    /// Feature-gated for replay engine extensibility verification.
+    #[cfg(feature = "replay-version-test")]
+    ExternalRaised2 {
+        instance: String,
+        name: String,
+        topic: String,
+        data: String,
+    },
 }
 
 /// Provider abstraction for durable orchestration execution (persistence + queues).

@@ -3,6 +3,7 @@ t = "test --all-features"
 tw = "test --all-features -- --nocapture"
 nt = "nextest run --all-features"
 ntw = "nextest run --all-features --no-capture"
+# For full two-pass test coverage (with and without feature flags): ./run-tests.sh
 r = "run"
 c = "clippy -- -D warnings"
 f = "fmt"

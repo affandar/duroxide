@@ -17,6 +17,7 @@ sqlite = ["sqlx", "libsqlite3-sys"]  # SQLite provider (bundled, no system deps)
 provider-test = ["sqlite"]  # Enable all provider testing infrastructure (requires sqlite)
 test = ["provider-test", "test-hooks"]  # Auto-enable provider-test and test-hooks for tests
 test-hooks = []  # Enable test hooks for fault injection in integration tests
+replay-version-test = ["test"]  # Zero-cost: only gates test code for replay engine extensibility verification
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }

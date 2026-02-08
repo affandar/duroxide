@@ -72,6 +72,8 @@ impl SqliteProvider {
             | WorkItem::ExternalRaised { instance, .. }
             | WorkItem::CancelInstance { instance, .. }
             | WorkItem::ContinueAsNew { instance, .. } => instance,
+            #[cfg(feature = "replay-version-test")]
+            WorkItem::ExternalRaised2 { instance, .. } => instance,
             WorkItem::SubOrchCompleted { parent_instance, .. } | WorkItem::SubOrchFailed { parent_instance, .. } => {
                 parent_instance
             }
@@ -515,6 +517,10 @@ impl SqliteProvider {
                 EventKind::SubOrchestrationCancelRequested { .. } => "SubOrchestrationCancelRequested",
                 EventKind::OrchestrationCancelRequested { .. } => "OrchestrationCancelRequested",
                 EventKind::OrchestrationChained { .. } => "OrchestrationChained",
+                #[cfg(feature = "replay-version-test")]
+                EventKind::ExternalSubscribed2 { .. } => "ExternalSubscribed2",
+                #[cfg(feature = "replay-version-test")]
+                EventKind::ExternalEvent2 { .. } => "ExternalEvent2",
             };
 
             let event_data = serde_json::to_string(&event)
@@ -1159,6 +1165,8 @@ impl Provider for SqliteProvider {
                 | WorkItem::ExternalRaised { instance, .. }
                 | WorkItem::CancelInstance { instance, .. }
                 | WorkItem::ContinueAsNew { instance, .. } => instance,
+                #[cfg(feature = "replay-version-test")]
+                WorkItem::ExternalRaised2 { instance, .. } => instance,
                 WorkItem::SubOrchCompleted { parent_instance, .. }
                 | WorkItem::SubOrchFailed { parent_instance, .. } => parent_instance,
                 _ => continue,
