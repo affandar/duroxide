@@ -621,7 +621,7 @@ impl Runtime {
                     // Extract pinned duroxide version from the event's duroxide_version field.
                     // This is the version of the runtime that created this execution.
                     // The provider stores it for capability-filtered fetching.
-                    metadata.pinned_duroxide_version = crate::providers::SemverVersion::parse(&event.duroxide_version);
+                    metadata.pinned_duroxide_version = semver::Version::parse(&event.duroxide_version).ok();
                 }
                 EventKind::OrchestrationCompleted { output } => {
                     metadata.status = Some("Completed".to_string());

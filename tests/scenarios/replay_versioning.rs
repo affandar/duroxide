@@ -13,7 +13,7 @@
 
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self, RuntimeOptions};
-use duroxide::{Client, Event, EventKind, OrchestrationContext, OrchestrationRegistry, SemverVersion};
+use duroxide::{Client, EventKind, OrchestrationContext, OrchestrationRegistry};
 use duroxide::providers::{ExecutionMetadata, WorkItem};
 use std::time::Duration;
 
@@ -341,153 +341,84 @@ async fn e2e_upgrade_with_preexisting_v1_history() {
     // All stamped with duroxide_version "0.1.10".
 
     let execution_id = duroxide::INITIAL_EXECUTION_ID;
+    let ev = |id, kind| common::make_versioned_event(id, instance, execution_id, None, kind, old_duroxide_version);
 
-    // Helper to create an event stamped with the old version
-    let make_event = |event_id: u64, source_event_id: Option<u64>, kind: EventKind| -> Event {
-        let mut event = Event::with_event_id(event_id, instance, execution_id, source_event_id, kind);
-        event.duroxide_version = old_duroxide_version.to_string();
-        event
-    };
-
-    // --- Turn 1: Enqueue StartOrchestration, fetch, ack with OrchestrationStarted + ExternalSubscribed ---
-    store
-        .enqueue_for_orchestrator(
-            WorkItem::StartOrchestration {
-                instance: instance.to_string(),
-                orchestration: "Upgrader".to_string(),
-                version: Some("1.0.0".to_string()),
+    // --- Turn 1: OrchestrationStarted + ExternalSubscribed ---
+    common::seed_history_turn(
+        &*store,
+        WorkItem::StartOrchestration {
+            instance: instance.to_string(),
+            orchestration: "Upgrader".to_string(),
+            version: Some("1.0.0".to_string()),
+            input: "seed".to_string(),
+            parent_instance: None,
+            parent_id: None,
+            execution_id,
+        },
+        execution_id,
+        vec![
+            ev(1, EventKind::OrchestrationStarted {
+                name: "Upgrader".to_string(),
+                version: "1.0.0".to_string(),
                 input: "seed".to_string(),
                 parent_instance: None,
                 parent_id: None,
-                execution_id,
-            },
-            None,
-        )
-        .await
-        .unwrap();
+            }),
+            ev(2, EventKind::ExternalSubscribed { name: "approval".to_string() }),
+        ],
+        vec![],
+        ExecutionMetadata {
+            orchestration_name: Some("Upgrader".to_string()),
+            orchestration_version: Some("1.0.0".to_string()),
+            pinned_duroxide_version: Some(semver::Version::new(0, 1, 10)),
+            ..Default::default()
+        },
+    )
+    .await;
 
-    let (_item, lock_token, _) = store
-        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
-        .await
-        .unwrap()
-        .expect("should fetch start item");
+    // --- Turn 2: ExternalEvent(old-0) + ExternalSubscribed ---
+    common::seed_history_turn(
+        &*store,
+        WorkItem::ExternalRaised {
+            instance: instance.to_string(),
+            name: "approval".to_string(),
+            data: "old-0".to_string(),
+        },
+        execution_id,
+        vec![
+            ev(3, EventKind::ExternalEvent { name: "approval".to_string(), data: "old-0".to_string() }),
+            ev(4, EventKind::ExternalSubscribed { name: "approval".to_string() }),
+        ],
+        vec![],
+        ExecutionMetadata {
+            orchestration_name: Some("Upgrader".to_string()),
+            orchestration_version: Some("1.0.0".to_string()),
+            ..Default::default()
+        },
+    )
+    .await;
 
-    store
-        .ack_orchestration_item(
-            &lock_token,
-            execution_id,
-            vec![
-                make_event(1, None, EventKind::OrchestrationStarted {
-                    name: "Upgrader".to_string(),
-                    version: "1.0.0".to_string(),
-                    input: "seed".to_string(),
-                    parent_instance: None,
-                    parent_id: None,
-                }),
-                make_event(2, None, EventKind::ExternalSubscribed {
-                    name: "approval".to_string(),
-                }),
-            ],
-            vec![], // no worker items
-            vec![], // no orchestrator items
-            ExecutionMetadata {
-                orchestration_name: Some("Upgrader".to_string()),
-                orchestration_version: Some("1.0.0".to_string()),
-                pinned_duroxide_version: Some(SemverVersion::new(0, 1, 10)),
-                ..Default::default()
-            },
-            vec![],
-        )
-        .await
-        .unwrap();
-
-    // --- Turn 2: Enqueue ExternalRaised(old-0), fetch, ack with ExternalEvent + ExternalSubscribed ---
-    store
-        .enqueue_for_orchestrator(
-            WorkItem::ExternalRaised {
-                instance: instance.to_string(),
-                name: "approval".to_string(),
-                data: "old-0".to_string(),
-            },
-            None,
-        )
-        .await
-        .unwrap();
-
-    let (_item, lock_token, _) = store
-        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
-        .await
-        .unwrap()
-        .expect("should fetch external raised 0");
-
-    store
-        .ack_orchestration_item(
-            &lock_token,
-            execution_id,
-            vec![
-                make_event(3, None, EventKind::ExternalEvent {
-                    name: "approval".to_string(),
-                    data: "old-0".to_string(),
-                }),
-                make_event(4, None, EventKind::ExternalSubscribed {
-                    name: "approval".to_string(),
-                }),
-            ],
-            vec![],
-            vec![],
-            ExecutionMetadata {
-                orchestration_name: Some("Upgrader".to_string()),
-                orchestration_version: Some("1.0.0".to_string()),
-                ..Default::default()
-            },
-            vec![],
-        )
-        .await
-        .unwrap();
-
-    // --- Turn 3: Enqueue ExternalRaised(old-1), fetch, ack with ExternalEvent + ExternalSubscribed ---
-    store
-        .enqueue_for_orchestrator(
-            WorkItem::ExternalRaised {
-                instance: instance.to_string(),
-                name: "approval".to_string(),
-                data: "old-1".to_string(),
-            },
-            None,
-        )
-        .await
-        .unwrap();
-
-    let (_item, lock_token, _) = store
-        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
-        .await
-        .unwrap()
-        .expect("should fetch external raised 1");
-
-    store
-        .ack_orchestration_item(
-            &lock_token,
-            execution_id,
-            vec![
-                make_event(5, None, EventKind::ExternalEvent {
-                    name: "approval".to_string(),
-                    data: "old-1".to_string(),
-                }),
-                make_event(6, None, EventKind::ExternalSubscribed {
-                    name: "approval".to_string(),
-                }),
-            ],
-            vec![],
-            vec![],
-            ExecutionMetadata {
-                orchestration_name: Some("Upgrader".to_string()),
-                orchestration_version: Some("1.0.0".to_string()),
-                ..Default::default()
-            },
-            vec![],
-        )
-        .await
-        .unwrap();
+    // --- Turn 3: ExternalEvent(old-1) + ExternalSubscribed ---
+    common::seed_history_turn(
+        &*store,
+        WorkItem::ExternalRaised {
+            instance: instance.to_string(),
+            name: "approval".to_string(),
+            data: "old-1".to_string(),
+        },
+        execution_id,
+        vec![
+            ev(5, EventKind::ExternalEvent { name: "approval".to_string(), data: "old-1".to_string() }),
+            ev(6, EventKind::ExternalSubscribed { name: "approval".to_string() }),
+        ],
+        vec![],
+        ExecutionMetadata {
+            orchestration_name: Some("Upgrader".to_string()),
+            orchestration_version: Some("1.0.0".to_string()),
+            ..Default::default()
+        },
+    )
+    .await;
 
     // Verify seeded history
     let seeded_history = store.read(instance).await.unwrap();

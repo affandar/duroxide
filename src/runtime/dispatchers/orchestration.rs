@@ -193,14 +193,14 @@ impl Runtime {
                                 // (always event_id=1, always a known event type on any version).
                                 let pinned_version = item.history.iter().find_map(|e| {
                                     if matches!(&e.kind, crate::EventKind::OrchestrationStarted { .. }) {
-                                        crate::providers::SemverVersion::parse(&e.duroxide_version)
+                                        semver::Version::parse(&e.duroxide_version).ok()
                                     } else {
                                         None
                                     }
                                 });
 
                                 if let Some(pinned) = pinned_version
-                                    && !supported_range.contains(pinned)
+                                    && !supported_range.contains(&pinned)
                                 {
                                     tracing::warn!(
                                         target: "duroxide::runtime",

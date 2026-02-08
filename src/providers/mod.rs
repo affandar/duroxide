@@ -5,46 +5,9 @@ use std::time::Duration;
 pub mod error;
 pub use error::ProviderError;
 
-/// Parsed semver version as three numeric components.
-///
-/// Used to represent the duroxide crate version pinned to an execution,
-/// and to express version ranges for capability filtering.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct SemverVersion {
-    pub major: u16,
-    pub minor: u16,
-    pub patch: u16,
-}
-
-impl SemverVersion {
-    pub const fn new(major: u16, minor: u16, patch: u16) -> Self {
-        Self { major, minor, patch }
-    }
-
-    /// Parse a semver string like "1.2.3" into components.
-    /// Returns `None` if the string is not a valid 3-part semver.
-    pub fn parse(s: &str) -> Option<Self> {
-        let parts: Vec<&str> = s.split('.').collect();
-        if parts.len() != 3 {
-            return None;
-        }
-        Some(Self {
-            major: parts[0].parse().ok()?,
-            minor: parts[1].parse().ok()?,
-            patch: parts[2].parse().ok()?,
-        })
-    }
-
-    /// Returns the current build version of the duroxide crate.
-    pub fn current_build() -> Self {
-        Self::parse(env!("CARGO_PKG_VERSION")).expect("CARGO_PKG_VERSION must be valid semver")
-    }
-}
-
-impl std::fmt::Display for SemverVersion {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}.{}.{}", self.major, self.minor, self.patch)
-    }
+/// Returns the current build version of the duroxide crate.
+pub fn current_build_version() -> semver::Version {
+    semver::Version::parse(env!("CARGO_PKG_VERSION")).expect("CARGO_PKG_VERSION must be valid semver")
 }
 
 /// An inclusive version range: [min, max].
@@ -53,18 +16,18 @@ impl std::fmt::Display for SemverVersion {
 /// matches any version `v` where `0.0.0 <= v <= 1.5.0`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SemverRange {
-    pub min: SemverVersion,
-    pub max: SemverVersion,
+    pub min: semver::Version,
+    pub max: semver::Version,
 }
 
 impl SemverRange {
-    pub fn new(min: SemverVersion, max: SemverVersion) -> Self {
+    pub fn new(min: semver::Version, max: semver::Version) -> Self {
         Self { min, max }
     }
 
     /// Check if a version falls within this range (inclusive on both ends).
-    pub fn contains(&self, version: SemverVersion) -> bool {
-        version >= self.min && version <= self.max
+    pub fn contains(&self, version: &semver::Version) -> bool {
+        version >= &self.min && version <= &self.max
     }
 
     /// Default range: `>=0.0.0, <=CURRENT_BUILD_VERSION`.
@@ -73,8 +36,8 @@ impl SemverRange {
     /// build version. Replay engines are backward-compatible.
     pub fn default_for_current_build() -> Self {
         Self {
-            min: SemverVersion::new(0, 0, 0),
-            max: SemverVersion::current_build(),
+            min: semver::Version::new(0, 0, 0),
+            max: current_build_version(),
         }
     }
 }
@@ -97,7 +60,7 @@ pub struct DispatcherCapabilityFilter {
 
 impl DispatcherCapabilityFilter {
     /// Check if a pinned version is compatible with this filter.
-    pub fn is_compatible(&self, version: SemverVersion) -> bool {
+    pub fn is_compatible(&self, version: &semver::Version) -> bool {
         self.supported_duroxide_versions.iter().any(|r| r.contains(version))
     }
 
@@ -267,7 +230,7 @@ pub struct ExecutionMetadata {
     /// (when `OrchestrationStarted` is in the history delta), enforced by a `debug_assert`
     /// in the orchestration dispatcher. The provider does not need to enforce write-once
     /// semantics — it simply stores what it's told.
-    pub pinned_duroxide_version: Option<SemverVersion>,
+    pub pinned_duroxide_version: Option<semver::Version>,
 }
 
 /// Provider-backed work queue items the runtime consumes continually.

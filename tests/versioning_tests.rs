@@ -582,3 +582,44 @@ fn resolve_handler_exact_missing_returns_none() {
             .is_none()
     );
 }
+
+/// Serde boundary test: verifies EventKind deserialization behavior for v2 event variants.
+///
+/// The `replay-version-test` feature gates whether ExternalSubscribed2/ExternalEvent2
+/// exist in the EventKind enum. This test runs in both passes:
+///   - `cargo nt` (--all-features): v2 variants exist → deserialization succeeds
+///   - `cargo nextest run` (no features): v2 variants absent → deserialization fails
+///
+/// Together, the two passes prove duroxide's version isolation guarantee:
+/// old binaries structurally cannot parse new event types.
+/// Use `./run-tests.sh` to run both passes.
+#[test]
+fn serde_boundary_v2_events() {
+    let subscribed2_json = r#"{"type": "ExternalSubscribed2", "name": "x", "topic": "y"}"#;
+    let event2_json =
+        r#"{"type": "ExternalEvent2", "name": "x", "topic": "y", "data": "payload"}"#;
+
+    #[cfg(not(feature = "replay-version-test"))]
+    {
+        assert!(
+            serde_json::from_str::<EventKind>(subscribed2_json).is_err(),
+            "ExternalSubscribed2 should fail deserialization without feature flag"
+        );
+        assert!(
+            serde_json::from_str::<EventKind>(event2_json).is_err(),
+            "ExternalEvent2 should fail deserialization without feature flag"
+        );
+    }
+
+    #[cfg(feature = "replay-version-test")]
+    {
+        assert!(
+            serde_json::from_str::<EventKind>(subscribed2_json).is_ok(),
+            "ExternalSubscribed2 should succeed with feature flag"
+        );
+        assert!(
+            serde_json::from_str::<EventKind>(event2_json).is_ok(),
+            "ExternalEvent2 should succeed with feature flag"
+        );
+    }
+}

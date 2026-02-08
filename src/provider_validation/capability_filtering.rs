@@ -7,7 +7,7 @@
 //! See `docs/proposals/provider-capability-filtering.md` test plan categories A, B, F, F2, I.
 
 use super::ProviderFactory;
-use crate::providers::{DispatcherCapabilityFilter, ExecutionMetadata, SemverRange, SemverVersion, WorkItem};
+use crate::providers::{DispatcherCapabilityFilter, ExecutionMetadata, SemverRange, WorkItem};
 use crate::{Event, EventKind, INITIAL_EVENT_ID, INITIAL_EXECUTION_ID};
 use std::time::Duration;
 
@@ -46,7 +46,7 @@ fn orchestration_started_event(instance: &str, duroxide_version: &str) -> Event 
 }
 
 /// Build a filter for the given inclusive range [min, max].
-fn filter_for_range(min: SemverVersion, max: SemverVersion) -> DispatcherCapabilityFilter {
+fn filter_for_range(min: semver::Version, max: semver::Version) -> DispatcherCapabilityFilter {
     DispatcherCapabilityFilter {
         supported_duroxide_versions: vec![SemverRange::new(min, max)],
     }
@@ -58,7 +58,7 @@ fn filter_for_range(min: SemverVersion, max: SemverVersion) -> DispatcherCapabil
 async fn seed_instance_with_version(
     provider: &dyn crate::providers::Provider,
     instance: &str,
-    pinned_version: SemverVersion,
+    pinned_version: semver::Version,
 ) {
     // Enqueue start item
     provider
@@ -124,7 +124,7 @@ async fn seed_instance_with_version(
 /// Test #1: fetch_with_filter_none_returns_any_item
 pub async fn test_fetch_with_filter_none_returns_any_item<F: ProviderFactory>(factory: &F) {
     let provider = factory.create_provider().await;
-    let v = SemverVersion::new(1, 2, 3);
+    let v = semver::Version::new(1, 2, 3);
     seed_instance_with_version(&*provider, "inst-1", v).await;
 
     // Fetch with filter=None → should return the item (legacy behavior)
@@ -138,10 +138,10 @@ pub async fn test_fetch_with_filter_none_returns_any_item<F: ProviderFactory>(fa
 /// Test #2: fetch_with_compatible_filter_returns_item
 pub async fn test_fetch_with_compatible_filter_returns_item<F: ProviderFactory>(factory: &F) {
     let provider = factory.create_provider().await;
-    let v = SemverVersion::new(1, 2, 3);
+    let v = semver::Version::new(1, 2, 3);
     seed_instance_with_version(&*provider, "inst-2", v).await;
 
-    let filter = filter_for_range(SemverVersion::new(1, 0, 0), SemverVersion::new(1, 9, 9));
+    let filter = filter_for_range(semver::Version::new(1, 0, 0), semver::Version::new(1, 9, 9));
     let result = provider
         .fetch_orchestration_item(LOCK_TIMEOUT, Duration::ZERO, Some(&filter))
         .await
@@ -152,10 +152,10 @@ pub async fn test_fetch_with_compatible_filter_returns_item<F: ProviderFactory>(
 /// Test #3: fetch_with_incompatible_filter_skips_item
 pub async fn test_fetch_with_incompatible_filter_skips_item<F: ProviderFactory>(factory: &F) {
     let provider = factory.create_provider().await;
-    let v = SemverVersion::new(1, 2, 3);
+    let v = semver::Version::new(1, 2, 3);
     seed_instance_with_version(&*provider, "inst-3", v).await;
 
-    let filter = filter_for_range(SemverVersion::new(2, 0, 0), SemverVersion::new(2, 9, 9));
+    let filter = filter_for_range(semver::Version::new(2, 0, 0), semver::Version::new(2, 9, 9));
     let result = provider
         .fetch_orchestration_item(LOCK_TIMEOUT, Duration::ZERO, Some(&filter))
         .await
@@ -166,11 +166,11 @@ pub async fn test_fetch_with_incompatible_filter_skips_item<F: ProviderFactory>(
 /// Test #4: fetch_filter_skips_incompatible_selects_compatible
 pub async fn test_fetch_filter_skips_incompatible_selects_compatible<F: ProviderFactory>(factory: &F) {
     let provider = factory.create_provider().await;
-    seed_instance_with_version(&*provider, "inst-v1", SemverVersion::new(1, 0, 0)).await;
-    seed_instance_with_version(&*provider, "inst-v2", SemverVersion::new(2, 0, 0)).await;
+    seed_instance_with_version(&*provider, "inst-v1", semver::Version::new(1, 0, 0)).await;
+    seed_instance_with_version(&*provider, "inst-v2", semver::Version::new(2, 0, 0)).await;
 
     // Filter for v2 only
-    let filter_v2 = filter_for_range(SemverVersion::new(2, 0, 0), SemverVersion::new(2, 9, 9));
+    let filter_v2 = filter_for_range(semver::Version::new(2, 0, 0), semver::Version::new(2, 9, 9));
     let (item, lock_token, _) = provider
         .fetch_orchestration_item(LOCK_TIMEOUT, Duration::ZERO, Some(&filter_v2))
         .await
@@ -183,7 +183,7 @@ pub async fn test_fetch_filter_skips_incompatible_selects_compatible<F: Provider
         .unwrap();
 
     // Filter for v1 only
-    let filter_v1 = filter_for_range(SemverVersion::new(1, 0, 0), SemverVersion::new(1, 9, 9));
+    let filter_v1 = filter_for_range(semver::Version::new(1, 0, 0), semver::Version::new(1, 9, 9));
     let (item, _, _) = provider
         .fetch_orchestration_item(LOCK_TIMEOUT, Duration::ZERO, Some(&filter_v1))
         .await
@@ -195,10 +195,10 @@ pub async fn test_fetch_filter_skips_incompatible_selects_compatible<F: Provider
 /// Test #5: fetch_filter_does_not_lock_skipped_instances
 pub async fn test_fetch_filter_does_not_lock_skipped_instances<F: ProviderFactory>(factory: &F) {
     let provider = factory.create_provider().await;
-    seed_instance_with_version(&*provider, "inst-5", SemverVersion::new(1, 0, 0)).await;
+    seed_instance_with_version(&*provider, "inst-5", semver::Version::new(1, 0, 0)).await;
 
     // Fetch with incompatible filter → None
-    let incompatible = filter_for_range(SemverVersion::new(2, 0, 0), SemverVersion::new(2, 9, 9));
+    let incompatible = filter_for_range(semver::Version::new(2, 0, 0), semver::Version::new(2, 9, 9));
     let result = provider
         .fetch_orchestration_item(LOCK_TIMEOUT, Duration::ZERO, Some(&incompatible))
         .await
@@ -206,7 +206,7 @@ pub async fn test_fetch_filter_does_not_lock_skipped_instances<F: ProviderFactor
     assert!(result.is_none());
 
     // Fetch with compatible filter → should still be available (not locked)
-    let compatible = filter_for_range(SemverVersion::new(0, 0, 0), SemverVersion::new(1, 9, 9));
+    let compatible = filter_for_range(semver::Version::new(0, 0, 0), semver::Version::new(1, 9, 9));
     let result = provider
         .fetch_orchestration_item(LOCK_TIMEOUT, Duration::ZERO, Some(&compatible))
         .await
@@ -266,7 +266,7 @@ pub async fn test_fetch_filter_null_pinned_version_always_compatible<F: Provider
         .unwrap();
 
     // Fetch with any filter → should return (NULL = always compatible)
-    let filter = filter_for_range(SemverVersion::new(99, 0, 0), SemverVersion::new(99, 9, 9));
+    let filter = filter_for_range(semver::Version::new(99, 0, 0), semver::Version::new(99, 9, 9));
     let result = provider
         .fetch_orchestration_item(LOCK_TIMEOUT, Duration::ZERO, Some(&filter))
         .await
@@ -277,10 +277,10 @@ pub async fn test_fetch_filter_null_pinned_version_always_compatible<F: Provider
 /// Test #7: fetch_filter_boundary_versions
 pub async fn test_fetch_filter_boundary_versions<F: ProviderFactory>(factory: &F) {
     let provider = factory.create_provider().await;
-    let filter = filter_for_range(SemverVersion::new(1, 0, 0), SemverVersion::new(1, 9, 99));
+    let filter = filter_for_range(semver::Version::new(1, 0, 0), semver::Version::new(1, 9, 99));
 
     // Test lower bound: 1.0.0 should be included
-    seed_instance_with_version(&*provider, "v1-low", SemverVersion::new(1, 0, 0)).await;
+    seed_instance_with_version(&*provider, "v1-low", semver::Version::new(1, 0, 0)).await;
     let result = provider
         .fetch_orchestration_item(LOCK_TIMEOUT, Duration::ZERO, Some(&filter))
         .await
@@ -291,7 +291,7 @@ pub async fn test_fetch_filter_boundary_versions<F: ProviderFactory>(factory: &F
     provider.abandon_orchestration_item(&lock, None, true).await.unwrap();
 
     // Test upper bound: 1.9.99 should be included
-    seed_instance_with_version(&*provider, "v1-high", SemverVersion::new(1, 9, 99)).await;
+    seed_instance_with_version(&*provider, "v1-high", semver::Version::new(1, 9, 99)).await;
     let result = provider
         .fetch_orchestration_item(LOCK_TIMEOUT, Duration::ZERO, Some(&filter))
         .await
@@ -303,7 +303,7 @@ pub async fn test_fetch_filter_boundary_versions<F: ProviderFactory>(factory: &F
     // Test just outside: 2.0.0 should be excluded.
     // Use a separate provider to avoid interference from the v1 instances above.
     let provider2 = factory.create_provider().await;
-    seed_instance_with_version(&*provider2, "v2-exact", SemverVersion::new(2, 0, 0)).await;
+    seed_instance_with_version(&*provider2, "v2-exact", semver::Version::new(2, 0, 0)).await;
 
     let result = provider2
         .fetch_orchestration_item(LOCK_TIMEOUT, Duration::ZERO, Some(&filter))
@@ -322,11 +322,11 @@ pub async fn test_fetch_filter_boundary_versions<F: ProviderFactory>(factory: &F
 /// Test #8: pinned_version_stored_via_ack_metadata
 pub async fn test_pinned_version_stored_via_ack_metadata<F: ProviderFactory>(factory: &F) {
     let provider = factory.create_provider().await;
-    let v = SemverVersion::new(3, 1, 4);
+    let v = semver::Version::new(3, 1, 4);
     seed_instance_with_version(&*provider, "inst-8", v).await;
 
     // Fetch with matching filter → confirms version was stored from metadata
-    let filter = filter_for_range(SemverVersion::new(3, 0, 0), SemverVersion::new(3, 9, 9));
+    let filter = filter_for_range(semver::Version::new(3, 0, 0), semver::Version::new(3, 9, 9));
     let result = provider
         .fetch_orchestration_item(LOCK_TIMEOUT, Duration::ZERO, Some(&filter))
         .await
@@ -337,11 +337,11 @@ pub async fn test_pinned_version_stored_via_ack_metadata<F: ProviderFactory>(fac
 /// Test #9: pinned_version_immutable_across_ack_cycles
 pub async fn test_pinned_version_immutable_across_ack_cycles<F: ProviderFactory>(factory: &F) {
     let provider = factory.create_provider().await;
-    let v = SemverVersion::new(1, 0, 0);
+    let v = semver::Version::new(1, 0, 0);
     seed_instance_with_version(&*provider, "inst-9", v).await;
 
     // Fetch and ack again (second turn, no pinned version in metadata)
-    let filter = filter_for_range(SemverVersion::new(0, 0, 0), SemverVersion::new(1, 9, 9));
+    let filter = filter_for_range(semver::Version::new(0, 0, 0), semver::Version::new(1, 9, 9));
     let (item, lock_token, _) = provider
         .fetch_orchestration_item(LOCK_TIMEOUT, Duration::ZERO, Some(&filter))
         .await
@@ -401,10 +401,10 @@ pub async fn test_continue_as_new_execution_gets_own_pinned_version<F: ProviderF
     let provider = factory.create_provider().await;
 
     // Seed instance with execution 1 pinned at 1.0.0
-    seed_instance_with_version(&*provider, "inst-can", SemverVersion::new(1, 0, 0)).await;
+    seed_instance_with_version(&*provider, "inst-can", semver::Version::new(1, 0, 0)).await;
 
     // Fetch and ack as ContinuedAsNew → creates execution 2 pinned at 2.0.0
-    let filter_v1 = filter_for_range(SemverVersion::new(0, 0, 0), SemverVersion::new(1, 9, 9));
+    let filter_v1 = filter_for_range(semver::Version::new(0, 0, 0), semver::Version::new(1, 9, 9));
     let (_item, lock_token, _) = provider
         .fetch_orchestration_item(LOCK_TIMEOUT, Duration::ZERO, Some(&filter_v1))
         .await
@@ -463,7 +463,7 @@ pub async fn test_continue_as_new_execution_gets_own_pinned_version<F: ProviderF
             ExecutionMetadata {
                 orchestration_name: Some("TestOrch".to_string()),
                 orchestration_version: Some("1.0.0".to_string()),
-                pinned_duroxide_version: Some(SemverVersion::new(2, 0, 0)),
+                pinned_duroxide_version: Some(semver::Version::new(2, 0, 0)),
                 ..Default::default()
             },
             vec![],
@@ -485,7 +485,7 @@ pub async fn test_continue_as_new_execution_gets_own_pinned_version<F: ProviderF
         .unwrap();
 
     // Fetch with v2 filter → should return (uses execution 2's pinned version)
-    let filter_v2 = filter_for_range(SemverVersion::new(2, 0, 0), SemverVersion::new(2, 9, 9));
+    let filter_v2 = filter_for_range(semver::Version::new(2, 0, 0), semver::Version::new(2, 9, 9));
     let result = provider
         .fetch_orchestration_item(LOCK_TIMEOUT, Duration::ZERO, Some(&filter_v2))
         .await
@@ -504,7 +504,7 @@ pub async fn test_continue_as_new_execution_gets_own_pinned_version<F: ProviderF
 
     // Fetch with v1 filter → should NOT return (execution 2 is pinned at 2.0.0,
     // proving the old v1.0.0 pinned version was NOT inherited)
-    let filter_v1_only = filter_for_range(SemverVersion::new(1, 0, 0), SemverVersion::new(1, 9, 9));
+    let filter_v1_only = filter_for_range(semver::Version::new(1, 0, 0), semver::Version::new(1, 9, 9));
     let result = provider
         .fetch_orchestration_item(LOCK_TIMEOUT, Duration::ZERO, Some(&filter_v1_only))
         .await
@@ -522,7 +522,7 @@ pub async fn test_continue_as_new_execution_gets_own_pinned_version<F: ProviderF
 /// Test #22: filter_with_empty_supported_versions_returns_nothing
 pub async fn test_filter_with_empty_supported_versions_returns_nothing<F: ProviderFactory>(factory: &F) {
     let provider = factory.create_provider().await;
-    seed_instance_with_version(&*provider, "inst-empty", SemverVersion::new(1, 0, 0)).await;
+    seed_instance_with_version(&*provider, "inst-empty", semver::Version::new(1, 0, 0)).await;
 
     let filter = DispatcherCapabilityFilter {
         supported_duroxide_versions: vec![],
@@ -537,9 +537,9 @@ pub async fn test_filter_with_empty_supported_versions_returns_nothing<F: Provid
 /// Test #23: concurrent_filtered_fetch_no_double_lock
 pub async fn test_concurrent_filtered_fetch_no_double_lock<F: ProviderFactory>(factory: &F) {
     let provider = factory.create_provider().await;
-    seed_instance_with_version(&*provider, "inst-conc", SemverVersion::new(1, 0, 0)).await;
+    seed_instance_with_version(&*provider, "inst-conc", semver::Version::new(1, 0, 0)).await;
 
-    let filter = filter_for_range(SemverVersion::new(0, 0, 0), SemverVersion::new(1, 9, 9));
+    let filter = filter_for_range(semver::Version::new(0, 0, 0), semver::Version::new(1, 9, 9));
 
     // First fetch should succeed
     let result1 = provider
@@ -623,7 +623,7 @@ pub async fn test_ack_stores_pinned_version_via_metadata_update<F: ProviderFacto
             ExecutionMetadata {
                 orchestration_name: Some("TestOrch".to_string()),
                 orchestration_version: Some("1.0.0".to_string()),
-                pinned_duroxide_version: Some(SemverVersion::new(1, 2, 3)),
+                pinned_duroxide_version: Some(semver::Version::new(1, 2, 3)),
                 ..Default::default()
             },
             vec![],
@@ -645,7 +645,7 @@ pub async fn test_ack_stores_pinned_version_via_metadata_update<F: ProviderFacto
         .unwrap();
 
     // Fetch with matching filter → should work now
-    let filter = filter_for_range(SemverVersion::new(1, 0, 0), SemverVersion::new(1, 9, 9));
+    let filter = filter_for_range(semver::Version::new(1, 0, 0), semver::Version::new(1, 9, 9));
     let result = provider
         .fetch_orchestration_item(LOCK_TIMEOUT, Duration::ZERO, Some(&filter))
         .await
@@ -662,10 +662,10 @@ pub async fn test_ack_stores_pinned_version_via_metadata_update<F: ProviderFacto
 pub async fn test_provider_updates_pinned_version_when_told<F: ProviderFactory>(factory: &F) {
     let provider = factory.create_provider().await;
     // Create with pinned version 1.0.0
-    seed_instance_with_version(&*provider, "inst-update", SemverVersion::new(1, 0, 0)).await;
+    seed_instance_with_version(&*provider, "inst-update", semver::Version::new(1, 0, 0)).await;
 
     // Fetch and ack with a DIFFERENT pinned version — provider should accept it
-    let filter_v1 = filter_for_range(SemverVersion::new(0, 0, 0), SemverVersion::new(1, 9, 9));
+    let filter_v1 = filter_for_range(semver::Version::new(0, 0, 0), semver::Version::new(1, 9, 9));
     let (_item, lock_token, _) = provider
         .fetch_orchestration_item(LOCK_TIMEOUT, Duration::ZERO, Some(&filter_v1))
         .await
@@ -682,7 +682,7 @@ pub async fn test_provider_updates_pinned_version_when_told<F: ProviderFactory>(
             ExecutionMetadata {
                 orchestration_name: Some("TestOrch".to_string()),
                 orchestration_version: Some("1.0.0".to_string()),
-                pinned_duroxide_version: Some(SemverVersion::new(2, 0, 0)),
+                pinned_duroxide_version: Some(semver::Version::new(2, 0, 0)),
                 ..Default::default()
             },
             vec![],
@@ -704,7 +704,7 @@ pub async fn test_provider_updates_pinned_version_when_told<F: ProviderFactory>(
         .unwrap();
 
     // Should now be fetchable with v2 filter (version was updated)
-    let filter_v2 = filter_for_range(SemverVersion::new(2, 0, 0), SemverVersion::new(2, 0, 0));
+    let filter_v2 = filter_for_range(semver::Version::new(2, 0, 0), semver::Version::new(2, 0, 0));
     let result = provider
         .fetch_orchestration_item(LOCK_TIMEOUT, Duration::ZERO, Some(&filter_v2))
         .await
@@ -718,7 +718,7 @@ pub async fn test_provider_updates_pinned_version_when_told<F: ProviderFactory>(
         .unwrap();
 
     // Should NOT be fetchable with v1-only filter anymore
-    let filter_v1_only = filter_for_range(SemverVersion::new(1, 0, 0), SemverVersion::new(1, 0, 0));
+    let filter_v1_only = filter_for_range(semver::Version::new(1, 0, 0), semver::Version::new(1, 0, 0));
     let result = provider
         .fetch_orchestration_item(LOCK_TIMEOUT, Duration::ZERO, Some(&filter_v1_only))
         .await
@@ -741,7 +741,7 @@ async fn seed_and_corrupt_history(
     provider: &dyn crate::providers::Provider,
     sqlite: &crate::providers::sqlite::SqliteProvider,
     instance: &str,
-    pinned_version: SemverVersion,
+    pinned_version: semver::Version,
 ) {
     seed_instance_with_version(provider, instance, pinned_version).await;
 
@@ -762,10 +762,10 @@ pub async fn test_fetch_corrupted_history_filtered_vs_unfiltered(
     provider: &dyn crate::providers::Provider,
     sqlite: &crate::providers::sqlite::SqliteProvider,
 ) {
-    seed_and_corrupt_history(provider, sqlite, "inst-corrupt-39", SemverVersion::new(1, 0, 0)).await;
+    seed_and_corrupt_history(provider, sqlite, "inst-corrupt-39", semver::Version::new(1, 0, 0)).await;
 
     // Part A: Filter excludes v1.0.0 → should return Ok(None), no deserialization attempted
-    let excluding_filter = filter_for_range(SemverVersion::new(2, 0, 0), SemverVersion::new(2, 9, 9));
+    let excluding_filter = filter_for_range(semver::Version::new(2, 0, 0), semver::Version::new(2, 9, 9));
     let result = provider
         .fetch_orchestration_item(LOCK_TIMEOUT, Duration::ZERO, Some(&excluding_filter))
         .await;
@@ -802,7 +802,7 @@ pub async fn test_fetch_deserialization_error_increments_attempt_count(
     provider: &dyn crate::providers::Provider,
     sqlite: &crate::providers::sqlite::SqliteProvider,
 ) {
-    seed_and_corrupt_history(provider, sqlite, "inst-deser-41", SemverVersion::new(1, 0, 0)).await;
+    seed_and_corrupt_history(provider, sqlite, "inst-deser-41", semver::Version::new(1, 0, 0)).await;
 
     // Use a very short lock timeout so we can re-fetch quickly
     let short_lock = Duration::from_millis(50);
@@ -849,7 +849,7 @@ pub async fn test_fetch_deserialization_error_eventually_reaches_poison(
     provider: &dyn crate::providers::Provider,
     sqlite: &crate::providers::sqlite::SqliteProvider,
 ) {
-    seed_and_corrupt_history(provider, sqlite, "inst-poison-42", SemverVersion::new(1, 0, 0)).await;
+    seed_and_corrupt_history(provider, sqlite, "inst-poison-42", semver::Version::new(1, 0, 0)).await;
 
     let short_lock = Duration::from_millis(50);
     let max_attempts: u32 = 5;
@@ -893,10 +893,10 @@ pub async fn test_fetch_filter_applied_before_history_deserialization(
     provider: &dyn crate::providers::Provider,
     sqlite: &crate::providers::sqlite::SqliteProvider,
 ) {
-    seed_and_corrupt_history(provider, sqlite, "inst-order-43", SemverVersion::new(99, 0, 0)).await;
+    seed_and_corrupt_history(provider, sqlite, "inst-order-43", semver::Version::new(99, 0, 0)).await;
 
     // Filter excludes v99.0.0
-    let filter = filter_for_range(SemverVersion::new(1, 0, 0), SemverVersion::new(2, 0, 0));
+    let filter = filter_for_range(semver::Version::new(1, 0, 0), semver::Version::new(2, 0, 0));
     let result = provider
         .fetch_orchestration_item(LOCK_TIMEOUT, Duration::ZERO, Some(&filter))
         .await;
@@ -928,15 +928,15 @@ pub async fn test_fetch_single_range_only_uses_first_range<F: ProviderFactory>(f
     let provider = factory.create_provider().await;
 
     // Instance A pinned at 1.0.0
-    seed_instance_with_version(&*provider, "inst-range-a", SemverVersion::new(1, 0, 0)).await;
+    seed_instance_with_version(&*provider, "inst-range-a", semver::Version::new(1, 0, 0)).await;
     // Instance B pinned at 3.0.0
-    seed_instance_with_version(&*provider, "inst-range-b", SemverVersion::new(3, 0, 0)).await;
+    seed_instance_with_version(&*provider, "inst-range-b", semver::Version::new(3, 0, 0)).await;
 
     // Multi-range filter: [1.0.0–1.5.0, 3.0.0–3.5.0]
     let filter = DispatcherCapabilityFilter {
         supported_duroxide_versions: vec![
-            SemverRange::new(SemverVersion::new(1, 0, 0), SemverVersion::new(1, 5, 0)),
-            SemverRange::new(SemverVersion::new(3, 0, 0), SemverVersion::new(3, 5, 0)),
+            SemverRange::new(semver::Version::new(1, 0, 0), semver::Version::new(1, 5, 0)),
+            SemverRange::new(semver::Version::new(3, 0, 0), semver::Version::new(3, 5, 0)),
         ],
     };
 

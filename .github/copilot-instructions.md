@@ -81,14 +81,21 @@ tokio::select! { ... }              // NEVER use tokio::select in orchestrations
 ## Build & Test Commands
 
 ```bash
-cargo nt                               # ⚠️ PREFERRED: Run all tests with nextest
+cargo nt                               # ⚠️ PREFERRED: Run all tests with nextest (--all-features)
 cargo nt -E 'test(/pattern/)'          # Filter tests by pattern
 cargo nt --test specific_test          # Run specific test file
+./run-tests.sh                         # ⚠️ COMPREHENSIVE: Two-pass (with + without feature flags)
+./run-tests.sh -E 'test(/pattern/)'    # Two-pass with filter
 cargo build --all-targets              # Build everything
 cargo clippy --all-targets --all-features  # Full lint check
 cargo test --doc                       # Doctest validation (nextest doesn't run these)
 cargo run --example hello_world        # Run example
 ```
+
+`cargo nt` runs `nextest run --all-features` (single pass). `./run-tests.sh` adds a second pass
+without features to catch behaviors hidden under `--all-features` — feature-gated code paths,
+serde boundary enforcement (v2 event rejection), and conditional compilation differences.
+Use `./run-tests.sh` before committing.
 
 ## Key Directories
 
@@ -141,6 +148,12 @@ Users upgrade duroxide by rolling out new versions one node at a time. This mean
 - **Single-Thread Mode**: Validates pgrx/embedded use cases
 
 When adding features, consider if they warrant a scenario test based on real-world usage.
+
+**Pre-seeded history:** Tests that need history without a running runtime should use helpers in `tests/common/mod.rs`:
+- `seed_history_turn()` — enqueue→fetch→ack cycle in one call (builds one orchestrator turn)
+- `seed_instance_with_pinned_version()` — creates an instance stamped with a specific duroxide version
+- `make_versioned_event()` — creates an event with a custom `duroxide_version` stamp
+- Never duplicate the raw enqueue→fetch→ack pattern inline — use these helpers instead
 
 ## AI Workflow Prompts
 

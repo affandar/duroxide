@@ -300,8 +300,8 @@ let runtime = Runtime::builder()
     .with_options(RuntimeOptions {
         // Widen range to include all possible pinned versions
         supported_replay_versions: Some(SemverRange::new(
-            SemverVersion::new(0, 0, 0),
-            SemverVersion::new(99, 0, 0),
+            semver::Version::new(0, 0, 0),
+            semver::Version::new(99, 0, 0),
         )),
         max_attempts: 5,
         ..Default::default()

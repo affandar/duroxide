@@ -437,7 +437,7 @@ pub use providers::{
 };
 
 // Re-export capability filtering types
-pub use providers::{DispatcherCapabilityFilter, SemverRange, SemverVersion};
+pub use providers::{current_build_version, DispatcherCapabilityFilter, SemverRange};
 
 // Re-export deletion/pruning types for Client API users
 pub use providers::{DeleteInstanceResult, InstanceFilter, InstanceTree, PruneOptions, PruneResult};
