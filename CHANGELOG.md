@@ -5,6 +5,44 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.17] - 2026-02-09
+
+**Release:** <https://crates.io/crates/duroxide/0.1.17>
+
+**Proposal:** [Provider Capability Filtering](https://github.com/affandar/duroxide/blob/main/docs/proposals-impl/provider-capability-filtering.md)
+
+### Added
+
+- **Provider Capability Filtering (Phase 1)** — Safe rolling upgrades in mixed-version clusters
+  - Orchestration dispatcher passes a version filter to the provider so it only returns
+    executions whose pinned `duroxide_version` falls within the runtime's supported range
+  - SQL-level filtering applied before lock acquisition and history deserialization
+  - NULL pinned version treated as always compatible (backward compat with pre-migration data)
+  - `RuntimeOptions::supported_replay_versions` for custom version range configuration
+  - Defense-in-depth: runtime-side compatibility check after fetch with 1-second abandon delay
+  - Startup log declaring supported version range; warning log on incompatible-version abandon
+
+- **New types:** `SemverVersion`, `SemverRange`, `DispatcherCapabilityFilter`, `current_build_version()`
+
+- **Provider API change:** `fetch_orchestration_item()` gains `filter: Option<&DispatcherCapabilityFilter>` parameter
+
+- **History deserialization contract** — Providers must surface deserialization errors (not silently drop events)
+  - `history_error` field on fetched items for deserialization failures
+  - Transaction commits lock + attempt_count before returning errors (enables poison path)
+
+- **ProviderFactory test helpers** — `corrupt_instance_history()` and `get_max_attempt_count()`
+  optional methods for provider-agnostic deserialization contract tests
+
+- **38 new tests** — 20 provider validation + 18 e2e scenario tests covering filtering,
+  rolling deployment routing, metadata/migration, ContinueAsNew isolation, drain procedures,
+  and observability
+
+### Changed
+
+- **Migration:** `20240106000000_add_pinned_version.sql` adds `duroxide_version_major/minor/patch`
+  columns to `executions` table
+- Provider validation test total: 114 tests (up from 94)
+
 ## [0.1.16] - 2026-02-02
 
 **Release:** <https://crates.io/crates/duroxide/0.1.16>
