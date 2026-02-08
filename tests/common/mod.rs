@@ -3,6 +3,7 @@
 #![allow(clippy::expect_used)]
 
 pub mod fault_injection;
+#[allow(dead_code)]
 pub mod tracing_capture;
 
 use duroxide::providers::sqlite::SqliteProvider;

@@ -117,7 +117,10 @@ impl Provider for PoisonInjectingProvider {
         poll_timeout: Duration,
         filter: Option<&DispatcherCapabilityFilter>,
     ) -> Result<Option<(OrchestrationItem, String, u32)>, ProviderError> {
-        let result = self.inner.fetch_orchestration_item(lock_timeout, poll_timeout, filter).await?;
+        let result = self
+            .inner
+            .fetch_orchestration_item(lock_timeout, poll_timeout, filter)
+            .await?;
 
         if let Some((item, lock_token, real_attempt_count)) = result {
             // Check if we need to skip this fetch
@@ -280,7 +283,9 @@ impl Provider for FilterBypassProvider {
         _filter: Option<&DispatcherCapabilityFilter>,
     ) -> Result<Option<(OrchestrationItem, String, u32)>, ProviderError> {
         // Bypass: always fetch with filter=None, ignoring whatever the runtime passed
-        self.inner.fetch_orchestration_item(lock_timeout, poll_timeout, None).await
+        self.inner
+            .fetch_orchestration_item(lock_timeout, poll_timeout, None)
+            .await
     }
 
     async fn fetch_work_item(
@@ -302,7 +307,15 @@ impl Provider for FilterBypassProvider {
         cancelled_activities: Vec<ScheduledActivityIdentifier>,
     ) -> Result<(), ProviderError> {
         self.inner
-            .ack_orchestration_item(lock_token, execution_id, history_delta, worker_items, orchestrator_items, metadata, cancelled_activities)
+            .ack_orchestration_item(
+                lock_token,
+                execution_id,
+                history_delta,
+                worker_items,
+                orchestrator_items,
+                metadata,
+                cancelled_activities,
+            )
             .await
     }
 
@@ -312,7 +325,9 @@ impl Provider for FilterBypassProvider {
         delay: Option<Duration>,
         ignore_attempt: bool,
     ) -> Result<(), ProviderError> {
-        self.inner.abandon_orchestration_item(lock_token, delay, ignore_attempt).await
+        self.inner
+            .abandon_orchestration_item(lock_token, delay, ignore_attempt)
+            .await
     }
 
     async fn ack_work_item(&self, token: &str, completion: Option<WorkItem>) -> Result<(), ProviderError> {
@@ -358,7 +373,9 @@ impl Provider for FilterBypassProvider {
         execution_id: u64,
         new_events: Vec<Event>,
     ) -> Result<(), ProviderError> {
-        self.inner.append_with_execution(instance, execution_id, new_events).await
+        self.inner
+            .append_with_execution(instance, execution_id, new_events)
+            .await
     }
 
     fn as_management_capability(&self) -> Option<&dyn ProviderAdmin> {
@@ -436,7 +453,9 @@ impl Provider for FailingProvider {
                 "simulated transient infrastructure failure",
             ))
         } else {
-            self.inner.fetch_orchestration_item(lock_timeout, poll_timeout, filter).await
+            self.inner
+                .fetch_orchestration_item(lock_timeout, poll_timeout, filter)
+                .await
         }
     }
 

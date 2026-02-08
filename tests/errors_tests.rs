@@ -772,14 +772,11 @@ async fn orchestration_panic_is_caught_and_fails_with_message() {
     let (store, _td) = common::create_sqlite_store_disk().await;
 
     let orchestrations = OrchestrationRegistry::builder()
-        .register(
-            "PanicOrch",
-            |_ctx: OrchestrationContext, _input: String| async move {
-                panic!("something went terribly wrong");
-                #[allow(unreachable_code)]
-                Ok("unreachable".to_string())
-            },
-        )
+        .register("PanicOrch", |_ctx: OrchestrationContext, _input: String| async move {
+            panic!("something went terribly wrong");
+            #[allow(unreachable_code)]
+            Ok("unreachable".to_string())
+        })
         .build();
     let activities = ActivityRegistry::builder().build();
 

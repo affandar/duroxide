@@ -1980,7 +1980,10 @@ impl Provider for RecordingProvider {
         poll_timeout: Duration,
         filter: Option<&DispatcherCapabilityFilter>,
     ) -> Result<Option<(OrchestrationItem, String, u32)>, ProviderError> {
-        let result = self.inner.fetch_orchestration_item(lock_timeout, poll_timeout, filter).await?;
+        let result = self
+            .inner
+            .fetch_orchestration_item(lock_timeout, poll_timeout, filter)
+            .await?;
 
         if let Some((item, lock_token, attempt_count)) = result {
             if item.instance == "combo-child" && !self.allow_child_fetch.load(Ordering::SeqCst) {

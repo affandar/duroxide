@@ -216,11 +216,7 @@ impl Runtime {
                                     // avoiding CPU burn and starvation of compatible work items.
                                     let _ = rt
                                         .history_store
-                                        .abandon_orchestration_item(
-                                            &lock_token,
-                                            Some(Duration::from_secs(1)),
-                                            false,
-                                        )
+                                        .abandon_orchestration_item(&lock_token, Some(Duration::from_secs(1)), false)
                                         .await;
                                     continue;
                                 }
@@ -854,12 +850,17 @@ impl Runtime {
         // or manual metadata construction.
         debug_assert!(
             metadata.pinned_duroxide_version.is_none()
-                || history_delta.iter().any(|e| matches!(&e.kind, crate::EventKind::OrchestrationStarted { .. })),
+                || history_delta
+                    .iter()
+                    .any(|e| matches!(&e.kind, crate::EventKind::OrchestrationStarted { .. })),
             "pinned_duroxide_version must only be set when OrchestrationStarted is in the history delta \
              (first turn of an execution). Setting it on subsequent turns would corrupt the execution's \
              version routing. pinned={:?}, delta_events={:?}",
             metadata.pinned_duroxide_version,
-            history_delta.iter().map(|e| std::mem::discriminant(&e.kind)).collect::<Vec<_>>()
+            history_delta
+                .iter()
+                .map(|e| std::mem::discriminant(&e.kind))
+                .collect::<Vec<_>>()
         );
 
         let mut attempts: u32 = 0;

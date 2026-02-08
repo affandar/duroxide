@@ -34,21 +34,17 @@ struct FieldCapture<'a> {
 
 impl<'a> Visit for FieldCapture<'a> {
     fn record_str(&mut self, field: &Field, value: &str) {
-        self.fields
-            .insert(field.name().to_string(), value.to_string());
+        self.fields.insert(field.name().to_string(), value.to_string());
     }
     fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {
-        self.fields
-            .insert(field.name().to_string(), format!("{value:?}"));
+        self.fields.insert(field.name().to_string(), format!("{value:?}"));
     }
 }
 
 impl<S: Subscriber> Layer<S> for CaptureLayer {
     fn on_event(&self, event: &TracingEvent<'_>, _ctx: LayerContext<'_, S>) {
         let mut fields = BTreeMap::new();
-        event.record(&mut FieldCapture {
-            fields: &mut fields,
-        });
+        event.record(&mut FieldCapture { fields: &mut fields });
         let meta = event.metadata();
         let message = fields.get("message").cloned().unwrap_or_default();
         self.events.lock().unwrap().push(CapturedEvent {

@@ -89,7 +89,10 @@ impl Provider for InstrumentedProvider {
         filter: Option<&DispatcherCapabilityFilter>,
     ) -> Result<Option<(OrchestrationItem, String, u32)>, ProviderError> {
         let start = std::time::Instant::now();
-        let result = self.inner.fetch_orchestration_item(lock_timeout, poll_timeout, filter).await;
+        let result = self
+            .inner
+            .fetch_orchestration_item(lock_timeout, poll_timeout, filter)
+            .await;
         let duration = start.elapsed();
 
         self.record_operation(

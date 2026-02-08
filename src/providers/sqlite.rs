@@ -8,9 +8,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tracing::debug;
 
 use super::{
-    DeleteInstanceResult, DispatcherCapabilityFilter, ExecutionInfo, InstanceFilter, InstanceInfo,
-    OrchestrationItem, Provider, ProviderAdmin, ProviderError, PruneOptions, PruneResult, QueueDepths,
-    ScheduledActivityIdentifier, SystemMetrics, WorkItem,
+    DeleteInstanceResult, DispatcherCapabilityFilter, ExecutionInfo, InstanceFilter, InstanceInfo, OrchestrationItem,
+    Provider, ProviderAdmin, ProviderError, PruneOptions, PruneResult, QueueDepths, ScheduledActivityIdentifier,
+    SystemMetrics, WorkItem,
 };
 use crate::{Event, EventKind};
 
@@ -594,8 +594,10 @@ impl Provider for SqliteProvider {
 
             // Packed integer comparison: major * 1_000_000 + minor * 1_000 + patch.
             // Works as long as minor and patch are < 1000, which is true in practice.
-            let min_packed = range.min.major as i64 * 1_000_000 + range.min.minor as i64 * 1_000 + range.min.patch as i64;
-            let max_packed = range.max.major as i64 * 1_000_000 + range.max.minor as i64 * 1_000 + range.max.patch as i64;
+            let min_packed =
+                range.min.major as i64 * 1_000_000 + range.min.minor as i64 * 1_000 + range.min.patch as i64;
+            let max_packed =
+                range.max.major as i64 * 1_000_000 + range.max.minor as i64 * 1_000 + range.max.patch as i64;
 
             sqlx::query(
                 r#"
@@ -820,9 +822,9 @@ impl Provider for SqliteProvider {
                     // Commit the transaction to persist lock + attempt_count increment.
                     // This ensures corrupted history items eventually reach the poison
                     // threshold rather than spinning forever with a rolled-back counter.
-                    tx.commit().await.map_err(|ce| {
-                        Self::sqlx_to_provider_error("fetch_orchestration_item", ce)
-                    })?;
+                    tx.commit()
+                        .await
+                        .map_err(|ce| Self::sqlx_to_provider_error("fetch_orchestration_item", ce))?;
                     return Err(ProviderError::permanent(
                         "fetch_orchestration_item",
                         format!("Failed to read history: {e}"),

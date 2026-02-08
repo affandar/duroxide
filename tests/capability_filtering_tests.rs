@@ -7,12 +7,10 @@
 //! - Version range routing and drain procedures
 //! - Observability (log assertions)
 
-use duroxide::providers::{
-    ExecutionMetadata, Provider, SemverRange, SemverVersion, WorkItem,
-};
+use duroxide::providers::{ExecutionMetadata, Provider, SemverRange, SemverVersion, WorkItem};
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self, RuntimeOptions};
-use duroxide::{Client, Event, EventKind, OrchestrationRegistry, INITIAL_EVENT_ID, INITIAL_EXECUTION_ID};
+use duroxide::{Client, Event, EventKind, INITIAL_EVENT_ID, INITIAL_EXECUTION_ID, OrchestrationRegistry};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -100,9 +98,7 @@ async fn seed_instance_with_pinned_version(
 
     // Release any locks we acquired on other instances
     for token in abandoned_tokens {
-        let _ = provider
-            .abandon_orchestration_item(&token, None, true)
-            .await;
+        let _ = provider.abandon_orchestration_item(&token, None, true).await;
     }
 }
 
@@ -121,16 +117,13 @@ async fn runtime_abandons_incompatible_execution() {
     let (store, _td) = common::create_sqlite_store_disk().await;
 
     // Seed instance pinned at v99.0.0 (far future version)
-    seed_instance_with_pinned_version(&*store, "incompat-12", "TestOrch", SemverVersion::new(99, 0, 0))
-        .await;
+    seed_instance_with_pinned_version(&*store, "incompat-12", "TestOrch", SemverVersion::new(99, 0, 0)).await;
 
     // Register a simple orchestration handler
     let orchestrations = OrchestrationRegistry::builder()
         .register(
             "TestOrch",
-            |_ctx: duroxide::OrchestrationContext, _input: String| async move {
-                Ok("completed".to_string())
-            },
+            |_ctx: duroxide::OrchestrationContext, _input: String| async move { Ok("completed".to_string()) },
         )
         .build();
     let activities = ActivityRegistry::builder().build();
@@ -143,13 +136,7 @@ async fn runtime_abandons_incompatible_execution() {
         ..Default::default()
     };
 
-    let rt = runtime::Runtime::start_with_options(
-        store.clone(),
-        activities,
-        orchestrations,
-        options,
-    )
-    .await;
+    let rt = runtime::Runtime::start_with_options(store.clone(), activities, orchestrations, options).await;
 
     // Wait — the runtime should NOT process this incompatible item
     tokio::time::sleep(Duration::from_secs(2)).await;
@@ -175,9 +162,7 @@ async fn runtime_processes_compatible_execution_normally() {
     let orchestrations = OrchestrationRegistry::builder()
         .register(
             "CompatOrch",
-            |_ctx: duroxide::OrchestrationContext, _input: String| async move {
-                Ok("compatible-ok".to_string())
-            },
+            |_ctx: duroxide::OrchestrationContext, _input: String| async move { Ok("compatible-ok".to_string()) },
         )
         .build();
     let activities = ActivityRegistry::builder().build();
@@ -187,13 +172,7 @@ async fn runtime_processes_compatible_execution_normally() {
         ..Default::default()
     };
 
-    let rt = runtime::Runtime::start_with_options(
-        store.clone(),
-        activities,
-        orchestrations,
-        options,
-    )
-    .await;
+    let rt = runtime::Runtime::start_with_options(store.clone(), activities, orchestrations, options).await;
 
     let client = Client::new(store.clone());
     client
@@ -234,15 +213,12 @@ async fn runtime_abandon_reaches_max_attempts_and_poisons() {
     let (store, _td) = common::create_sqlite_store_disk().await;
 
     // Seed instance pinned at v99.0.0
-    seed_instance_with_pinned_version(&*store, "poison-14", "TestOrch", SemverVersion::new(99, 0, 0))
-        .await;
+    seed_instance_with_pinned_version(&*store, "poison-14", "TestOrch", SemverVersion::new(99, 0, 0)).await;
 
     let orchestrations = OrchestrationRegistry::builder()
         .register(
             "TestOrch",
-            |_ctx: duroxide::OrchestrationContext, _input: String| async move {
-                Ok("should-not-reach".to_string())
-            },
+            |_ctx: duroxide::OrchestrationContext, _input: String| async move { Ok("should-not-reach".to_string()) },
         )
         .build();
     let activities = ActivityRegistry::builder().build();
@@ -253,13 +229,7 @@ async fn runtime_abandon_reaches_max_attempts_and_poisons() {
         ..Default::default()
     };
 
-    let rt = runtime::Runtime::start_with_options(
-        store.clone(),
-        activities,
-        orchestrations,
-        options,
-    )
-    .await;
+    let rt = runtime::Runtime::start_with_options(store.clone(), activities, orchestrations, options).await;
 
     // With provider-level filtering, the item is invisible to the runtime
     tokio::time::sleep(Duration::from_secs(2)).await;
@@ -290,9 +260,7 @@ async fn execution_metadata_includes_pinned_version_on_new_orchestration() {
     let orchestrations = OrchestrationRegistry::builder()
         .register(
             "MetaOrch",
-            |_ctx: duroxide::OrchestrationContext, _input: String| async move {
-                Ok("meta-ok".to_string())
-            },
+            |_ctx: duroxide::OrchestrationContext, _input: String| async move { Ok("meta-ok".to_string()) },
         )
         .build();
     let activities = ActivityRegistry::builder().build();
@@ -302,19 +270,10 @@ async fn execution_metadata_includes_pinned_version_on_new_orchestration() {
         ..Default::default()
     };
 
-    let rt = runtime::Runtime::start_with_options(
-        store.clone(),
-        activities,
-        orchestrations,
-        options,
-    )
-    .await;
+    let rt = runtime::Runtime::start_with_options(store.clone(), activities, orchestrations, options).await;
 
     let client = Client::new(store.clone());
-    client
-        .start_orchestration("meta-19", "MetaOrch", "{}")
-        .await
-        .unwrap();
+    client.start_orchestration("meta-19", "MetaOrch", "{}").await.unwrap();
 
     let status = client
         .wait_for_orchestration("meta-19", Duration::from_secs(5))
@@ -332,8 +291,7 @@ async fn execution_metadata_includes_pinned_version_on_new_orchestration() {
         .expect("Should have OrchestrationStarted event");
 
     let current_version = SemverVersion::current_build();
-    let pinned = SemverVersion::parse(&started_event.duroxide_version)
-        .expect("Should be parseable semver");
+    let pinned = SemverVersion::parse(&started_event.duroxide_version).expect("Should be parseable semver");
     assert_eq!(
         pinned, current_version,
         "Pinned version should match current build version"
@@ -354,9 +312,7 @@ async fn existing_executions_without_pinned_version_remain_fetchable() {
     let orchestrations = OrchestrationRegistry::builder()
         .register(
             "NullOrch",
-            |_ctx: duroxide::OrchestrationContext, _input: String| async move {
-                Ok("null-ok".to_string())
-            },
+            |_ctx: duroxide::OrchestrationContext, _input: String| async move { Ok("null-ok".to_string()) },
         )
         .build();
     let activities = ActivityRegistry::builder().build();
@@ -366,13 +322,7 @@ async fn existing_executions_without_pinned_version_remain_fetchable() {
         ..Default::default()
     };
 
-    let rt = runtime::Runtime::start_with_options(
-        store.clone(),
-        activities,
-        orchestrations,
-        options,
-    )
-    .await;
+    let rt = runtime::Runtime::start_with_options(store.clone(), activities, orchestrations, options).await;
 
     // The runtime should pick up this instance despite NULL pinned version
     // (NULL = always compatible)
@@ -393,11 +343,7 @@ async fn existing_executions_without_pinned_version_remain_fetchable() {
 }
 
 /// Helper: seed an instance WITHOUT pinned version (simulates pre-migration data)
-async fn provider_seed_without_pinned_version(
-    provider: &dyn Provider,
-    instance: &str,
-    orchestration: &str,
-) {
+async fn provider_seed_without_pinned_version(provider: &dyn Provider, instance: &str, orchestration: &str) {
     provider
         .enqueue_for_orchestrator(
             WorkItem::StartOrchestration {
@@ -430,9 +376,7 @@ async fn default_supported_range_includes_current_and_older_versions() {
     let orchestrations = OrchestrationRegistry::builder()
         .register(
             "RangeOrch",
-            |_ctx: duroxide::OrchestrationContext, _input: String| async move {
-                Ok("range-ok".to_string())
-            },
+            |_ctx: duroxide::OrchestrationContext, _input: String| async move { Ok("range-ok".to_string()) },
         )
         .build();
     let activities = ActivityRegistry::builder().build();
@@ -442,21 +386,12 @@ async fn default_supported_range_includes_current_and_older_versions() {
         ..Default::default()
     };
 
-    let rt = runtime::Runtime::start_with_options(
-        store.clone(),
-        activities,
-        orchestrations,
-        options,
-    )
-    .await;
+    let rt = runtime::Runtime::start_with_options(store.clone(), activities, orchestrations, options).await;
 
     let client = Client::new(store.clone());
 
     // Start an orchestration — pinned at current build version
-    client
-        .start_orchestration("range-26", "RangeOrch", "{}")
-        .await
-        .unwrap();
+    client.start_orchestration("range-26", "RangeOrch", "{}").await.unwrap();
 
     let status = client
         .wait_for_orchestration("range-26", Duration::from_secs(5))
@@ -481,20 +416,12 @@ async fn default_supported_range_excludes_future_versions() {
     let (store, _td) = common::create_sqlite_store_disk().await;
 
     // Seed instance pinned at far-future version
-    seed_instance_with_pinned_version(
-        &*store,
-        "future-27",
-        "FutureOrch",
-        SemverVersion::new(99, 0, 0),
-    )
-    .await;
+    seed_instance_with_pinned_version(&*store, "future-27", "FutureOrch", SemverVersion::new(99, 0, 0)).await;
 
     let orchestrations = OrchestrationRegistry::builder()
         .register(
             "FutureOrch",
-            |_ctx: duroxide::OrchestrationContext, _input: String| async move {
-                Ok("should-not-reach".to_string())
-            },
+            |_ctx: duroxide::OrchestrationContext, _input: String| async move { Ok("should-not-reach".to_string()) },
         )
         .build();
     let activities = ActivityRegistry::builder().build();
@@ -505,13 +432,7 @@ async fn default_supported_range_excludes_future_versions() {
         ..Default::default()
     };
 
-    let rt = runtime::Runtime::start_with_options(
-        store.clone(),
-        activities,
-        orchestrations,
-        options,
-    )
-    .await;
+    let rt = runtime::Runtime::start_with_options(store.clone(), activities, orchestrations, options).await;
 
     // The item should be invisible to the runtime
     tokio::time::sleep(Duration::from_secs(2)).await;
@@ -536,20 +457,12 @@ async fn custom_supported_replay_versions_narrows_range() {
     let (store, _td) = common::create_sqlite_store_disk().await;
 
     // Seed instance pinned at v1.0.0
-    seed_instance_with_pinned_version(
-        &*store,
-        "narrow-28",
-        "NarrowOrch",
-        SemverVersion::new(1, 0, 0),
-    )
-    .await;
+    seed_instance_with_pinned_version(&*store, "narrow-28", "NarrowOrch", SemverVersion::new(1, 0, 0)).await;
 
     let orchestrations = OrchestrationRegistry::builder()
         .register(
             "NarrowOrch",
-            |_ctx: duroxide::OrchestrationContext, _input: String| async move {
-                Ok("should-not-reach".to_string())
-            },
+            |_ctx: duroxide::OrchestrationContext, _input: String| async move { Ok("should-not-reach".to_string()) },
         )
         .build();
     let activities = ActivityRegistry::builder().build();
@@ -565,13 +478,7 @@ async fn custom_supported_replay_versions_narrows_range() {
         ..Default::default()
     };
 
-    let rt = runtime::Runtime::start_with_options(
-        store.clone(),
-        activities,
-        orchestrations,
-        options,
-    )
-    .await;
+    let rt = runtime::Runtime::start_with_options(store.clone(), activities, orchestrations, options).await;
 
     // Wait — the item should remain untouched
     tokio::time::sleep(Duration::from_secs(2)).await;
@@ -599,27 +506,13 @@ async fn two_runtimes_different_version_ranges_route_correctly() {
     let (store, _td) = common::create_sqlite_store_disk().await;
 
     // Seed instances with different pinned versions
-    seed_instance_with_pinned_version(
-        &*store,
-        "v1-inst",
-        "RoutingOrch",
-        SemverVersion::new(1, 0, 0),
-    )
-    .await;
-    seed_instance_with_pinned_version(
-        &*store,
-        "v2-inst",
-        "RoutingOrch",
-        SemverVersion::new(2, 0, 0),
-    )
-    .await;
+    seed_instance_with_pinned_version(&*store, "v1-inst", "RoutingOrch", SemverVersion::new(1, 0, 0)).await;
+    seed_instance_with_pinned_version(&*store, "v2-inst", "RoutingOrch", SemverVersion::new(2, 0, 0)).await;
 
     let orchestrations = OrchestrationRegistry::builder()
         .register(
             "RoutingOrch",
-            |_ctx: duroxide::OrchestrationContext, _input: String| async move {
-                Ok("routed".to_string())
-            },
+            |_ctx: duroxide::OrchestrationContext, _input: String| async move { Ok("routed".to_string()) },
         )
         .build();
     let activities = ActivityRegistry::builder().build();
@@ -646,21 +539,13 @@ async fn two_runtimes_different_version_ranges_route_correctly() {
         ..Default::default()
     };
 
-    let rt_a = runtime::Runtime::start_with_options(
-        store.clone(),
-        activities.clone(),
-        orchestrations.clone(),
-        options_a,
-    )
-    .await;
+    let rt_a =
+        runtime::Runtime::start_with_options(store.clone(), activities.clone(), orchestrations.clone(), options_a)
+            .await;
 
-    let rt_b = runtime::Runtime::start_with_options(
-        store.clone(),
-        activities.clone(),
-        orchestrations.clone(),
-        options_b,
-    )
-    .await;
+    let rt_b =
+        runtime::Runtime::start_with_options(store.clone(), activities.clone(), orchestrations.clone(), options_b)
+            .await;
 
     // Wait for both orchestrations to complete
     let completed = common::wait_for_history(
@@ -708,17 +593,13 @@ async fn sub_orchestration_gets_own_pinned_version() {
         .register(
             "ParentOrch",
             |ctx: duroxide::OrchestrationContext, _input: String| async move {
-                let sub_result = ctx
-                    .schedule_sub_orchestration("ChildOrch", "child-input")
-                    .await?;
+                let sub_result = ctx.schedule_sub_orchestration("ChildOrch", "child-input").await?;
                 Ok(format!("parent-done:{sub_result}"))
             },
         )
         .register(
             "ChildOrch",
-            |_ctx: duroxide::OrchestrationContext, _input: String| async move {
-                Ok("child-done".to_string())
-            },
+            |_ctx: duroxide::OrchestrationContext, _input: String| async move { Ok("child-done".to_string()) },
         )
         .build();
     let activities = ActivityRegistry::builder().build();
@@ -728,13 +609,7 @@ async fn sub_orchestration_gets_own_pinned_version() {
         ..Default::default()
     };
 
-    let rt = runtime::Runtime::start_with_options(
-        store.clone(),
-        activities,
-        orchestrations,
-        options,
-    )
-    .await;
+    let rt = runtime::Runtime::start_with_options(store.clone(), activities, orchestrations, options).await;
 
     let client = Client::new(store.clone());
     client
@@ -761,26 +636,30 @@ async fn sub_orchestration_gets_own_pinned_version() {
 
     // Verify the parent's history contains SubOrchestrationScheduled
     let parent_hist = store.read("parent-24").await.unwrap();
-    let has_sub_scheduled = parent_hist.iter().any(|e| {
-        matches!(&e.kind, EventKind::SubOrchestrationScheduled { .. })
-    });
+    let has_sub_scheduled = parent_hist
+        .iter()
+        .any(|e| matches!(&e.kind, EventKind::SubOrchestrationScheduled { .. }));
     assert!(has_sub_scheduled, "Parent should have scheduled a sub-orchestration");
 
     // Find the child instance and verify its OrchestrationStarted has current build version
-    let child_instance = parent_hist.iter().find_map(|e| {
-        if let EventKind::SubOrchestrationScheduled { instance, .. } = &e.kind {
-            Some(instance.clone())
-        } else {
-            None
-        }
-    }).expect("Should find SubOrchestrationScheduled event");
+    let child_instance = parent_hist
+        .iter()
+        .find_map(|e| {
+            if let EventKind::SubOrchestrationScheduled { instance, .. } = &e.kind {
+                Some(instance.clone())
+            } else {
+                None
+            }
+        })
+        .expect("Should find SubOrchestrationScheduled event");
 
     let child_hist = store.read(&child_instance).await.unwrap_or_default();
-    if let Some(child_started) = child_hist.iter().find(|e| {
-        matches!(&e.kind, EventKind::OrchestrationStarted { .. })
-    }) {
-        let child_pinned = SemverVersion::parse(&child_started.duroxide_version)
-            .expect("Child pinned version should be parseable");
+    if let Some(child_started) = child_hist
+        .iter()
+        .find(|e| matches!(&e.kind, EventKind::OrchestrationStarted { .. }))
+    {
+        let child_pinned =
+            SemverVersion::parse(&child_started.duroxide_version).expect("Child pinned version should be parseable");
         let current = SemverVersion::current_build();
         assert_eq!(
             child_pinned, current,
@@ -809,9 +688,7 @@ async fn runtime_logs_capability_declaration_at_startup() {
     let orchestrations = OrchestrationRegistry::builder()
         .register(
             "LogOrch",
-            |_ctx: duroxide::OrchestrationContext, _input: String| async move {
-                Ok("ok".to_string())
-            },
+            |_ctx: duroxide::OrchestrationContext, _input: String| async move { Ok("ok".to_string()) },
         )
         .build();
     let activities = ActivityRegistry::builder().build();
@@ -837,7 +714,9 @@ async fn runtime_logs_capability_declaration_at_startup() {
         e.target.contains("duroxide::runtime")
             && e.level == Level::INFO
             && (e.message.contains("capability")
-                || e.fields.values().any(|v: &String| v.contains("capability") || v.contains("supported_range")))
+                || e.fields
+                    .values()
+                    .any(|v: &String| v.contains("capability") || v.contains("supported_range")))
     });
 
     assert!(
@@ -862,20 +741,12 @@ async fn overlapping_version_ranges_both_can_process() {
     let (store, _td) = common::create_sqlite_store_disk().await;
 
     // Seed instance pinned at v2.5.0 (in both runtimes' ranges)
-    seed_instance_with_pinned_version(
-        &*store,
-        "overlap-17",
-        "OverlapOrch",
-        SemverVersion::new(2, 5, 0),
-    )
-    .await;
+    seed_instance_with_pinned_version(&*store, "overlap-17", "OverlapOrch", SemverVersion::new(2, 5, 0)).await;
 
     let orchestrations = OrchestrationRegistry::builder()
         .register(
             "OverlapOrch",
-            |_ctx: duroxide::OrchestrationContext, _input: String| async move {
-                Ok("overlap-ok".to_string())
-            },
+            |_ctx: duroxide::OrchestrationContext, _input: String| async move { Ok("overlap-ok".to_string()) },
         )
         .build();
     let activities = ActivityRegistry::builder().build();
@@ -902,21 +773,13 @@ async fn overlapping_version_ranges_both_can_process() {
         ..Default::default()
     };
 
-    let rt_a = runtime::Runtime::start_with_options(
-        store.clone(),
-        activities.clone(),
-        orchestrations.clone(),
-        options_a,
-    )
-    .await;
+    let rt_a =
+        runtime::Runtime::start_with_options(store.clone(), activities.clone(), orchestrations.clone(), options_a)
+            .await;
 
-    let rt_b = runtime::Runtime::start_with_options(
-        store.clone(),
-        activities.clone(),
-        orchestrations.clone(),
-        options_b,
-    )
-    .await;
+    let rt_b =
+        runtime::Runtime::start_with_options(store.clone(), activities.clone(), orchestrations.clone(), options_b)
+            .await;
 
     // Wait for completion — either runtime can pick it up
     let completed = common::wait_for_history(
@@ -929,7 +792,10 @@ async fn overlapping_version_ranges_both_can_process() {
         5000,
     )
     .await;
-    assert!(completed, "v2.5.0 instance should complete on either runtime (overlapping ranges)");
+    assert!(
+        completed,
+        "v2.5.0 instance should complete on either runtime (overlapping ranges)"
+    );
 
     rt_a.shutdown(None).await;
     rt_b.shutdown(None).await;
@@ -968,9 +834,7 @@ async fn mixed_cluster_compatible_and_incompatible_items() {
     let orchestrations = OrchestrationRegistry::builder()
         .register(
             "MixedOrch",
-            |_ctx: duroxide::OrchestrationContext, _input: String| async move {
-                Ok("mixed-ok".to_string())
-            },
+            |_ctx: duroxide::OrchestrationContext, _input: String| async move { Ok("mixed-ok".to_string()) },
         )
         .build();
     let activities = ActivityRegistry::builder().build();
@@ -997,21 +861,13 @@ async fn mixed_cluster_compatible_and_incompatible_items() {
         ..Default::default()
     };
 
-    let rt_a = runtime::Runtime::start_with_options(
-        store.clone(),
-        activities.clone(),
-        orchestrations.clone(),
-        options_a,
-    )
-    .await;
+    let rt_a =
+        runtime::Runtime::start_with_options(store.clone(), activities.clone(), orchestrations.clone(), options_a)
+            .await;
 
-    let rt_b = runtime::Runtime::start_with_options(
-        store.clone(),
-        activities.clone(),
-        orchestrations.clone(),
-        options_b,
-    )
-    .await;
+    let rt_b =
+        runtime::Runtime::start_with_options(store.clone(), activities.clone(), orchestrations.clone(), options_b)
+            .await;
 
     // Wait for all 5 to complete
     for i in 0..3 {
@@ -1066,20 +922,12 @@ async fn pinned_version_extracted_from_orchestration_started_event() {
     let (store, _td) = common::create_sqlite_store_disk().await;
 
     // Seed instance pinned at v3.1.4
-    seed_instance_with_pinned_version(
-        &*store,
-        "pinned-21",
-        "PinnedOrch",
-        SemverVersion::new(3, 1, 4),
-    )
-    .await;
+    seed_instance_with_pinned_version(&*store, "pinned-21", "PinnedOrch", SemverVersion::new(3, 1, 4)).await;
 
     let orchestrations = OrchestrationRegistry::builder()
         .register(
             "PinnedOrch",
-            |_ctx: duroxide::OrchestrationContext, _input: String| async move {
-                Ok("pinned-ok".to_string())
-            },
+            |_ctx: duroxide::OrchestrationContext, _input: String| async move { Ok("pinned-ok".to_string()) },
         )
         .build();
     let activities = ActivityRegistry::builder().build();
@@ -1094,13 +942,7 @@ async fn pinned_version_extracted_from_orchestration_started_event() {
         ..Default::default()
     };
 
-    let rt = runtime::Runtime::start_with_options(
-        store.clone(),
-        activities,
-        orchestrations,
-        options,
-    )
-    .await;
+    let rt = runtime::Runtime::start_with_options(store.clone(), activities, orchestrations, options).await;
 
     let completed = common::wait_for_history(
         store.clone(),
@@ -1123,8 +965,7 @@ async fn pinned_version_extracted_from_orchestration_started_event() {
         .find(|e| matches!(&e.kind, EventKind::OrchestrationStarted { .. }))
         .expect("Should have OrchestrationStarted event");
 
-    let pinned = SemverVersion::parse(&started.duroxide_version)
-        .expect("Should parse pinned version");
+    let pinned = SemverVersion::parse(&started.duroxide_version).expect("Should parse pinned version");
     assert_eq!(
         pinned,
         SemverVersion::new(3, 1, 4),
@@ -1159,9 +1000,7 @@ async fn activity_completion_after_continue_as_new_is_discarded() {
             "CANOrch",
             |ctx: duroxide::OrchestrationContext, input: String| async move {
                 match input.as_str() {
-                    "start" => {
-                        ctx.continue_as_new("second".to_string()).await
-                    }
+                    "start" => ctx.continue_as_new("second".to_string()).await,
                     _ => {
                         let _result = ctx.schedule_wait("done_signal").await;
                         Ok("can-complete".to_string())
@@ -1176,19 +1015,10 @@ async fn activity_completion_after_continue_as_new_is_discarded() {
         ..Default::default()
     };
 
-    let rt = runtime::Runtime::start_with_options(
-        store.clone(),
-        activities,
-        orchestrations,
-        options,
-    )
-    .await;
+    let rt = runtime::Runtime::start_with_options(store.clone(), activities, orchestrations, options).await;
 
     let client = Client::new(store.clone());
-    client
-        .start_orchestration("can-25", "CANOrch", "start")
-        .await
-        .unwrap();
+    client.start_orchestration("can-25", "CANOrch", "start").await.unwrap();
 
     // Wait for the second execution to be active (waiting for external event)
     let subscribed = common::wait_for_subscription(store.clone(), "can-25", "done_signal", 5000).await;
@@ -1261,13 +1091,7 @@ async fn wide_supported_range_drains_stuck_items_via_deserialization_error() {
     let store: Arc<dyn Provider> = Arc::new(SqliteProvider::new(&db_url, None).await.unwrap());
 
     // Seed an instance pinned at v99.0.0
-    seed_instance_with_pinned_version(
-        &*store,
-        "drain-29",
-        "DrainOrch",
-        SemverVersion::new(99, 0, 0),
-    )
-    .await;
+    seed_instance_with_pinned_version(&*store, "drain-29", "DrainOrch", SemverVersion::new(99, 0, 0)).await;
 
     // Corrupt the history with unknown event type data via SQL
     sqlx::query("UPDATE history SET event_data = '{\"kind\":\"UnknownFutureEvent\",\"data\":\"garbage\"}' WHERE instance_id = 'drain-29'")
@@ -1278,9 +1102,7 @@ async fn wide_supported_range_drains_stuck_items_via_deserialization_error() {
     let orchestrations = OrchestrationRegistry::builder()
         .register(
             "DrainOrch",
-            |_ctx: duroxide::OrchestrationContext, _input: String| async move {
-                Ok("should-not-reach".to_string())
-            },
+            |_ctx: duroxide::OrchestrationContext, _input: String| async move { Ok("should-not-reach".to_string()) },
         )
         .build();
     let activities = ActivityRegistry::builder().build();
@@ -1297,25 +1119,15 @@ async fn wide_supported_range_drains_stuck_items_via_deserialization_error() {
         ..Default::default()
     };
 
-    let rt = runtime::Runtime::start_with_options(
-        store.clone(),
-        activities,
-        orchestrations,
-        options,
-    )
-    .await;
+    let rt = runtime::Runtime::start_with_options(store.clone(), activities, orchestrations, options).await;
 
     // Wait for the item to be poisoned (failed via max_attempts)
     let drained = common::wait_for_history(
         store.clone(),
         "drain-29",
         |hist| {
-            hist.iter().any(|e| {
-                matches!(
-                    &e.kind,
-                    EventKind::OrchestrationFailed { .. }
-                )
-            })
+            hist.iter()
+                .any(|e| matches!(&e.kind, EventKind::OrchestrationFailed { .. }))
         },
         10_000,
     )
@@ -1362,25 +1174,15 @@ async fn runtime_logs_warning_on_incompatible_abandon() {
     let (inner_store, _td) = common::create_sqlite_store_disk().await;
 
     // Seed instance pinned at v99.0.0 (incompatible with default range)
-    seed_instance_with_pinned_version(
-        &*inner_store,
-        "warn-30",
-        "WarnOrch",
-        SemverVersion::new(99, 0, 0),
-    )
-    .await;
+    seed_instance_with_pinned_version(&*inner_store, "warn-30", "WarnOrch", SemverVersion::new(99, 0, 0)).await;
 
     // Wrap with FilterBypassProvider that ignores the capability filter
-    let bypass_store: Arc<dyn Provider> = Arc::new(
-        common::fault_injection::FilterBypassProvider::new(inner_store),
-    );
+    let bypass_store: Arc<dyn Provider> = Arc::new(common::fault_injection::FilterBypassProvider::new(inner_store));
 
     let orchestrations = OrchestrationRegistry::builder()
         .register(
             "WarnOrch",
-            |_ctx: duroxide::OrchestrationContext, _input: String| async move {
-                Ok("should-not-reach".to_string())
-            },
+            |_ctx: duroxide::OrchestrationContext, _input: String| async move { Ok("should-not-reach".to_string()) },
         )
         .build();
     let activities = ActivityRegistry::builder().build();
@@ -1392,13 +1194,7 @@ async fn runtime_logs_warning_on_incompatible_abandon() {
         ..Default::default()
     };
 
-    let rt = runtime::Runtime::start_with_options(
-        bypass_store.clone(),
-        activities,
-        orchestrations,
-        options,
-    )
-    .await;
+    let rt = runtime::Runtime::start_with_options(bypass_store.clone(), activities, orchestrations, options).await;
 
     // Wait for the runtime to process and abandon the incompatible item
     tokio::time::sleep(Duration::from_secs(3)).await;
@@ -1418,7 +1214,11 @@ async fn runtime_logs_warning_on_incompatible_abandon() {
         "Runtime should log warning when abandoning incompatible item via defense-in-depth. \
          Captured {} events. WARN events: {:?}",
         events.len(),
-        events.iter().filter(|e| e.level == Level::WARN).map(|e| &e.message).collect::<Vec<_>>()
+        events
+            .iter()
+            .filter(|e| e.level == Level::WARN)
+            .map(|e| &e.message)
+            .collect::<Vec<_>>()
     );
 
     // Verify the warning contains instance ID and version info

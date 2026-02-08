@@ -7,9 +7,7 @@
 //! See `docs/proposals/provider-capability-filtering.md` test plan categories A, B, F, F2, I.
 
 use super::ProviderFactory;
-use crate::providers::{
-    DispatcherCapabilityFilter, ExecutionMetadata, SemverRange, SemverVersion, WorkItem,
-};
+use crate::providers::{DispatcherCapabilityFilter, ExecutionMetadata, SemverRange, SemverVersion, WorkItem};
 use crate::{Event, EventKind, INITIAL_EVENT_ID, INITIAL_EXECUTION_ID};
 use std::time::Duration;
 
@@ -115,9 +113,7 @@ async fn seed_instance_with_version(
 
     // Release any locks we acquired on other instances
     for token in abandoned_tokens {
-        let _ = provider
-            .abandon_orchestration_item(&token, None, true)
-            .await;
+        let _ = provider.abandon_orchestration_item(&token, None, true).await;
     }
 }
 
@@ -168,9 +164,7 @@ pub async fn test_fetch_with_incompatible_filter_skips_item<F: ProviderFactory>(
 }
 
 /// Test #4: fetch_filter_skips_incompatible_selects_compatible
-pub async fn test_fetch_filter_skips_incompatible_selects_compatible<F: ProviderFactory>(
-    factory: &F,
-) {
+pub async fn test_fetch_filter_skips_incompatible_selects_compatible<F: ProviderFactory>(factory: &F) {
     let provider = factory.create_provider().await;
     seed_instance_with_version(&*provider, "inst-v1", SemverVersion::new(1, 0, 0)).await;
     seed_instance_with_version(&*provider, "inst-v2", SemverVersion::new(2, 0, 0)).await;
@@ -204,8 +198,7 @@ pub async fn test_fetch_filter_does_not_lock_skipped_instances<F: ProviderFactor
     seed_instance_with_version(&*provider, "inst-5", SemverVersion::new(1, 0, 0)).await;
 
     // Fetch with incompatible filter → None
-    let incompatible =
-        filter_for_range(SemverVersion::new(2, 0, 0), SemverVersion::new(2, 9, 9));
+    let incompatible = filter_for_range(SemverVersion::new(2, 0, 0), SemverVersion::new(2, 9, 9));
     let result = provider
         .fetch_orchestration_item(LOCK_TIMEOUT, Duration::ZERO, Some(&incompatible))
         .await
@@ -225,9 +218,7 @@ pub async fn test_fetch_filter_does_not_lock_skipped_instances<F: ProviderFactor
 }
 
 /// Test #6: fetch_filter_null_pinned_version_always_compatible
-pub async fn test_fetch_filter_null_pinned_version_always_compatible<F: ProviderFactory>(
-    factory: &F,
-) {
+pub async fn test_fetch_filter_null_pinned_version_always_compatible<F: ProviderFactory>(factory: &F) {
     let provider = factory.create_provider().await;
 
     // Create an instance WITHOUT setting pinned version (simulates pre-migration data)
@@ -280,10 +271,7 @@ pub async fn test_fetch_filter_null_pinned_version_always_compatible<F: Provider
         .fetch_orchestration_item(LOCK_TIMEOUT, Duration::ZERO, Some(&filter))
         .await
         .unwrap();
-    assert!(
-        result.is_some(),
-        "NULL pinned version should be always compatible"
-    );
+    assert!(result.is_some(), "NULL pinned version should be always compatible");
 }
 
 /// Test #7: fetch_filter_boundary_versions
@@ -343,10 +331,7 @@ pub async fn test_pinned_version_stored_via_ack_metadata<F: ProviderFactory>(fac
         .fetch_orchestration_item(LOCK_TIMEOUT, Duration::ZERO, Some(&filter))
         .await
         .unwrap();
-    assert!(
-        result.is_some(),
-        "Version stored via metadata should be filterable"
-    );
+    assert!(result.is_some(), "Version stored via metadata should be filterable");
 }
 
 /// Test #9: pinned_version_immutable_across_ack_cycles
@@ -400,10 +385,7 @@ pub async fn test_pinned_version_immutable_across_ack_cycles<F: ProviderFactory>
         .fetch_orchestration_item(LOCK_TIMEOUT, Duration::ZERO, Some(&filter))
         .await
         .unwrap();
-    assert!(
-        result.is_some(),
-        "Pinned version should persist across ack cycles"
-    );
+    assert!(result.is_some(), "Pinned version should persist across ack cycles");
 }
 
 // ---------------------------------------------------------------------------
@@ -415,9 +397,7 @@ pub async fn test_pinned_version_immutable_across_ack_cycles<F: ProviderFactory>
 /// After ContinueAsNew, the new execution's pinned version comes from the new
 /// ExecutionMetadata, NOT inherited from the previous execution.
 /// Verifies: v2 filter matches execution 2, v1 filter does NOT.
-pub async fn test_continue_as_new_execution_gets_own_pinned_version<F: ProviderFactory>(
-    factory: &F,
-) {
+pub async fn test_continue_as_new_execution_gets_own_pinned_version<F: ProviderFactory>(factory: &F) {
     let provider = factory.create_provider().await;
 
     // Seed instance with execution 1 pinned at 1.0.0
@@ -510,7 +490,10 @@ pub async fn test_continue_as_new_execution_gets_own_pinned_version<F: ProviderF
         .fetch_orchestration_item(LOCK_TIMEOUT, Duration::ZERO, Some(&filter_v2))
         .await
         .unwrap();
-    assert!(result.is_some(), "Should return item with v2 filter after ContinueAsNew");
+    assert!(
+        result.is_some(),
+        "Should return item with v2 filter after ContinueAsNew"
+    );
 
     let (item, lock_token3, _) = result.unwrap();
     assert_eq!(item.instance, "inst-can");
@@ -521,8 +504,7 @@ pub async fn test_continue_as_new_execution_gets_own_pinned_version<F: ProviderF
 
     // Fetch with v1 filter → should NOT return (execution 2 is pinned at 2.0.0,
     // proving the old v1.0.0 pinned version was NOT inherited)
-    let filter_v1_only =
-        filter_for_range(SemverVersion::new(1, 0, 0), SemverVersion::new(1, 9, 9));
+    let filter_v1_only = filter_for_range(SemverVersion::new(1, 0, 0), SemverVersion::new(1, 9, 9));
     let result = provider
         .fetch_orchestration_item(LOCK_TIMEOUT, Duration::ZERO, Some(&filter_v1_only))
         .await
@@ -538,9 +520,7 @@ pub async fn test_continue_as_new_execution_gets_own_pinned_version<F: ProviderF
 // ---------------------------------------------------------------------------
 
 /// Test #22: filter_with_empty_supported_versions_returns_nothing
-pub async fn test_filter_with_empty_supported_versions_returns_nothing<F: ProviderFactory>(
-    factory: &F,
-) {
+pub async fn test_filter_with_empty_supported_versions_returns_nothing<F: ProviderFactory>(factory: &F) {
     let provider = factory.create_provider().await;
     seed_instance_with_version(&*provider, "inst-empty", SemverVersion::new(1, 0, 0)).await;
 
@@ -551,10 +531,7 @@ pub async fn test_filter_with_empty_supported_versions_returns_nothing<F: Provid
         .fetch_orchestration_item(LOCK_TIMEOUT, Duration::ZERO, Some(&filter))
         .await
         .unwrap();
-    assert!(
-        result.is_none(),
-        "Empty supported versions should return None"
-    );
+    assert!(result.is_none(), "Empty supported versions should return None");
 }
 
 /// Test #23: concurrent_filtered_fetch_no_double_lock
@@ -576,10 +553,7 @@ pub async fn test_concurrent_filtered_fetch_no_double_lock<F: ProviderFactory>(f
         .fetch_orchestration_item(LOCK_TIMEOUT, Duration::ZERO, Some(&filter))
         .await
         .unwrap();
-    assert!(
-        result2.is_none(),
-        "Second fetch should return None (instance locked)"
-    );
+    assert!(result2.is_none(), "Second fetch should return None (instance locked)");
 }
 
 // ---------------------------------------------------------------------------
@@ -676,10 +650,7 @@ pub async fn test_ack_stores_pinned_version_via_metadata_update<F: ProviderFacto
         .fetch_orchestration_item(LOCK_TIMEOUT, Duration::ZERO, Some(&filter))
         .await
         .unwrap();
-    assert!(
-        result.is_some(),
-        "Backfilled pinned version should be filterable"
-    );
+    assert!(result.is_some(), "Backfilled pinned version should be filterable");
 }
 
 /// Test #46: provider_updates_pinned_version_when_told
@@ -738,10 +709,7 @@ pub async fn test_provider_updates_pinned_version_when_told<F: ProviderFactory>(
         .fetch_orchestration_item(LOCK_TIMEOUT, Duration::ZERO, Some(&filter_v2))
         .await
         .unwrap();
-    assert!(
-        result.is_some(),
-        "Provider should have updated pinned version to 2.0.0"
-    );
+    assert!(result.is_some(), "Provider should have updated pinned version to 2.0.0");
 
     let (_, lock_token2, _) = result.unwrap();
     provider
@@ -750,8 +718,7 @@ pub async fn test_provider_updates_pinned_version_when_told<F: ProviderFactory>(
         .unwrap();
 
     // Should NOT be fetchable with v1-only filter anymore
-    let filter_v1_only =
-        filter_for_range(SemverVersion::new(1, 0, 0), SemverVersion::new(1, 0, 0));
+    let filter_v1_only = filter_for_range(SemverVersion::new(1, 0, 0), SemverVersion::new(1, 0, 0));
     let result = provider
         .fetch_orchestration_item(LOCK_TIMEOUT, Duration::ZERO, Some(&filter_v1_only))
         .await
@@ -795,12 +762,10 @@ pub async fn test_fetch_corrupted_history_filtered_vs_unfiltered(
     provider: &dyn crate::providers::Provider,
     sqlite: &crate::providers::sqlite::SqliteProvider,
 ) {
-    seed_and_corrupt_history(provider, sqlite, "inst-corrupt-39", SemverVersion::new(1, 0, 0))
-        .await;
+    seed_and_corrupt_history(provider, sqlite, "inst-corrupt-39", SemverVersion::new(1, 0, 0)).await;
 
     // Part A: Filter excludes v1.0.0 → should return Ok(None), no deserialization attempted
-    let excluding_filter =
-        filter_for_range(SemverVersion::new(2, 0, 0), SemverVersion::new(2, 9, 9));
+    let excluding_filter = filter_for_range(SemverVersion::new(2, 0, 0), SemverVersion::new(2, 9, 9));
     let result = provider
         .fetch_orchestration_item(LOCK_TIMEOUT, Duration::ZERO, Some(&excluding_filter))
         .await;
@@ -837,13 +802,7 @@ pub async fn test_fetch_deserialization_error_increments_attempt_count(
     provider: &dyn crate::providers::Provider,
     sqlite: &crate::providers::sqlite::SqliteProvider,
 ) {
-    seed_and_corrupt_history(
-        provider,
-        sqlite,
-        "inst-deser-41",
-        SemverVersion::new(1, 0, 0),
-    )
-    .await;
+    seed_and_corrupt_history(provider, sqlite, "inst-deser-41", SemverVersion::new(1, 0, 0)).await;
 
     // Use a very short lock timeout so we can re-fetch quickly
     let short_lock = Duration::from_millis(50);
@@ -852,10 +811,7 @@ pub async fn test_fetch_deserialization_error_increments_attempt_count(
     let result1 = provider
         .fetch_orchestration_item(short_lock, Duration::ZERO, None)
         .await;
-    assert!(
-        result1.is_err(),
-        "First fetch should fail with deserialization error"
-    );
+    assert!(result1.is_err(), "First fetch should fail with deserialization error");
 
     // Wait for lock to expire
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -887,19 +843,13 @@ pub async fn test_fetch_deserialization_error_increments_attempt_count(
 /// This is a provider-level test that validates the attempt_count keeps incrementing
 /// for corrupted history items. The full poison termination pipeline is tested
 /// at the runtime level (Category C).
-/// 
+///
 /// TODO : Actual poisoning is not implemented yet, so this test just verifies attempt_count increments
 pub async fn test_fetch_deserialization_error_eventually_reaches_poison(
     provider: &dyn crate::providers::Provider,
     sqlite: &crate::providers::sqlite::SqliteProvider,
 ) {
-    seed_and_corrupt_history(
-        provider,
-        sqlite,
-        "inst-poison-42",
-        SemverVersion::new(1, 0, 0),
-    )
-    .await;
+    seed_and_corrupt_history(provider, sqlite, "inst-poison-42", SemverVersion::new(1, 0, 0)).await;
 
     let short_lock = Duration::from_millis(50);
     let max_attempts: u32 = 5;
@@ -943,13 +893,7 @@ pub async fn test_fetch_filter_applied_before_history_deserialization(
     provider: &dyn crate::providers::Provider,
     sqlite: &crate::providers::sqlite::SqliteProvider,
 ) {
-    seed_and_corrupt_history(
-        provider,
-        sqlite,
-        "inst-order-43",
-        SemverVersion::new(99, 0, 0),
-    )
-    .await;
+    seed_and_corrupt_history(provider, sqlite, "inst-order-43", SemverVersion::new(99, 0, 0)).await;
 
     // Filter excludes v99.0.0
     let filter = filter_for_range(SemverVersion::new(1, 0, 0), SemverVersion::new(2, 0, 0));
@@ -964,10 +908,7 @@ pub async fn test_fetch_filter_applied_before_history_deserialization(
         "Filter should be applied before deserialization; got error: {:?}",
         result.err()
     );
-    assert!(
-        result.unwrap().is_none(),
-        "Excluded version should not be returned"
-    );
+    assert!(result.unwrap().is_none(), "Excluded version should not be returned");
 
     // Sanity: fetch without filter → should error (history is corrupted)
     let unfiltered = provider
@@ -1010,10 +951,7 @@ pub async fn test_fetch_single_range_only_uses_first_range<F: ProviderFactory>(f
         item.instance, "inst-range-a",
         "Phase 1: only first range should be used, returning instance A"
     );
-    provider
-        .abandon_orchestration_item(&lock, None, true)
-        .await
-        .unwrap();
+    provider.abandon_orchestration_item(&lock, None, true).await.unwrap();
 
     // Instance B (v3.0.0) should NOT be returned despite being in the second range
     // because Phase 1 only uses the first range
@@ -1029,4 +967,3 @@ pub async fn test_fetch_single_range_only_uses_first_range<F: ProviderFactory>(f
         );
     }
 }
-
