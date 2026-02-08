@@ -411,12 +411,15 @@ async fn test_status_independence() {
         .unwrap();
     client.start_orchestration("inst-fail", "FailOrch", "").await.unwrap();
 
-    // Wait for both to finish
-    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-
-    // Check statuses are independent
-    let status1 = client.get_orchestration_status("inst-success").await.unwrap();
-    let status2 = client.get_orchestration_status("inst-fail").await.unwrap();
+    // Wait for both to finish (use wait_for_orchestration instead of sleep for reliability)
+    let status1 = client
+        .wait_for_orchestration("inst-success", Duration::from_secs(5))
+        .await
+        .unwrap();
+    let status2 = client
+        .wait_for_orchestration("inst-fail", Duration::from_secs(5))
+        .await
+        .unwrap();
 
     assert!(
         matches!(status1, OrchestrationStatus::Completed { .. }),
