@@ -32,6 +32,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         log_level: "info".to_string(),
         service_name: "duroxide-dashboard".to_string(),
         service_version: Some("1.0.0".to_string()),
+        ..Default::default()
     };
 
     let options = RuntimeOptions {

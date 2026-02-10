@@ -28,6 +28,7 @@ use std::sync::{
     Arc,
     atomic::{AtomicI64, AtomicU64, Ordering},
 };
+use std::time::Duration;
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
 /// Log format options for structured logging
@@ -92,6 +93,11 @@ pub struct ObservabilityConfig {
     pub service_name: String,
     /// Optional service version
     pub service_version: Option<String>,
+
+    // Gauge polling configuration
+    /// Interval for polling the provider to refresh gauge metrics
+    /// (queue depths, active orchestrations). Defaults to 60 seconds.
+    pub gauge_poll_interval: Duration,
 }
 
 impl Default for ObservabilityConfig {
@@ -101,6 +107,7 @@ impl Default for ObservabilityConfig {
             log_level: "info".to_string(),
             service_name: "duroxide".to_string(),
             service_version: None,
+            gauge_poll_interval: Duration::from_secs(60),
         }
     }
 }

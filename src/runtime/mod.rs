@@ -551,6 +551,11 @@ impl Runtime {
             .map(|handle| handle.metrics_snapshot())
     }
 
+    /// Returns a reference to the observability handle, if observability is enabled.
+    pub fn observability_handle(&self) -> Option<&observability::ObservabilityHandle> {
+        self.observability_handle.as_ref()
+    }
+
     /// Initialize all gauges that need to sync with persistent state on startup.
     ///
     /// Gauges (unlike counters) represent current state and must be initialized
@@ -591,6 +596,55 @@ impl Runtime {
                     );
                 }
             }
+        }
+    }
+
+    /// Spawn a background task that periodically polls the provider for gauge values.
+    ///
+    /// Updates `duroxide_active_orchestrations`, `duroxide_orchestrator_queue_depth`,
+    /// and `duroxide_worker_queue_depth` gauges from the database at the configured interval.
+    fn start_gauge_poller(self: Arc<Self>) -> JoinHandle<()> {
+        let interval = self.options.observability.gauge_poll_interval;
+        let shutdown_flag = self.shutdown_flag.clone();
+
+        tokio::spawn(async move {
+            tracing::debug!(
+                target: "duroxide::runtime",
+                interval_secs = interval.as_secs(),
+                "Gauge poller started"
+            );
+
+            loop {
+                tokio::time::sleep(interval).await;
+
+                if shutdown_flag.load(Ordering::Relaxed) {
+                    break;
+                }
+
+                self.clone().refresh_gauges().await;
+            }
+        })
+    }
+
+    /// Refresh all gauge metrics from the provider.
+    async fn refresh_gauges(self: Arc<Self>) {
+        let provider = &self
+            .observability_handle
+            .as_ref()
+            .expect("gauge poller only runs when observability is enabled")
+            .metrics_provider();
+        let admin = match self.history_store.as_management_capability() {
+            Some(admin) => admin,
+            None => return,
+        };
+
+        let (system_result, queue_result) = tokio::join!(admin.get_system_metrics(), admin.get_queue_depths());
+
+        if let Ok(metrics) = system_result {
+            provider.set_active_orchestrations(metrics.running_instances as i64);
+        }
+        if let Ok(depths) = queue_result {
+            provider.update_queue_depths(depths.orchestrator_queue as u64, depths.worker_queue as u64);
         }
     }
 
@@ -794,6 +848,12 @@ impl Runtime {
         // Initialize gauges from provider (if supported)
         runtime.clone().initialize_gauges().await;
 
+        // Start periodic gauge polling if observability is enabled
+        if runtime.observability_handle.is_some() {
+            let gauge_handle = runtime.clone().start_gauge_poller();
+            runtime.joins.lock().await.push(gauge_handle);
+        }
+
         // background orchestrator dispatcher (extracted from inline poller)
         let handle = runtime.clone().start_orchestration_dispatcher();
         runtime.joins.lock().await.push(handle);
@@ -801,10 +861,6 @@ impl Runtime {
         // background work dispatcher (executes activities)
         let work_handle = runtime.clone().start_work_dispatcher(activity_registry);
         runtime.joins.lock().await.push(work_handle);
-
-        // Note: Queue depth monitoring could be added here, but requires ProviderAdmin trait
-        // which is not available on all providers. Providers can implement their own queue depth
-        // export via their admin interfaces.
 
         runtime
     }
