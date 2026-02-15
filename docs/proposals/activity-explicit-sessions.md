@@ -4,7 +4,7 @@
 **Created:** 2026-02-14  
 **Updated:** 2026-02-14  
 
-> **Revision note:** See `docs/proposals/activity-explicit-sessions-v3.md` for implementation-ready corrections and clarifications. Treat v2 as the baseline narrative and v3 as the source of truth where they differ.
+> **Revision note:** v3 corrections have been folded into this document. See `docs/proposals/activity-explicit-sessions-v3.md` for the compact correction summary.
 
 ## Summary
 
@@ -65,10 +65,10 @@ time  Orchestration Instance ("conv-42")          Session        Worker
 
 t=0   User sends first message
       open_session() ─────────────────────────▶  Session 1      
-      hydrate.on_session(1) ──────────────────────────────────▶  Worker A claims
+      schedule_activity_on_session(hydrate,1) ────────────────▶  Worker A claims
                                                                  CopilotSession created
 
-t=1   run_turn(msg1).on_session(1) ───────────────────────────▶  Worker A executes
+t=1   schedule_activity_on_session(run_turn(msg1),1) ──────────▶  Worker A executes
       ◀── Ok(response1)
 
 t=5   schedule_wait("user_message")
@@ -77,12 +77,12 @@ t=5   schedule_wait("user_message")
        session renewal task keeps lock alive)                    renewal task running
 
 t=35  User sends second message
-      run_turn(msg2).on_session(1) ───────────────────────────▶  Worker A (same!)
+      schedule_activity_on_session(run_turn(msg2),1) ──────────▶  Worker A (same!)
       ◀── Ok(response2)                                          In-memory state warm
 
 t=40  LLM says "wait 3 hours"
-      checkpoint.on_session(1) ───────────────────────────────▶  Worker A checkpoints
-      dehydrate.on_session(1) ────────────────────────────────▶  Worker A tears down
+      schedule_activity_on_session(checkpoint,1) ─────────────▶  Worker A checkpoints
+      schedule_activity_on_session(dehydrate,1) ───────────────▶  Worker A tears down
       close_session(1) ──────────────────────▶  Session 1 ended  Renewal task stops
       schedule_timer(3h)
 
@@ -90,12 +90,12 @@ t=40  LLM says "wait 3 hours"
 
 t=3h  Timer fires
       open_session() ─────────────────────────▶  Session 2
-      hydrate.on_session(2) ──────────────────────────────────▶  Worker B claims
+      schedule_activity_on_session(hydrate,2) ────────────────▶  Worker B claims
                                                                  (A may be gone)
                                                                  CopilotSession from
                                                                  checkpoint
 
-t=3h  run_turn("wait complete").on_session(2) ─────────────────▶ Worker B executes
+t=3h  schedule_activity_on_session(run_turn("wait complete"),2) ▶ Worker B executes
       ◀── Ok(response3)
 
       ... more interactive turns on Worker B ...
@@ -106,15 +106,15 @@ t=4h  ──── Worker B crashes! ────
                                                   lock expires   session_lock_timeout
 
 t=4h  User sends message
-      run_turn(msg).on_session(2) ────────────────────────────▶  Worker C claims
+      schedule_activity_on_session(run_turn(msg),2) ──────────▶  Worker C claims
       ◀── Err("session_lost")                                    No local state!
-      hydrate.on_session(2) ──────────────────────────────────▶  Worker C hydrates
+      schedule_activity_on_session(hydrate,2) ─────────────────▶  Worker C hydrates
                                                                  from last checkpoint
-      run_turn(msg).on_session(2) ────────────────────────────▶  Worker C executes
+      schedule_activity_on_session(run_turn(msg),2) ───────────▶  Worker C executes
       ◀── Ok(response)
 
 t=5h  Conversation ends
-      dehydrate.on_session(2) ────────────────────────────────▶  Worker C cleans up
+      schedule_activity_on_session(dehydrate,2) ──────────────▶  Worker C cleans up
       close_session(2) ──────────────────────▶  Session 2 ended
       return Ok("conversation complete")
 
@@ -146,12 +146,12 @@ t=5h  Conversation ends
 
 // ORCHESTRATION-SIDE: clean, no error-matching boilerplate
 let session_id = ctx.open_session().await?;
-ctx.schedule_activity("hydrate", &config).on_session(&session_id).await?;
+ctx.schedule_activity_on_session("hydrate", &config, &session_id).await?;
 
 loop {
     let event = ctx.schedule_wait("user_message").await;
-    let result = ctx.schedule_activity("run_turn", &event)
-        .on_session(&session_id).await?;  // activities self-heal on migration
+    let result = ctx.schedule_activity_on_session("run_turn", &event, &session_id)
+        .await?;  // activities self-heal on migration
 }
 ```
 
@@ -206,8 +206,12 @@ let session_id = ctx.open_session().await?;
 let session_id = ctx.open_session_with_id("my-session-123").await?;
 
 // Route activities to the session's worker
-let result = ctx.schedule_activity("run_turn", &input)
-    .on_session(&session_id)
+let result = ctx.schedule_activity_on_session("run_turn", &input, &session_id)
+    .await?;
+
+// Typed variant (same codec behavior as schedule_activity_typed)
+let output: TurnResult = ctx
+    .schedule_activity_on_session_typed("run_turn", &typed_input, &session_id)
     .await?;
 
 // Close the session — orchestrator-side operation
@@ -286,24 +290,20 @@ async fn copilot_agent(ctx: &OrchestrationContext) -> Result<String, String> {
     let session_id = ctx.open_session().await?;
 
     // Hydrate on whichever worker claims the session
-    ctx.schedule_activity("hydrate_copilot", &config)
-        .on_session(&session_id).await?;
+    ctx.schedule_activity_on_session("hydrate_copilot", &config, &session_id).await?;
 
     loop {
         let event = ctx.schedule_wait("user_message").await;
 
-        match ctx.schedule_activity("run_turn", &event)
-            .on_session(&session_id).await
+        match ctx.schedule_activity_on_session("run_turn", &event, &session_id).await
         {
             Ok(result) => {
                 // Checkpoint after every turn (app's choice)
-                ctx.schedule_activity("checkpoint", "")
-                    .on_session(&session_id).await?;
+                ctx.schedule_activity_on_session("checkpoint", "", &session_id).await?;
             }
             Err(e) if e.contains("session_lost") => {
                 // Worker died or session lock expired. Re-hydrate.
-                ctx.schedule_activity("hydrate_copilot", &config)
-                    .on_session(&session_id).await?;
+                ctx.schedule_activity_on_session("hydrate_copilot", &config, &session_id).await?;
                 continue;
             }
             Err(e) => return Err(e),
@@ -311,13 +311,11 @@ async fn copilot_agent(ctx: &OrchestrationContext) -> Result<String, String> {
 
         // Long wait: checkpoint, close session, timer, reopen
         if needs_long_wait {
-            ctx.schedule_activity("dehydrate_copilot", "")
-                .on_session(&session_id).await?;
+            ctx.schedule_activity_on_session("dehydrate_copilot", "", &session_id).await?;
             ctx.close_session(&session_id).await?;
             ctx.schedule_timer(Duration::from_secs(3600)).await;
             let session_id = ctx.open_session().await?;
-            ctx.schedule_activity("hydrate_copilot", &config)
-                .on_session(&session_id).await?;
+            ctx.schedule_activity_on_session("hydrate_copilot", &config, &session_id).await?;
         }
 
         // History management
@@ -401,13 +399,13 @@ t=10    Activity completes. No more items in queue for "X".
 t=25    Orchestration waits on schedule_wait("user_message").
         → No items in queue. Renewal task keeps extending lock.
 
-t=40    User sends message. Orchestration schedules run_turn.on_session("X").
+t=40    User sends message. Orchestration schedules schedule_activity_on_session(run_turn, "X").
         → Worker A fetches it (still owns session). In-memory state available.
         → No migration, no re-hydration.
 
 t=100   Orchestration calls close_session("X").
         → But first, app should schedule a dehydrate activity to clean up:
-          dehydrate.on_session("X") → Worker A checkpoints & evicts cache.
+          schedule_activity_on_session(dehydrate, "X") → Worker A checkpoints & evicts cache.
         → Then close_session("X") marks session as ended in provider.
         → Worker A's renewal task receives error on next renewal attempt → stops.
         → In-memory state already cleaned up by the dehydrate activity.
@@ -486,7 +484,7 @@ When closing an active session:
 **Note:** `close_session` does NOT run an activity on the session's worker. The worker does not receive an explicit "teardown" signal. If the app needs to checkpoint/dehydrate before closing, it should schedule a `dehydrate` activity before calling `close_session`:
 
 ```rust
-ctx.schedule_activity("dehydrate", "").on_session(&session_id).await?;
+ctx.schedule_activity_on_session("dehydrate", "", &session_id).await?;
 ctx.close_session(&session_id).await?;
 ```
 
@@ -522,12 +520,11 @@ The app handles this transparently inside activities:
 The orchestration decides to release the worker before a long idle period:
 
 ```rust
-ctx.schedule_activity("dehydrate", "").on_session(&session_id).await?;
+ctx.schedule_activity_on_session("dehydrate", "", &session_id).await?;
 ctx.close_session(&session_id).await?;
 ctx.schedule_timer(Duration::from_secs(3600)).await;
 let session_id = ctx.open_session().await?;
-ctx.schedule_activity("hydrate", &config)
-    .on_session(&session_id).await?;
+ctx.schedule_activity_on_session("hydrate", &config, &session_id).await?;
 ```
 
 No migration surprise — the orchestration explicitly manages the transition.
@@ -546,11 +543,15 @@ From the orchestration's perspective, this is the same as a crash: the next acti
 
 ```sql
 CREATE TABLE sessions (
-    session_id    TEXT PRIMARY KEY,
     instance_id   TEXT NOT NULL,     -- orchestration instance that owns it
+    session_id    TEXT NOT NULL,
     worker_id     TEXT,              -- NULL = unclaimed, non-NULL = attached
-    locked_until  BIGINT            -- NULL = unclaimed, else lock expiry (ms)
+    locked_until  INTEGER,           -- NULL = unclaimed, else lock expiry (ms)
+    PRIMARY KEY (instance_id, session_id)
 );
+
+CREATE INDEX idx_sessions_worker ON sessions(worker_id);
+CREATE INDEX idx_sessions_locked_until ON sessions(locked_until);
 ```
 
 Note: there is no `ended` column. When `close_session` is called, the session row is **deleted**. A session row exists only while the session is open. This simplifies queries — "session exists" = "session is open". The `renew_session_lock` method returns an error when the row is missing, which signals the worker's renewal task to stop.
@@ -597,15 +598,26 @@ ActivityExecute {
 }
 ```
 
-**`DurableFuture<T>`** — gains `.on_session()` modifier:
+**`OrchestrationContext`** — gains session-bound scheduling methods:
 ```rust
-impl<T> DurableFuture<T> {
-    pub fn on_session(mut self, session_id: impl Into<String>) -> Self {
-        self.session_id = Some(session_id.into());
-        self
-    }
+impl OrchestrationContext {
+    pub fn schedule_activity_on_session(
+        &self,
+        name: impl Into<String>,
+        input: impl Into<String>,
+        session_id: &str,
+    ) -> DurableFuture<Result<String, String>>;
+
+    pub fn schedule_activity_on_session_typed<In: serde::Serialize, Out: serde::de::DeserializeOwned>(
+        &self,
+        name: impl Into<String>,
+        input: &In,
+        session_id: &str,
+    ) -> impl Future<Output = Result<Out, String>>;
 }
 ```
+
+**API parity note:** `schedule_activity_on_session_typed` must preserve the same JSON codec semantics and error behavior as existing `schedule_activity_typed` — same codec path, same decode-failure behavior, no session-specific serialization differences.
 
 **`ActivityContext`** — gains `session_id()`:
 ```rust
@@ -635,10 +647,10 @@ pub trait Provider: Any + Send + Sync {
 The runtime checks this at startup and when processing session actions:
 - If the orchestration calls `open_session()` and the provider doesn't support sessions, the orchestration is failed with:
   ```
-  ErrorDetails::Configuration {
-      kind: ConfigErrorKind::Nondeterminism,
-      resource: "session",
-      message: "Provider does not support sessions"
+  ErrorDetails::Application {
+      kind: AppErrorKind::OrchestrationFailed,
+      message: "Provider does not support sessions".to_string(),
+      retryable: false,
   }
   ```
 - The worker dispatcher only uses session-aware fetch if `supports_sessions()` is true.
@@ -700,6 +712,7 @@ async fn renew_work_item_lock(&self, token: &str, extend_for: Duration)
 ```rust
 async fn renew_session_lock(
     &self,
+    instance_id: &str,
     session_id: &str,
     worker_id: &str,
     extend_for: Duration,
@@ -711,6 +724,7 @@ async fn renew_session_lock(
 ```rust
 async fn release_session_lock(
     &self,
+    instance_id: &str,
     session_id: &str,
     worker_id: &str,
 ) -> Result<(), ProviderError>;
@@ -735,7 +749,8 @@ async fn release_session_lock(
 
 - Processes `Action::OpenSession` → persists `SessionOpened` event, creates session row via provider
 - Processes `Action::CloseSession` → persists `SessionClosed` event, deletes session row, cancels in-flight activities
-- **On orchestration terminal** (Completed, Failed, ContinuedAsNew): closes all open sessions for the instance. The orchestration dispatcher queries for open sessions by `instance_id` and deletes them, same as `close_session`. In-flight session activities are cancelled via the existing lock-steal mechanism. This prevents session leaks when orchestrations complete without explicitly closing sessions.
+- **On orchestration terminal** (Completed, Failed, Cancelled): closes all open sessions for the instance. The orchestration dispatcher queries for open sessions by `instance_id` and deletes them, same as `close_session`. In-flight session activities are cancelled via the existing lock-steal mechanism. This prevents session leaks when orchestrations complete without explicitly closing sessions.
+- **On ContinuedAsNew**: sessions are **not** closed. They survive across executions of the same instance (see ContinueAsNew section).
 
 ### Replay Engine
 
@@ -747,26 +762,17 @@ async fn release_session_lock(
 
 The replay engine tracks open sessions in a `HashSet<String>` during execution. This set is validated at several points. All session validation errors are **application errors** (not nondeterminism) — they represent bugs in the orchestration code, not replay divergence.
 
-**1. `close_session` without matching `open_session`**
+**1. `close_session` is idempotent**
 
-If the orchestration calls `close_session(id)` and `id` is not in the open sessions set (never opened, or already closed), the replay engine returns `TurnResult::Failed` with:
+`close_session` is idempotent at both the provider and replay engine levels. Calling `close_session(id)` for a session that was never opened or is already closed is a no-op — a `SessionClosed` event is still recorded for replay determinism, but no error is raised. This keeps orchestration code simple and avoids fragile open/close bookkeeping.
+
+**2. `schedule_activity_on_session` referencing a non-open session**
+
+If the orchestration calls `schedule_activity_on_session(..., id)` and `id` is not in the open sessions set, the replay engine returns `TurnResult::Failed` with:
 ```
 ErrorDetails::Application {
     kind: AppErrorKind::OrchestrationFailed,
-    message: "close_session called for session '{id}' which is not open",
-    retryable: false,
-}
-```
-
-Note: `close_session` is idempotent at the **provider** level (no-op if already closed). But at the **replay engine** level within a single execution, calling close on an already-closed session is a programming error.
-
-**2. `on_session` referencing a non-open session**
-
-If the orchestration schedules an activity with `.on_session(id)` and `id` is not in the open sessions set, the replay engine returns `TurnResult::Failed` with:
-```
-ErrorDetails::Application {
-    kind: AppErrorKind::OrchestrationFailed,
-    message: "schedule_activity.on_session called for session '{id}' which is not open",
+    message: "schedule_activity_on_session called for session '{id}' which is not open",
     retryable: false,
 }
 ```
@@ -790,7 +796,7 @@ If the orchestration calls `open_session()` and the provider's `supports_session
 ```
 ErrorDetails::Application {
     kind: AppErrorKind::OrchestrationFailed,
-    message: "Provider does not support sessions",
+    message: "Provider does not support sessions".to_string(),
     retryable: false,
 }
 ```
@@ -806,7 +812,7 @@ When an orchestration calls `continue_as_new`, the set of currently open session
 1. At `ContinueAsNew` time, the replay engine captures the set of open session IDs.
 2. This set is persisted as part of the `OrchestrationContinuedAsNew` event (or as a separate mechanism passed through the provider).
 3. When the new execution starts, the replay engine initializes its open sessions set from the carried-over data.
-4. The sessions are immediately available — the user's orchestration code does **not** need to call `open_session_with_id()` again. The sessions are already open and can be used with `.on_session()` directly.
+4. The sessions are immediately available — the user's orchestration code does **not** need to call `open_session_with_id()` again. The sessions are already open and can be used with `schedule_activity_on_session()` directly.
 
 The user only needs to carry the session_id string(s) in the `continue_as_new` input so the orchestration code knows which IDs to reference. The runtime handles the session bookkeeping transparently.
 
@@ -833,7 +839,7 @@ RuntimeOptions {
 
 ### ContinueAsNew
 
-Session is instance-scoped, so it survives across executions. The set of open sessions is carried over automatically by the runtime to the new execution — no additional `open_session` calls needed. The user carries the session_id string(s) in the `continue_as_new` input so the orchestration code knows which IDs to use with `.on_session()`. Execution-id filtering for completions remains unchanged.
+Session is instance-scoped, so it survives across executions. The set of open sessions is carried over automatically by the runtime to the new execution — no additional `open_session` calls needed. The user carries the session_id string(s) in the `continue_as_new` input so the orchestration code knows which IDs to use with `schedule_activity_on_session()`. Execution-id filtering for completions remains unchanged.
 
 ### External Events / Timers
 
@@ -884,7 +890,7 @@ RuntimeOptions {
 2. Add `SessionOpened` / `SessionClosed` event kinds
 3. Add `OpenSession` / `CloseSession` action variants
 4. Add `session_id: Option<String>` to `Action::CallActivity`, `EventKind::ActivityScheduled`, `WorkItem::ActivityExecute`
-5. Add `.on_session()` modifier to `DurableFuture`
+5. Add `schedule_activity_on_session()` and `schedule_activity_on_session_typed()` to `OrchestrationContext`
 6. Add `session_id()` getter to `ActivityContext`
 7. Add `max_sessions_per_worker` and `session_lock_timeout` to `RuntimeOptions`
 8. Add `sessions` table and `worker_queue.session_id` column (SQLite migration)
@@ -920,13 +926,11 @@ RuntimeOptions {
 
 2. **`session_idle_timeout` default** — `None` (hold forever) is simplest and right for copilot. But should the default be `Some(5 min)` to prevent accidental session accumulation on workers?
 
-3. **Interaction with activity tags** — If both features ship, can an activity have both `.on_session()` and `.with_tag()`? Semantically: tag selects the worker pool, session selects the worker within the pool.
+3. **Interaction with activity tags** — If both features ship, can an activity use both `schedule_activity_on_session()` and `.with_tag()`? Semantically: tag selects the worker pool, session selects the worker within the pool.
 
-### Pre-requisite: Improve `runtime_id` uniqueness
+### Note: `runtime_id` stays as 4-char hex
 
-The current `runtime_id` is a 4-char hex derived from nanoseconds (`{:04x}` of `nanos & 0xFFFF`). This is only 16 bits — collision-prone when multiple runtimes start in quick succession. Sessions use `runtime_id` as the `worker_id` for lock ownership, making collisions dangerous (two processes thinking they own the same session).
-
-**Change:** Replace the 4-char nanosecond-derived ID with an 8-char UUID segment (first 8 hex chars of a UUID v4). This gives 32 bits of randomness — sufficient for process-level uniqueness. No user-supplied IDs for now; revisit if Kubernetes StatefulSet pod names become a requirement.
+The current `runtime_id` is a 4-char hex derived from nanoseconds (`{:04x}` of `nanos & 0xFFFF`). Sessions use `runtime_id` as the `worker_id` for lock ownership. The 16-bit value is kept as-is for now; collision risk is low for typical deployment sizes. Revisit if Kubernetes StatefulSet pod names or high-density deployments become a requirement.
 
 ---
 
@@ -943,19 +947,19 @@ The current `runtime_id` is a 4-char hex derived from nanoseconds (`{:04x}` of `
 | 1.5 | `close_session_idempotent` | `close_session(id)` on an already-closed session is a no-op, no error. |
 | 1.6 | `close_session_nonexistent_noop` | `close_session("never-opened")` is a no-op, no error. |
 | 1.7 | `open_close_open_same_id` | Open session "X", close it, open "X" again. Second open succeeds and session is usable. |
-| 1.8 | `multiple_sessions_open_concurrently` | Open 3 sessions with different IDs. All are independently usable with `.on_session()`. |
+| 1.8 | `multiple_sessions_open_concurrently` | Open 3 sessions with different IDs. All are independently usable with `schedule_activity_on_session()`. |
 | 1.9 | `session_events_in_history` | After `open_session` and `close_session`, history contains `SessionOpened` and `SessionClosed` events with correct session_ids. |
 
 ### 2. Session Routing — Happy Path
 
 | # | Test | Description |
 |---|------|-------------|
-| 2.1 | `session_activity_routes_to_same_worker` | Open session. Schedule 3 sequential activities with `.on_session(id)`. All execute on the same worker (assert via `ActivityContext.worker_id()`). |
-| 2.2 | `session_activity_routes_consistently_across_turns` | Open session. Schedule activity, await. Wait for external event. Schedule another activity on same session. Same worker. |
-| 2.3 | `different_sessions_can_route_to_different_workers` | Open session A and session B. Schedule activities on each. They MAY execute on different workers (non-deterministic, but the system allows it). |
-| 2.4 | `non_session_activity_unaffected` | Open session. Schedule one activity with `.on_session(id)` and one without. Non-session activity can execute on any worker. |
-| 2.5 | `session_id_available_in_activity_context` | Activity scheduled with `.on_session("X")` has `ctx.session_id() == Some("X")`. |
-| 2.6 | `non_session_activity_has_none_session_id` | Activity scheduled without `.on_session()` has `ctx.session_id() == None`. |
+| 2.1 | `session_activity_routes_to_same_worker` | Open session. Schedule 3 sequential `schedule_activity_on_session` calls. All execute on the same worker (assert via `ActivityContext.worker_id()`). |
+| 2.2 | `session_activity_routes_consistently_across_turns` | Open session. Schedule session activity, await. Wait for external event. Schedule another session activity on same session. Same worker. |
+| 2.3 | `different_sessions_can_route_to_different_workers` | Open session A and session B. Schedule session activities on each. They MAY execute on different workers (non-deterministic, but the system allows it). |
+| 2.4 | `non_session_activity_unaffected` | Open session. Schedule one `schedule_activity_on_session` and one `schedule_activity`. Non-session activity can execute on any worker. |
+| 2.5 | `session_id_available_in_activity_context` | Activity scheduled via `schedule_activity_on_session(... "X")` has `ctx.session_id() == Some("X")`. |
+| 2.6 | `non_session_activity_has_none_session_id` | Activity scheduled via `schedule_activity` has `ctx.session_id() == None`. |
 
 ### 3. Session Routing — Multi-Worker
 
@@ -1007,9 +1011,9 @@ The current `runtime_id` is a 4-char hex derived from nanoseconds (`{:04x}` of `
 
 | # | Test | Description |
 |---|------|-------------|
-| 8.1 | `close_without_open_fails_orchestration` | Call `close_session("X")` without prior `open_session`. Orchestration fails with `AppErrorKind::OrchestrationFailed`. |
-| 8.2 | `on_session_without_open_fails` | Schedule activity `.on_session("X")` without opening session "X". Orchestration fails. |
-| 8.3 | `on_session_after_close_fails` | Open "X", close "X", then schedule activity `.on_session("X")`. Orchestration fails. |
+| 8.1 | `close_without_open_is_noop` | Call `close_session("X")` without prior `open_session`. No error, `SessionClosed` event recorded, provider no-op. |
+| 8.2 | `session_activity_without_open_fails` | Schedule `schedule_activity_on_session(..., "X")` without opening session "X". Orchestration fails. |
+| 8.3 | `session_activity_after_close_fails` | Open "X", close "X", then `schedule_activity_on_session(..., "X")`. Orchestration fails. |
 | 8.4 | `max_sessions_exceeded_fails` | With `max_sessions_per_orchestration: 2`, open 3 sessions. Third open fails orchestration. |
 | 8.5 | `max_sessions_close_then_reopen_within_limit` | Open 2 (at limit), close 1 (now at 1), open another (now at 2). Succeeds. |
 | 8.6 | `provider_no_session_support_fails` | Provider returns `supports_sessions() = false`. Orchestration calls `open_session()`. Fails with `AppErrorKind::OrchestrationFailed`. |
@@ -1029,8 +1033,8 @@ The current `runtime_id` is a 4-char hex derived from nanoseconds (`{:04x}` of `
 
 | # | Test | Description |
 |---|------|-------------|
-| 10.1 | `session_survives_continue_as_new` | Open session, schedule activity (succeeds on worker A), continue_as_new. In new execution, schedule activity `.on_session(same_id)`. Executes on same worker A. |
-| 10.2 | `session_no_reopen_needed` | After continue_as_new, sessions are already in the open set. `.on_session(id)` works without calling `open_session_with_id()` again. |
+| 10.1 | `session_survives_continue_as_new` | Open session, schedule session activity (succeeds on worker A), continue_as_new. In new execution, `schedule_activity_on_session(same_id)`. Executes on same worker A. |
+| 10.2 | `session_no_reopen_needed` | After continue_as_new, sessions are already in the open set. `schedule_activity_on_session(id)` works without calling `open_session_with_id()` again. |
 | 10.3 | `multiple_sessions_survive_can` | Open 3 sessions. ContinueAsNew. All 3 usable in new execution. |
 | 10.4 | `close_session_after_can` | Open session, ContinueAsNew, close session in new execution. Works. Session row deleted. |
 | 10.5 | `can_with_no_open_sessions` | ContinueAsNew with no sessions open. New execution starts with empty session set. open_session works normally. |
@@ -1054,7 +1058,7 @@ The current `runtime_id` is a 4-char hex derived from nanoseconds (`{:04x}` of `
 | 12.3 | `fan_out_mixed` | `join` with 2 session activities and 2 non-session activities. All 4 complete. Session ones on same worker. |
 | 12.4 | `select_session_vs_timer` | `select2` between session activity and timer. Timer wins. Session activity cancelled (select loser). |
 | 12.5 | `select_session_vs_nonsession` | `select2` between session activity and non-session activity. Whichever completes first wins. Loser cancelled. |
-| 12.6 | `sub_orchestration_does_not_inherit_session` | Parent opens session. Schedules sub-orchestration. Sub-orchestration tries `.on_session(parent_session_id)` — fails (session is instance-local). |
+| 12.6 | `sub_orchestration_does_not_inherit_session` | Parent opens session. Schedules sub-orchestration. Sub-orchestration tries `schedule_activity_on_session(parent_session_id)` — fails (session is instance-local). |
 
 ### 13. Multiple Sessions — Interleaving
 
