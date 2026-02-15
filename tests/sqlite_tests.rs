@@ -98,6 +98,7 @@ async fn test_sqlite_provider_basic() {
             EventKind::ActivityScheduled {
                 name: "TestActivity".to_string(),
                 input: "test-input".to_string(),
+                session_id: None,
             },
         ),
     ];
@@ -284,6 +285,7 @@ async fn test_sqlite_basic_persistence() {
                 id: 1,
                 name: "TestActivity".to_string(),
                 input: "test-input".to_string(),
+                session_id: None,
             })
             .await
             .expect("Failed to enqueue worker work");
@@ -295,6 +297,7 @@ async fn test_sqlite_basic_persistence() {
                 id: 2,
                 name: "TestActivity2".to_string(),
                 input: "test-input-2".to_string(),
+                session_id: None,
             })
             .await
             .expect("Failed to enqueue worker work 2");
@@ -613,6 +616,7 @@ async fn test_sqlite_provider_transactional() {
             EventKind::ActivityScheduled {
                 name: "Activity1".to_string(),
                 input: "{}".to_string(),
+                session_id: None,
             },
         ),
         Event::with_event_id(
@@ -623,6 +627,7 @@ async fn test_sqlite_provider_transactional() {
             EventKind::ActivityScheduled {
                 name: "Activity2".to_string(),
                 input: "{}".to_string(),
+                session_id: None,
             },
         ),
         Event::with_event_id(
@@ -633,6 +638,7 @@ async fn test_sqlite_provider_transactional() {
             EventKind::ActivityScheduled {
                 name: "Activity3".to_string(),
                 input: "{}".to_string(),
+                session_id: None,
             },
         ),
     ];
@@ -644,6 +650,7 @@ async fn test_sqlite_provider_transactional() {
             id: 1,
             name: "Activity1".to_string(),
             input: "{}".to_string(),
+            session_id: None,
         },
         WorkItem::ActivityExecute {
             instance: instance.to_string(),
@@ -651,6 +658,7 @@ async fn test_sqlite_provider_transactional() {
             id: 2,
             name: "Activity2".to_string(),
             input: "{}".to_string(),
+            session_id: None,
         },
         WorkItem::ActivityExecute {
             instance: instance.to_string(),
@@ -658,6 +666,7 @@ async fn test_sqlite_provider_transactional() {
             id: 3,
             name: "Activity3".to_string(),
             input: "{}".to_string(),
+            session_id: None,
         },
     ];
 
@@ -815,6 +824,7 @@ async fn test_execution_status_running() {
             EventKind::ActivityScheduled {
                 name: "TestActivity".to_string(),
                 input: "test".to_string(),
+                session_id: None,
             },
         ),
     ];

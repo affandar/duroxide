@@ -253,3 +253,13 @@ pub mod capability_filtering {
         test_provider_updates_pinned_version_when_told,
     };
 }
+
+pub mod sessions {
+    pub use crate::provider_validation::sessions::{
+        test_close_session_lock_stealing_signal, test_mixed_session_and_regular, test_plain_fetch_only_non_session,
+        test_regular_items_unaffected, test_session_affinity_routing, test_session_claim_race_single_winner,
+        test_session_fetch_mixed_behavior, test_session_fifo_no_starvation,
+        test_session_item_skipped_when_owned_by_other, test_session_lock_extended_on_fetch, test_session_lock_renewal,
+        test_session_release, test_supports_sessions,
+    };
+}

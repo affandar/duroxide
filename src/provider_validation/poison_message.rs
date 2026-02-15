@@ -148,6 +148,7 @@ pub async fn worker_attempt_count_starts_at_one(factory: &dyn ProviderFactory) {
             id: 1,
             name: "TestActivity".to_string(),
             input: "{}".to_string(),
+            session_id: None,
         })
         .await
         .expect("enqueue should succeed");
@@ -194,6 +195,7 @@ pub async fn worker_attempt_count_increments_on_lock_expiry(factory: &dyn Provid
             id: 1,
             name: "TestActivity".to_string(),
             input: "{}".to_string(),
+            session_id: None,
         })
         .await
         .expect("enqueue should succeed");
@@ -250,6 +252,7 @@ pub async fn attempt_count_is_per_message(factory: &dyn ProviderFactory) {
             id: 1,
             name: "Activity1".to_string(),
             input: "{}".to_string(),
+            session_id: None,
         })
         .await
         .expect("enqueue should succeed");
@@ -261,6 +264,7 @@ pub async fn attempt_count_is_per_message(factory: &dyn ProviderFactory) {
             id: 2,
             name: "Activity2".to_string(),
             input: "{}".to_string(),
+            session_id: None,
         })
         .await
         .expect("enqueue should succeed");
@@ -335,6 +339,7 @@ pub async fn abandon_work_item_ignore_attempt_decrements(factory: &dyn ProviderF
             id: 1,
             name: "TestActivity".to_string(),
             input: "{}".to_string(),
+            session_id: None,
         })
         .await
         .expect("enqueue should succeed");
@@ -486,6 +491,7 @@ pub async fn ignore_attempt_never_goes_negative(factory: &dyn ProviderFactory) {
             id: 1,
             name: "TestActivity".to_string(),
             input: "{}".to_string(),
+            session_id: None,
         })
         .await
         .expect("enqueue should succeed");

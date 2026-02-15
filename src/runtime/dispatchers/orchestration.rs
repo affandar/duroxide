@@ -11,7 +11,9 @@
 #![allow(clippy::unwrap_used)]
 #![allow(clippy::clone_on_ref_ptr)]
 
-use crate::providers::{ExecutionMetadata, ProviderError, ScheduledActivityIdentifier, WorkItem};
+use crate::providers::{
+    ExecutionMetadata, ProviderError, ScheduledActivityIdentifier, ScheduledSessionIdentifier, WorkItem,
+};
 use crate::{Event, EventKind};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -409,88 +411,116 @@ impl Runtime {
         }
 
         // Process the execution (unified path)
-        let (worker_items, orchestrator_items, select_cancelled_activities, execution_id_for_ack) = if workitem_reader
-            .has_orchestration_name()
-        {
-            // Resolve handler and execute orchestration
-            let result = self
-                .resolve_and_execute_orchestration_handler(
-                    instance,
-                    &mut history_mgr,
-                    &workitem_reader,
-                    execution_id_to_use,
-                    worker_id,
-                )
-                .await;
+        let (worker_items, orchestrator_items, select_cancelled_activities, closed_sessions, execution_id_for_ack) =
+            if workitem_reader.has_orchestration_name() {
+                // Resolve handler and execute orchestration
+                let result = self
+                    .resolve_and_execute_orchestration_handler(
+                        instance,
+                        &mut history_mgr,
+                        &workitem_reader,
+                        execution_id_to_use,
+                        worker_id,
+                    )
+                    .await;
 
-            match result {
-                Ok((wi, oi, cancels)) => {
-                    // Handler resolved successfully - now record metrics
-                    tracing::debug!(
-                        target: "duroxide::runtime",
-                        instance_id = %instance,
-                        execution_id = %execution_id_to_use,
-                        orchestration_name = %workitem_reader.orchestration_name,
-                        orchestration_version = %version,
-                        worker_id = %worker_id,
-                        is_continue_as_new = %workitem_reader.is_continue_as_new,
-                        "Orchestration started"
-                    );
+                match result {
+                    Ok((wi, oi, cancels, closed_sessions)) => {
+                        // Handler resolved successfully - now record metrics
+                        tracing::debug!(
+                            target: "duroxide::runtime",
+                            instance_id = %instance,
+                            execution_id = %execution_id_to_use,
+                            orchestration_name = %workitem_reader.orchestration_name,
+                            orchestration_version = %version,
+                            worker_id = %worker_id,
+                            is_continue_as_new = %workitem_reader.is_continue_as_new,
+                            "Orchestration started"
+                        );
 
-                    // Record orchestration start metric
-                    let initiated_by = if workitem_reader.is_continue_as_new {
-                        "continueAsNew"
-                    } else {
-                        "client"
-                    };
-                    self.record_orchestration_start(&workitem_reader.orchestration_name, &version, initiated_by);
+                        // Record orchestration start metric
+                        let initiated_by = if workitem_reader.is_continue_as_new {
+                            "continueAsNew"
+                        } else {
+                            "client"
+                        };
+                        self.record_orchestration_start(&workitem_reader.orchestration_name, &version, initiated_by);
 
-                    // Increment active orchestrations gauge ONLY for brand new orchestrations
-                    if history_mgr.is_full_history_empty() && !workitem_reader.is_continue_as_new {
-                        self.increment_active_orchestrations();
+                        // Increment active orchestrations gauge ONLY for brand new orchestrations
+                        if history_mgr.is_full_history_empty() && !workitem_reader.is_continue_as_new {
+                            self.increment_active_orchestrations();
+                        }
+
+                        (wi, oi, cancels, closed_sessions, execution_id_to_use)
                     }
+                    Err(OrchestrationProcessingError::UnregisteredOrchestration) => {
+                        // Orchestration not registered - abandon with exponential backoff
+                        let backoff = self.options.unregistered_backoff.delay(attempt_count);
+                        let remaining_attempts = self.options.max_attempts.saturating_sub(attempt_count);
 
-                    (wi, oi, cancels, execution_id_to_use)
+                        tracing::warn!(
+                            target: "duroxide::runtime",
+                            instance = %instance,
+                            orchestration_name = %workitem_reader.orchestration_name,
+                            version = %workitem_reader.version.as_deref().unwrap_or("latest"),
+                            attempt_count = %attempt_count,
+                            max_attempts = %self.options.max_attempts,
+                            remaining_attempts = %remaining_attempts,
+                            backoff_secs = %backoff.as_secs_f32(),
+                            "Orchestration not registered, abandoning with {:.1}s backoff (will poison in {} more attempts)",
+                            backoff.as_secs_f32(),
+                            remaining_attempts
+                        );
+
+                        // Abandon with delay - poison handling will eventually terminate if genuinely missing
+                        let _ = self
+                            .history_store
+                            .abandon_orchestration_item(lock_token, Some(backoff), false)
+                            .await;
+                        return;
+                    }
                 }
-                Err(OrchestrationProcessingError::UnregisteredOrchestration) => {
-                    // Orchestration not registered - abandon with exponential backoff
-                    let backoff = self.options.unregistered_backoff.delay(attempt_count);
-                    let remaining_attempts = self.options.max_attempts.saturating_sub(attempt_count);
-
-                    tracing::warn!(
-                        target: "duroxide::runtime",
-                        instance = %instance,
-                        orchestration_name = %workitem_reader.orchestration_name,
-                        version = %workitem_reader.version.as_deref().unwrap_or("latest"),
-                        attempt_count = %attempt_count,
-                        max_attempts = %self.options.max_attempts,
-                        remaining_attempts = %remaining_attempts,
-                        backoff_secs = %backoff.as_secs_f32(),
-                        "Orchestration not registered, abandoning with {:.1}s backoff (will poison in {} more attempts)",
-                        backoff.as_secs_f32(),
-                        remaining_attempts
-                    );
-
-                    // Abandon with delay - poison handling will eventually terminate if genuinely missing
-                    let _ = self
-                        .history_store
-                        .abandon_orchestration_item(lock_token, Some(backoff), false)
-                        .await;
-                    return;
-                }
-            }
-        } else {
-            // Empty effective batch
-            (vec![], vec![], vec![], execution_id_to_use)
-        };
+            } else {
+                // Empty effective batch
+                (vec![], vec![], vec![], vec![], execution_id_to_use)
+            };
 
         // Snapshot current history delta (used for metadata + logging below).
         // NOTE: We may append additional events (e.g., cancellation requests) later in this method.
         let history_delta_snapshot = history_mgr.delta().to_vec();
 
         // Compute execution metadata from history_delta (runtime responsibility)
-        let metadata =
+        let mut metadata =
             Runtime::compute_execution_metadata(&history_delta_snapshot, &orchestrator_items, item.execution_id);
+        metadata.cancelled_sessions = closed_sessions.clone();
+
+        // Close-session side-channel: cancel in-flight activities for explicitly closed sessions.
+        // This is in addition to terminal-state cancellation behavior below.
+        let mut cancelled_activities = select_cancelled_activities;
+        if !closed_sessions.is_empty() {
+            let closed_session_ids: std::collections::HashSet<String> =
+                closed_sessions.iter().map(|s| s.session_id.clone()).collect();
+            let close_inflight = history_mgr.compute_inflight_activities_for_sessions(
+                instance,
+                execution_id_for_ack,
+                &closed_session_ids,
+            );
+
+            for a in &close_inflight {
+                let event_id = history_mgr.next_event_id();
+                history_mgr.append(Event::with_event_id(
+                    event_id,
+                    instance,
+                    execution_id_for_ack,
+                    Some(a.activity_id),
+                    EventKind::ActivityCancelRequested {
+                        reason: "session_closed".to_string(),
+                    },
+                ));
+            }
+
+            cancelled_activities.extend(close_inflight);
+        }
 
         // Calculate metrics
         let duration_seconds = start_time.elapsed().as_secs_f64();
@@ -656,7 +686,6 @@ impl Runtime {
         // - Failed: Orchestration errored, pending work is no longer needed
         // - Completed: "Select losers" - activities that lost a select race
         // - ContinuedAsNew: Old execution's activities won't be awaited by new execution
-        let mut cancelled_activities = select_cancelled_activities;
         match metadata.status.as_deref() {
             Some("Failed") | Some("Completed") | Some("ContinuedAsNew") => {
                 let inflight = history_mgr.compute_inflight_activities(instance, execution_id_for_ack);
@@ -791,10 +820,19 @@ impl Runtime {
         workitem_reader: &WorkItemReader,
         execution_id: u64,
         worker_id: &str,
-    ) -> Result<(Vec<WorkItem>, Vec<WorkItem>, Vec<ScheduledActivityIdentifier>), OrchestrationProcessingError> {
+    ) -> Result<
+        (
+            Vec<WorkItem>,
+            Vec<WorkItem>,
+            Vec<ScheduledActivityIdentifier>,
+            Vec<ScheduledSessionIdentifier>,
+        ),
+        OrchestrationProcessingError,
+    > {
         let mut worker_items = Vec::new();
         let mut orchestrator_items = Vec::new();
         let mut cancelled_activities = Vec::new();
+        let mut cancelled_sessions = Vec::new();
 
         // Resolve handler once - use provided version or resolve from registry policy
         let resolved_handler = if let Some(v_str) = &workitem_reader.version {
@@ -840,25 +878,37 @@ impl Runtime {
         }
 
         // Run the atomic execution to get all changes, passing the resolved handler and version
-        let (_exec_history_delta, exec_worker_items, exec_orchestrator_items, exec_cancelled_activities, _result) =
-            Arc::clone(self)
-                .run_single_execution_atomic(
-                    instance,
-                    history_mgr,
-                    workitem_reader,
-                    execution_id,
-                    worker_id,
-                    handler,
-                    resolved_version.to_string(),
-                )
-                .await;
+        let (
+            _exec_history_delta,
+            exec_worker_items,
+            exec_orchestrator_items,
+            exec_cancelled_activities,
+            exec_cancelled_sessions,
+            _result,
+        ) = Arc::clone(self)
+            .run_single_execution_atomic(
+                instance,
+                history_mgr,
+                workitem_reader,
+                execution_id,
+                worker_id,
+                handler,
+                resolved_version.to_string(),
+            )
+            .await;
 
         // Combine all changes (history already in history_mgr via mutation)
         worker_items.extend(exec_worker_items);
         orchestrator_items.extend(exec_orchestrator_items);
         cancelled_activities.extend(exec_cancelled_activities);
+        cancelled_sessions.extend(exec_cancelled_sessions);
 
-        Ok((worker_items, orchestrator_items, cancelled_activities))
+        Ok((
+            worker_items,
+            orchestrator_items,
+            cancelled_activities,
+            cancelled_sessions,
+        ))
     }
 
     /// Acknowledge an orchestration item with changes, using smart retry logic based on ProviderError
@@ -1004,6 +1054,7 @@ impl Runtime {
                 orchestration_version: Some(item.version.clone()),
                 parent_instance_id: None,
                 pinned_duroxide_version: None,
+                cancelled_sessions: vec![],
             };
 
             let _ = self
@@ -1096,6 +1147,7 @@ impl Runtime {
             orchestration_version: Some(item.version.clone()),
             parent_instance_id: parent_link.as_ref().map(|(pi, _)| pi.clone()),
             pinned_duroxide_version: None, // Poison path — version already set at creation
+            cancelled_sessions: vec![],
         };
 
         // If this is a sub-orchestration, notify parent of failure

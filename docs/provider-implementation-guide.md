@@ -700,6 +700,54 @@ async fn ack_work_item(
 
 ### Step 3: Orchestrator Queue (Similar Pattern)
 
+### Session-Aware Worker Fetch (Required Semantics)
+
+For providers that implement sessions (`supports_sessions() == true`), `fetch_session_work_item()`
+should follow this logic explicitly:
+
+```text
+function fetch_session_work_item(lock_timeout, worker_id):
+    begin transaction
+    now = current_time_ms()
+
+    // Candidate selection in FIFO order
+    // - If worker_id is NULL: only non-session rows are eligible
+    // - If worker_id is set: include non-session rows and session rows that are:
+    //   (a) unclaimed, (b) expired, or (c) already owned by this worker
+    candidates = SELECT ... FROM worker_queue LEFT JOIN sessions
+                             WHERE visible_at <= now
+                                 AND (lock_token IS NULL OR locked_until <= now)
+                                 AND worker/session ownership predicate
+                             ORDER BY worker_queue.id
+                             LIMIT N
+
+    for each candidate in candidates:
+        if candidate.session_id is set and worker_id is set:
+            if session owner == worker_id and session lock active:
+                extend session lock
+            else if session owner != worker_id and session lock active:
+                continue  // cannot take this row
+            else:
+                // unclaimed/expired (or missing session row)
+                // conditional claim: succeed only if still unclaimed/expired
+                upsert session with WHERE old lock is null/expired
+                if rows_affected == 0:
+                    continue  // lost claim race
+
+        lock worker_queue row (set lock_token, locked_until, attempt_count += 1)
+        commit transaction
+        return Some(item, lock_token, attempt_count)
+
+    commit transaction
+    return None
+```
+
+**Important invariants:**
+- Candidate order is FIFO by `worker_queue.id`.
+- Session claim is race-safe (`rows_affected == 0` means another worker won).
+- `fetch_work_item()` (non-session API) must not return session-bound rows.
+- Session lock extension on owned-session fetch is required to preserve liveness.
+
 The orchestrator queue follows the same peek-lock pattern, but with instance-level locking.
 
 **Schema:**

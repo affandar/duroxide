@@ -354,6 +354,67 @@ impl HistoryManager {
             })
             .collect()
     }
+
+    /// Compute in-flight activities restricted to a set of session IDs.
+    ///
+    /// Used for close-session lock-stealing: scheduled activities on closed sessions
+    /// that are not yet completed/failed/cancel-requested are cancelled.
+    pub fn compute_inflight_activities_for_sessions(
+        &self,
+        instance: &str,
+        execution_id: u64,
+        session_ids: &std::collections::HashSet<String>,
+    ) -> Vec<ScheduledActivityIdentifier> {
+        let scheduled: std::collections::HashSet<u64> = self
+            .full_history_iter()
+            .filter_map(|e| {
+                if let EventKind::ActivityScheduled {
+                    session_id: Some(sid), ..
+                } = &e.kind
+                    && session_ids.contains(sid)
+                {
+                    Some(e.event_id)
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        let completed: std::collections::HashSet<u64> = self
+            .full_history_iter()
+            .filter_map(|e| {
+                if matches!(
+                    &e.kind,
+                    EventKind::ActivityCompleted { .. } | EventKind::ActivityFailed { .. }
+                ) {
+                    e.source_event_id
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        let cancel_requested: std::collections::HashSet<u64> = self
+            .full_history_iter()
+            .filter_map(|e| {
+                if matches!(&e.kind, EventKind::ActivityCancelRequested { .. }) {
+                    e.source_event_id
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        scheduled
+            .difference(&completed)
+            .filter(|id| !cancel_requested.contains(id))
+            .map(|&activity_id| ScheduledActivityIdentifier {
+                instance: instance.to_string(),
+                execution_id,
+                activity_id,
+            })
+            .collect()
+    }
 }
 
 /// Reader for extracting information from a batch of work items

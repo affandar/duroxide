@@ -95,7 +95,7 @@ fn schedule_activity_creates_activity_scheduled_event() {
     );
 
     match &activity_events[0].kind {
-        EventKind::ActivityScheduled { name, input } => {
+        EventKind::ActivityScheduled { name, input, .. } => {
             assert_eq!(name, "MyActivity");
             assert_eq!(input, "my-input");
         }

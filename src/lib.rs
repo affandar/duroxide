@@ -985,7 +985,13 @@ pub enum EventKind {
 
     /// Activity was scheduled.
     #[serde(rename = "ActivityScheduled")]
-    ActivityScheduled { name: String, input: String },
+    ActivityScheduled {
+        name: String,
+        input: String,
+        #[serde(default)]
+        #[serde(skip_serializing_if = "Option::is_none")]
+        session_id: Option<String>,
+    },
 
     /// Activity completed successfully with a result.
     #[serde(rename = "ActivityCompleted")]
@@ -1052,6 +1058,14 @@ pub enum EventKind {
     /// Cancellation has been requested for the orchestration (terminal will follow deterministically).
     #[serde(rename = "OrchestrationCancelRequested")]
     OrchestrationCancelRequested { reason: String },
+
+    /// A session was opened (deterministic lifecycle event).
+    #[serde(rename = "SessionOpened")]
+    SessionOpened { session_id: String },
+
+    /// A session was closed (deterministic lifecycle event).
+    #[serde(rename = "SessionClosed")]
+    SessionClosed { session_id: String },
 
     /// V2 subscription: includes a topic filter for pub/sub matching.
     /// Feature-gated for replay engine extensibility verification.
@@ -1297,6 +1311,18 @@ pub enum Action {
         scheduling_event_id: u64,
         name: String,
         input: String,
+        #[allow(dead_code)]
+        session_id: Option<String>,
+    },
+    /// Open a session with a given session_id.
+    OpenSession {
+        scheduling_event_id: u64,
+        session_id: String,
+    },
+    /// Close a session by session_id (idempotent).
+    CloseSession {
+        scheduling_event_id: u64,
+        session_id: String,
     },
     /// Create a timer that will fire at the specified absolute time.
     /// scheduling_event_id is the event_id of the TimerCreated event.
@@ -1394,6 +1420,11 @@ struct CtxInner {
     /// Sub-orchestration token -> resolved instance ID mapping
     sub_orchestration_instances: std::collections::HashMap<u64, String>,
 
+    // === Session Tracking ===
+    /// Set of currently open session IDs for this orchestration execution.
+    /// Tracks open/close for replay validation.
+    open_sessions: std::collections::HashSet<String>,
+
     // === Cancellation Tracking ===
     /// Tokens that have been cancelled (dropped without completing)
     cancelled_tokens: std::collections::HashSet<u64>,
@@ -1436,6 +1467,7 @@ impl CtxInner {
             #[cfg(feature = "replay-version-test")]
             external2_next_index: Default::default(),
             sub_orchestration_instances: Default::default(),
+            open_sessions: Default::default(),
 
             // Cancellation tracking
             cancelled_tokens: Default::default(),
@@ -1661,6 +1693,7 @@ pub struct ActivityContext {
     activity_name: String,
     activity_id: u64,
     worker_id: String,
+    session_id: Option<String>,
     /// Cancellation token for cooperative cancellation.
     /// Triggered when the parent orchestration reaches a terminal state.
     cancellation_token: tokio_util::sync::CancellationToken,
@@ -1693,6 +1726,7 @@ impl ActivityContext {
             activity_name,
             activity_id,
             worker_id,
+            session_id: None,
             cancellation_token: tokio_util::sync::CancellationToken::new(),
             store,
         }
@@ -1723,6 +1757,7 @@ impl ActivityContext {
             activity_name,
             activity_id,
             worker_id,
+            session_id: None,
             cancellation_token,
             store,
         }
@@ -1756,6 +1791,16 @@ impl ActivityContext {
     /// Returns the worker dispatcher ID processing this activity.
     pub fn worker_id(&self) -> &str {
         &self.worker_id
+    }
+
+    /// Returns the session ID if this activity was scheduled on a session.
+    pub fn session_id(&self) -> Option<&str> {
+        self.session_id.as_deref()
+    }
+
+    /// Set the session ID (used internally by the worker dispatcher).
+    pub(crate) fn set_session_id(&mut self, session_id: Option<String>) {
+        self.session_id = session_id;
     }
 
     /// Emit an INFO level trace entry associated with this activity.
@@ -1923,6 +1968,7 @@ impl std::fmt::Debug for ActivityContext {
             .field("activity_name", &self.activity_name)
             .field("activity_id", &self.activity_id)
             .field("worker_id", &self.worker_id)
+            .field("session_id", &self.session_id)
             .field("cancellation_token", &self.cancellation_token)
             .field("store", &"<Provider>")
             .finish()
@@ -2680,16 +2726,26 @@ impl OrchestrationContext {
         name: impl Into<String>,
         input: impl Into<String>,
     ) -> DurableFuture<Result<String, String>> {
+        self.schedule_activity_impl(name, input, None)
+    }
+
+    /// Internal implementation shared by `schedule_activity` and `schedule_activity_on_session`.
+    fn schedule_activity_impl(
+        &self,
+        name: impl Into<String>,
+        input: impl Into<String>,
+        session_id: Option<String>,
+    ) -> DurableFuture<Result<String, String>> {
         let name: String = name.into();
         let input: String = input.into();
 
         let mut inner = self.inner.lock().expect("Mutex should not be poisoned");
 
-        // Emit action at schedule time
         let token = inner.emit_action(Action::CallActivity {
             scheduling_event_id: 0, // Will be assigned by replay engine
             name: name.clone(),
             input: input.clone(),
+            session_id,
         });
         drop(inner);
 
@@ -2724,6 +2780,97 @@ impl OrchestrationContext {
     ) -> impl Future<Output = Result<Out, String>> {
         let payload = crate::_typed_codec::Json::encode(input).expect("encode");
         let fut = self.schedule_activity(name, payload);
+        async move {
+            let s = fut.await?;
+            crate::_typed_codec::Json::decode::<Out>(&s)
+        }
+    }
+
+    // =========================================================================
+    // Session lifecycle methods
+    // =========================================================================
+
+    /// Open a session with a generated deterministic ID.
+    ///
+    /// Returns a deterministic session ID derived from the internal token counter.
+    /// This ensures the same ID is produced on replay.
+    ///
+    /// # Determinism safety
+    ///
+    /// The session ID is derived from `inner.next_token + 1` which is the same counter
+    /// used by all `schedule_*` and `emit_action` calls. Since orchestrations are
+    /// deterministic (same code path, same fork ordering), the token counter advances
+    /// identically on every replay. This follows the same pattern as
+    /// `schedule_orchestration()` which also emits fire-and-forget actions.
+    ///
+    /// Both `open_session` and `close_session` are synchronous (not async) because
+    /// they are fire-and-forget actions — like `schedule_orchestration()` /
+    /// `StartOrchestrationDetached`. They emit an action and return immediately.
+    /// The replay engine records the corresponding `SessionOpened`/`SessionClosed`
+    /// events in `history_delta`. No completion callback is needed because sessions
+    /// don't produce results; the only observable effect is that subsequent
+    /// `schedule_activity_on_session` calls can reference the session ID.
+    pub fn open_session(&self) -> Result<String, String> {
+        let mut inner = self.inner.lock().expect("Mutex should not be poisoned");
+        // Generate deterministic session ID from the token counter
+        let session_id = format!("session-{}", inner.next_token + 1);
+        let _token = inner.emit_action(Action::OpenSession {
+            scheduling_event_id: 0,
+            session_id: session_id.clone(),
+        });
+        Ok(session_id)
+    }
+
+    /// Open a session with a caller-provided ID (idempotent).
+    ///
+    /// If the session already exists and is open, this is a no-op returning the same ID.
+    /// If the session was previously closed, it reopens it.
+    pub fn open_session_with_id(&self, session_id: impl Into<String>) -> Result<String, String> {
+        let session_id: String = session_id.into();
+        let mut inner = self.inner.lock().expect("Mutex should not be poisoned");
+        let _token = inner.emit_action(Action::OpenSession {
+            scheduling_event_id: 0,
+            session_id: session_id.clone(),
+        });
+        Ok(session_id)
+    }
+
+    /// Close a session by ID (idempotent).
+    ///
+    /// No-op if the session is already closed or was never opened.
+    /// A `SessionClosed` event is recorded for replay determinism.
+    pub fn close_session(&self, session_id: &str) {
+        let mut inner = self.inner.lock().expect("Mutex should not be poisoned");
+        let _token = inner.emit_action(Action::CloseSession {
+            scheduling_event_id: 0,
+            session_id: session_id.to_string(),
+        });
+    }
+
+    /// Schedule an activity on a specific session.
+    ///
+    /// The activity will be routed to the worker that owns the session.
+    /// Fails the orchestration if `session_id` is not currently open.
+    pub fn schedule_activity_on_session(
+        &self,
+        name: impl Into<String>,
+        input: impl Into<String>,
+        session_id: &str,
+    ) -> DurableFuture<Result<String, String>> {
+        self.schedule_activity_impl(name, input, Some(session_id.to_string()))
+    }
+
+    /// Typed variant of `schedule_activity_on_session`.
+    ///
+    /// Same JSON codec semantics as `schedule_activity_typed`.
+    pub fn schedule_activity_on_session_typed<In: serde::Serialize, Out: serde::de::DeserializeOwned>(
+        &self,
+        name: impl Into<String>,
+        input: &In,
+        session_id: &str,
+    ) -> impl Future<Output = Result<Out, String>> {
+        let payload = crate::_typed_codec::Json::encode(input).expect("encode");
+        let fut = self.schedule_activity_on_session(name, payload, session_id);
         async move {
             let s = fut.await?;
             crate::_typed_codec::Json::decode::<Out>(&s)

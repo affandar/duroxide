@@ -167,6 +167,7 @@ pub async fn test_delete_cleans_queues_and_locks<F: ProviderFactory>(factory: &F
             id: 1,
             name: "TestActivity".to_string(),
             input: "{}".to_string(),
+            session_id: None,
         })
         .await
         .unwrap();
@@ -549,6 +550,7 @@ async fn create_completed_instance_with_parent(
                 orchestration_version: Some("1.0.0".to_string()),
                 parent_instance_id: parent_id.map(|s| s.to_string()),
                 pinned_duroxide_version: None,
+                cancelled_sessions: vec![],
             },
             vec![],
         )
@@ -998,6 +1000,7 @@ pub async fn test_stale_activity_after_delete_recreate<F: ProviderFactory>(facto
                     EventKind::ActivityScheduled {
                         name: "OldActivity".to_string(),
                         input: "old-input".to_string(),
+                        session_id: None,
                     },
                 ),
             ],
@@ -1007,6 +1010,7 @@ pub async fn test_stale_activity_after_delete_recreate<F: ProviderFactory>(facto
                 id: 2,
                 name: "OldActivity".to_string(),
                 input: "old-input".to_string(),
+                session_id: None,
             }],
             vec![],
             ExecutionMetadata {
@@ -1174,6 +1178,7 @@ async fn create_child_instance(provider: &dyn crate::providers::Provider, instan
         orchestration_version: Some("1.0.0".to_string()),
         parent_instance_id: Some(parent_id.to_string()),
         pinned_duroxide_version: None,
+        cancelled_sessions: vec![],
     };
 
     let (_item, lock_token, _attempt_count) = provider

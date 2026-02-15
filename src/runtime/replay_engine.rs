@@ -59,6 +59,9 @@ pub struct ReplayEngine {
     /// Events beyond this index in baseline_history are NEW this turn (not replay).
     /// Used to correctly track is_replaying state.
     persisted_history_len: usize,
+
+    /// Maximum number of sessions a single orchestration can open at the same time.
+    max_sessions_per_orchestration: usize,
 }
 
 impl ReplayEngine {
@@ -78,7 +81,14 @@ impl ReplayEngine {
             next_event_id,
             abort_error: None,
             persisted_history_len: persisted_len,
+            max_sessions_per_orchestration: 10, // default, can be overridden
         }
+    }
+
+    /// Set the maximum number of sessions per orchestration.
+    pub fn with_max_sessions_per_orchestration(mut self, max: usize) -> Self {
+        self.max_sessions_per_orchestration = max;
+        self
     }
 
     /// Set the number of events in baseline_history that were actually persisted.
@@ -620,7 +630,7 @@ impl ReplayEngine {
                 }
 
                 // Schedule events
-                EventKind::ActivityScheduled { name, input: inp } => {
+                EventKind::ActivityScheduled { name, input: inp, .. } => {
                     if let Err(result) = self.match_and_bind_schedule(
                         &ctx,
                         &mut emitted_actions,
@@ -747,6 +757,61 @@ impl ReplayEngine {
                     // has no completion event
 
                     let _ = (name, instance, inp); // Suppress unused warnings
+                }
+
+                // Session lifecycle events (fire-and-forget, like OrchestrationChained)
+                EventKind::SessionOpened { session_id } => {
+                    let (token, action) = match emitted_actions.pop_front() {
+                        Some(a) => a,
+                        None => {
+                            return TurnResult::Failed(nondeterminism_error(
+                                "history SessionOpened but no emitted action",
+                            ));
+                        }
+                    };
+
+                    if !action_matches_event_kind(&action, &event.kind) {
+                        return TurnResult::Failed(nondeterminism_error(&format!(
+                            "schedule mismatch: action={:?} vs event={:?}",
+                            action, event.kind
+                        )));
+                    }
+
+                    ctx.bind_token(token, event.event_id());
+                    // Track open session in ctx
+                    ctx.inner
+                        .lock()
+                        .expect("Mutex should not be poisoned")
+                        .open_sessions
+                        .insert(session_id.clone());
+                    must_poll = true;
+                }
+
+                EventKind::SessionClosed { session_id } => {
+                    let (token, action) = match emitted_actions.pop_front() {
+                        Some(a) => a,
+                        None => {
+                            return TurnResult::Failed(nondeterminism_error(
+                                "history SessionClosed but no emitted action",
+                            ));
+                        }
+                    };
+
+                    if !action_matches_event_kind(&action, &event.kind) {
+                        return TurnResult::Failed(nondeterminism_error(&format!(
+                            "schedule mismatch: action={:?} vs event={:?}",
+                            action, event.kind
+                        )));
+                    }
+
+                    ctx.bind_token(token, event.event_id());
+                    // Remove from open sessions (idempotent — may not be present)
+                    ctx.inner
+                        .lock()
+                        .expect("Mutex should not be poisoned")
+                        .open_sessions
+                        .remove(session_id);
+                    must_poll = true;
                 }
 
                 // Completion events
@@ -882,6 +947,11 @@ impl ReplayEngine {
             self.next_event_id += 1;
 
             ctx.bind_token(token, event_id);
+
+            // Validate session constraints for new (non-replayed) actions
+            if let Some(failure) = Self::validate_session_action(&action, &ctx, self.max_sessions_per_orchestration) {
+                return failure;
+            }
 
             let updated_action = update_action_event_id(action, event_id);
 
@@ -1309,6 +1379,57 @@ impl ReplayEngine {
 }
 
 impl ReplayEngine {
+    /// Validate session constraints for a newly emitted action.
+    ///
+    /// Updates the `open_sessions` set in `ctx` for open/close actions.
+    /// Returns `Some(TurnResult::Failed(...))` if the action violates a session constraint,
+    /// or `None` if the action is valid.
+    fn validate_session_action(
+        action: &crate::Action,
+        ctx: &crate::OrchestrationContext,
+        max_sessions: usize,
+    ) -> Option<TurnResult> {
+        match action {
+            crate::Action::OpenSession { session_id, .. } => {
+                let mut inner = ctx.inner.lock().expect("Mutex should not be poisoned");
+                if !inner.open_sessions.contains(session_id) {
+                    if inner.open_sessions.len() >= max_sessions {
+                        return Some(TurnResult::Failed(crate::ErrorDetails::Application {
+                            kind: crate::AppErrorKind::OrchestrationFailed,
+                            message: format!(
+                                "max sessions per orchestration exceeded (limit: {max_sessions}, open: {})",
+                                inner.open_sessions.len()
+                            ),
+                            retryable: false,
+                        }));
+                    }
+                    inner.open_sessions.insert(session_id.clone());
+                }
+            }
+            crate::Action::CloseSession { session_id, .. } => {
+                ctx.inner
+                    .lock()
+                    .expect("Mutex should not be poisoned")
+                    .open_sessions
+                    .remove(session_id);
+            }
+            crate::Action::CallActivity {
+                session_id: Some(sid), ..
+            } => {
+                let inner = ctx.inner.lock().expect("Mutex should not be poisoned");
+                if !inner.open_sessions.contains(sid) {
+                    return Some(TurnResult::Failed(crate::ErrorDetails::Application {
+                        kind: crate::AppErrorKind::OrchestrationFailed,
+                        message: format!("schedule_activity_on_session called for session '{sid}' which is not open"),
+                        retryable: false,
+                    }));
+                }
+            }
+            _ => {}
+        }
+        None
+    }
+
     // Getter methods for atomic execution
     pub fn history_delta(&self) -> &[Event] {
         &self.history_delta
@@ -1391,9 +1512,15 @@ fn extract_panic_message(panic_payload: Box<dyn std::any::Any + Send>) -> String
 /// Convert an Action to an Event for history persistence
 fn action_to_event(action: &Action, instance: &str, execution_id: u64, event_id: u64) -> Option<Event> {
     let kind = match action {
-        Action::CallActivity { name, input, .. } => EventKind::ActivityScheduled {
+        Action::CallActivity {
+            name,
+            input,
+            session_id,
+            ..
+        } => EventKind::ActivityScheduled {
             name: name.clone(),
             input: input.clone(),
+            session_id: session_id.clone(),
         },
         Action::CreateTimer { fire_at_ms, .. } => EventKind::TimerCreated {
             fire_at_ms: *fire_at_ms,
@@ -1421,6 +1548,12 @@ fn action_to_event(action: &Action, instance: &str, execution_id: u64, event_id:
             instance: instance.clone(),
             input: input.clone(),
         },
+        Action::OpenSession { session_id, .. } => EventKind::SessionOpened {
+            session_id: session_id.clone(),
+        },
+        Action::CloseSession { session_id, .. } => EventKind::SessionClosed {
+            session_id: session_id.clone(),
+        },
         // ContinueAsNew doesn't become a schedule event - it has its own terminal event
         Action::ContinueAsNew { .. } => {
             return None;
@@ -1435,10 +1568,16 @@ fn action_to_event(action: &Action, instance: &str, execution_id: u64, event_id:
 /// (unless an explicit instance ID was provided, indicated by not starting with SUB_ORCH_PENDING_PREFIX).
 fn update_action_event_id(action: Action, event_id: u64) -> Action {
     match action {
-        Action::CallActivity { name, input, .. } => Action::CallActivity {
+        Action::CallActivity {
+            name,
+            input,
+            session_id,
+            ..
+        } => Action::CallActivity {
             scheduling_event_id: event_id,
             name,
             input,
+            session_id,
         },
         Action::CreateTimer { fire_at_ms, .. } => Action::CreateTimer {
             scheduling_event_id: event_id,
@@ -1489,6 +1628,14 @@ fn update_action_event_id(action: Action, event_id: u64) -> Action {
             instance,
             input,
         },
+        Action::OpenSession { session_id, .. } => Action::OpenSession {
+            scheduling_event_id: event_id,
+            session_id,
+        },
+        Action::CloseSession { session_id, .. } => Action::CloseSession {
+            scheduling_event_id: event_id,
+            session_id,
+        },
         // ContinueAsNew doesn't have scheduling_event_id
         Action::ContinueAsNew { .. } => action,
     }
@@ -1508,9 +1655,19 @@ fn poll_once<F: Future>(fut: Pin<&mut F>) -> Poll<F::Output> {
 /// Check if an action matches an event kind
 fn action_matches_event_kind(action: &Action, event_kind: &EventKind) -> bool {
     match (action, event_kind) {
-        (Action::CallActivity { name, input, .. }, EventKind::ActivityScheduled { name: en, input: ei }) => {
-            name == en && input == ei
-        }
+        (
+            Action::CallActivity {
+                name,
+                input,
+                session_id,
+                ..
+            },
+            EventKind::ActivityScheduled {
+                name: en,
+                input: ei,
+                session_id: es,
+            },
+        ) => name == en && input == ei && session_id == es,
 
         (Action::CreateTimer { fire_at_ms, .. }, EventKind::TimerCreated { fire_at_ms: ef }) => {
             // Allow some tolerance for timer fire_at_ms since it's computed at different times
@@ -1544,6 +1701,10 @@ fn action_matches_event_kind(action: &Action, event_kind: &EventKind) -> bool {
                 input: inp,
             },
         ) => name == en && instance == ei && input == inp,
+
+        (Action::OpenSession { session_id, .. }, EventKind::SessionOpened { session_id: es }) => session_id == es,
+
+        (Action::CloseSession { session_id, .. }, EventKind::SessionClosed { session_id: es }) => session_id == es,
 
         _ => false,
     }
