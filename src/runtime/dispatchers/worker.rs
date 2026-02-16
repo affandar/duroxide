@@ -300,6 +300,7 @@ async fn process_next_work_item(
                     rt.options.worker_lock_timeout,
                     rt.options.dispatcher_long_poll_timeout,
                     worker_id,
+                    rt.options.session_lock_duration,
                 )
                 .await?
         } else {

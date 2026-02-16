@@ -262,4 +262,43 @@ impl Provider for InstrumentedProvider {
     fn as_management_capability(&self) -> Option<&dyn ProviderAdmin> {
         self.inner.as_management_capability()
     }
+
+    fn supports_sessions(&self) -> bool {
+        self.inner.supports_sessions()
+    }
+
+    async fn fetch_session_work_item(
+        &self,
+        lock_timeout: Duration,
+        poll_timeout: Duration,
+        worker_id: &str,
+        session_lock_duration: Duration,
+    ) -> Result<Option<(WorkItem, String, u32)>, ProviderError> {
+        self.inner
+            .fetch_session_work_item(lock_timeout, poll_timeout, worker_id, session_lock_duration)
+            .await
+    }
+
+    async fn renew_session_lock(
+        &self,
+        instance_id: &str,
+        session_id: &str,
+        worker_id: &str,
+        extend_for: Duration,
+    ) -> Result<(), ProviderError> {
+        self.inner
+            .renew_session_lock(instance_id, session_id, worker_id, extend_for)
+            .await
+    }
+
+    async fn release_session_lock(
+        &self,
+        instance_id: &str,
+        session_id: &str,
+        worker_id: &str,
+    ) -> Result<(), ProviderError> {
+        self.inner
+            .release_session_lock(instance_id, session_id, worker_id)
+            .await
+    }
 }

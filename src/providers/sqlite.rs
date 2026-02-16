@@ -128,6 +128,7 @@ impl SqliteProvider {
         &self,
         lock_timeout: Duration,
         worker_id: Option<&str>,
+        session_lock_dur: Duration,
     ) -> Result<Option<(WorkItem, String, u32)>, ProviderError> {
         let op = "fetch_work_item";
         let mut tx = self
@@ -196,7 +197,7 @@ impl SqliteProvider {
             candidates
         {
             if let (Some(sid), Some(iid), Some(wid)) = (&session_id, &instance_id, worker_id) {
-                let session_lock_duration = lock_timeout.as_millis() as i64 * 2;
+                let session_lock_duration = session_lock_dur.as_millis() as i64;
 
                 match (owner_worker_id.as_ref(), owner_locked_until) {
                     (Some(owner), Some(_locked_until)) if owner == wid => {
@@ -1290,6 +1291,36 @@ impl Provider for SqliteProvider {
             );
         }
 
+        // Create/delete session rows based on SessionOpened/SessionClosed events in history_delta.
+        // Session rows must exist before worker items referencing them are enqueued.
+        for event in &history_delta {
+            match &event.kind {
+                crate::EventKind::SessionOpened { session_id } => {
+                    sqlx::query(
+                        r#"
+                        INSERT INTO sessions (instance_id, session_id, worker_id, locked_until)
+                        VALUES (?, ?, NULL, NULL)
+                        ON CONFLICT(instance_id, session_id) DO NOTHING
+                        "#,
+                    )
+                    .bind(&instance_id)
+                    .bind(session_id)
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(|e| Self::sqlx_to_provider_error("ack_orchestration_item", e))?;
+                }
+                crate::EventKind::SessionClosed { session_id } => {
+                    sqlx::query("DELETE FROM sessions WHERE instance_id = ? AND session_id = ?")
+                        .bind(&instance_id)
+                        .bind(session_id)
+                        .execute(&mut *tx)
+                        .await
+                        .map_err(|e| Self::sqlx_to_provider_error("ack_orchestration_item", e))?;
+                }
+                _ => {}
+            }
+        }
+
         // Enqueue worker items with identity columns for cancellation support
         debug!(
             instance = %instance_id,
@@ -1298,15 +1329,21 @@ impl Provider for SqliteProvider {
         );
         let now_ms = Self::now_millis();
         for item in worker_items {
-            // Extract identity fields from ActivityExecute
-            let (activity_instance, activity_execution_id, activity_id) = match &item {
+            // Extract identity fields from ActivityExecute (including session_id for routing)
+            let (activity_instance, activity_execution_id, activity_id, session_id) = match &item {
                 WorkItem::ActivityExecute {
                     instance,
                     execution_id,
                     id,
+                    session_id,
                     ..
-                } => (Some(instance.as_str()), Some(*execution_id), Some(*id)),
-                _ => (None, None, None),
+                } => (
+                    Some(instance.as_str()),
+                    Some(*execution_id),
+                    Some(*id),
+                    session_id.clone(),
+                ),
+                _ => (None, None, None, None),
             };
 
             let work_item = serde_json::to_string(&item).map_err(|e| {
@@ -1314,8 +1351,8 @@ impl Provider for SqliteProvider {
             })?;
             sqlx::query(
                 r#"
-                INSERT INTO worker_queue (work_item, visible_at, instance_id, execution_id, activity_id)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO worker_queue (work_item, visible_at, instance_id, execution_id, activity_id, session_id)
+                VALUES (?, ?, ?, ?, ?, ?)
                 "#,
             )
             .bind(work_item)
@@ -1323,9 +1360,10 @@ impl Provider for SqliteProvider {
             .bind(activity_instance)
             .bind(activity_execution_id.map(|e| e as i64))
             .bind(activity_id.map(|a| a as i64))
+            .bind(session_id)
             .execute(&mut *tx)
             .await
-            .map_err(|e| Self::sqlx_to_provider_error("list_instances", e))?;
+            .map_err(|e| Self::sqlx_to_provider_error("ack_orchestration_item", e))?;
         }
 
         // Delete cancelled activities (lock stealing) - batch operation
@@ -1640,7 +1678,7 @@ impl Provider for SqliteProvider {
         lock_timeout: Duration,
         _poll_timeout: Duration,
     ) -> Result<Option<(WorkItem, String, u32)>, ProviderError> {
-        self.fetch_work_item_inner(lock_timeout, None).await
+        self.fetch_work_item_inner(lock_timeout, None, Duration::ZERO).await
     }
 
     async fn ack_work_item(&self, token: &str, completion: Option<WorkItem>) -> Result<(), ProviderError> {
@@ -1911,8 +1949,10 @@ impl Provider for SqliteProvider {
         lock_timeout: Duration,
         _poll_timeout: Duration,
         worker_id: &str,
+        session_lock_duration: Duration,
     ) -> Result<Option<(WorkItem, String, u32)>, ProviderError> {
-        self.fetch_work_item_inner(lock_timeout, Some(worker_id)).await
+        self.fetch_work_item_inner(lock_timeout, Some(worker_id), session_lock_duration)
+            .await
     }
 
     async fn renew_session_lock(

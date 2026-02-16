@@ -290,7 +290,7 @@ pub struct RuntimeOptions {
     /// The session lock in the provider expires after this duration.
     /// The background renewal task renews it every `duration / 2`.
     /// Keep this short for fast crash recovery.
-    /// Default: 10 minutes.
+    /// Default: `2 * worker_lock_timeout` (e.g., 60s when worker_lock_timeout is 30s).
     pub session_lock_duration: Duration,
 
     /// Session idle timeout. How long a session remains attached to a worker
@@ -325,7 +325,7 @@ impl Default for RuntimeOptions {
             activity_cancellation_grace_period: Duration::from_secs(10),
             supported_replay_versions: None,
             max_sessions_per_worker: 100,
-            session_lock_duration: Duration::from_secs(600),
+            session_lock_duration: Duration::from_secs(60), // 2 * worker_lock_timeout (30s)
             session_idle_timeout: None,
             max_sessions_per_orchestration: 10,
         }

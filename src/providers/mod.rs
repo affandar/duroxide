@@ -1847,6 +1847,8 @@ pub trait Provider: Any + Send + Sync {
     /// - `session_id` belongs to a session this worker already owns, OR
     /// - `session_id` belongs to an unclaimed/expired session (worker claims atomically)
     ///
+    /// `session_lock_duration` controls how long a newly claimed session lock lasts.
+    ///
     /// Only available when `supports_sessions()` returns `true`.
     ///
     /// Default: returns a "sessions not supported" error.
@@ -1856,6 +1858,7 @@ pub trait Provider: Any + Send + Sync {
         _lock_timeout: Duration,
         _poll_timeout: Duration,
         _worker_id: &str,
+        _session_lock_duration: Duration,
     ) -> Result<Option<(WorkItem, String, u32)>, ProviderError> {
         Err(ProviderError::permanent(
             "fetch_session_work_item",

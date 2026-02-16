@@ -10,6 +10,8 @@ use super::*;
 use crate::providers::{ExecutionMetadata, Provider, ScheduledSessionIdentifier, WorkItem};
 use std::sync::Arc;
 
+const TEST_SESSION_LOCK: Duration = Duration::from_secs(60);
+
 /// Helper to create a session-bound activity work item.
 fn session_activity(instance: &str, session_id: &str, activity_id: u64) -> WorkItem {
     WorkItem::ActivityExecute {
@@ -62,7 +64,7 @@ pub async fn test_session_affinity_routing(factory: &dyn super::ProviderFactory)
 
     // Worker A claims it (which also claims the session)
     let result = provider
-        .fetch_session_work_item(Duration::from_secs(30), Duration::ZERO, "worker-A")
+        .fetch_session_work_item(Duration::from_secs(30), Duration::ZERO, "worker-A", TEST_SESSION_LOCK)
         .await
         .unwrap();
 
@@ -88,7 +90,7 @@ pub async fn test_session_affinity_routing(factory: &dyn super::ProviderFactory)
 
     // Worker A should get it because session is owned by A
     let result_a = provider
-        .fetch_session_work_item(Duration::from_secs(30), Duration::ZERO, "worker-A")
+        .fetch_session_work_item(Duration::from_secs(30), Duration::ZERO, "worker-A", TEST_SESSION_LOCK)
         .await
         .unwrap();
     assert!(result_a.is_some(), "worker-A should get second session item");
@@ -110,7 +112,7 @@ pub async fn test_regular_items_unaffected(factory: &dyn super::ProviderFactory)
 
     // Any worker should get it via fetch_session_work_item
     let result = provider
-        .fetch_session_work_item(Duration::from_secs(30), Duration::ZERO, "worker-X")
+        .fetch_session_work_item(Duration::from_secs(30), Duration::ZERO, "worker-X", TEST_SESSION_LOCK)
         .await
         .unwrap();
     assert!(result.is_some(), "regular item should be fetchable");
@@ -139,7 +141,7 @@ pub async fn test_session_lock_renewal(factory: &dyn super::ProviderFactory) {
         .unwrap();
 
     let result = provider
-        .fetch_session_work_item(Duration::from_secs(5), Duration::ZERO, "worker-R")
+        .fetch_session_work_item(Duration::from_secs(5), Duration::ZERO, "worker-R", TEST_SESSION_LOCK)
         .await
         .unwrap();
     assert!(result.is_some());
@@ -173,7 +175,7 @@ pub async fn test_session_release(factory: &dyn super::ProviderFactory) {
         .await
         .unwrap();
     let result = provider
-        .fetch_session_work_item(Duration::from_secs(30), Duration::ZERO, "worker-1")
+        .fetch_session_work_item(Duration::from_secs(30), Duration::ZERO, "worker-1", TEST_SESSION_LOCK)
         .await
         .unwrap();
     let (_item, token, _) = result.unwrap();
@@ -192,7 +194,7 @@ pub async fn test_session_release(factory: &dyn super::ProviderFactory) {
         .unwrap();
 
     let result2 = provider
-        .fetch_session_work_item(Duration::from_secs(30), Duration::ZERO, "worker-2")
+        .fetch_session_work_item(Duration::from_secs(30), Duration::ZERO, "worker-2", TEST_SESSION_LOCK)
         .await
         .unwrap();
     assert!(result2.is_some(), "worker-2 should claim released session");
@@ -222,7 +224,7 @@ pub async fn test_mixed_session_and_regular(factory: &dyn super::ProviderFactory
     let mut fetched_count = 0;
     for _ in 0..3 {
         let result = provider
-            .fetch_session_work_item(Duration::from_secs(5), Duration::ZERO, "worker-M")
+            .fetch_session_work_item(Duration::from_secs(5), Duration::ZERO, "worker-M", TEST_SESSION_LOCK)
             .await
             .unwrap();
         if let Some((_item, token, _)) = result {
@@ -264,7 +266,7 @@ pub async fn test_session_fifo_no_starvation(factory: &dyn super::ProviderFactor
     let mut fetched_ids = Vec::new();
     for _ in 0..4 {
         let result = provider
-            .fetch_session_work_item(Duration::from_secs(5), Duration::ZERO, "worker-F")
+            .fetch_session_work_item(Duration::from_secs(5), Duration::ZERO, "worker-F", TEST_SESSION_LOCK)
             .await
             .unwrap();
         if let Some((item, token, _)) = result {
@@ -303,7 +305,7 @@ pub async fn test_session_lock_extended_on_fetch(factory: &dyn super::ProviderFa
         .unwrap();
 
     let result = provider
-        .fetch_session_work_item(Duration::from_secs(2), Duration::ZERO, "worker-A")
+        .fetch_session_work_item(Duration::from_secs(2), Duration::ZERO, "worker-A", TEST_SESSION_LOCK)
         .await
         .unwrap();
     assert!(result.is_some());
@@ -318,7 +320,7 @@ pub async fn test_session_lock_extended_on_fetch(factory: &dyn super::ProviderFa
 
     // Worker A fetches it — this should extend the session lock
     let result2 = provider
-        .fetch_session_work_item(Duration::from_secs(30), Duration::ZERO, "worker-A")
+        .fetch_session_work_item(Duration::from_secs(30), Duration::ZERO, "worker-A", TEST_SESSION_LOCK)
         .await
         .unwrap();
     assert!(result2.is_some(), "worker-A should get second session item");
@@ -331,7 +333,7 @@ pub async fn test_session_lock_extended_on_fetch(factory: &dyn super::ProviderFa
         .await
         .unwrap();
     let result_b = provider
-        .fetch_session_work_item(Duration::from_secs(5), Duration::ZERO, "worker-B")
+        .fetch_session_work_item(Duration::from_secs(5), Duration::ZERO, "worker-B", TEST_SESSION_LOCK)
         .await
         .unwrap();
     // Worker B should NOT get this session item because A still owns the session
@@ -367,7 +369,7 @@ pub async fn test_session_item_skipped_when_owned_by_other(factory: &dyn super::
         .await
         .unwrap();
     let result = provider
-        .fetch_session_work_item(Duration::from_secs(60), Duration::ZERO, "worker-A")
+        .fetch_session_work_item(Duration::from_secs(60), Duration::ZERO, "worker-A", TEST_SESSION_LOCK)
         .await
         .unwrap();
     assert!(result.is_some());
@@ -386,7 +388,7 @@ pub async fn test_session_item_skipped_when_owned_by_other(factory: &dyn super::
 
     // Worker B should skip the session item and get the regular one
     let result_b = provider
-        .fetch_session_work_item(Duration::from_secs(5), Duration::ZERO, "worker-B")
+        .fetch_session_work_item(Duration::from_secs(5), Duration::ZERO, "worker-B", TEST_SESSION_LOCK)
         .await
         .unwrap();
     assert!(result_b.is_some(), "worker-B should get the regular item");
@@ -472,7 +474,7 @@ pub async fn test_session_fetch_mixed_behavior(factory: &dyn super::ProviderFact
 
     for _ in 0..3 {
         let result = provider
-            .fetch_session_work_item(Duration::from_secs(30), Duration::ZERO, "worker-MIX")
+            .fetch_session_work_item(Duration::from_secs(30), Duration::ZERO, "worker-MIX", TEST_SESSION_LOCK)
             .await
             .unwrap();
 
@@ -509,7 +511,7 @@ pub async fn test_session_claim_race_single_winner(factory: &dyn super::Provider
         let mut attempts = 0u32;
         loop {
             match provider
-                .fetch_session_work_item(Duration::from_secs(30), Duration::ZERO, worker_id)
+                .fetch_session_work_item(Duration::from_secs(30), Duration::ZERO, worker_id, TEST_SESSION_LOCK)
                 .await
             {
                 Ok(v) => return v,
@@ -574,7 +576,7 @@ pub async fn test_close_session_lock_stealing_signal(factory: &dyn super::Provid
         .unwrap();
 
     let fetched = provider
-        .fetch_session_work_item(Duration::from_secs(30), Duration::ZERO, "worker-close-A")
+        .fetch_session_work_item(Duration::from_secs(30), Duration::ZERO, "worker-close-A", TEST_SESSION_LOCK)
         .await
         .unwrap()
         .expect("worker should fetch session item");
