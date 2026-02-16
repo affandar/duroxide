@@ -792,14 +792,7 @@ This prevents runaway orchestrations from opening unbounded sessions.
 
 **4. Provider does not support sessions**
 
-If the orchestration calls `open_session()` and the provider's `supports_sessions()` returns false, the replay engine returns `TurnResult::Failed` with:
-```
-ErrorDetails::Application {
-    kind: AppErrorKind::OrchestrationFailed,
-    message: "Provider does not support sessions".to_string(),
-    retryable: false,
-}
-```
+> **Note:** This check is NOT performed by the replay engine, since the replay engine has no access to the provider. Instead, the worker dispatcher checks `supports_sessions()` at fetch time and will not route session-bound work items if the provider doesn't support sessions. If an orchestration calls `open_session()` against a non-session provider, the session events and actions will be recorded in history and the session-bound activities will be enqueued, but `fetch_work_item` (non-session path) will skip them, causing the orchestration to hang. This is a deployment-time configuration concern, not a replay validation concern.
 
 **5. Replay: `SessionOpened` / `SessionClosed` determinism**
 
@@ -1016,7 +1009,7 @@ The current `runtime_id` is a 4-char hex derived from nanoseconds (`{:04x}` of `
 | 8.3 | `session_activity_after_close_fails` | Open "X", close "X", then `schedule_activity_on_session(..., "X")`. Orchestration fails. |
 | 8.4 | `max_sessions_exceeded_fails` | With `max_sessions_per_orchestration: 2`, open 3 sessions. Third open fails orchestration. |
 | 8.5 | `max_sessions_close_then_reopen_within_limit` | Open 2 (at limit), close 1 (now at 1), open another (now at 2). Succeeds. |
-| 8.6 | `provider_no_session_support_fails` | Provider returns `supports_sessions() = false`. Orchestration calls `open_session()`. Fails with `AppErrorKind::OrchestrationFailed`. |
+| 8.6 | `provider_no_session_support_hangs` | Provider returns `supports_sessions() = false`. Orchestration calls `open_session()` and `schedule_activity_on_session()`. Session events are recorded in history but session-bound activities are never fetched (non-session fetch skips them). This is a deployment configuration concern, not validated at replay time. |
 
 ### 9. Replay Determinism
 
