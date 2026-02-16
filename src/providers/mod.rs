@@ -404,6 +404,10 @@ pub enum WorkItem {
         orchestration: String,
         input: String,
         version: Option<String>,
+        /// Session IDs that should remain open in the new execution.
+        #[serde(default)]
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        open_sessions: Vec<String>,
     },
 
     /// V2: External event with topic-based pub/sub matching (goes to orchestrator queue).

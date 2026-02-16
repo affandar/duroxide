@@ -446,6 +446,9 @@ pub struct WorkItemReader {
 
     /// Whether this is a ContinueAsNew
     pub is_continue_as_new: bool,
+
+    /// Sessions carried over from a previous execution via ContinueAsNew.
+    pub carried_sessions: Vec<String>,
 }
 
 impl WorkItemReader {
@@ -487,7 +490,7 @@ impl WorkItemReader {
         }
 
         // Extract parameters from start item or use defaults
-        let (orchestration_name, input, version, parent_instance, parent_id, is_continue_as_new) =
+        let (orchestration_name, input, version, parent_instance, parent_id, is_continue_as_new, carried_sessions) =
             if let Some(ref item) = start_item {
                 match item {
                     WorkItem::StartOrchestration {
@@ -504,13 +507,23 @@ impl WorkItemReader {
                         parent_instance.clone(),
                         *parent_id,
                         false,
+                        vec![],
                     ),
                     WorkItem::ContinueAsNew {
                         orchestration,
                         input,
                         version,
+                        open_sessions,
                         ..
-                    } => (orchestration.clone(), input.clone(), version.clone(), None, None, true),
+                    } => (
+                        orchestration.clone(),
+                        input.clone(),
+                        version.clone(),
+                        None,
+                        None,
+                        true,
+                        open_sessions.clone(),
+                    ),
                     _ => unreachable!(),
                 }
             } else {
@@ -527,7 +540,7 @@ impl WorkItemReader {
                 let version = history_mgr.version();
                 let parent_instance = history_mgr.parent_instance.clone();
                 let parent_id = history_mgr.parent_id;
-                (orchestration_name, input, version, parent_instance, parent_id, false)
+                (orchestration_name, input, version, parent_instance, parent_id, false, vec![])
             };
 
         Self {
@@ -539,6 +552,7 @@ impl WorkItemReader {
             parent_instance,
             parent_id,
             is_continue_as_new,
+            carried_sessions,
         }
     }
 
@@ -768,6 +782,7 @@ mod tests {
             orchestration: "test-orch".to_string(),
             input: "new-input".to_string(),
             version: Some("2.0.0".to_string()),
+            open_sessions: vec![],
         }];
 
         let history_mgr = HistoryManager::from_history(&[]);

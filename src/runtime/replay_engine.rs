@@ -62,6 +62,14 @@ pub struct ReplayEngine {
 
     /// Maximum number of sessions a single orchestration can open at the same time.
     max_sessions_per_orchestration: usize,
+
+    /// Sessions still open after the orchestration turn completes.
+    /// Populated by `execute_orchestration` for terminal cleanup.
+    pub(crate) remaining_open_sessions: HashSet<String>,
+
+    /// Sessions carried from a previous execution via ContinueAsNew.
+    /// Used to initialize the OrchestrationContext's open_sessions set.
+    carried_sessions: HashSet<String>,
 }
 
 impl ReplayEngine {
@@ -82,12 +90,20 @@ impl ReplayEngine {
             abort_error: None,
             persisted_history_len: persisted_len,
             max_sessions_per_orchestration: 10, // default, can be overridden
+            remaining_open_sessions: HashSet::new(),
+            carried_sessions: HashSet::new(),
         }
     }
 
     /// Set the maximum number of sessions per orchestration.
     pub fn with_max_sessions_per_orchestration(mut self, max: usize) -> Self {
         self.max_sessions_per_orchestration = max;
+        self
+    }
+
+    /// Initialize open sessions carried over from a previous execution (ContinueAsNew).
+    pub fn with_carried_sessions(mut self, sessions: Vec<String>) -> Self {
+        self.carried_sessions = sessions.into_iter().collect();
         self
     }
 
@@ -554,6 +570,14 @@ impl ReplayEngine {
             Some(worker_id.to_string()),
         );
 
+        // Initialize carried sessions from ContinueAsNew (must happen before polling)
+        if !self.carried_sessions.is_empty() {
+            ctx.inner
+                .lock()
+                .expect("Mutex should not be poisoned")
+                .open_sessions = self.carried_sessions.clone();
+        }
+
         // Clone ctx for use in the async closure
         let ctx_for_future = ctx.clone();
 
@@ -965,6 +989,14 @@ impl ReplayEngine {
 
             self.pending_actions.push(updated_action);
         }
+
+        // Capture the final open sessions set for terminal cleanup.
+        self.remaining_open_sessions = ctx
+            .inner
+            .lock()
+            .expect("Mutex should not be poisoned")
+            .open_sessions
+            .clone();
 
         // Check for cancellation first - if cancelled, return immediately
         // This matches legacy mode behavior: cancel takes precedence over completion
@@ -1445,6 +1477,10 @@ impl ReplayEngine {
 
     pub fn cancelled_sub_orchestration_ids(&self) -> &[String] {
         &self.cancelled_sub_orchestration_ids
+    }
+
+    pub fn remaining_open_sessions(&self) -> &HashSet<String> {
+        &self.remaining_open_sessions
     }
 
     /// Check if this run made any progress (added history)

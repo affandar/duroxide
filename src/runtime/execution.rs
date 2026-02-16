@@ -97,7 +97,8 @@ impl Runtime {
         let persisted_len = history_mgr.original_len();
         let mut turn = ReplayEngine::new(instance.to_string(), execution_id, current_execution_history)
             .with_persisted_history_len(persisted_len)
-            .with_max_sessions_per_orchestration(self.options.max_sessions_per_orchestration);
+            .with_max_sessions_per_orchestration(self.options.max_sessions_per_orchestration)
+            .with_carried_sessions(workitem_reader.carried_sessions.clone());
 
         // Prep completions from incoming messages
         if !messages.is_empty() {
@@ -152,6 +153,7 @@ impl Runtime {
         // Nondeterminism detection is handled by ReplayEngine::execute_orchestration
 
         // Handle turn result and collect work items
+        let mut is_terminal = false;
         let result = match turn_result {
             TurnResult::Continue => {
                 // Collect work items from pending actions
@@ -232,6 +234,7 @@ impl Runtime {
                 Ok(String::new())
             }
             TurnResult::Completed(output) => {
+                is_terminal = true;
                 // Honor detached orchestration starts at terminal state
                 enqueue_detached_from_pending(turn.pending_actions());
 
@@ -261,6 +264,7 @@ impl Runtime {
                 Ok(output)
             }
             TurnResult::Failed(details) => {
+                is_terminal = true;
                 // Honor detached orchestration starts at terminal state
                 enqueue_detached_from_pending(turn.pending_actions());
 
@@ -297,17 +301,20 @@ impl Runtime {
                     EventKind::OrchestrationContinuedAsNew { input: input.clone() },
                 ));
 
-                // Enqueue continue as new work item
+                // Enqueue continue as new work item, carrying open sessions
+                let carry_sessions: Vec<String> = turn.remaining_open_sessions().iter().cloned().collect();
                 orchestrator_items.push(WorkItem::ContinueAsNew {
                     instance: instance.to_string(),
                     orchestration: orchestration_name.to_string(),
                     input: input.clone(),
                     version: version.clone(),
+                    open_sessions: carry_sessions,
                 });
 
                 Ok("continued as new".to_string())
             }
             TurnResult::Cancelled(reason) => {
+                is_terminal = true;
                 let details = crate::ErrorDetails::Application {
                     kind: crate::AppErrorKind::Cancelled { reason: reason.clone() },
                     message: String::new(),
@@ -354,6 +361,23 @@ impl Runtime {
 
         // Now add cancelled sub-orchestration items (deferred to avoid borrow conflict)
         orchestrator_items.extend(cancelled_sub_orch_items);
+
+        // Terminal session cleanup: when the orchestration terminates (Completed, Failed,
+        // Cancelled), close all remaining open sessions so they don't leak in the provider.
+        // ContinueAsNew is NOT terminal — sessions survive across executions.
+        // is_terminal was set in the match arms above
+        if is_terminal {
+            let already_closed: std::collections::HashSet<String> =
+                cancelled_sessions.iter().map(|s| s.session_id.clone()).collect();
+            for session_id in turn.remaining_open_sessions() {
+                if !already_closed.contains(session_id) {
+                    cancelled_sessions.push(ScheduledSessionIdentifier {
+                        instance: instance.to_string(),
+                        session_id: session_id.clone(),
+                    });
+                }
+            }
+        }
 
         debug!(
             instance,
