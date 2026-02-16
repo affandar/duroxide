@@ -56,19 +56,34 @@ An audit against the full spec (design + test matrix) on 2026-02-16 identified o
 
 ## Tests Added / Updated
 
-Session/provider validation additions include:
-
-- `plain_fetch_only_non_session`
-- `session_fetch_mixed_behavior`
-- `session_claim_race_single_winner`
+**Provider validation tests** (`src/provider_validation/sessions.rs`): 16 tests
+- `supports_sessions`, `session_affinity_routing`, `regular_items_unaffected`
+- `session_lock_renewal`, `session_release`, `mixed_session_and_regular`
+- `session_fifo_no_starvation`, `session_lock_extended_on_fetch`
+- `session_item_skipped_when_owned_by_other`, `plain_fetch_only_non_session`
+- `session_fetch_mixed_behavior`, `session_claim_race_single_winner`
 - `close_session_lock_stealing_signal`
+- `ack_stores_session_id_on_worker_item` (validates issue 1 fix)
+- `ack_creates_session_row` (validates issue 7)
+- `ack_deletes_session_row` (validates issue 7)
 
-Also added/updated session scenario coverage in `tests/scenarios/sessions.rs` and session validation wiring in `tests/sqlite_provider_validations.rs`.
-
-Latest verification at time of this status:
-
-- `cargo nt` passes (full suite): 754/754.
-- Session-focused suites pass.
+**Scenario tests** (`tests/scenarios/sessions.rs`): 19 tests
+- `session_basic_lifecycle`, `session_mixed_with_regular_activities`
+- `session_auto_generated_id`, `session_single_thread_mode`
+- `session_max_sessions_exceeded`, `session_activity_on_closed_session_fails`
+- `session_open_with_id_idempotent` (validates issue 6)
+- `session_close_idempotent` (spec 1.5/1.6)
+- `session_empty_id_rejected` (spec 15.11)
+- `session_long_id_rejected` (spec 15.12)
+- `session_open_close_reopen` (spec 1.7)
+- `session_multiple_concurrent` (spec 1.8/13.1)
+- `session_close_one_keep_other` (spec 13.3)
+- `session_max_close_then_reopen_within_limit` (spec 8.5)
+- `session_survives_continue_as_new` (spec 10.1/10.2)
+- `session_terminal_cleanup` (spec 11.1)
+- `session_non_session_activity_has_none` (spec 2.6)
+- `session_serialization_backward_compat` (spec 16.1-16.4)
+- `session_events_serialize_roundtrip` (spec 16.5)
 
 ## Proposal Mapping (Current)
 
@@ -82,9 +97,29 @@ Primary spec: [activity-explicit-sessions.md](activity-explicit-sessions.md)
 - Session renewal failure path causing cancellation signal for in-flight activities.
 - `session_idle_timeout` behavior started after last activity completion/cancel.
 
+### Fixed (post-audit, 2026-02-16)
+
+- `session_id` column now populated in `ack_orchestration_item` worker enqueue path.
+- Session rows created/deleted at open/close time during `ack_orchestration_item`.
+- `session_lock_duration` default changed to `2 * worker_lock_timeout` (60s).
+- `fetch_session_work_item` uses explicit `session_lock_duration` parameter.
+- `InstrumentedProvider` delegates session methods to inner provider.
+- `open_session_with_id` is truly idempotent (no-op when session already open).
+- Session ID validation: empty string rejected, length limit 1024.
+- ContinueAsNew carries open sessions to new execution.
+- Terminal orchestration auto-closes remaining open sessions.
+- `max_sessions_per_worker` enforced at fetch time.
+- Graceful shutdown releases all session locks immediately.
+- Spec updated: `supports_sessions` check removed from replay engine requirements.
+
 ### Still open / partial vs spec
 
-- See **Audit** section below for the full gap analysis.
+- Multi-worker routing tests (require 2+ runtime instances sharing a store).
+- Worker crash migration tests (spec sections 5.1-5.4).
+- Graceful shutdown integration test with two runtimes (spec section 6.1-6.2).
+- Replay determinism unit tests (spec section 9).
+- Observability tracing tests (spec section 17).
+- Piggyback session renewal on activity lock renewal (deferred optimization).
 
 ---
 
