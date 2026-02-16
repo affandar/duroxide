@@ -1423,27 +1423,24 @@ impl ReplayEngine {
     ) -> Option<TurnResult> {
         match action {
             crate::Action::OpenSession { session_id, .. } => {
-                let mut inner = ctx.inner.lock().expect("Mutex should not be poisoned");
-                if !inner.open_sessions.contains(session_id) {
-                    if inner.open_sessions.len() >= max_sessions {
-                        return Some(TurnResult::Failed(crate::ErrorDetails::Application {
-                            kind: crate::AppErrorKind::OrchestrationFailed,
-                            message: format!(
-                                "max sessions per orchestration exceeded (limit: {max_sessions}, open: {})",
-                                inner.open_sessions.len()
-                            ),
-                            retryable: false,
-                        }));
-                    }
-                    inner.open_sessions.insert(session_id.clone());
+                // The orchestration context eagerly adds the session to open_sessions
+                // at call time (for same-poll idempotency). Here we only enforce the
+                // limit. The count already includes this session, so check > max.
+                let inner = ctx.inner.lock().expect("Mutex should not be poisoned");
+                if inner.open_sessions.contains(session_id) && inner.open_sessions.len() > max_sessions {
+                    return Some(TurnResult::Failed(crate::ErrorDetails::Application {
+                        kind: crate::AppErrorKind::OrchestrationFailed,
+                        message: format!(
+                            "max sessions per orchestration exceeded (limit: {max_sessions}, open: {})",
+                            inner.open_sessions.len()
+                        ),
+                        retryable: false,
+                    }));
                 }
             }
-            crate::Action::CloseSession { session_id, .. } => {
-                ctx.inner
-                    .lock()
-                    .expect("Mutex should not be poisoned")
-                    .open_sessions
-                    .remove(session_id);
+            crate::Action::CloseSession { .. } => {
+                // The orchestration context already removed the session from open_sessions
+                // at close_session() call time. No additional work needed here.
             }
             crate::Action::CallActivity {
                 session_id: Some(sid), ..

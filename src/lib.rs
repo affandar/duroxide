@@ -2810,10 +2810,14 @@ impl OrchestrationContext {
     /// events in `history_delta`. No completion callback is needed because sessions
     /// don't produce results; the only observable effect is that subsequent
     /// `schedule_activity_on_session` calls can reference the session ID.
+    /// Note: This method does NOT check `max_sessions_per_orchestration` because
+    /// the limit is enforced by the replay engine's `validate_session_action`.
+    /// The context eagerly adds the session to `open_sessions` for same-poll
+    /// idempotency and schedule validation.
     pub fn open_session(&self) -> Result<String, String> {
         let mut inner = self.inner.lock().expect("Mutex should not be poisoned");
-        // Generate deterministic session ID from the token counter
         let session_id = format!("session-{}", inner.next_token + 1);
+        inner.open_sessions.insert(session_id.clone());
         let _token = inner.emit_action(Action::OpenSession {
             scheduling_event_id: 0,
             session_id: session_id.clone(),
@@ -2843,6 +2847,7 @@ impl OrchestrationContext {
         if inner.open_sessions.contains(&session_id) {
             return Ok(session_id);
         }
+        inner.open_sessions.insert(session_id.clone());
         let _token = inner.emit_action(Action::OpenSession {
             scheduling_event_id: 0,
             session_id: session_id.clone(),
@@ -2856,6 +2861,7 @@ impl OrchestrationContext {
     /// A `SessionClosed` event is recorded for replay determinism.
     pub fn close_session(&self, session_id: &str) {
         let mut inner = self.inner.lock().expect("Mutex should not be poisoned");
+        inner.open_sessions.remove(session_id);
         let _token = inner.emit_action(Action::CloseSession {
             scheduling_event_id: 0,
             session_id: session_id.to_string(),

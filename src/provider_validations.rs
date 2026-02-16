@@ -256,6 +256,7 @@ pub mod capability_filtering {
 
 pub mod sessions {
     pub use crate::provider_validation::sessions::{
+        test_ack_creates_session_row, test_ack_deletes_session_row, test_ack_stores_session_id_on_worker_item,
         test_close_session_lock_stealing_signal, test_mixed_session_and_regular, test_plain_fetch_only_non_session,
         test_regular_items_unaffected, test_session_affinity_routing, test_session_claim_race_single_winner,
         test_session_fetch_mixed_behavior, test_session_fifo_no_starvation,

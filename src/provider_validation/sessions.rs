@@ -638,3 +638,244 @@ pub async fn test_close_session_lock_stealing_signal(factory: &dyn super::Provid
         "session renewal should fail after session close lock stealing"
     );
 }
+
+/// Test: ack_orchestration_item stores session_id on worker queue rows.
+///
+/// Validates that session-bound activities enqueued via the orchestration ack path
+/// have the session_id column set (not just in the serialized JSON).
+pub async fn test_ack_stores_session_id_on_worker_item(factory: &dyn super::ProviderFactory) {
+    use crate::{Event, EventKind, INITIAL_EXECUTION_ID};
+
+    let provider = factory.create_provider().await;
+    let instance = "ack-session-id-test";
+
+    create_instance(&*provider, instance).await.unwrap();
+
+    // Enqueue a trigger so we can fetch and ack
+    provider
+        .enqueue_for_orchestrator(
+            WorkItem::ExternalRaised {
+                instance: instance.to_string(),
+                name: "trigger".to_string(),
+                data: "{}".to_string(),
+            },
+            None,
+        )
+        .await
+        .unwrap();
+
+    let (_, lock_token, _) = provider
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
+        .await
+        .unwrap()
+        .expect("should have orch item");
+
+    // Ack with a SessionOpened event and a session-bound worker item
+    let session_id = "ack-ses-1";
+    provider
+        .ack_orchestration_item(
+            &lock_token,
+            INITIAL_EXECUTION_ID,
+            vec![Event::with_event_id(
+                2,
+                instance,
+                INITIAL_EXECUTION_ID,
+                None,
+                EventKind::SessionOpened {
+                    session_id: session_id.to_string(),
+                },
+            )],
+            vec![session_activity(instance, session_id, 10)],
+            vec![],
+            ExecutionMetadata::default(),
+            vec![],
+        )
+        .await
+        .unwrap();
+
+    // Now fetch with session-aware path. The item should be found and session claimed.
+    let result = provider
+        .fetch_session_work_item(Duration::from_secs(30), Duration::ZERO, "worker-ack-test", TEST_SESSION_LOCK)
+        .await
+        .unwrap();
+
+    assert!(result.is_some(), "session-bound item enqueued via ack should be fetchable");
+    let (item, token, _) = result.unwrap();
+    match &item {
+        WorkItem::ActivityExecute {
+            id, session_id: sid, ..
+        } => {
+            assert_eq!(*id, 10);
+            assert_eq!(sid.as_deref(), Some("ack-ses-1"));
+        }
+        _ => panic!("expected ActivityExecute"),
+    }
+    provider.ack_work_item(&token, None).await.unwrap();
+}
+
+/// Test: ack_orchestration_item creates session rows from SessionOpened events.
+pub async fn test_ack_creates_session_row(factory: &dyn super::ProviderFactory) {
+    use crate::{Event, EventKind, INITIAL_EXECUTION_ID};
+
+    let provider = factory.create_provider().await;
+    let instance = "ack-session-row-test";
+
+    create_instance(&*provider, instance).await.unwrap();
+
+    provider
+        .enqueue_for_orchestrator(
+            WorkItem::ExternalRaised {
+                instance: instance.to_string(),
+                name: "trigger".to_string(),
+                data: "{}".to_string(),
+            },
+            None,
+        )
+        .await
+        .unwrap();
+
+    let (_, lock_token, _) = provider
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
+        .await
+        .unwrap()
+        .expect("should have orch item");
+
+    // Ack with a SessionOpened event (no worker items)
+    provider
+        .ack_orchestration_item(
+            &lock_token,
+            INITIAL_EXECUTION_ID,
+            vec![Event::with_event_id(
+                2,
+                instance,
+                INITIAL_EXECUTION_ID,
+                None,
+                EventKind::SessionOpened {
+                    session_id: "row-ses".to_string(),
+                },
+            )],
+            vec![],
+            vec![],
+            ExecutionMetadata::default(),
+            vec![],
+        )
+        .await
+        .unwrap();
+
+    // Session row should exist — renew should succeed if we claim it first
+    // (row exists but unclaimed, so claim it by fetching a session-bound item)
+    provider
+        .enqueue_for_worker(session_activity(instance, "row-ses", 20))
+        .await
+        .unwrap();
+
+    let result = provider
+        .fetch_session_work_item(Duration::from_secs(30), Duration::ZERO, "worker-row-test", TEST_SESSION_LOCK)
+        .await
+        .unwrap();
+    assert!(result.is_some(), "session row should exist from ack");
+    let (_, token, _) = result.unwrap();
+    provider.ack_work_item(&token, None).await.unwrap();
+
+    // Renew should succeed since we claimed it
+    let renew = provider
+        .renew_session_lock(instance, "row-ses", "worker-row-test", Duration::from_secs(30))
+        .await;
+    assert!(renew.is_ok(), "session row should be claimable after ack creates it");
+}
+
+/// Test: ack_orchestration_item deletes session rows from SessionClosed events.
+pub async fn test_ack_deletes_session_row(factory: &dyn super::ProviderFactory) {
+    use crate::{Event, EventKind, INITIAL_EXECUTION_ID};
+
+    let provider = factory.create_provider().await;
+    let instance = "ack-session-delete-test";
+
+    create_instance(&*provider, instance).await.unwrap();
+
+    // First ack: create session
+    provider
+        .enqueue_for_orchestrator(
+            WorkItem::ExternalRaised {
+                instance: instance.to_string(),
+                name: "t1".to_string(),
+                data: "{}".to_string(),
+            },
+            None,
+        )
+        .await
+        .unwrap();
+
+    let (_, lock_token1, _) = provider
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
+        .await
+        .unwrap()
+        .unwrap();
+
+    provider
+        .ack_orchestration_item(
+            &lock_token1,
+            INITIAL_EXECUTION_ID,
+            vec![Event::with_event_id(
+                2,
+                instance,
+                INITIAL_EXECUTION_ID,
+                None,
+                EventKind::SessionOpened {
+                    session_id: "del-ses".to_string(),
+                },
+            )],
+            vec![],
+            vec![],
+            ExecutionMetadata::default(),
+            vec![],
+        )
+        .await
+        .unwrap();
+
+    // Second ack: close session
+    provider
+        .enqueue_for_orchestrator(
+            WorkItem::ExternalRaised {
+                instance: instance.to_string(),
+                name: "t2".to_string(),
+                data: "{}".to_string(),
+            },
+            None,
+        )
+        .await
+        .unwrap();
+
+    let (_, lock_token2, _) = provider
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
+        .await
+        .unwrap()
+        .unwrap();
+
+    provider
+        .ack_orchestration_item(
+            &lock_token2,
+            INITIAL_EXECUTION_ID,
+            vec![Event::with_event_id(
+                3,
+                instance,
+                INITIAL_EXECUTION_ID,
+                None,
+                EventKind::SessionClosed {
+                    session_id: "del-ses".to_string(),
+                },
+            )],
+            vec![],
+            vec![],
+            ExecutionMetadata::default(),
+            vec![],
+        )
+        .await
+        .unwrap();
+
+    // Session row should be deleted
+    let renew = provider
+        .renew_session_lock(instance, "del-ses", "any", Duration::from_secs(30))
+        .await;
+    assert!(renew.is_err(), "session row should be deleted after SessionClosed ack");
+}
