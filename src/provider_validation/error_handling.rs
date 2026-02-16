@@ -93,6 +93,7 @@ pub async fn test_duplicate_event_id_rejection<F: ProviderFactory>(factory: &F) 
                 EventKind::ActivityScheduled {
                     name: "Activity".to_string(),
                     input: "{}".to_string(),
+                    session_id: None,
                 },
             )],
             vec![],

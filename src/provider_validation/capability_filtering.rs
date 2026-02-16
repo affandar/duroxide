@@ -431,6 +431,7 @@ pub async fn test_continue_as_new_execution_gets_own_pinned_version<F: ProviderF
                 orchestration: "TestOrch".to_string(),
                 input: "{}".to_string(),
                 version: Some("1.0.0".to_string()),
+                open_sessions: vec![],
             }],
             ExecutionMetadata {
                 status: Some("ContinuedAsNew".to_string()),
@@ -1048,6 +1049,7 @@ pub async fn test_ack_appends_event_to_corrupted_history<F: ProviderFactory>(fac
         orchestration_version: Some(item.version.clone()),
         parent_instance_id: None,
         pinned_duroxide_version: None,
+        cancelled_sessions: vec![],
     };
 
     // Ack with the failed event — this MUST succeed despite corrupted history rows.

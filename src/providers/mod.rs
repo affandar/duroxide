@@ -86,6 +86,19 @@ pub struct ScheduledActivityIdentifier {
     pub activity_id: u64,
 }
 
+/// Identity of a session to cancel/steal during orchestration ack.
+///
+/// Used by the runtime as an explicit side-channel signal (analogous to
+/// `cancelled_activities`) so providers can perform lock stealing without
+/// inspecting history events.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScheduledSessionIdentifier {
+    /// Instance ID of the orchestration that owns the session
+    pub instance: String,
+    /// Session ID to close/steal
+    pub session_id: String,
+}
+
 /// Orchestration item containing all data needed to process an instance atomically.
 ///
 /// This represents a locked batch of work for a single orchestration instance.
@@ -244,6 +257,14 @@ pub struct ExecutionMetadata {
     /// in the orchestration dispatcher. The provider does not need to enforce write-once
     /// semantics — it simply stores what it's told.
     pub pinned_duroxide_version: Option<semver::Version>,
+    /// Sessions that must be force-closed during this ack (lock stealing).
+    ///
+    /// Providers should, atomically with the rest of ack:
+    /// - remove/clear session ownership rows for these sessions, and
+    /// - delete queued/in-flight session-bound worker rows for these sessions.
+    ///
+    /// This is an out-of-band runtime signal (do not infer by reading history).
+    pub cancelled_sessions: Vec<ScheduledSessionIdentifier>,
 }
 
 /// Provider-backed work queue items the runtime consumes continually.
@@ -304,6 +325,9 @@ pub enum WorkItem {
         id: u64, // scheduling_event_id from ActivityScheduled
         name: String,
         input: String,
+        #[serde(default)]
+        #[serde(skip_serializing_if = "Option::is_none")]
+        session_id: Option<String>,
     },
 
     /// Activity completed successfully (goes to orchestrator queue)
@@ -380,6 +404,10 @@ pub enum WorkItem {
         orchestration: String,
         input: String,
         version: Option<String>,
+        /// Session IDs that should remain open in the new execution.
+        #[serde(default)]
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        open_sessions: Vec<String>,
     },
 
     /// V2: External event with topic-based pub/sub matching (goes to orchestrator queue).
@@ -1806,10 +1834,71 @@ pub trait Provider: Any + Send + Sync {
     /// Return Err if storage fails. Return Ok if item was enqueued successfully.
     async fn enqueue_for_orchestrator(&self, _item: WorkItem, _delay: Option<Duration>) -> Result<(), ProviderError>;
 
-    // - Add timeout parameter to fetch_work_item and dequeue_timer_peek_lock
-    // - Add refresh_worker_lock(token, extend_ms) and refresh_timer_lock(token, extend_ms)
-    // - Provider should auto-abandon messages if lock expires without ack
-    // This would enable graceful handling of worker crashes and long-running activities
+    // ===== Session Support =====
+
+    /// Whether this provider supports sessions (worker affinity).
+    ///
+    /// Default: `false`. Providers that implement the sessions table schema
+    /// should override this to return `true`.
+    fn supports_sessions(&self) -> bool {
+        false
+    }
+
+    /// Fetch a work item, including session-bound items.
+    ///
+    /// Returns items where:
+    /// - `session_id IS NULL` (regular work), OR
+    /// - `session_id` belongs to a session this worker already owns, OR
+    /// - `session_id` belongs to an unclaimed/expired session (worker claims atomically)
+    ///
+    /// `session_lock_duration` controls how long a newly claimed session lock lasts.
+    ///
+    /// Only available when `supports_sessions()` returns `true`.
+    ///
+    /// Default: returns a "sessions not supported" error.
+    /// Providers that support sessions MUST override this.
+    async fn fetch_session_work_item(
+        &self,
+        _lock_timeout: Duration,
+        _poll_timeout: Duration,
+        _worker_id: &str,
+        _session_lock_duration: Duration,
+    ) -> Result<Option<(WorkItem, String, u32)>, ProviderError> {
+        Err(ProviderError::permanent(
+            "fetch_session_work_item",
+            "sessions not supported by this provider; do not call fetch_session_work_item when supports_sessions() returns false",
+        ))
+    }
+
+    /// Renew a session lock. Called periodically by the worker's session renewal task.
+    ///
+    /// Returns error if the session row doesn't exist (closed) or is claimed
+    /// by a different worker.
+    async fn renew_session_lock(
+        &self,
+        _instance_id: &str,
+        _session_id: &str,
+        _worker_id: &str,
+        _extend_for: Duration,
+    ) -> Result<(), ProviderError> {
+        Err(ProviderError::permanent("renew_session_lock", "sessions not supported"))
+    }
+
+    /// Release a session lock immediately (graceful shutdown).
+    ///
+    /// Sets `worker_id = NULL`, `locked_until = NULL`. No-op if the session
+    /// doesn't exist or is owned by a different worker.
+    async fn release_session_lock(
+        &self,
+        _instance_id: &str,
+        _session_id: &str,
+        _worker_id: &str,
+    ) -> Result<(), ProviderError> {
+        Err(ProviderError::permanent(
+            "release_session_lock",
+            "sessions not supported",
+        ))
+    }
 
     // ===== Capability Discovery =====
 

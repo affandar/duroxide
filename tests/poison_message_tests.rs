@@ -100,6 +100,7 @@ async fn worker_attempt_count_increments_on_lock_expiry() {
             id: 1,
             name: "TestActivity".to_string(),
             input: "{}".to_string(),
+            session_id: None,
         })
         .await
         .expect("enqueue should succeed");

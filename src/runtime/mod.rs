@@ -262,6 +262,50 @@ pub struct RuntimeOptions {
     ///
     /// Default: `None` (uses `>=0.0.0, <=CURRENT_BUILD_VERSION`)
     pub supported_replay_versions: Option<crate::providers::SemverRange>,
+
+    // ===== Session Configuration =====
+    // Session metrics (planned):
+    //
+    // Proposed session metrics (to be emitted via the runtime's metrics subsystem):
+    //   - `duroxide.sessions.active`       (gauge)  — number of sessions currently owned by this worker
+    //   - `duroxide.sessions.claimed`      (counter) — total sessions claimed by this worker
+    //   - `duroxide.sessions.released`     (counter) — total sessions voluntarily released
+    //   - `duroxide.sessions.expired`      (counter) — total sessions lost to lock expiry
+    //   - `duroxide.sessions.renewal`      (counter) — total session lock renewals
+    //   - `duroxide.sessions.renewal_failed` (counter) — session lock renewals that failed
+    //
+    // Note on `max_sessions_per_worker` vs `worker_concurrency`:
+    //   `max_sessions_per_worker` limits how many *sessions* a worker owns.
+    //   `worker_concurrency` limits how many *activities* execute in parallel.
+    //   A worker may own 100 sessions but only execute 2 activities at a time;
+    //   the remaining session-bound items wait in the provider queue until a
+    //   worker slot becomes free. The provider's `fetch_session_work_item`
+    //   still respects FIFO ordering among all ready items.
+    /// Maximum number of sessions this worker will own concurrently.
+    /// Worker skips unclaimed sessions when at capacity.
+    /// Default: 100. Set to 0 to never accept session work.
+    pub max_sessions_per_worker: usize,
+
+    /// Session lock duration for liveness detection.
+    /// The session lock in the provider expires after this duration.
+    /// The background renewal task renews it every `duration / 2`.
+    /// Keep this short for fast crash recovery.
+    /// Default: `2 * worker_lock_timeout` (e.g., 60s when worker_lock_timeout is 30s).
+    pub session_lock_duration: Duration,
+
+    /// Session idle timeout. How long a session remains attached to a worker
+    /// after the last activity for that session completes.
+    ///
+    /// - `Some(duration)` — voluntary release after idle period
+    /// - `None` — hold forever while worker is alive
+    ///
+    /// Default: None
+    pub session_idle_timeout: Option<Duration>,
+
+    /// Maximum number of sessions a single orchestration can have open concurrently.
+    /// Enforced by the replay engine. Exceeding this fails the orchestration.
+    /// Default: 10
+    pub max_sessions_per_orchestration: usize,
 }
 
 impl Default for RuntimeOptions {
@@ -280,6 +324,10 @@ impl Default for RuntimeOptions {
             max_attempts: 10,
             activity_cancellation_grace_period: Duration::from_secs(10),
             supported_replay_versions: None,
+            max_sessions_per_worker: 100,
+            session_lock_duration: Duration::from_secs(60), // 2 * worker_lock_timeout (30s)
+            session_idle_timeout: None,
+            max_sessions_per_orchestration: 10,
         }
     }
 }

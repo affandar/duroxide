@@ -33,3 +33,6 @@ mod version_replay_bug;
 #[cfg(feature = "replay-version-test")]
 #[path = "scenarios/replay_versioning.rs"]
 mod replay_versioning;
+
+#[path = "scenarios/sessions.rs"]
+mod sessions;

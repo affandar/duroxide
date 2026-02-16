@@ -9,7 +9,7 @@ use tracing::debug;
 use super::replay_engine::{ReplayEngine, TurnResult};
 use crate::{
     Event, EventKind,
-    providers::{ScheduledActivityIdentifier, WorkItem},
+    providers::{ScheduledActivityIdentifier, ScheduledSessionIdentifier, WorkItem},
     runtime::{OrchestrationHandler, Runtime},
 };
 
@@ -34,6 +34,7 @@ impl Runtime {
         Vec<WorkItem>,
         Vec<WorkItem>,
         Vec<ScheduledActivityIdentifier>,
+        Vec<ScheduledSessionIdentifier>,
         Result<String, String>,
     ) {
         let orchestration_name = &workitem_reader.orchestration_name;
@@ -43,6 +44,7 @@ impl Runtime {
         let mut worker_items = Vec::new();
         let mut orchestrator_items = Vec::new();
         let mut cancelled_activities: Vec<ScheduledActivityIdentifier> = Vec::new();
+        let mut cancelled_sessions: Vec<ScheduledSessionIdentifier> = Vec::new();
 
         // Helper: only honor detached starts at terminal; ignore all other pending actions
         let mut enqueue_detached_from_pending = |pending: &[_]| {
@@ -94,7 +96,9 @@ impl Runtime {
         // Get the persisted history length for is_replaying tracking
         let persisted_len = history_mgr.original_len();
         let mut turn = ReplayEngine::new(instance.to_string(), execution_id, current_execution_history)
-            .with_persisted_history_len(persisted_len);
+            .with_persisted_history_len(persisted_len)
+            .with_max_sessions_per_orchestration(self.options.max_sessions_per_orchestration)
+            .with_carried_sessions(workitem_reader.carried_sessions.clone());
 
         // Prep completions from incoming messages
         if !messages.is_empty() {
@@ -108,6 +112,18 @@ impl Runtime {
             orchestration_name.to_string(),
             orchestration_version.clone(),
             worker_id,
+        );
+
+        // Out-of-band close-session signal for provider lock stealing.
+        // Net semantics: close+reopen same session in same turn => not cancelled.
+        let closed_session_ids = Self::collect_closed_sessions_from_pending(turn.pending_actions());
+        cancelled_sessions.extend(
+            closed_session_ids
+                .into_iter()
+                .map(|session_id| ScheduledSessionIdentifier {
+                    instance: instance.to_string(),
+                    session_id,
+                }),
         );
 
         // Select/select2 losers: request cancellation for those activities now.
@@ -137,6 +153,7 @@ impl Runtime {
         // Nondeterminism detection is handled by ReplayEngine::execute_orchestration
 
         // Handle turn result and collect work items
+        let mut is_terminal = false;
         let result = match turn_result {
             TurnResult::Continue => {
                 // Collect work items from pending actions
@@ -146,6 +163,7 @@ impl Runtime {
                             scheduling_event_id,
                             name,
                             input,
+                            session_id,
                         } => {
                             let execution_id = self.get_execution_id_for_instance(instance, Some(execution_id)).await;
                             worker_items.push(WorkItem::ActivityExecute {
@@ -154,6 +172,7 @@ impl Runtime {
                                 id: *scheduling_event_id,
                                 name: name.clone(),
                                 input: input.clone(),
+                                session_id: session_id.clone(),
                             });
                         }
                         crate::Action::CreateTimer {
@@ -215,6 +234,7 @@ impl Runtime {
                 Ok(String::new())
             }
             TurnResult::Completed(output) => {
+                is_terminal = true;
                 // Honor detached orchestration starts at terminal state
                 enqueue_detached_from_pending(turn.pending_actions());
 
@@ -244,6 +264,7 @@ impl Runtime {
                 Ok(output)
             }
             TurnResult::Failed(details) => {
+                is_terminal = true;
                 // Honor detached orchestration starts at terminal state
                 enqueue_detached_from_pending(turn.pending_actions());
 
@@ -280,17 +301,20 @@ impl Runtime {
                     EventKind::OrchestrationContinuedAsNew { input: input.clone() },
                 ));
 
-                // Enqueue continue as new work item
+                // Enqueue continue as new work item, carrying open sessions
+                let carry_sessions: Vec<String> = turn.remaining_open_sessions().iter().cloned().collect();
                 orchestrator_items.push(WorkItem::ContinueAsNew {
                     instance: instance.to_string(),
                     orchestration: orchestration_name.to_string(),
                     input: input.clone(),
                     version: version.clone(),
+                    open_sessions: carry_sessions,
                 });
 
                 Ok("continued as new".to_string())
             }
             TurnResult::Cancelled(reason) => {
+                is_terminal = true;
                 let details = crate::ErrorDetails::Application {
                     kind: crate::AppErrorKind::Cancelled { reason: reason.clone() },
                     message: String::new(),
@@ -338,6 +362,23 @@ impl Runtime {
         // Now add cancelled sub-orchestration items (deferred to avoid borrow conflict)
         orchestrator_items.extend(cancelled_sub_orch_items);
 
+        // Terminal session cleanup: when the orchestration terminates (Completed, Failed,
+        // Cancelled), close all remaining open sessions so they don't leak in the provider.
+        // ContinueAsNew is NOT terminal — sessions survive across executions.
+        // is_terminal was set in the match arms above
+        if is_terminal {
+            let already_closed: std::collections::HashSet<String> =
+                cancelled_sessions.iter().map(|s| s.session_id.clone()).collect();
+            for session_id in turn.remaining_open_sessions() {
+                if !already_closed.contains(session_id) {
+                    cancelled_sessions.push(ScheduledSessionIdentifier {
+                        instance: instance.to_string(),
+                        session_id: session_id.clone(),
+                    });
+                }
+            }
+        }
+
         debug!(
             instance,
             "run_single_execution_atomic complete: history_delta={}, worker={}, orch={}",
@@ -350,8 +391,27 @@ impl Runtime {
             worker_items,
             orchestrator_items,
             cancelled_activities,
+            cancelled_sessions,
             result,
         )
+    }
+
+    fn collect_closed_sessions_from_pending(pending_actions: &[crate::Action]) -> Vec<String> {
+        let mut closed: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+        for action in pending_actions {
+            match action {
+                crate::Action::CloseSession { session_id, .. } => {
+                    closed.insert(session_id.clone());
+                }
+                crate::Action::OpenSession { session_id, .. } => {
+                    closed.remove(session_id);
+                }
+                _ => {}
+            }
+        }
+
+        closed.into_iter().collect()
     }
 
     /// Get cancellation targets for child sub-orchestrations.

@@ -354,6 +354,67 @@ impl HistoryManager {
             })
             .collect()
     }
+
+    /// Compute in-flight activities restricted to a set of session IDs.
+    ///
+    /// Used for close-session lock-stealing: scheduled activities on closed sessions
+    /// that are not yet completed/failed/cancel-requested are cancelled.
+    pub fn compute_inflight_activities_for_sessions(
+        &self,
+        instance: &str,
+        execution_id: u64,
+        session_ids: &std::collections::HashSet<String>,
+    ) -> Vec<ScheduledActivityIdentifier> {
+        let scheduled: std::collections::HashSet<u64> = self
+            .full_history_iter()
+            .filter_map(|e| {
+                if let EventKind::ActivityScheduled {
+                    session_id: Some(sid), ..
+                } = &e.kind
+                    && session_ids.contains(sid)
+                {
+                    Some(e.event_id)
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        let completed: std::collections::HashSet<u64> = self
+            .full_history_iter()
+            .filter_map(|e| {
+                if matches!(
+                    &e.kind,
+                    EventKind::ActivityCompleted { .. } | EventKind::ActivityFailed { .. }
+                ) {
+                    e.source_event_id
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        let cancel_requested: std::collections::HashSet<u64> = self
+            .full_history_iter()
+            .filter_map(|e| {
+                if matches!(&e.kind, EventKind::ActivityCancelRequested { .. }) {
+                    e.source_event_id
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        scheduled
+            .difference(&completed)
+            .filter(|id| !cancel_requested.contains(id))
+            .map(|&activity_id| ScheduledActivityIdentifier {
+                instance: instance.to_string(),
+                execution_id,
+                activity_id,
+            })
+            .collect()
+    }
 }
 
 /// Reader for extracting information from a batch of work items
@@ -385,6 +446,9 @@ pub struct WorkItemReader {
 
     /// Whether this is a ContinueAsNew
     pub is_continue_as_new: bool,
+
+    /// Sessions carried over from a previous execution via ContinueAsNew.
+    pub carried_sessions: Vec<String>,
 }
 
 impl WorkItemReader {
@@ -426,7 +490,7 @@ impl WorkItemReader {
         }
 
         // Extract parameters from start item or use defaults
-        let (orchestration_name, input, version, parent_instance, parent_id, is_continue_as_new) =
+        let (orchestration_name, input, version, parent_instance, parent_id, is_continue_as_new, carried_sessions) =
             if let Some(ref item) = start_item {
                 match item {
                     WorkItem::StartOrchestration {
@@ -443,13 +507,23 @@ impl WorkItemReader {
                         parent_instance.clone(),
                         *parent_id,
                         false,
+                        vec![],
                     ),
                     WorkItem::ContinueAsNew {
                         orchestration,
                         input,
                         version,
+                        open_sessions,
                         ..
-                    } => (orchestration.clone(), input.clone(), version.clone(), None, None, true),
+                    } => (
+                        orchestration.clone(),
+                        input.clone(),
+                        version.clone(),
+                        None,
+                        None,
+                        true,
+                        open_sessions.clone(),
+                    ),
                     _ => unreachable!(),
                 }
             } else {
@@ -466,7 +540,7 @@ impl WorkItemReader {
                 let version = history_mgr.version();
                 let parent_instance = history_mgr.parent_instance.clone();
                 let parent_id = history_mgr.parent_id;
-                (orchestration_name, input, version, parent_instance, parent_id, false)
+                (orchestration_name, input, version, parent_instance, parent_id, false, vec![])
             };
 
         Self {
@@ -478,6 +552,7 @@ impl WorkItemReader {
             parent_instance,
             parent_id,
             is_continue_as_new,
+            carried_sessions,
         }
     }
 
@@ -707,6 +782,7 @@ mod tests {
             orchestration: "test-orch".to_string(),
             input: "new-input".to_string(),
             version: Some("2.0.0".to_string()),
+            open_sessions: vec![],
         }];
 
         let history_mgr = HistoryManager::from_history(&[]);

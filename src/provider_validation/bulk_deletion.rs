@@ -389,6 +389,7 @@ async fn create_completed_instance_with_parent(
                 orchestration_version: Some("1.0.0".to_string()),
                 parent_instance_id,
                 pinned_duroxide_version: None,
+                cancelled_sessions: vec![],
             },
             vec![],
         )

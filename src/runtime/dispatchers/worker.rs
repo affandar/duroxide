@@ -29,9 +29,11 @@
 //! 4. If the activity doesn't complete, it's aborted and the work item is dropped
 
 use crate::providers::WorkItem;
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
+use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, warn};
@@ -76,6 +78,145 @@ struct ActivityWorkContext {
     item_serialized: String,
     /// Worker ID for logging
     worker_id: String,
+    /// Session ID if this activity was scheduled on a session
+    session_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct SessionLeaseKey {
+    instance_id: String,
+    session_id: String,
+    worker_id: String,
+}
+
+struct SessionLeaseEntry {
+    active_count: usize,
+    session_lost_token: CancellationToken,
+    renewal_handle: JoinHandle<()>,
+    idle_release_handle: Option<JoinHandle<()>>,
+}
+
+#[derive(Clone, Default)]
+struct SessionRenewalRegistry {
+    inner: Arc<Mutex<HashMap<SessionLeaseKey, SessionLeaseEntry>>>,
+}
+
+
+impl SessionRenewalRegistry {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    async fn owned_session_count(&self) -> usize {
+        self.inner.lock().await.len()
+    }
+
+    /// Release all owned session locks immediately (graceful shutdown).
+    async fn release_all(&self, store: Arc<dyn crate::providers::Provider>) {
+        let entries: Vec<(SessionLeaseKey, SessionLeaseEntry)> = {
+            let mut map = self.inner.lock().await;
+            map.drain().collect()
+        };
+        for (key, entry) in entries {
+            entry.renewal_handle.abort();
+            if let Some(idle_handle) = entry.idle_release_handle {
+                idle_handle.abort();
+            }
+            let _ = store
+                .release_session_lock(&key.instance_id, &key.session_id, &key.worker_id)
+                .await;
+        }
+    }
+
+    async fn acquire(
+        &self,
+        store: Arc<dyn crate::providers::Provider>,
+        key: SessionLeaseKey,
+        session_lock_duration: Duration,
+        shutdown: Arc<std::sync::atomic::AtomicBool>,
+    ) -> CancellationToken {
+        let mut map = self.inner.lock().await;
+        if let Some(existing) = map.get_mut(&key) {
+            existing.active_count += 1;
+            if let Some(idle_handle) = existing.idle_release_handle.take() {
+                idle_handle.abort();
+            }
+            return existing.session_lost_token.clone();
+        }
+
+        let session_lost_token = CancellationToken::new();
+        let renewal_handle = spawn_session_renewal(
+            store,
+            key.instance_id.clone(),
+            key.session_id.clone(),
+            key.worker_id.clone(),
+            session_lock_duration,
+            shutdown,
+            session_lost_token.clone(),
+        );
+
+        map.insert(
+            key,
+            SessionLeaseEntry {
+                active_count: 1,
+                session_lost_token: session_lost_token.clone(),
+                renewal_handle,
+                idle_release_handle: None,
+            },
+        );
+
+        session_lost_token
+    }
+
+    async fn release(
+        &self,
+        store: Arc<dyn crate::providers::Provider>,
+        key: &SessionLeaseKey,
+        session_idle_timeout: Option<Duration>,
+    ) {
+        let mut map = self.inner.lock().await;
+        if let Some(existing) = map.get_mut(key) {
+            if existing.active_count > 1 {
+                existing.active_count -= 1;
+                return;
+            }
+
+            existing.active_count = 0;
+
+            if let Some(timeout) = session_idle_timeout {
+                if existing.idle_release_handle.is_none() {
+                    let registry = self.clone();
+                    let key_clone = key.clone();
+                    let idle_handle = tokio::spawn(async move {
+                        tokio::time::sleep(timeout).await;
+                        registry.try_release_after_idle(store, key_clone).await;
+                    });
+                    existing.idle_release_handle = Some(idle_handle);
+                }
+                return;
+            }
+
+            // No idle timeout configured: keep the session lease alive indefinitely.
+            return;
+        }
+    }
+
+    async fn try_release_after_idle(&self, store: Arc<dyn crate::providers::Provider>, key: SessionLeaseKey) {
+        let maybe_entry = {
+            let mut map = self.inner.lock().await;
+            let should_release = map.get(&key).map(|entry| entry.active_count == 0).unwrap_or(false);
+
+            if should_release { map.remove(&key) } else { None }
+        };
+
+        if let Some(entry) = maybe_entry {
+            entry.renewal_handle.abort();
+
+            let _ = store
+                .release_session_lock(&key.instance_id, &key.session_id, &key.worker_id)
+                .await;
+        }
+    }
 }
 
 // ============================================================================
@@ -93,6 +234,7 @@ impl Runtime {
     ) -> JoinHandle<()> {
         let concurrency = self.options.worker_concurrency;
         let shutdown = self.shutdown_flag.clone();
+        let session_renewals = SessionRenewalRegistry::new();
 
         tokio::spawn(async move {
             let mut worker_handles = Vec::with_capacity(concurrency);
@@ -101,6 +243,7 @@ impl Runtime {
                 let rt = Arc::clone(&self);
                 let activities = Arc::clone(&activities);
                 let shutdown = Arc::clone(&shutdown);
+                let session_renewals = session_renewals.clone();
                 let worker_id = format!("work-{worker_idx}-{}", rt.runtime_id);
 
                 let handle = tokio::spawn(async move {
@@ -114,30 +257,33 @@ impl Runtime {
                         let min_interval = rt.options.dispatcher_min_poll_interval;
                         let start_time = std::time::Instant::now();
 
-                        let work_found = match process_next_work_item(&rt, &activities, &shutdown, &worker_id).await {
-                            Ok(found) => {
-                                consecutive_retryable_errors = 0;
-                                found
-                            }
-                            Err(e) if e.is_retryable() => {
-                                // Exponential backoff for retryable errors (database locks, etc.)
-                                consecutive_retryable_errors += 1;
-                                let backoff_ms = (100 * 2_u64.pow(consecutive_retryable_errors)).min(3000);
-                                warn!(
-                                    "Error fetching work item (retryable, attempt {}): {:?}, backing off {}ms",
-                                    consecutive_retryable_errors, e, backoff_ms
-                                );
-                                tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
-                                continue;
-                            }
-                            Err(e) => {
-                                // Permanent errors - log and continue with normal polling
-                                warn!("Error fetching work item (permanent): {:?}", e);
-                                consecutive_retryable_errors = 0;
-                                tokio::time::sleep(Duration::from_millis(100)).await;
-                                continue;
-                            }
-                        };
+                        let work_found =
+                            match process_next_work_item(&rt, &activities, &shutdown, &session_renewals, &worker_id)
+                                .await
+                            {
+                                Ok(found) => {
+                                    consecutive_retryable_errors = 0;
+                                    found
+                                }
+                                Err(e) if e.is_retryable() => {
+                                    // Exponential backoff for retryable errors (database locks, etc.)
+                                    consecutive_retryable_errors += 1;
+                                    let backoff_ms = (100 * 2_u64.pow(consecutive_retryable_errors)).min(3000);
+                                    warn!(
+                                        "Error fetching work item (retryable, attempt {}): {:?}, backing off {}ms",
+                                        consecutive_retryable_errors, e, backoff_ms
+                                    );
+                                    tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
+                                    continue;
+                                }
+                                Err(e) => {
+                                    // Permanent errors - log and continue with normal polling
+                                    warn!("Error fetching work item (permanent): {:?}", e);
+                                    consecutive_retryable_errors = 0;
+                                    tokio::time::sleep(Duration::from_millis(100)).await;
+                                    continue;
+                                }
+                            };
 
                         // Enforce minimum polling interval to prevent hot loops
                         if !work_found {
@@ -151,6 +297,10 @@ impl Runtime {
             for handle in worker_handles {
                 let _ = handle.await;
             }
+
+            // Graceful shutdown: release all session locks immediately so other
+            // workers can claim them without waiting for lock expiry.
+            session_renewals.release_all(Arc::clone(&self.history_store)).await;
         })
     }
 }
@@ -165,15 +315,32 @@ async fn process_next_work_item(
     rt: &Arc<Runtime>,
     activities: &Arc<registry::ActivityRegistry>,
     shutdown: &Arc<std::sync::atomic::AtomicBool>,
+    session_renewals: &SessionRenewalRegistry,
     worker_id: &str,
 ) -> Result<bool, crate::providers::ProviderError> {
-    let (item, token, attempt_count) = match rt
-        .history_store
-        .fetch_work_item(rt.options.worker_lock_timeout, rt.options.dispatcher_long_poll_timeout)
-        .await?
-    {
-        Some(result) => result,
-        None => return Ok(false),
+    let (item, token, attempt_count) = {
+        let use_sessions = rt.history_store.supports_sessions();
+        let at_session_capacity = use_sessions
+            && rt.options.max_sessions_per_worker > 0
+            && session_renewals.owned_session_count().await >= rt.options.max_sessions_per_worker;
+        let result = if use_sessions && !at_session_capacity {
+            rt.history_store
+                .fetch_session_work_item(
+                    rt.options.worker_lock_timeout,
+                    rt.options.dispatcher_long_poll_timeout,
+                    worker_id,
+                    rt.options.session_lock_duration,
+                )
+                .await?
+        } else {
+            rt.history_store
+                .fetch_work_item(rt.options.worker_lock_timeout, rt.options.dispatcher_long_poll_timeout)
+                .await?
+        };
+        match result {
+            Some(r) => r,
+            None => return Ok(false),
+        }
     };
 
     let item_serialized = serde_json::to_string(&item).unwrap_or_default();
@@ -185,6 +352,7 @@ async fn process_next_work_item(
             id,
             name,
             input,
+            session_id,
         } => {
             let ctx = ActivityWorkContext {
                 instance,
@@ -196,6 +364,7 @@ async fn process_next_work_item(
                 attempt_count,
                 item_serialized,
                 worker_id: worker_id.to_string(),
+                session_id,
             };
 
             // Note: We no longer check execution state at fetch time.
@@ -205,7 +374,7 @@ async fn process_next_work_item(
                 handle_poison_message(rt, &ctx).await;
             } else {
                 // Execute activity with cancellation support
-                execute_activity(rt, activities, shutdown, ctx).await;
+                execute_activity(rt, activities, shutdown, session_renewals, ctx).await;
             }
         }
         other => {
@@ -286,6 +455,7 @@ async fn execute_activity(
     rt: &Arc<Runtime>,
     activities: &Arc<registry::ActivityRegistry>,
     shutdown: &Arc<std::sync::atomic::AtomicBool>,
+    session_renewals: &SessionRenewalRegistry,
     ctx: ActivityWorkContext,
 ) {
     let cancellation_token = CancellationToken::new();
@@ -299,6 +469,35 @@ async fn execute_activity(
         Arc::clone(shutdown),
         cancellation_token.clone(),
     );
+
+    // Acquire shared per-session renewal lease (single renewal task per session key).
+    // Also bridge session-lock-loss to activity cancellation.
+    let (session_lease_key, session_lock_loss_bridge) = if let Some(ref sid) = ctx.session_id {
+        let key = SessionLeaseKey {
+            instance_id: ctx.instance.clone(),
+            session_id: sid.clone(),
+            worker_id: ctx.worker_id.clone(),
+        };
+
+        let session_lost_token = session_renewals
+            .acquire(
+                Arc::clone(&rt.history_store),
+                key.clone(),
+                rt.options.session_lock_duration,
+                Arc::clone(shutdown),
+            )
+            .await;
+
+        let activity_cancel = cancellation_token.clone();
+        let bridge = tokio::spawn(async move {
+            session_lost_token.cancelled().await;
+            activity_cancel.cancel();
+        });
+
+        (Some(key), Some(bridge))
+    } else {
+        (None, None)
+    };
 
     let activity_ctx = build_activity_context(rt, &ctx, cancellation_token.clone()).await;
 
@@ -329,11 +528,28 @@ async fn execute_activity(
         }
         None => {
             manager_handle.abort();
+            if let Some(h) = session_lock_loss_bridge {
+                h.abort();
+            }
+            if let Some(key) = session_lease_key.as_ref() {
+                session_renewals
+                    .release(Arc::clone(&rt.history_store), key, rt.options.session_idle_timeout)
+                    .await;
+            }
             abandon_unregistered_activity(rt, &ctx).await;
             // Early return after abandonment - no ack_result needed since we abandoned
             return;
         }
     };
+
+    if let Some(h) = session_lock_loss_bridge {
+        h.abort();
+    }
+    if let Some(key) = session_lease_key.as_ref() {
+        session_renewals
+            .release(Arc::clone(&rt.history_store), key, rt.options.session_idle_timeout)
+            .await;
+    }
 
     handle_activity_outcome(rt, &ctx, ack_result, outcome).await;
 }
@@ -349,7 +565,7 @@ async fn build_activity_context(
         .map(|d| (d.name, d.version))
         .unwrap_or_else(|| ("unknown".to_string(), "unknown".to_string()));
 
-    crate::ActivityContext::new_with_cancellation(
+    let mut activity_ctx = crate::ActivityContext::new_with_cancellation(
         ctx.instance.clone(),
         ctx.execution_id,
         orch_name,
@@ -359,7 +575,9 @@ async fn build_activity_context(
         ctx.worker_id.clone(),
         cancellation_token,
         Arc::clone(&rt.history_store),
-    )
+    );
+    activity_ctx.set_session_id(ctx.session_id.clone());
+    activity_ctx
 }
 
 /// Run an activity with cancellation support using `tokio::select!`.
@@ -608,6 +826,75 @@ fn calculate_renewal_interval(lock_timeout: Duration, buffer: Duration) -> Durat
         let half = (lock_timeout.as_secs_f64() * 0.5).ceil().max(1.0);
         Duration::from_secs_f64(half)
     }
+}
+
+/// Spawn a background task to renew a session lock while an activity is executing.
+///
+/// Renews the session lock every `duration / 2`. If renewal fails (session closed or
+/// claimed by another worker), this task cancels `session_lost_token` so all activities
+/// bound to this session lease are cooperatively cancelled.
+/// TODO: Optimization — piggyback session renewals on activity lock renewal ticks
+/// to reduce timer/task overhead under high session fan-in.
+fn spawn_session_renewal(
+    store: Arc<dyn crate::providers::Provider>,
+    instance_id: String,
+    session_id: String,
+    worker_id: String,
+    session_lock_duration: Duration,
+    shutdown: Arc<std::sync::atomic::AtomicBool>,
+    session_lost_token: CancellationToken,
+) -> JoinHandle<()> {
+    let renewal_interval = Duration::from_millis((session_lock_duration.as_millis() / 2).max(1000) as u64);
+
+    tracing::debug!(
+        target: "duroxide::runtime::worker",
+        instance_id = %instance_id,
+        session_id = %session_id,
+        worker_id = %worker_id,
+        renewal_interval_secs = %renewal_interval.as_secs(),
+        "Spawning session renewal task"
+    );
+
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(renewal_interval);
+        interval.tick().await; // Skip first immediate tick
+
+        loop {
+            interval.tick().await;
+
+            if shutdown.load(Ordering::Relaxed) {
+                tracing::debug!(
+                    target: "duroxide::runtime::worker",
+                    session_id = %session_id,
+                    "Session renewal stopping due to shutdown"
+                );
+                break;
+            }
+
+            match store
+                .renew_session_lock(&instance_id, &session_id, &worker_id, session_lock_duration)
+                .await
+            {
+                Ok(()) => {
+                    tracing::trace!(
+                        target: "duroxide::runtime::worker",
+                        session_id = %session_id,
+                        "Session lock renewed"
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        target: "duroxide::runtime::worker",
+                        session_id = %session_id,
+                        error = %e,
+                        "Session lock renewal failed; canceling activities bound to this session"
+                    );
+                    session_lost_token.cancel();
+                    break;
+                }
+            }
+        }
+    })
 }
 
 /// Spawn a background task to manage an in-flight activity.

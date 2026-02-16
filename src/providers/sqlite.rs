@@ -111,6 +111,172 @@ impl SqliteProvider {
         Ok(())
     }
 
+    /// Unified internal method for fetching work items.
+    ///
+    /// When `worker_id` is `Some`, session-aware fetching is used:
+    /// - Items are fetched in strict FIFO order (`ORDER BY wq.id`), not prioritized by type.
+    /// - If the next item is session-bound AND owned by this worker → return it, extend session lock.
+    /// - If the next item is session-bound AND the session is unclaimed/expired → atomically claim the
+    ///   session (only if no other worker owns it) and return it.
+    /// - If the next item is session-bound but owned by a *different* active worker → skip it and
+    ///   try the next item.
+    /// - If the next item has no session_id → return it as a regular item.
+    ///
+    /// When `worker_id` is `None`, plain `fetch_work_item` semantics: pick the oldest visible,
+    /// unlocked item regardless of `session_id`.
+    async fn fetch_work_item_inner(
+        &self,
+        lock_timeout: Duration,
+        worker_id: Option<&str>,
+        session_lock_dur: Duration,
+    ) -> Result<Option<(WorkItem, String, u32)>, ProviderError> {
+        let op = "fetch_work_item";
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| Self::sqlx_to_provider_error(op, e))?;
+
+        let now = Self::now_millis();
+
+        // We always select candidates via a single query.
+        // - Session-aware path (worker_id=Some): fetch up to 20 rows so we can skip rows
+        //   whose sessions are actively owned by another worker.
+        // - Non-session path (worker_id=None): fetch only 1 row (legacy behavior).
+        let candidate_limit: i64 = if worker_id.is_some() { 20 } else { 1 };
+        let candidates: Vec<(
+            i64,
+            String,
+            i32,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<i64>,
+        )> = sqlx::query_as(
+            r#"
+                SELECT wq.id, wq.work_item, wq.attempt_count, wq.session_id, wq.instance_id,
+                       s.worker_id, s.locked_until
+                FROM worker_queue wq
+                LEFT JOIN sessions s
+                    ON wq.instance_id = s.instance_id AND wq.session_id = s.session_id
+                WHERE wq.visible_at <= ?
+                    AND (wq.lock_token IS NULL OR wq.locked_until <= ?)
+                    -- When worker_id is NULL (plain fetch_work_item), only non-session rows are eligible.
+                    -- When worker_id is set (fetch_session_work_item), filter out session-bound rows
+                    -- actively owned by a different worker (worker_id != current AND lock not expired).
+                    -- Keep rows that are non-session, unclaimed, expired, or owned by current worker.
+                    AND (
+                        (? IS NULL AND wq.session_id IS NULL)
+                        OR (
+                            ? IS NOT NULL
+                            AND (
+                                wq.session_id IS NULL
+                                OR s.worker_id IS NULL
+                                OR s.locked_until IS NULL
+                                OR s.locked_until <= ?
+                                OR s.worker_id = ?
+                            )
+                        )
+                    )
+                ORDER BY wq.id
+                LIMIT ?
+                "#,
+        )
+        .bind(now)
+        .bind(now)
+        .bind(worker_id)
+        .bind(worker_id)
+        .bind(now)
+        .bind(worker_id)
+        .bind(candidate_limit)
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(|e| Self::sqlx_to_provider_error(op, e))?;
+
+        for (row_id, work_item_json, attempt_count, session_id, instance_id, owner_worker_id, owner_locked_until) in
+            candidates
+        {
+            if let (Some(sid), Some(iid), Some(wid)) = (&session_id, &instance_id, worker_id) {
+                let session_lock_duration = session_lock_dur.as_millis() as i64;
+
+                match (owner_worker_id.as_ref(), owner_locked_until) {
+                    (Some(owner), Some(_locked_until)) if owner == wid => {
+                        // We own this session — extend the session lock and take the item.
+                        let new_session_lock = now.saturating_add(session_lock_duration);
+                        sqlx::query(
+                            "UPDATE sessions SET locked_until = ? WHERE instance_id = ? AND session_id = ? AND worker_id = ?",
+                        )
+                        .bind(new_session_lock)
+                        .bind(iid)
+                        .bind(sid)
+                        .bind(wid)
+                        .execute(&mut *tx)
+                        .await
+                        .map_err(|e| Self::sqlx_to_provider_error(op, e))?;
+                    }
+                    (Some(owner), Some(locked_until)) if owner != wid && locked_until > now => {
+                        // Another worker actively owns this session — skip this item.
+                        continue;
+                    }
+                    _ => {
+                        // Session is unclaimed, expired, or doesn't exist yet.
+                        // Claim it with a conditional upsert: only overwrite if still unclaimed/expired.
+                        let new_session_lock = now.saturating_add(session_lock_duration);
+                        let result = sqlx::query(
+                            r#"
+                            INSERT INTO sessions (instance_id, session_id, worker_id, locked_until)
+                            VALUES (?, ?, ?, ?)
+                            ON CONFLICT(instance_id, session_id) DO UPDATE
+                            SET worker_id = excluded.worker_id, locked_until = excluded.locked_until
+                            WHERE sessions.worker_id IS NULL
+                               OR sessions.locked_until IS NULL
+                               OR sessions.locked_until <= ?
+                            "#,
+                        )
+                        .bind(iid)
+                        .bind(sid)
+                        .bind(wid)
+                        .bind(new_session_lock)
+                        .bind(now)
+                        .execute(&mut *tx)
+                        .await
+                        .map_err(|e| Self::sqlx_to_provider_error(op, e))?;
+
+                        if result.rows_affected() == 0 {
+                            // Another worker raced us and claimed the session first — skip.
+                            continue;
+                        }
+                    }
+                }
+            }
+
+            // Lock the work item
+            let lock_token = Self::generate_lock_token();
+            let locked_until = Self::timestamp_after(lock_timeout);
+
+            sqlx::query(
+                "UPDATE worker_queue SET lock_token = ?, locked_until = ?, attempt_count = attempt_count + 1 WHERE id = ?",
+            )
+            .bind(&lock_token)
+            .bind(locked_until)
+            .bind(row_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| Self::sqlx_to_provider_error(op, e))?;
+
+            tx.commit().await.map_err(|e| Self::sqlx_to_provider_error(op, e))?;
+
+            let work_item: WorkItem = serde_json::from_str(&work_item_json)
+                .map_err(|e| ProviderError::permanent(op, format!("Deserialization error: {e}")))?;
+
+            return Ok(Some((work_item, lock_token, (attempt_count + 1) as u32)));
+        }
+
+        tx.commit().await.map_err(|e| Self::sqlx_to_provider_error(op, e))?;
+
+        Ok(None)
+    }
+
     /// Create a new SQLite provider
     ///
     /// # Arguments
@@ -364,7 +530,23 @@ impl SqliteProvider {
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 instance_id TEXT,
                 execution_id TEXT,
-                activity_id INTEGER
+                activity_id INTEGER,
+                session_id TEXT
+            )
+            "#,
+        )
+        .execute(pool)
+        .await?;
+
+        // Sessions table for worker affinity
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS sessions (
+                instance_id TEXT NOT NULL,
+                session_id TEXT NOT NULL,
+                worker_id TEXT,
+                locked_until INTEGER,
+                PRIMARY KEY (instance_id, session_id)
             )
             "#,
         )
@@ -517,6 +699,8 @@ impl SqliteProvider {
                 EventKind::SubOrchestrationCancelRequested { .. } => "SubOrchestrationCancelRequested",
                 EventKind::OrchestrationCancelRequested { .. } => "OrchestrationCancelRequested",
                 EventKind::OrchestrationChained { .. } => "OrchestrationChained",
+                EventKind::SessionOpened { .. } => "SessionOpened",
+                EventKind::SessionClosed { .. } => "SessionClosed",
                 #[cfg(feature = "replay-version-test")]
                 EventKind::ExternalSubscribed2 { .. } => "ExternalSubscribed2",
                 #[cfg(feature = "replay-version-test")]
@@ -1107,6 +1291,36 @@ impl Provider for SqliteProvider {
             );
         }
 
+        // Create/delete session rows based on SessionOpened/SessionClosed events in history_delta.
+        // Session rows must exist before worker items referencing them are enqueued.
+        for event in &history_delta {
+            match &event.kind {
+                crate::EventKind::SessionOpened { session_id } => {
+                    sqlx::query(
+                        r#"
+                        INSERT INTO sessions (instance_id, session_id, worker_id, locked_until)
+                        VALUES (?, ?, NULL, NULL)
+                        ON CONFLICT(instance_id, session_id) DO NOTHING
+                        "#,
+                    )
+                    .bind(&instance_id)
+                    .bind(session_id)
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(|e| Self::sqlx_to_provider_error("ack_orchestration_item", e))?;
+                }
+                crate::EventKind::SessionClosed { session_id } => {
+                    sqlx::query("DELETE FROM sessions WHERE instance_id = ? AND session_id = ?")
+                        .bind(&instance_id)
+                        .bind(session_id)
+                        .execute(&mut *tx)
+                        .await
+                        .map_err(|e| Self::sqlx_to_provider_error("ack_orchestration_item", e))?;
+                }
+                _ => {}
+            }
+        }
+
         // Enqueue worker items with identity columns for cancellation support
         debug!(
             instance = %instance_id,
@@ -1115,15 +1329,21 @@ impl Provider for SqliteProvider {
         );
         let now_ms = Self::now_millis();
         for item in worker_items {
-            // Extract identity fields from ActivityExecute
-            let (activity_instance, activity_execution_id, activity_id) = match &item {
+            // Extract identity fields from ActivityExecute (including session_id for routing)
+            let (activity_instance, activity_execution_id, activity_id, session_id) = match &item {
                 WorkItem::ActivityExecute {
                     instance,
                     execution_id,
                     id,
+                    session_id,
                     ..
-                } => (Some(instance.as_str()), Some(*execution_id), Some(*id)),
-                _ => (None, None, None),
+                } => (
+                    Some(instance.as_str()),
+                    Some(*execution_id),
+                    Some(*id),
+                    session_id.clone(),
+                ),
+                _ => (None, None, None, None),
             };
 
             let work_item = serde_json::to_string(&item).map_err(|e| {
@@ -1131,8 +1351,8 @@ impl Provider for SqliteProvider {
             })?;
             sqlx::query(
                 r#"
-                INSERT INTO worker_queue (work_item, visible_at, instance_id, execution_id, activity_id)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO worker_queue (work_item, visible_at, instance_id, execution_id, activity_id, session_id)
+                VALUES (?, ?, ?, ?, ?, ?)
                 "#,
             )
             .bind(work_item)
@@ -1140,9 +1360,10 @@ impl Provider for SqliteProvider {
             .bind(activity_instance)
             .bind(activity_execution_id.map(|e| e as i64))
             .bind(activity_id.map(|a| a as i64))
+            .bind(session_id)
             .execute(&mut *tx)
             .await
-            .map_err(|e| Self::sqlx_to_provider_error("list_instances", e))?;
+            .map_err(|e| Self::sqlx_to_provider_error("ack_orchestration_item", e))?;
         }
 
         // Delete cancelled activities (lock stealing) - batch operation
@@ -1172,6 +1393,50 @@ impl Provider for SqliteProvider {
                     .bind(activity.activity_id as i64);
             }
             query
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| Self::sqlx_to_provider_error("ack_orchestration_item", e))?;
+        }
+
+        // Session lock stealing (close_session side-channel):
+        // 1) delete session-bound worker rows for closed sessions (cancels queued/in-flight work)
+        // 2) delete session ownership rows (next renewal fails, session is fully closed)
+        if !metadata.cancelled_sessions.is_empty() {
+            debug!(
+                instance = %instance_id,
+                count = metadata.cancelled_sessions.len(),
+                "Applying closed-session lock stealing"
+            );
+
+            let placeholders: Vec<String> = metadata
+                .cancelled_sessions
+                .iter()
+                .enumerate()
+                .map(|(i, _)| format!("(?{}, ?{})", i * 2 + 1, i * 2 + 2))
+                .collect();
+
+            let worker_sql = format!(
+                "DELETE FROM worker_queue WHERE (instance_id, session_id) IN (VALUES {})",
+                placeholders.join(", ")
+            );
+            let mut worker_query = sqlx::query(&worker_sql);
+            for session in &metadata.cancelled_sessions {
+                worker_query = worker_query.bind(&session.instance).bind(&session.session_id);
+            }
+            worker_query
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| Self::sqlx_to_provider_error("ack_orchestration_item", e))?;
+
+            let session_sql = format!(
+                "DELETE FROM sessions WHERE (instance_id, session_id) IN (VALUES {})",
+                placeholders.join(", ")
+            );
+            let mut session_query = sqlx::query(&session_sql);
+            for session in &metadata.cancelled_sessions {
+                session_query = session_query.bind(&session.instance).bind(&session.session_id);
+            }
+            session_query
                 .execute(&mut *tx)
                 .await
                 .map_err(|e| Self::sqlx_to_provider_error("ack_orchestration_item", e))?;
@@ -1369,14 +1634,20 @@ impl Provider for SqliteProvider {
         tracing::debug!(target: "duroxide::providers::sqlite", ?item, "enqueue_for_worker");
 
         // Extract identity fields from ActivityExecute for cancellation support
-        let (activity_instance, activity_execution_id, activity_id) = match &item {
+        let (activity_instance, activity_execution_id, activity_id, session_id) = match &item {
             WorkItem::ActivityExecute {
                 instance,
                 execution_id,
                 id,
+                session_id,
                 ..
-            } => (Some(instance.as_str()), Some(*execution_id), Some(*id)),
-            _ => (None, None, None),
+            } => (
+                Some(instance.as_str()),
+                Some(*execution_id),
+                Some(*id),
+                session_id.clone(),
+            ),
+            _ => (None, None, None, None),
         };
 
         let work_item = serde_json::to_string(&item)
@@ -1385,8 +1656,8 @@ impl Provider for SqliteProvider {
 
         sqlx::query(
             r#"
-            INSERT INTO worker_queue (work_item, visible_at, instance_id, execution_id, activity_id)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO worker_queue (work_item, visible_at, instance_id, execution_id, activity_id, session_id)
+            VALUES (?, ?, ?, ?, ?, ?)
             "#,
         )
         .bind(work_item)
@@ -1394,6 +1665,7 @@ impl Provider for SqliteProvider {
         .bind(activity_instance)
         .bind(activity_execution_id.map(|e| e as i64))
         .bind(activity_id.map(|a| a as i64))
+        .bind(session_id)
         .execute(&self.pool)
         .await
         .map_err(|e| Self::sqlx_to_provider_error("enqueue_for_worker", e))?;
@@ -1406,82 +1678,7 @@ impl Provider for SqliteProvider {
         lock_timeout: Duration,
         _poll_timeout: Duration,
     ) -> Result<Option<(WorkItem, String, u32)>, ProviderError> {
-        let mut tx = self
-            .pool
-            .begin()
-            .await
-            .map_err(|e| Self::sqlx_to_provider_error("fetch_work_item", e))?;
-
-        let lock_token = Self::generate_lock_token();
-        let locked_until = Self::timestamp_after(lock_timeout);
-
-        tracing::debug!(
-            "Worker dequeue: looking for available items, locked_until will be {}",
-            locked_until
-        );
-
-        // First find and lock the next item
-        // Item is available if: visible, and (unlocked OR lock expired)
-        let now_ms = Self::now_millis();
-        let next_item = sqlx::query(
-            r#"
-            SELECT id, work_item, attempt_count FROM worker_queue
-            WHERE visible_at <= ?1
-              AND (lock_token IS NULL OR locked_until <= ?1)
-            ORDER BY id
-            LIMIT 1
-            "#,
-        )
-        .bind(now_ms)
-        .fetch_optional(&mut *tx)
-        .await
-        .map_err(|e| Self::sqlx_to_provider_error("fetch_work_item", e))?;
-
-        if next_item.is_none() {
-            tracing::debug!("Worker dequeue: no available items found");
-            return Ok(None);
-        }
-
-        let next_item = next_item.unwrap();
-
-        tracing::debug!("Worker dequeue found item");
-
-        let id: i64 = next_item
-            .try_get("id")
-            .map_err(|e| ProviderError::permanent("fetch_work_item", format!("Failed to get id: {e}")))?;
-        let work_item_str: String = next_item
-            .try_get("work_item")
-            .map_err(|e| ProviderError::permanent("fetch_work_item", format!("Failed to get work_item: {e}")))?;
-        let current_attempt_count: i64 = next_item
-            .try_get("attempt_count")
-            .map_err(|e| ProviderError::permanent("fetch_work_item", format!("Failed to get attempt_count: {e}")))?;
-
-        // Update with lock and increment attempt_count for poison message detection
-        sqlx::query(
-            r#"
-            UPDATE worker_queue
-            SET lock_token = ?1, locked_until = ?2, attempt_count = attempt_count + 1
-            WHERE id = ?3
-            "#,
-        )
-        .bind(&lock_token)
-        .bind(locked_until)
-        .bind(id)
-        .execute(&mut *tx)
-        .await
-        .map_err(|e| Self::sqlx_to_provider_error("fetch_work_item", e))?;
-
-        // The attempt_count after the UPDATE is current + 1
-        let attempt_count = (current_attempt_count + 1) as u32;
-
-        let work_item: WorkItem = serde_json::from_str(&work_item_str)
-            .map_err(|e| ProviderError::permanent("fetch_work_item", format!("Deserialization error: {e}")))?;
-
-        tx.commit()
-            .await
-            .map_err(|e| Self::sqlx_to_provider_error("fetch_work_item", e))?;
-
-        Ok(Some((work_item, lock_token, attempt_count)))
+        self.fetch_work_item_inner(lock_timeout, None, Duration::ZERO).await
     }
 
     async fn ack_work_item(&self, token: &str, completion: Option<WorkItem>) -> Result<(), ProviderError> {
@@ -1740,6 +1937,67 @@ impl Provider for SqliteProvider {
             .await
             .map_err(|e| Self::sqlx_to_provider_error("abandon_orchestration_item", e))?;
 
+        Ok(())
+    }
+
+    fn supports_sessions(&self) -> bool {
+        true
+    }
+
+    async fn fetch_session_work_item(
+        &self,
+        lock_timeout: Duration,
+        _poll_timeout: Duration,
+        worker_id: &str,
+        session_lock_duration: Duration,
+    ) -> Result<Option<(WorkItem, String, u32)>, ProviderError> {
+        self.fetch_work_item_inner(lock_timeout, Some(worker_id), session_lock_duration)
+            .await
+    }
+
+    async fn renew_session_lock(
+        &self,
+        instance_id: &str,
+        session_id: &str,
+        worker_id: &str,
+        extend_for: Duration,
+    ) -> Result<(), ProviderError> {
+        let new_locked_until = Self::timestamp_after(extend_for);
+        let result = sqlx::query(
+            "UPDATE sessions SET locked_until = ? WHERE instance_id = ? AND session_id = ? AND worker_id = ?",
+        )
+        .bind(new_locked_until)
+        .bind(instance_id)
+        .bind(session_id)
+        .bind(worker_id)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| Self::sqlx_to_provider_error("renew_session_lock", e))?;
+
+        if result.rows_affected() == 0 {
+            return Err(ProviderError::permanent(
+                "renew_session_lock",
+                format!("session {instance_id}/{session_id} not owned by {worker_id}"),
+            ));
+        }
+        Ok(())
+    }
+
+    async fn release_session_lock(
+        &self,
+        instance_id: &str,
+        session_id: &str,
+        worker_id: &str,
+    ) -> Result<(), ProviderError> {
+        sqlx::query(
+            "UPDATE sessions SET worker_id = NULL, locked_until = NULL WHERE instance_id = ? AND session_id = ? AND worker_id = ?",
+        )
+        .bind(instance_id)
+        .bind(session_id)
+        .bind(worker_id)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| Self::sqlx_to_provider_error("release_session_lock", e))?;
         Ok(())
     }
 
@@ -2772,6 +3030,7 @@ mod tests {
                 EventKind::ActivityScheduled {
                     name: "Activity1".to_string(),
                     input: "{}".to_string(),
+                    session_id: None,
                 },
             ),
             Event::with_event_id(
@@ -2782,6 +3041,7 @@ mod tests {
                 EventKind::ActivityScheduled {
                     name: "Activity2".to_string(),
                     input: "{}".to_string(),
+                    session_id: None,
                 },
             ),
         ];
@@ -2793,6 +3053,7 @@ mod tests {
                 id: 1,
                 name: "Activity1".to_string(),
                 input: "{}".to_string(),
+                session_id: None,
             },
             WorkItem::ActivityExecute {
                 instance: "test-atomic".to_string(),
@@ -2800,6 +3061,7 @@ mod tests {
                 id: 2,
                 name: "Activity2".to_string(),
                 input: "{}".to_string(),
+                session_id: None,
             },
         ];
 
@@ -3111,6 +3373,7 @@ mod tests {
             id: 1,
             name: "TestActivity".to_string(),
             input: "test-input".to_string(),
+            session_id: None,
         };
 
         store.enqueue_for_worker(work_item.clone()).await.unwrap();
@@ -3457,6 +3720,7 @@ mod tests {
             id: 1,
             name: "TestActivity".to_string(),
             input: "test-input".to_string(),
+            session_id: None,
         };
         store.enqueue_for_worker(work_item).await.unwrap();
 
@@ -3513,6 +3777,7 @@ mod tests {
             id: 1,
             name: "TestActivity".to_string(),
             input: "test-input".to_string(),
+            session_id: None,
         };
         store.enqueue_for_worker(work_item).await.unwrap();
 
@@ -3613,6 +3878,7 @@ mod tests {
             id: 1,
             name: "TestActivity".to_string(),
             input: "test-input".to_string(),
+            session_id: None,
         };
         store.enqueue_for_worker(work_item).await.unwrap();
 

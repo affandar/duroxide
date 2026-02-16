@@ -148,6 +148,7 @@ pub async fn test_multi_operation_atomic_ack<F: ProviderFactory>(factory: &F) {
             EventKind::ActivityScheduled {
                 name: "Activity1".to_string(),
                 input: "input1".to_string(),
+                session_id: None,
             },
         ),
         Event::with_event_id(
@@ -158,6 +159,7 @@ pub async fn test_multi_operation_atomic_ack<F: ProviderFactory>(factory: &F) {
             EventKind::ActivityScheduled {
                 name: "Activity2".to_string(),
                 input: "input2".to_string(),
+                session_id: None,
             },
         ),
         Event::with_event_id(
@@ -168,6 +170,7 @@ pub async fn test_multi_operation_atomic_ack<F: ProviderFactory>(factory: &F) {
             EventKind::ActivityScheduled {
                 name: "Activity3".to_string(),
                 input: "input3".to_string(),
+                session_id: None,
             },
         ),
         Event::with_event_id(
@@ -186,6 +189,7 @@ pub async fn test_multi_operation_atomic_ack<F: ProviderFactory>(factory: &F) {
             id: 1,
             name: "Activity1".to_string(),
             input: "input1".to_string(),
+            session_id: None,
         },
         WorkItem::ActivityExecute {
             instance: "instance-A".to_string(),
@@ -193,6 +197,7 @@ pub async fn test_multi_operation_atomic_ack<F: ProviderFactory>(factory: &F) {
             id: 2,
             name: "Activity2".to_string(),
             input: "input2".to_string(),
+            session_id: None,
         },
         WorkItem::ActivityExecute {
             instance: "instance-A".to_string(),
@@ -200,6 +205,7 @@ pub async fn test_multi_operation_atomic_ack<F: ProviderFactory>(factory: &F) {
             id: 3,
             name: "Activity3".to_string(),
             input: "input3".to_string(),
+            session_id: None,
         },
     ];
 

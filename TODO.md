@@ -70,6 +70,7 @@
 - Add orchestrator functions
 - Macros for syntactic sugar [DESIGNED - see docs/proposals/MACRO-FINAL-DESIGN.md]
 - activity session management - cancellations, progress report, messaging.
+- Optimize session lock renewal by piggybacking it on activity lock renewal ticks (reduce renewal task/timer overhead).
 - reduce the junk in stress tests, make them useful
 - name the dispatchers
 - Update provider docs

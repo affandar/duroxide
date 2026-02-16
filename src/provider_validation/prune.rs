@@ -239,6 +239,7 @@ async fn create_multi_execution_instance(
                 orchestration: "TestOrch".to_string(),
                 input: "{}".to_string(),
                 version: Some("1.0.0".to_string()),
+                open_sessions: vec![],
             }
         };
 

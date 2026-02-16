@@ -256,6 +256,7 @@ pub async fn test_worker_lock_renewal_success<F: ProviderFactory>(factory: &F) {
             id: 1,
             name: "TestActivity".to_string(),
             input: "test".to_string(),
+            session_id: None,
         })
         .await
         .unwrap();
@@ -325,6 +326,7 @@ pub async fn test_worker_lock_renewal_after_expiration<F: ProviderFactory>(facto
             id: 1,
             name: "TestActivity".to_string(),
             input: "test".to_string(),
+            session_id: None,
         })
         .await
         .unwrap();
@@ -377,6 +379,7 @@ pub async fn test_worker_lock_renewal_extends_timeout<F: ProviderFactory>(factor
         id: 1,
         name: "TestActivity".to_string(),
         input: "test".to_string(),
+        session_id: None,
     };
 
     // Ack with Running status and enqueue the activity
@@ -455,6 +458,7 @@ pub async fn test_worker_lock_renewal_after_ack<F: ProviderFactory>(factory: &F)
             id: 1,
             name: "TestActivity".to_string(),
             input: "test".to_string(),
+            session_id: None,
         })
         .await
         .unwrap();
@@ -503,6 +507,7 @@ pub async fn test_abandon_work_item_releases_lock<F: ProviderFactory>(factory: &
             id: 1,
             name: "TestActivity".to_string(),
             input: "test".to_string(),
+            session_id: None,
         })
         .await
         .unwrap();
@@ -569,6 +574,7 @@ pub async fn test_abandon_work_item_with_delay<F: ProviderFactory>(factory: &F) 
             id: 1,
             name: "TestActivity".to_string(),
             input: "test".to_string(),
+            session_id: None,
         })
         .await
         .unwrap();

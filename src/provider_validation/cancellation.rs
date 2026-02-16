@@ -35,6 +35,7 @@ pub async fn test_fetch_returns_running_state_for_active_orchestration<F: Provid
         id: 1,
         name: "TestActivity".to_string(),
         input: "{}".to_string(),
+        session_id: None,
     };
 
     provider
@@ -109,6 +110,7 @@ pub async fn test_fetch_returns_terminal_state_when_orchestration_completed<F: P
         id: 1,
         name: "TestActivity".to_string(),
         input: "{}".to_string(),
+        session_id: None,
     };
 
     provider
@@ -193,6 +195,7 @@ pub async fn test_fetch_returns_terminal_state_when_orchestration_failed<F: Prov
         id: 1,
         name: "TestActivity".to_string(),
         input: "{}".to_string(),
+        session_id: None,
     };
 
     provider
@@ -282,6 +285,7 @@ pub async fn test_fetch_returns_terminal_state_when_orchestration_continued_as_n
         id: 1,
         name: "TestActivity".to_string(),
         input: "{}".to_string(),
+        session_id: None,
     };
 
     provider
@@ -350,6 +354,7 @@ pub async fn test_fetch_returns_missing_state_when_instance_deleted<F: ProviderF
         id: 1,
         name: "TestActivity".to_string(),
         input: "{}".to_string(),
+        session_id: None,
     };
 
     provider.enqueue_for_worker(activity_item).await.unwrap();
@@ -399,6 +404,7 @@ pub async fn test_renew_returns_running_when_orchestration_active<F: ProviderFac
         id: 1,
         name: "TestActivity".to_string(),
         input: "{}".to_string(),
+        session_id: None,
     };
 
     provider
@@ -471,6 +477,7 @@ pub async fn test_renew_returns_terminal_when_orchestration_completed<F: Provide
         id: 1,
         name: "TestActivity".to_string(),
         input: "{}".to_string(),
+        session_id: None,
     };
 
     provider
@@ -580,6 +587,7 @@ pub async fn test_renew_returns_missing_when_instance_deleted<F: ProviderFactory
         id: 1,
         name: "TestActivity".to_string(),
         input: "{}".to_string(),
+        session_id: None,
     };
     provider.enqueue_for_worker(activity_item).await.unwrap();
 
@@ -613,6 +621,7 @@ pub async fn test_ack_work_item_none_deletes_without_enqueue<F: ProviderFactory>
         id: 1,
         name: "TestActivity".to_string(),
         input: "{}".to_string(),
+        session_id: None,
     };
     provider.enqueue_for_worker(activity_item).await.unwrap();
 
@@ -688,6 +697,7 @@ pub async fn test_cancelled_activities_deleted_from_worker_queue<F: ProviderFact
         id: 1,
         name: "Activity1".to_string(),
         input: "{}".to_string(),
+        session_id: None,
     };
     let activity2 = WorkItem::ActivityExecute {
         instance: "inst-cancel-delete".to_string(),
@@ -695,6 +705,7 @@ pub async fn test_cancelled_activities_deleted_from_worker_queue<F: ProviderFact
         id: 2,
         name: "Activity2".to_string(),
         input: "{}".to_string(),
+        session_id: None,
     };
     let activity3 = WorkItem::ActivityExecute {
         instance: "inst-cancel-delete".to_string(),
@@ -702,6 +713,7 @@ pub async fn test_cancelled_activities_deleted_from_worker_queue<F: ProviderFact
         id: 3,
         name: "Activity3".to_string(),
         input: "{}".to_string(),
+        session_id: None,
     };
 
     provider
@@ -825,6 +837,7 @@ pub async fn test_ack_work_item_fails_when_entry_deleted<F: ProviderFactory>(fac
         id: 1,
         name: "TestActivity".to_string(),
         input: "{}".to_string(),
+        session_id: None,
     };
     provider.enqueue_for_worker(activity_item).await.unwrap();
 
@@ -871,6 +884,7 @@ pub async fn test_renew_fails_when_entry_deleted<F: ProviderFactory>(factory: &F
         id: 1,
         name: "TestActivity".to_string(),
         input: "{}".to_string(),
+        session_id: None,
     };
     provider.enqueue_for_worker(activity_item).await.unwrap();
 
@@ -989,6 +1003,7 @@ pub async fn test_batch_cancellation_deletes_multiple_activities<F: ProviderFact
             id: i,
             name: format!("Activity{i}"),
             input: "{}".to_string(),
+            session_id: None,
         })
         .collect();
 
@@ -1110,6 +1125,7 @@ pub async fn test_same_activity_in_worker_items_and_cancelled_is_noop<F: Provide
         id: activity_id,
         name: "DroppedActivity".to_string(),
         input: "{}".to_string(),
+        session_id: None,
     };
 
     let cancelled_activity = ScheduledActivityIdentifier {
@@ -1125,6 +1141,7 @@ pub async fn test_same_activity_in_worker_items_and_cancelled_is_noop<F: Provide
         id: 3, // Different id
         name: "NormalActivity".to_string(),
         input: "{}".to_string(),
+        session_id: None,
     };
 
     // 4. Ack with the activity in BOTH worker_items and cancelled_activities

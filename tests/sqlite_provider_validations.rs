@@ -12,6 +12,14 @@
 
 #[cfg(feature = "provider-test")]
 mod tests {
+    use duroxide::provider_validations::sessions::{
+        test_ack_creates_session_row, test_ack_deletes_session_row, test_ack_stores_session_id_on_worker_item,
+        test_close_session_lock_stealing_signal, test_mixed_session_and_regular, test_plain_fetch_only_non_session,
+        test_regular_items_unaffected, test_session_affinity_routing, test_session_claim_race_single_winner,
+        test_session_fetch_mixed_behavior, test_session_fifo_no_starvation,
+        test_session_item_skipped_when_owned_by_other, test_session_lock_extended_on_fetch, test_session_lock_renewal,
+        test_session_release, test_supports_sessions,
+    };
     use duroxide::provider_validations::{
         ProviderFactory,
         // Bulk deletion tests
@@ -827,5 +835,90 @@ mod tests {
     #[tokio::test]
     async fn test_sqlite_ack_appends_event_to_corrupted_history() {
         test_ack_appends_event_to_corrupted_history(&SharedSqliteTestFactory::new().await).await;
+    }
+
+    // =========================================================================
+    // Session validation tests
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_sqlite_supports_sessions() {
+        let provider = SqliteTestFactory.create_provider().await;
+        test_supports_sessions(provider).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_session_affinity_routing() {
+        test_session_affinity_routing(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_regular_items_unaffected() {
+        test_regular_items_unaffected(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_session_lock_renewal() {
+        test_session_lock_renewal(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_session_release() {
+        test_session_release(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_mixed_session_and_regular() {
+        test_mixed_session_and_regular(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_session_fifo_no_starvation() {
+        test_session_fifo_no_starvation(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_session_lock_extended_on_fetch() {
+        test_session_lock_extended_on_fetch(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_session_item_skipped_when_owned_by_other() {
+        test_session_item_skipped_when_owned_by_other(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_plain_fetch_only_non_session() {
+        test_plain_fetch_only_non_session(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_session_fetch_mixed_behavior() {
+        test_session_fetch_mixed_behavior(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_session_claim_race_single_winner() {
+        test_session_claim_race_single_winner(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_close_session_lock_stealing_signal() {
+        test_close_session_lock_stealing_signal(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_ack_stores_session_id_on_worker_item() {
+        test_ack_stores_session_id_on_worker_item(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_ack_creates_session_row() {
+        test_ack_creates_session_row(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_ack_deletes_session_row() {
+        test_ack_deletes_session_row(&SqliteTestFactory).await;
     }
 }

@@ -58,6 +58,7 @@ pub async fn test_execution_isolation<F: ProviderFactory>(factory: &F) {
                     EventKind::ActivityScheduled {
                         name: "Activity1".to_string(),
                         input: "input1".to_string(),
+                        session_id: None,
                     },
                 ),
                 Event::with_event_id(
@@ -173,6 +174,7 @@ pub async fn test_latest_execution_detection<F: ProviderFactory>(factory: &F) {
                 EventKind::ActivityScheduled {
                     name: "A".to_string(),
                     input: "".to_string(),
+                    session_id: None,
                 },
             )],
             vec![],
@@ -205,6 +207,7 @@ pub async fn test_latest_execution_detection<F: ProviderFactory>(factory: &F) {
                 EventKind::ActivityScheduled {
                     name: "B".to_string(),
                     input: "".to_string(),
+                    session_id: None,
                 },
             )],
             vec![],
@@ -387,6 +390,7 @@ pub async fn test_continue_as_new_creates_new_execution<F: ProviderFactory>(fact
                 orchestration: "TestOrch".to_string(),
                 input: "new-input".to_string(),
                 version: Some("1.0.0".to_string()),
+                open_sessions: vec![],
             },
             None,
         )
@@ -465,6 +469,7 @@ pub async fn test_execution_history_persistence<F: ProviderFactory>(factory: &F)
                     EventKind::ActivityScheduled {
                         name: format!("Activity-{exec_id}"),
                         input: format!("input-{exec_id}"),
+                        session_id: None,
                     },
                 )],
                 vec![],
