@@ -101,9 +101,31 @@ struct SessionRenewalRegistry {
     inner: Arc<Mutex<HashMap<SessionLeaseKey, SessionLeaseEntry>>>,
 }
 
+
 impl SessionRenewalRegistry {
     fn new() -> Self {
         Self::default()
+    }
+
+    async fn owned_session_count(&self) -> usize {
+        self.inner.lock().await.len()
+    }
+
+    /// Release all owned session locks immediately (graceful shutdown).
+    async fn release_all(&self, store: Arc<dyn crate::providers::Provider>) {
+        let entries: Vec<(SessionLeaseKey, SessionLeaseEntry)> = {
+            let mut map = self.inner.lock().await;
+            map.drain().collect()
+        };
+        for (key, entry) in entries {
+            entry.renewal_handle.abort();
+            if let Some(idle_handle) = entry.idle_release_handle {
+                idle_handle.abort();
+            }
+            let _ = store
+                .release_session_lock(&key.instance_id, &key.session_id, &key.worker_id)
+                .await;
+        }
     }
 
     async fn acquire(
@@ -275,6 +297,10 @@ impl Runtime {
             for handle in worker_handles {
                 let _ = handle.await;
             }
+
+            // Graceful shutdown: release all session locks immediately so other
+            // workers can claim them without waiting for lock expiry.
+            session_renewals.release_all(Arc::clone(&self.history_store)).await;
         })
     }
 }
@@ -294,7 +320,10 @@ async fn process_next_work_item(
 ) -> Result<bool, crate::providers::ProviderError> {
     let (item, token, attempt_count) = {
         let use_sessions = rt.history_store.supports_sessions();
-        let result = if use_sessions {
+        let at_session_capacity = use_sessions
+            && rt.options.max_sessions_per_worker > 0
+            && session_renewals.owned_session_count().await >= rt.options.max_sessions_per_worker;
+        let result = if use_sessions && !at_session_capacity {
             rt.history_store
                 .fetch_session_work_item(
                     rt.options.worker_lock_timeout,
