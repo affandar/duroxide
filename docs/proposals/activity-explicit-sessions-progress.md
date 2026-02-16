@@ -1,6 +1,6 @@
 # Activity-Explicit Sessions — Progress Status
 
-Last updated: 2026-02-15
+Last updated: 2026-02-16
 
 Spec reference: [activity-explicit-sessions.md](activity-explicit-sessions.md)
 
@@ -103,3 +103,50 @@ Primary spec: [activity-explicit-sessions.md](activity-explicit-sessions.md)
 4. **Renewal optimization (deferred)**
    - Implement piggyback renewal strategy to reduce periodic session renewal task overhead.
    - Spec pointer: [activity-explicit-sessions.md](activity-explicit-sessions.md) — provider/runtime renewal behavior notes.
+
+## Independent Review Findings (2026-02-16)
+
+Design/spec/test review was performed against:
+- proposal: `docs/proposals/activity-explicit-sessions.md`
+- implementation: runtime + replay + sqlite provider paths
+- tests: scenarios + provider validations
+
+### Critical
+
+1. **Session ID is dropped on the orchestration ack enqueue path**
+   - `run_single_execution_atomic` emits `WorkItem::ActivityExecute { session_id: Some(...) }`, but SQLite `ack_orchestration_item` inserts worker rows without `session_id`.
+   - This breaks spec parity for session routing on orchestration-scheduled activities.
+   - Existing provider session tests mostly use direct `enqueue_for_worker`, so this path is under-validated.
+
+2. **Session lock timing is inconsistent and can expire before first renewal**
+   - Session claim TTL currently derives from `worker_lock_timeout * 2`.
+   - Renewal loop cadence derives from `session_lock_duration / 2` (default 10m), and lock renewal piggyback in `renew_work_item_lock` is not implemented.
+   - This can cause attachment loss between turns even while the renewal subsystem is configured.
+
+### High
+
+3. **`max_sessions_per_worker` is configured but not enforced end-to-end**
+4. **No fail-fast orchestration error when provider does not support sessions**
+5. **Terminal orchestration session cleanup not fully implemented**
+6. **Graceful shutdown does not explicitly release all owned sessions immediately**
+
+### Medium
+
+7. **ContinueAsNew behavior does not fully match the "no reopen needed" narrative**
+8. **Large proposal test matrix is only partially covered by current scenario/provider tests**
+9. **Session ID validation edge cases (empty/very long IDs) are not enforced**
+10. **Session-aware fetch scans only a bounded candidate window, allowing starvation in some queue shapes**
+
+### Low
+
+11. **In-memory schema path lacks some session indexes present in migrations**
+12. **Proposal references a v3 correction file that is not present**
+
+## Recommended Priorities
+
+1. Fix `ack_orchestration_item` worker enqueue to persist `session_id`.
+2. Unify session lock claim/renew timing semantics and implement lock-renew piggyback parity.
+3. Enforce `max_sessions_per_worker`.
+4. Add provider capability failure path for `open_session*`.
+5. Finish terminal cleanup + graceful shutdown release semantics.
+6. Expand tests to cover orchestration-driven session routing, terminal cleanup, CAN carry, and unsupported-provider failure.
