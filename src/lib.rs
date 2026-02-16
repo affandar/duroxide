@@ -2823,11 +2823,26 @@ impl OrchestrationContext {
 
     /// Open a session with a caller-provided ID (idempotent).
     ///
-    /// If the session already exists and is open, this is a no-op returning the same ID.
+    /// If the session already exists and is open, this is a true no-op: no action is
+    /// emitted and no `SessionOpened` event is recorded. This makes it safe to call
+    /// defensively (e.g., after `ContinueAsNew`) without producing replay divergence.
+    ///
     /// If the session was previously closed, it reopens it.
     pub fn open_session_with_id(&self, session_id: impl Into<String>) -> Result<String, String> {
         let session_id: String = session_id.into();
+        if session_id.is_empty() {
+            return Err("session_id must not be empty".to_string());
+        }
+        if session_id.len() > 1024 {
+            return Err(format!(
+                "session_id exceeds maximum length of 1024 (got {})",
+                session_id.len()
+            ));
+        }
         let mut inner = self.inner.lock().expect("Mutex should not be poisoned");
+        if inner.open_sessions.contains(&session_id) {
+            return Ok(session_id);
+        }
         let _token = inner.emit_action(Action::OpenSession {
             scheduling_event_id: 0,
             session_id: session_id.clone(),
